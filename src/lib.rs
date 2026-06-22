@@ -38,4 +38,7 @@ pub mod ams;
 // Exposes Phase 7 Video stream configuration and proprietary binary camera controllers.
 pub mod camera;
 
+// Exposes Phase 8 System diagnostics (HMS key parsing) and K-profile database calibrations.
+pub mod diagnostics;
+
 pub use error::BambuError;

@@ -46,22 +46,16 @@ This document tracks the architectural progress, finalized specifications, and t
 *   **RTSPS Integration (Port 322)**: Designed connection URL formatters and helper utilities to rewrite proxy request-lines from plain RTSP to secure RTSPS to preserve Digest Authentication hash calculations.
 *   **RTP Timestamp Reconstruction**: Implemented `RtpTimestampCorrector` to resolve P2S static timestamp bugs by synthesizing monotonically advancing values mapped to the standard 90,000 Hz video stream clock.
 
+### Diagnostic Unpacking (HMS) & K-Profile Database Calibration (Phase 8)
+*   **Packed HMS Key Decoder**: Developed bitwise mathematical decoders to unpack 32-bit `attr` and `code` integers into support Wiki-slug keys (`MMMM_MMMM_CCCC_CCCC`) and local panel short-codes (`MMMM_CCCC`) [REF-DIAG-HMS].
+*   **Module and Severity Identification**: Unpacked 4-character hardware module boundaries and severity ratings directly from the `attr` telemetry word.
+*   **Fault Isolation Filters**: Structured safety rules that filter transient status progress updates (low-word indices < `0x4000`) and cancellation echoes (e.g., `0300_400C` and `0500_400E`) to isolate genuine hardware faults.
+*   **K-Profile Calibration Payload Builders**: Designed payload serialization request wrappers for querying (`extrusion_cali_get`) and writing (`extrusion_cali_set`) Linear Advance calibration settings [REF-DIAG-KPROF].
+*   **Validation & Deletion Schemas**: Enforced strict 19-character numeric `setting_id` bounds. Segmented database deletion tasks into standard single-nozzle deletions (Schema A, keyed on `setting_id`) and IDEX deletions (Schema B, keyed on coordinate parameters).
+
 ---
 
 ## 2. Future Development Phases
-
-### Phase 8: Diagnostic Unpacking (HMS) & K-Profile Database Calibration
-*   **Core Objective**: Implement mathematical unpacking algorithms for physical HMS error codes and design database interfaces for pressure-advance (K-profile) calibrations.
-*   **Files & Modules Layout**:
-    *   `src/diagnostics/mod.rs`
-    *   `src/diagnostics/hms.rs`
-    *   `src/diagnostics/kprofile.rs`
-*   **Execution Sequence**:
-    1.  **Packed HMS Key Decoder**: Unpack the 32-bit `attr` and `code` integers into the standard 16-character wiki troubleshooting key (`MMMM_MMMM_CCCC_CCCC`) and the abbreviated local 8-character short-code (`MMMM_CCCC`) `[REF-DIAG-HMS]`.
-    2.  **Severity and Module Identification Extraction**: Unpack severity metrics and source hardware module identifiers using bitwise operations.
-    3.  **Real Fault Filters**: Flag alerts as genuine hardware faults only if the low 16-bit value of the code is equal to or greater than `0x4000`.
-    4.  **K-Profile Calibration Payload Builders**: Implement serialization schemas for managing pressure-advance settings (`extrusion_cali_get`, `extrusion_cali_set`, `extrusion_cali_del`).
-    5.  **Multi-Nozzle IDEX Deletions**: In `src/diagnostics/kprofile.rs`, implement deletion builders for both single-nozzle and dual-nozzle IDEX platforms `[REF-DIAG-KPROF]`.
 
 ### Phase 9: Comprehensive Mock Integration & Protocol Validation
 *   **Core Objective**: Expand our asynchronous mock test rig to cover MQTT command/report cycles, active AMS slot updates, and image frame extraction protocols.
