@@ -1,0 +1,436 @@
+//! # State Telemetry Payload Schemas
+//!
+//! Provides structured, allocation-friendly deserialization models for the
+//! local MQTTS Port 8883 state telemetry streams [REF-MQTT-ENV].
+//!
+//! Supports permissive parsing for platform discrepancies (such as the variable
+//! types of `sdcard` presence markers) and implements binary unpacking helpers
+//! for composite packed temperatures, home/status flags, and door sensors.
+
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Unified top-level telemetry report received from the printer's local MQTT broker.
+///
+/// Under the over-the-wire schema, updates are typically nested within separate
+/// top-level domains depending on which micro-system published the frame.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelemetryReport {
+    /// Telemetry parameters representing the physical printer state machine.
+    #[serde(default)]
+    pub print: Option<PrintTelemetry>,
+
+    /// Network and hardware board capability descriptors.
+    #[serde(default)]
+    pub device: Option<DeviceTelemetry>,
+}
+
+/// Core printer state machine telemetry, containing kinematics, thermal targets,
+/// auxiliary fan configurations, and connected AMS arrays.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrintTelemetry {
+    /// High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
+    pub gcode_state: Option<String>,
+
+    /// Path or parent project file currently loaded for execution.
+    pub gcode_file: Option<String>,
+
+    /// User-assigned name of the active print queue task.
+    pub subtask_name: Option<String>,
+
+    /// Hardware-enforced unique 32-bit transaction identifier tracking active jobs.
+    pub subtask_id: Option<String>,
+
+    /// Active layer progress tracker.
+    pub layer_num: Option<i32>,
+
+    /// Total layers within the sliced print pipeline.
+    pub total_layers: Option<i32>,
+
+    /// Print job completion percentage (0.0 to 100.0).
+    pub progress: Option<f32>,
+
+    /// Estimated remaining duration of the active layer sequence, in seconds.
+    pub mc_remaining_time: Option<i32>,
+
+    /// Kinematics flag field tracking homing states, networking interfaces, and door nodes.
+    pub home_flag: Option<u32>,
+
+    /// State field used in newer enclosed printer lines to track sensors (e.g., door status hex strings).
+    pub stat: Option<String>,
+
+    /// Permissive indicator tracking physical MicroSD card insertion.
+    ///
+    /// Evaluated via custom deserializer to absorb structural variations between firmwares.
+    #[serde(deserialize_with = "deserialize_permissive_bool", default)]
+    pub sdcard: bool,
+
+    /// Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
+    pub wifi_signal: Option<String>,
+
+    /// On-board part cooling fan speed (represented as discrete steps 0 to 15) [REF-CLIM-FANS].
+    pub cooling_fan_speed: Option<String>,
+
+    /// On-board left-side auxiliary fan speed (represented as discrete steps 0 to 15).
+    pub big_fan1_speed: Option<String>,
+
+    /// On-board filtration or chamber exhaust fan speed (represented as discrete steps 0 to 15).
+    pub big_fan2_speed: Option<String>,
+
+    /// On-board toolhead heatbreak fan speed (represented as discrete steps 0 to 15).
+    pub heatbreak_fan_speed: Option<String>,
+
+    /// Hotend target temperature register.
+    ///
+    /// May carry packed composite values when actively heating [REF-THER-DECODE].
+    pub nozzle_target_temper: Option<u32>,
+
+    /// Hotend actual temperature register.
+    ///
+    /// May carry packed composite values when actively heating [REF-THER-DECODE].
+    pub nozzle_temper: Option<u32>,
+
+    /// Heated build-plate temperature register (actual, target, or composite packed).
+    pub bed_temper: Option<u32>,
+
+    /// Active chamber heater or sensor telemetry (actual, target, or composite packed).
+    pub chamber_temper: Option<u32>,
+
+    /// Hexadecimal bitmask string representing the physical presence of loaded spools.
+    pub tray_exist_bits: Option<String>,
+
+    /// Power status of the printer core logic board.
+    #[serde(default)]
+    pub power_on_flag: Option<bool>,
+
+    /// Array of standard modular material expansion units connected to the bus.
+    #[serde(default)]
+    pub ams: Vec<AmsUnit>,
+
+    /// Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
+    #[serde(default)]
+    pub ams_mapping: Vec<i32>,
+}
+
+/// Modular standard expansion unit managing up to 4 physical spool slots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmsUnit {
+    /// Unique index representing the unit position on the physical expansion bus (0 to 3).
+    pub id: String,
+
+    /// Ambient temperature inside the expansion enclosure, in degrees Celsius.
+    pub temp: String,
+
+    /// Enclosure climate relative humidity indicator (scale index 1 to 5).
+    pub humidity: String,
+
+    /// Trays / spool slots configured inside the designated unit.
+    #[serde(default)]
+    pub tray: Vec<AmsTray>,
+}
+
+/// Material spool state descriptor representing a single physical tray slot.
+///
+/// **Zero-Warning Tolerant Parsing:**
+/// Under standard P1/A1 firmware tracks, removing a physical spool truncates the
+/// JSON output to only contain the ID key. Making descriptive keys optional permits
+/// safe parsing under empty-slot conditions without triggering serialisation panics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmsTray {
+    /// The physical index representing the slot (0 to 3).
+    pub id: u8,
+
+    /// The native state code representing filament routing status [REF-AMS-DECODE].
+    pub state: Option<u8>,
+
+    /// Material class abbreviation (e.g. "PLA", "PETG", "PA-CF").
+    pub tray_type: Option<String>,
+
+    /// RRGGBBAA hexadecimal color string defining the filament profile.
+    pub tray_color: Option<String>,
+
+    /// Short or unique customized preset index matching slicer calibrations.
+    pub tray_info_idx: Option<String>,
+
+    /// 16-character hexadecimal RFID tag UID, if reading a native spool.
+    pub tag_uid: Option<String>,
+
+    /// 32-character globally unique ID of the filament spool.
+    pub tray_uuid: Option<String>,
+
+    /// Remaining filament volume percentage (or -1 if uncalculated).
+    pub remain: Option<i32>,
+}
+
+/// Device hardware state properties containing physical tooling descriptions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceTelemetry {
+    /// Structured descriptions representing the active extruder assembly properties.
+    pub nozzle: Option<NozzleCollection>,
+}
+
+/// Wrap block holding nozzle characteristics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NozzleCollection {
+    /// Polymorphic array representing active carriages and tool configurations.
+    #[serde(default)]
+    pub info: Vec<NozzleInfo>,
+}
+
+/// Dynamic extruder nozzle details.
+///
+/// Integrates both legacy abbreviated keys (standard platforms) and descriptive keys
+/// (IDEX platforms) to provide unified schema matching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NozzleInfo {
+    /// Extruder carriage index (0 = Right/Main, 1 = Left/Deputy) or storage rack index.
+    pub id: u8,
+
+    /// Nozzle orifice diameter in millimeters (e.g. 0.4).
+    pub diameter: Option<f32>,
+
+    /// Target maximum temperature (Standard Platform abbreviated representation).
+    pub tm: Option<u32>,
+
+    /// Target maximum temperature (IDEX Platform verbose representation).
+    pub max_temp: Option<u32>,
+
+    /// Core physical nozzle composition or tool type designation.
+    #[serde(rename = "type")]
+    pub nozzle_type: Option<String>,
+
+    /// Normalized physical wear tracker value.
+    pub wear: Option<u32>,
+
+    /// Hotend manufacturer serial number (verbose IDEX platform representation).
+    pub serial_number: Option<String>,
+
+    /// Hotend manufacturer serial number (standard platform abbreviated representation).
+    pub sn: Option<String>,
+
+    /// Physical filament color hex code loaded into the extruder.
+    pub filament_colour: Option<String>,
+
+    /// Abbreviated filament color hex code.
+    pub color_m: Option<String>,
+
+    /// Filament preset calibration index.
+    pub filament_id: Option<String>,
+
+    /// Abbreviated filament preset calibration index.
+    pub fila_id: Option<String>,
+}
+
+// ============================================================================
+// Unpacking Helpers and Structural Evaluation Functions
+// ============================================================================
+
+impl PrintTelemetry {
+    /// Resolves the actual and target values from a composite packed temperature u32 [REF-THER-DECODE].
+    ///
+    /// If the value is less than or equal to 500, the temperature is returned directly
+    /// and the target is assumed to be 0°C. If greater than 500, both fields are extracted.
+    pub fn unpack_temperature(raw_val: u32) -> (u16, u16) {
+        if raw_val <= 500 {
+            (raw_val as u16, 0)
+        } else {
+            let target = (raw_val >> 16) & 0xFFFF;
+            let actual = raw_val & 0xFFFF;
+            (actual as u16, target as u16)
+        }
+    }
+
+    /// Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
+    ///
+    /// Inspects bit 18 (`0x00040000`) of the `home_flag` register.
+    pub fn is_ethernet_active(&self) -> bool {
+        self.home_flag
+            .map(|flag| (flag & 0x00040000) != 0)
+            .unwrap_or(false)
+    }
+
+    /// Evaluates whether the physical front enclosure door is open [REF-NET-DOOR].
+    ///
+    /// Due to model polymorphism, sensor routing is dependent on the core series:
+    /// * **X1 Series**: Monitored via bit 23 (`0x00800000`) of the `home_flag` register.
+    /// * **Other Series**: Monitored via bit 23 (`0x00800000`) of the parsed hexadecimal `stat` field.
+    pub fn is_door_open(&self, is_x1_series: bool) -> bool {
+        if is_x1_series {
+            self.home_flag
+                .map(|flag| (flag & 0x00800000) != 0)
+                .unwrap_or(false)
+        } else {
+            self.stat
+                .as_ref()
+                .and_then(|s| Self::parse_hex_string(s))
+                .map(|val| (val & 0x00800000) != 0)
+                .unwrap_or(false)
+        }
+    }
+
+    /// Helper converting raw hexadecimal state strings cleanly into standard numeric values.
+    fn parse_hex_string(hex_str: &str) -> Option<u32> {
+        let clean = hex_str
+            .strip_prefix("0x")
+            .or_else(|| hex_str.strip_prefix("0X"))
+            .unwrap_or(hex_str);
+        u32::from_str_radix(clean, 16).ok()
+    }
+}
+
+impl AmsTray {
+    /// Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
+    ///
+    /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
+    pub fn get_state(&self) -> u8 {
+        self.state.unwrap_or(9)
+    }
+}
+
+// ============================================================================
+// Custom Permissive Boolean Deserializer
+// ============================================================================
+
+/// Custom deserializer mapping various over-the-wire `sdcard` formats to a unified boolean.
+///
+/// Absorbs standard boolean values, integer indicators (e.g., `1`), and
+/// firmware string constants like `"HAS_SDCARD_NORMAL"`.
+fn deserialize_permissive_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawSdValue {
+        Bool(bool),
+        Int(i64),
+        String(String),
+    }
+
+    match RawSdValue::deserialize(deserializer) {
+        Ok(RawSdValue::Bool(b)) => Ok(b),
+        Ok(RawSdValue::Int(i)) => Ok(i != 0),
+        Ok(RawSdValue::String(s)) => {
+            let s_upper = s.to_uppercase();
+            Ok(s_upper == "HAS_SDCARD_NORMAL" || s_upper == "TRUE" || s_upper == "1")
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_temperature_unpacking_composite() {
+        // 6553700 decimal is 0x00640064 -> 100 actual, 100 target
+        let (actual, target) = PrintTelemetry::unpack_temperature(6553700);
+        assert_eq!(actual, 100);
+        assert_eq!(target, 100);
+
+        // Standard un-heated state <= 500 should return target 0
+        let (actual_idle, target_idle) = PrintTelemetry::unpack_temperature(35);
+        assert_eq!(actual_idle, 35);
+        assert_eq!(target_idle, 0);
+    }
+
+    #[test]
+    fn test_ethernet_active_bit() {
+        let mut telemetry = PrintTelemetry {
+            gcode_state: None,
+            gcode_file: None,
+            subtask_name: None,
+            subtask_id: None,
+            layer_num: None,
+            total_layers: None,
+            progress: None,
+            mc_remaining_time: None,
+            home_flag: Some(0x00040000), // Bit 18 set
+            stat: None,
+            sdcard: false,
+            wifi_signal: None,
+            cooling_fan_speed: None,
+            big_fan1_speed: None,
+            big_fan2_speed: None,
+            heatbreak_fan_speed: None,
+            nozzle_target_temper: None,
+            nozzle_temper: None,
+            bed_temper: None,
+            chamber_temper: None,
+            tray_exist_bits: None,
+            power_on_flag: None,
+            ams: Vec::new(),
+            ams_mapping: Vec::new(),
+        };
+
+        assert!(telemetry.is_ethernet_active());
+
+        telemetry.home_flag = Some(0);
+        assert!(!telemetry.is_ethernet_active());
+    }
+
+    #[test]
+    fn test_door_open_sensor_routing() {
+        let mut telemetry = PrintTelemetry {
+            gcode_state: None,
+            gcode_file: None,
+            subtask_name: None,
+            subtask_id: None,
+            layer_num: None,
+            total_layers: None,
+            progress: None,
+            mc_remaining_time: None,
+            home_flag: Some(0x00800000), // Bit 23 set
+            stat: Some("0x800000".to_string()),
+            sdcard: false,
+            wifi_signal: None,
+            cooling_fan_speed: None,
+            big_fan1_speed: None,
+            big_fan2_speed: None,
+            heatbreak_fan_speed: None,
+            nozzle_target_temper: None,
+            nozzle_temper: None,
+            bed_temper: None,
+            chamber_temper: None,
+            tray_exist_bits: None,
+            power_on_flag: None,
+            ams: Vec::new(),
+            ams_mapping: Vec::new(),
+        };
+
+        // On X1 series, evaluates home_flag
+        assert!(telemetry.is_door_open(true));
+
+        // On non-X1 series, evaluates stat string
+        assert!(telemetry.is_door_open(false));
+
+        telemetry.home_flag = Some(0);
+        telemetry.stat = Some("0x0".to_string());
+        assert!(!telemetry.is_door_open(true));
+        assert!(!telemetry.is_door_open(false));
+    }
+
+    #[test]
+    fn test_sdcard_permissive_boolean_deserialization() {
+        let json_bool = r#"{"print": {"sdcard": true}}"#;
+        let r1: TelemetryReport = serde_json::from_str(json_bool).unwrap();
+        assert!(r1.print.unwrap().sdcard);
+
+        let json_int = r#"{"print": {"sdcard": 1}}"#;
+        let r2: TelemetryReport = serde_json::from_str(json_int).unwrap();
+        assert!(r2.print.unwrap().sdcard);
+
+        let json_str = r#"{"print": {"sdcard": "HAS_SDCARD_NORMAL"}}"#;
+        let r3: TelemetryReport = serde_json::from_str(json_str).unwrap();
+        assert!(r3.print.unwrap().sdcard);
+
+        let json_invalid = r#"{"print": {"sdcard": 0}}"#;
+        let r4: TelemetryReport = serde_json::from_str(json_invalid).unwrap();
+        assert!(!r4.print.unwrap().sdcard);
+    }
+}

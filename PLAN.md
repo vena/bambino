@@ -1,44 +1,35 @@
 # Bambu Lab LAN Protocol Client Crate (`bambu-lan`)
 ## Multi-Platform Rust Crate Implementation Blueprint
 
-This document tracks the current completion status and future implementation blueprint of the `bambu-lan` crate, compiling cleanly across Standard Host (`std`/`tokio`), ESP-IDF, and Bare-Metal (`no_std`/`embassy`) targets.
+This document tracks the architectural progress, finalized specifications, and the scheduled implementation phases for the `bambu-lan` crate across Host (`std`/`tokio`), ESP-IDF (`std`), and Bare-Metal (`no_std`/`embassy`) compilation targets.
 
 ---
 
-## 1. Completed Architectures & Foundation Status
+## 1. Completed Architectures & Foundation Summary
 
-### Phase 1: Abstract I/O, Platform Adaptations & Unified Error Systems [COMPLETED]
-*   **Abstract Boundaries**: Implemented async interface traits (`AsyncIo`, `AsyncUdpSocket`, `TlsConnector`, `TimerProvider`) under `src/io/mod.rs` conforming to the `embedded-io-async` (v0.7.0) specification.
+### Abstract I/O, Platform Adaptations & Unified Error Systems (Phase 1)
+*   **Abstract Boundaries**: Implemented core asynchronous I/O traits (`AsyncIo`, `AsyncUdpSocket`, `TlsConnector`, `TimerProvider`) conforming strictly to the `embedded-io-async` (v0.7.0) specification.
 *   **Platform Adapters**:
-    *   **Tokio (Host `std`)**: Created `src/io/tokio.rs` utilizing `tokio-rustls` and a custom certificate verifier (`NoCertificateVerification`) to bypass self-signed certificate chains.
-    *   **ESP-IDF (Embedded `std`)**: Created `src/io/esp_idf.rs` for Espressif native integration.
-    *   **Embassy (Bare-Metal `no_std`)**: Created `src/io/embassy.rs` wrapping `embassy-net` and `embedded-tls` (v0.19.0) with custom `SyncUnsafeCell` record buffers to satisfy exclusive borrow lifetimes with zero compiler warnings.
-*   **Dependency Bridging**: Configured Cargo alias mapping (`rand_core_legacy` v0.6.4 vs `rand_core` v0.10.1) in `Cargo.toml` to support the different RNG trait versions expected by standard workspace dependencies and `embedded-tls` concurrently.
-*   **Unified Error Engine**: Engineered the platform-agnostic `BambuError` (`src/error.rs`) mapping transport, validation, and terminal disk issues cleanly.
+    *   **Tokio (Host `std`)**: Implemented safe, platform-native network wrappers using `tokio-rustls` and a non-checking trust verifier to process self-signed certificates.
+    *   **ESP-IDF (Embedded `std`)**: Completed standard FreeRTOS BSD socket integration layer.
+    *   **Embassy (Bare-Metal `no_std`)**: Developed static, allocation-free adapters utilizing `embassy-net` and `embedded-tls` (v0.19.0) using static unsafe-cell buffer pools.
+*   **Unified Error Engine**: Standardized operational error boundaries via `BambuError` to map socket, parsing, and storage faults.
 
-### Phase 2: SSDP Network Discovery Engine [COMPLETED]
-*   **Zero-Copy Parser**: Implemented `src/discovery/parser.rs` using `httparse` (v1.10.1) to parse HTTP-like headers from `NOTIFY` and `M-SEARCH` UDP frames with zero runtime memory allocations.
-*   **USN & Location Sanitization**: Built robust string parsers that handle bare vs. UUID-prefixed serial values and parse target IP and Port boundaries from raw `LOCATION` strings.
-*   **H2S/H2D Collision Safety**: Implemented serial prefix mapping logic with secondary validation checking of the `DevModel.bambu.com` (or `DevModel`) header, successfully differentiating the `H2S` and `H2D` models sharing the `094` prefix before routing command sets.
-*   **Orchestration Loops**: Developed the `DiscoveryEngine` in `src/discovery/mod.rs` bound to multicast Port `2021` (`[REF-NET-DISC]`), driving active searches and non-blocking polling loops platform-agnostically via the abstract `TimerProvider`.
-*   **Testing Suite**: Included loopback unit tests validating parsing performance and mock socket operations.
+### SSDP Network Discovery Engine (Phase 2)
+*   **Zero-Copy Parse**: Integrated a zero-allocation HTTP-style response and request parser using `httparse` to extract locations, user-defined names, and model properties from UDP datagrams.
+*   **Active & Passive Scanning**: Structured `DiscoveryEngine` and the standalone `discover_devices` helper to coordinate active multicast sweeps and handle network timeout recovery loops.
+
+### Model-Specific Telemetry Polymorphism & Bitmasks (Phase 3)
+*   **Structured Telemetry Models**: Implemented complete Serde-deserializable structs representing printer status broadcasts (`TelemetryReport`, `PrintTelemetry`, `DeviceTelemetry`, and `AmsUnit`).
+*   **Permissive Parsing**: Engineered custom deserializers to process varying data types for `sdcard` detection (`bool`, `integer`, or string constants).
+*   **Model Quirks Interface**: Defined the `ModelQuirks` trait directly on `BambuModel` to perform static-dispatch evaluations for:
+    *   Door-sensor routing variations (X1 `home_flag` bit 23 vs. other models' `stat` hex string bit 23).
+    *   Chamber temperature and state-stage reporting exclusions for open-frame architectures.
+    *   FTPS TLS 1.2 strict constraints and plaintext passive data-channel overrides.
 
 ---
 
 ## 2. Future Development Phases
-
-### Phase 3: Model-Specific Telemetry Polymorphism & Bitmasks
-*   **Core Objective**: Implement a trait-based Quirks Engine to process model-specific telemetry adjustments, define structured telemetry deserializers, and parse nested status bitmasks.
-*   **Files & Modules Layout**:
-    *   `src/quirks/mod.rs`
-    *   `src/quirks/models/` (strictly separated files: `x1.rs`, `x2.rs`, `p1.rs`, `p2.rs`, `a1.rs`, `h2.rs`)
-    *   `src/types/mod.rs`
-    *   `src/types/telemetry.rs`
-*   **Execution Sequence**:
-    1.  **Define Core `ModelQuirks` Trait**: In `src/quirks/mod.rs`, define hook functions for FTPS rules, telemetry sanitization, signal sentinel evaluations, and camera timing constraints.
-    2.  **Isolate Model Override Implementations**: Customize behaviors (such as `uses_plaintext_ftps_data_channel` for the A1 series, and `enforce_ftps_tls_1_2` for P2S/X2D models).
-    3.  **Construct Telemetry Structures**: In `src/types/telemetry.rs`, define serializable structs representing core status updates (mapping `gcode_state`, `layer_num`, `total_layers`, `progress`, etc. as defined in `[REF-MQTT-ENV]`).
-    4.  **Implement Bitmask Decoding**: Decode diagnostic and state fields (e.g., `home_flag` bitmask checks for Ethernet vs. WiFi mode and enclosure door open sensors `[REF-NET-DOOR]`).
 
 ### Phase 4: Async MQTT State Engine & Command Builders
 *   **Core Objective**: Implement a thread-safe, non-singleton MQTT client layer supporting concurrent execution, automate status queries, enforce transaction bounds, and implement keep-alive zombie checks.

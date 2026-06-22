@@ -22,4 +22,8 @@ pub mod io;
 // Exposes Phase 2 Simple Service Discovery Protocol (SSDP) engine to the crate's module tree.
 pub mod discovery;
 
+// Exposes Phase 3 State Telemetry structures and model-specific quirks.
+pub mod quirks;
+pub mod types;
+
 pub use error::BambuError;
