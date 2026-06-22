@@ -1,0 +1,84 @@
+[package]
+name = "bambu-lan"
+version = "0.1.0"
+edition = "2021"
+authors = ["vena <deaconvena+bambino@gmail.com>"]
+description = "A multi-platform, asynchronous Rust library for direct local network control of Bambu Lab 3D printers."
+license = "aGPL-3.0"
+
+[features]
+# Default features: compilation targeting high-capability host systems using Tokio and Rustls
+default = ["std", "tokio"]
+
+# Standard library support flag
+std = ["dep:thiserror", "serde/std", "serde_json/std"]
+
+# Tokio-specific dependencies and platform bridges
+tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "std"]
+
+# ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
+esp-idf = ["dep:esp-idf-svc", "std"]
+
+# Bare-metal / restricted environment support (no standard library)
+no_std = []
+
+# Dynamic allocation support flag (enables string manipulation on bare-metal environments)
+alloc = ["serde/alloc"]
+
+# Embassy-net framework support with embedded TLS and async IO bindings
+embassy = [
+    "dep:embassy-net",
+    "dep:embassy-time",
+    "dep:embedded-tls",
+    "no_std",
+    "alloc",
+]
+
+[dependencies]
+# Serialization and schema definitions
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false }
+
+# Embedded/no_std-compatible asynchronous IO traits
+embedded-io-async = { version = "0.7.0" }
+
+# Error formatting mapping (only available on host architectures running std)
+thiserror = { version = "2.0.18", optional = true }
+
+# Zero-copy HTTP response and header parsing.
+# Configured with default-features disabled to ensure compatibility with no_std/Embassy environments.
+httparse = { version = "1.10.1", default-features = false }
+
+# Host runtime and network transport layer
+# Enabled "io-util" feature of tokio to provide AsyncReadExt and AsyncWriteExt methods.
+tokio = { version = "1.52.3", features = [
+    "net",
+    "time",
+    "rt",
+    "sync",
+    "io-util",
+], optional = true }
+tokio-rustls = { version = "0.26.4", features = [
+    "ring",
+    "tls12",
+], optional = true }
+rustls-pki-types = { version = "1.14", optional = true }
+
+# ESP-IDF system services binding for hardware transport
+esp-idf-svc = { version = "0.52.1", optional = true }
+
+# Embassy runtime stack components (for bare-metal integrations)
+# Explicitly propagate "proto-ipv4" and "medium-ethernet" features to satisfy smoltcp stack requirements
+# when default-features are disabled in non-std environments.
+embassy-net = { version = "0.9.1", default-features = false, features = [
+    "udp",
+    "tcp",
+    "proto-ipv4",
+    "medium-ethernet",
+], optional = true }
+embassy-time = { version = "0.5.1", optional = true }
+embedded-tls = { version = "0.19.0", default-features = false, optional = true }
+
+[dev-dependencies]
+# Standard testing runtime components
+tokio = { version = "1.52.3", features = ["full"] }
