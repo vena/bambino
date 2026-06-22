@@ -35,4 +35,7 @@ pub mod ftps;
 // Exposes Phase 6 AMS expansion bus, material mapping and filament control structures.
 pub mod ams;
 
+// Exposes Phase 7 Video stream configuration and proprietary binary camera controllers.
+pub mod camera;
+
 pub use error::BambuError;
