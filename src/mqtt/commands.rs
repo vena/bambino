@@ -1,0 +1,606 @@
+//! # MQTT Command Payloads & Serialization Builders
+//!
+//! Provides the concrete data structures and serialization wrappers required to control
+//! physical Bambu Lab printers over MQTTS Port 8883 [REF-MQTT-LIFECYCLE].
+//!
+//! Fully compatible with `no_std` environments, leveraging `alloc` for string
+//! representations where standard heap allocations are unavailable.
+
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use serde::Serialize;
+
+/// Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch
+/// milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`).
+///
+/// **Why this is critical:** The printer's onboard G-code parsing routine clamps subtask identifiers
+/// to standard 32-bit signed integer limits. If a connecting client uses an un-clamped millisecond
+/// epoch (13-digit integer), the memory allocation registers on the motion board will overflow.
+/// This causes the printer to lock indefinitely in an `IDLE` state and treat all subsequent print dispatches
+/// as illegal continuation frames of a single, corrupted tracking cycle [REF-MQTT-ENV].
+pub fn clamp_task_id(raw_id: u64) -> String {
+    (raw_id % 2147483647).to_string()
+}
+
+// ============================================================================
+// 1. Status & Information Queries
+// ============================================================================
+
+/// Payload schema to trigger a complete state dump ("pushall") from the printer.
+#[derive(Debug, Clone, Serialize)]
+pub struct PushAllPayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PushAllRequest {
+    pub pushing: PushAllPayload,
+}
+
+impl PushAllRequest {
+    pub fn new(sequence_id: u64) -> Self {
+        Self {
+            pushing: PushAllPayload {
+                command: "pushall",
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Payload schema to retrieve hardware/firmware version strings from the expansion bus.
+#[derive(Debug, Clone, Serialize)]
+pub struct GetVersionPayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GetVersionRequest {
+    pub info: GetVersionPayload,
+}
+
+impl GetVersionRequest {
+    pub fn new(sequence_id: u64) -> Self {
+        Self {
+            info: GetVersionPayload {
+                command: "get_version",
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+// ============================================================================
+// 2. Structural G-Code Enveloping
+// ============================================================================
+
+/// Queues raw G-code strings directly to the printer's motion execution controller.
+///
+/// Under the Bambu protocol specification, physical moves, manual extrusions, and
+/// temperature targets are issued by packing standard G-code lines into this wrapper.
+#[derive(Debug, Clone, Serialize)]
+pub struct GCodePayload {
+    pub command: &'static str,
+    pub param: String,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GCodeRequest {
+    pub print: GCodePayload,
+}
+
+impl GCodeRequest {
+    /// Creates a request envelope wrapping a raw G-code payload.
+    ///
+    /// **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
+    /// to ensure the physical controller's stream parser identifies the end-of-command boundary.
+    pub fn new(gcode_line: &str, sequence_id: u64) -> Self {
+        let mut param = String::from(gcode_line);
+        if !param.ends_with('\n') {
+            param.push('\n');
+        }
+        Self {
+            print: GCodePayload {
+                command: "gcode_line",
+                param,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+// ============================================================================
+// 3. Print Queue Lifecycle Management
+// ============================================================================
+
+/// General control payload used for pause, resume, stop, and clean actions.
+#[derive(Debug, Clone, Serialize)]
+pub struct StandardControlPayload {
+    pub command: String,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StandardControlRequest {
+    pub print: StandardControlPayload,
+}
+
+impl StandardControlRequest {
+    pub fn new(command: &str, sequence_id: u64) -> Self {
+        Self {
+            print: StandardControlPayload {
+                command: String::from(command),
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Instructs the printer to bypass rendering specific objects within active multi-model jobs.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipObjectsPayload {
+    pub command: &'static str,
+    pub obj_list: Vec<u32>,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkipObjectsRequest {
+    pub print: SkipObjectsPayload,
+}
+
+impl SkipObjectsRequest {
+    pub fn new(object_indices: Vec<u32>, sequence_id: u64) -> Self {
+        Self {
+            print: SkipObjectsPayload {
+                command: "skip_objects",
+                obj_list: object_indices,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+// ============================================================================
+// 4. Submit Print Job (project_file Dispatch)
+// ============================================================================
+
+/// Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectFilePayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+    /// Target file path of the internal sliced plate payload (e.g. "Metadata/plate_1.gcode").
+    pub param: String,
+    /// User-friendly label associated with the print queue task.
+    pub subtask_name: String,
+    /// Unique 32-bit tracking identifier (Clamped to prevent overflow lockups).
+    pub subtask_id: String,
+    /// Sliced compilation container file path residing on the SD card (e.g., "job.3mf").
+    pub file: String,
+    /// Connection endpoint directory scheme (Must use `ftp://` for local loopback parsing) [REF-MQTT-LIFECYCLE].
+    pub url: String,
+    pub timelapse: bool,
+    pub bed_type: String,
+    pub bed_leveling: bool,
+    /// Controls dynamic flow calibration. Expressed as an integer: `1` for active, `0` for bypass.
+    pub extrude_cali_flag: i32,
+    /// Active nozzle offset verification flag (Used primarily on IDEX and tool-changers).
+    pub nozzle_offset_cali: i32,
+    pub vibration_cali: bool,
+    pub layer_inspect: bool,
+    /// Triggers physical AMS multiplexer material routing.
+    pub use_ams: bool,
+    /// Flat mapping array representing physical material index mappings.
+    /// Unused slots or virtual external lines must use the `-1` sentinel.
+    pub ams_mapping: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectFileRequest {
+    pub print: ProjectFilePayload,
+}
+
+impl ProjectFileRequest {
+    /// Helper to instantiate a clean, safe local-mode project file submit sequence.
+    ///
+    /// **Polymorphic Warning:** `use_ams` is serialized strictly as a JSON boolean.
+    /// On dual-nozzle IDEX systems, serializing this field as an integer (e.g., `1` / `0`)
+    /// causes the printer's JSON engine to treat the value as the physical carriage index
+    /// (Target nozzle 1) instead of material routing parameters [REF-MQTT-LIFECYCLE].
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        job_filename: &str,
+        plate_gcode_path: &str,
+        subtask_name: &str,
+        raw_subtask_id: u64,
+        bed_type: &str,
+        bed_leveling: bool,
+        run_flow_calibration: bool,
+        run_vibration_compensation: bool,
+        use_ams: bool,
+        ams_mapping: Vec<i32>,
+        sequence_id: u64,
+    ) -> Self {
+        // Enforce the local network storage loopback directory scheme
+        let url = format!("ftp://{}", job_filename);
+
+        Self {
+            print: ProjectFilePayload {
+                command: "project_file",
+                sequence_id: sequence_id.to_string(),
+                param: String::from(plate_gcode_path),
+                subtask_name: String::from(subtask_name),
+                subtask_id: clamp_task_id(raw_subtask_id),
+                file: String::from(job_filename),
+                url,
+                timelapse: true, // Retained to ensure video generation triggers smoothly
+                bed_type: String::from(bed_type),
+                bed_leveling,
+                extrude_cali_flag: if run_flow_calibration { 1 } else { 0 },
+                nozzle_offset_cali: 0, // Disabled here; overridden dynamically on IDEX platforms
+                vibration_cali: run_vibration_compensation,
+                layer_inspect: true,
+                use_ams,
+                ams_mapping,
+            },
+        }
+    }
+}
+
+// ============================================================================
+// 5. Hardware Subsystem & Climate Control Commands
+// ============================================================================
+
+/// Chamber illumination and toolhead LED control configurations.
+#[derive(Debug, Clone, Serialize)]
+pub struct LedCtrlPayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+    /// Targets specific physical fixtures (e.g. "chamber_light", "chamber_light2").
+    pub led_node: String,
+    /// Mode state transitions (e.g., "on", "off", "flashing").
+    pub led_mode: String,
+    pub led_on_time: u32,
+    pub led_off_time: u32,
+    pub loop_times: u32,
+    pub interval_time: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LedCtrlRequest {
+    pub system: LedCtrlPayload,
+}
+
+impl LedCtrlRequest {
+    pub fn new(led_node: &str, turn_on: bool, sequence_id: u64) -> Self {
+        Self {
+            system: LedCtrlPayload {
+                command: "ledctrl",
+                sequence_id: sequence_id.to_string(),
+                led_node: String::from(led_node),
+                led_mode: String::from(if turn_on { "on" } else { "off" }),
+                led_on_time: 0,
+                led_off_time: 0,
+                loop_times: 0,
+                interval_time: 0,
+            },
+        }
+    }
+}
+
+/// Redirects internal climate airflows using active damper deflection plates.
+#[derive(Debug, Clone, Serialize)]
+pub struct AirductPayload {
+    pub command: &'static str,
+    /// `0` represents cooling mode (recirculation), `1` represents heating mode (exhaust).
+    #[serde(rename = "modeId")]
+    pub mode_id: i32,
+    pub submode: i32,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AirductRequest {
+    pub print: AirductPayload,
+}
+
+impl AirductRequest {
+    pub fn new(recirculate_air: bool, sequence_id: u64) -> Self {
+        Self {
+            print: AirductPayload {
+                command: "set_airduct",
+                mode_id: if recirculate_air { 0 } else { 1 },
+                submode: -1,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Controls structural notification sound output via speakers (Supported on A1 and H2D series only).
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptSoundPayload {
+    pub command: &'static str,
+    pub sound_enable: bool,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptSoundRequest {
+    pub print: PromptSoundPayload,
+}
+
+impl PromptSoundRequest {
+    pub fn new(enable: bool, sequence_id: u64) -> Self {
+        Self {
+            print: PromptSoundPayload {
+                command: "print_option",
+                sound_enable: enable,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Modifies active alarm or attention chime parameters on the printer cabinet buzzer module.
+#[derive(Debug, Clone, Serialize)]
+pub struct BuzzerPayload {
+    pub command: &'static str,
+    /// Alarm state representation: `0` (Silent), `1` (Alarm), `2` (Chirp/Beep).
+    pub mode: i32,
+    pub reason: &'static str,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BuzzerRequest {
+    pub print: BuzzerPayload,
+}
+
+impl BuzzerRequest {
+    pub fn new(mode_code: i32, sequence_id: u64) -> Self {
+        Self {
+            print: BuzzerPayload {
+                command: "buzzer_ctrl",
+                mode: mode_code,
+                reason: "",
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+// ============================================================================
+// 6. Filament Configuration, Scanning & Feeding (AMS Control)
+// ============================================================================
+
+/// Overwrites physical attributes or custom slicer presets assigned to a specific tray.
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsFilamentSettingPayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+    pub ams_id: i32,
+    pub tray_id: i32,
+    /// Standard filament preset index code (e.g. "GFL05" / "PF12345678901234567") [REF-AMS-SP_CFG].
+    pub tray_info_idx: String,
+    pub tray_type: String,
+    pub tray_sub_brands: String,
+    /// Structural hexadecimal color in RRGGBBAA format (e.g., "FFFF00FF").
+    pub tray_color: String,
+    pub nozzle_temp_min: u32,
+    pub nozzle_temp_max: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsFilamentSettingRequest {
+    pub print: AmsFilamentSettingPayload,
+}
+
+impl AmsFilamentSettingRequest {
+    /// Creates a request payload to update slot parameters.
+    ///
+    /// **Polymorphic Tray Rule:**
+    /// For standard physical slots, `ams_id` matches the expansion unit index (0-3).
+    /// For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
+    /// and `tray_id` must strictly be set to `254` to prevent command rejection [REF-MQTT-LIFECYCLE].
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        ams_id: i32,
+        tray_id: i32,
+        preset_code: &str,
+        material_type: &str,
+        color_hex: &str,
+        temp_min: u32,
+        temp_max: u32,
+        sequence_id: u64,
+    ) -> Self {
+        Self {
+            print: AmsFilamentSettingPayload {
+                command: "ams_filament_setting",
+                sequence_id: sequence_id.to_string(),
+                ams_id,
+                tray_id,
+                tray_info_idx: String::from(preset_code),
+                tray_type: String::from(material_type),
+                tray_sub_brands: format!("{} Basic", material_type),
+                tray_color: String::from(color_hex),
+                nozzle_temp_min: temp_min,
+                nozzle_temp_max: temp_max,
+            },
+        }
+    }
+}
+
+/// Commands standard AMS controllers to resume, pause, or reset physical material feeds.
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsControlPayload {
+    pub command: &'static str,
+    /// Target physical operation (e.g., "resume", "pause").
+    pub param: String,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsControlRequest {
+    pub print: AmsControlPayload,
+}
+
+impl AmsControlRequest {
+    pub fn new(operation: &str, sequence_id: u64) -> Self {
+        Self {
+            print: AmsControlPayload {
+                command: "ams_control",
+                param: String::from(operation),
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Triggers physical filament feeder movement to scan proprietary RFID tag properties.
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsGetRfidPayload {
+    pub command: &'static str,
+    pub ams_id: i32,
+    pub slot_id: i32,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsGetRfidRequest {
+    pub print: AmsGetRfidPayload,
+}
+
+impl AmsGetRfidRequest {
+    pub fn new(ams_id: i32, slot_id: i32, sequence_id: u64) -> Self {
+        Self {
+            print: AmsGetRfidPayload {
+                command: "ams_get_rfid",
+                ams_id,
+                slot_id,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+// ============================================================================
+// 7. Physical Self-Tests & Operational Performance Scaling
+// ============================================================================
+
+/// Triggers automated physical resonance compensation sweeps and chassis alignments.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationPayload {
+    pub command: &'static str,
+    /// Calculated 32-bit active target parameter option bitmask [REF-MQTT-LIFECYCLE].
+    pub option: u32,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalibrationRequest {
+    pub print: CalibrationPayload,
+}
+
+impl CalibrationRequest {
+    pub fn new(option_bitmask: u32, sequence_id: u64) -> Self {
+        Self {
+            print: CalibrationPayload {
+                command: "calibration",
+                option: option_bitmask,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Dynamically scales maximum movement velocity and acceleration limits.
+#[derive(Debug, Clone, Serialize)]
+pub struct PrintSpeedPayload {
+    pub command: &'static str,
+    /// Target speed scaling index serialized as string:
+    /// * `"1"`: Silent Mode (50% limits).
+    /// * `"2"`: Standard Mode (100% nominal).
+    /// * `"3"`: Sport Mode (124% limits).
+    /// * `"4"`: Ludicrous Mode (166% limits).
+    pub param: String,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrintSpeedRequest {
+    pub print: PrintSpeedPayload,
+}
+
+impl PrintSpeedRequest {
+    pub fn new(speed_index_str: &str, sequence_id: u64) -> Self {
+        Self {
+            print: PrintSpeedPayload {
+                command: "print_speed",
+                param: String::from(speed_index_str),
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_id_modulo_math() {
+        // Test standard large epoch millisecond timestamps clamp within standard signed bounds
+        let raw_epoch: u64 = 1718626458000;
+        let clamped = clamp_task_id(raw_epoch);
+        let parsed_id: i64 = clamped.parse().unwrap();
+        assert!(parsed_id <= 2147483647);
+        assert!(parsed_id >= 0);
+    }
+
+    #[test]
+    fn test_push_all_json_structure() {
+        let req = PushAllRequest::new(1005);
+        let serialized = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"pushing":{"command":"pushall","sequence_id":"1005"}}"#
+        );
+    }
+
+    #[test]
+    fn test_gcode_newline_appending() {
+        // Verify manual relative G-code coordinates include newline indicators
+        let req = GCodeRequest::new("M104 T0 S220", 3001);
+        assert!(req.print.param.ends_with('\n'));
+        assert_eq!(req.print.param, "M104 T0 S220\n");
+    }
+
+    #[test]
+    fn test_project_file_local_ftp_uri() {
+        let req = ProjectFileRequest::new(
+            "my_job_payload.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            1718626458000,
+            "textured_plate",
+            true,
+            true,
+            true,
+            true,
+            vec![-1, 0, 1],
+            9001,
+        );
+
+        assert_eq!(req.print.url, "ftp://my_job_payload.3mf");
+        assert_eq!(req.print.extrude_cali_flag, 1);
+        assert!(req.print.timelapse);
+    }
+}

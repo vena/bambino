@@ -1,0 +1,435 @@
+//! # Lightweight, Transport-Agnostic MQTT v3.1.1 Client Session
+//!
+//! Implements a dedicated async MQTT client designed to execute over our abstract
+//! `AsyncIo` trait bounds. This custom client facilitates secure MQTTS connection
+//! negotiations, subscription registrations, QoS 1 publish queues, keep-alive frames,
+//! and write-channel zombie detection [REF-MQTT-CONN] [REF-MQTT-ZOMBIE].
+//!
+//! Designed for absolute execution safety across standard hosts, ESP-IDF microcontrollers,
+//! and bare-metal Embassy targets.
+
+#[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::{String, ToString};
+#[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+use crate::error::BambuError;
+use crate::io::{AsyncIo, SocketError, TimerProvider};
+
+// ============================================================================
+// MQTT Packet Serialization Helpers
+// ============================================================================
+
+/// Encodes an input length parameter into a variable-length MQTT remaining length block (1 to 4 bytes).
+fn encode_remaining_length(mut len: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = (len % 128) as u8;
+        len /= 128;
+        if len > 0 {
+            byte |= 128;
+        }
+        bytes.push(byte);
+        if len == 0 {
+            break;
+        }
+    }
+    bytes
+}
+
+/// Encodes a standard MQTT CONNECT packet using Clean Session = True, Username, and Password flags.
+fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
+    let mut payload = Vec::new();
+
+    // Protocol Name length prefix and string
+    payload.extend_from_slice(&[0x00, 0x04]);
+    payload.extend_from_slice(b"MQTT");
+
+    // Protocol Level: 4 (v3.1.1)
+    payload.push(0x04);
+
+    // Connect Flags: Clean Session (0x02) | Username (0x80) | Password (0x40) -> 0xC2
+    payload.push(0xC2);
+
+    // Keep Alive: 30 seconds -> 0x001E
+    payload.extend_from_slice(&[0x00, 0x1E]);
+
+    // Client ID
+    payload.extend_from_slice(&(client_id.len() as u16).to_be_bytes());
+    payload.extend_from_slice(client_id.as_bytes());
+
+    // Username
+    payload.extend_from_slice(&(username.len() as u16).to_be_bytes());
+    payload.extend_from_slice(username.as_bytes());
+
+    // Password
+    payload.extend_from_slice(&(password.len() as u16).to_be_bytes());
+    payload.extend_from_slice(password.as_bytes());
+
+    let mut packet = vec![0x10]; // CONNECT packet type
+    packet.extend_from_slice(&encode_remaining_length(payload.len()));
+    packet.extend(payload);
+    packet
+}
+
+/// Encodes an MQTT SUBSCRIBE packet with QoS 1 flags.
+fn encode_subscribe(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> {
+    let mut payload = Vec::new();
+
+    // Packet ID
+    payload.extend_from_slice(&packet_id.to_be_bytes());
+
+    // Topic string length prefix and bytes
+    payload.extend_from_slice(&(topic.len() as u16).to_be_bytes());
+    payload.extend_from_slice(topic.as_bytes());
+
+    // Requested QoS byte
+    payload.push(qos);
+
+    let mut packet = vec![0x82]; // SUBSCRIBE packet type (QoS 1 flag set on header)
+    packet.extend_from_slice(&encode_remaining_length(payload.len()));
+    packet.extend(payload);
+    packet
+}
+
+/// Encodes an MQTT PUBLISH packet with QoS 1 flags.
+fn encode_publish_qos1(packet_id: u16, topic: &str, payload: &[u8]) -> Vec<u8> {
+    let mut var_header = Vec::new();
+
+    // Topic string length prefix and bytes
+    var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());
+    var_header.extend_from_slice(topic.as_bytes());
+
+    // Packet Identifier for QoS 1
+    var_header.extend_from_slice(&packet_id.to_be_bytes());
+
+    let remaining_length = var_header.len() + payload.len();
+    let mut packet = vec![0x32]; // PUBLISH with QoS 1 flags (0x30 type | 0x02 flags)
+    packet.extend_from_slice(&encode_remaining_length(remaining_length));
+    packet.extend(var_header);
+    packet.extend_from_slice(payload);
+    packet
+}
+
+/// Encodes an MQTT PUBACK confirmation packet.
+fn encode_puback(packet_id: u16) -> Vec<u8> {
+    let mut packet = vec![0x40, 0x02]; // Type = PUBACK, Rem Len = 2
+    packet.extend_from_slice(&packet_id.to_be_bytes());
+    packet
+}
+
+/// Encodes an MQTT PINGREQ frame.
+fn encode_pingreq() -> Vec<u8> {
+    vec![0xC0, 0x00]
+}
+
+/// Reads exactly one standard MQTT frame asynchronously from our abstract socket.
+async fn read_exact_packet<IO: AsyncIo>(
+    stream: &mut IO,
+    payload_buf: &mut Vec<u8>,
+) -> Result<(u8, usize), SocketError> {
+    // Read the fixed header packet type byte
+    let mut header = [0u8; 1];
+    stream
+        .read_exact(&mut header)
+        .await
+        .map_err(|_| SocketError::ConnectionReset)?;
+
+    // Read variable-length remaining length
+    let mut rem_len: usize = 0;
+    let mut multiplier: usize = 1;
+    loop {
+        let mut single_byte = [0u8; 1];
+        stream
+            .read_exact(&mut single_byte)
+            .await
+            .map_err(|_| SocketError::ConnectionReset)?;
+        let b = single_byte[0];
+        rem_len += ((b & 127) as usize) * multiplier;
+        if (b & 128) == 0 {
+            break;
+        }
+        multiplier *= 128;
+        if multiplier > 128 * 128 * 128 {
+            return Err(SocketError::InvalidInput); // Protocol violation
+        }
+    }
+
+    // Resize our buffer and read exactly the remaining length bytes
+    payload_buf.resize(rem_len, 0);
+    if rem_len > 0 {
+        stream
+            .read_exact(payload_buf)
+            .await
+            .map_err(|_| SocketError::ConnectionReset)?;
+    }
+
+    Ok((header[0], rem_len))
+}
+
+// ============================================================================
+// MQTT Client Session Management
+// ============================================================================
+
+/// Incoming MQTT message details parsed from the wire.
+#[derive(Debug, Clone)]
+pub struct MqttMessage {
+    pub topic: String,
+    pub payload: Vec<u8>,
+}
+
+/// Lightweight MQTT client session running over an established `AsyncIo` stream.
+pub struct BambuMqttClient<IO: AsyncIo> {
+    stream: IO,
+    serial: String,
+    next_packet_id: u16,
+    /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
+    in_flight: Vec<u16>,
+    /// Accumulated elapsed seconds since the last command publish while waiting for a response update.
+    write_pending_secs: Option<u32>,
+    /// Incremental scale of unacknowledged ping requests.
+    ping_outstanding: bool,
+}
+
+impl<IO: AsyncIo> BambuMqttClient<IO> {
+    /// Executes a secure local network connection handshake and subscription loop with the printer.
+    ///
+    /// **Authentication Note:** If the printer's physical broker rejects credentials due to
+    /// an invalid access code, this function returns `BambuError::AccessDenied`.
+    pub async fn connect<Timer: TimerProvider>(
+        mut stream: IO,
+        serial: &str,
+        access_code: &str,
+    ) -> Result<Self, BambuError> {
+        let client_id = format!("bambu_lan_{}", serial);
+        let connect_pkt = encode_connect(&client_id, "bblp", access_code);
+
+        stream
+            .write_all(&connect_pkt)
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        stream
+            .flush()
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+
+        // Read CONNACK packet
+        let mut payload_buf = Vec::new();
+        let (header, _rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
+            .await
+            .map_err(BambuError::NetworkError)?;
+
+        let packet_type = header >> 4;
+        if packet_type != 2 {
+            return Err(BambuError::ProtocolViolation("Expected CONNACK frame"));
+        }
+        if payload_buf.len() < 2 {
+            return Err(BambuError::ProtocolViolation("Short CONNACK payload"));
+        }
+        let connack_code = payload_buf[1];
+        if connack_code != 0 {
+            // Authentication credentials rejected by physical broker (LAN access code incorrect)
+            return Err(BambuError::AccessDenied);
+        }
+
+        // Subscribe to report topic
+        let report_topic = format!("device/{}/report", serial);
+        let subscribe_pkt = encode_subscribe(1, &report_topic, 1);
+
+        stream
+            .write_all(&subscribe_pkt)
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        stream
+            .flush()
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+
+        // Read SUBACK packet
+        let (sub_header, _sub_rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
+            .await
+            .map_err(BambuError::NetworkError)?;
+        let sub_type = sub_header >> 4;
+        if sub_type != 9 {
+            return Err(BambuError::ProtocolViolation("Expected SUBACK frame"));
+        }
+        if payload_buf.len() < 3 {
+            return Err(BambuError::ProtocolViolation("Short SUBACK payload"));
+        }
+        let return_code = payload_buf[2];
+        if return_code == 0x80 {
+            return Err(BambuError::ProtocolViolation(
+                "Subscription rejected by physical broker",
+            ));
+        }
+
+        Ok(Self {
+            stream,
+            serial: String::from(serial),
+            next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
+            in_flight: Vec::new(),
+            write_pending_secs: None,
+            ping_outstanding: false,
+        })
+    }
+
+    /// Submits a serialized JSON command payload to the printer's request channel.
+    ///
+    /// **In-flight Bounds Verification:**
+    /// If the unacknowledged queue size equals or exceeds 200, this function returns a
+    /// network timeout error to protect memory space and prevent packet drift [REF-MQTT-CONN].
+    pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, BambuError> {
+        if self.in_flight.len() >= 200 {
+            return Err(BambuError::NetworkError(SocketError::TimedOut));
+        }
+
+        let packet_id = self.next_packet_id;
+        self.next_packet_id = self.next_packet_id.wrapping_add(1);
+        if self.next_packet_id == 0 {
+            self.next_packet_id = 1; // 0 is reserved in MQTT specifications
+        }
+
+        let topic = format!("device/{}/request", self.serial);
+        let packet = encode_publish_qos1(packet_id, &topic, payload);
+
+        self.stream
+            .write_all(&packet)
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        self.stream
+            .flush()
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+
+        self.in_flight.push(packet_id);
+
+        // Arm/reset write-channel zombie detection tracking [REF-MQTT-ZOMBIE]
+        self.write_pending_secs = Some(0);
+
+        Ok(packet_id)
+    }
+
+    /// Block-waits and parses the next incoming packet from the printer connection.
+    ///
+    /// Evaluates protocol frames and handles internal responses (e.g. sending `PUBACK` replies
+    /// to incoming reports, stripping out matching packet IDs from `in_flight` lists, and
+    /// acknowledging PINGRESPs) seamlessly before returning telemetry packets.
+    pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
+        let mut payload_buf = Vec::new();
+        loop {
+            let (header, _rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf)
+                .await
+                .map_err(BambuError::NetworkError)?;
+
+            let packet_type = header >> 4;
+            match packet_type {
+                3 => {
+                    // Incoming PUBLISH frame from broker
+                    let qos = (header & 0x06) >> 1;
+
+                    if payload_buf.len() < 2 {
+                        return Err(BambuError::ProtocolViolation("Short publish payload"));
+                    }
+                    let topic_len = u16::from_be_bytes([payload_buf[0], payload_buf[1]]) as usize;
+                    if payload_buf.len() < 2 + topic_len {
+                        return Err(BambuError::ProtocolViolation("Invalid topic length bounds"));
+                    }
+
+                    let topic = core::str::from_utf8(&payload_buf[2..2 + topic_len])
+                        .map_err(|_| BambuError::ProtocolViolation("Non-UTF8 topic name"))?
+                        .to_string();
+
+                    let mut payload_start = 2 + topic_len;
+                    let mut packet_id = None;
+                    if qos == 1 {
+                        if payload_buf.len() < payload_start + 2 {
+                            return Err(BambuError::ProtocolViolation(
+                                "Missing packet ID in QoS 1",
+                            ));
+                        }
+                        let id = u16::from_be_bytes([
+                            payload_buf[payload_start],
+                            payload_buf[payload_start + 1],
+                        ]);
+                        packet_id = Some(id);
+                        payload_start += 2;
+                    }
+
+                    let payload = payload_buf[payload_start..].to_vec();
+
+                    // If incoming message was QoS 1, immediately acknowledge to physical broker
+                    if let Some(id) = packet_id {
+                        let ack = encode_puback(id);
+                        self.stream.write_all(&ack).await.map_err(|_| {
+                            BambuError::NetworkError(SocketError::ConnectionAborted)
+                        })?;
+                        self.stream.flush().await.map_err(|_| {
+                            BambuError::NetworkError(SocketError::ConnectionAborted)
+                        })?;
+                    }
+
+                    // Reset write channel zombie tracking since a telemetry update was received
+                    self.write_pending_secs = None;
+
+                    return Ok(MqttMessage { topic, payload });
+                }
+                4 => {
+                    // Incoming PUBACK (Acknowledge outgoing commands)
+                    if payload_buf.len() < 2 {
+                        return Err(BambuError::ProtocolViolation("Invalid PUBACK length"));
+                    }
+                    let ack_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
+                    if let Some(pos) = self.in_flight.iter().position(|&id| id == ack_id) {
+                        self.in_flight.remove(pos);
+                    }
+                }
+                13 => {
+                    // Incoming PINGRESP from physical broker
+                    self.ping_outstanding = false;
+                }
+                _ => {
+                    // Safely ignore other control frames gracefully (e.g. SUBACK, PINGREQ)
+                }
+            }
+        }
+    }
+
+    /// Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
+    pub async fn send_ping(&mut self) -> Result<(), BambuError> {
+        let ping = encode_pingreq();
+        self.stream
+            .write_all(&ping)
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        self.stream
+            .flush()
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        self.ping_outstanding = true;
+        Ok(())
+    }
+
+    /// Platform-agnostic timer tick update.
+    ///
+    /// Evaluates if an active write operation has remained un-responded for 10 seconds or longer,
+    /// triggering a secure reconnection loop warning if write-channel failure occurs [REF-MQTT-ZOMBIE].
+    pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), BambuError> {
+        if let Some(ref mut secs) = self.write_pending_secs {
+            *secs += elapsed_secs;
+            if *secs >= 10 {
+                // Keep-alive write zombie state detected. Trigger immediate reconnect loop!
+                return Err(BambuError::Timeout);
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns a slice containing current un-acknowledged QoS 1 packet identifiers.
+    pub fn get_in_flight_count(&self) -> usize {
+        self.in_flight.len()
+    }
+}

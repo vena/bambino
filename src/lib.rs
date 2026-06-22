@@ -26,4 +26,7 @@ pub mod discovery;
 pub mod quirks;
 pub mod types;
 
+// Exposes Phase 4 MQTT state client and control command structures.
+pub mod mqtt;
+
 pub use error::BambuError;

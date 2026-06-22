@@ -27,21 +27,16 @@ This document tracks the architectural progress, finalized specifications, and t
     *   Chamber temperature and state-stage reporting exclusions for open-frame architectures.
     *   FTPS TLS 1.2 strict constraints and plaintext passive data-channel overrides.
 
+### Async MQTT State Engine & Command Builders (Phase 4)
+*   **Command Payload Builders**: Implemented exact serialization wrappers (`PushAll`, `GetVersion`, `GCodeRequest`, `ProjectFileRequest`, `LedCtrlRequest`, `AmsFilamentSettingRequest` etc.) mapping trailing G-code newlines, local loopback `ftp://` paths, and rigid boolean parameters for IDEX compliance.
+*   **Task ID Clamping**: Integrated a `clamp_task_id` modulo controller (`epoch % 2147483647`) to constrain 64-bit timestamps within 32-bit signed limits, preventing printer buffer lockups.
+*   **Lightweight Client (`BambuMqttClient`)**: Constructed a custom transport-agnostic MQTT v3.1.1 client running on top of our `AsyncIo` trait bounds. Handles secure handshakes (`CONNECT` with clean session, credential rejection routing to `BambuError::AccessDenied`), QoS 1 subscriptions (`SUBSCRIBE` and `SUBACK` handling), and telemetry routing.
+*   **QoS 1 Queue Tracking**: Enforces strict in-flight buffer limits. Refuses message publication if unacknowledged outbox frames meet or exceed the printer's 200-packet capacity limit.
+*   **Keep-Alive & Zombie Detection**: Decoupled scheduling ticks via `send_ping` and a platform-independent `tick_zombie_check` routine. Detects silent write-channel failures (receiving reports but dropping commands) and throws error recovery timeouts after 10 seconds of unanswered write frames.
+
 ---
 
 ## 2. Future Development Phases
-
-### Phase 4: Async MQTT State Engine & Command Builders
-*   **Core Objective**: Implement a thread-safe, non-singleton MQTT client layer supporting concurrent execution, automate status queries, enforce transaction bounds, and implement keep-alive zombie checks.
-*   **Files & Modules Layout**:
-    *   `src/mqtt/mod.rs`
-    *   `src/mqtt/client.rs`
-    *   `src/mqtt/commands.rs`
-*   **Execution Sequence**:
-    1.  **Configure Multi-Printer Session State**: Implement `PrinterSession` without using global static references, tracking custom atomic task ID counters.
-    2.  **Gcode Line Wrap Builder**: In `src/mqtt/commands.rs`, construct serialization routines for `gcode_line` wrappers.
-    3.  **Prevent 32-Bit Signed Integer Overflows**: Enforce safe value clamping (modulo 2,147,483,647) for generated task/subtask identifiers to prevent printer parsing lockups.
-    4.  **Implement Keep-Alive Verification**: Monitor incoming telemetry timestamps. If no new messages are received on the `report` topic within 10 seconds of issuing a write command, mark the connection state as a zombie and initiate a reconnection sequence `[REF-MQTT-ZOMBIE]`.
 
 ### Phase 5: Custom Implicit FTPS Engine
 *   **Core Objective**: Implement a custom asynchronous implicit FTPS client to handle file listings, directory traversals, and file uploads directly over the abstraction layer.
