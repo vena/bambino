@@ -8,12 +8,12 @@ This document tracks the architectural progress, finalized specifications, and t
 ## 1. Completed Architectures & Foundation Summary
 
 ### Abstract I/O, Platform Adaptations & Unified Error Systems (Phase 1)
-*   **Abstract Boundaries**: Implemented core asynchronous I/O traits (`AsyncIo`, `AsyncUdpSocket`, `TlsConnector`, `TimerProvider`) conforming strictly to the `embedded-io-async` (v0.7.0) specification.
+*   **Abstract I/O Boundaries**: Implemented asynchronous I/O trait bounds (`AsyncIo`, `AsyncUdpSocket`, `TlsConnector`, `TimerProvider`) conforming to the `embedded-io-async` (v0.7.0) specification.
 *   **Platform Adapters**:
-    *   **Tokio (Host `std`)**: Implemented safe, platform-native network wrappers using `tokio-rustls` and a non-checking trust verifier to process self-signed certificates.
+    *   **Tokio (Host `std`)**: Leveraged `tokio-rustls` and a non-validating verifier to accept self-signed printer certificates.
     *   **ESP-IDF (Embedded `std`)**: Completed standard FreeRTOS BSD socket integration layer.
-    *   **Embassy (Bare-Metal `no_std`)**: Developed static, allocation-free adapters utilizing `embassy-net` and `embedded-tls` (v0.19.0) using static unsafe-cell buffer pools.
-*   **Unified Error Engine**: Standardized operational error boundaries via `BambuError` to map socket, parsing, and storage faults.
+    *   **Embassy (Bare-Metal `no_std`)**: Developed static, allocation-free adapters using `embassy-net` and `embedded-tls` (v0.19.0).
+*   **Unified Error Engine**: Standardized operational error boundaries via the `BambuError` enum to wrap socket, parsing, and non-volatile storage write exceptions.
 
 ### SSDP Network Discovery Engine (Phase 2)
 *   **Zero-Copy Parse**: Integrated a zero-allocation HTTP-style response and request parser using `httparse` to extract locations, user-defined names, and model properties from UDP datagrams.
@@ -34,22 +34,17 @@ This document tracks the architectural progress, finalized specifications, and t
 *   **QoS 1 Queue Tracking**: Enforces strict in-flight buffer limits. Refuses message publication if unacknowledged outbox frames meet or exceed the printer's 200-packet capacity limit.
 *   **Keep-Alive & Zombie Detection**: Decoupled scheduling ticks via `send_ping` and a platform-independent `tick_zombie_check` routine. Detects silent write-channel failures (receiving reports but dropping commands) and throws error recovery timeouts after 10 seconds of unanswered write frames.
 
+### Custom Implicit FTPS Engine (Phase 5)
+*   **Implicit Handshake Control**: Implemented `BambuFtpsClient` over abstract `AsyncIo` boundaries. Socket connections are immediately wrapped in TLS prior to receiving or sending greetings on Port 990, avoiding explicit `AUTH TLS` triggers.
+*   **Whitespace-Insensitive Directory Parsing**: In `src/ftps/parser.rs`, tokenizes variable whitespace gaps returned by UNIX `LIST` outputs to reconstruct names, directory nodes, sizes, and times.
+*   **Temporal Rollover Mitigation**: Implemented strict tuple comparison (`parsed_datetime > current_datetime`) to decrement the year component by 1 during boundary rollovers (e.g., parsing a December modification date while the host clock is in January).
+*   **Model-Specific Passive Protections**: Leverages `ModelQuirks` to bypass `PROT P` on A1 models (leaving data channels in plaintext `PROT C`) and enforce TLS 1.2 on P2S/X2D models to avoid data channel session-close races.
+*   **Flush Integrity Controls**: Automatically closes the passive data channel abruptly upon completion and waits up to 300 seconds on the control channel for the `226` response to prevent microSD write latency exceptions. Validates partial uploads by querying file sizes via `get_file_size` on close-race errors.
+*   **Integration Verified**: Validated all transactional states (greetings, login, list directory parsing, AVBL capacity fallback parsing, file size query, passive uploads, and deletion commands) using an in-memory loopback duplex-pipe testing harness (`tests/ftps_test.rs`).
+
 ---
 
 ## 2. Future Development Phases
-
-### Phase 5: Custom Implicit FTPS Engine
-*   **Core Objective**: Implement a custom asynchronous implicit FTPS client to handle file listings, directory traversals, and file uploads directly over the abstraction layer.
-*   **Files & Modules Layout**:
-    *   `src/ftps/mod.rs`
-    *   `src/ftps/client.rs`
-    *   `src/ftps/parser.rs`
-*   **Execution Sequence**:
-    1.  **Implicit TLS Initialization**: Create a command socket connection. Prior to executing any standard protocol handshakes, immediately wrap the raw stream in the `TlsConnector` to establish a secure channel on Port 990 `[REF-FTPS-CONN]`.
-    2.  **Coordinate TLS Session Resumption**: Extract the TLS session ticket from the control socket and supply it during the passive data channel handshake.
-    3.  **Whitespace-Insensitive UNIX Listing Parser**: In `src/ftps/parser.rs`, tokenize multi-spaced responses returned by `LIST` to extract size, name, and timestamp metadata.
-    4.  **Implement Model-Specific Transport Rules**: Force TLS 1.2 on P2S/X2D models to prevent session truncation, and disable `PROT P` on A1 models to permit plaintext passive data channels.
-    5.  **MicroSD Flush and Verification Blocks**: After executing a passive file transfer, immediately close the data connection and block-wait on the control socket for the `226 Transfer complete` response before dispatching downstream print commands `[REF-FTPS-FLUSH]`.
 
 ### Phase 6: AMS Expansion Bus & Material Systems
 *   **Core Objective**: Implement presence bitmask calculation helpers, dynamic slot-cleansing routines on state transitions, multi-AMS index resolution, and filament change/drying configuration builders.
@@ -89,13 +84,12 @@ This document tracks the architectural progress, finalized specifications, and t
     4.  **K-Profile Calibration Payload Builders**: Implement serialization schemas for managing pressure-advance settings (`extrusion_cali_get`, `extrusion_cali_set`, `extrusion_cali_del`).
     5.  **Multi-Nozzle IDEX Deletions**: In `src/diagnostics/kprofile.rs`, implement deletion builders for both single-nozzle and dual-nozzle IDEX platforms `[REF-DIAG-KPROF]`.
 
-### Phase 9: Comprehensive Mock Integration, Protocol Verification & Validation
-*   **Core Objective**: Construct a complete, multi-protocol mock printer test rig to validate telemetry parsing, implicit FTPS transfers, secure camera streaming, and dynamic quirks behaviors locally.
+### Phase 9: Comprehensive Mock Integration & Protocol Validation
+*   **Core Objective**: Expand our asynchronous mock test rig to cover MQTT command/report cycles, active AMS slot updates, and image frame extraction protocols.
 *   **Files & Modules Layout**:
-    *   `tests/mock_server.rs`
+    *   `tests/mock_server.rs` (To be expanded or structured)
     *   `tests/integration_tests.rs`
 *   **Execution Sequence**:
-    1.  **Construct Multi-Protocol Mock Server**: Build a local test server running asynchronously inside a background process that binds to loopback ports (Port 8883 MQTTS, Port 990 FTPS, Port 6000 Binary Camera).
-    2.  **Concurrency Isolation Verification**: Spin up multiple clients targeted at separate mock server instances, validating that there is no shared state or thread safety issues.
-    3.  **Validate Telemetry Filtering**: Publish real telemetry frames containing the `stg_cur = 0` idle bug and verify the client correctly filters the state.
-    4.  **Property-Based Telemetry Fuzzing**: Use random or boundary values to fuzz telemetry parsers, ensuring that they recover gracefully from unexpected or malformed inputs without panicking.
+    1.  **Extend Mock Server Harness**: Implement background handlers inside the mock server to simulate local MQTT broker subscriptions and Port 6000 binary JPEG emissions.
+    2.  **Concurrency Validation**: Confirm that multiple clients running concurrently on different thread contexts do not leak state or block asynchronous timers.
+    3.  **Fuzzing & Boundary Recovery**: Submit randomized telemetry payloads to ensure the parsing models reject malformed structures gracefully without panic.

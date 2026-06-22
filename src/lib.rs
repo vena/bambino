@@ -29,4 +29,7 @@ pub mod types;
 // Exposes Phase 4 MQTT state client and control command structures.
 pub mod mqtt;
 
+// Exposes Phase 5 Custom Implicit FTPS storage manipulation client.
+pub mod ftps;
+
 pub use error::BambuError;
