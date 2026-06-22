@@ -17,6 +17,6 @@ env/
 /.embuild
 *.log
 *.so
-PLAN.md
+#PLAN.md
 /reference
 PHASE.md

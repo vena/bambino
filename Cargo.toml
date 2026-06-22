@@ -2,9 +2,9 @@
 name = "bambu-lan"
 version = "0.1.0"
 edition = "2021"
-authors = ["vena <deaconvena+bambino@gmail.com>"]
+authors = ["Colleague <developer@bambulab.lan>"]
 description = "A multi-platform, asynchronous Rust library for direct local network control of Bambu Lab 3D printers."
-license = "aGPL-3.0"
+license = "MIT OR Apache-2.0"
 
 [features]
 # Default features: compilation targeting high-capability host systems using Tokio and Rustls
@@ -23,13 +23,18 @@ esp-idf = ["dep:esp-idf-svc", "std"]
 no_std = []
 
 # Dynamic allocation support flag (enables string manipulation on bare-metal environments)
-alloc = ["serde/alloc"]
+# Propagates the required allocation features to both serde and serde_json core libraries.
+alloc = ["serde/alloc", "serde_json/alloc"]
 
-# Embassy-net framework support with embedded TLS and async IO bindings
+# Embassy-net framework support with embedded TLS and async IO bindings.
+# Pulls in both the user-configured rand_core v0.10.1 and the renamed rand_core_legacy v0.6.4
+# to bridge embedded-tls v0.19.0 expectations while avoiding duplicate package identifier collisions.
 embassy = [
     "dep:embassy-net",
     "dep:embassy-time",
     "dep:embedded-tls",
+    "dep:rand_core",
+    "dep:rand_core_legacy",
     "no_std",
     "alloc",
 ]
@@ -37,7 +42,7 @@ embassy = [
 [dependencies]
 # Serialization and schema definitions
 serde = { version = "1.0", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0", default-features = false }
+serde_json = { version = "1.0.150", default-features = false }
 
 # Embedded/no_std-compatible asynchronous IO traits
 embedded-io-async = { version = "0.7.0" }
@@ -78,6 +83,15 @@ embassy-net = { version = "0.9.1", default-features = false, features = [
 ], optional = true }
 embassy-time = { version = "0.5.1", optional = true }
 embedded-tls = { version = "0.19.0", default-features = false, optional = true }
+
+# Cryptographically secure random number generators for standard embedded workspace interfaces.
+rand_core = { version = "0.10.1", default-features = false, optional = true }
+
+# Legacy random number generator version (v0.6.4) to satisfy embedded-tls v0.19.0 internally
+# without throwing generic compile mismatches with the workspace's default v0.10.1 types.
+# Note: Different major versions of the same package are treated by Cargo as separate dependencies,
+# allowing them to compile and execute concurrently without triggering namespace/identifier collisions.
+rand_core_legacy = { package = "rand_core", version = "0.6.4", default-features = false, optional = true }
 
 [dev-dependencies]
 # Standard testing runtime components

@@ -8,7 +8,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::borrow::ToOwned;
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 /// Enumeration of physical Bambu Lab printer models supported on the local interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
