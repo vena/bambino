@@ -32,4 +32,7 @@ pub mod mqtt;
 // Exposes Phase 5 Custom Implicit FTPS storage manipulation client.
 pub mod ftps;
 
+// Exposes Phase 6 AMS expansion bus, material mapping and filament control structures.
+pub mod ams;
+
 pub use error::BambuError;

@@ -42,22 +42,16 @@ This document tracks the architectural progress, finalized specifications, and t
 *   **Flush Integrity Controls**: Automatically closes the passive data channel abruptly upon completion and waits up to 300 seconds on the control channel for the `226` response to prevent microSD write latency exceptions. Validates partial uploads by querying file sizes via `get_file_size` on close-race errors.
 *   **Integration Verified**: Validated all transactional states (greetings, login, list directory parsing, AVBL capacity fallback parsing, file size query, passive uploads, and deletion commands) using an in-memory loopback duplex-pipe testing harness (`tests/ftps_test.rs`).
 
+### AMS Expansion Bus & Material Systems (Phase 6)
+*   **Presence Evaluation**: Implemented bitwise evaluation logic to parse standard AMS slot presence from hex strings, including handling of AMS-HT (high-temperature dry chamber) units.
+*   **State Sanitization**: Integrated active slot cleansing routines that clear stale configuration parameters (like `tray_type`, `tray_color`, `tag_uid`, etc.) when a physical spool is removed or transitions to an empty/absent state (state `9`/`0` or empty string).
+*   **Shutdown Exception**: Added a safety boundary to ignore updates where `tray_exist_bits` evaluates to zero strictly when `power_on_flag` is false to prevent false "spool removed" alerts.
+*   **Index Resolution**: Handled local-to-global indexing (`(ams_id * 4) + tray_id`), including multi-AMS and IDEX map translations (`ams_extruder_map` correlated with `active_extruder`).
+*   **Slicer Mapping & Safe Overrides**: Implemented `build_ams_mapping` (flat mapping array) and `build_ams_mapping2` (structured objects). Integrated `validate_external_spool_safety` to enforce setting `use_ams = false` on single-nozzle printers when printing exclusively from the external spool, avoiding motion board exceptions.
+
 ---
 
 ## 2. Future Development Phases
-
-### Phase 6: AMS Expansion Bus & Material Systems
-*   **Core Objective**: Implement presence bitmask calculation helpers, dynamic slot-cleansing routines on state transitions, multi-AMS index resolution, and filament change/drying configuration builders.
-*   **Files & Modules Layout**:
-    *   `src/ams/mod.rs`
-    *   `src/ams/parser.rs`
-    *   `src/ams/mapping.rs`
-*   **Execution Sequence**:
-    1.  **Presence Bitmask Parsing**: Implement bitwise evaluation formulas for standard and high-temperature material units.
-    2.  **Printer Shutdown Detection Exception**: Ignore updates where the existence bitmask evaluates to zero strictly when `power_on_flag` is false.
-    3.  **Active Slot Cleansing Logic**: When a slot transitions to state `9` (Empty) or the `tray_type` key is omitted during incremental status updates, explicitly clear or nullify all stale material telemetry parameters to prevent old configurations from persisting `[REF-AMS-DECODE]`.
-    4.  **Slicer-to-Printer Material Array Builders**: In `src/ams/mapping.rs`, construct `ams_mapping` (flat array of integer channel indices, mapping unused or external slots to the `-1` marker) and `ams_mapping2` (structured unit-and-slot mapping objects).
-    5.  **External Spool Safety Rules**: Implement a validator that enforces setting `use_ams = false` on single-nozzle printers if all mapped filaments reside on the virtual external spool `[REF-AMS-USEAMS]`.
 
 ### Phase 7: Video & Image Stream Capture
 *   **Core Objective**: Implement inline processing of secure camera streams directly within the library, decoding both the Port 6000 binary JPEG frame headers and Port 322 RTSPS Digest authentication challenges without spinning up external proxy processes.
