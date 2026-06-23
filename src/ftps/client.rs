@@ -18,7 +18,6 @@ use crate::discovery::BambuModel;
 use crate::error::BambuError;
 use crate::ftps::parser::{parse_unix_listing, FtpFile};
 use crate::io::{AsyncIo, SocketError, TlsConnector};
-use crate::quirks::ModelQuirks;
 
 /// Factory trait used to establish standard TCP socket connections to passive ports.
 ///
@@ -106,7 +105,7 @@ where
         }
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
-        if !model.uses_plaintext_ftps_data_channel() {
+        if !model.quirks().uses_plaintext_ftps_data_channel() {
             // Standard lines protect passive channels via PROT P (Private/TLS)
             write_command(&mut control_stream, "PROT P").await?;
             let (code, _) = read_response(&mut control_stream, &mut buf).await?;
@@ -161,7 +160,7 @@ where
 
         // Wrap passive data socket if secure channel is required [REF-FTPS-CONN]
         let mut listing_payload = Vec::new();
-        if !self.model.uses_plaintext_ftps_data_channel() {
+        if !self.model.quirks().uses_plaintext_ftps_data_channel() {
             let mut secure_data_socket = self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
@@ -261,7 +260,7 @@ where
             ));
         }
 
-        if !self.model.uses_plaintext_ftps_data_channel() {
+        if !self.model.quirks().uses_plaintext_ftps_data_channel() {
             let mut secure_data_socket = self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
@@ -307,7 +306,7 @@ where
         let res = read_response(&mut self.control_stream, &mut ctrl_buf).await;
         match res {
             Ok((226, _)) => Ok(()),
-            Ok((426, _)) if self.model.enforce_ftps_tls_1_2() => {
+            Ok((426, _)) if self.model.quirks().enforce_ftps_tls_1_2() => {
                 // TLS 1.3 Close Race: Double check exact size to confirm write success [REF-FTPS-CONN]
                 let remote_size = self.get_file_size(remote_path).await?;
                 if remote_size == data.len() as u64 {

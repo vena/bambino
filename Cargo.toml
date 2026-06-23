@@ -55,13 +55,15 @@ thiserror = { version = "2.0.18", optional = true }
 httparse = { version = "1.10.1", default-features = false }
 
 # Host runtime and network transport layer
-# Enabled "io-util" feature of tokio to provide AsyncReadExt and AsyncWriteExt methods.
+# Enabled "io-util", "macros", and "rt-multi-thread" features of tokio to support async main binaries and select macros.
 tokio = { version = "1.52.3", features = [
     "net",
     "time",
     "rt",
     "sync",
     "io-util",
+    "macros",
+    "rt-multi-thread",
 ], optional = true }
 tokio-rustls = { version = "0.26.4", features = [
     "ring",

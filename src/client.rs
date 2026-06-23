@@ -28,7 +28,6 @@ use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use crate::io::{AsyncIo, TlsConnector};
 use crate::mqtt::{BambuMqttClient, GCodeRequest, MqttMessage, StandardControlRequest};
-use crate::quirks::ModelQuirks;
 
 // ============================================================================
 // Internal Default Dummy Types (Satisfies Recursive Inner Bounds)
@@ -196,7 +195,7 @@ where
     /// * **Bed-Slingers** (A1, A1 Mini) can handle targeted homing macros safely, but a bare `G28` is
     ///   highly recommended for standard configurations.
     pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, BambuError> {
-        let is_bed_on_z = self.model.is_bed_on_z();
+        let is_bed_on_z = self.model.quirks().is_bed_on_z();
 
         let gcode = if is_bed_on_z {
             if home_z_only_danger {
@@ -226,7 +225,10 @@ where
     ) -> Result<u16, BambuError> {
         let axis_upper = axis.to_ascii_uppercase();
         if axis_upper == 'Z' {
-            let gcode = self.model.relative_z_move_gcode(distance, feedrate);
+            let gcode = self
+                .model
+                .quirks()
+                .relative_z_move_gcode(distance, feedrate);
             if gcode.is_empty() {
                 return Err(BambuError::ModelMismatch);
             }
@@ -274,7 +276,7 @@ where
     /// This is only supported on enclosed models equipped with active chamber heaters (such as X1E or P2S).
     /// If issued to models without active chamber thermal capabilities, returns a capability mismatch error.
     pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
-        if self.model.ignores_chamber_temperature() {
+        if self.model.quirks().ignores_chamber_temperature() {
             return Err(BambuError::ModelMismatch);
         }
         let gcode = format!("M141 S{}", target_temp);

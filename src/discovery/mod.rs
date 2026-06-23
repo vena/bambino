@@ -42,15 +42,22 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
         Self { socket }
     }
 
-    /// Dispatches a standard multicast active discovery query to trigger local printer reports.
+    /// Dispatches active search queries to trigger local printer reports.
     ///
-    /// Transmits the request over UDP directly to the multicast cluster target `239.255.255.250:2021`.
+    /// **Dual Multicast/Broadcast Fallback:**
+    /// Sends the query to both standard SSDP multicast (`239.255.255.250`) and global subnet
+    /// broadcast (`255.255.255.255`). This ensures that even if local routers filter IGMP multicast,
+    /// or if OS network interface routing routes multicast to inactive adapters, the query is
+    /// successfully broadcast across all active local interfaces.
     pub async fn broadcast_search(&self) -> Result<(), BambuError> {
-        let target = format!("{}:{}", MULTICAST_IP, SSDP_PORT);
-        self.socket
-            .send_to(M_SEARCH_QUERY, &target)
-            .await
-            .map_err(BambuError::NetworkError)?;
+        // Target A: Standard SSDP Multicast group
+        let multicast_target = format!("{}:{}", MULTICAST_IP, SSDP_PORT);
+        let _ = self.socket.send_to(M_SEARCH_QUERY, &multicast_target).await;
+
+        // Target B: Subnet-wide global broadcast fallback (forces interface transmission)
+        let broadcast_target = format!("255.255.255.255:{}", SSDP_PORT);
+        let _ = self.socket.send_to(M_SEARCH_QUERY, &broadcast_target).await;
+
         Ok(())
     }
 
@@ -174,9 +181,12 @@ mod tests {
         engine.broadcast_search().await.unwrap();
         {
             let payloads = sent_ref.lock().unwrap();
-            assert_eq!(payloads.len(), 1);
+            // Expected 2 broadcasts (Multicast + Global Broadcast fallback)
+            assert_eq!(payloads.len(), 2);
             assert!(payloads[0].starts_with(b"M-SEARCH"));
             assert!(payloads[0].ends_with(b"\r\n\r\n"));
+            assert!(payloads[1].starts_with(b"M-SEARCH"));
+            assert!(payloads[1].ends_with(b"\r\n\r\n"));
         }
 
         let mut buf = [0u8; 1500];

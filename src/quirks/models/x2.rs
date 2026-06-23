@@ -1,59 +1,70 @@
 //! # X2 Series (X2D CoreXY) Quirks
 //!
 //! Handles parameters unique to the X2D dual-carriage auxiliary-cooling model.
-//!
-//! **Door Sensor & Dual Fan Key Routing [REF-NET-DOOR] [REF-CLIM-FANS]:**
-//! Unlike the X1 series which maps the door switch to `home_flag`, the X2 series
-//! maps the door to `stat` bit 23. Auxiliary fans are mapped inside the nested
-//! `device.airduct.parts` telemetry array matching ID 160.
 
-/// Part index inside the airduct array targeting the secondary right-hand auxiliary fan
-pub const SECONDARY_AUX_FAN_PART_ID: u32 = 160;
+use crate::quirks::ModelQuirks;
+use crate::types::PrintTelemetry;
 
-/// Returns true if the secondary cooling fan speed is nested inside airduct structures
-pub fn uses_nested_airduct_cooling_telemetry() -> bool {
-    true
-}
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
 
-/// Returns true if this model series requires plaintext transmissions on the
-/// FTPS passive data channel (PROT C) [REF-FTPS-CONN].
-pub fn uses_plaintext_ftps_data_channel() -> bool {
-    false
-}
+pub struct X2Quirks;
 
-/// Returns true if the physical machine chassis is equipped with an electronic
-/// front enclosure door open sensor switch [REF-NET-DOOR].
-pub fn has_door_sensor() -> bool {
-    true
-}
+impl ModelQuirks for X2Quirks {
+    fn uses_plaintext_ftps_data_channel(&self) -> bool {
+        false
+    }
 
-/// Returns the physical local TCP port used by the model's camera interface [REF-NET-PORTS].
-pub fn camera_stream_port() -> u16 {
-    322
-}
+    fn enforce_ftps_tls_1_2(&self) -> bool {
+        true
+    }
 
-/// Returns true if the model lacks a physical chamber temperature sensor [REF-THER-DECODE].
-pub fn ignores_chamber_temperature() -> bool {
-    false
-}
+    fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool {
+        telemetry.is_door_open(false)
+    }
 
-/// Returns true if the model series exhibits the idle state-machine bug where
-/// `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
-pub fn has_stg_cur_idle_bug() -> bool {
-    false
-}
+    fn has_door_sensor(&self) -> bool {
+        true
+    }
 
-/// Returns true if the model possesses an active heated chamber control loop [REF-MOTO-GCODE].
-pub fn has_active_chamber_heater() -> bool {
-    false
-}
+    fn camera_stream_port(&self) -> u16 {
+        322
+    }
 
-/// Returns the number of physical extruder carriages present on the machine carriage bus.
-pub fn physical_nozzle_count() -> u8 {
-    2
-}
+    fn ignores_chamber_temperature(&self) -> bool {
+        false
+    }
 
-/// Returns true if the build plate moves along the Z-axis (CoreXY bed-on-Z platforms) [REF-MOTO-GCODE].
-pub fn is_bed_on_z() -> bool {
-    true
+    fn has_stg_cur_idle_bug(&self) -> bool {
+        false
+    }
+
+    fn has_active_chamber_heater(&self) -> bool {
+        false
+    }
+
+    fn physical_nozzle_count(&self) -> u8 {
+        2
+    }
+
+    fn supports_nozzle_offset_calibration(&self) -> bool {
+        true
+    }
+
+    fn is_bed_on_z(&self) -> bool {
+        true
+    }
+
+    fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
+        let clean = gcode.to_uppercase();
+        clean.contains("G28") && (clean.contains('Z') || clean.contains('X') || clean.contains('Y'))
+    }
+
+    fn relative_z_move_gcode(&self, _distance: f32, _feedrate: u32) -> String {
+        String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")
+    }
+
+    fn is_unsupported_command(&self, _command: &str) -> bool {
+        false
+    }
 }

@@ -400,3 +400,14 @@ async fn test_peripheral_signals_and_climate_controls() {
 
     broker_task.await.unwrap();
 }
+
+#[test]
+fn test_quirks_model_unsupported_commands() {
+    // P1S ignores "get_version"
+    let p1s = BambuModel::P1S;
+    assert!(p1s.quirks().is_unsupported_command("get_version"));
+
+    // X1C allows "get_version"
+    let x1c = BambuModel::X1C;
+    assert!(!x1c.quirks().is_unsupported_command("get_version"));
+}

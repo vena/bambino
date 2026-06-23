@@ -36,6 +36,11 @@ impl AsyncUdpSocket for TokioUdpSocket {
         let inner = ::tokio::net::UdpSocket::bind(addr)
             .await
             .map_err(to_socket_error)?;
+
+        // Enable local broadcast capabilities safely. This allows the discovery engine to
+        // send search packets to "255.255.255.255" if standard multicast routing is blocked.
+        let _ = inner.set_broadcast(true);
+
         Ok(Self { inner })
     }
 
@@ -46,9 +51,24 @@ impl AsyncUdpSocket for TokioUdpSocket {
             .map_err(to_socket_error)
     }
 
+    /// Asynchronously reads an incoming datagram, bounding the wait block with a timeout.
+    ///
+    /// **Why this is critical:**
+    /// By default, `tokio::net::UdpSocket::recv_from` blocks indefinitely if no packet is available.
+    /// During sweeps where some network environments drop unicast discovery replies, this blocks
+    /// execution threads forever. Wrapping the call in a 100ms timeout enables standard polling
+    /// loops to proceed and exit gracefully.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError> {
-        let (len, addr) = self.inner.recv_from(buf).await.map_err(to_socket_error)?;
-        Ok((len, addr.to_string()))
+        match ::tokio::time::timeout(
+            core::time::Duration::from_millis(100),
+            self.inner.recv_from(buf),
+        )
+        .await
+        {
+            Ok(Ok((len, addr))) => Ok((len, addr.to_string())),
+            Ok(Err(e)) => Err(to_socket_error(e)),
+            Err(_) => Err(SocketError::TimedOut),
+        }
     }
 }
 
