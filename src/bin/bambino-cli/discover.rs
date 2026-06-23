@@ -43,22 +43,20 @@ pub async fn run() -> Result<(), BambuError> {
         return Ok(());
     }
 
-    println!("\nDetected {} Printer(s):", devices.len());
-    println!("{:=<100}", "");
-    println!(
-        "{:<18} | {:<16} | {:<15} | {:<25} | {:<15}",
-        "Model", "Serial Number", "IP Address", "Device Name", "Firmware Version"
-    );
-    println!("{:=<100}", "");
-
-    for device in devices {
-        let model_str = format!("{:?}", device.model);
-        println!(
-            "{:<18} | {:<16} | {:<15} | {:<25} | {:<15}",
-            model_str, device.serial, device.ip, device.name, device.version
-        );
+    println!("\nDetected {} printer(s):\n", devices.len());
+    let mut table = crate::table::Table::new(vec![
+        "Model", "Serial", "IP Address", "Name", "Firmware",
+    ]);
+    for device in &devices {
+        table.add_row(vec![
+            &format!("{:?}", device.model),
+            &device.serial,
+            &device.ip,
+            &device.name,
+            &device.version,
+        ]);
     }
-    println!("{:=<100}\n", "");
+    table.print();
 
     Ok(())
 }

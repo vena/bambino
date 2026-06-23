@@ -144,26 +144,25 @@ pub async fn run(
                 return Ok(());
             }
 
-            println!("\nDirectory Listing: {}", path);
-            println!("{:=<75}", "");
-            println!(
-                "{:<4} | {:<12} | {:<20} | {:<30}",
-                "Type", "Size (Bytes)", "Last Modified", "Filename"
-            );
-            println!("{:=<75}", "");
-
-            for file in files {
+            println!("\nDirectory listing: {}\n", path);
+            let mut table = crate::table::Table::new(vec![
+                "Type", "Size", "Modified", "Name",
+            ]);
+            for file in &files {
                 let type_str = if file.is_dir { "DIR" } else { "FILE" };
+                let size_str = if file.is_dir {
+                    String::from("-")
+                } else {
+                    format_size(file.size)
+                };
                 let modified_str = format!(
                     "{:04}-{:02}-{:02} {:02}:{:02}",
                     file.year, file.month, file.day, file.hour, file.minute
                 );
-                println!(
-                    "{:<4} | {:<12} | {:<20} | {:<30}",
-                    type_str, file.size, modified_str, file.name
-                );
+                table.add_row(vec![type_str, &size_str, &modified_str, &file.name]);
             }
-            println!("{:=<75}\n", "");
+            table.print();
+            println!();
         }
         "upload" => {
             if action_args.len() < 3 {
@@ -227,4 +226,16 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 {
+        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    } else if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
 }

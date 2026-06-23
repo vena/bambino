@@ -147,24 +147,36 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
     // We use a generous timeout to allow latency-heavy ESP32 targets to complete the query.
     match tokio::time::timeout(Duration::from_secs(10), poll_future).await {
         Ok(Ok(modules)) => {
-            println!("\nDetected Expansion Bus Modules & Versions:");
-            println!("{:=<75}", "");
-            println!(
-                "{:<15} | {:<18} | {:<30}",
-                "Module Name", "Software Version", "Hardware Serial"
-            );
-            println!("{:=<75}", "");
+            let mut table = crate::table::Table::new(vec![
+                "Product", "Module", "Hardware", "Firmware", "Serial",
+            ]);
 
-            for m in modules {
+            for m in &modules {
+                let visible = m.get("visible").and_then(|v| v.as_bool()).unwrap_or(true);
+                if !visible && !is_verbose {
+                    continue;
+                }
+
+                let product = m
+                    .get("product_name")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("");
                 let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                let hw_ver = m.get("hw_ver").and_then(|h| h.as_str()).unwrap_or("");
                 let sw_ver = m
                     .get("sw_ver")
                     .and_then(|s| s.as_str())
                     .unwrap_or("unknown");
                 let sn = m.get("sn").and_then(|s| s.as_str()).unwrap_or("N/A");
-                println!("{:<15} | {:<18} | {:<30}", name, sw_ver, sn);
+                table.add_row(vec![product, name, hw_ver, sw_ver, sn]);
             }
-            println!("{:=<75}\n", "");
+
+            println!();
+            table.print();
+            if !is_verbose {
+                println!("\n  Use -v to show all internal modules.");
+            }
+            println!();
         }
         Ok(Err(e)) => {
             if is_verbose {

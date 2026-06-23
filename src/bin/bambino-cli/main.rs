@@ -16,6 +16,7 @@ mod control;
 mod discover;
 mod monitor;
 mod storage;
+mod table;
 
 /// Global static indicating whether verbose debug logging is requested.
 ///
