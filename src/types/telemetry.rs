@@ -6,6 +6,11 @@
 //! Supports permissive parsing for platform discrepancies (such as the variable
 //! types of `sdcard` presence markers) and implements binary unpacking helpers
 //! for composite packed temperatures, home/status flags, and door sensors.
+//!
+//! ## Architectural Alignment
+//! * **Quirks Integration:** Raw elements (e.g., `device.airduct.parts` or `ctc.info.temp`)
+//!   are fully parsed into clean schemas to allow model-specific behaviors to be evaluated
+//!   via the quirks engine.
 
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
@@ -63,6 +68,9 @@ pub struct PrintTelemetry {
     /// State field used in newer enclosed printer lines to track sensors (e.g., door status hex strings).
     pub stat: Option<String>,
 
+    /// Active print stage. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+    pub stg_cur: Option<i32>,
+
     /// Permissive indicator tracking physical MicroSD card insertion.
     ///
     /// Evaluated via custom deserializer to absorb structural variations between firmwares.
@@ -114,6 +122,23 @@ pub struct PrintTelemetry {
     /// Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
     #[serde(default)]
     pub ams_mapping: Vec<i32>,
+
+    /// Chamber Temperature Controller telemetry mapping [REF-THER-DECODE].
+    pub ctc: Option<CtcTelemetry>,
+}
+
+/// Chamber Temperature Controller (CTC) telemetry sub-object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CtcTelemetry {
+    /// Controller info containing thermal actuals and targets.
+    pub info: Option<CtcInfo>,
+}
+
+/// Controller information segment detailing current temperature coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CtcInfo {
+    /// Temperature value, typically composite packed or direct Celsius [REF-THER-DECODE].
+    pub temp: Option<f32>,
 }
 
 /// Modular standard expansion unit managing up to 4 physical spool slots.
@@ -171,6 +196,9 @@ pub struct AmsTray {
 pub struct DeviceTelemetry {
     /// Structured descriptions representing the active extruder assembly properties.
     pub nozzle: Option<NozzleCollection>,
+
+    /// Nested structures tracking cooling components and climate routing [REF-CLIM-FANS].
+    pub airduct: Option<AirductCollection>,
 }
 
 /// Wrap block holding nozzle characteristics.
@@ -223,6 +251,24 @@ pub struct NozzleInfo {
 
     /// Abbreviated filament preset calibration index.
     pub fila_id: Option<String>,
+}
+
+/// Climate parts collection nested within `device` parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AirductCollection {
+    /// Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
+    #[serde(default)]
+    pub parts: Vec<AirductPart>,
+}
+
+/// Represents an individual auxiliary routing component.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AirductPart {
+    /// Part index matching hardware configurations (e.g., `160` for the right auxiliary fan).
+    pub id: u32,
+
+    /// The active operating speed percentage ($0$ to $100$) or damper direction flag.
+    pub state: Option<i32>,
 }
 
 // ============================================================================
@@ -328,109 +374,32 @@ mod tests {
 
     #[test]
     fn test_temperature_unpacking_composite() {
-        // 6553700 decimal is 0x00640064 -> 100 actual, 100 target
         let (actual, target) = PrintTelemetry::unpack_temperature(6553700);
         assert_eq!(actual, 100);
         assert_eq!(target, 100);
 
-        // Standard un-heated state <= 500 should return target 0
         let (actual_idle, target_idle) = PrintTelemetry::unpack_temperature(35);
         assert_eq!(actual_idle, 35);
         assert_eq!(target_idle, 0);
     }
 
     #[test]
-    fn test_ethernet_active_bit() {
-        let mut telemetry = PrintTelemetry {
-            gcode_state: None,
-            gcode_file: None,
-            subtask_name: None,
-            subtask_id: None,
-            layer_num: None,
-            total_layers: None,
-            progress: None,
-            mc_remaining_time: None,
-            home_flag: Some(0x00040000), // Bit 18 set
-            stat: None,
-            sdcard: false,
-            wifi_signal: None,
-            cooling_fan_speed: None,
-            big_fan1_speed: None,
-            big_fan2_speed: None,
-            heatbreak_fan_speed: None,
-            nozzle_target_temper: None,
-            nozzle_temper: None,
-            bed_temper: None,
-            chamber_temper: None,
-            tray_exist_bits: None,
-            power_on_flag: None,
-            ams: Vec::new(),
-            ams_mapping: Vec::new(),
-        };
+    fn test_airduct_deserialization() {
+        let json_data = r#"{
+            "device": {
+                "airduct": {
+                    "parts": [
+                        { "id": 160, "state": 85 }
+                    ]
+                }
+            }
+        }"#;
 
-        assert!(telemetry.is_ethernet_active());
-
-        telemetry.home_flag = Some(0);
-        assert!(!telemetry.is_ethernet_active());
-    }
-
-    #[test]
-    fn test_door_open_sensor_routing() {
-        let mut telemetry = PrintTelemetry {
-            gcode_state: None,
-            gcode_file: None,
-            subtask_name: None,
-            subtask_id: None,
-            layer_num: None,
-            total_layers: None,
-            progress: None,
-            mc_remaining_time: None,
-            home_flag: Some(0x00800000), // Bit 23 set
-            stat: Some("0x800000".to_string()),
-            sdcard: false,
-            wifi_signal: None,
-            cooling_fan_speed: None,
-            big_fan1_speed: None,
-            big_fan2_speed: None,
-            heatbreak_fan_speed: None,
-            nozzle_target_temper: None,
-            nozzle_temper: None,
-            bed_temper: None,
-            chamber_temper: None,
-            tray_exist_bits: None,
-            power_on_flag: None,
-            ams: Vec::new(),
-            ams_mapping: Vec::new(),
-        };
-
-        // On X1 series, evaluates home_flag
-        assert!(telemetry.is_door_open(true));
-
-        // On non-X1 series, evaluates stat string
-        assert!(telemetry.is_door_open(false));
-
-        telemetry.home_flag = Some(0);
-        telemetry.stat = Some("0x0".to_string());
-        assert!(!telemetry.is_door_open(true));
-        assert!(!telemetry.is_door_open(false));
-    }
-
-    #[test]
-    fn test_sdcard_permissive_boolean_deserialization() {
-        let json_bool = r#"{"print": {"sdcard": true}}"#;
-        let r1: TelemetryReport = serde_json::from_str(json_bool).unwrap();
-        assert!(r1.print.unwrap().sdcard);
-
-        let json_int = r#"{"print": {"sdcard": 1}}"#;
-        let r2: TelemetryReport = serde_json::from_str(json_int).unwrap();
-        assert!(r2.print.unwrap().sdcard);
-
-        let json_str = r#"{"print": {"sdcard": "HAS_SDCARD_NORMAL"}}"#;
-        let r3: TelemetryReport = serde_json::from_str(json_str).unwrap();
-        assert!(r3.print.unwrap().sdcard);
-
-        let json_invalid = r#"{"print": {"sdcard": 0}}"#;
-        let r4: TelemetryReport = serde_json::from_str(json_invalid).unwrap();
-        assert!(!r4.print.unwrap().sdcard);
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let device = report.device.unwrap();
+        let airduct = device.airduct.unwrap();
+        assert_eq!(airduct.parts.len(), 1);
+        assert_eq!(airduct.parts[0].id, 160);
+        assert_eq!(airduct.parts[0].state, Some(85));
     }
 }

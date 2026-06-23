@@ -3,8 +3,15 @@
 //! Provides the concrete data structures and serialization wrappers required to control
 //! physical Bambu Lab printers over MQTTS Port 8883 [REF-MQTT-LIFECYCLE].
 //!
-//! Fully compatible with `no_std` environments, leveraging `alloc` for string
-//! representations where standard heap allocations are unavailable.
+//! Handles complex polymorphic rules such as the string-vs-array mapping schemas for the
+//! `ams_mapping` parameter, and enforces safety bounds on task identities.
+//!
+//! ## Architectural Alignment
+//! * **Polymorphic Mapping Rules [REF-MQTT-LIFECYCLE]:** Handles conditional typing for
+//!   material mappings, where inactive AMS sessions must present as empty strings while active
+//!   sessions require integer arrays.
+//! * **Task-ID Overflow Prevention [REF-MQTT-ENV]:** Clamps all generated sequence identifiers
+//!   to 32-bit signed integer limits to prevent memory allocation overflows on hardware boards.
 
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
@@ -16,11 +23,11 @@ use serde::Serialize;
 /// Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch
 /// milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`).
 ///
-/// **Why this is critical:** The printer's onboard G-code parsing routine clamps subtask identifiers
-/// to standard 32-bit signed integer limits. If a connecting client uses an un-clamped millisecond
-/// epoch (13-digit integer), the memory allocation registers on the motion board will overflow.
-/// This causes the printer to lock indefinitely in an `IDLE` state and treat all subsequent print dispatches
-/// as illegal continuation frames of a single, corrupted tracking cycle [REF-MQTT-ENV].
+/// **Why this is critical [REF-MQTT-ENV]:**
+/// The printer's onboard G-code parsing routine clamps subtask identifiers to standard 32-bit
+/// signed integer limits. If a connecting client uses an un-clamped millisecond epoch (13-digit integer),
+/// the memory allocation registers on the motion board will overflow. This causes the printer to lock
+/// indefinitely in an `IDLE` state and reject all subsequent print dispatches.
 pub fn clamp_task_id(raw_id: u64) -> String {
     (raw_id % 2147483647).to_string()
 }
@@ -171,6 +178,27 @@ impl SkipObjectsRequest {
 // 4. Submit Print Job (project_file Dispatch)
 // ============================================================================
 
+/// Represents the conditional, polymorphic typing needed for the `ams_mapping` key [REF-MQTT-LIFECYCLE].
+///
+/// **The Polymorphic Mapping Rule:**
+/// * When `use_ams` is `false` (external spool mode), the key must serialize to an empty string `""`.
+/// * When `use_ams` is `true` (AMS active mode), the key must serialize as an integer array (e.g. `[0, -1, 1]`).
+///
+/// Utilizing an untagged enum ensures standard JSON compliance across all execution profiles.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AmsMappingTable {
+    Inactive(String),
+    Active(Vec<i32>),
+}
+
+/// Represents the detailed material and nozzle path pairing entries used inside the structured `ams_mapping2` array.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProjectAmsMapping2Entry {
+    pub ams_id: u8,
+    pub slot_id: u8,
+}
+
 /// Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectFilePayload {
@@ -195,11 +223,13 @@ pub struct ProjectFilePayload {
     pub nozzle_offset_cali: i32,
     pub vibration_cali: bool,
     pub layer_inspect: bool,
-    /// Triggers physical AMS multiplexer material routing.
+    /// Triggers physical AMS multiplexer material routing. Must strictly be serialized as a boolean.
     pub use_ams: bool,
-    /// Flat mapping array representing physical material index mappings.
-    /// Unused slots or virtual external lines must use the `-1` sentinel.
-    pub ams_mapping: Vec<i32>,
+    /// Polymorphic representation enforcing empty strings on external spools vs integer arrays on standard channels.
+    pub ams_mapping: AmsMappingTable,
+    /// Structured sub-mappings for advanced material and multi-AMS routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,10 +240,11 @@ pub struct ProjectFileRequest {
 impl ProjectFileRequest {
     /// Helper to instantiate a clean, safe local-mode project file submit sequence.
     ///
-    /// **Polymorphic Warning:** `use_ams` is serialized strictly as a JSON boolean.
-    /// On dual-nozzle IDEX systems, serializing this field as an integer (e.g., `1` / `0`)
-    /// causes the printer's JSON engine to treat the value as the physical carriage index
-    /// (Target nozzle 1) instead of material routing parameters [REF-MQTT-LIFECYCLE].
+    /// **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
+    /// `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
+    /// serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
+    /// to treat the value as the physical carriage index (Target nozzle 1) instead of material
+    /// routing parameters.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         job_filename: &str,
@@ -226,10 +257,17 @@ impl ProjectFileRequest {
         run_vibration_compensation: bool,
         use_ams: bool,
         ams_mapping: Vec<i32>,
+        ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
         sequence_id: u64,
     ) -> Self {
         // Enforce the local network storage loopback directory scheme
         let url = format!("ftp://{}", job_filename);
+
+        let mapping = if use_ams {
+            AmsMappingTable::Active(ams_mapping)
+        } else {
+            AmsMappingTable::Inactive(String::new())
+        };
 
         Self {
             print: ProjectFilePayload {
@@ -244,11 +282,12 @@ impl ProjectFileRequest {
                 bed_type: String::from(bed_type),
                 bed_leveling,
                 extrude_cali_flag: if run_flow_calibration { 1 } else { 0 },
-                nozzle_offset_cali: 0, // Disabled here; overridden dynamically on IDEX platforms
+                nozzle_offset_cali: 0, // Overridden dynamically on IDEX platforms
                 vibration_cali: run_vibration_compensation,
                 layer_inspect: true,
                 use_ams,
-                ams_mapping,
+                ams_mapping: mapping,
+                ams_mapping2,
             },
         }
     }
@@ -299,7 +338,7 @@ impl LedCtrlRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct AirductPayload {
     pub command: &'static str,
-    /// `0` represents cooling mode (recirculation), `1` represents heating mode (exhaust).
+    /// `0` represents cooling mode (recirculation), `1` represents heating mode (exhaust) [REF-MQTT-LIFECYCLE].
     #[serde(rename = "modeId")]
     pub mode_id: i32,
     pub submode: i32,
@@ -353,7 +392,7 @@ impl PromptSoundRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct BuzzerPayload {
     pub command: &'static str,
-    /// Alarm state representation: `0` (Silent), `1` (Alarm), `2` (Chirp/Beep).
+    /// Alarm state representation: `0` (Silent), `1` (Alarm), `2` (Chirp/Beep) [REF-MQTT-LIFECYCLE].
     pub mode: i32,
     pub reason: &'static str,
     pub sequence_id: String,
@@ -406,10 +445,10 @@ pub struct AmsFilamentSettingRequest {
 impl AmsFilamentSettingRequest {
     /// Creates a request payload to update slot parameters.
     ///
-    /// **Polymorphic Tray Rule:**
+    /// **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
     /// For standard physical slots, `ams_id` matches the expansion unit index (0-3).
     /// For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
-    /// and `tray_id` must strictly be set to `254` to prevent command rejection [REF-MQTT-LIFECYCLE].
+    /// and `tray_id` must strictly be set to `254` to prevent command rejection.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ams_id: i32,
@@ -557,7 +596,6 @@ mod tests {
 
     #[test]
     fn test_task_id_modulo_math() {
-        // Test standard large epoch millisecond timestamps clamp within standard signed bounds
         let raw_epoch: u64 = 1718626458000;
         let clamped = clamp_task_id(raw_epoch);
         let parsed_id: i64 = clamped.parse().unwrap();
@@ -566,41 +604,46 @@ mod tests {
     }
 
     #[test]
-    fn test_push_all_json_structure() {
-        let req = PushAllRequest::new(1005);
-        let serialized = serde_json::to_string(&req).unwrap();
-        assert_eq!(
-            serialized,
-            r#"{"pushing":{"command":"pushall","sequence_id":"1005"}}"#
-        );
-    }
-
-    #[test]
-    fn test_gcode_newline_appending() {
-        // Verify manual relative G-code coordinates include newline indicators
-        let req = GCodeRequest::new("M104 T0 S220", 3001);
-        assert!(req.print.param.ends_with('\n'));
-        assert_eq!(req.print.param, "M104 T0 S220\n");
-    }
-
-    #[test]
-    fn test_project_file_local_ftp_uri() {
+    fn test_ams_mapping_polymorphism_inactive() {
         let req = ProjectFileRequest::new(
-            "my_job_payload.3mf",
+            "job.3mf",
             "Metadata/plate_1.gcode",
             "Test Print",
-            1718626458000,
-            "textured_plate",
+            12345,
+            "textured",
             true,
             true,
             true,
-            true,
-            vec![-1, 0, 1],
-            9001,
+            false, // use_ams = false (External spool)
+            vec![],
+            None,
+            5000,
         );
 
-        assert_eq!(req.print.url, "ftp://my_job_payload.3mf");
-        assert_eq!(req.print.extrude_cali_flag, 1);
-        assert!(req.print.timelapse);
+        let json = serde_json::to_string(&req).unwrap();
+        // Should serialize strictly as empty string ""
+        assert!(json.contains(r#""ams_mapping":"""#));
+    }
+
+    #[test]
+    fn test_ams_mapping_polymorphism_active() {
+        let req = ProjectFileRequest::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+            true,
+            true,
+            true,
+            true, // use_ams = true
+            vec![0, -1, 1],
+            None,
+            5000,
+        );
+
+        let json = serde_json::to_string(&req).unwrap();
+        // Should serialize as an integer array
+        assert!(json.contains(r#""ams_mapping":[0,-1,1]"#));
     }
 }

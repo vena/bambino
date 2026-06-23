@@ -196,19 +196,7 @@ where
     /// * **Bed-Slingers** (A1, A1 Mini) can handle targeted homing macros safely, but a bare `G28` is
     ///   highly recommended for standard configurations.
     pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, BambuError> {
-        let is_bed_on_z = match self.model {
-            BambuModel::X1C
-            | BambuModel::X1E
-            | BambuModel::X2D
-            | BambuModel::P1P
-            | BambuModel::P1S
-            | BambuModel::P2S
-            | BambuModel::H2D
-            | BambuModel::H2DPro
-            | BambuModel::H2C
-            | BambuModel::H2S => true,
-            _ => false,
-        };
+        let is_bed_on_z = self.model.is_bed_on_z();
 
         let gcode = if is_bed_on_z {
             if home_z_only_danger {
@@ -238,10 +226,10 @@ where
     ) -> Result<u16, BambuError> {
         let axis_upper = axis.to_ascii_uppercase();
         if axis_upper == 'Z' {
-            let gcode = format!(
-                "M211 S1\nM1002 push_ref_mode\nG91\nG0 Z{:.2} F{}\nG90\nM1002 pop_ref_mode",
-                distance, feedrate
-            );
+            let gcode = self.model.relative_z_move_gcode(distance, feedrate);
+            if gcode.is_empty() {
+                return Err(BambuError::ModelMismatch);
+            }
             self.send_gcode(&gcode).await
         } else {
             let gcode = format!("G91\nG0 {}{:.2} F{}\nG90", axis_upper, distance, feedrate);
@@ -330,6 +318,34 @@ where
     pub async fn toggle_led(&mut self, node: &str, turn_on: bool) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq);
+        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
+        self.mqtt.publish_command(&payload).await
+    }
+
+    /// Configures the active climate airduct damper mode (cooling vs heating recirculation) [REF-MQTT-LIFECYCLE].
+    pub async fn set_airduct_mode(&mut self, recirculate_air: bool) -> Result<u16, BambuError> {
+        let seq = self.next_sequence_id();
+        let req = crate::mqtt::commands::AirductRequest::new(recirculate_air, seq);
+        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
+        self.mqtt.publish_command(&payload).await
+    }
+
+    /// Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
+    ///
+    /// Available on supported hardware architectures only (such as the A1 and H2D series).
+    pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, BambuError> {
+        let seq = self.next_sequence_id();
+        let req = crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq);
+        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
+        self.mqtt.publish_command(&payload).await
+    }
+
+    /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
+    ///
+    /// Buzzer mode codes map to: `0` (Silent/disarmed), `1` (Alarm triggered), `2` (Beeping attention).
+    pub async fn set_buzzer_mode(&mut self, mode_code: i32) -> Result<u16, BambuError> {
+        let seq = self.next_sequence_id();
+        let req = crate::mqtt::commands::BuzzerRequest::new(mode_code, seq);
         let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
         self.mqtt.publish_command(&payload).await
     }

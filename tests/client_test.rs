@@ -265,7 +265,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
-        // Part cooling fan verification (M106 P1)
+        // Verify part cooling fan (M106 P1)
         let json_cf = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_cf["print"]["param"], "M106 P1 S127\n"); // 50% PWM
 
@@ -356,6 +356,47 @@ async fn test_queue_lifecycle_control_blocks() {
     client.pause_print().await.unwrap();
     client.resume_print().await.unwrap();
     client.stop_print().await.unwrap();
+
+    broker_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn test_peripheral_signals_and_climate_controls() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Verify set_airduct_mode (set_airduct command, modeId = 0)
+        let json_airduct = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_airduct["print"]["command"], "set_airduct");
+        assert_eq!(json_airduct["print"]["modeId"], 0);
+
+        // Verify set_prompt_sound (print_option command, sound_enable = true)
+        let json_sound = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_sound["print"]["command"], "print_option");
+        assert_eq!(json_sound["print"]["sound_enable"], true);
+
+        // Verify set_buzzer_mode (buzzer_ctrl command, mode = 2)
+        let json_buzzer = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_buzzer["print"]["command"], "buzzer_ctrl");
+        assert_eq!(json_buzzer["print"]["mode"], 2);
+    });
+
+    let mqtt_client = BambuMqttClient::connect::<DummyTimer>(
+        TokioIo(client_stream),
+        "01P000000000000",
+        "12345678",
+    )
+    .await
+    .unwrap();
+
+    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // Recirculate (cooling) damper path -> modeId = 0
+    client.set_airduct_mode(true).await.unwrap();
+    client.set_prompt_sound(true).await.unwrap();
+    client.set_buzzer_mode(2).await.unwrap();
 
     broker_task.await.unwrap();
 }
