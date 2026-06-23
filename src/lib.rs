@@ -41,4 +41,7 @@ pub mod camera;
 // Exposes Phase 8 System diagnostics (HMS key parsing) and K-profile database calibrations.
 pub mod diagnostics;
 
+// Exposes Phase 10 Unified printer client coordinator and developer APIs.
+pub mod client;
+
 pub use error::BambuError;
