@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-use bambu_lan::io::TokioIo;
+use bambino::io::TokioIo;
 
 /// Executes the sequential mock FTP server task on the provided control stream.
 ///
@@ -177,11 +177,19 @@ pub async fn run_mock_server(
         .await
         .unwrap();
 
+    // Post-upload SIZE verification
+    let n = server_control.read(&mut buf).await.unwrap();
+    assert_eq!(&buf[..n], b"SIZE /model/job.3mf\r\n");
+    server_control
+        .write_all(b"213 16\r\n")
+        .await
+        .unwrap();
+
     // ========================================================================
     // Deletion (DELE) Sequence
     // ========================================================================
 
-    // Frame 12: DELE file command
+    // DELE file command
     let n = server_control.read(&mut buf).await.unwrap();
     assert_eq!(&buf[..n], b"DELE /model/job.3mf\r\n");
     server_control

@@ -33,13 +33,29 @@ pub struct TokioUdpSocket {
 
 impl AsyncUdpSocket for TokioUdpSocket {
     async fn bind(addr: &str) -> Result<Self, SocketError> {
-        let inner = ::tokio::net::UdpSocket::bind(addr)
-            .await
-            .map_err(to_socket_error)?;
+        // We bind a standard library `std::net::UdpSocket` first and configure standard properties
+        // before converting it cleanly into an asynchronous Tokio UdpSocket.
+        let std_socket = std::net::UdpSocket::bind(addr).map_err(to_socket_error)?;
 
-        // Enable local broadcast capabilities safely. This allows the discovery engine to
-        // send search packets to "255.255.255.255" if standard multicast routing is blocked.
-        let _ = inner.set_broadcast(true);
+        // Enable local broadcast capabilities safely.
+        let _ = std_socket.set_broadcast(true);
+
+        // Join the standard Bambu multicast group (239.255.255.250) to register an active IGMP membership.
+        // On macOS and Windows, local firewalls and kernel routing stacks frequently drop incoming UDP
+        // replies from SSDP targets on ephemeral ports unless the receiving socket has registered a
+        // multicast group membership first.
+        let multiaddr = std::net::Ipv4Addr::new(239, 255, 255, 250);
+        let interface = std::net::Ipv4Addr::new(0, 0, 0, 0);
+        let _ = std_socket.join_multicast_v4(&multiaddr, &interface);
+
+        // **Non-blocking Mode Requirement [REF-NET-DISC]:**
+        // Putting the standard library socket in non-blocking mode is strictly required before wrapping
+        // it in the Tokio asynchronous engine. Failing to toggle this flag causes recent versions of Tokio
+        // (v1.40+) to panic immediately on thread-local registration.
+        std_socket.set_nonblocking(true).map_err(to_socket_error)?;
+
+        // Convert the configured standard socket into an asynchronous Tokio UdpSocket.
+        let inner = ::tokio::net::UdpSocket::from_std(std_socket).map_err(to_socket_error)?;
 
         Ok(Self { inner })
     }

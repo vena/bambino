@@ -11,11 +11,11 @@ use std::fs;
 use std::path::Path;
 use tokio::net::TcpStream;
 
-use bambu_lan::discovery::resolve_model;
-use bambu_lan::error::BambuError;
-use bambu_lan::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use bambu_lan::io::tokio::{build_unsafe_client_config, to_socket_error, TokioTlsConnector};
-use bambu_lan::io::{SocketError, TokioIo};
+use bambino::discovery::resolve_model;
+use bambino::error::BambuError;
+use bambino::ftps::{BambuFtpsClient, FtpDataStreamFactory};
+use bambino::io::tokio::{build_unsafe_client_config, to_socket_error, TokioTlsConnector};
+use bambino::io::{SocketError, TokioIo};
 
 /// Concrete implementation of the passive data connection factory for the Tokio runtime.
 struct TokioDataStreamFactory;

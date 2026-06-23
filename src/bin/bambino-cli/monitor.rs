@@ -12,14 +12,14 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::interval;
 
-use bambu_lan::diagnostics::{decode_hms_alert, decode_print_error};
-use bambu_lan::error::BambuError;
-use bambu_lan::io::tokio::{
+use bambino::diagnostics::{decode_hms_alert, decode_print_error};
+use bambino::error::BambuError;
+use bambino::io::tokio::{
     build_unsafe_client_config, to_socket_error, TokioTimer, TokioTlsConnector,
 };
-use bambu_lan::io::{TlsConnector, TokioIo};
-use bambu_lan::mqtt::{BambuMqttClient, PushAllRequest};
-use bambu_lan::types::PrintTelemetry;
+use bambino::io::{TlsConnector, TokioIo};
+use bambino::mqtt::{BambuMqttClient, PushAllRequest};
+use bambino::types::PrintTelemetry;
 
 /// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {

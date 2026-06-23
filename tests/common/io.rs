@@ -12,8 +12,8 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use bambu_lan::ftps::FtpDataStreamFactory;
-use bambu_lan::io::{AsyncIo, SocketError, TlsConnector, TokioIo};
+use bambino::ftps::FtpDataStreamFactory;
+use bambino::io::{AsyncIo, SocketError, TlsConnector, TokioIo};
 
 /// A pass-through TLS connector for testing.
 ///

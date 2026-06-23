@@ -97,9 +97,9 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         let size = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
 
         // Bounded allocation check to guard against memory allocation overflow attacks
-        if size > 5 * 1024 * 1024 {
+        if size > 10 * 1024 * 1024 {
             return Err(BambuError::ProtocolViolation(
-                "Extracted JPEG frame size exceeds safety allocation limit (5MB)",
+                "Extracted JPEG frame size exceeds safety allocation limit (10MB)",
             ));
         }
 

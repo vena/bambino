@@ -1,7 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(async_fn_in_trait)]
 
-//! # Bambu Lab LAN Protocol Client Crate (`bambu-lan`)
+//! # Bambu Lab LAN Protocol Client Crate (`bambino`)
 //!
 //! A multi-platform, asynchronous Rust library designed to interface directly
 //! with physical Bambu Lab 3D printers via local network (LAN mode) protocols.

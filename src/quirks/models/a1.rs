@@ -80,7 +80,12 @@ impl ModelQuirks for A1Quirks {
         String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")
     }
 
-    fn is_unsupported_command(&self, command: &str) -> bool {
-        command == "get_version"
+    /// Evaluates if the specified command string is unsupported or ignored on the target model.
+    ///
+    /// **Why get_version is allowed here:**
+    /// Similar to the P1 series, we are lifting the restriction on `get_version` for the A1
+    /// series to allow diagnostic evaluation and verification of device replies.
+    fn is_unsupported_command(&self, _command: &str) -> bool {
+        false
     }
 }

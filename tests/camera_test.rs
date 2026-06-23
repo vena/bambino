@@ -11,8 +11,8 @@ mod common;
 
 use tokio::io::DuplexStream;
 
-use bambu_lan::camera::binary::BambuBinaryCameraStream;
-use bambu_lan::io::TokioIo;
+use bambino::camera::binary::BambuBinaryCameraStream;
+use bambino::io::TokioIo;
 
 use common::mock_camera::run_mock_camera_server;
 

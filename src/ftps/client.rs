@@ -305,9 +305,10 @@ where
         // Block-wait for transfer acknowledgment on the control socket
         let res = read_response(&mut self.control_stream, &mut ctrl_buf).await;
         match res {
-            Ok((226, _)) => Ok(()),
-            Ok((426, _)) if self.model.quirks().enforce_ftps_tls_1_2() => {
-                // TLS 1.3 Close Race: Double check exact size to confirm write success [REF-FTPS-CONN]
+            Ok((226, _)) | Ok((426, _)) => {
+                // Verify the remote file size matches the expected upload length unconditionally.
+                // The 426 path handles the TLS 1.3 close-notify race on P2S/X2D models, but SIZE
+                // verification after 226 also catches silent SD card write truncation on all models.
                 let remote_size = self.get_file_size(remote_path).await?;
                 if remote_size == data.len() as u64 {
                     Ok(())

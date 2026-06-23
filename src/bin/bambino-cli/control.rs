@@ -4,18 +4,21 @@
 //!
 //! Handles dispatching manual commands to the printer motion controller
 //! and querying hardware modules from the expansion bus [REF-MOTO-GCODE].
+//!
+//! Incorporates detailed diagnostic telemetry printing if `--verbose` is enabled
+//! to isolate connection, handshake, and packet serialization issues.
 
 use std::time::Duration;
 use tokio::net::TcpStream;
 
-use bambu_lan::client::{FanTarget, PrinterClient};
-use bambu_lan::discovery::resolve_model;
-use bambu_lan::error::BambuError;
-use bambu_lan::io::tokio::{
+use bambino::client::{FanTarget, PrinterClient};
+use bambino::discovery::resolve_model;
+use bambino::error::BambuError;
+use bambino::io::tokio::{
     build_unsafe_client_config, to_socket_error, TokioTimer, TokioTlsConnector,
 };
-use bambu_lan::io::{TlsConnector, TokioIo};
-use bambu_lan::mqtt::{BambuMqttClient, GetVersionRequest};
+use bambino::io::{TlsConnector, TokioIo};
+use bambino::mqtt::{BambuMqttClient, GetVersionRequest};
 
 /// Utility to connect and return a configured MQTT client wrapper.
 async fn connect_mqtt(
@@ -26,62 +29,123 @@ async fn connect_mqtt(
     BambuMqttClient<<TokioTlsConnector as TlsConnector<TokioIo<TcpStream>>>::Stream>,
     BambuError,
 > {
+    let is_verbose = crate::is_verbose();
+    if is_verbose {
+        println!("[VERBOSE] Configuring TLS client context utilizing self-signed certificate verifier...");
+    }
     let config = build_unsafe_client_config();
     let connector = tokio_rustls::TlsConnector::from(config);
     let tls_connector = TokioTlsConnector::new(connector);
 
+    if is_verbose {
+        println!("[VERBOSE] Dialing TCP socket to {}:8883...", ip);
+    }
     let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
         .await
         .map_err(to_socket_error)
         .map_err(BambuError::NetworkError)?;
     let raw_io = TokioIo(tcp_stream);
 
+    if is_verbose {
+        println!("[VERBOSE] Wrapping socket in secure TLS session...");
+    }
     let secure_stream = tls_connector
         .connect(ip, 8883, raw_io)
         .await
         .map_err(BambuError::NetworkError)?;
 
-    BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await
+    if is_verbose {
+        println!("[VERBOSE] Initiating secure MQTT v3.1.1 protocol handshake...");
+    }
+    let client = BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
+
+    if is_verbose {
+        println!("[VERBOSE] MQTT protocol session established successfully.");
+    }
+    Ok(client)
 }
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
 ///
-/// **Query Capability Check [REF-DIAG-HMS]:**
-/// Verifies if the target printer model supports get_version commands using the model quirks engine.
-/// If unsupported (such as on the P1 or A1 series), prints an informational notice and exits cleanly
-/// without attempting to send the payload.
+/// **Removing Quirk Gates:**
+/// We have removed the `model.quirks().is_unsupported_command("get_version")` check.
+/// This allows us to attempt sending the packet to the P1S under LAN mode to verify
+/// exact behavior and observe where the command stalls or how the device reacts.
 pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
-    let model = resolve_model(serial, None);
-
-    if model.quirks().is_unsupported_command("get_version") {
-        println!("\n\x1B[1;33mNotice: Version query is unsupported on this printer model.\x1B[0m");
-        println!("Note: Lightweight printer models (such as the P1 and A1 series) do not");
-        println!("support or reply to expansion bus 'get_version' queries over LAN mode.\n");
-        return Ok(());
-    }
-
+    let is_verbose = crate::is_verbose();
     let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
 
     println!("Querying expansion bus version database...");
     let req = GetVersionRequest::new(10002);
+
+    if is_verbose {
+        println!("[VERBOSE] Serializing get_version command structure to JSON...");
+    }
     let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
+
+    if is_verbose {
+        println!(
+            "[VERBOSE] Publishing payload to 'request' topic: {}",
+            String::from_utf8_lossy(&payload)
+        );
+    }
     mqtt.publish_command(&payload).await?;
+
+    if is_verbose {
+        println!("[VERBOSE] Published command successfully. Entering polling loop for telemetry responses...");
+    }
 
     let poll_future = async {
         loop {
             let msg = mqtt.poll_telemetry().await?;
-            let v: serde_json::Value =
-                serde_json::from_slice(&msg.payload).unwrap_or(serde_json::Value::Null);
+            if is_verbose {
+                println!(
+                    "[VERBOSE] Telemetry frame received on topic: '{}', size: {} bytes",
+                    msg.topic,
+                    msg.payload.len()
+                );
+            }
 
-            if v.get("command").and_then(|c| c.as_str()) == Some("get_version") {
-                if let Some(modules) = v.get("module").and_then(|m| m.as_array()) {
-                    return Ok::<_, BambuError>(modules.clone());
+            let v: serde_json::Value = match serde_json::from_slice(&msg.payload) {
+                Ok(val) => val,
+                Err(e) => {
+                    if is_verbose {
+                        println!("[VERBOSE] Failed to parse JSON frame payload: {:?}", e);
+                    }
+                    serde_json::Value::Null
+                }
+            };
+
+            if is_verbose && !v.is_null() {
+                println!(
+                    "[VERBOSE] Parsed JSON Content: {}",
+                    serde_json::to_string(&v).unwrap_or_default()
+                );
+            }
+
+            // Polymorphic structure matching: We inspect if the payload maps command keys under
+            // the root object directly, or if they are nested inside an 'info' sub-block.
+            let target_node = if v.get("info").is_some() {
+                v.get("info")
+            } else {
+                Some(&v)
+            };
+
+            if let Some(node) = target_node {
+                if node.get("command").and_then(|c| c.as_str()) == Some("get_version") {
+                    if is_verbose {
+                        println!("[VERBOSE] Matching 'get_version' command frame detected!");
+                    }
+                    if let Some(modules) = node.get("module").and_then(|m| m.as_array()) {
+                        return Ok::<_, BambuError>(modules.clone());
+                    }
                 }
             }
         }
     };
 
-    match tokio::time::timeout(Duration::from_secs(5), poll_future).await {
+    // We use a generous timeout to allow latency-heavy ESP32 targets to complete the query.
+    match tokio::time::timeout(Duration::from_secs(10), poll_future).await {
         Ok(Ok(modules)) => {
             println!("\nDetected Expansion Bus Modules & Versions:");
             println!("{:=<75}", "");
@@ -102,11 +166,20 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
             }
             println!("{:=<75}\n", "");
         }
-        Ok(Err(e)) => return Err(e),
+        Ok(Err(e)) => {
+            if is_verbose {
+                println!("[VERBOSE] Polling loop generated an active error: {:?}", e);
+            }
+            return Err(e);
+        }
         Err(_) => {
-            println!("\n\x1B[1;33mNotice: Version query timed out after 5 seconds.\x1B[0m");
-            println!("Note: Some lightweight printer models (such as the P1 and A1 series) do not");
-            println!("support or reply to expansion bus 'get_version' queries over LAN mode.\n");
+            println!("\n\x1B[1;33mNotice: Version query timed out after 10 seconds.\x1B[0m");
+            println!(
+                "Note: If this model does not reply, it confirms the physical firmware on this"
+            );
+            println!(
+                "specific hardware track discards or ignores 'get_version' payloads over MQTTS.\n"
+            );
         }
     }
 
@@ -126,7 +199,13 @@ pub async fn run(
         ));
     }
 
+    let is_verbose = crate::is_verbose();
     let action = action_args[0].to_lowercase();
+
+    if is_verbose {
+        println!("[VERBOSE] Running control subcommand action: '{}'", action);
+    }
+
     let mqtt = connect_mqtt(ip, serial, access_code).await?;
     let model = resolve_model(serial, None);
     let mut client = PrinterClient::new(mqtt, serial, model);

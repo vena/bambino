@@ -114,7 +114,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bambu-lan"
+name = "bambino"
 version = "0.1.0"
 dependencies = [
  "embassy-net",

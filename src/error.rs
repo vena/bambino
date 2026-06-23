@@ -7,7 +7,7 @@ use std::string::String;
 #[cfg(all(not(feature = "std"), feature = "alloc"))]
 use alloc::string::String;
 
-/// Unified error type for the `bambu-lan` crate.
+/// Unified error type for the `bambino` crate.
 /// 
 /// This enum wraps all protocol, serialization, and transport-level failures 
 /// with localized error contexts. Under `std` environments, standard formatting 

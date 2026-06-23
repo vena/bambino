@@ -1,5 +1,5 @@
 [package]
-name = "bambu-lan"
+name = "bambino"
 version = "0.1.0"
 edition = "2021"
 authors = ["Colleague <developer@bambulab.lan>"]

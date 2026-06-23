@@ -70,7 +70,13 @@ impl ModelQuirks for P1Quirks {
         String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")
     }
 
-    fn is_unsupported_command(&self, command: &str) -> bool {
-        command == "get_version"
+    /// Evaluates if the specified command string is unsupported or ignored on the target model.
+    ///
+    /// **Why get_version is allowed here:**
+    /// Previously, a gate blocked `get_version` on the P1 series due to assumptions about lack
+    /// of support. We are removing this restriction to verify if the P1S actually processes
+    /// and responds to expansion bus version queries under active LAN/Developer modes.
+    fn is_unsupported_command(&self, _command: &str) -> bool {
+        false
     }
 }

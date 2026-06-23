@@ -11,9 +11,9 @@ mod common;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
-use bambu_lan::error::BambuError;
-use bambu_lan::io::{TimerProvider, TokioIo};
-use bambu_lan::mqtt::BambuMqttClient;
+use bambino::error::BambuError;
+use bambino::io::{TimerProvider, TokioIo};
+use bambino::mqtt::BambuMqttClient;
 
 use common::mock_mqtt::run_mock_mqtt_broker;
 

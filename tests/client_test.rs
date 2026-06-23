@@ -9,11 +9,11 @@
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
-use bambu_lan::client::{FanTarget, PrinterClient};
-use bambu_lan::discovery::BambuModel;
-use bambu_lan::error::BambuError;
-use bambu_lan::io::{TimerProvider, TokioIo};
-use bambu_lan::mqtt::BambuMqttClient;
+use bambino::client::{FanTarget, PrinterClient};
+use bambino::discovery::BambuModel;
+use bambino::error::BambuError;
+use bambino::io::{TimerProvider, TokioIo};
+use bambino::mqtt::BambuMqttClient;
 
 // ============================================================================
 // Shared Test Primitives & Handshake Mocks
@@ -399,15 +399,4 @@ async fn test_peripheral_signals_and_climate_controls() {
     client.set_buzzer_mode(2).await.unwrap();
 
     broker_task.await.unwrap();
-}
-
-#[test]
-fn test_quirks_model_unsupported_commands() {
-    // P1S ignores "get_version"
-    let p1s = BambuModel::P1S;
-    assert!(p1s.quirks().is_unsupported_command("get_version"));
-
-    // X1C allows "get_version"
-    let x1c = BambuModel::X1C;
-    assert!(!x1c.quirks().is_unsupported_command("get_version"));
 }
