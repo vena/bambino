@@ -149,13 +149,22 @@ fn render_dashboard(
 ) -> Result<(), serde_json::Error> {
     let v: serde_json::Value = serde_json::from_slice(payload)?;
 
-    let incoming = match v.get("print") {
-        Some(serde_json::Value::Object(obj)) => obj,
-        _ => return Ok(()),
-    };
+    let mut had_update = false;
 
-    for (key, value) in incoming {
-        state.insert(key.clone(), value.clone());
+    if let Some(serde_json::Value::Object(print_obj)) = v.get("print") {
+        for (key, value) in print_obj {
+            state.insert(key.clone(), value.clone());
+        }
+        had_update = true;
+    }
+
+    if let Some(device_obj) = v.get("device") {
+        state.insert("_device".to_string(), device_obj.clone());
+        had_update = true;
+    }
+
+    if !had_update {
+        return Ok(());
     }
 
     print!("\x1B[2J\x1B[1;1H");
@@ -189,7 +198,7 @@ fn render_dashboard(
         String::from("--")
     };
 
-    println!("=================== Bambu Lab Printer Live Dashboard ====================");
+    println!("================== Bambu Lab Printer Live Dashboard ===================");
     println!("{:<20} : {}", "Operational State", gcode_state);
     println!("{:<20} : {}", "Active Job Name", subtask_name);
     println!(
@@ -198,24 +207,113 @@ fn render_dashboard(
     );
     println!("{:<20} : {}", "Time Remaining", remaining_formatted);
 
-    // -- Nozzle --
-    let nozzle_diameter = state
-        .get("nozzle_diameter")
-        .and_then(|s| s.as_str())
-        .unwrap_or("--");
-    let nozzle_type = state
-        .get("nozzle_type")
-        .and_then(|s| s.as_str())
-        .unwrap_or("--");
-    println!("{:<20} : {}mm {}", "Nozzle", nozzle_diameter, nozzle_type);
+    // -- Nozzles --
+    // Build a unified nozzle list: prefer device.nozzle.info[], backfill from print-level fields.
+    struct NozzleEntry {
+        id: u64,
+        diameter: String,
+        ntype: String,
+        temp: String,
+    }
 
-    // -- Thermal --
+    let mut nozzles: Vec<NozzleEntry> = Vec::new();
+
+    if let Some(device_nozzles) = state
+        .get("_device")
+        .and_then(|d| d.get("nozzle"))
+        .and_then(|n| n.get("info"))
+        .and_then(|i| i.as_array())
+    {
+        for n in device_nozzles {
+            let id = n.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+            if id >= 16 {
+                continue;
+            }
+            let diameter = n
+                .get("diameter")
+                .and_then(|d| d.as_f64())
+                .map(|d| format!("{:.1}mm", d))
+                .unwrap_or_else(|| "--".to_string());
+            let ntype = n
+                .get("type")
+                .or_else(|| n.get("nozzle_type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("--")
+                .to_string();
+            nozzles.push(NozzleEntry {
+                id,
+                diameter,
+                ntype,
+                temp: String::new(),
+            });
+        }
+    }
+
+    // Backfill from print-level fields if device data hasn't arrived
+    if nozzles.is_empty() {
+        let diameter = state
+            .get("nozzle_diameter")
+            .and_then(|s| s.as_str())
+            .unwrap_or("--")
+            .to_string();
+        let ntype = state
+            .get("nozzle_type")
+            .and_then(|s| s.as_str())
+            .unwrap_or("--")
+            .to_string();
+        nozzles.push(NozzleEntry {
+            id: 0,
+            diameter: format!("{}mm", diameter),
+            ntype,
+            temp: String::new(),
+        });
+    }
+
+    // Fill in temperatures from print-level fields
     let nozzle_temper = state
         .get("nozzle_temper")
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as u32;
-    let (nozzle_act, nozzle_tgt) = PrintTelemetry::unpack_temperature(nozzle_temper);
+    let nozzle_target = state
+        .get("nozzle_target_temper")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as u32;
+    let (nozzle_act, _) = PrintTelemetry::unpack_temperature(nozzle_temper);
+    let (_, nozzle_tgt) = PrintTelemetry::unpack_temperature(nozzle_target);
 
+    if nozzles.len() == 1 {
+        nozzles[0].temp = format!("{}°C / T: {}°C", nozzle_act, nozzle_tgt);
+    } else if nozzles.len() >= 2 {
+        // IDEX: nozzle_temper = left(#1) actual, nozzle_target_temper = right(#0) target
+        if let Some(right) = nozzles.iter_mut().find(|n| n.id == 0) {
+            right.temp = format!("target: {}°C", nozzle_tgt);
+        }
+        if let Some(left) = nozzles.iter_mut().find(|n| n.id == 1) {
+            left.temp = format!("{}°C", nozzle_act);
+        }
+    }
+
+    println!("\n--- Nozzles -----------------------------------------------------------");
+    for row in nozzles.chunks(2) {
+        let mut cols: Vec<String> = Vec::new();
+        for n in row {
+            if n.temp.is_empty() {
+                cols.push(format!("#{}: {} {}", n.id, n.diameter, n.ntype));
+            } else {
+                cols.push(format!(
+                    "#{}: {} {} ({})",
+                    n.id, n.diameter, n.ntype, n.temp
+                ));
+            }
+        }
+        if cols.len() == 2 {
+            println!("{:<34} │ {}", cols[0], cols[1]);
+        } else {
+            println!("{}", cols[0]);
+        }
+    }
+
+    // -- Thermal (bed + chamber) --
     let bed_temper = state
         .get("bed_temper")
         .and_then(|t| t.as_u64())
@@ -224,10 +322,10 @@ fn render_dashboard(
 
     println!("\n--- Thermal -----------------------------------------------------------");
     println!(
-        "{:<20} : {:>3}°C / {:>3}°C",
-        "Hotend", nozzle_act, nozzle_tgt
+        "{:<10} : {}°C / T: {}°C",
+        "Heated Bed", bed_act, bed_tgt
     );
-    println!("{:<20} : {:>3}°C / {:>3}°C", "Heated Bed", bed_act, bed_tgt);
+
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state
             .get("chamber_temper")
@@ -320,7 +418,7 @@ fn render_dashboard(
                 "\n--- AMS #{} ({}°C, RH:{}){}",
                 unit_id, temp, humidity, dry_suffix
             );
-            let pad = 71usize.saturating_sub(header.len());
+            let pad = 71usize.saturating_sub(header.len() - 1);
             println!("{} {}", header, "-".repeat(pad));
 
             if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
