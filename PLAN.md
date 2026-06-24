@@ -25,6 +25,108 @@ The `bambino` library provides a platform-agnostic abstraction of local network 
 
 ---
 
-## 2. Remaining Work — Protocol Coverage & API Completeness
+## 2. Remaining Work — Code Quality & Modernization
 
-All phases (13–18) identified in the cross-audit against the Bambuddy reference application have been completed. The library's MQTT command surface, FTPS operations, telemetry structs, discovery engine, and logging infrastructure are now fully aligned with the reference documentation.
+A deep audit of the full codebase identified systemic patterns worth addressing: discarded error sources, scattered magic numbers, repeated boilerplate, suboptimal collection choices, and quirks engine correctness issues. These phases are ordered by dependency — foundational work first, then consumers of that work.
+
+**Phase dependency chain:** 19 → 20 → 21 → 22 → 23 → 24. Each phase may depend on changes made in earlier phases (e.g., Phase 20 uses the `From` impl from Phase 19; Phase 23 tests use constants from Phase 19; Phase 24 builds on the deduplicated quirks from Phase 20).
+
+**Verification gate between each phase:** `cargo build && cargo build --no-default-features --features alloc --lib && cargo test` — every change must compile under both the default `tokio` feature set and the `no_std`+`alloc` library target.
+
+### Phase 19: Error Handling & Constants Foundation
+
+Upgrade the error type system and extract magic numbers into named constants. No other phase should be started before this one completes — `From` impls and named constants are used throughout later phases.
+
+**Error handling (`src/error.rs`):**
+
+The current structure: `BambuError` derives `Debug` only (not `Clone`). Under `std`, it uses `thiserror` for `Display`/`Error`. Under `no_std`, a manual `Display` impl duplicates all message strings (lines 62-78). Two separate variants exist for protocol errors: `ProtocolViolation(&'static str)` and `ProtocolViolationDynamic(String)` (the latter gated on `alloc`/`std`). `SocketError` in `src/io/mod.rs` already derives `Clone, Copy`.
+
+* [ ] Implement `From<SocketError> for BambuError` in `src/error.rs` — eliminates 29 manual `.map_err(BambuError::NetworkError)` calls (14 in `src/ftps/client.rs`, 10 in `src/mqtt/client.rs`, 4 in `src/camera/binary.rs`, 1 in `src/discovery/mod.rs`)
+* [ ] Unify `ProtocolViolation` and `ProtocolViolationDynamic` into a single `ProtocolViolation(Cow<'static, str>)` variant (gated on alloc/std; bare no_std keeps `&'static str` only). `ProtocolViolationDynamic` is only used in CLI code (`src/bin/bambino-cli/control.rs`, `storage.rs`), not the library — low urgency but cleaner API
+* [ ] Sync the manual no_std `Display` impl with thiserror annotations; add a `#[cfg(test)]` assertion comparing `format!("{}", variant)` output to catch future drift
+* [ ] Add `Clone` derive to `BambuError` (all variants are Clone-compatible once `Cow` replaces `String`)
+
+**Named constants — extract magic numbers into `pub(crate) const` blocks:**
+* [ ] MQTT packet types in `src/mqtt/client.rs`
+* [ ] FTP response codes in `src/ftps/client.rs`
+* [ ] AMS tray state/ID boundaries in `src/ams/`
+* [ ] Camera frame constants in `src/camera/binary.rs`
+* [ ] HMS fault threshold and cancellation codes in `src/diagnostics/hms.rs`
+* [ ] Door sensor bitmask in `src/types/telemetry.rs`
+* [ ] FTPS misc in `src/ftps/client.rs`: port, chunk size, data buffer, size heuristic threshold, PASV port multiplier
+* [ ] MQTT misc in `src/mqtt/client.rs`: in-flight limit, keep-alive timeout
+* [ ] Discovery in `src/discovery/mod.rs`: re-broadcast interval
+* [ ] Telemetry in `src/types/telemetry.rs`: temperature unpacking divisor
+* [ ] Camera ports in `src/camera/`: RTSPS port, binary JPEG port, RTP clock frequency
+* [ ] Fan conversion in `src/quirks/mod.rs`: step divisor, rounding offset
+* [ ] Other: `i32::MAX as u64` in `clamp_task_id`, sequence ID start in `src/client.rs`, UDP recv timeout in `src/io/tokio.rs`
+
+### Phase 20: Library DRY Refactoring
+
+Extract repeated patterns into helper methods, reducing mechanical duplication. Depends on Phase 19 (`From` impl, constants).
+
+* [ ] Add `async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<u16, BambuError>` helper on `PrinterClient` in `src/client.rs` — replaces 18 identical `serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?; self.mqtt.publish_command(&payload).await` sequences
+* [ ] Deduplicate Z-axis safety G-code to a single location in `src/quirks/models/` — the identical `String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")` literal is copy-pasted across all 6 model files (a1, p1, p2, x1, x2, h2). For now, consolidate to one shared constant or default trait method; Phase 24 will later convert this to a parameterized format that uses the actual `distance`/`feedrate` arguments
+* [ ] Add `Vec::with_capacity` hints to MQTT encoding functions in `src/mqtt/client.rs` — `encode_remaining_length` (cap 4), `encode_connect`/`encode_subscribe`/`encode_publish_qos1` (pre-calculated from topic/payload lengths)
+* [ ] Propagate `From<SocketError>` from Phase 19 — replace the 29 manual `.map_err(BambuError::NetworkError)` calls with `?` where the calling function returns `Result<_, BambuError>`
+* [ ] Log discarded source errors — change `.map_err(|_| SocketError::ConnectionReset)` closures in `src/mqtt/client.rs` `read_exact_packet` (3 occurrences) to `log::trace!` the source error before converting
+
+### Phase 21: Collection Efficiency & API Surface Polish
+
+Replace suboptimal data structures, restrict visibility, and clean up the public API. Depends on Phase 20 (new helper methods affect API shape).
+
+* [ ] Replace `in_flight: Vec<u16>` with `BTreeSet<u16>` in `src/mqtt/client.rs`
+* [ ] Replace discovery deduplication linear scan with `BTreeSet<String>` in `src/discovery/mod.rs`
+* [ ] Hide dummy types (`DummyRawIo`, `DummyTls`, `DummyFactory`) with `#[doc(hidden)]` — must stay `pub` for default type parameters but should be hidden from docs
+* [ ] Change `clamp_task_id` return type from `String` to `u32`
+* [ ] Introduce `PrintJobConfig` struct to replace 8+ parameter `start_print()` and `ProjectFileRequest::new()`
+* [ ] Remove phase numbering comments in `src/lib.rs`
+* [ ] Remove `#![allow(async_fn_in_trait)]` lint suppression
+
+### Phase 22: CLI Hardening
+
+Extract shared connection logic, add input validation and timeouts. Depends on Phases 19-21 (library API changes must stabilize first).
+
+* [ ] Extract `connect_mqtt` into shared `src/bin/bambino-cli/connection.rs` — function in control.rs, inline-duplicated twice in monitor.rs. Include a `MqttClient` type alias
+* [ ] Add connection timeout wrapping `TcpStream::connect`
+* [ ] Add input validation for IP, serial, and access code parameters
+* [ ] Add file upload size guard in `storage.rs`
+* [ ] Clean up removed quirks check TODO comment in `control.rs`
+
+### Phase 23: Test Infrastructure & Coverage
+
+Consolidate test mocking, replace magic numbers, and expand edge case coverage. Depends on Phases 19-22 (tests validate all prior changes; uses constants from Phase 19).
+
+* [ ] Extract shared CONNECT/SUBSCRIBE parsing from `tests/client_test.rs` handshake helper into `tests/common/mock_mqtt.rs` — the two files have separate abstractions (full broker vs. handshake-only) but share raw packet parsing
+* [ ] Replace magic packet type numbers in test assertions with Phase 19 constants
+* [ ] Add `expect("context")` to bare `.unwrap()` calls in tests
+* [ ] Add negative/failure tests for `PrinterClient` — in-flight saturation, connection drop
+* [ ] Add edge case tests for MQTT — packet ID wraparound
+* [ ] Add edge case tests for FTPS — empty listing, malformed PASV response
+
+### Phase 24: Quirks Engine Overhaul
+
+A deep audit of the quirks engine (`src/quirks/`) and its usage revealed correctness bugs, missing capabilities, architectural leaks, and dead code. This phase brings the engine into full alignment with the reference documentation (`reference/04_toolhead_thermal_motion.md` §4.2, `reference/06_cameras.md`) and enforces the design principle that ALL model-specific behavior routes through `model.quirks()`. Can be done independently of Phases 19-23 but is listed last since it's the largest scope.
+
+**Correctness fixes:**
+* [ ] Split H2 model family into separate quirks structs (`H2SQuirks`, `H2DQuirks`, `H2CQuirks`, `H2DProQuirks`) — currently all report `physical_nozzle_count=1`, but H2D/H2DPro=2 and H2C=7 (1 dedicated left nozzle + 6 interchangeable right-side hotends)
+* [ ] Fix X1E active chamber heater — `X1Quirks` returns `false` for `has_active_chamber_heater()` but reference §4.2 explicitly lists X1E as supporting it. Either split X1C/X1E quirks or add differentiation
+* [ ] Fix `relative_z_move_gcode` — all 6 implementations ignore `distance`/`feedrate` parameters, hardcoding `Z10.00 F3000`. Interpolate actual values and add per-model Z travel bounds validation
+
+**Architectural violations — model-specific behavior outside quirks:**
+* [ ] Move X2D auxiliary fan check out of `client.rs` — line 343 directly matches `BambuModel::X2D` instead of calling a quirks method. Add `supports_auxiliary_right_fan() -> bool` to `ModelQuirks`
+* [ ] Refactor door sensor decoding — `PrintTelemetry::is_door_open(is_x1_series: bool)` embeds model knowledge in the telemetry layer. Move field selection logic (X1 uses `home_flag`, others use `stat`) into the quirks implementations themselves
+
+**Missing quirks methods (documented in reference but not in trait):**
+* [ ] Add `requires_wallclock_rtsp_timestamps() -> bool` — P2S camera timestamp freezing workaround. Currently a standalone function in `p2.rs`, not a trait method
+* [ ] Add `auxiliary_fan_uses_percentage() -> bool` — X2D's right auxiliary fan (id: 160) uses 0-100% directly instead of 0-15 step conversion
+
+**Trait cleanup — reduce duplication, remove dead code:**
+* [ ] Add default implementation for `is_unsupported_command()` returning `false` — every model currently implements it identically, and no real filtering exists. Consider removing entirely if it serves no purpose
+* [ ] Extract shared `is_unsafe_homing_command` default for bed-on-Z models — 5 of 6 models have identical G28 axis-check logic
+* [ ] Extract shared `relative_z_move_gcode` default for CoreXY models (after fixing parameterization above)
+* [ ] Remove orphaned standalone functions in `p2.rs` (`force_tls_v12_for_ftps()`, `requires_wallclock_rtsp_timestamps()`) once integrated into the trait
+
+**Tests:**
+* [ ] Add per-model quirks assertion tests validating nozzle counts, chamber capabilities, and camera ports against reference documentation
+* [ ] Add unit tests for parameterized Z-move G-code output and limit clamping

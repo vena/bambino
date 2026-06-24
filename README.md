@@ -10,9 +10,7 @@ Designed for use on host machines, powerful ESP32 platforms with `std` support (
 - **MQTT control** — connect to the printer's local broker on port 8883, send commands, stream telemetry
 - **File transfer** — implicit FTPS on port 990 for listing, uploading, and deleting files on the SD card
 - **Camera** — binary JPEG streaming on port 6000 (A1/P1) and RTSPS on port 322 (X1/X2/H2/P2S)
-- **Model quirks** — handles per-model differences (TLS data channel modes, fan step rounding, Z-axis safety, etc.) so you don't have to
-
-Tested against: X1C, X1E, X2D, A1, A1 Mini, A2L, P1P, P1S, P2S, H2D, H2D Pro, H2C, H2S.
+- **Model quirks** — handles per-model differences (TLS data channel modes, fan step rounding, Z-axis safety, etc.)
 
 ## Quick start
 
@@ -178,6 +176,15 @@ Add `-v` for protocol-level debug output, or set `BAMBU_VERBOSE=1`.
 - **IP** and **Serial** — `bambino-cli discover` will show them
 - **Access Code** — on the printer's LCD under Network > LAN Mode
 
+## Acknowledgements
+
+Bambino would not have been possible without the reverse-engineering work of other excellent projects.
+
+*  [Bambuddy](github.com/maziggy/bambuddy)
+*  [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
+*  [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
+*  [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
+
 ## License
 
-AGPL 3.0
+[AGPL-3.0](LICENSE)
