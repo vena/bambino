@@ -11,8 +11,8 @@
 use std::time::Duration;
 
 use bambino::client::{FanTarget, PrinterClient};
-use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
+use bambino::models::resolve_model;
 use bambino::mqtt::GetVersionRequest;
 
 use crate::connection::connect_mqtt;

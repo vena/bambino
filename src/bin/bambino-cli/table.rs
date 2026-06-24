@@ -1,5 +1,7 @@
 #![cfg(feature = "std")]
 
+use std::io::{self, Write};
+
 pub struct Table {
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
@@ -19,6 +21,10 @@ impl Table {
     }
 
     pub fn print(&self) {
+        self.write_to(&mut io::stdout());
+    }
+
+    pub fn write_to(&self, w: &mut impl Write) {
         let col_count = self.headers.len();
         let mut widths: Vec<usize> = self.headers.iter().map(|h| h.len()).collect();
         for row in &self.rows {
@@ -31,15 +37,15 @@ impl Table {
 
         let separator_width: usize = widths.iter().sum::<usize>() + (col_count - 1) * 3;
 
-        print_row(&self.headers, &widths);
-        println!("{:─<width$}", "", width = separator_width);
+        write_row(w, &self.headers, &widths);
+        let _ = writeln!(w, "{:─<width$}", "", width = separator_width);
         for row in &self.rows {
-            print_row(row, &widths);
+            write_row(w, row, &widths);
         }
     }
 }
 
-fn print_row(cells: &[String], widths: &[usize]) {
+fn write_row(w: &mut impl Write, cells: &[String], widths: &[usize]) {
     let formatted: Vec<String> = cells
         .iter()
         .enumerate()
@@ -48,5 +54,5 @@ fn print_row(cells: &[String], widths: &[usize]) {
             format!("{:<width$}", cell, width = w)
         })
         .collect();
-    println!("{}", formatted.join(" │ "));
+    let _ = writeln!(w, "{}", formatted.join(" │ "));
 }

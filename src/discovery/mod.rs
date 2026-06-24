@@ -8,7 +8,6 @@ pub mod parser;
 
 use crate::error::BambuError;
 use crate::io::{AsyncUdpSocket, TimerProvider};
-pub use crate::models::{BambuModel, resolve_model};
 pub use parser::{SsdpDevice, parse_ssdp_payload};
 
 #[cfg(not(feature = "std"))]
@@ -255,6 +254,7 @@ where
 mod tests {
     use super::*;
     use crate::io::{AsyncUdpSocket, SocketError};
+    use crate::models::BambuModel;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -1,24 +1,49 @@
 #![cfg(feature = "std")]
 
-//! # Real-Time Telemetry & Diagnostics Monitoring Subcommand
-//!
-//! Establishes a secure connection to MQTTS Port 8883 [REF-MQTT-CONN],
-//! initiates a state dump, and continuously processes state updates [REF-MQTT-ENV].
-//!
-//! Employs `tokio::select!` to multiplex between incoming telemetry updates
-//! and outbound keep-alive PING frames, rendering a live terminal dashboard.
-
+use std::io::{self, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal;
+use tokio::sync::mpsc;
 use tokio::time::interval;
 
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
-use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
+use bambino::models::resolve_model;
 use bambino::mqtt::PushAllRequest;
 use bambino::quirks::ModelQuirks;
 use bambino::types::PrintTelemetry;
 
 use crate::connection::connect_mqtt;
+
+/// Write adapter that translates `\n` to `\r\n` for raw-mode terminal output.
+struct RawWriter<W: Write>(W);
+
+impl<W: Write> Write for RawWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut last = 0;
+        for (i, &byte) in buf.iter().enumerate() {
+            if byte == b'\n' {
+                if i > last {
+                    self.0.write_all(&buf[last..i])?;
+                }
+                self.0.write_all(b"\r\n")?;
+                last = i + 1;
+            }
+        }
+        if last < buf.len() {
+            self.0.write_all(&buf[last..])?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
 
 /// Connects, sends `pushall`, and dumps the first response containing a `print` object as pretty JSON.
 pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
@@ -30,7 +55,6 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), Bambu
     let push_payload = serde_json::to_vec(&push_req).map_err(|_| BambuError::SerializationError)?;
     mqtt.publish_command(&push_payload).await?;
 
-    // Collect messages until we get one with a "print" object containing "gcode_state"
     let timeout = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(timeout);
 
@@ -53,54 +77,103 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), Bambu
     }
 }
 
+/// RAII guard that restores terminal state on drop.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        write!(stdout, "\x1B[?1049h\x1B[?25l")?;
+        stdout.flush()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let mut stdout = io::stdout();
+        let _ = write!(stdout, "\x1B[?25h\x1B[?1049l");
+        let _ = stdout.flush();
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
 /// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
-    println!("Connecting to secure MQTT broker at {}:8883...", ip);
+    eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
 
     let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
-    println!("MQTT Connection successfully established. Querying status database...");
+    eprintln!("MQTT Connection successfully established. Querying status database...");
 
-    // 3. Command the printer to dump its initial state machine values
     let seq_id = 10001;
     let push_req = PushAllRequest::new(seq_id);
     let push_payload = serde_json::to_vec(&push_req).map_err(|_| BambuError::SerializationError)?;
     mqtt.publish_command(&push_payload).await?;
 
-    // 4. Configure our keep-alive timer loop (Ping interval set to 15 seconds)
     let mut ping_timer = interval(Duration::from_secs(15));
-    // Skip the first immediate tick
     ping_timer.tick().await;
 
     let model = resolve_model(serial, None);
     let quirks = model.quirks();
-    println!(
-        "Monitoring active ({}). Press Ctrl+C to terminate.\n",
-        serial
-    );
+
+    let _guard = TerminalGuard::enter().map_err(|_| {
+        BambuError::ProtocolViolation("failed to initialize terminal raw mode".into())
+    })?;
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_flag = shutdown.clone();
+    let (key_tx, mut key_rx) = mpsc::channel::<KeyEvent>(4);
+    tokio::task::spawn_blocking(move || {
+        while !shutdown_flag.load(Ordering::Relaxed) {
+            if event::poll(Duration::from_millis(50)).unwrap_or(false)
+                && let Ok(Event::Key(key)) = event::read()
+                && key_tx.blocking_send(key).is_err()
+            {
+                break;
+            }
+        }
+    });
 
     let mut state = serde_json::Map::new();
 
-    loop {
+    let result = loop {
         tokio::select! {
-            // A: Listen for incoming telemetry payloads
             telemetry_res = mqtt.poll_telemetry() => {
                 match telemetry_res {
                     Ok(msg) => {
                         if let Err(e) = render_dashboard(&msg.payload, &mut state, quirks) {
-                            eprintln!("Warning: Failed to render telemetry updates: {:?}", e);
+                            log::warn!("Failed to render telemetry updates: {:?}", e);
                         }
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => break Err(e),
                 }
             }
 
-            // B: Periodically send keep-alives to prevent zombie TCP dropouts [REF-MQTT-ZOMBIE]
             _ = ping_timer.tick() => {
                 if let Err(e) = mqtt.send_ping().await {
-                    eprintln!("Warning: Failed to dispatch keep-alive ping: {:?}", e);
+                    log::warn!("Failed to dispatch keep-alive ping: {:?}", e);
+                }
+            }
+
+            Some(key) = key_rx.recv() => {
+                if should_quit(&key) {
+                    break Ok(());
                 }
             }
         }
+    };
+
+    shutdown.store(true, Ordering::Relaxed);
+    result
+}
+
+fn should_quit(key: &KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('q' | 'Q' | 'x' | 'X') if key.modifiers == KeyModifiers::NONE => true,
+        KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => true,
+        KeyCode::Esc => true,
+        _ => false,
     }
 }
 
@@ -130,7 +203,8 @@ fn render_dashboard(
         return Ok(());
     }
 
-    print!("\x1B[2J\x1B[1;1H");
+    let mut w = RawWriter(io::stdout());
+    write!(w, "\x1B[1;1H\x1B[2J").unwrap_or(());
 
     // -- Print Status --
     let gcode_state = state
@@ -161,17 +235,22 @@ fn render_dashboard(
         String::from("--")
     };
 
-    println!("================== Bambu Lab Printer Live Dashboard ===================");
-    println!("{:<20} : {}", "Operational State", gcode_state);
-    println!("{:<20} : {}", "Active Job Name", subtask_name);
-    println!(
+    writeln!(
+        w,
+        "================== Bambu Lab Printer Live Dashboard ==================="
+    )
+    .unwrap_or(());
+    writeln!(w, "{:<20} : {}", "Operational State", gcode_state).unwrap_or(());
+    writeln!(w, "{:<20} : {}", "Active Job Name", subtask_name).unwrap_or(());
+    writeln!(
+        w,
         "{:<20} : {:.1}%  ({}/{})",
         "Print Progress", progress, layer_num, total_layers
-    );
-    println!("{:<20} : {}", "Time Remaining", remaining_formatted);
+    )
+    .unwrap_or(());
+    writeln!(w, "{:<20} : {}", "Time Remaining", remaining_formatted).unwrap_or(());
 
     // -- Nozzles --
-    // Build a unified nozzle list: prefer device.nozzle.info[], backfill from print-level fields.
     struct NozzleEntry {
         id: u64,
         diameter: String,
@@ -212,7 +291,6 @@ fn render_dashboard(
         }
     }
 
-    // Backfill from print-level fields if device data hasn't arrived
     if nozzles.is_empty() {
         let diameter = state
             .get("nozzle_diameter")
@@ -232,7 +310,6 @@ fn render_dashboard(
         });
     }
 
-    // Fill in temperatures from print-level fields
     let nozzle_temper = state
         .get("nozzle_temper")
         .and_then(|t| t.as_u64())
@@ -247,7 +324,6 @@ fn render_dashboard(
     if nozzles.len() == 1 {
         nozzles[0].temp = format!("{}°C / T: {}°C", nozzle_act, nozzle_tgt);
     } else if nozzles.len() >= 2 {
-        // IDEX: nozzle_temper = left(#1) actual, nozzle_target_temper = right(#0) target
         if let Some(right) = nozzles.iter_mut().find(|n| n.id == 0) {
             right.temp = format!("target: {}°C", nozzle_tgt);
         }
@@ -256,7 +332,11 @@ fn render_dashboard(
         }
     }
 
-    println!("\n--- Nozzles -----------------------------------------------------------");
+    writeln!(
+        w,
+        "\n--- Nozzles -----------------------------------------------------------"
+    )
+    .unwrap_or(());
     for row in nozzles.chunks(2) {
         let mut cols: Vec<String> = Vec::new();
         for n in row {
@@ -270,9 +350,9 @@ fn render_dashboard(
             }
         }
         if cols.len() == 2 {
-            println!("{:<34} │ {}", cols[0], cols[1]);
+            writeln!(w, "{:<34} │ {}", cols[0], cols[1]).unwrap_or(());
         } else {
-            println!("{}", cols[0]);
+            writeln!(w, "{}", cols[0]).unwrap_or(());
         }
     }
 
@@ -283,8 +363,12 @@ fn render_dashboard(
         .unwrap_or(0) as u32;
     let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
 
-    println!("\n--- Thermal -----------------------------------------------------------");
-    println!("{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt);
+    writeln!(
+        w,
+        "\n--- Thermal -----------------------------------------------------------"
+    )
+    .unwrap_or(());
+    writeln!(w, "{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt).unwrap_or(());
 
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state
@@ -292,10 +376,12 @@ fn render_dashboard(
             .and_then(|t| t.as_u64())
             .unwrap_or(0) as u32;
         let (chamber_act, chamber_tgt) = PrintTelemetry::unpack_temperature(chamber_temper);
-        println!(
+        writeln!(
+            w,
             "{:<20} : {:>3}°C / {:>3}°C",
             "Chamber", chamber_act, chamber_tgt
-        );
+        )
+        .unwrap_or(());
     }
 
     // -- Fans & System (two-column layout) --
@@ -333,12 +419,18 @@ fn render_dashboard(
         ("Timelapse", timelapse),
     ];
 
-    println!("\n--- Fans & System -----------------------------------------------------");
+    writeln!(
+        w,
+        "\n--- Fans & System -----------------------------------------------------"
+    )
+    .unwrap_or(());
     for i in 0..4 {
-        println!(
+        writeln!(
+            w,
             "{:<14} : {:<6} {:>3} {:<14} : {}",
             fan_values[i].0, fan_values[i].1, "│", sys_values[i].0, sys_values[i].1
-        );
+        )
+        .unwrap_or(());
     }
 
     // -- AMS --
@@ -379,7 +471,7 @@ fn render_dashboard(
                 unit_id, temp, humidity, dry_suffix
             );
             let pad = 71usize.saturating_sub(header.len() - 1);
-            println!("{} {}", header, "-".repeat(pad));
+            writeln!(w, "{} {}", header, "-".repeat(pad)).unwrap_or(());
 
             if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
                 let mut table =
@@ -408,7 +500,7 @@ fn render_dashboard(
                     table.add_row(vec![&tray_id, status, material, &remain]);
                 }
 
-                table.print();
+                table.write_to(&mut w);
             }
         }
     }
@@ -423,25 +515,37 @@ fn render_dashboard(
                 .and_then(|t| t.as_str())
                 .unwrap_or("--");
             let color_swatch = format_color_swatch(tray_color);
-            println!("\n--- External Spool ----------------------------------------------------");
-            println!(
+            writeln!(
+                w,
+                "\n--- External Spool ----------------------------------------------------"
+            )
+            .unwrap_or(());
+            writeln!(
+                w,
                 "{:<20} : {} {} (max {}°C)",
                 "Material", tray_type, color_swatch, nozzle_temp
-            );
+            )
+            .unwrap_or(());
         }
     }
 
-    println!("=======================================================================");
+    writeln!(
+        w,
+        "======================================================================="
+    )
+    .unwrap_or(());
 
     // -- Diagnostics --
     if let Some(err_val) = state.get("print_error").and_then(|e| e.as_u64())
         && let Some(decoded_err) = decode_print_error(err_val as u32)
         && decoded_err.is_genuine_fault
     {
-        println!(
+        writeln!(
+            w,
             "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
             decoded_err.short_code
-        );
+        )
+        .unwrap_or(());
     }
 
     if let Some(hms_array) = state.get("hms").and_then(|h| h.as_array()) {
@@ -459,15 +563,20 @@ fn render_dashboard(
         }
 
         if !active_hms.is_empty() {
-            println!("Active Hardware Alerts:");
+            writeln!(w, "Active Hardware Alerts:").unwrap_or(());
             for decoded in &active_hms {
-                println!(
+                writeln!(
+                    w,
                     "  \x1B[1;33m[{}] Severity: {:?} (Module: {})\x1B[0m",
                     decoded.short_code, decoded.severity, decoded.module_id
-                );
+                )
+                .unwrap_or(());
             }
         }
     }
+
+    writeln!(w, "\n\x1B[2m[q/x/Esc to quit]\x1B[0m").unwrap_or(());
+    w.flush().unwrap_or(());
 
     Ok(())
 }

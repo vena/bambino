@@ -12,11 +12,11 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
-use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
 use bambino::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
 use bambino::io::{SocketError, TokioIo};
+use bambino::models::resolve_model;
 
 use crate::connection::validate_params;
 
