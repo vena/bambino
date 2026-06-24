@@ -62,6 +62,9 @@ pub struct PrintTelemetry {
     /// Estimated remaining duration of the active layer sequence, in seconds.
     pub mc_remaining_time: Option<i32>,
 
+    /// Print sub-stage identifier tracking granular execution phases within the active print stage.
+    pub mc_print_sub_stage: Option<i32>,
+
     /// Kinematics flag field tracking homing states, networking interfaces, and door nodes.
     pub home_flag: Option<u32>,
 
@@ -70,6 +73,13 @@ pub struct PrintTelemetry {
 
     /// Active print stage. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
     pub stg_cur: Option<i32>,
+
+    /// Active error code register, packed as a 32-bit integer [REF-DIAG-HMS].
+    pub print_error: Option<u32>,
+
+    /// Active hardware fault and diagnostic alert entries [REF-DIAG-HMS].
+    #[serde(default)]
+    pub hms: Option<Vec<HmsEntry>>,
 
     /// Permissive indicator tracking physical MicroSD card insertion.
     ///
@@ -115,6 +125,18 @@ pub struct PrintTelemetry {
     #[serde(default)]
     pub power_on_flag: Option<bool>,
 
+    /// Internal identifier or state of the hardware camera module [REF-CAM-RTSPS].
+    pub ipcam_dev: Option<String>,
+
+    /// Camera live feed recording status (`"enable"` or `"disable"`) [REF-CAM-RTSPS].
+    pub ipcam_record: Option<String>,
+
+    /// Frame-by-layer timelapse recording status (`"enable"` or `"disable"`) [REF-CAM-RTSPS].
+    pub timelapse: Option<String>,
+
+    /// AI detection settings (spaghetti detection, first-layer inspection, etc.).
+    pub xcam: Option<serde_json::Value>,
+
     /// Array of standard modular material expansion units connected to the bus.
     #[serde(default)]
     pub ams: Vec<AmsUnit>,
@@ -139,6 +161,18 @@ pub struct CtcTelemetry {
 pub struct CtcInfo {
     /// Temperature value, typically composite packed or direct Celsius [REF-THER-DECODE].
     pub temp: Option<f32>,
+}
+
+/// Raw telemetry entry from the `hms` diagnostic array [REF-DIAG-HMS].
+///
+/// Each entry represents an active hardware fault or status indication. Use
+/// `diagnostics::decode_hms_alert()` to unpack into wiki keys, short-codes, and severity levels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HmsEntry {
+    /// Packed attribute word encoding module ID, severity, and subsystem address.
+    pub attr: u32,
+    /// Packed code word encoding fault category and error index.
+    pub code: u32,
 }
 
 /// Modular standard expansion unit managing up to 4 physical spool slots.
@@ -401,5 +435,124 @@ mod tests {
         assert_eq!(airduct.parts.len(), 1);
         assert_eq!(airduct.parts[0].id, 160);
         assert_eq!(airduct.parts[0].state, Some(85));
+    }
+
+    #[test]
+    fn test_print_error_deserialization() {
+        let json_data = r#"{
+            "print": {
+                "print_error": 83902476
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        assert_eq!(print.print_error, Some(83902476));
+    }
+
+    #[test]
+    fn test_hms_array_deserialization() {
+        let json_data = r#"{
+            "print": {
+                "hms": [
+                    { "attr": 50331904, "code": 65543 },
+                    { "attr": 83886336, "code": 81924 }
+                ]
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        let hms = print.hms.unwrap();
+        assert_eq!(hms.len(), 2);
+        assert_eq!(hms[0].attr, 50331904);
+        assert_eq!(hms[0].code, 65543);
+        assert_eq!(hms[1].attr, 83886336);
+        assert_eq!(hms[1].code, 81924);
+    }
+
+    #[test]
+    fn test_hms_absent_vs_empty() {
+        let absent = r#"{ "print": {} }"#;
+        let report: TelemetryReport = serde_json::from_str(absent).unwrap();
+        assert!(report.print.unwrap().hms.is_none());
+
+        let empty = r#"{ "print": { "hms": [] } }"#;
+        let report: TelemetryReport = serde_json::from_str(empty).unwrap();
+        let hms = report.print.unwrap().hms.unwrap();
+        assert!(hms.is_empty());
+    }
+
+    #[test]
+    fn test_camera_fields_deserialization() {
+        let json_data = r#"{
+            "print": {
+                "ipcam_dev": "1",
+                "ipcam_record": "enable",
+                "timelapse": "enable"
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        assert_eq!(print.ipcam_dev.as_deref(), Some("1"));
+        assert_eq!(print.ipcam_record.as_deref(), Some("enable"));
+        assert_eq!(print.timelapse.as_deref(), Some("enable"));
+    }
+
+    #[test]
+    fn test_xcam_deserialization() {
+        let json_data = r#"{
+            "print": {
+                "xcam": {
+                    "first_layer_inspector": true,
+                    "spaghetti_detector": false
+                }
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        let xcam = print.xcam.unwrap();
+        assert_eq!(xcam["first_layer_inspector"], true);
+        assert_eq!(xcam["spaghetti_detector"], false);
+    }
+
+    #[test]
+    fn test_mc_print_sub_stage_deserialization() {
+        let json_data = r#"{
+            "print": {
+                "mc_print_sub_stage": 3
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        assert_eq!(print.mc_print_sub_stage, Some(3));
+    }
+
+    #[test]
+    fn test_full_telemetry_with_diagnostics() {
+        let json_data = r#"{
+            "print": {
+                "gcode_state": "RUNNING",
+                "mc_print_sub_stage": 0,
+                "print_error": 0,
+                "hms": [],
+                "ipcam_dev": "1",
+                "ipcam_record": "enable",
+                "timelapse": "disable",
+                "xcam": { "allow_skip_parts": false }
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        assert_eq!(print.gcode_state.as_deref(), Some("RUNNING"));
+        assert_eq!(print.mc_print_sub_stage, Some(0));
+        assert_eq!(print.print_error, Some(0));
+        assert!(print.hms.unwrap().is_empty());
+        assert_eq!(print.ipcam_record.as_deref(), Some("enable"));
+        assert_eq!(print.timelapse.as_deref(), Some("disable"));
     }
 }

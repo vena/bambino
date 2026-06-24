@@ -60,14 +60,14 @@ Add missing FTP commands to `BambuFtpsClient` in `src/ftps/client.rs`:
 
 Extend `PrintTelemetry` in `src/types/telemetry.rs` with documented fields not yet captured:
 
-* [ ] `print_error: Option<u32>` — active error code register
-* [ ] `hms: Option<Vec<HmsEntry>>` with `HmsEntry { attr: u32, code: u32 }` — active hardware alerts
-* [ ] `mc_print_sub_stage: Option<i32>` — print sub-stage identifier
-* [ ] `ipcam_dev: Option<String>` — camera module state
-* [ ] `ipcam_record: Option<String>` — recording status (enable/disable)
-* [ ] `timelapse: Option<String>` — timelapse recording status
-* [ ] `xcam: Option<serde_json::Value>` — AI detection settings
-* [ ] Helper: `is_door_open(model) -> Option<bool>` — extract door sensor from `home_flag` (X1) or `stat` (P2S/X2D/H2) bit 23
+* [x] `print_error: Option<u32>` — active error code register
+* [x] `hms: Option<Vec<HmsEntry>>` with `HmsEntry { attr: u32, code: u32 }` — active hardware alerts
+* [x] `mc_print_sub_stage: Option<i32>` — print sub-stage identifier
+* [x] `ipcam_dev: Option<String>` — camera module state
+* [x] `ipcam_record: Option<String>` — recording status (enable/disable)
+* [x] `timelapse: Option<String>` — timelapse recording status
+* [x] `xcam: Option<serde_json::Value>` — AI detection settings
+* [x] Helper: `is_door_open(model) -> Option<bool>` — extract door sensor from `home_flag` (X1) or `stat` (P2S/X2D/H2) bit 23
 
 ### Phase 17: Discovery Port 1990 Support
 

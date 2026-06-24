@@ -6,6 +6,6 @@
 pub mod telemetry;
 
 pub use telemetry::{
-    AmsTray, AmsUnit, DeviceTelemetry, NozzleCollection, NozzleInfo, PrintTelemetry,
+    AmsTray, AmsUnit, DeviceTelemetry, HmsEntry, NozzleCollection, NozzleInfo, PrintTelemetry,
     TelemetryReport,
 };
