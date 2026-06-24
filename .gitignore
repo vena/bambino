@@ -18,6 +18,6 @@ env/
 *.log
 *.so
 #PLAN.md
-/reference
+#/reference
 PHASE.md
 /certs

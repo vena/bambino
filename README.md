@@ -8,9 +8,9 @@ Designed for use on host machines, powerful ESP32 platforms with `std` support (
 
 - **Discovery** — finds printers on your LAN via SSDP (ports 2021/1990)
 - **MQTT control** — connect to the printer's local broker on port 8883, send commands, stream telemetry
-- **File transfer** — implicit FTPS on port 990 for listing, uploading, and deleting files on the SD card
+- **File transfer** — implicit FTPS on port 990 for listing, uploading, downloading, and deleting files on the SD card
 - **Camera** — binary JPEG streaming on port 6000 (A1/P1) and RTSPS on port 322 (X1/X2/H2/P2S)
-- **Model quirks** — handles per-model differences (TLS data channel modes, fan step rounding, Z-axis safety, etc.)
+- **Model quirks** — handles per-model differences polymorphically: TLS data channel modes, fan step rounding, Z-axis homing safety, door sensor routing, camera timestamp corrections, nozzle counts (single/IDEX/tool changer), and chamber heater capabilities
 
 ## Quick start
 
@@ -40,10 +40,10 @@ for d in &devices {
 
 ```rust
 use bambino::client::PrinterClient;
-use bambino::discovery::resolve_model;
+use bambino::models::resolve_model;
 use bambino::mqtt::BambuMqttClient;
+use bambino::io::TokioIo;
 use bambino::io::tokio::{build_unsafe_client_config, TokioTlsConnector, TokioTimer};
-use bambino::io::{TlsConnector, TokioIo};
 
 // TLS + MQTT handshake
 let config = build_unsafe_client_config();
@@ -59,26 +59,42 @@ printer.home_axes(false).await?;
 printer.set_bed_temperature(60).await?;
 printer.set_nozzle_temperature(0, 220).await?;
 printer.toggle_led("chamber_light", true).await?;
+```
 
-// AMS filament control
+### AMS filament control
+
+```rust
 printer.change_filament(0, 1, 1, -1, -1).await?;  // load slot 1
 printer.start_drying(0, 55, 480, true, "PA-CF").await?;
+```
 
-// Print speed, calibration, job submission
+### Print jobs
+
+```rust
 use bambino::client::{PrintSpeed, CalibrationOption};
+use bambino::mqtt::PrintJobConfig;
+
 printer.set_print_speed(PrintSpeed::Sport).await?;
 printer.start_calibration(
     CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
 ).await?;
-printer.start_print(
-    "job.3mf", "Metadata/plate_1.gcode", "My Print",
-    12345, "textured", true, vec![0, -1, 1],
-).await?;
+
+let config = PrintJobConfig::new(
+    "job.3mf",
+    "Metadata/plate_1.gcode",
+    "My Print",
+    12345,
+    "textured",
+).with_ams(vec![0, -1, 1]);
+
+printer.start_print(&config).await?;
 ```
 
 ### Read telemetry
 
 ```rust
+use bambino::types::TelemetryReport;
+
 loop {
     let msg = printer.poll_telemetry().await?;
     let report: TelemetryReport = serde_json::from_slice(&msg.payload)?;
@@ -180,7 +196,7 @@ Add `-v` for protocol-level debug output, or set `BAMBU_VERBOSE=1`.
 
 Bambino would not have been possible without the reverse-engineering work of other excellent projects.
 
-*  [Bambuddy](github.com/maziggy/bambuddy)
+*  [Bambuddy](https://github.com/maziggy/bambuddy)
 *  [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
 *  [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
 *  [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
