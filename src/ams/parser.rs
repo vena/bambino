@@ -7,6 +7,14 @@
 
 use crate::types::AmsTray;
 
+pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
+pub(crate) const AMS_HT_ID_MIN: u8 = 128;
+pub(crate) const AMS_HT_ID_MAX: u8 = 135;
+pub(crate) const AMS_EXTERNAL_SPOOL_ID: u8 = 254;
+pub(crate) const AMS_EXTERNAL_SPOOL_ALT_ID: u8 = 255;
+pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
+pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
+
 /// Evaluates if a physical spool is present in a specific standard AMS slot.
 ///
 /// Standard AMS units contain up to 4 slots. The physical presence is tracked via
@@ -40,11 +48,11 @@ pub fn evaluate_spool_presence(
 
     // High-temperature AMS-HT units (IDs 128-135) reside on their own bus addresses
     // and do not participate in standard bitwise exists strings.
-    if ams_id >= 128 && ams_id <= 135 {
+    if ams_id >= AMS_HT_ID_MIN && ams_id <= AMS_HT_ID_MAX {
         return Some(true);
     }
 
-    let shift_standard = (ams_id as u32 * 4) + tray_id as u32;
+    let shift_standard = (ams_id as u32 * AMS_SLOTS_PER_UNIT as u32) + tray_id as u32;
     let slot_exists = ((parsed_mask >> shift_standard) & 1) == 1;
 
     Some(slot_exists)
@@ -62,7 +70,7 @@ pub fn evaluate_spool_presence(
 /// stale config keys if empty. It treats an empty `tray_type` string as an explicit clearing signal.
 pub fn clean_stale_tray_data(tray: &mut AmsTray) {
     let is_absent_state = match tray.state {
-        Some(9) | Some(0) | None => true,
+        Some(AMS_TRAY_STATE_EMPTY) | Some(AMS_TRAY_STATE_POWER_OFF) | None => true,
         _ => false,
     };
 
@@ -83,7 +91,7 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
 
         // Standardize absent state representation to 9
         if tray.state.is_none() {
-            tray.state = Some(9);
+            tray.state = Some(AMS_TRAY_STATE_EMPTY);
         }
     }
 }
@@ -95,12 +103,12 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> u8 {
-    if ams_id >= 128 && ams_id <= 135 {
+    if ams_id >= AMS_HT_ID_MIN && ams_id <= AMS_HT_ID_MAX {
         ams_id
-    } else if ams_id == 254 || ams_id == 255 {
+    } else if ams_id == AMS_EXTERNAL_SPOOL_ID || ams_id == AMS_EXTERNAL_SPOOL_ALT_ID {
         tray_id
     } else {
-        (ams_id * 4) + tray_id
+        (ams_id * AMS_SLOTS_PER_UNIT) + tray_id
     }
 }
 

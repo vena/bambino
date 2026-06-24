@@ -19,6 +19,29 @@ use crate::error::BambuError;
 use crate::ftps::parser::{parse_unix_listing, FtpFile};
 use crate::io::{AsyncIo, SocketError, TlsConnector};
 
+// FTP response codes (RFC 959)
+pub(crate) const FTP_GREETING: u16 = 220;
+pub(crate) const FTP_TRANSFER_STARTING: u16 = 125;
+pub(crate) const FTP_TRANSFER_OPENING: u16 = 150;
+pub(crate) const FTP_SIZE_OK: u16 = 213;
+pub(crate) const FTP_STAT_OK: u16 = 211;
+pub(crate) const FTP_TRANSFER_COMPLETE: u16 = 226;
+pub(crate) const FTP_PASSIVE_MODE: u16 = 227;
+pub(crate) const FTP_LOGIN_OK: u16 = 230;
+pub(crate) const FTP_FILE_ACTION_OK: u16 = 250;
+pub(crate) const FTP_PATHNAME_CREATED: u16 = 257;
+pub(crate) const FTP_PASSWORD_NEEDED: u16 = 331;
+pub(crate) const FTP_RENAME_PENDING: u16 = 350;
+pub(crate) const FTP_TRANSFER_ABORTED: u16 = 426;
+pub(crate) const FTP_FILE_NOT_FOUND: u16 = 550;
+pub(crate) const FTP_COMMAND_OK: u16 = 200;
+
+pub(crate) const FTPS_IMPLICIT_PORT: u16 = 990;
+pub(crate) const FTPS_UPLOAD_CHUNK_SIZE: usize = 65536;
+pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
+pub(crate) const FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD: u64 = 100_000_000;
+pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
+
 /// Factory trait used to establish standard TCP socket connections to passive ports.
 ///
 /// Under FTPS, passive transfers open fresh data socket connections back to the printer.
@@ -64,7 +87,7 @@ where
     ) -> Result<Self, BambuError> {
         // Immediately wrap the control stream in TLS prior to reading greetings [REF-FTPS-CONN]
         let mut control_stream = tls_connector
-            .connect(ip, 990, raw_control)
+            .connect(ip, FTPS_IMPLICIT_PORT, raw_control)
             .await
             .map_err(BambuError::NetworkError)?;
 
@@ -72,36 +95,36 @@ where
 
         // Read Server Greeting (220)
         let (code, _) = read_response(&mut control_stream, &mut buf).await?;
-        if code != 220 {
+        if code != FTP_GREETING {
             return Err(BambuError::ProtocolViolation(
-                "Unexpected greeting from FTP server",
-            ));
+                "Unexpected greeting from FTP server".into(),
+                ));
         }
 
         // Login USER bblp
         write_command(&mut control_stream, "USER bblp").await?;
         let (code, _) = read_response(&mut control_stream, &mut buf).await?;
-        if code != 331 {
+        if code != FTP_PASSWORD_NEEDED {
             return Err(BambuError::ProtocolViolation(
-                "USER authentication phase rejected",
-            ));
+                "USER authentication phase rejected".into(),
+                ));
         }
 
         // Login PASS <access_code>
         let pass_cmd = format!("PASS {}", access_code);
         write_command(&mut control_stream, &pass_cmd).await?;
         let (code, _) = read_response(&mut control_stream, &mut buf).await?;
-        if code != 230 {
+        if code != FTP_LOGIN_OK {
             return Err(BambuError::AccessDenied);
         }
 
         // Request Protection Buffer Size (PBSZ 0)
         write_command(&mut control_stream, "PBSZ 0").await?;
         let (code, _) = read_response(&mut control_stream, &mut buf).await?;
-        if code != 200 {
+        if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
-                "PBSZ protection sizing configuration failed",
-            ));
+                "PBSZ protection sizing configuration failed".into(),
+                ));
         }
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
@@ -109,10 +132,10 @@ where
             // Standard lines protect passive channels via PROT P (Private/TLS)
             write_command(&mut control_stream, "PROT P").await?;
             let (code, _) = read_response(&mut control_stream, &mut buf).await?;
-            if code != 200 {
+            if code != FTP_COMMAND_OK {
                 return Err(BambuError::ProtocolViolation(
-                    "Failed to enable TLS data channel protection",
-                ));
+                    "Failed to enable TLS data channel protection".into(),
+                    ));
             }
         } else {
             // A1 series does not support TLS on passive channels due to ESP32 constraints.
@@ -152,10 +175,10 @@ where
         // Immediately read transient opening response on control channel
         let mut ctrl_buf = Vec::new();
         let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
-        if code != 150 && code != 125 {
+        if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
-                "LIST transfer initialization failed",
-            ));
+                "LIST transfer initialization failed".into(),
+                ));
         }
 
         // Wrap passive data socket if secure channel is required [REF-FTPS-CONN]
@@ -177,14 +200,14 @@ where
 
         // Await transfer confirmation on control channel
         let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
-        if code != 226 {
+        if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
-                "LIST transfer confirmation aborted",
-            ));
+                "LIST transfer confirmation aborted".into(),
+                ));
         }
 
         let payload_str = core::str::from_utf8(&listing_payload)
-            .map_err(|_| BambuError::ProtocolViolation("Non-UTF8 directory listings response"))?;
+            .map_err(|_| BambuError::ProtocolViolation("Non-UTF8 directory listings response".into()))?;
 
         Ok(parse_unix_listing(
             payload_str,
@@ -203,14 +226,14 @@ where
 
         let mut buf = Vec::new();
         let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
-        if code != 213 {
+        if code != FTP_SIZE_OK {
             return Err(BambuError::ProtocolViolation(
-                "SIZE query rejected by storage server",
-            ));
+                "SIZE query rejected by storage server".into(),
+                ));
         }
 
         text.parse::<u64>()
-            .map_err(|_| BambuError::ProtocolViolation("Invalid file size parameter returned"))
+            .map_err(|_| BambuError::ProtocolViolation("Invalid file size parameter returned".into()))
     }
 
     /// Removes a targeted file from non-volatile storage.
@@ -223,12 +246,12 @@ where
 
         // Code 250 represents successful deletion. Code 550 indicates the file is absent.
         // Both represent terminal success for cleanup operations [REF-FTPS-OPS].
-        if code == 250 || code == 550 {
+        if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
             Err(BambuError::ProtocolViolation(
-                "DELE file removal request failed",
-            ))
+                "DELE file removal request failed".into(),
+                ))
         }
     }
 
@@ -254,10 +277,10 @@ where
 
         let mut ctrl_buf = Vec::new();
         let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
-        if code != 150 && code != 125 {
+        if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
-                "STOR upload negotiation rejected",
-            ));
+                "STOR upload negotiation rejected".into(),
+                ));
         }
 
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
@@ -270,7 +293,7 @@ where
             // Chunked upload sequence
             let mut offset = 0;
             while offset < data.len() {
-                let chunk_size = core::cmp::min(65536, data.len() - offset);
+                let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
                 secure_data_socket
                     .write_all(&data[offset..offset + chunk_size])
                     .await
@@ -288,7 +311,7 @@ where
             let mut plain_data_socket = raw_data_socket;
             let mut offset = 0;
             while offset < data.len() {
-                let chunk_size = core::cmp::min(65536, data.len() - offset);
+                let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
                 plain_data_socket
                     .write_all(&data[offset..offset + chunk_size])
                     .await
@@ -305,7 +328,7 @@ where
         // Block-wait for transfer acknowledgment on the control socket
         let res = read_response(&mut self.control_stream, &mut ctrl_buf).await;
         match res {
-            Ok((226, _)) | Ok((426, _)) => {
+            Ok((FTP_TRANSFER_COMPLETE, _)) | Ok((FTP_TRANSFER_ABORTED, _)) => {
                 // Verify the remote file size matches the expected upload length unconditionally.
                 // The 426 path handles the TLS 1.3 close-notify race on P2S/X2D models, but SIZE
                 // verification after 226 also catches silent SD card write truncation on all models.
@@ -336,10 +359,10 @@ where
 
         let mut ctrl_buf = Vec::new();
         let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
-        if code != 150 && code != 125 {
+        if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
-                "RETR transfer initialization failed",
-            ));
+                "RETR transfer initialization failed".into(),
+                ));
         }
 
         let mut file_payload = Vec::new();
@@ -358,10 +381,10 @@ where
         }
 
         let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
-        if code != 226 {
+        if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
-                "RETR transfer confirmation aborted",
-            ));
+                "RETR transfer confirmation aborted".into(),
+                ));
         }
 
         Ok(file_payload)
@@ -374,10 +397,10 @@ where
 
         let mut buf = Vec::new();
         let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
-        if code != 257 {
+        if code != FTP_PATHNAME_CREATED {
             return Err(BambuError::ProtocolViolation(
-                "MKD directory creation failed",
-            ));
+                "MKD directory creation failed".into(),
+                ));
         }
         Ok(())
     }
@@ -392,12 +415,12 @@ where
 
         let mut buf = Vec::new();
         let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
-        if code == 250 || code == 550 {
+        if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
             Err(BambuError::ProtocolViolation(
-                "RMD directory removal request failed",
-            ))
+                "RMD directory removal request failed".into(),
+                ))
         }
     }
 
@@ -411,20 +434,20 @@ where
 
         let mut buf = Vec::new();
         let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
-        if code != 350 {
+        if code != FTP_RENAME_PENDING {
             return Err(BambuError::ProtocolViolation(
-                "RNFR rename source path rejected",
-            ));
+                "RNFR rename source path rejected".into(),
+                ));
         }
 
         let rnto_cmd = format!("RNTO {}", to);
         write_command(&mut self.control_stream, &rnto_cmd).await?;
 
         let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
-        if code != 250 {
+        if code != FTP_FILE_ACTION_OK {
             return Err(BambuError::ProtocolViolation(
-                "RNTO rename destination path rejected",
-            ));
+                "RNTO rename destination path rejected".into(),
+                ));
         }
         Ok(())
     }
@@ -436,32 +459,32 @@ where
         let mut buf = Vec::new();
         let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
 
-        if code == 213 {
+        if code == FTP_SIZE_OK {
             text.parse::<u64>()
-                .map_err(|_| BambuError::ProtocolViolation("Malformed AVBL numeric response"))
+                .map_err(|_| BambuError::ProtocolViolation("Malformed AVBL numeric response".into()))
         } else {
             // AVBL is unrecognized on older firmware targets. Fallback to STAT query [REF-FTPS-OPS].
             write_command(&mut self.control_stream, "STAT").await?;
             let (code, stat_text) = read_response(&mut self.control_stream, &mut buf).await?;
-            if code == 211 {
+            if code == FTP_STAT_OK {
                 // Parse free bytes out of stat description lines. Real-world physical dumps vary,
                 // but usually report standard numeric sizing metrics.
                 let mut size_found = None;
                 for word in stat_text.split_whitespace() {
                     if let Ok(val) = word.parse::<u64>() {
                         // High heuristic sizing boundary (> 100MB) to ensure we avoid smaller indexes
-                        if val > 100_000_000 {
+                        if val > FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD {
                             size_found = Some(val);
                         }
                     }
                 }
                 size_found.ok_or(BambuError::ProtocolViolation(
-                    "No valid sizing fields parsed in STAT",
-                ))
+                    "No valid sizing fields parsed in STAT".into(),
+                    ))
             } else {
                 Err(BambuError::ProtocolViolation(
-                    "Hardware capacity queries rejected",
-                ))
+                    "Hardware capacity queries rejected".into(),
+                    ))
             }
         }
     }
@@ -472,19 +495,19 @@ where
 
         let mut buf = Vec::new();
         let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
-        if code != 227 {
+        if code != FTP_PASSIVE_MODE {
             return Err(BambuError::ProtocolViolation(
-                "PASV port negotiation rejected",
-            ));
+                "PASV port negotiation rejected".into(),
+                ));
         }
 
         // Extract (IP_1,IP_2,IP_3,IP_4,PORT_1,PORT_2) components
         let start = text
             .find('(')
-            .ok_or(BambuError::ProtocolViolation("Invalid PASV format"))?;
+            .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
         let end = text
             .find(')')
-            .ok_or(BambuError::ProtocolViolation("Invalid PASV format"))?;
+            .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
         let inner = &text[start + 1..end];
         let mut parts = inner.split(',');
 
@@ -494,13 +517,13 @@ where
         let _ = parts.next();
 
         let p1 = parts.next().and_then(|p| p.parse::<u16>().ok()).ok_or(
-            BambuError::ProtocolViolation("Failed to parse PORT_1 in PASV"),
+            BambuError::ProtocolViolation("Failed to parse PORT_1 in PASV".into()),
         )?;
         let p2 = parts.next().and_then(|p| p.parse::<u16>().ok()).ok_or(
-            BambuError::ProtocolViolation("Failed to parse PORT_2 in PASV"),
+            BambuError::ProtocolViolation("Failed to parse PORT_2 in PASV".into()),
         )?;
 
-        Ok(p1 * 256 + p2)
+        Ok(p1 * FTPS_PASV_PORT_MULTIPLIER + p2)
     }
 }
 
@@ -592,7 +615,7 @@ async fn read_response<IO: AsyncIo>(
 
 /// Utility capturing passive stream data up to socket EOF bounds.
 async fn read_to_eof<IO: AsyncIo>(stream: &mut IO, out: &mut Vec<u8>) -> Result<(), BambuError> {
-    let mut chunk = [0u8; 4096];
+    let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
     loop {
         match stream.read(&mut chunk).await {
             Ok(0) => break, // Socket closed gracefully (EOF reached)

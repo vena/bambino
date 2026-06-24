@@ -18,6 +18,10 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+pub(crate) const HMS_FAULT_THRESHOLD: u32 = 0x4000;
+pub(crate) const HMS_CANCEL_ECHO_A: &str = "0300_400C";
+pub(crate) const HMS_CANCEL_ECHO_B: &str = "0500_400E";
+
 /// Numerical classification of the severity level of an HMS diagnostic alert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HmsSeverity {
@@ -89,11 +93,11 @@ pub fn decode_hms_alert(attr: u32, code: u32) -> DecodedHmsAlert {
 
     // Under physical printer firmware architectures, low-word code indexes below 0x4000
     // represent transient progress alerts (such as axis homing states) rather than errors.
-    let is_status_step = code_low < 0x4000;
+    let is_status_step = code_low < HMS_FAULT_THRESHOLD;
 
     // Cancellation echoes (e.g., 0300_400C) are raised as system confirmations when
     // a user aborts a print. These must not be flagged as actual errors.
-    let is_cancel_echo = short_code == "0300_400C" || short_code == "0500_400E";
+    let is_cancel_echo = short_code == HMS_CANCEL_ECHO_A || short_code == HMS_CANCEL_ECHO_B;
 
     let is_genuine_fault = !is_status_step && !is_cancel_echo;
 
@@ -139,11 +143,10 @@ pub fn decode_print_error(print_error: u32) -> Option<DecodedPrintError> {
     let module_id = ((print_error >> 24) & 0xFF) as u8;
     let code_low = (print_error & 0xFFFF) as u16;
 
-    // Diagnostic codes with low-word indices below 0x4000 represent non-fault statuses.
-    let is_status_step = code_low < 0x4000;
+    let is_status_step = (code_low as u32) < HMS_FAULT_THRESHOLD;
 
     // Filter out standard cancellation status echoes
-    let is_cancel_echo = short_code == "0300_400C" || short_code == "0500_400E";
+    let is_cancel_echo = short_code == HMS_CANCEL_ECHO_A || short_code == HMS_CANCEL_ECHO_B;
 
     let is_genuine_fault = !is_status_step && !is_cancel_echo;
 

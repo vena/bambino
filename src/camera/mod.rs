@@ -16,6 +16,9 @@
 pub mod binary;
 pub mod rtsps;
 
+pub const CAMERA_PORT_RTSPS: u16 = 322;
+pub const CAMERA_PORT_BINARY_JPEG: u16 = 6000;
+
 /// Defines the operational camera interface type associated with the printer hardware line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CameraProtocol {
@@ -29,8 +32,8 @@ impl CameraProtocol {
     /// Returns the standard TCP port associated with the physical interface.
     pub fn default_port(&self) -> u16 {
         match self {
-            CameraProtocol::Rtsps => 322,
-            CameraProtocol::BinaryJpeg => 6000,
+            CameraProtocol::Rtsps => CAMERA_PORT_RTSPS,
+            CameraProtocol::BinaryJpeg => CAMERA_PORT_BINARY_JPEG,
         }
     }
 }

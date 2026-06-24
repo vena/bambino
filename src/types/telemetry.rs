@@ -359,13 +359,17 @@ pub struct AirductPart {
 // Unpacking Helpers and Structural Evaluation Functions
 // ============================================================================
 
+pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
+pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
+pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
+
 impl PrintTelemetry {
     /// Resolves the actual and target values from a composite packed temperature u32 [REF-THER-DECODE].
     ///
     /// If the value is less than or equal to 500, the temperature is returned directly
     /// and the target is assumed to be 0°C. If greater than 500, both fields are extracted.
     pub fn unpack_temperature(raw_val: u32) -> (u16, u16) {
-        if raw_val <= 500 {
+        if raw_val <= TEMP_COMPOSITE_THRESHOLD {
             (raw_val as u16, 0)
         } else {
             let target = (raw_val >> 16) & 0xFFFF;
@@ -379,7 +383,7 @@ impl PrintTelemetry {
     /// Inspects bit 18 (`0x00040000`) of the `home_flag` register.
     pub fn is_ethernet_active(&self) -> bool {
         self.home_flag
-            .map(|flag| (flag & 0x00040000) != 0)
+            .map(|flag| (flag & ETHERNET_ACTIVE_BITMASK) != 0)
             .unwrap_or(false)
     }
 
@@ -391,13 +395,13 @@ impl PrintTelemetry {
     pub fn is_door_open(&self, is_x1_series: bool) -> bool {
         if is_x1_series {
             self.home_flag
-                .map(|flag| (flag & 0x00800000) != 0)
+                .map(|flag| (flag & DOOR_SENSOR_BITMASK) != 0)
                 .unwrap_or(false)
         } else {
             self.stat
                 .as_ref()
                 .and_then(|s| Self::parse_hex_string(s))
-                .map(|val| (val & 0x00800000) != 0)
+                .map(|val| (val & DOOR_SENSOR_BITMASK) != 0)
                 .unwrap_or(false)
         }
     }
@@ -417,7 +421,7 @@ impl AmsTray {
     ///
     /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
     pub fn get_state(&self) -> u8 {
-        self.state.unwrap_or(9)
+        self.state.unwrap_or(crate::ams::parser::AMS_TRAY_STATE_EMPTY)
     }
 }
 

@@ -108,15 +108,17 @@ impl BambuModel {
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
 
+pub(crate) const FAN_STEP_MAX: u8 = 15;
+pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
+
 /// Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
 ///
 /// Implements standard mathematical rounding logic: `Round(Step * 100 / 15)`.
 pub fn fan_step_to_percentage(step: u8) -> u8 {
-    if step >= 15 {
+    if step >= FAN_STEP_MAX {
         100
     } else {
-        // Safe integer-based rounding equivalent to: round(step * 6.67)
-        ((step as u32 * 100 + 7) / 15) as u8
+        ((step as u32 * 100 + FAN_ROUNDING_OFFSET) / FAN_STEP_MAX as u32) as u8
     }
 }
 

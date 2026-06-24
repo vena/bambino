@@ -5,6 +5,8 @@
 //! and the Rustls TLS stack.
 
 use crate::io::{AsyncUdpSocket, SocketError, TimerProvider, TlsConnector, TokioIo};
+
+pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
@@ -76,7 +78,7 @@ impl AsyncUdpSocket for TokioUdpSocket {
     /// loops to proceed and exit gracefully.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError> {
         match ::tokio::time::timeout(
-            core::time::Duration::from_millis(100),
+            core::time::Duration::from_millis(UDP_RECV_TIMEOUT_MS),
             self.inner.recv_from(buf),
         )
         .await

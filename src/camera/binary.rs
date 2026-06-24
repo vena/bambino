@@ -23,6 +23,19 @@ use alloc::vec::Vec;
 use crate::error::BambuError;
 use crate::io::{AsyncIo, SocketError};
 
+pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
+pub(crate) const CAMERA_HANDSHAKE_MAGIC: u32 = 64;
+pub(crate) const CAMERA_HANDSHAKE_COMMAND_ID: u32 = 12288;
+pub(crate) const CAMERA_USERNAME_OFFSET: usize = 16;
+pub(crate) const CAMERA_PASSWORD_OFFSET: usize = 48;
+pub(crate) const CAMERA_PASSWORD_MAX_LEN: usize = 32;
+pub(crate) const CAMERA_FRAME_HEADER_SIZE: usize = 16;
+pub(crate) const CAMERA_FRAME_MAX_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) const JPEG_MARKER_SOI_HIGH: u8 = 0xFF;
+pub(crate) const JPEG_MARKER_SOI_LOW: u8 = 0xD8;
+pub(crate) const JPEG_MARKER_EOI_HIGH: u8 = 0xFF;
+pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
+
 /// Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY].
 ///
 /// **Byte Ordering Specifications:**
@@ -31,27 +44,22 @@ use crate::io::{AsyncIo, SocketError};
 /// * Offset 8-15 (8 bytes): Zero-padding block
 /// * Offset 16-47 (32 bytes): Null-padded ASCII username (`"bblp"`)
 /// * Offset 48-79 (32 bytes): Null-padded ASCII LAN access code
-pub fn build_handshake_packet(access_code: &str) -> Result<[u8; 80], BambuError> {
-    let mut packet = [0u8; 80];
+pub fn build_handshake_packet(access_code: &str) -> Result<[u8; CAMERA_HANDSHAKE_SIZE], BambuError> {
+    let mut packet = [0u8; CAMERA_HANDSHAKE_SIZE];
 
-    // Magic Header definition
-    packet[0..4].copy_from_slice(&64u32.to_le_bytes());
+    packet[0..4].copy_from_slice(&CAMERA_HANDSHAKE_MAGIC.to_le_bytes());
+    packet[4..8].copy_from_slice(&CAMERA_HANDSHAKE_COMMAND_ID.to_le_bytes());
 
-    // Connection Command ID registration
-    packet[4..8].copy_from_slice(&12288u32.to_le_bytes());
-
-    // Fill Username buffer block (null-terminated)
     let username = b"bblp";
-    packet[16..16 + username.len()].copy_from_slice(username);
+    packet[CAMERA_USERNAME_OFFSET..CAMERA_USERNAME_OFFSET + username.len()].copy_from_slice(username);
 
-    // Validate and write password/LAN access code buffer block (null-terminated)
     let code_bytes = access_code.as_bytes();
-    if code_bytes.len() > 32 {
+    if code_bytes.len() > CAMERA_PASSWORD_MAX_LEN {
         return Err(BambuError::ProtocolViolation(
-            "Access code length exceeds maximum 32-byte authorization boundary",
-        ));
+            "Access code length exceeds maximum 32-byte authorization boundary".into(),
+            ));
     }
-    packet[48..48 + code_bytes.len()].copy_from_slice(code_bytes);
+    packet[CAMERA_PASSWORD_OFFSET..CAMERA_PASSWORD_OFFSET + code_bytes.len()].copy_from_slice(code_bytes);
 
     Ok(packet)
 }
@@ -87,7 +95,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// image extraction operations.
     pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError> {
         // Read 16-byte frame metadata descriptor
-        let mut header = [0u8; 16];
+        let mut header = [0u8; CAMERA_FRAME_HEADER_SIZE];
         self.stream
             .read_exact(&mut header)
             .await
@@ -97,16 +105,16 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         let size = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
 
         // Bounded allocation check to guard against memory allocation overflow attacks
-        if size > 10 * 1024 * 1024 {
+        if size > CAMERA_FRAME_MAX_SIZE {
             return Err(BambuError::ProtocolViolation(
-                "Extracted JPEG frame size exceeds safety allocation limit (10MB)",
-            ));
+                "Extracted JPEG frame size exceeds safety allocation limit (10MB)".into(),
+                ));
         }
 
         if size == 0 {
             return Err(BambuError::ProtocolViolation(
-                "Acquired empty frame payload descriptor",
-            ));
+                "Acquired empty frame payload descriptor".into(),
+                ));
         }
 
         // Fetch exactly N payload bytes representing raw image data
@@ -118,14 +126,14 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
 
         // Validate frame bounds to protect downstream graphic engines against decoding crashes
         if size < 4
-            || frame_buf[0] != 0xFF
-            || frame_buf[1] != 0xD8
-            || frame_buf[size - 2] != 0xFF
-            || frame_buf[size - 1] != 0xD9
+            || frame_buf[0] != JPEG_MARKER_SOI_HIGH
+            || frame_buf[1] != JPEG_MARKER_SOI_LOW
+            || frame_buf[size - 2] != JPEG_MARKER_EOI_HIGH
+            || frame_buf[size - 1] != JPEG_MARKER_EOI_LOW
         {
             return Err(BambuError::ProtocolViolation(
-                "Acquired stream packet lacks valid JPEG magic marker boundaries",
-            ));
+                "Acquired stream packet lacks valid JPEG magic marker boundaries".into(),
+                ));
         }
 
         Ok(())

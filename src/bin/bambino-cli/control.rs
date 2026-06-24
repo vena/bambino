@@ -172,8 +172,8 @@ pub async fn run(
 ) -> Result<(), BambuError> {
     if action_args.is_empty() {
         return Err(BambuError::ProtocolViolation(
-            "Missing control action identifier",
-        ));
+            "Missing control action identifier".into(),
+            ));
     }
 
     let action = action_args[0].to_lowercase();
@@ -193,16 +193,16 @@ pub async fn run(
         "move" => {
             if action_args.len() < 4 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> move <axis> <distance> [feedrate]",
-                ));
+                    "Usage: control <ip> <serial> <access_code> move <axis> <distance> [feedrate]".into(),
+                    ));
             }
             let axis_char = action_args[1]
                 .chars()
                 .next()
-                .ok_or(BambuError::ProtocolViolation("Invalid axis"))?;
+                .ok_or(BambuError::ProtocolViolation("Invalid axis".into()))?;
             let distance = action_args[2]
                 .parse::<f32>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid distance format"))?;
+                .map_err(|_| BambuError::ProtocolViolation("Invalid distance format".into()))?;
             let feedrate = action_args
                 .get(3)
                 .and_then(|f| f.parse::<u32>().ok())
@@ -215,12 +215,12 @@ pub async fn run(
         "extrude" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> extrude <length> [feedrate]",
-                ));
+                    "Usage: control <ip> <serial> <access_code> extrude <length> [feedrate]".into(),
+                    ));
             }
             let length = action_args[1]
                 .parse::<f32>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid length format"))?;
+                .map_err(|_| BambuError::ProtocolViolation("Invalid length format".into()))?;
             let feedrate = action_args
                 .get(2)
                 .and_then(|f| f.parse::<u32>().ok())
@@ -233,13 +233,13 @@ pub async fn run(
         "fan" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> fan <target> <speed_percent>",
-                ));
+                    "Usage: control <ip> <serial> <access_code> fan <target> <speed_percent>".into(),
+                    ));
             }
             let target = action_args[1].to_lowercase();
             let speed = action_args[2]
                 .parse::<u8>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid speed percent"))?;
+                .map_err(|_| BambuError::ProtocolViolation("Invalid speed percent".into()))?;
 
             let fan_target = match target.as_str() {
                 "part" => FanTarget::PartCooling,
@@ -247,8 +247,8 @@ pub async fn run(
                 "exhaust" => FanTarget::ChamberExhaust,
                 _ => {
                     return Err(BambuError::ProtocolViolation(
-                        "Invalid fan target. Choose 'part', 'aux', or 'exhaust'",
-                    ))
+                        "Invalid fan target. Choose 'part', 'aux', or 'exhaust'".into(),
+                        ))
                 }
             };
 
@@ -259,13 +259,13 @@ pub async fn run(
         "temp" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> temp <target> <value>",
-                ));
+                    "Usage: control <ip> <serial> <access_code> temp <target> <value>".into(),
+                    ));
             }
             let target = action_args[1].to_lowercase();
             let val = action_args[2]
                 .parse::<u16>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid temperature target value"))?;
+                .map_err(|_| BambuError::ProtocolViolation("Invalid temperature target value".into()))?;
 
             match target.as_str() {
                 "nozzle" => {
@@ -282,8 +282,8 @@ pub async fn run(
                 }
                 _ => {
                     return Err(BambuError::ProtocolViolation(
-                        "Invalid thermal target. Choose 'nozzle', 'bed', or 'chamber'",
-                    ))
+                        "Invalid thermal target. Choose 'nozzle', 'bed', or 'chamber'".into(),
+                        ))
                 }
             }
             println!("Thermal command published successfully.");
@@ -291,8 +291,8 @@ pub async fn run(
         "led" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> led <node> <on|off>",
-                ));
+                    "Usage: control <ip> <serial> <access_code> led <node> <on|off>".into(),
+                    ));
             }
             let node = action_args[1].to_lowercase();
             let state = action_args[2].to_lowercase();
@@ -308,8 +308,8 @@ pub async fn run(
                 "off" => false,
                 _ => {
                     return Err(BambuError::ProtocolViolation(
-                        "Invalid LED switch. Choose 'on' or 'off'",
-                    ))
+                        "Invalid LED switch. Choose 'on' or 'off'".into(),
+                        ))
                 }
             };
 
@@ -330,10 +330,10 @@ pub async fn run(
             client.stop_print().await?;
         }
         other => {
-            return Err(BambuError::ProtocolViolationDynamic(format!(
+            return Err(BambuError::ProtocolViolation(format!(
                 "Unrecognized control action identifier '{}'",
                 other
-            )));
+            ).into()));
         }
     }
 

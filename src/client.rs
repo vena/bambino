@@ -29,6 +29,8 @@ use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use crate::io::{AsyncIo, TlsConnector};
 use crate::mqtt::{BambuMqttClient, GCodeRequest, MqttMessage, StandardControlRequest};
 
+pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
+
 // ============================================================================
 // Internal Default Dummy Types (Satisfies Recursive Inner Bounds)
 // ============================================================================
@@ -170,7 +172,7 @@ where
             ftps: None,
             serial: String::from(serial),
             model,
-            sequence_counter: 10000,
+            sequence_counter: INITIAL_SEQUENCE_ID,
         }
     }
 }
@@ -617,7 +619,7 @@ where
             ftps: Some(ftps_client),
             serial: String::from(serial),
             model,
-            sequence_counter: 10000,
+            sequence_counter: INITIAL_SEQUENCE_ID,
         }
     }
 

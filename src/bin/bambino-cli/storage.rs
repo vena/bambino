@@ -93,8 +93,8 @@ pub async fn run(
 ) -> Result<(), BambuError> {
     if action_args.is_empty() {
         return Err(BambuError::ProtocolViolation(
-            "Missing storage action identifier",
-        ));
+            "Missing storage action identifier".into(),
+            ));
     }
 
     let action = action_args[0].to_lowercase();
@@ -167,8 +167,8 @@ pub async fn run(
         "upload" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: files <ip> <serial> <access_code> upload <local_path> <remote_path>",
-                ));
+                    "Usage: files <ip> <serial> <access_code> upload <local_path> <remote_path>".into(),
+                    ));
             }
             let local_path_str = &action_args[1];
             let remote_path_str = &action_args[2];
@@ -176,13 +176,13 @@ pub async fn run(
             let local_path = Path::new(local_path_str);
             if !local_path.exists() {
                 return Err(BambuError::ProtocolViolation(
-                    "Target local file does not exist",
-                ));
+                    "Target local file does not exist".into(),
+                    ));
             }
 
             println!("Reading source file '{}' into buffer...", local_path_str);
             let payload = fs::read(local_path)
-                .map_err(|_| BambuError::ProtocolViolation("Failed to read local target file"))?;
+                .map_err(|_| BambuError::ProtocolViolation("Failed to read local target file".into()))?;
 
             println!(
                 "Uploading file ({} bytes) to remote path '{}'...",
@@ -197,8 +197,8 @@ pub async fn run(
         "delete" => {
             if action_args.len() < 2 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: files <ip> <serial> <access_code> delete <remote_path>",
-                ));
+                    "Usage: files <ip> <serial> <access_code> delete <remote_path>".into(),
+                    ));
             }
             let remote_path_str = &action_args[1];
 
@@ -218,10 +218,10 @@ pub async fn run(
             println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
         }
         other => {
-            return Err(BambuError::ProtocolViolationDynamic(format!(
+            return Err(BambuError::ProtocolViolation(format!(
                 "Unrecognized storage action identifier '{}'",
                 other
-            )));
+            ).into()));
         }
     }
 

@@ -22,6 +22,8 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
+pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
+
 /// Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch
 /// milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`).
 ///
@@ -31,7 +33,7 @@ use serde::Serialize;
 /// the memory allocation registers on the motion board will overflow. This causes the printer to lock
 /// indefinitely in an `IDLE` state and reject all subsequent print dispatches.
 pub fn clamp_task_id(raw_id: u64) -> String {
-    (raw_id % 2147483647).to_string()
+    (raw_id % TASK_ID_MAX).to_string()
 }
 
 // ============================================================================

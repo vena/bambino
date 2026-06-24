@@ -24,6 +24,9 @@ pub const SSDP_PORT: u16 = 2021;
 /// Alternative SSDP port listed in Bambu Lab documentation [REF-NET-PORTS].
 pub const SSDP_PORT_ALT: u16 = 1990;
 
+/// Interval between periodic M-SEARCH re-broadcasts during discovery sweeps (milliseconds).
+pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u128 = 3000;
+
 const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
                                      HOST: 239.255.255.250:2021\r\n\
                                      MAN: \"ssdp:discover\"\r\n\
@@ -184,7 +187,7 @@ where
     // Alternate polling across all bound sockets. Each recv_from times out after ~100ms,
     // so we cycle through engines round-robin.
     while elapsed_millis < total_millis {
-        if millis_since_last_search >= 3000 {
+        if millis_since_last_search >= SSDP_REBROADCAST_INTERVAL_MS {
             log::trace!("Re-broadcasting periodic M-SEARCH queries");
             for (engine, _) in &engines {
                 let _ = engine.broadcast_search().await;

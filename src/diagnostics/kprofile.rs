@@ -118,8 +118,8 @@ impl ExtrusionCaliSetRequest {
         for profile in &profiles {
             if !validate_setting_id(&profile.setting_id) {
                 return Err(BambuError::ProtocolViolation(
-                    "Setting ID violates the strict 19-character numeric calibration boundary rule",
-                ));
+                    "Setting ID violates the strict 19-character numeric calibration boundary rule".into(),
+                    ));
             }
         }
 
@@ -221,8 +221,8 @@ impl StandardCaliDelRequest {
     pub fn new(target: StandardCaliDelEntry, sequence_id: u64) -> Result<Self, BambuError> {
         if !validate_setting_id(&target.setting_id) {
             return Err(BambuError::ProtocolViolation(
-                "Setting ID violates the strict 19-character numeric calibration boundary rule",
-            ));
+                "Setting ID violates the strict 19-character numeric calibration boundary rule".into(),
+                ));
         }
 
         Ok(Self {

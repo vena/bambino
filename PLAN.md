@@ -41,25 +41,25 @@ Upgrade the error type system and extract magic numbers into named constants. No
 
 The current structure: `BambuError` derives `Debug` only (not `Clone`). Under `std`, it uses `thiserror` for `Display`/`Error`. Under `no_std`, a manual `Display` impl duplicates all message strings (lines 62-78). Two separate variants exist for protocol errors: `ProtocolViolation(&'static str)` and `ProtocolViolationDynamic(String)` (the latter gated on `alloc`/`std`). `SocketError` in `src/io/mod.rs` already derives `Clone, Copy`.
 
-* [ ] Implement `From<SocketError> for BambuError` in `src/error.rs` — eliminates 29 manual `.map_err(BambuError::NetworkError)` calls (14 in `src/ftps/client.rs`, 10 in `src/mqtt/client.rs`, 4 in `src/camera/binary.rs`, 1 in `src/discovery/mod.rs`)
-* [ ] Unify `ProtocolViolation` and `ProtocolViolationDynamic` into a single `ProtocolViolation(Cow<'static, str>)` variant (gated on alloc/std; bare no_std keeps `&'static str` only). `ProtocolViolationDynamic` is only used in CLI code (`src/bin/bambino-cli/control.rs`, `storage.rs`), not the library — low urgency but cleaner API
-* [ ] Sync the manual no_std `Display` impl with thiserror annotations; add a `#[cfg(test)]` assertion comparing `format!("{}", variant)` output to catch future drift
-* [ ] Add `Clone` derive to `BambuError` (all variants are Clone-compatible once `Cow` replaces `String`)
+* [x] Implement `From<SocketError> for BambuError` in `src/error.rs` — eliminates 29 manual `.map_err(BambuError::NetworkError)` calls (14 in `src/ftps/client.rs`, 10 in `src/mqtt/client.rs`, 4 in `src/camera/binary.rs`, 1 in `src/discovery/mod.rs`)
+* [x] Unify `ProtocolViolation` and `ProtocolViolationDynamic` into a single `ProtocolViolation(Cow<'static, str>)` variant (gated on alloc/std; bare no_std keeps `&'static str` only). `ProtocolViolationDynamic` is only used in CLI code (`src/bin/bambino-cli/control.rs`, `storage.rs`), not the library — low urgency but cleaner API
+* [x] Sync the manual no_std `Display` impl with thiserror annotations; add a `#[cfg(test)]` assertion comparing `format!("{}", variant)` output to catch future drift
+* [x] Add `Clone` derive to `BambuError` (all variants are Clone-compatible once `Cow` replaces `String`)
 
 **Named constants — extract magic numbers into `pub(crate) const` blocks:**
-* [ ] MQTT packet types in `src/mqtt/client.rs`
-* [ ] FTP response codes in `src/ftps/client.rs`
-* [ ] AMS tray state/ID boundaries in `src/ams/`
-* [ ] Camera frame constants in `src/camera/binary.rs`
-* [ ] HMS fault threshold and cancellation codes in `src/diagnostics/hms.rs`
-* [ ] Door sensor bitmask in `src/types/telemetry.rs`
-* [ ] FTPS misc in `src/ftps/client.rs`: port, chunk size, data buffer, size heuristic threshold, PASV port multiplier
-* [ ] MQTT misc in `src/mqtt/client.rs`: in-flight limit, keep-alive timeout
-* [ ] Discovery in `src/discovery/mod.rs`: re-broadcast interval
-* [ ] Telemetry in `src/types/telemetry.rs`: temperature unpacking divisor
-* [ ] Camera ports in `src/camera/`: RTSPS port, binary JPEG port, RTP clock frequency
-* [ ] Fan conversion in `src/quirks/mod.rs`: step divisor, rounding offset
-* [ ] Other: `i32::MAX as u64` in `clamp_task_id`, sequence ID start in `src/client.rs`, UDP recv timeout in `src/io/tokio.rs`
+* [x] MQTT packet types in `src/mqtt/client.rs`
+* [x] FTP response codes in `src/ftps/client.rs`
+* [x] AMS tray state/ID boundaries in `src/ams/`
+* [x] Camera frame constants in `src/camera/binary.rs`
+* [x] HMS fault threshold and cancellation codes in `src/diagnostics/hms.rs`
+* [x] Door sensor bitmask in `src/types/telemetry.rs`
+* [x] FTPS misc in `src/ftps/client.rs`: port, chunk size, data buffer, size heuristic threshold, PASV port multiplier
+* [x] MQTT misc in `src/mqtt/client.rs`: in-flight limit, keep-alive timeout
+* [x] Discovery in `src/discovery/mod.rs`: re-broadcast interval
+* [x] Telemetry in `src/types/telemetry.rs`: temperature unpacking divisor
+* [x] Camera ports in `src/camera/`: RTSPS port, binary JPEG port, RTP clock frequency
+* [x] Fan conversion in `src/quirks/mod.rs`: step divisor, rounding offset
+* [x] Other: `i32::MAX as u64` in `clamp_task_id`, sequence ID start in `src/client.rs`, UDP recv timeout in `src/io/tokio.rs`
 
 ### Phase 20: Library DRY Refactoring
 
@@ -75,6 +75,7 @@ Extract repeated patterns into helper methods, reducing mechanical duplication. 
 
 Replace suboptimal data structures, restrict visibility, and clean up the public API. Depends on Phase 20 (new helper methods affect API shape).
 
+* [ ] Extract `BambuModel` enum and `resolve_model()` out of `src/discovery/parser.rs` into a new top-level `src/models.rs` module. Currently `BambuModel` lives inside the SSDP parser, but it is not an SSDP concern — it is the crate's canonical model identity enum consumed by `quirks/mod.rs` (for `impl BambuModel { fn quirks() }`), `client.rs`, and `ftps/client.rs`. None of those modules have anything to do with discovery. `resolve_model()` is pure serial-prefix-to-enum mapping, also not SSDP-specific. `SsdpDevice` stays in `discovery/parser.rs` and imports `BambuModel` from the new location. Re-export `BambuModel` from `src/lib.rs` as a public type. Update all `use crate::discovery::BambuModel` imports crate-wide (including CLI code and tests) to `use crate::models::BambuModel`. Update `CLAUDE.md` to reflect the new canonical location.
 * [ ] Replace `in_flight: Vec<u16>` with `BTreeSet<u16>` in `src/mqtt/client.rs`
 * [ ] Replace discovery deduplication linear scan with `BTreeSet<String>` in `src/discovery/mod.rs`
 * [ ] Hide dummy types (`DummyRawIo`, `DummyTls`, `DummyFactory`) with `#[doc(hidden)]` — must stay `pub` for default type parameters but should be hidden from docs

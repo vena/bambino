@@ -19,6 +19,8 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
+
 /// Formats the standard implicit TLS RTSPS connection path utilized by Bambu Lab printers [REF-CAM-RTSPS].
 pub fn build_rtsps_url(ip: &str, access_code: &str) -> String {
     format!("rtsps://bblp:{}@{}:322/streaming/live/1", access_code, ip)
@@ -66,7 +68,7 @@ impl RtpTimestampCorrector {
         Self {
             base_timestamp: 0,
             has_initiated: false,
-            frequency_hz: 90000,
+            frequency_hz: RTP_CLOCK_FREQUENCY_HZ,
         }
     }
 
