@@ -14,7 +14,7 @@ default = ["std", "tokio"]
 std = ["dep:thiserror", "serde/std", "serde_json/std"]
 
 # Tokio-specific dependencies and platform bridges
-tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "std"]
+tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "dep:env_logger", "std"]
 
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
 esp-idf = ["dep:esp-idf-svc", "std"]
@@ -40,6 +40,9 @@ embassy = [
 ]
 
 [dependencies]
+# Structured logging facade (no_std compatible with default-features disabled)
+log = { version = "0.4", default-features = false }
+
 # Serialization and schema definitions
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.150", default-features = false }
@@ -94,6 +97,9 @@ rand_core = { version = "0.10.1", default-features = false, optional = true }
 # Note: Different major versions of the same package are treated by Cargo as separate dependencies,
 # allowing them to compile and execute concurrently without triggering namespace/identifier collisions.
 rand_core_legacy = { package = "rand_core", version = "0.6.4", default-features = false, optional = true }
+
+# Concrete log sink for CLI binary (only needed on host builds)
+env_logger = { version = "0.11", optional = true }
 
 [dev-dependencies]
 # Standard testing runtime components

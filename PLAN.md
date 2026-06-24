@@ -17,74 +17,14 @@ The `bambino` library provides a platform-agnostic abstraction of local network 
   * `monitor`: Real-time telemetry, composite thermal unpacking, and live HMS decoder.
   * `control`: Safer coordinate movement, manual extrusion feed, fan speed rounding, and lighting.
   * `files`: Passive implicit FTPS file-system listing, space allocation check, chunked upload, and deletion.
+* **Full MQTT Command Coverage** (Phases 13–14): All documented MQTT command types have serializable request structs in `src/mqtt/commands.rs`, including AMS filament change/drying, error clearing, and K-profile calibration binding. Every command struct is exposed through a corresponding convenience method on `PrinterClient` in `src/client.rs` (e.g., `change_filament()`, `start_drying()`, `clear_print_error()`, `set_print_speed()`, `skip_objects()`, `start_print()`, `start_calibration()`, `select_k_profile()`).
+* **Complete FTPS File Operations** (Phase 15): `BambuFtpsClient` supports the full lifecycle of remote filesystem operations: listing, upload, download (`RETR`), deletion, directory creation/removal (`MKD`/`RMD`), and rename (`RNFR`+`RNTO`).
+* **Full Telemetry Struct Coverage** (Phase 16): `PrintTelemetry` captures all documented wire fields including `print_error`, HMS hardware alerts, print sub-stage, camera/timelapse state, xcam AI detection settings, and door sensor extraction via `is_door_open(model)`.
+* **Dual-Port SSDP Discovery** (Phase 17): `discover_devices` binds sockets on both ports 2021 and 1990, sends M-SEARCH queries to each, and deduplicates results by serial number, covering the full range of Bambu Lab firmware discovery behavior.
+* **Structured Logging** (Phase 18): Library diagnostic output uses the `log` crate facade (`log::debug!`, `log::trace!`, `log::warn!`) with no `#[cfg]` gates. The CLI initializes `env_logger` from the `-v` flag. No `println!`-based verbose logging remains in library code.
 
 ---
 
 ## 2. Remaining Work — Protocol Coverage & API Completeness
 
-The following phases cover gaps between the reference documentation (`reference/`) and the library's current implementation surface, identified via cross-audit against the Bambuddy reference application.
-
-### Phase 13: Missing MQTT Command Structs
-
-Add serializable request structs in `src/mqtt/commands.rs` for documented commands that have no representation:
-
-* [x] `AmsChangeFilamentRequest` — load/unload filament from standard AMS or external spool. Requires `ams_id`, `slot_id`, `target`, `curr_temp`, `tar_temp`, `sequence_id`. Ref: `reference/05_materials_ams.md` §5.3.
-* [x] `AmsFilamentDryingRequest` — start/stop AMS-HT dry-chamber heating. Requires `ams_id`, `mode` (start/stop), `dry_temp`, `dry_time` (minutes), `rotate_tray`, `filament`. Ref: `reference/05_materials_ams.md` §5.4.
-* [x] `CleanPrintErrorRequest` — clear active error codes. Ref: `reference/03_mqtt_telemetry.md` §3.3.
-* [x] `ExtrusionCaliSelRequest` — bind a stored K-profile calibration entry to an AMS material slot. Ref: `reference/05_materials_ams.md` §5.3.
-
-### Phase 14: PrinterClient Helper Methods
-
-Expose convenience methods on `PrinterClient` in `src/client.rs` for command structs that exist but lack client-level wrappers:
-
-* [x] `change_filament()` — wraps `AmsChangeFilamentRequest`
-* [x] `start_drying()` / `stop_drying()` — wraps `AmsFilamentDryingRequest`
-* [x] `clear_print_error()` — wraps `CleanPrintErrorRequest`
-* [x] `set_print_speed(level)` — wraps existing `PrintSpeedRequest`
-* [x] `skip_objects(ids)` — wraps existing `SkipObjectsRequest`
-* [x] `start_print(file, ams_mapping)` — wraps existing `ProjectFileRequest`
-* [x] `scan_rfid(tray_id)` — wraps existing `AmsGetRfidRequest`
-* [x] `start_calibration(type)` — wraps existing `CalibrationRequest`
-* [x] `select_k_profile(...)` — wraps `ExtrusionCaliSelRequest`
-
-### Phase 15: FTPS File Operations
-
-Add missing FTP commands to `BambuFtpsClient` in `src/ftps/client.rs`:
-
-* [x] `download_file(remote_path) -> Vec<u8>` — RETR command with passive data channel
-* [x] `create_directory(path)` — MKD command
-* [x] `remove_directory(path)` — RMD command
-* [x] `rename_file(from, to)` — RNFR + RNTO command pair
-
-### Phase 16: Telemetry Struct Completeness
-
-Extend `PrintTelemetry` in `src/types/telemetry.rs` with documented fields not yet captured:
-
-* [x] `print_error: Option<u32>` — active error code register
-* [x] `hms: Option<Vec<HmsEntry>>` with `HmsEntry { attr: u32, code: u32 }` — active hardware alerts
-* [x] `mc_print_sub_stage: Option<i32>` — print sub-stage identifier
-* [x] `ipcam_dev: Option<String>` — camera module state
-* [x] `ipcam_record: Option<String>` — recording status (enable/disable)
-* [x] `timelapse: Option<String>` — timelapse recording status
-* [x] `xcam: Option<serde_json::Value>` — AI detection settings
-* [x] Helper: `is_door_open(model) -> Option<bool>` — extract door sensor from `home_flag` (X1) or `stat` (P2S/X2D/H2) bit 23
-
-### Phase 17: Discovery Port 1990 Support
-
-The Bambu Lab wiki lists both ports 1990 and 2021 for device discovery. Currently only port 2021 is implemented.
-
-* [x] Bind a second socket to port 1990 in `discover_devices` (or run two engines concurrently)
-* [x] Send M-SEARCH to both ports
-* [x] Merge and deduplicate results by serial number
-* [x] Update `bambino-cli` discover command to report which port each printer was found on (verbose only)
-
-### Phase 18: Structured Logging Migration
-
-Replace `println!`-based verbose debug logging with the `log` crate facade for proper library hygiene.
-
-* [ ] Add `log` dependency (no_std compatible via `default-features = false`)
-* [ ] Replace all `println!("[VERBOSE]` calls in `src/discovery/mod.rs` with `log::debug!` / `log::trace!`
-* [ ] Replace verbose `println!` calls in `src/mqtt/client.rs` (if any) with `log::debug!`
-* [ ] Remove `is_verbose()` function and `BAMBU_VERBOSE` env var check from library code
-* [ ] Add `env_logger` (or similar) initialization to `bambino-cli` to preserve CLI verbose output via `-v` flag
-* [ ] Remove `#[cfg(feature = "std")]` gates on logging statements (log crate handles no_std natively)
+All phases (13–18) identified in the cross-audit against the Bambuddy reference application have been completed. The library's MQTT command surface, FTPS operations, telemetry structs, discovery engine, and logging infrastructure are now fully aligned with the reference documentation.

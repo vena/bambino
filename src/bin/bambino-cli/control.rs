@@ -29,39 +29,28 @@ async fn connect_mqtt(
     BambuMqttClient<<TokioTlsConnector as TlsConnector<TokioIo<TcpStream>>>::Stream>,
     BambuError,
 > {
-    let is_verbose = crate::is_verbose();
-    if is_verbose {
-        println!("[VERBOSE] Configuring TLS client context utilizing self-signed certificate verifier...");
-    }
+    log::debug!("Configuring TLS client context utilizing self-signed certificate verifier");
     let config = build_unsafe_client_config();
     let connector = tokio_rustls::TlsConnector::from(config);
     let tls_connector = TokioTlsConnector::new(connector);
 
-    if is_verbose {
-        println!("[VERBOSE] Dialing TCP socket to {}:8883...", ip);
-    }
+    log::debug!("Dialing TCP socket to {}:8883", ip);
     let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
         .await
         .map_err(to_socket_error)
         .map_err(BambuError::NetworkError)?;
     let raw_io = TokioIo(tcp_stream);
 
-    if is_verbose {
-        println!("[VERBOSE] Wrapping socket in secure TLS session...");
-    }
+    log::debug!("Wrapping socket in secure TLS session");
     let secure_stream = tls_connector
         .connect(ip, 8883, raw_io)
         .await
         .map_err(BambuError::NetworkError)?;
 
-    if is_verbose {
-        println!("[VERBOSE] Initiating secure MQTT v3.1.1 protocol handshake...");
-    }
+    log::debug!("Initiating secure MQTT v3.1.1 protocol handshake");
     let client = BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
 
-    if is_verbose {
-        println!("[VERBOSE] MQTT protocol session established successfully.");
-    }
+    log::debug!("MQTT protocol session established successfully");
     Ok(client)
 }
 
@@ -78,49 +67,29 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
     println!("Querying expansion bus version database...");
     let req = GetVersionRequest::new(10002);
 
-    if is_verbose {
-        println!("[VERBOSE] Serializing get_version command structure to JSON...");
-    }
+    log::debug!("Serializing get_version command structure to JSON");
     let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
 
-    if is_verbose {
-        println!(
-            "[VERBOSE] Publishing payload to 'request' topic: {}",
-            String::from_utf8_lossy(&payload)
-        );
-    }
+    log::debug!("Publishing payload to 'request' topic: {}", String::from_utf8_lossy(&payload));
     mqtt.publish_command(&payload).await?;
 
-    if is_verbose {
-        println!("[VERBOSE] Published command successfully. Entering polling loop for telemetry responses...");
-    }
+    log::debug!("Published command successfully. Entering polling loop for telemetry responses");
 
     let poll_future = async {
         loop {
             let msg = mqtt.poll_telemetry().await?;
-            if is_verbose {
-                println!(
-                    "[VERBOSE] Telemetry frame received on topic: '{}', size: {} bytes",
-                    msg.topic,
-                    msg.payload.len()
-                );
-            }
+            log::debug!("Telemetry frame received on topic: '{}', size: {} bytes", msg.topic, msg.payload.len());
 
             let v: serde_json::Value = match serde_json::from_slice(&msg.payload) {
                 Ok(val) => val,
                 Err(e) => {
-                    if is_verbose {
-                        println!("[VERBOSE] Failed to parse JSON frame payload: {:?}", e);
-                    }
+                    log::debug!("Failed to parse JSON frame payload: {:?}", e);
                     serde_json::Value::Null
                 }
             };
 
-            if is_verbose && !v.is_null() {
-                println!(
-                    "[VERBOSE] Parsed JSON Content: {}",
-                    serde_json::to_string(&v).unwrap_or_default()
-                );
+            if !v.is_null() {
+                log::trace!("Parsed JSON Content: {}", serde_json::to_string(&v).unwrap_or_default());
             }
 
             // Polymorphic structure matching: We inspect if the payload maps command keys under
@@ -133,9 +102,7 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
 
             if let Some(node) = target_node {
                 if node.get("command").and_then(|c| c.as_str()) == Some("get_version") {
-                    if is_verbose {
-                        println!("[VERBOSE] Matching 'get_version' command frame detected!");
-                    }
+                    log::debug!("Matching 'get_version' command frame detected");
                     if let Some(modules) = node.get("module").and_then(|m| m.as_array()) {
                         return Ok::<_, BambuError>(modules.clone());
                     }
@@ -179,9 +146,7 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
             println!();
         }
         Ok(Err(e)) => {
-            if is_verbose {
-                println!("[VERBOSE] Polling loop generated an active error: {:?}", e);
-            }
+            log::debug!("Polling loop generated an active error: {:?}", e);
             return Err(e);
         }
         Err(_) => {
@@ -211,12 +176,9 @@ pub async fn run(
         ));
     }
 
-    let is_verbose = crate::is_verbose();
     let action = action_args[0].to_lowercase();
 
-    if is_verbose {
-        println!("[VERBOSE] Running control subcommand action: '{}'", action);
-    }
+    log::debug!("Running control subcommand action: '{}'", action);
 
     let mqtt = connect_mqtt(ip, serial, access_code).await?;
     let model = resolve_model(serial, None);

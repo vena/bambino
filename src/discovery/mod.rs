@@ -36,13 +36,6 @@ const M_SEARCH_QUERY_1990: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
                                      MX: 3\r\n\
                                      ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
 
-/// Retrieves the global verbose logging flag status.
-#[cfg(feature = "std")]
-fn is_verbose() -> bool {
-    crate::mqtt::client::is_verbose()
-}
-
-
 /// Detects the active physical interface IP used to route external traffic.
 ///
 /// **Why this is critical on macOS (and uses local multicast connect):**
@@ -88,23 +81,11 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
         let query = self.m_search_query();
 
         let multicast_target = format!("{}:{}", MULTICAST_IP, self.port);
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [SSDP] Transmitting multicast M-SEARCH request to: {}...",
-                multicast_target
-            );
-        }
+        log::debug!("Transmitting multicast M-SEARCH request to: {}", multicast_target);
         let _ = self.socket.send_to(query, &multicast_target).await;
 
         let broadcast_target = format!("255.255.255.255:{}", self.port);
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [SSDP] Transmitting fallback broadcast M-SEARCH request to: {}...",
-                broadcast_target
-            );
-        }
+        log::debug!("Transmitting fallback broadcast M-SEARCH request to: {}", broadcast_target);
         let _ = self.socket.send_to(query, &broadcast_target).await;
 
         Ok(())
@@ -117,34 +98,19 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     /// and `Err(BambuError)` for terminal network socket faults.
     pub async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, BambuError> {
         match self.socket.recv_from(buf).await {
-            Ok((len, _from_addr)) => {
-                #[cfg(feature = "std")]
-                if is_verbose() {
-                    println!(
-                        "[VERBOSE] [SSDP] UDP socket received datagram of size {} from: {}",
-                        len, _from_addr
-                    );
-                }
+            Ok((len, from_addr)) => {
+                log::trace!("UDP socket received datagram of size {} from: {}", len, from_addr);
 
                 let parsed = parse_ssdp_payload(&buf[..len]);
-                #[cfg(feature = "std")]
-                if is_verbose() {
-                    match &parsed {
-                        Some(device) => {
-                            println!(
-                                "[VERBOSE] [SSDP] Successfully parsed Bambu Lab printer record:\n\
-                                 [VERBOSE]   Serial: '{}', Model: {:?}, IP: {}, Name: '{}', Version: '{}'",
-                                device.serial, device.model, device.ip, device.name, device.version
-                            );
-                        }
-                        None => {
-                            let raw_text =
-                                String::from_utf8_lossy(&buf[..core::cmp::min(len, 300)]);
-                            println!(
-                                "[VERBOSE] [SSDP] Datagram discarded (Not a Bambu printer format). Raw header snippet:\n---\n{}\n---",
-                                raw_text.trim()
-                            );
-                        }
+                match &parsed {
+                    Some(device) => {
+                        log::debug!(
+                            "Parsed Bambu Lab printer record: serial='{}', model={:?}, ip={}, name='{}', version='{}'",
+                            device.serial, device.model, device.ip, device.name, device.version
+                        );
+                    }
+                    None => {
+                        log::trace!("Datagram discarded (not a Bambu printer format)");
                     }
                 }
                 Ok(parsed)
@@ -179,35 +145,18 @@ where
     let ports: &[u16] = &[SSDP_PORT, SSDP_PORT_ALT];
 
     #[cfg(feature = "std")]
-    if is_verbose() {
-        if let Some(local_ip) = get_local_routing_ip() {
-            println!(
-                "[VERBOSE] [SSDP] Detected active routing interface IP: {}",
-                local_ip
-            );
-        }
+    if let Some(local_ip) = get_local_routing_ip() {
+        log::debug!("Detected active routing interface IP: {}", local_ip);
     }
 
     let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
     for &port in ports {
         let bind_addr = format!("0.0.0.0:{}", port);
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [SSDP] Binding UDP socket on '{}'...",
-                bind_addr
-            );
-        }
+        log::debug!("Binding UDP socket on '{}'", bind_addr);
         match U::bind(&bind_addr).await {
             Ok(socket) => engines.push((DiscoveryEngine::new(socket, port), port)),
             Err(e) => {
-                #[cfg(feature = "std")]
-                if is_verbose() {
-                    println!(
-                        "[VERBOSE] [SSDP] Failed to bind port {}: {:?} (skipping)",
-                        port, e
-                    );
-                }
+                log::debug!("Failed to bind port {}: {:?} (skipping)", port, e);
                 if engines.is_empty() {
                     return Err(BambuError::NetworkError(e));
                 }
@@ -215,14 +164,8 @@ where
         }
     }
 
-    for _i in 0..2 {
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [SSDP] Initializing active query scan block #{}...",
-                _i + 1
-            );
-        }
+    for i in 0..2 {
+        log::debug!("Initializing active query scan block #{}", i + 1);
         for (engine, _) in &engines {
             engine.broadcast_search().await?;
         }
@@ -236,23 +179,13 @@ where
     let mut elapsed_millis: u128 = 0;
     let mut millis_since_last_search: u128 = 0;
 
-    #[cfg(feature = "std")]
-    if is_verbose() {
-        println!(
-            "[VERBOSE] [SSDP] Commencing poll listener sequence ({}ms limit, {} port(s))...",
-            total_millis,
-            engines.len()
-        );
-    }
+    log::debug!("Commencing poll listener sequence ({}ms limit, {} port(s))", total_millis, engines.len());
 
     // Alternate polling across all bound sockets. Each recv_from times out after ~100ms,
     // so we cycle through engines round-robin.
     while elapsed_millis < total_millis {
         if millis_since_last_search >= 3000 {
-            #[cfg(feature = "std")]
-            if is_verbose() {
-                println!("[VERBOSE] [SSDP] Re-broadcasting periodic M-SEARCH queries...");
-            }
+            log::trace!("Re-broadcasting periodic M-SEARCH queries");
             for (engine, _) in &engines {
                 let _ = engine.broadcast_search().await;
             }
@@ -264,13 +197,7 @@ where
                 Ok(Some(mut device)) => {
                     device.discovery_port = *port;
                     if !devices.iter().any(|d| d.serial == device.serial) {
-                        #[cfg(feature = "std")]
-                        if is_verbose() {
-                            println!(
-                                "[VERBOSE] [SSDP] Discovered '{}' via port {}.",
-                                device.serial, port
-                            );
-                        }
+                        log::debug!("Discovered '{}' via port {}", device.serial, port);
                         devices.push(device);
                     }
                 }
@@ -286,13 +213,7 @@ where
         }
     }
 
-    #[cfg(feature = "std")]
-    if is_verbose() {
-        println!(
-            "[VERBOSE] [SSDP] Completed discovery sweep. Total found unique machines: {}",
-            devices.len()
-        );
-    }
+    log::debug!("Completed discovery sweep. Total found unique machines: {}", devices.len());
 
     Ok(devices)
 }

@@ -83,7 +83,11 @@ async fn main() {
         }
     });
     VERBOSE.store(verbose, Ordering::SeqCst);
-    bambino::mqtt::client::set_verbose(verbose);
+
+    let log_level = if verbose { "debug" } else { "warn" };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
+        .format_target(true)
+        .init();
 
     // Positional matching is relative to the binary path at args[0]
     if args.len() < 2 {

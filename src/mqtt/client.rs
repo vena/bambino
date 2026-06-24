@@ -28,37 +28,6 @@ use crate::io::{AsyncIo, SocketError, TimerProvider};
 static CONNECTION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 // ============================================================================
-// Global Verbose Logging State (for local diagnostic tracing)
-// ============================================================================
-
-/// Static global atomic tracking if verbose wire logs are armed. Gated behind host standard library support.
-#[cfg(feature = "std")]
-pub static VERBOSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Configures application-wide library telemetry printouts.
-#[cfg(feature = "std")]
-pub fn set_verbose(enabled: bool) {
-    VERBOSE.store(enabled, std::sync::atomic::Ordering::SeqCst);
-}
-
-/// Dynamically checks if detailed wire logs are requested.
-///
-/// **Why this checks both atomic state and standard environment variables:**
-/// Provides a redundant diagnostic fallback. If downstream integration tools fail to call
-/// `set_verbose(true)`, setting the environment variable `BAMBU_VERBOSE=1` will automatically
-/// trigger exhaustive packet traces over host systems.
-#[cfg(feature = "std")]
-pub fn is_verbose() -> bool {
-    VERBOSE.load(std::sync::atomic::Ordering::Relaxed) || std::env::var("BAMBU_VERBOSE").is_ok()
-}
-
-/// Dummy indicator for bare-metal targets where standard formatting output is disabled.
-#[cfg(not(feature = "std"))]
-pub fn is_verbose() -> bool {
-    false
-}
-
-// ============================================================================
 // MQTT Packet Serialization Helpers
 // ============================================================================
 
@@ -250,13 +219,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         let client_id = format!("bambino_{}_{}", serial, conn_id);
         let connect_pkt = encode_connect(&client_id, "bblp", access_code);
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] Transmitting CONNECT payload (client_id: '{}', user: 'bblp')...",
-                client_id
-            );
-        }
+        log::debug!("Transmitting CONNECT payload (client_id: '{}', user: 'bblp')", client_id);
 
         stream
             .write_all(&connect_pkt)
@@ -270,24 +233,15 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // Read CONNACK packet
         let mut payload_buf = Vec::new();
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!("[VERBOSE] [MQTT] Awaiting broker CONNACK response packet...");
-        }
+        log::debug!("Awaiting broker CONNACK response packet");
 
-        let (header, _rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
+        let (header, rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
             .await
             .map_err(BambuError::NetworkError)?;
 
         let packet_type = header >> 4;
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] Received raw packet header type: {}, remaining size: {} bytes",
-                packet_type, _rem_len
-            );
-        }
+        log::debug!("Received raw packet header type: {}, remaining size: {} bytes", packet_type, rem_len);
 
         if packet_type != 2 {
             return Err(BambuError::ProtocolViolation("Expected CONNACK frame"));
@@ -297,13 +251,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         }
         let connack_code = payload_buf[1];
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] Connection accepted response byte: {}",
-                connack_code
-            );
-        }
+        log::debug!("Connection accepted response byte: {}", connack_code);
 
         if connack_code != 0 {
             // Authentication credentials rejected by physical broker (LAN access code incorrect)
@@ -313,13 +261,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // Subscribe to report topic
         let report_topic = format!("device/{}/report", serial);
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] Sending SUBSCRIBE frame targeting topic: '{}' (granted QoS 1)...",
-                report_topic
-            );
-        }
+        log::debug!("Sending SUBSCRIBE frame targeting topic: '{}' (granted QoS 1)", report_topic);
 
         let subscribe_pkt = encode_subscribe(1, &report_topic, 1);
 
@@ -333,23 +275,14 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
 
         // Read SUBACK packet
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!("[VERBOSE] [MQTT] Awaiting broker SUBACK verification packet...");
-        }
+        log::debug!("Awaiting broker SUBACK verification packet");
 
         let (sub_header, _sub_rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
             .await
             .map_err(BambuError::NetworkError)?;
         let sub_type = sub_header >> 4;
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] Received raw packet header type: {}",
-                sub_type
-            );
-        }
+        log::debug!("Received raw packet header type: {}", sub_type);
 
         if sub_type != 9 {
             return Err(BambuError::ProtocolViolation("Expected SUBACK frame"));
@@ -359,13 +292,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         }
         let return_code = payload_buf[2];
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] SUBACK response status granted: 0x{:02X}",
-                return_code
-            );
-        }
+        log::debug!("SUBACK response status granted: 0x{:02X}", return_code);
 
         if return_code == 0x80 {
             return Err(BambuError::ProtocolViolation(
@@ -391,13 +318,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// network timeout error to protect memory space and prevent packet drift [REF-MQTT-CONN].
     pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, BambuError> {
         if self.in_flight.len() >= 200 {
-            #[cfg(feature = "std")]
-            if is_verbose() {
-                println!(
-                    "[VERBOSE] [MQTT] Error: in-flight command backlog saturated ({} items).",
-                    self.in_flight.len()
-                );
-            }
+            log::warn!("In-flight command backlog saturated ({} items)", self.in_flight.len());
             return Err(BambuError::NetworkError(SocketError::TimedOut));
         }
 
@@ -409,13 +330,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         let topic = format!("device/{}/request", self.serial);
 
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!(
-                "[VERBOSE] [MQTT] Publishing QoS 1 command (packet_id: {}) to topic: '{}' (payload length: {} bytes)...",
-                packet_id, topic, payload.len()
-            );
-        }
+        log::debug!("Publishing QoS 1 command (packet_id: {}) to topic: '{}' (payload length: {} bytes)", packet_id, topic, payload.len());
 
         let packet = encode_publish_qos1(packet_id, &topic, payload);
 
@@ -444,7 +359,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
         let mut payload_buf = Vec::new();
         loop {
-            let (header, _rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf)
+            let (header, rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf)
                 .await
                 .map_err(BambuError::NetworkError)?;
 
@@ -452,13 +367,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
             let packet_type = header >> 4;
 
-            #[cfg(feature = "std")]
-            if is_verbose() {
-                println!(
-                    "[VERBOSE] [MQTT] Parsed wire packet type: {}, size: {} bytes",
-                    packet_type, _rem_len
-                );
-            }
+            log::trace!("Parsed wire packet type: {}, size: {} bytes", packet_type, rem_len);
 
             match packet_type {
                 3 => {
@@ -495,20 +404,11 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
                     let payload = payload_buf[payload_start..].to_vec();
 
-                    #[cfg(feature = "std")]
-                    if is_verbose() {
-                        println!(
-                            "[VERBOSE] [MQTT] Received PUBLISH frame on topic: '{}', QoS: {}, packet_id: {:?}, payload size: {} bytes",
-                            topic, qos, packet_id, payload.len()
-                        );
-                    }
+                    log::debug!("Received PUBLISH frame on topic: '{}', QoS: {}, packet_id: {:?}, payload size: {} bytes", topic, qos, packet_id, payload.len());
 
                     // If incoming message was QoS 1, immediately acknowledge to physical broker
                     if let Some(id) = packet_id {
-                        #[cfg(feature = "std")]
-                        if is_verbose() {
-                            println!("[VERBOSE] [MQTT] Sending automatic PUBACK to acknowledge receipt of packet_id: {}", id);
-                        }
+                        log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         let ack = encode_puback(id);
                         self.stream.write_all(&ack).await.map_err(|_| {
@@ -531,10 +431,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                     }
                     let ack_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
 
-                    #[cfg(feature = "std")]
-                    if is_verbose() {
-                        println!("[VERBOSE] [MQTT] Received PUBACK from broker for outbound packet_id: {}", ack_id);
-                    }
+                    log::trace!("Received PUBACK from broker for outbound packet_id: {}", ack_id);
 
                     if let Some(pos) = self.in_flight.iter().position(|&id| id == ack_id) {
                         self.in_flight.remove(pos);
@@ -542,21 +439,11 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                 }
                 13 => {
                     // Incoming PINGRESP from physical broker
-                    #[cfg(feature = "std")]
-                    if is_verbose() {
-                        println!("[VERBOSE] [MQTT] Received keep-alive PINGRESP from broker.");
-                    }
+                    log::trace!("Received keep-alive PINGRESP from broker");
                     self.ping_outstanding = false;
                 }
                 _ => {
-                    // Safely ignore other control frames gracefully (e.g. SUBACK, PINGREQ)
-                    #[cfg(feature = "std")]
-                    if is_verbose() {
-                        println!(
-                            "[VERBOSE] [MQTT] Ignoring un-handled control frame code: {}",
-                            packet_type
-                        );
-                    }
+                    log::debug!("Ignoring un-handled control frame code: {}", packet_type);
                 }
             }
         }
@@ -564,10 +451,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
     /// Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
     pub async fn send_ping(&mut self) -> Result<(), BambuError> {
-        #[cfg(feature = "std")]
-        if is_verbose() {
-            println!("[VERBOSE] [MQTT] Transmitting PINGREQ keep-alive packet...");
-        }
+        log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
         self.stream
@@ -592,20 +476,14 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         if let Some(ref mut secs) = self.write_pending_secs {
             *secs += elapsed_secs;
             if *secs >= 10 {
-                #[cfg(feature = "std")]
-                if is_verbose() {
-                    println!("[VERBOSE] [MQTT] [WARNING] Zombie state detected! Command issued but zero telemetry updates received for >= 10s.");
-                }
+                log::warn!("Zombie state detected: command issued but zero telemetry updates received for >= 10s");
                 return Err(BambuError::Timeout);
             }
         }
 
         self.secs_since_last_message += elapsed_secs;
         if self.secs_since_last_message >= 60 {
-            #[cfg(feature = "std")]
-            if is_verbose() {
-                println!("[VERBOSE] [MQTT] [WARNING] Connection stale! No packets received for >= 60s.");
-            }
+            log::warn!("Connection stale: no packets received for >= 60s");
             return Err(BambuError::Timeout);
         }
 
