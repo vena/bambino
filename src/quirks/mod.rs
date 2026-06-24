@@ -77,8 +77,18 @@ pub trait ModelQuirks {
         if !self.is_bed_on_z() {
             return false;
         }
-        let clean = gcode.to_uppercase();
-        clean.contains("G28") && (clean.contains('Z') || clean.contains('X') || clean.contains('Y'))
+        let mut tokens = gcode.split_whitespace();
+        let Some(cmd) = tokens.next() else {
+            return false;
+        };
+        if !cmd.eq_ignore_ascii_case("G28") {
+            return false;
+        }
+        tokens.any(|t| {
+            t.eq_ignore_ascii_case("X")
+                || t.eq_ignore_ascii_case("Y")
+                || t.eq_ignore_ascii_case("Z")
+        })
     }
 
     /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
@@ -471,6 +481,10 @@ mod tests {
         assert!(q.is_unsafe_homing_command("G28 X Y Z"));
         assert!(!q.is_unsafe_homing_command("G28"));
         assert!(!q.is_unsafe_homing_command("G1 Z10"));
+        assert!(!q.is_unsafe_homing_command("G280 Z"));
+        assert!(!q.is_unsafe_homing_command(""));
+        assert!(!q.is_unsafe_homing_command("G28"));
+        assert!(q.is_unsafe_homing_command("G28 z"));
     }
 
     #[test]

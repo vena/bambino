@@ -2,6 +2,9 @@
 //!
 //! Manages the properties and kinematic characteristics of the single-nozzle,
 //! IDEX, and tool-changer platforms [REF-MOTO-GCODE].
+//!
+//! H2C has 6 Vortek tool-changer hotends + 1 fixed hotend = 7 nozzles.
+//! O1C and O1C2 are hardware revisions with identical quirks.
 
 use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
