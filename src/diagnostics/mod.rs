@@ -15,6 +15,7 @@ pub use hms::{
     decode_hms_alert, decode_print_error, DecodedHmsAlert, DecodedPrintError, HmsSeverity,
 };
 pub use kprofile::{
-    validate_setting_id, ExtrusionCaliGetRequest, ExtrusionCaliSetRequest, IdexCaliDelEntry,
-    IdexCaliDelRequest, KProfileEntry, StandardCaliDelEntry, StandardCaliDelRequest,
+    validate_setting_id, ExtrusionCaliGetRequest, ExtrusionCaliSelRequest, ExtrusionCaliSetRequest,
+    IdexCaliDelEntry, IdexCaliDelRequest, KProfileEntry, StandardCaliDelEntry,
+    StandardCaliDelRequest,
 };

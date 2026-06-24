@@ -530,6 +530,117 @@ impl AmsGetRfidRequest {
     }
 }
 
+/// Triggers filament load or unload sequences on physical AMS units or virtual external spools [REF-AMS-MAP].
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsChangeFilamentPayload {
+    pub command: &'static str,
+    pub ams_id: i32,
+    pub slot_id: i32,
+    /// Load/unload destination (1 = toolhead load, 255 = unload/retract).
+    pub target: i32,
+    /// Current nozzle temperature (-1 = let firmware decide).
+    pub curr_temp: i32,
+    /// Target nozzle temperature (-1 = let firmware decide).
+    pub tar_temp: i32,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsChangeFilamentRequest {
+    pub print: AmsChangeFilamentPayload,
+}
+
+impl AmsChangeFilamentRequest {
+    pub fn new(
+        ams_id: i32,
+        slot_id: i32,
+        target: i32,
+        curr_temp: i32,
+        tar_temp: i32,
+        sequence_id: u64,
+    ) -> Self {
+        Self {
+            print: AmsChangeFilamentPayload {
+                command: "ams_change_filament",
+                ams_id,
+                slot_id,
+                target,
+                curr_temp,
+                tar_temp,
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsFilamentDryingPayload {
+    pub command: &'static str,
+    pub ams_id: i32,
+    /// 1 = start drying, 0 = stop drying.
+    pub mode: i32,
+    pub dry_temp: u32,
+    /// Duration in **minutes** (e.g., 8-hour cycle = 480).
+    pub dry_time: u32,
+    pub rotate_tray: bool,
+    pub filament: String,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AmsFilamentDryingRequest {
+    pub print: AmsFilamentDryingPayload,
+}
+
+impl AmsFilamentDryingRequest {
+    pub fn new(
+        ams_id: i32,
+        mode: i32,
+        dry_temp: u32,
+        dry_time: u32,
+        rotate_tray: bool,
+        filament: &str,
+        sequence_id: u64,
+    ) -> Self {
+        Self {
+            print: AmsFilamentDryingPayload {
+                command: "ams_filament_drying",
+                ams_id,
+                mode,
+                dry_temp,
+                dry_time,
+                rotate_tray,
+                filament: String::from(filament),
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+/// Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
+#[derive(Debug, Clone, Serialize)]
+pub struct CleanPrintErrorPayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CleanPrintErrorRequest {
+    pub print: CleanPrintErrorPayload,
+}
+
+impl CleanPrintErrorRequest {
+    pub fn new(sequence_id: u64) -> Self {
+        Self {
+            print: CleanPrintErrorPayload {
+                command: "clean_print_error",
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
 // ============================================================================
 // 7. Physical Self-Tests & Operational Performance Scaling
 // ============================================================================
@@ -645,5 +756,49 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         // Should serialize as an integer array
         assert!(json.contains(r#""ams_mapping":[0,-1,1]"#));
+    }
+
+    #[test]
+    fn test_ams_change_filament_load_json() {
+        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, 40005);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"ams_change_filament"#));
+        assert!(json.contains(r#""ams_id":0"#));
+        assert!(json.contains(r#""slot_id":1"#));
+        assert!(json.contains(r#""target":1"#));
+        assert!(json.contains(r#""curr_temp":-1"#));
+        assert!(json.contains(r#""tar_temp":-1"#));
+    }
+
+    #[test]
+    fn test_ams_change_filament_unload_json() {
+        let req = AmsChangeFilamentRequest::new(0, 255, 255, 210, 210, 40008);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""slot_id":255"#));
+        assert!(json.contains(r#""target":255"#));
+        assert!(json.contains(r#""curr_temp":210"#));
+    }
+
+    #[test]
+    fn test_ams_filament_drying_json() {
+        let req = AmsFilamentDryingRequest::new(128, 1, 55, 480, true, "PA-CF", 40004);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"ams_filament_drying"#));
+        assert!(json.contains(r#""ams_id":128"#));
+        assert!(json.contains(r#""mode":1"#));
+        assert!(json.contains(r#""dry_temp":55"#));
+        assert!(json.contains(r#""dry_time":480"#));
+        assert!(json.contains(r#""rotate_tray":true"#));
+        assert!(json.contains(r#""filament":"PA-CF""#));
+    }
+
+    #[test]
+    fn test_clean_print_error_json() {
+        let req = CleanPrintErrorRequest::new(20010);
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"print":{"command":"clean_print_error","sequence_id":"20010"}}"#
+        );
     }
 }

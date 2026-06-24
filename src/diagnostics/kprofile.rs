@@ -132,6 +132,54 @@ impl ExtrusionCaliSetRequest {
 }
 
 // ============================================================================
+// 3b. Bind Calibration Profile to AMS Slot (extrusion_cali_sel)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtrusionCaliSelPayload {
+    pub command: &'static str,
+    pub ams_id: i32,
+    /// Absolute global tray ID (not local slot index).
+    pub tray_id: i32,
+    pub cali_idx: i32,
+    pub filament_id: String,
+    pub nozzle_diameter: String,
+    pub sequence_id: String,
+}
+
+/// JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
+///
+/// The `setting_id` field is intentionally omitted from this payload to prevent
+/// database mislinking on the motion board.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtrusionCaliSelRequest {
+    pub print: ExtrusionCaliSelPayload,
+}
+
+impl ExtrusionCaliSelRequest {
+    pub fn new(
+        ams_id: i32,
+        tray_id: i32,
+        cali_idx: i32,
+        filament_id: &str,
+        nozzle_diameter: &str,
+        sequence_id: u64,
+    ) -> Self {
+        Self {
+            print: ExtrusionCaliSelPayload {
+                command: "extrusion_cali_sel",
+                ams_id,
+                tray_id,
+                cali_idx,
+                filament_id: String::from(filament_id),
+                nozzle_diameter: String::from(nozzle_diameter),
+                sequence_id: sequence_id.to_string(),
+            },
+        }
+    }
+}
+
+// ============================================================================
 // 4. Delete Profile Commands (extrusion_cali_del)
 // ============================================================================
 
@@ -276,5 +324,19 @@ mod tests {
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("extrusion_cali_set"));
         assert!(json.contains("PF12345678901234567"));
+    }
+
+    #[test]
+    fn test_extrusion_cali_sel_json() {
+        let req = ExtrusionCaliSelRequest::new(0, 1, 4, "GFA01", "0.4", 40003);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"extrusion_cali_sel"#));
+        assert!(json.contains(r#""ams_id":0"#));
+        assert!(json.contains(r#""tray_id":1"#));
+        assert!(json.contains(r#""cali_idx":4"#));
+        assert!(json.contains(r#""filament_id":"GFA01""#));
+        assert!(json.contains(r#""nozzle_diameter":"0.4""#));
+        // setting_id must be absent to prevent database mislinking
+        assert!(!json.contains("setting_id"));
     }
 }
