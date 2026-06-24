@@ -9,53 +9,15 @@
 //! to isolate connection, handshake, and packet serialization issues.
 
 use std::time::Duration;
-use tokio::net::TcpStream;
 
 use bambino::client::{FanTarget, PrinterClient};
 use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
-use bambino::io::tokio::{
-    TokioTimer, TokioTlsConnector, build_unsafe_client_config, to_socket_error,
-};
-use bambino::io::{TlsConnector, TokioIo};
-use bambino::mqtt::{BambuMqttClient, GetVersionRequest};
+use bambino::mqtt::GetVersionRequest;
 
-/// Utility to connect and return a configured MQTT client wrapper.
-async fn connect_mqtt(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-) -> Result<
-    BambuMqttClient<<TokioTlsConnector as TlsConnector<TokioIo<TcpStream>>>::Stream>,
-    BambuError,
-> {
-    log::debug!("Configuring TLS client context utilizing self-signed certificate verifier");
-    let config = build_unsafe_client_config();
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tls_connector = TokioTlsConnector::new(connector);
-
-    log::debug!("Dialing TCP socket to {}:8883", ip);
-    let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
-        .await
-        .map_err(to_socket_error)?;
-    let raw_io = TokioIo(tcp_stream);
-
-    log::debug!("Wrapping socket in secure TLS session");
-    let secure_stream = tls_connector.connect(ip, 8883, raw_io).await?;
-
-    log::debug!("Initiating secure MQTT v3.1.1 protocol handshake");
-    let client = BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
-
-    log::debug!("MQTT protocol session established successfully");
-    Ok(client)
-}
+use crate::connection::connect_mqtt;
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
-///
-/// **Removing Quirk Gates:**
-/// We have removed the `model.quirks().is_unsupported_command("get_version")` check.
-/// This allows us to attempt sending the packet to the P1S under LAN mode to verify
-/// exact behavior and observe where the command stalls or how the device reacts.
 pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     let is_verbose = crate::is_verbose();
     let mut mqtt = connect_mqtt(ip, serial, access_code).await?;

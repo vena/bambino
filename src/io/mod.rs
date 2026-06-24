@@ -54,6 +54,7 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> AsyncIo for T {}
 /// Asynchronous UDP Socket trait for unicast and multicast printer discovery.
 ///
 /// Interlaces with Port 2021 SSDP traffic defined in [REF-NET-DISC].
+#[allow(async_fn_in_trait)]
 pub trait AsyncUdpSocket: Sized {
     /// Binds to the designated local address.
     async fn bind(addr: &str) -> Result<Self, SocketError>;
@@ -69,6 +70,7 @@ pub trait AsyncUdpSocket: Sized {
 ///
 /// Facilitates wrapping raw TCP transport interfaces inside secure SSL/TLS sessions
 /// without enforcing a static library provider.
+#[allow(async_fn_in_trait)]
 pub trait TlsConnector<RawStream: AsyncIo> {
     /// The resulting encrypted socket stream type.
     type Stream: AsyncIo;
@@ -86,6 +88,7 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 ///
 /// Required to resolve post-boot handshakes, retry throttling, and camera frame pacing
 /// without burning processor cycles on embedded platforms.
+#[allow(async_fn_in_trait)]
 pub trait TimerProvider {
     /// Suspends execution of the calling task for the specified duration.
     async fn sleep(duration: core::time::Duration);

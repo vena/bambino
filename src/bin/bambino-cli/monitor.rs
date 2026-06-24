@@ -9,37 +9,22 @@
 //! and outbound keep-alive PING frames, rendering a live terminal dashboard.
 
 use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::time::interval;
 
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
 use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
-use bambino::io::tokio::{
-    TokioTimer, TokioTlsConnector, build_unsafe_client_config, to_socket_error,
-};
-use bambino::io::{TlsConnector, TokioIo};
-use bambino::mqtt::{BambuMqttClient, PushAllRequest};
+use bambino::mqtt::PushAllRequest;
 use bambino::quirks::ModelQuirks;
 use bambino::types::PrintTelemetry;
+
+use crate::connection::connect_mqtt;
 
 /// Connects, sends `pushall`, and dumps the first response containing a `print` object as pretty JSON.
 pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
-    let config = build_unsafe_client_config();
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tls_connector = TokioTlsConnector::new(connector);
-
-    let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
-        .await
-        .map_err(to_socket_error)?;
-    let raw_io = TokioIo(tcp_stream);
-
-    let secure_stream = tls_connector.connect(ip, 8883, raw_io).await?;
-
-    let mut mqtt =
-        BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
+    let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
 
     let push_req = PushAllRequest::new(10001);
     let push_payload = serde_json::to_vec(&push_req).map_err(|_| BambuError::SerializationError)?;
@@ -72,21 +57,7 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), Bambu
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     println!("Connecting to secure MQTT broker at {}:8883...", ip);
 
-    // 1. Establish the underlying TCP stream and wrap in secure TLS context [REF-NET-SECURE]
-    let config = build_unsafe_client_config();
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tls_connector = TokioTlsConnector::new(connector);
-
-    let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
-        .await
-        .map_err(to_socket_error)?;
-    let raw_io = TokioIo(tcp_stream);
-
-    let secure_stream = tls_connector.connect(ip, 8883, raw_io).await?;
-
-    // 2. Perform the MQTT v3.1.1 protocol handshake
-    let mut mqtt =
-        BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
+    let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
     println!("MQTT Connection successfully established. Querying status database...");
 
     // 3. Command the printer to dump its initial state machine values

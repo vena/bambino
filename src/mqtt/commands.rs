@@ -32,8 +32,8 @@ pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
 /// signed integer limits. If a connecting client uses an un-clamped millisecond epoch (13-digit integer),
 /// the memory allocation registers on the motion board will overflow. This causes the printer to lock
 /// indefinitely in an `IDLE` state and reject all subsequent print dispatches.
-pub fn clamp_task_id(raw_id: u64) -> String {
-    (raw_id % TASK_ID_MAX).to_string()
+pub fn clamp_task_id(raw_id: u64) -> u32 {
+    (raw_id % TASK_ID_MAX) as u32
 }
 
 // ============================================================================
@@ -182,6 +182,75 @@ impl SkipObjectsRequest {
 // 4. Submit Print Job (project_file Dispatch)
 // ============================================================================
 
+/// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
+///
+/// Replaces the positional parameter list on `start_print()` and `ProjectFileRequest::new()`
+/// with named fields and sensible defaults for calibration flags.
+#[derive(Debug, Clone)]
+pub struct PrintJobConfig {
+    pub job_filename: String,
+    pub plate_gcode_path: String,
+    pub subtask_name: String,
+    pub raw_subtask_id: u64,
+    pub bed_type: String,
+    pub bed_leveling: bool,
+    pub run_flow_calibration: bool,
+    pub run_vibration_compensation: bool,
+    pub use_ams: bool,
+    pub ams_mapping: Vec<i32>,
+    pub ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
+}
+
+impl PrintJobConfig {
+    pub fn new(
+        job_filename: &str,
+        plate_gcode_path: &str,
+        subtask_name: &str,
+        raw_subtask_id: u64,
+        bed_type: &str,
+    ) -> Self {
+        Self {
+            job_filename: String::from(job_filename),
+            plate_gcode_path: String::from(plate_gcode_path),
+            subtask_name: String::from(subtask_name),
+            raw_subtask_id,
+            bed_type: String::from(bed_type),
+            bed_leveling: true,
+            run_flow_calibration: true,
+            run_vibration_compensation: true,
+            use_ams: false,
+            ams_mapping: Vec::new(),
+            ams_mapping2: None,
+        }
+    }
+
+    pub fn with_ams(mut self, mapping: Vec<i32>) -> Self {
+        self.use_ams = true;
+        self.ams_mapping = mapping;
+        self
+    }
+
+    pub fn with_ams_mapping2(mut self, mapping2: Vec<ProjectAmsMapping2Entry>) -> Self {
+        self.ams_mapping2 = Some(mapping2);
+        self
+    }
+
+    pub fn bed_leveling(mut self, enabled: bool) -> Self {
+        self.bed_leveling = enabled;
+        self
+    }
+
+    pub fn flow_calibration(mut self, enabled: bool) -> Self {
+        self.run_flow_calibration = enabled;
+        self
+    }
+
+    pub fn vibration_compensation(mut self, enabled: bool) -> Self {
+        self.run_vibration_compensation = enabled;
+        self
+    }
+}
+
 /// Represents the conditional, polymorphic typing needed for the `ams_mapping` key [REF-MQTT-LIFECYCLE].
 ///
 /// **The Polymorphic Mapping Rule:**
@@ -242,33 +311,18 @@ pub struct ProjectFileRequest {
 }
 
 impl ProjectFileRequest {
-    /// Helper to instantiate a clean, safe local-mode project file submit sequence.
+    /// Constructs a print job request from a `PrintJobConfig` and an internal sequence ID.
     ///
     /// **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
     /// `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
     /// serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
     /// to treat the value as the physical carriage index (Target nozzle 1) instead of material
     /// routing parameters.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        job_filename: &str,
-        plate_gcode_path: &str,
-        subtask_name: &str,
-        raw_subtask_id: u64,
-        bed_type: &str,
-        bed_leveling: bool,
-        run_flow_calibration: bool,
-        run_vibration_compensation: bool,
-        use_ams: bool,
-        ams_mapping: Vec<i32>,
-        ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
-        sequence_id: u64,
-    ) -> Self {
-        // Enforce the local network storage loopback directory scheme
-        let url = format!("ftp://{}", job_filename);
+    pub fn from_config(config: &PrintJobConfig, sequence_id: u64) -> Self {
+        let url = format!("ftp://{}", config.job_filename);
 
-        let mapping = if use_ams {
-            AmsMappingTable::Active(ams_mapping)
+        let mapping = if config.use_ams {
+            AmsMappingTable::Active(config.ams_mapping.clone())
         } else {
             AmsMappingTable::Inactive(String::new())
         };
@@ -277,21 +331,21 @@ impl ProjectFileRequest {
             print: ProjectFilePayload {
                 command: "project_file",
                 sequence_id: sequence_id.to_string(),
-                param: String::from(plate_gcode_path),
-                subtask_name: String::from(subtask_name),
-                subtask_id: clamp_task_id(raw_subtask_id),
-                file: String::from(job_filename),
+                param: config.plate_gcode_path.clone(),
+                subtask_name: config.subtask_name.clone(),
+                subtask_id: clamp_task_id(config.raw_subtask_id).to_string(),
+                file: config.job_filename.clone(),
                 url,
-                timelapse: true, // Retained to ensure video generation triggers smoothly
-                bed_type: String::from(bed_type),
-                bed_leveling,
-                extrude_cali_flag: if run_flow_calibration { 1 } else { 0 },
-                nozzle_offset_cali: 0, // Overridden dynamically on IDEX platforms
-                vibration_cali: run_vibration_compensation,
+                timelapse: true,
+                bed_type: config.bed_type.clone(),
+                bed_leveling: config.bed_leveling,
+                extrude_cali_flag: if config.run_flow_calibration { 1 } else { 0 },
+                nozzle_offset_cali: 0,
+                vibration_cali: config.run_vibration_compensation,
                 layer_inspect: true,
-                use_ams,
+                use_ams: config.use_ams,
                 ams_mapping: mapping,
-                ams_mapping2,
+                ams_mapping2: config.ams_mapping2.clone(),
             },
         }
     }
@@ -713,52 +767,37 @@ mod tests {
     fn test_task_id_modulo_math() {
         let raw_epoch: u64 = 1718626458000;
         let clamped = clamp_task_id(raw_epoch);
-        let parsed_id: i64 = clamped.parse().unwrap();
-        assert!(parsed_id <= 2147483647);
-        assert!(parsed_id >= 0);
+        assert!(clamped <= i32::MAX as u32);
     }
 
     #[test]
     fn test_ams_mapping_polymorphism_inactive() {
-        let req = ProjectFileRequest::new(
+        let config = PrintJobConfig::new(
             "job.3mf",
             "Metadata/plate_1.gcode",
             "Test Print",
             12345,
             "textured",
-            true,
-            true,
-            true,
-            false, // use_ams = false (External spool)
-            vec![],
-            None,
-            5000,
         );
+        let req = ProjectFileRequest::from_config(&config, 5000);
 
         let json = serde_json::to_string(&req).unwrap();
-        // Should serialize strictly as empty string ""
         assert!(json.contains(r#""ams_mapping":"""#));
     }
 
     #[test]
     fn test_ams_mapping_polymorphism_active() {
-        let req = ProjectFileRequest::new(
+        let config = PrintJobConfig::new(
             "job.3mf",
             "Metadata/plate_1.gcode",
             "Test Print",
             12345,
             "textured",
-            true,
-            true,
-            true,
-            true, // use_ams = true
-            vec![0, -1, 1],
-            None,
-            5000,
-        );
+        )
+        .with_ams(vec![0, -1, 1]);
+        let req = ProjectFileRequest::from_config(&config, 5000);
 
         let json = serde_json::to_string(&req).unwrap();
-        // Should serialize as an integer array
         assert!(json.contains(r#""ams_mapping":[0,-1,1]"#));
     }
 

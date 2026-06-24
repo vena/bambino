@@ -1,5 +1,4 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![allow(async_fn_in_trait)]
 
 //! # Bambu Lab LAN Protocol Client Crate (`bambino`)
 //!
@@ -18,30 +17,17 @@ extern crate alloc;
 
 pub mod error;
 pub mod io;
+pub mod models;
 
-// Exposes Phase 2 Simple Service Discovery Protocol (SSDP) engine to the crate's module tree.
 pub mod discovery;
-
-// Exposes Phase 3 State Telemetry structures and model-specific quirks.
 pub mod quirks;
 pub mod types;
-
-// Exposes Phase 4 MQTT state client and control command structures.
 pub mod mqtt;
-
-// Exposes Phase 5 Custom Implicit FTPS storage manipulation client.
 pub mod ftps;
-
-// Exposes Phase 6 AMS expansion bus, material mapping and filament control structures.
 pub mod ams;
-
-// Exposes Phase 7 Video stream configuration and proprietary binary camera controllers.
 pub mod camera;
-
-// Exposes Phase 8 System diagnostics (HMS key parsing) and K-profile database calibrations.
 pub mod diagnostics;
-
-// Exposes Phase 10 Unified printer client coordinator and developer APIs.
 pub mod client;
 
 pub use error::BambuError;
+pub use models::BambuModel;

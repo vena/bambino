@@ -10,9 +10,9 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 use bambino::client::{FanTarget, PrinterClient};
-use bambino::discovery::BambuModel;
 use bambino::error::BambuError;
 use bambino::io::{TimerProvider, TokioIo};
+use bambino::models::BambuModel;
 use bambino::mqtt::BambuMqttClient;
 
 // ============================================================================

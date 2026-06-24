@@ -8,12 +8,20 @@ pub mod parser;
 
 use crate::error::BambuError;
 use crate::io::{AsyncUdpSocket, TimerProvider};
-pub use parser::{BambuModel, SsdpDevice, parse_ssdp_payload, resolve_model};
+pub use crate::models::{BambuModel, resolve_model};
+pub use parser::{SsdpDevice, parse_ssdp_payload};
 
+#[cfg(not(feature = "std"))]
+use alloc::collections::BTreeSet;
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
+use alloc::string::String;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
+use std::collections::BTreeSet;
 
 /// Standard Bambu Lab multicast group target for SSDP operations.
 pub const MULTICAST_IP: &str = "239.255.255.250";
@@ -190,6 +198,7 @@ where
     }
 
     let mut devices: Vec<SsdpDevice> = Vec::new();
+    let mut seen_serials: BTreeSet<String> = BTreeSet::new();
     let mut buf = [0u8; 1500];
 
     let total_millis = timeout.as_millis();
@@ -217,7 +226,7 @@ where
             match engine.poll_next_device(&mut buf).await {
                 Ok(Some(mut device)) => {
                     device.discovery_port = *port;
-                    if !devices.iter().any(|d| d.serial == device.serial) {
+                    if seen_serials.insert(device.serial.clone()) {
                         log::debug!("Discovered '{}' via port {}", device.serial, port);
                         devices.push(device);
                     }

@@ -9,6 +9,8 @@
 //! and bare-metal Embassy targets.
 
 #[cfg(not(feature = "std"))]
+use alloc::collections::BTreeSet;
+#[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
@@ -16,6 +18,9 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
+use std::collections::BTreeSet;
 
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
@@ -213,7 +218,7 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     serial: String,
     next_packet_id: u16,
     /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
-    in_flight: Vec<u16>,
+    in_flight: BTreeSet<u16>,
     /// Accumulated elapsed seconds since the last command publish while waiting for a response update.
     write_pending_secs: Option<u32>,
     /// Incremental scale of unacknowledged ping requests.
@@ -334,7 +339,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             stream,
             serial: String::from(serial),
             next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
-            in_flight: Vec::new(),
+            in_flight: BTreeSet::new(),
             write_pending_secs: None,
             ping_outstanding: false,
             secs_since_last_message: 0,
@@ -381,7 +386,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             .await
             .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
 
-        self.in_flight.push(packet_id);
+        self.in_flight.insert(packet_id);
 
         // Arm/reset write-channel zombie detection tracking [REF-MQTT-ZOMBIE]
         self.write_pending_secs = Some(0);
@@ -486,9 +491,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                         ack_id
                     );
 
-                    if let Some(pos) = self.in_flight.iter().position(|&id| id == ack_id) {
-                        self.in_flight.remove(pos);
-                    }
+                    self.in_flight.remove(&ack_id);
                 }
                 PACKET_TYPE_PINGRESP => {
                     log::trace!("Received keep-alive PINGRESP from broker");

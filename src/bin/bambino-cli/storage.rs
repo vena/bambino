@@ -9,6 +9,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 use tokio::net::TcpStream;
 
 use bambino::discovery::resolve_model;
@@ -16,6 +17,8 @@ use bambino::error::BambuError;
 use bambino::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
 use bambino::io::{SocketError, TokioIo};
+
+use crate::connection::validate_params;
 
 /// Concrete implementation of the passive data connection factory for the Tokio runtime.
 struct TokioDataStreamFactory;
@@ -97,6 +100,8 @@ pub async fn run(
         ));
     }
 
+    validate_params(ip, serial, access_code)?;
+
     let action = action_args[0].to_lowercase();
     let model = resolve_model(serial, None);
 
@@ -105,14 +110,18 @@ pub async fn run(
         ip
     );
 
-    // 1. Setup secure TLS socket context
     let config = build_unsafe_client_config();
     let connector = tokio_rustls::TlsConnector::from(config);
     let tls_connector = TokioTlsConnector::new(connector);
 
-    let tcp_stream = TcpStream::connect(format!("{}:990", ip))
-        .await
-        .map_err(to_socket_error)?;
+    const CONNECT_TIMEOUT_SECS: u64 = 5;
+    let tcp_stream = tokio::time::timeout(
+        Duration::from_secs(CONNECT_TIMEOUT_SECS),
+        TcpStream::connect(format!("{}:990", ip)),
+    )
+    .await
+    .map_err(|_| BambuError::NetworkError(SocketError::TimedOut))?
+    .map_err(to_socket_error)?;
     let raw_control = TokioIo(tcp_stream);
 
     // 2. Perform connection, login, and security policy selection [REF-FTPS-CONN]
@@ -172,9 +181,19 @@ pub async fn run(
             let remote_path_str = &action_args[2];
 
             let local_path = Path::new(local_path_str);
-            if !local_path.exists() {
+            let metadata = fs::metadata(local_path).map_err(|_| {
+                BambuError::ProtocolViolation("Target local file does not exist".into())
+            })?;
+
+            const MAX_UPLOAD_BYTES: u64 = 1_073_741_824;
+            if metadata.len() > MAX_UPLOAD_BYTES {
                 return Err(BambuError::ProtocolViolation(
-                    "Target local file does not exist".into(),
+                    format!(
+                        "File too large for upload: {} bytes (max {} MB)",
+                        metadata.len(),
+                        MAX_UPLOAD_BYTES / (1024 * 1024)
+                    )
+                    .into(),
                 ));
             }
 

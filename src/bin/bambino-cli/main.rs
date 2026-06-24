@@ -12,6 +12,7 @@ use std::env;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod connection;
 mod control;
 mod discover;
 mod monitor;

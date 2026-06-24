@@ -12,7 +12,7 @@ pub mod models;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
-use crate::discovery::BambuModel;
+use crate::models::BambuModel;
 use crate::types::PrintTelemetry;
 
 /// Polymorphic interface tracking model-specific hardware variations and transport exceptions.

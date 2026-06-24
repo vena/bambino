@@ -14,10 +14,10 @@ use alloc::vec::Vec;
 
 use embedded_io_async::Write;
 
-use crate::discovery::BambuModel;
 use crate::error::BambuError;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
 use crate::io::{AsyncIo, SocketError, TlsConnector};
+use crate::models::BambuModel;
 
 // FTP response codes (RFC 959)
 pub(crate) const FTP_GREETING: u16 = 220;
@@ -46,6 +46,7 @@ pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
 ///
 /// Under FTPS, passive transfers open fresh data socket connections back to the printer.
 /// This abstract boundary permits safe standard, ESP-IDF, and bare-metal Embassy bindings.
+#[allow(async_fn_in_trait)]
 pub trait FtpDataStreamFactory<RawIO: AsyncIo> {
     /// Connects a raw, un-encrypted socket to the designated host and port.
     async fn create_data_stream(&self, host: &str, port: u16) -> Result<RawIO, SocketError>;

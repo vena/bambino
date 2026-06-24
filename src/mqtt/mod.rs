@@ -14,6 +14,7 @@ pub use client::{BambuMqttClient, MqttMessage};
 pub use commands::{
     AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsFilamentDryingRequest,
     AmsFilamentSettingRequest, AmsGetRfidRequest, BuzzerRequest, CalibrationRequest,
-    CleanPrintErrorRequest, GCodeRequest, GetVersionRequest, LedCtrlRequest, ProjectFileRequest,
-    PromptSoundRequest, PushAllRequest, SkipObjectsRequest, StandardControlRequest, clamp_task_id,
+    CleanPrintErrorRequest, GCodeRequest, GetVersionRequest, LedCtrlRequest, PrintJobConfig,
+    ProjectFileRequest, PromptSoundRequest, PushAllRequest, SkipObjectsRequest,
+    StandardControlRequest, clamp_task_id,
 };

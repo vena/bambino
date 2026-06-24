@@ -12,9 +12,9 @@ mod common;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use bambino::discovery::BambuModel;
 use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
+use bambino::models::BambuModel;
 
 use common::io::{DummyTlsConnector, MockDataStreamFactory};
 use common::mock_ftps::run_mock_server;

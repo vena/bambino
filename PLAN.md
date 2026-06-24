@@ -75,24 +75,24 @@ Extract repeated patterns into helper methods, reducing mechanical duplication. 
 
 Replace suboptimal data structures, restrict visibility, and clean up the public API. Depends on Phase 20 (new helper methods affect API shape).
 
-* [ ] Extract `BambuModel` enum and `resolve_model()` out of `src/discovery/parser.rs` into a new top-level `src/models.rs` module. Currently `BambuModel` lives inside the SSDP parser, but it is not an SSDP concern — it is the crate's canonical model identity enum consumed by `quirks/mod.rs` (for `impl BambuModel { fn quirks() }`), `client.rs`, and `ftps/client.rs`. None of those modules have anything to do with discovery. `resolve_model()` is pure serial-prefix-to-enum mapping, also not SSDP-specific. `SsdpDevice` stays in `discovery/parser.rs` and imports `BambuModel` from the new location. Re-export `BambuModel` from `src/lib.rs` as a public type. Update all `use crate::discovery::BambuModel` imports crate-wide (including CLI code and tests) to `use crate::models::BambuModel`. Update `CLAUDE.md` to reflect the new canonical location.
-* [ ] Replace `in_flight: Vec<u16>` with `BTreeSet<u16>` in `src/mqtt/client.rs`
-* [ ] Replace discovery deduplication linear scan with `BTreeSet<String>` in `src/discovery/mod.rs`
-* [ ] Hide dummy types (`DummyRawIo`, `DummyTls`, `DummyFactory`) with `#[doc(hidden)]` — must stay `pub` for default type parameters but should be hidden from docs
-* [ ] Change `clamp_task_id` return type from `String` to `u32`
-* [ ] Introduce `PrintJobConfig` struct to replace 8+ parameter `start_print()` and `ProjectFileRequest::new()`
-* [ ] Remove phase numbering comments in `src/lib.rs`
-* [ ] Remove `#![allow(async_fn_in_trait)]` lint suppression
+* [x] Extract `BambuModel` enum and `resolve_model()` out of `src/discovery/parser.rs` into a new top-level `src/models.rs` module. Currently `BambuModel` lives inside the SSDP parser, but it is not an SSDP concern — it is the crate's canonical model identity enum consumed by `quirks/mod.rs` (for `impl BambuModel { fn quirks() }`), `client.rs`, and `ftps/client.rs`. None of those modules have anything to do with discovery. `resolve_model()` is pure serial-prefix-to-enum mapping, also not SSDP-specific. `SsdpDevice` stays in `discovery/parser.rs` and imports `BambuModel` from the new location. Re-export `BambuModel` from `src/lib.rs` as a public type. Update all `use crate::discovery::BambuModel` imports crate-wide (including CLI code and tests) to `use crate::models::BambuModel`. Update `CLAUDE.md` to reflect the new canonical location.
+* [x] Replace `in_flight: Vec<u16>` with `BTreeSet<u16>` in `src/mqtt/client.rs`
+* [x] Replace discovery deduplication linear scan with `BTreeSet<String>` in `src/discovery/mod.rs`
+* [x] Hide dummy types (`DummyRawIo`, `DummyTls`, `DummyFactory`) with `#[doc(hidden)]` — must stay `pub` for default type parameters but should be hidden from docs
+* [x] Change `clamp_task_id` return type from `String` to `u32`
+* [x] Introduce `PrintJobConfig` struct to replace 8+ parameter `start_print()` and `ProjectFileRequest::new()`
+* [x] Remove phase numbering comments in `src/lib.rs`
+* [x] Remove `#![allow(async_fn_in_trait)]` lint suppression
 
 ### Phase 22: CLI Hardening
 
 Extract shared connection logic, add input validation and timeouts. Depends on Phases 19-21 (library API changes must stabilize first).
 
-* [ ] Extract `connect_mqtt` into shared `src/bin/bambino-cli/connection.rs` — function in control.rs, inline-duplicated twice in monitor.rs. Include a `MqttClient` type alias
-* [ ] Add connection timeout wrapping `TcpStream::connect`
-* [ ] Add input validation for IP, serial, and access code parameters
-* [ ] Add file upload size guard in `storage.rs`
-* [ ] Clean up removed quirks check TODO comment in `control.rs`
+* [x] Extract `connect_mqtt` into shared `src/bin/bambino-cli/connection.rs` — function in control.rs, inline-duplicated twice in monitor.rs. Include a `MqttClient` type alias
+* [x] Add connection timeout wrapping `TcpStream::connect`
+* [x] Add input validation for IP, serial, and access code parameters
+* [x] Add file upload size guard in `storage.rs`
+* [x] Clean up removed quirks check TODO comment in `control.rs`
 
 ### Phase 23: Test Infrastructure & Coverage
 

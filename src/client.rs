@@ -25,11 +25,13 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
-use crate::discovery::BambuModel;
 use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use crate::io::{AsyncIo, TlsConnector};
-use crate::mqtt::{BambuMqttClient, GCodeRequest, MqttMessage, StandardControlRequest};
+use crate::models::BambuModel;
+use crate::mqtt::{
+    BambuMqttClient, GCodeRequest, MqttMessage, PrintJobConfig, StandardControlRequest,
+};
 
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 
@@ -37,7 +39,7 @@ pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 // Internal Default Dummy Types (Satisfies Recursive Inner Bounds)
 // ============================================================================
 
-/// Private internal helper dummy type satisfying `AsyncIo` to enable trait default parameterization.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
 pub struct DummyRawIo;
 
@@ -60,7 +62,7 @@ impl embedded_io_async::Write for DummyRawIo {
     }
 }
 
-/// Private internal helper dummy type satisfying `TlsConnector` to enable trait default parameterization.
+#[doc(hidden)]
 pub struct DummyTls;
 
 impl TlsConnector<DummyRawIo> for DummyTls {
@@ -75,7 +77,7 @@ impl TlsConnector<DummyRawIo> for DummyTls {
     }
 }
 
-/// Private internal helper dummy type satisfying `FtpDataStreamFactory` to enable trait default parameterization.
+#[doc(hidden)]
 pub struct DummyFactory;
 
 impl FtpDataStreamFactory<DummyRawIo> for DummyFactory {
@@ -554,40 +556,9 @@ where
     }
 
     /// Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
-    ///
-    /// * `job_filename`: Container file path on the SD card (e.g., `"job.3mf"`).
-    /// * `plate_gcode_path`: Internal sliced plate path (e.g., `"Metadata/plate_1.gcode"`).
-    /// * `subtask_name`: User-friendly label for the print queue.
-    /// * `raw_subtask_id`: Tracking identifier (automatically clamped to 32-bit safe range).
-    /// * `bed_type`: Bed surface descriptor (e.g., `"textured"`).
-    /// * `use_ams`: Whether to route filament through the AMS multiplexer.
-    /// * `ams_mapping`: Material slot mapping (empty if `use_ams` is false).
-    #[allow(clippy::too_many_arguments)]
-    pub async fn start_print(
-        &mut self,
-        job_filename: &str,
-        plate_gcode_path: &str,
-        subtask_name: &str,
-        raw_subtask_id: u64,
-        bed_type: &str,
-        use_ams: bool,
-        ams_mapping: Vec<i32>,
-    ) -> Result<u16, BambuError> {
+    pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
-        let req = crate::mqtt::ProjectFileRequest::new(
-            job_filename,
-            plate_gcode_path,
-            subtask_name,
-            raw_subtask_id,
-            bed_type,
-            true,
-            true,
-            true,
-            use_ams,
-            ams_mapping,
-            None,
-            seq,
-        );
+        let req = crate::mqtt::ProjectFileRequest::from_config(config, seq);
         self.publish_request(&req).await
     }
 }
