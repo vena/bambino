@@ -137,9 +137,8 @@ pub struct PrintTelemetry {
     /// AI detection settings (spaghetti detection, first-layer inspection, etc.).
     pub xcam: Option<serde_json::Value>,
 
-    /// Array of standard modular material expansion units connected to the bus.
-    #[serde(default)]
-    pub ams: Vec<AmsUnit>,
+    /// AMS expansion bus status container [REF-AMS-DECODE].
+    pub ams: Option<AmsStatusReport>,
 
     /// Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
     #[serde(default)]
@@ -175,6 +174,35 @@ pub struct HmsEntry {
     pub code: u32,
 }
 
+/// Top-level AMS status wrapper containing the units array and bus-wide metadata [REF-AMS-DECODE].
+///
+/// On the wire, AMS telemetry is nested as `print.ams.ams[...]` — this struct represents
+/// the intermediate `print.ams` object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmsStatusReport {
+    /// Array of connected AMS units on the expansion bus.
+    #[serde(default)]
+    pub ams: Vec<AmsUnit>,
+
+    /// Hexadecimal bitmask string indicating which AMS units are physically present.
+    pub ams_exist_bits: Option<String>,
+
+    /// Hexadecimal bitmask string indicating which tray slots contain a physical spool.
+    pub tray_exist_bits: Option<String>,
+
+    /// Hexadecimal bitmask string indicating which trays contain Bambu Lab branded spools.
+    pub tray_is_bbl_bits: Option<String>,
+
+    /// Index of the currently active tray feeding filament to the toolhead.
+    pub tray_now: Option<String>,
+
+    /// Index of the previously active tray.
+    pub tray_pre: Option<String>,
+
+    /// AMS protocol version.
+    pub version: Option<i32>,
+}
+
 /// Modular standard expansion unit managing up to 4 physical spool slots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AmsUnit {
@@ -184,12 +212,32 @@ pub struct AmsUnit {
     /// Ambient temperature inside the expansion enclosure, in degrees Celsius.
     pub temp: String,
 
-    /// Enclosure climate relative humidity indicator (scale index 1 to 5).
+    /// Enclosure climate relative humidity index (1-5 scale).
     pub humidity: String,
+
+    /// Actual relative humidity percentage (1-100) from the onboard sensor.
+    pub humidity_raw: Option<u32>,
+
+    /// Remaining drying time in minutes during an active dry cycle [REF-AMS-DRYER].
+    pub dry_time: Option<u32>,
+
+    /// Drying configuration settings (target temperature, duration, filament type).
+    pub dry_setting: Option<AmsDrySetting>,
 
     /// Trays / spool slots configured inside the designated unit.
     #[serde(default)]
     pub tray: Vec<AmsTray>,
+}
+
+/// Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmsDrySetting {
+    /// Target drying temperature in degrees Celsius.
+    pub dry_temperature: Option<i32>,
+    /// Configured drying duration in minutes.
+    pub dry_duration: Option<i32>,
+    /// Filament type string for the active drying profile (e.g. "PA-CF").
+    pub dry_filament: Option<String>,
 }
 
 /// Material spool state descriptor representing a single physical tray slot.
@@ -529,6 +577,90 @@ mod tests {
         let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
         let print = report.print.unwrap();
         assert_eq!(print.mc_print_sub_stage, Some(3));
+    }
+
+    #[test]
+    fn test_ams_nested_wire_format() {
+        let json_data = r#"{
+            "print": {
+                "ams": {
+                    "ams": [
+                        {
+                            "id": "0",
+                            "temp": "26.0",
+                            "humidity": "3",
+                            "tray": [
+                                { "id": 0, "state": 10, "tray_type": "PLA", "tray_color": "FF0000FF", "remain": 85 },
+                                { "id": 1, "state": 11, "tray_type": "PETG", "tray_color": "0000FFFF", "remain": 42 },
+                                { "id": 2 },
+                                { "id": 3, "state": 10, "tray_type": "PLA", "tray_color": "FFFFFFFF", "remain": 100 }
+                            ]
+                        }
+                    ],
+                    "ams_exist_bits": "1",
+                    "tray_exist_bits": "b",
+                    "tray_now": "1",
+                    "version": 0
+                }
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        let ams_status = print.ams.unwrap();
+
+        assert_eq!(ams_status.ams_exist_bits.as_deref(), Some("1"));
+        assert_eq!(ams_status.tray_exist_bits.as_deref(), Some("b"));
+        assert_eq!(ams_status.tray_now.as_deref(), Some("1"));
+        assert_eq!(ams_status.ams.len(), 1);
+
+        let unit = &ams_status.ams[0];
+        assert_eq!(unit.id, "0");
+        assert_eq!(unit.temp, "26.0");
+        assert_eq!(unit.humidity, "3");
+        assert_eq!(unit.tray.len(), 4);
+
+        assert_eq!(unit.tray[0].tray_type.as_deref(), Some("PLA"));
+        assert_eq!(unit.tray[0].state, Some(10));
+        assert_eq!(unit.tray[1].state, Some(11));
+        assert_eq!(unit.tray[1].tray_type.as_deref(), Some("PETG"));
+        // Slot 2: empty (truncated JSON — P1S firmware behavior)
+        assert_eq!(unit.tray[2].state, None);
+        assert_eq!(unit.tray[2].get_state(), 9);
+    }
+
+    #[test]
+    fn test_ams_drying_fields() {
+        let json_data = r#"{
+            "print": {
+                "ams": {
+                    "ams": [
+                        {
+                            "id": "0",
+                            "temp": "55.0",
+                            "humidity": "1",
+                            "humidity_raw": 8,
+                            "dry_time": 142,
+                            "dry_setting": {
+                                "dry_temperature": 55,
+                                "dry_duration": 480,
+                                "dry_filament": "PA-CF"
+                            },
+                            "tray": []
+                        }
+                    ]
+                }
+            }
+        }"#;
+
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let unit = &report.print.unwrap().ams.unwrap().ams[0];
+        assert_eq!(unit.dry_time, Some(142));
+        assert_eq!(unit.humidity_raw, Some(8));
+        let dry = unit.dry_setting.as_ref().unwrap();
+        assert_eq!(dry.dry_temperature, Some(55));
+        assert_eq!(dry.dry_duration, Some(480));
+        assert_eq!(dry.dry_filament.as_deref(), Some("PA-CF"));
     }
 
     #[test]

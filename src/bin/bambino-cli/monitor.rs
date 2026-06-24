@@ -59,13 +59,15 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 
     println!("Monitoring active. Press Ctrl+C to terminate.\n");
 
+    let mut state = serde_json::Map::new();
+
     loop {
         tokio::select! {
             // A: Listen for incoming telemetry payloads
             telemetry_res = mqtt.poll_telemetry() => {
                 match telemetry_res {
                     Ok(msg) => {
-                        if let Err(e) = render_dashboard(&msg.payload) {
+                        if let Err(e) = render_dashboard(&msg.payload, &mut state) {
                             eprintln!("Warning: Failed to render telemetry updates: {:?}", e);
                         }
                     }
@@ -83,105 +85,242 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
     }
 }
 
-/// Parses the raw JSON report payload and draws a clean status dashboard in the console.
-fn render_dashboard(payload: &[u8]) -> Result<(), serde_json::Error> {
+/// Merges a partial telemetry update into accumulated state and redraws the dashboard.
+fn render_dashboard(
+    payload: &[u8],
+    state: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), serde_json::Error> {
     let v: serde_json::Value = serde_json::from_slice(payload)?;
 
-    // Telemetry updates often contain partial segments. Only refresh terminal output
-    // when we receive structural print state parameters.
-    let print_obj = match v.get("print") {
-        Some(p) if p.is_object() => p,
+    let incoming = match v.get("print") {
+        Some(serde_json::Value::Object(obj)) => obj,
         _ => return Ok(()),
     };
 
-    let gcode_state = print_obj
+    for (key, value) in incoming {
+        state.insert(key.clone(), value.clone());
+    }
+
+    print!("\x1B[2J\x1B[1;1H");
+
+    // -- Print Status --
+    let gcode_state = state
         .get("gcode_state")
         .and_then(|s| s.as_str())
         .unwrap_or("UNKNOWN");
-    let subtask_name = print_obj
+    let subtask_name = state
         .get("subtask_name")
         .and_then(|s| s.as_str())
         .unwrap_or("None");
-    let progress = print_obj
+    let progress = state
         .get("progress")
         .and_then(|p| p.as_f64())
         .unwrap_or(0.0);
-    let layer_num = print_obj
+    let layer_num = state
         .get("layer_num")
         .and_then(|l| l.as_i64())
         .unwrap_or(0);
-    let total_layers = print_obj
+    let total_layers = state
         .get("total_layers")
         .and_then(|l| l.as_i64())
         .unwrap_or(0);
-    let remaining_sec = print_obj
+    let remaining_sec = state
         .get("mc_remaining_time")
         .and_then(|t| t.as_i64())
         .unwrap_or(0);
 
-    // Unpack temperatures safely using our composite helpers [REF-THER-DECODE]
-    let nozzle_temper = print_obj
+    let remaining_formatted = if remaining_sec > 0 {
+        format!("{}m {}s", remaining_sec / 60, remaining_sec % 60)
+    } else {
+        String::from("--")
+    };
+
+    println!("=================== Bambu Lab Printer Live Dashboard ====================");
+    println!("{:<20} : {}", "Operational State", gcode_state);
+    println!("{:<20} : {}", "Active Job Name", subtask_name);
+    println!(
+        "{:<20} : {:.1}%  ({}/{})",
+        "Print Progress", progress, layer_num, total_layers
+    );
+    println!("{:<20} : {}", "Time Remaining", remaining_formatted);
+
+    // -- Thermal --
+    let nozzle_temper = state
         .get("nozzle_temper")
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as u32;
     let (nozzle_act, nozzle_tgt) = PrintTelemetry::unpack_temperature(nozzle_temper);
 
-    let bed_temper = print_obj
+    let bed_temper = state
         .get("bed_temper")
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as u32;
     let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
 
-    let chamber_temper = print_obj
+    let chamber_temper = state
         .get("chamber_temper")
         .and_then(|t| t.as_u64())
         .unwrap_or(0) as u32;
     let (chamber_act, chamber_tgt) = PrintTelemetry::unpack_temperature(chamber_temper);
 
-    // Format remaining time nicely
-    let remaining_formatted = if remaining_sec > 0 {
-        format!("{}m {}s", remaining_sec / 60, remaining_sec % 60)
-    } else {
-        String::from("Unknown")
+    println!("--- Thermal -----------------------------------------------------------");
+    println!(
+        "{:<20} : {:>3}°C / {:>3}°C",
+        "Hotend", nozzle_act, nozzle_tgt
+    );
+    println!(
+        "{:<20} : {:>3}°C / {:>3}°C",
+        "Heated Bed", bed_act, bed_tgt
+    );
+    println!(
+        "{:<20} : {:>3}°C / {:>3}°C",
+        "Chamber", chamber_act, chamber_tgt
+    );
+
+    // -- Fans & System (two-column layout) --
+    let fan_values = [
+        ("Part Cooling", get_fan_pct(state, "cooling_fan_speed")),
+        ("Aux Fan", get_fan_pct(state, "big_fan1_speed")),
+        ("Chamber Fan", get_fan_pct(state, "big_fan2_speed")),
+        ("Heatbreak Fan", get_fan_pct(state, "heatbreak_fan_speed")),
+    ];
+
+    let wifi = state
+        .get("wifi_signal")
+        .and_then(|s| s.as_str())
+        .unwrap_or("--");
+    let sdcard = match state.get("sdcard") {
+        Some(serde_json::Value::Bool(true)) => "Inserted",
+        Some(serde_json::Value::String(s)) if s.to_uppercase() == "HAS_SDCARD_NORMAL" => {
+            "Inserted"
+        }
+        Some(serde_json::Value::Number(n)) if n.as_i64().unwrap_or(0) != 0 => "Inserted",
+        Some(serde_json::Value::Bool(false)) | Some(serde_json::Value::Number(_)) => {
+            "Not Detected"
+        }
+        _ => "--",
     };
+    let recording = state
+        .get("ipcam_record")
+        .and_then(|s| s.as_str())
+        .unwrap_or("--");
+    let timelapse = state
+        .get("timelapse")
+        .and_then(|s| s.as_str())
+        .unwrap_or("--");
 
-    // Cleanly clear terminal cursor lines to simulate live in-place redraws
-    print!("\x1B[2J\x1B[1;1H");
+    let sys_values = [
+        ("WiFi", wifi),
+        ("SD Card", sdcard),
+        ("Recording", recording),
+        ("Timelapse", timelapse),
+    ];
 
-    println!("=================== Bambu Lab Printer Live Dashboard ===================");
-    println!("{:<20} : {}", "Operational State", gcode_state);
-    println!("{:<20} : {}", "Active Job Name", subtask_name);
-    println!("{:<20} : {:.1}%", "Print Progress", progress);
-    println!("{:<20} : {} / {}", "Layer Range", layer_num, total_layers);
-    println!("{:<20} : {}", "Time Remaining", remaining_formatted);
-    println!("------------------------------------------------------------------------");
-    println!(
-        "{:<20} : Actual: {:>3}°C  |  Target: {:>3}°C",
-        "Hotend Temp", nozzle_act, nozzle_tgt
-    );
-    println!(
-        "{:<20} : Actual: {:>3}°C  |  Target: {:>3}°C",
-        "Heated Bed Temp", bed_act, bed_tgt
-    );
-    println!(
-        "{:<20} : Actual: {:>3}°C  |  Target: {:>3}°C",
-        "Chamber Temp", chamber_act, chamber_tgt
-    );
-    println!("========================================================================");
+    println!("--- Fans & System -----------------------------------------------------");
+    for i in 0..4 {
+        println!(
+            "{:<14} : {:<6} {:>3} {:<14} : {}",
+            fan_values[i].0, fan_values[i].1, "│", sys_values[i].0, sys_values[i].1
+        );
+    }
 
-    // 5. Unpack and display system hardware errors dynamically [REF-DIAG-HMS]
-    if let Some(err_val) = print_obj.get("print_error").and_then(|e| e.as_u64()) {
+    // -- AMS --
+    if let Some(ams_array) = state
+        .get("ams")
+        .and_then(|a| a.get("ams"))
+        .and_then(|a| a.as_array())
+    {
+        for unit in ams_array {
+            let unit_id = json_as_str_or_num(unit.get("id"));
+            let temp = unit.get("temp").and_then(|t| t.as_str()).unwrap_or("--");
+            let humidity = unit
+                .get("humidity_raw")
+                .and_then(|h| h.as_u64())
+                .map(|h| format!("{}%", h))
+                .unwrap_or_else(|| {
+                    // Fall back to the 1-5 index if raw percentage is absent
+                    unit.get("humidity")
+                        .and_then(|h| h.as_str())
+                        .map(|s| format!("idx:{}", s))
+                        .unwrap_or_else(|| "--".to_string())
+                });
+
+            let dry_suffix = match unit.get("dry_time").and_then(|d| d.as_u64()) {
+                Some(mins) if mins > 0 => {
+                    let dry_temp = unit
+                        .get("dry_setting")
+                        .and_then(|ds| ds.get("dry_temperature"))
+                        .and_then(|t| t.as_i64())
+                        .filter(|t| *t > 0);
+                    match dry_temp {
+                        Some(t) => format!(" Drying: {}:{:02}@{}°C", mins / 60, mins % 60, t),
+                        None => format!(" Drying: {}:{:02} left", mins / 60, mins % 60),
+                    }
+                }
+                _ => String::new(),
+            };
+
+            let header = format!(
+                "--- AMS #{} ({}°C, RH:{}){}",
+                unit_id, temp, humidity, dry_suffix
+            );
+            let pad = 71usize.saturating_sub(header.len());
+            println!("{} {}", header, "-".repeat(pad));
+
+            if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
+                let mut table = crate::table::Table::new(vec![
+                    "Slot", "Status", "Material", "Remaining",
+                ]);
+
+                for tray in trays {
+                    let tray_id = json_as_str_or_num(tray.get("id"));
+
+                    let tray_state = tray
+                        .get("state")
+                        .and_then(|s| s.as_u64())
+                        .map(|s| s as u8);
+                    let status = match tray_state {
+                        Some(11) => "Loaded",
+                        Some(10) => "Present",
+                        Some(9) | Some(0) | None => "Empty",
+                        _ => "Unknown",
+                    };
+
+                    let material = tray
+                        .get("tray_type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+
+                    let remain = tray
+                        .get("remain")
+                        .and_then(|r| r.as_i64())
+                        .filter(|r| *r >= 0)
+                        .map(|r| format!("{}%", r))
+                        .unwrap_or_default();
+
+                    table.add_row(vec![&tray_id, status, material, &remain]);
+                }
+
+                table.print();
+            }
+        }
+    }
+
+    println!("=======================================================================");
+
+    // -- Diagnostics --
+    if let Some(err_val) = state.get("print_error").and_then(|e| e.as_u64()) {
         if let Some(decoded_err) = decode_print_error(err_val as u32) {
             if decoded_err.is_genuine_fault {
                 println!(
-                    "\x1B[1;31m[ACTIVE ERROR] State Code: {}\x1B[0m",
+                    "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
                     decoded_err.short_code
                 );
             }
         }
     }
 
-    if let Some(hms_array) = print_obj.get("hms").and_then(|h| h.as_array()) {
+    if let Some(hms_array) = state.get("hms").and_then(|h| h.as_array()) {
         let mut active_hms = Vec::new();
         for alert in hms_array {
             if let (Some(attr), Some(code)) = (
@@ -196,10 +335,10 @@ fn render_dashboard(payload: &[u8]) -> Result<(), serde_json::Error> {
         }
 
         if !active_hms.is_empty() {
-            println!("\nActive Hardware Alerts:");
-            for decoded in active_hms {
+            println!("Active Hardware Alerts:");
+            for decoded in &active_hms {
                 println!(
-                    "  \x1B[1;33m- [{}] Severity: {:?} (Module: {})\x1B[0m",
+                    "  \x1B[1;33m[{}] Severity: {:?} (Module: {})\x1B[0m",
                     decoded.short_code, decoded.severity, decoded.module_id
                 );
             }
@@ -207,4 +346,23 @@ fn render_dashboard(payload: &[u8]) -> Result<(), serde_json::Error> {
     }
 
     Ok(())
+}
+
+/// Extracts a fan speed field as a percentage string (0-15 step scale).
+fn get_fan_pct(state: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
+    state
+        .get(key)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(|step| format!("{}%", (step as f32 / 15.0 * 100.0).round() as u32))
+        .unwrap_or_else(|| "--".to_string())
+}
+
+/// Extracts a JSON value as a display string, handling both string and numeric types.
+fn json_as_str_or_num(val: Option<&serde_json::Value>) -> String {
+    match val {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => "?".to_string(),
+    }
 }
