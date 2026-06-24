@@ -6,8 +6,9 @@
 //! Evaluates the client against an inline, in-memory duplex stream mock to ensure
 //! exact verification of the generated raw JSON payloads and raw G-code arrays.
 
+mod common;
+
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 use bambino::client::{FanTarget, PrinterClient};
 use bambino::error::BambuError;
@@ -15,8 +16,10 @@ use bambino::io::{TimerProvider, TokioIo};
 use bambino::models::BambuModel;
 use bambino::mqtt::BambuMqttClient;
 
+use common::mock_mqtt::{handle_mqtt_handshake, read_publish_payload};
+
 // ============================================================================
-// Shared Test Primitives & Handshake Mocks
+// Shared Test Primitives
 // ============================================================================
 
 struct DummyTimer;
@@ -25,71 +28,6 @@ impl TimerProvider for DummyTimer {
     async fn sleep(_duration: Duration) {
         // No-op for high-frequency in-memory tests
     }
-}
-
-/// Helper performing non-blocking bit operations to read MQTT variable-length numbers.
-async fn read_var_len(stream: &mut DuplexStream) -> usize {
-    let mut rem_len: usize = 0;
-    let mut multiplier: usize = 1;
-    loop {
-        let mut byte = [0u8; 1];
-        stream.read_exact(&mut byte).await.unwrap();
-        let b = byte[0];
-        rem_len += ((b & 127) as usize) * multiplier;
-        multiplier *= 128;
-        if (b & 128) == 0 {
-            break;
-        }
-    }
-    rem_len
-}
-
-/// Simulates standard MQTTS login handshakes to establish the client session.
-async fn handle_mqtt_handshake(stream: &mut DuplexStream) {
-    let mut header = [0u8; 1];
-
-    // 1. Validate CONNECT packet
-    stream.read_exact(&mut header).await.unwrap();
-    assert_eq!(header[0], 0x10, "Expected CONNECT type identifier");
-    let rem_len = read_var_len(stream).await;
-    let mut payload = vec![0u8; rem_len];
-    stream.read_exact(&mut payload).await.unwrap();
-
-    // Reply with positive CONNACK confirmation (accepted)
-    stream.write_all(&[0x20, 0x02, 0x00, 0x00]).await.unwrap();
-    stream.flush().await.unwrap();
-
-    // 2. Validate SUBSCRIBE packet
-    stream.read_exact(&mut header).await.unwrap();
-    assert_eq!(header[0], 0x82, "Expected SUBSCRIBE type identifier");
-    let rem_len2 = read_var_len(stream).await;
-    payload.resize(rem_len2, 0);
-    stream.read_exact(&mut payload).await.unwrap();
-
-    // Reply with standard SUBACK confirmation (QoS 1)
-    stream
-        .write_all(&[0x90, 0x03, payload[0], payload[1], 0x01])
-        .await
-        .unwrap();
-    stream.flush().await.unwrap();
-}
-
-/// Intercepts and parses the JSON body of the next MQTT Publish packet sent by the client.
-async fn read_publish_payload(stream: &mut DuplexStream) -> serde_json::Value {
-    let mut header = [0u8; 1];
-    stream.read_exact(&mut header).await.unwrap();
-    assert_eq!(header[0], 0x32, "Expected PUBLISH with QoS 1 flags");
-
-    let rem_len = read_var_len(stream).await;
-    let mut packet = vec![0u8; rem_len];
-    stream.read_exact(&mut packet).await.unwrap();
-
-    // Reconstruct topic size to locate the payload boundary
-    let topic_len = u16::from_be_bytes([packet[0], packet[1]]) as usize;
-    let payload_start = 2 + topic_len + 2; // +2 for Topic len, +2 for Packet ID
-
-    let json_bytes = &packet[payload_start..];
-    serde_json::from_slice(json_bytes).unwrap()
 }
 
 // ============================================================================
@@ -115,7 +53,7 @@ async fn test_homing_safety_interlocks() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed");
 
     // CoreXY Bed-on-Z initialization
     let mut client_x1c = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1C);
@@ -129,7 +67,10 @@ async fn test_homing_safety_interlocks() {
     assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
 
     // Standard homing should succeed with bare G28
-    client_x1c.home_axes(false).await.unwrap();
+    client_x1c
+        .home_axes(false)
+        .await
+        .expect("G28 homing failed");
 
     // Bed-Slinger initialization
     let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
@@ -147,15 +88,18 @@ async fn test_homing_safety_interlocks() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed for A1");
 
     let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
     // Bed-Slingers do not share upward bed collision hazards; G28 Z homing is permitted
-    client_a1.home_axes(true).await.unwrap();
+    client_a1
+        .home_axes(true)
+        .await
+        .expect("A1 Z-only homing failed");
 
-    broker_task.await.unwrap();
-    broker_task_a1.await.unwrap();
+    broker_task.await.expect("X1C broker task panicked");
+    broker_task_a1.await.expect("A1 broker task panicked");
 }
 
 #[tokio::test]
@@ -187,15 +131,21 @@ async fn test_kinematic_and_extrusion_moves() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed");
 
     let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
 
-    client.move_relative('z', 10.0, 3000).await.unwrap();
-    client.move_relative('x', -15.5, 6000).await.unwrap();
-    client.extrude(10.0, 900).await.unwrap();
+    client
+        .move_relative('z', 10.0, 3000)
+        .await
+        .expect("Z move failed");
+    client
+        .move_relative('x', -15.5, 6000)
+        .await
+        .expect("X move failed");
+    client.extrude(10.0, 900).await.expect("Extrusion failed");
 
-    broker_task.await.unwrap();
+    broker_task.await.expect("Broker task panicked");
 }
 
 #[tokio::test]
@@ -224,15 +174,24 @@ async fn test_thermal_guards_and_temperatures() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed");
 
     let mut client_x1c = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1C);
 
-    client_x1c.set_bed_temperature(60).await.unwrap();
-    client_x1c.set_nozzle_temperature(0, 220).await.unwrap();
+    client_x1c
+        .set_bed_temperature(60)
+        .await
+        .expect("Bed temp set failed");
+    client_x1c
+        .set_nozzle_temperature(0, 220)
+        .await
+        .expect("Nozzle temp set failed");
 
     // Chamber temperature should succeed on enclosed CoreXY models
-    client_x1c.set_chamber_temperature(45).await.unwrap();
+    client_x1c
+        .set_chamber_temperature(45)
+        .await
+        .expect("Chamber temp set failed");
 
     // Open-frame model check
     let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
@@ -246,7 +205,7 @@ async fn test_thermal_guards_and_temperatures() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed for A1");
 
     let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
@@ -254,8 +213,8 @@ async fn test_thermal_guards_and_temperatures() {
     let err_res = client_a1.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
 
-    broker_task.await.unwrap();
-    broker_task_a1.await.unwrap();
+    broker_task.await.expect("X1C broker task panicked");
+    broker_task_a1.await.expect("A1 broker task panicked");
 }
 
 #[tokio::test]
@@ -280,18 +239,18 @@ async fn test_cooling_fans_and_peripheral_switches() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed");
 
     let mut client_p1s = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client_p1s
         .set_fan_speed(FanTarget::PartCooling, 50)
         .await
-        .unwrap();
+        .expect("Part cooling fan set failed");
     client_p1s
         .set_fan_speed(FanTarget::AuxiliaryLeft, 100)
         .await
-        .unwrap();
+        .expect("Auxiliary left fan set failed");
 
     // Verify right auxiliary cooling fan is restricted on non-X2D models
     let err_res = client_p1s
@@ -313,17 +272,17 @@ async fn test_cooling_fans_and_peripheral_switches() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed for X2D");
 
     let mut client_x2 = PrinterClient::new(mqtt_client_x2, "20P000000000000", BambuModel::X2D);
 
     client_x2
         .set_fan_speed(FanTarget::AuxiliaryRight, 80)
         .await
-        .unwrap();
+        .expect("X2D auxiliary right fan set failed");
 
-    broker_task.await.unwrap();
-    broker_task_x2.await.unwrap();
+    broker_task.await.expect("P1S broker task panicked");
+    broker_task_x2.await.expect("X2D broker task panicked");
 }
 
 #[tokio::test]
@@ -349,15 +308,15 @@ async fn test_queue_lifecycle_control_blocks() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed");
 
     let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
 
-    client.pause_print().await.unwrap();
-    client.resume_print().await.unwrap();
-    client.stop_print().await.unwrap();
+    client.pause_print().await.expect("Pause failed");
+    client.resume_print().await.expect("Resume failed");
+    client.stop_print().await.expect("Stop failed");
 
-    broker_task.await.unwrap();
+    broker_task.await.expect("Broker task panicked");
 }
 
 #[tokio::test]
@@ -389,14 +348,104 @@ async fn test_peripheral_signals_and_climate_controls() {
         "12345678",
     )
     .await
-    .unwrap();
+    .expect("MQTT connect handshake failed");
 
     let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     // Recirculate (cooling) damper path -> modeId = 0
-    client.set_airduct_mode(true).await.unwrap();
-    client.set_prompt_sound(true).await.unwrap();
-    client.set_buzzer_mode(2).await.unwrap();
+    client
+        .set_airduct_mode(true)
+        .await
+        .expect("Airduct mode set failed");
+    client
+        .set_prompt_sound(true)
+        .await
+        .expect("Prompt sound set failed");
+    client
+        .set_buzzer_mode(2)
+        .await
+        .expect("Buzzer mode set failed");
 
-    broker_task.await.unwrap();
+    broker_task.await.expect("Broker task panicked");
+}
+
+// ============================================================================
+// Negative / Failure Path Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_in_flight_saturation() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(1_048_576);
+
+    let _broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Read and discard all incoming PUBLISH packets without sending PUBACKs
+        loop {
+            match common::mock_mqtt::read_packet(&mut server_stream).await {
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mqtt_client = BambuMqttClient::connect::<DummyTimer>(
+        TokioIo(client_stream),
+        "01P000000000000",
+        "12345678",
+    )
+    .await
+    .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // Fill the in-flight queue to capacity (200 commands)
+    for i in 0..200 {
+        client
+            .send_gcode("G28")
+            .await
+            .unwrap_or_else(|e| panic!("Command {} should succeed but got: {:?}", i, e));
+    }
+
+    // The 201st command must be rejected due to in-flight saturation
+    let err = client.send_gcode("G28").await;
+    assert!(
+        err.is_err(),
+        "Expected in-flight saturation error on command 201"
+    );
+}
+
+#[tokio::test]
+async fn test_connection_drop_during_operation() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        // Drop the server stream immediately after handshake
+        drop(server_stream);
+    });
+
+    let mqtt_client = BambuMqttClient::connect::<DummyTimer>(
+        TokioIo(client_stream),
+        "01P000000000000",
+        "12345678",
+    )
+    .await
+    .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    broker_task.await.expect("Broker task panicked");
+
+    // After the server stream is dropped, publish attempts should fail with a network error
+    let result = client.send_gcode("G28").await;
+    assert!(
+        result.is_err(),
+        "Expected network error after connection drop"
+    );
+    assert!(
+        matches!(result, Err(BambuError::NetworkError(_))),
+        "Expected BambuError::NetworkError, got {:?}",
+        result
+    );
 }

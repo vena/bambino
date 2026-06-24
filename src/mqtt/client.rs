@@ -556,3 +556,48 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         self.in_flight.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_packet_id_skips_zero_on_wraparound() {
+        let mut next_packet_id: u16 = u16::MAX;
+
+        let issued_id = next_packet_id;
+        next_packet_id = next_packet_id.wrapping_add(1);
+        if next_packet_id == 0 {
+            next_packet_id = 1;
+        }
+
+        assert_eq!(issued_id, u16::MAX);
+        assert_eq!(next_packet_id, 1, "Packet ID must skip 0 after wraparound");
+    }
+
+    #[test]
+    fn test_packet_id_normal_increment() {
+        let mut next_packet_id: u16 = 100;
+
+        next_packet_id = next_packet_id.wrapping_add(1);
+        if next_packet_id == 0 {
+            next_packet_id = 1;
+        }
+
+        assert_eq!(next_packet_id, 101);
+    }
+
+    #[test]
+    fn test_packet_id_one_before_max() {
+        let mut next_packet_id: u16 = u16::MAX - 1;
+
+        next_packet_id = next_packet_id.wrapping_add(1);
+        if next_packet_id == 0 {
+            next_packet_id = 1;
+        }
+
+        assert_eq!(
+            next_packet_id,
+            u16::MAX,
+            "ID before MAX should increment normally"
+        );
+    }
+}

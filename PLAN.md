@@ -98,12 +98,12 @@ Extract shared connection logic, add input validation and timeouts. Depends on P
 
 Consolidate test mocking, replace magic numbers, and expand edge case coverage. Depends on Phases 19-22 (tests validate all prior changes; uses constants from Phase 19).
 
-* [ ] Extract shared CONNECT/SUBSCRIBE parsing from `tests/client_test.rs` handshake helper into `tests/common/mock_mqtt.rs` — the two files have separate abstractions (full broker vs. handshake-only) but share raw packet parsing
-* [ ] Replace magic packet type numbers in test assertions with Phase 19 constants
-* [ ] Add `expect("context")` to bare `.unwrap()` calls in tests
-* [ ] Add negative/failure tests for `PrinterClient` — in-flight saturation, connection drop
-* [ ] Add edge case tests for MQTT — packet ID wraparound
-* [ ] Add edge case tests for FTPS — empty listing, malformed PASV response
+* [x] Extract shared CONNECT/SUBSCRIBE parsing from `tests/client_test.rs` handshake helper into `tests/common/mock_mqtt.rs` — consolidated `handle_mqtt_handshake()` and `read_publish_payload()` as shared public functions; `run_mock_mqtt_broker` refactored to call `handle_mqtt_handshake`; `client_test.rs` imports from `common::mock_mqtt` instead of inlining
+* [x] Replace magic packet type numbers in test assertions with named constants — added `PACKET_TYPE_*` and `HEADER_*` constants to `tests/common/mock_mqtt.rs`; all magic hex values (`0x10`, `0x82`, `0x32`, `0x40`, `0x20`, `0x90`, `0xD0`) replaced throughout mock broker and test assertions
+* [x] Add `expect("context")` to bare `.unwrap()` calls in tests — replaced across `mock_mqtt.rs`, `mock_ftps.rs`, `mock_camera.rs`, `client_test.rs`, `mqtt_test.rs`, `camera_test.rs`
+* [x] Add negative/failure tests for `PrinterClient` — `test_in_flight_saturation` (200 commands without PUBACKs, 201st rejected) and `test_connection_drop_during_operation` (server drop → `NetworkError`) in `client_test.rs`
+* [x] Add edge case tests for MQTT — packet ID wraparound: 3 unit tests in `src/mqtt/client.rs` verifying `next_packet_id` skips 0 on `u16::MAX` wraparound
+* [x] Add edge case tests for FTPS — extracted `parse_pasv_port()` from `negotiate_passive_port` in `src/ftps/client.rs` with 6 unit tests (valid, port-zero, missing parens, non-numeric, incomplete, empty); 3 parser tests in `src/ftps/parser.rs` (empty listing, whitespace-only, malformed lines skipped)
 
 ### Phase 24: Quirks Engine Overhaul
 

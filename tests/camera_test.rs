@@ -52,7 +52,8 @@ async fn test_binary_camera_handshake_and_streaming() {
         [0xFF, 0xD9],
         "Missing JPEG end marker"
     );
-    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2]).unwrap();
+    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2])
+        .expect("Camera frame inner payload is not valid UTF-8");
     assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_0");
 
     // Frame 2
@@ -61,7 +62,8 @@ async fn test_binary_camera_handshake_and_streaming() {
         .await
         .expect("Failed to read second camera frame");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
-    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2]).unwrap();
+    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2])
+        .expect("Camera frame inner payload is not valid UTF-8");
     assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_1");
 
     // Frame 3
@@ -70,7 +72,8 @@ async fn test_binary_camera_handshake_and_streaming() {
         .await
         .expect("Failed to read third camera frame");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
-    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2]).unwrap();
+    let inner_str = core::str::from_utf8(&frame_buf[2..frame_buf.len() - 2])
+        .expect("Camera frame inner payload is not valid UTF-8");
     assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_2");
 
     // 5. Verify Stream Exhaustion

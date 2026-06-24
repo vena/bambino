@@ -51,7 +51,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     let _packet_id = client
         .publish_command(b"{\"command\":\"pushall\"}")
         .await
-        .expect("Failed to publish command");
+        .expect("QoS 1 command publish failed");
 
     // Ensure the packet is tracked in the unacknowledged queue
     assert_eq!(
@@ -73,12 +73,12 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     inject_tx
         .send(b"{\"mock\":\"telemetry_payload_1\"}".to_vec())
         .await
-        .unwrap();
+        .expect("Failed to inject telemetry payload 1 into mock broker");
 
     let msg = client
         .poll_telemetry()
         .await
-        .expect("Failed to poll telemetry message");
+        .expect("Telemetry poll returned error instead of injected message");
 
     assert_eq!(msg.topic, format!("device/{}/report", serial));
     assert_eq!(msg.payload, b"{\"mock\":\"telemetry_payload_1\"}");
@@ -91,21 +91,27 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     );
 
     // 5. Test PINGREQ / PINGRESP cycle
-    client.send_ping().await.expect("Failed to send PINGREQ");
+    client
+        .send_ping()
+        .await
+        .expect("PINGREQ keep-alive dispatch failed");
 
     // Inject another message to unblock the poll loop and process the PINGRESP
     inject_tx
         .send(b"{\"mock\":\"telemetry_payload_2\"}".to_vec())
         .await
-        .unwrap();
-    let _ = client.poll_telemetry().await.unwrap();
+        .expect("Failed to inject telemetry payload 2 into mock broker");
+    let _ = client
+        .poll_telemetry()
+        .await
+        .expect("Telemetry poll failed after PINGREQ cycle");
 
     // 6. Test Write-Channel Zombie Detection
     // Arm the zombie tracker by publishing a new command
     client
         .publish_command(b"{\"command\":\"zombie_test\"}")
         .await
-        .unwrap();
+        .expect("Zombie test command publish failed");
 
     // Tick forward 5 seconds. Timeout boundary is 10 seconds, so this should pass.
     assert!(

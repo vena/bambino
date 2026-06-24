@@ -489,29 +489,7 @@ where
             ));
         }
 
-        // Extract (IP_1,IP_2,IP_3,IP_4,PORT_1,PORT_2) components
-        let start = text
-            .find('(')
-            .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
-        let end = text
-            .find(')')
-            .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
-        let inner = &text[start + 1..end];
-        let mut parts = inner.split(',');
-
-        let _ = parts.next();
-        let _ = parts.next();
-        let _ = parts.next();
-        let _ = parts.next();
-
-        let p1 = parts.next().and_then(|p| p.parse::<u16>().ok()).ok_or(
-            BambuError::ProtocolViolation("Failed to parse PORT_1 in PASV".into()),
-        )?;
-        let p2 = parts.next().and_then(|p| p.parse::<u16>().ok()).ok_or(
-            BambuError::ProtocolViolation("Failed to parse PORT_2 in PASV".into()),
-        )?;
-
-        Ok(p1 * FTPS_PASV_PORT_MULTIPLIER + p2)
+        parse_pasv_port(&text)
     }
 }
 
@@ -601,6 +579,43 @@ async fn read_response<IO: AsyncIo>(
     }
 }
 
+/// Extracts the passive port number from a PASV response text.
+///
+/// Parses the `(IP_1,IP_2,IP_3,IP_4,PORT_1,PORT_2)` tuple and computes
+/// the port as `PORT_1 * 256 + PORT_2`.
+pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
+    let start = text
+        .find('(')
+        .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
+    let end = text
+        .find(')')
+        .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
+    let inner = &text[start + 1..end];
+    let mut parts = inner.split(',');
+
+    let _ = parts.next();
+    let _ = parts.next();
+    let _ = parts.next();
+    let _ = parts.next();
+
+    let p1 =
+        parts
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .ok_or(BambuError::ProtocolViolation(
+                "Failed to parse PORT_1 in PASV".into(),
+            ))?;
+    let p2 =
+        parts
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .ok_or(BambuError::ProtocolViolation(
+                "Failed to parse PORT_2 in PASV".into(),
+            ))?;
+
+    Ok(p1 * FTPS_PASV_PORT_MULTIPLIER + p2)
+}
+
 /// Utility capturing passive stream data up to socket EOF bounds.
 async fn read_to_eof<IO: AsyncIo>(stream: &mut IO, out: &mut Vec<u8>) -> Result<(), BambuError> {
     let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
@@ -612,4 +627,59 @@ async fn read_to_eof<IO: AsyncIo>(stream: &mut IO, out: &mut Vec<u8>) -> Result<
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_pasv_response() {
+        // Port = 192 * 256 + 168 = 49320
+        let port =
+            parse_pasv_port("Entering Passive Mode (127,0,0,1,192,168).").expect("valid PASV");
+        assert_eq!(port, 49320);
+    }
+
+    #[test]
+    fn test_pasv_port_zero() {
+        let port = parse_pasv_port("Entering Passive Mode (127,0,0,1,0,21).").expect("valid PASV");
+        assert_eq!(port, 21);
+    }
+
+    #[test]
+    fn test_pasv_missing_parentheses() {
+        let result = parse_pasv_port("227 No parentheses here");
+        assert!(
+            matches!(result, Err(BambuError::ProtocolViolation(_))),
+            "Expected ProtocolViolation for missing parentheses"
+        );
+    }
+
+    #[test]
+    fn test_pasv_non_numeric_port() {
+        let result = parse_pasv_port("(127,0,0,1,abc,168)");
+        assert!(
+            matches!(result, Err(BambuError::ProtocolViolation(_))),
+            "Expected ProtocolViolation for non-numeric PORT_1"
+        );
+    }
+
+    #[test]
+    fn test_pasv_incomplete_components() {
+        let result = parse_pasv_port("(127,0,0,1,192)");
+        assert!(
+            matches!(result, Err(BambuError::ProtocolViolation(_))),
+            "Expected ProtocolViolation for missing PORT_2"
+        );
+    }
+
+    #[test]
+    fn test_pasv_empty_parens() {
+        let result = parse_pasv_port("()");
+        assert!(
+            matches!(result, Err(BambuError::ProtocolViolation(_))),
+            "Expected ProtocolViolation for empty parentheses"
+        );
+    }
 }

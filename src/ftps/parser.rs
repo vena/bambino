@@ -225,6 +225,28 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_listing() {
+        let files = parse_unix_listing("", 2026, 6, 17, 15, 0);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_whitespace_only_listing() {
+        let files = parse_unix_listing("   \n  \n\r\n", 2026, 6, 17, 15, 0);
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_malformed_lines_skipped() {
+        let payload = "not a valid listing line\n\
+                       -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 valid.3mf\n\
+                       truncated\n";
+        let files = parse_unix_listing(payload, 2026, 6, 17, 15, 0);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "valid.3mf");
+    }
+
+    #[test]
     fn test_temporal_rollover_boundary_heuristics() {
         // Today is January 2nd, 2026 (01:15).
         // We parse a file modified on December 31st containing a timestamp of 23:59.

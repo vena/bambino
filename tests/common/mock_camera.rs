@@ -75,8 +75,14 @@ pub async fn run_mock_camera_server(
         header[0..4].copy_from_slice(&payload_size.to_le_bytes());
 
         // Emit header followed by the binary frame
-        stream.write_all(&header).await.unwrap();
-        stream.write_all(&mock_image).await.unwrap();
-        stream.flush().await.unwrap();
+        stream
+            .write_all(&header)
+            .await
+            .expect("Failed to write camera frame header");
+        stream
+            .write_all(&mock_image)
+            .await
+            .expect("Failed to write camera frame payload");
+        stream.flush().await.expect("Failed to flush camera frame");
     }
 }
