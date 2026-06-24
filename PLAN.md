@@ -37,15 +37,15 @@ Add serializable request structs in `src/mqtt/commands.rs` for documented comman
 
 Expose convenience methods on `PrinterClient` in `src/client.rs` for command structs that exist but lack client-level wrappers:
 
-* [ ] `change_filament()` — wraps `AmsChangeFilamentRequest`
-* [ ] `start_drying()` / `stop_drying()` — wraps `AmsFilamentDryingRequest`
-* [ ] `clear_print_error()` — wraps `CleanPrintErrorRequest`
-* [ ] `set_print_speed(level)` — wraps existing `PrintSpeedRequest`
-* [ ] `skip_objects(ids)` — wraps existing `SkipObjectsRequest`
-* [ ] `start_print(file, ams_mapping)` — wraps existing `ProjectFileRequest`
-* [ ] `scan_rfid(tray_id)` — wraps existing `AmsGetRfidRequest`
-* [ ] `start_calibration(type)` — wraps existing `CalibrationRequest`
-* [ ] `select_k_profile(...)` — wraps `ExtrusionCaliSelRequest`
+* [x] `change_filament()` — wraps `AmsChangeFilamentRequest`
+* [x] `start_drying()` / `stop_drying()` — wraps `AmsFilamentDryingRequest`
+* [x] `clear_print_error()` — wraps `CleanPrintErrorRequest`
+* [x] `set_print_speed(level)` — wraps existing `PrintSpeedRequest`
+* [x] `skip_objects(ids)` — wraps existing `SkipObjectsRequest`
+* [x] `start_print(file, ams_mapping)` — wraps existing `ProjectFileRequest`
+* [x] `scan_rfid(tray_id)` — wraps existing `AmsGetRfidRequest`
+* [x] `start_calibration(type)` — wraps existing `CalibrationRequest`
+* [x] `select_k_profile(...)` — wraps `ExtrusionCaliSelRequest`
 
 ### Phase 15: FTPS File Operations
 

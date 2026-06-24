@@ -61,6 +61,21 @@ printer.home_axes(false).await?;
 printer.set_bed_temperature(60).await?;
 printer.set_nozzle_temperature(0, 220).await?;
 printer.toggle_led("chamber_light", true).await?;
+
+// AMS filament control
+printer.change_filament(0, 1, 1, -1, -1).await?;  // load slot 1
+printer.start_drying(0, 55, 480, true, "PA-CF").await?;
+
+// Print speed, calibration, job submission
+use bambino::client::{PrintSpeed, CalibrationOption};
+printer.set_print_speed(PrintSpeed::Sport).await?;
+printer.start_calibration(
+    CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
+).await?;
+printer.start_print(
+    "job.3mf", "Metadata/plate_1.gcode", "My Print",
+    12345, "textured", true, vec![0, -1, 1],
+).await?;
 ```
 
 ### Read telemetry
