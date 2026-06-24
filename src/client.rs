@@ -19,9 +19,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
+use alloc::string::String;
 
 use crate::discovery::BambuModel;
 use crate::error::BambuError;

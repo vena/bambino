@@ -1,5 +1,3 @@
-#![cfg_attr(not(feature = "std"), no_std)]
-
 //! # AMS Expansion Bus & Material Systems Module
 //!
 //! Exposes presence bitmask calculation helpers, slot-sanitization routines,

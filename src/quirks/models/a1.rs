@@ -7,8 +7,6 @@ use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
 
 #[cfg(not(feature = "std"))]
-use alloc::format;
-#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 /// Maximum physical workspace dimension boundaries (in millimeters)

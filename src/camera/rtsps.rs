@@ -85,7 +85,8 @@ impl RtpTimestampCorrector {
         }
 
         // Multiply elapsed host seconds against 90kHz clock scale
-        let rtp_delta = (elapsed_secs * self.frequency_hz as f64).round() as u32;
+        let raw = elapsed_secs * self.frequency_hz as f64;
+        let rtp_delta = (raw + 0.5) as u32;
 
         self.base_timestamp.wrapping_add(rtp_delta)
     }

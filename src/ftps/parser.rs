@@ -5,7 +5,7 @@
 //! variable-width column padding and embeds robust temporal rollover heuristics.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 

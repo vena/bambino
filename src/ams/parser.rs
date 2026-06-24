@@ -5,9 +5,6 @@
 //! presence via hex bitmasks, managing power-down state anomalies, cleansing stale
 //! tray data, and calculating global indexes.
 
-#[cfg(not(feature = "std"))]
-use alloc::string::String;
-
 use crate::types::AmsTray;
 
 /// Evaluates if a physical spool is present in a specific standard AMS slot.

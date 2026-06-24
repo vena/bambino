@@ -77,3 +77,14 @@ The Bambu Lab wiki lists both ports 1990 and 2021 for device discovery. Currentl
 * [ ] Send M-SEARCH to both ports
 * [ ] Merge and deduplicate results by serial number
 * [ ] Update `bambino-cli` discover command to report which port each printer was found on (verbose only)
+
+### Phase 18: Structured Logging Migration
+
+Replace `println!`-based verbose debug logging with the `log` crate facade for proper library hygiene.
+
+* [ ] Add `log` dependency (no_std compatible via `default-features = false`)
+* [ ] Replace all `println!("[VERBOSE]` calls in `src/discovery/mod.rs` with `log::debug!` / `log::trace!`
+* [ ] Replace verbose `println!` calls in `src/mqtt/client.rs` (if any) with `log::debug!`
+* [ ] Remove `is_verbose()` function and `BAMBU_VERBOSE` env var check from library code
+* [ ] Add `env_logger` (or similar) initialization to `bambino-cli` to preserve CLI verbose output via `-v` flag
+* [ ] Remove `#[cfg(feature = "std")]` gates on logging statements (log crate handles no_std natively)

@@ -13,8 +13,6 @@ pub use parser::{parse_ssdp_payload, resolve_model, BambuModel, SsdpDevice};
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
-use alloc::string::ToString;
-#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 /// Standard Bambu Lab multicast group target for SSDP operations.
@@ -41,11 +39,6 @@ fn is_verbose() -> bool {
     crate::mqtt::client::is_verbose()
 }
 
-/// Dummy flag for non-standard environments.
-#[cfg(not(feature = "std"))]
-fn is_verbose() -> bool {
-    false
-}
 
 /// Detects the active physical interface IP used to route external traffic.
 ///
@@ -80,11 +73,10 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     /// or if OS network interface routing routes multicast to inactive adapters, the query is
     /// successfully broadcast across all active local interfaces.
     pub async fn broadcast_search(&self) -> Result<(), BambuError> {
-        let is_verbose_active = is_verbose();
-
         // Target A: Standard SSDP Multicast group
         let multicast_target = format!("{}:{}", MULTICAST_IP, SSDP_PORT);
-        if is_verbose_active {
+        #[cfg(feature = "std")]
+        if is_verbose() {
             println!(
                 "[VERBOSE] [SSDP] Transmitting multicast M-SEARCH request to: {}...",
                 multicast_target
@@ -94,7 +86,8 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 
         // Target B: Subnet-wide global broadcast fallback (forces interface transmission)
         let broadcast_target = format!("255.255.255.255:{}", SSDP_PORT);
-        if is_verbose_active {
+        #[cfg(feature = "std")]
+        if is_verbose() {
             println!(
                 "[VERBOSE] [SSDP] Transmitting fallback broadcast M-SEARCH request to: {}...",
                 broadcast_target
@@ -112,17 +105,18 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     /// and `Err(BambuError)` for terminal network socket faults.
     pub async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, BambuError> {
         match self.socket.recv_from(buf).await {
-            Ok((len, from_addr)) => {
-                let is_verbose_active = is_verbose();
-                if is_verbose_active {
+            Ok((len, _from_addr)) => {
+                #[cfg(feature = "std")]
+                if is_verbose() {
                     println!(
                         "[VERBOSE] [SSDP] UDP socket received datagram of size {} from: {}",
-                        len, from_addr
+                        len, _from_addr
                     );
                 }
 
                 let parsed = parse_ssdp_payload(&buf[..len]);
-                if is_verbose_active {
+                #[cfg(feature = "std")]
+                if is_verbose() {
                     match &parsed {
                         Some(device) => {
                             println!(
@@ -132,7 +126,6 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                             );
                         }
                         None => {
-                            // Convert the packet segment to a string block to help diagnose non-printer/malformed traffic
                             let raw_text =
                                 String::from_utf8_lossy(&buf[..core::cmp::min(len, 300)]);
                             println!(
@@ -168,8 +161,6 @@ where
     U: AsyncUdpSocket,
     T: TimerProvider,
 {
-    let is_verbose_active = is_verbose();
-
     // Bind to the SSDP port on the wildcard address. Using port 2021 (SSDP_PORT) is required
     // because printers send NOTIFY advertisements to 239.255.255.250:2021, and the OS only
     // delivers multicast packets when the socket's bound port matches the destination port.
@@ -177,8 +168,8 @@ where
     // all multicast NOTIFY traffic, which many printers rely on exclusively.
     let bind_addr = format!("0.0.0.0:{}", SSDP_PORT);
 
-    if is_verbose_active {
-        #[cfg(feature = "std")]
+    #[cfg(feature = "std")]
+    if is_verbose() {
         if let Some(local_ip) = get_local_routing_ip() {
             println!(
                 "[VERBOSE] [SSDP] Detected active routing interface IP: {}",
@@ -192,7 +183,8 @@ where
     }
 
     let socket = U::bind(&bind_addr).await.map_err(|e| {
-        if is_verbose_active {
+        #[cfg(feature = "std")]
+        if is_verbose() {
             println!(
                 "[VERBOSE] [SSDP] Critical: Failed to bind UDP socket: {:?}",
                 e
@@ -203,11 +195,12 @@ where
     let engine = DiscoveryEngine::new(socket);
 
     // Send search query multiple times to insulate against standard wireless packet drops
-    for i in 0..2 {
-        if is_verbose_active {
+    for _i in 0..2 {
+        #[cfg(feature = "std")]
+        if is_verbose() {
             println!(
                 "[VERBOSE] [SSDP] Initializing active query scan block #{}...",
-                i + 1
+                _i + 1
             );
         }
         engine.broadcast_search().await?;
@@ -222,7 +215,8 @@ where
     let mut elapsed_millis: u128 = 0;
     let mut millis_since_last_search: u128 = 0;
 
-    if is_verbose_active {
+    #[cfg(feature = "std")]
+    if is_verbose() {
         println!(
             "[VERBOSE] [SSDP] Commencing poll listener sequence ({}ms limit)...",
             total_millis
@@ -237,7 +231,8 @@ where
     // extended poll window.
     while elapsed_millis < total_millis {
         if millis_since_last_search >= 3000 {
-            if is_verbose_active {
+            #[cfg(feature = "std")]
+            if is_verbose() {
                 println!("[VERBOSE] [SSDP] Re-broadcasting periodic M-SEARCH query...");
             }
             let _ = engine.broadcast_search().await;
@@ -248,7 +243,8 @@ where
             Ok(Some(device)) => {
                 // Deduplicate devices based on unique serial number records
                 if !devices.iter().any(|d| d.serial == device.serial) {
-                    if is_verbose_active {
+                    #[cfg(feature = "std")]
+                    if is_verbose() {
                         println!("[VERBOSE] [SSDP] Adding newly discovered printer '{}' to active array.", device.serial);
                     }
                     devices.push(device);
@@ -267,7 +263,8 @@ where
         }
     }
 
-    if is_verbose_active {
+    #[cfg(feature = "std")]
+    if is_verbose() {
         println!(
             "[VERBOSE] [SSDP] Completed discovery sweep. Total found unique machines: {}",
             devices.len()
