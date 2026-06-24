@@ -101,35 +101,45 @@ async fn main() {
         "discover" => discover::run().await,
         "info" => {
             if args.len() < 5 {
-                eprintln!("Error: Missing required parameters.\nUsage: bambino-cli info <ip> <serial> <access_code>");
+                eprintln!(
+                    "Error: Missing required parameters.\nUsage: bambino-cli info <ip> <serial> <access_code>"
+                );
                 process::exit(1);
             }
             control::run_info(&args[2], &args[3], &args[4]).await
         }
         "monitor" => {
             if args.len() < 5 {
-                eprintln!("Error: Missing required parameters.\nUsage: bambino-cli monitor <ip> <serial> <access_code>");
+                eprintln!(
+                    "Error: Missing required parameters.\nUsage: bambino-cli monitor <ip> <serial> <access_code>"
+                );
                 process::exit(1);
             }
             monitor::run(&args[2], &args[3], &args[4]).await
         }
         "dump" => {
             if args.len() < 5 {
-                eprintln!("Error: Missing required parameters.\nUsage: bambino-cli dump <ip> <serial> <access_code>");
+                eprintln!(
+                    "Error: Missing required parameters.\nUsage: bambino-cli dump <ip> <serial> <access_code>"
+                );
                 process::exit(1);
             }
             monitor::dump(&args[2], &args[3], &args[4]).await
         }
         "control" => {
             if args.len() < 6 {
-                eprintln!("Error: Missing action parameter.\nUsage: bambino-cli control <ip> <serial> <access_code> <ACTION> [ARGS]");
+                eprintln!(
+                    "Error: Missing action parameter.\nUsage: bambino-cli control <ip> <serial> <access_code> <ACTION> [ARGS]"
+                );
                 process::exit(1);
             }
             control::run(&args[2], &args[3], &args[4], &args[5..]).await
         }
         "files" => {
             if args.len() < 6 {
-                eprintln!("Error: Missing action parameter.\nUsage: bambino-cli files <ip> <serial> <access_code> <ACTION> [ARGS]");
+                eprintln!(
+                    "Error: Missing action parameter.\nUsage: bambino-cli files <ip> <serial> <access_code> <ACTION> [ARGS]"
+                );
                 process::exit(1);
             }
             storage::run(&args[2], &args[3], &args[4], &args[5..]).await

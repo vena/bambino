@@ -180,10 +180,7 @@ pub async fn run_mock_server(
     // Post-upload SIZE verification
     let n = server_control.read(&mut buf).await.unwrap();
     assert_eq!(&buf[..n], b"SIZE /model/job.3mf\r\n");
-    server_control
-        .write_all(b"213 16\r\n")
-        .await
-        .unwrap();
+    server_control.write_all(b"213 16\r\n").await.unwrap();
 
     // ========================================================================
     // Deletion (DELE) Sequence

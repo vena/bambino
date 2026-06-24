@@ -159,26 +159,20 @@ async fn read_exact_packet<IO: AsyncIo>(
 ) -> Result<(u8, usize), SocketError> {
     // Read the fixed header packet type byte
     let mut header = [0u8; 1];
-    stream
-        .read_exact(&mut header)
-        .await
-        .map_err(|e| {
-            log::trace!("MQTT header read failed: {:?}", e);
-            SocketError::ConnectionReset
-        })?;
+    stream.read_exact(&mut header).await.map_err(|e| {
+        log::trace!("MQTT header read failed: {:?}", e);
+        SocketError::ConnectionReset
+    })?;
 
     // Read variable-length remaining length
     let mut rem_len: usize = 0;
     let mut multiplier: usize = 1;
     loop {
         let mut single_byte = [0u8; 1];
-        stream
-            .read_exact(&mut single_byte)
-            .await
-            .map_err(|e| {
-                log::trace!("MQTT remaining-length read failed: {:?}", e);
-                SocketError::ConnectionReset
-            })?;
+        stream.read_exact(&mut single_byte).await.map_err(|e| {
+            log::trace!("MQTT remaining-length read failed: {:?}", e);
+            SocketError::ConnectionReset
+        })?;
         let b = single_byte[0];
         rem_len += ((b & 127) as usize) * multiplier;
         if (b & 128) == 0 {
@@ -193,13 +187,10 @@ async fn read_exact_packet<IO: AsyncIo>(
     // Resize our buffer and read exactly the remaining length bytes
     payload_buf.resize(rem_len, 0);
     if rem_len > 0 {
-        stream
-            .read_exact(payload_buf)
-            .await
-            .map_err(|e| {
-                log::trace!("MQTT payload read failed: {:?}", e);
-                SocketError::ConnectionReset
-            })?;
+        stream.read_exact(payload_buf).await.map_err(|e| {
+            log::trace!("MQTT payload read failed: {:?}", e);
+            SocketError::ConnectionReset
+        })?;
     }
 
     Ok((header[0], rem_len))
@@ -246,7 +237,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         let client_id = format!("bambino_{}_{}", serial, conn_id);
         let connect_pkt = encode_connect(&client_id, "bblp", access_code);
 
-        log::debug!("Transmitting CONNECT payload (client_id: '{}', user: 'bblp')", client_id);
+        log::debug!(
+            "Transmitting CONNECT payload (client_id: '{}', user: 'bblp')",
+            client_id
+        );
 
         stream
             .write_all(&connect_pkt)
@@ -266,13 +260,21 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         let packet_type = header >> 4;
 
-        log::debug!("Received raw packet header type: {}, remaining size: {} bytes", packet_type, rem_len);
+        log::debug!(
+            "Received raw packet header type: {}, remaining size: {} bytes",
+            packet_type,
+            rem_len
+        );
 
         if packet_type != PACKET_TYPE_CONNACK {
-            return Err(BambuError::ProtocolViolation("Expected CONNACK frame".into()));
+            return Err(BambuError::ProtocolViolation(
+                "Expected CONNACK frame".into(),
+            ));
         }
         if payload_buf.len() < 2 {
-            return Err(BambuError::ProtocolViolation("Short CONNACK payload".into()));
+            return Err(BambuError::ProtocolViolation(
+                "Short CONNACK payload".into(),
+            ));
         }
         let connack_code = payload_buf[1];
 
@@ -286,7 +288,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // Subscribe to report topic
         let report_topic = format!("device/{}/report", serial);
 
-        log::debug!("Sending SUBSCRIBE frame targeting topic: '{}' (granted QoS 1)", report_topic);
+        log::debug!(
+            "Sending SUBSCRIBE frame targeting topic: '{}' (granted QoS 1)",
+            report_topic
+        );
 
         let subscribe_pkt = encode_subscribe(1, &report_topic, 1);
 
@@ -308,7 +313,9 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         log::debug!("Received raw packet header type: {}", sub_type);
 
         if sub_type != PACKET_TYPE_SUBACK {
-            return Err(BambuError::ProtocolViolation("Expected SUBACK frame".into()));
+            return Err(BambuError::ProtocolViolation(
+                "Expected SUBACK frame".into(),
+            ));
         }
         if payload_buf.len() < 3 {
             return Err(BambuError::ProtocolViolation("Short SUBACK payload".into()));
@@ -320,7 +327,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         if return_code == 0x80 {
             return Err(BambuError::ProtocolViolation(
                 "Subscription rejected by physical broker".into(),
-                ));
+            ));
         }
 
         Ok(Self {
@@ -341,7 +348,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// network timeout error to protect memory space and prevent packet drift [REF-MQTT-CONN].
     pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, BambuError> {
         if self.in_flight.len() >= MQTT_IN_FLIGHT_LIMIT {
-            log::warn!("In-flight command backlog saturated ({} items)", self.in_flight.len());
+            log::warn!(
+                "In-flight command backlog saturated ({} items)",
+                self.in_flight.len()
+            );
             return Err(BambuError::NetworkError(SocketError::TimedOut));
         }
 
@@ -353,7 +363,12 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         let topic = format!("device/{}/request", self.serial);
 
-        log::debug!("Publishing QoS 1 command (packet_id: {}) to topic: '{}' (payload length: {} bytes)", packet_id, topic, payload.len());
+        log::debug!(
+            "Publishing QoS 1 command (packet_id: {}) to topic: '{}' (payload length: {} bytes)",
+            packet_id,
+            topic,
+            payload.len()
+        );
 
         let packet = encode_publish_qos1(packet_id, &topic, payload);
 
@@ -388,18 +403,26 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
             let packet_type = header >> 4;
 
-            log::trace!("Parsed wire packet type: {}, size: {} bytes", packet_type, rem_len);
+            log::trace!(
+                "Parsed wire packet type: {}, size: {} bytes",
+                packet_type,
+                rem_len
+            );
 
             match packet_type {
                 PACKET_TYPE_PUBLISH => {
                     let qos = (header & 0x06) >> 1;
 
                     if payload_buf.len() < 2 {
-                        return Err(BambuError::ProtocolViolation("Short publish payload".into()));
+                        return Err(BambuError::ProtocolViolation(
+                            "Short publish payload".into(),
+                        ));
                     }
                     let topic_len = u16::from_be_bytes([payload_buf[0], payload_buf[1]]) as usize;
                     if payload_buf.len() < 2 + topic_len {
-                        return Err(BambuError::ProtocolViolation("Invalid topic length bounds".into()));
+                        return Err(BambuError::ProtocolViolation(
+                            "Invalid topic length bounds".into(),
+                        ));
                     }
 
                     let topic = core::str::from_utf8(&payload_buf[2..2 + topic_len])
@@ -412,7 +435,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                         if payload_buf.len() < payload_start + 2 {
                             return Err(BambuError::ProtocolViolation(
                                 "Missing packet ID in QoS 1".into(),
-                                ));
+                            ));
                         }
                         let id = u16::from_be_bytes([
                             payload_buf[payload_start],
@@ -424,7 +447,13 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
                     let payload = payload_buf[payload_start..].to_vec();
 
-                    log::debug!("Received PUBLISH frame on topic: '{}', QoS: {}, packet_id: {:?}, payload size: {} bytes", topic, qos, packet_id, payload.len());
+                    log::debug!(
+                        "Received PUBLISH frame on topic: '{}', QoS: {}, packet_id: {:?}, payload size: {} bytes",
+                        topic,
+                        qos,
+                        packet_id,
+                        payload.len()
+                    );
 
                     // If incoming message was QoS 1, immediately acknowledge to physical broker
                     if let Some(id) = packet_id {
@@ -446,11 +475,16 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                 }
                 PACKET_TYPE_PUBACK => {
                     if payload_buf.len() < 2 {
-                        return Err(BambuError::ProtocolViolation("Invalid PUBACK length".into()));
+                        return Err(BambuError::ProtocolViolation(
+                            "Invalid PUBACK length".into(),
+                        ));
                     }
                     let ack_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
 
-                    log::trace!("Received PUBACK from broker for outbound packet_id: {}", ack_id);
+                    log::trace!(
+                        "Received PUBACK from broker for outbound packet_id: {}",
+                        ack_id
+                    );
 
                     if let Some(pos) = self.in_flight.iter().position(|&id| id == ack_id) {
                         self.in_flight.remove(pos);
@@ -494,14 +528,20 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         if let Some(ref mut secs) = self.write_pending_secs {
             *secs += elapsed_secs;
             if *secs >= MQTT_ZOMBIE_TIMEOUT_SECS {
-                log::warn!("Zombie state detected: command issued but zero telemetry updates received for >= {}s", MQTT_ZOMBIE_TIMEOUT_SECS);
+                log::warn!(
+                    "Zombie state detected: command issued but zero telemetry updates received for >= {}s",
+                    MQTT_ZOMBIE_TIMEOUT_SECS
+                );
                 return Err(BambuError::Timeout);
             }
         }
 
         self.secs_since_last_message += elapsed_secs;
         if self.secs_since_last_message >= MQTT_STALE_CONNECTION_SECS {
-            log::warn!("Connection stale: no packets received for >= {}s", MQTT_STALE_CONNECTION_SECS);
+            log::warn!(
+                "Connection stale: no packets received for >= {}s",
+                MQTT_STALE_CONNECTION_SECS
+            );
             return Err(BambuError::Timeout);
         }
 

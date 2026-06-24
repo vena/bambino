@@ -16,7 +16,7 @@ use embedded_io_async::Write;
 
 use crate::discovery::BambuModel;
 use crate::error::BambuError;
-use crate::ftps::parser::{parse_unix_listing, FtpFile};
+use crate::ftps::parser::{FtpFile, parse_unix_listing};
 use crate::io::{AsyncIo, SocketError, TlsConnector};
 
 // FTP response codes (RFC 959)
@@ -97,7 +97,7 @@ where
         if code != FTP_GREETING {
             return Err(BambuError::ProtocolViolation(
                 "Unexpected greeting from FTP server".into(),
-                ));
+            ));
         }
 
         // Login USER bblp
@@ -106,7 +106,7 @@ where
         if code != FTP_PASSWORD_NEEDED {
             return Err(BambuError::ProtocolViolation(
                 "USER authentication phase rejected".into(),
-                ));
+            ));
         }
 
         // Login PASS <access_code>
@@ -123,7 +123,7 @@ where
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
                 "PBSZ protection sizing configuration failed".into(),
-                ));
+            ));
         }
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
@@ -134,7 +134,7 @@ where
             if code != FTP_COMMAND_OK {
                 return Err(BambuError::ProtocolViolation(
                     "Failed to enable TLS data channel protection".into(),
-                    ));
+                ));
             }
         } else {
             // A1 series does not support TLS on passive channels due to ESP32 constraints.
@@ -161,10 +161,7 @@ where
         current_minute: u8,
     ) -> Result<Vec<FtpFile>, BambuError> {
         let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self
-            .data_factory
-            .create_data_stream(&self.ip, port)
-            .await?;
+        let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
 
         // Command the control socket to list files
         let list_cmd = format!("LIST {}", remote_path);
@@ -176,7 +173,7 @@ where
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "LIST transfer initialization failed".into(),
-                ));
+            ));
         }
 
         // Wrap passive data socket if secure channel is required [REF-FTPS-CONN]
@@ -200,11 +197,12 @@ where
         if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
                 "LIST transfer confirmation aborted".into(),
-                ));
+            ));
         }
 
-        let payload_str = core::str::from_utf8(&listing_payload)
-            .map_err(|_| BambuError::ProtocolViolation("Non-UTF8 directory listings response".into()))?;
+        let payload_str = core::str::from_utf8(&listing_payload).map_err(|_| {
+            BambuError::ProtocolViolation("Non-UTF8 directory listings response".into())
+        })?;
 
         Ok(parse_unix_listing(
             payload_str,
@@ -226,11 +224,12 @@ where
         if code != FTP_SIZE_OK {
             return Err(BambuError::ProtocolViolation(
                 "SIZE query rejected by storage server".into(),
-                ));
+            ));
         }
 
-        text.parse::<u64>()
-            .map_err(|_| BambuError::ProtocolViolation("Invalid file size parameter returned".into()))
+        text.parse::<u64>().map_err(|_| {
+            BambuError::ProtocolViolation("Invalid file size parameter returned".into())
+        })
     }
 
     /// Removes a targeted file from non-volatile storage.
@@ -248,7 +247,7 @@ where
         } else {
             Err(BambuError::ProtocolViolation(
                 "DELE file removal request failed".into(),
-                ))
+            ))
         }
     }
 
@@ -263,10 +262,7 @@ where
     ///    via the `SIZE` command to ensure data integrity [REF-FTPS-CONN].
     pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), BambuError> {
         let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self
-            .data_factory
-            .create_data_stream(&self.ip, port)
-            .await?;
+        let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
 
         let stor_cmd = format!("STOR {}", remote_path);
         write_command(&mut self.control_stream, &stor_cmd).await?;
@@ -276,7 +272,7 @@ where
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "STOR upload negotiation rejected".into(),
-                ));
+            ));
         }
 
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
@@ -343,10 +339,7 @@ where
     /// Negotiates a passive data channel, retrieves the binary payload, and returns the raw bytes.
     pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, BambuError> {
         let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self
-            .data_factory
-            .create_data_stream(&self.ip, port)
-            .await?;
+        let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
 
         let retr_cmd = format!("RETR {}", remote_path);
         write_command(&mut self.control_stream, &retr_cmd).await?;
@@ -356,7 +349,7 @@ where
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer initialization failed".into(),
-                ));
+            ));
         }
 
         let mut file_payload = Vec::new();
@@ -377,7 +370,7 @@ where
         if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer confirmation aborted".into(),
-                ));
+            ));
         }
 
         Ok(file_payload)
@@ -393,7 +386,7 @@ where
         if code != FTP_PATHNAME_CREATED {
             return Err(BambuError::ProtocolViolation(
                 "MKD directory creation failed".into(),
-                ));
+            ));
         }
         Ok(())
     }
@@ -413,7 +406,7 @@ where
         } else {
             Err(BambuError::ProtocolViolation(
                 "RMD directory removal request failed".into(),
-                ))
+            ))
         }
     }
 
@@ -430,7 +423,7 @@ where
         if code != FTP_RENAME_PENDING {
             return Err(BambuError::ProtocolViolation(
                 "RNFR rename source path rejected".into(),
-                ));
+            ));
         }
 
         let rnto_cmd = format!("RNTO {}", to);
@@ -440,7 +433,7 @@ where
         if code != FTP_FILE_ACTION_OK {
             return Err(BambuError::ProtocolViolation(
                 "RNTO rename destination path rejected".into(),
-                ));
+            ));
         }
         Ok(())
     }
@@ -453,8 +446,9 @@ where
         let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
 
         if code == FTP_SIZE_OK {
-            text.parse::<u64>()
-                .map_err(|_| BambuError::ProtocolViolation("Malformed AVBL numeric response".into()))
+            text.parse::<u64>().map_err(|_| {
+                BambuError::ProtocolViolation("Malformed AVBL numeric response".into())
+            })
         } else {
             // AVBL is unrecognized on older firmware targets. Fallback to STAT query [REF-FTPS-OPS].
             write_command(&mut self.control_stream, "STAT").await?;
@@ -473,11 +467,11 @@ where
                 }
                 size_found.ok_or(BambuError::ProtocolViolation(
                     "No valid sizing fields parsed in STAT".into(),
-                    ))
+                ))
             } else {
                 Err(BambuError::ProtocolViolation(
                     "Hardware capacity queries rejected".into(),
-                    ))
+                ))
             }
         }
     }
@@ -491,7 +485,7 @@ where
         if code != FTP_PASSIVE_MODE {
             return Err(BambuError::ProtocolViolation(
                 "PASV port negotiation rejected".into(),
-                ));
+            ));
         }
 
         // Extract (IP_1,IP_2,IP_3,IP_4,PORT_1,PORT_2) components

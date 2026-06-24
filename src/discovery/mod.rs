@@ -8,7 +8,7 @@ pub mod parser;
 
 use crate::error::BambuError;
 use crate::io::{AsyncUdpSocket, TimerProvider};
-pub use parser::{parse_ssdp_payload, resolve_model, BambuModel, SsdpDevice};
+pub use parser::{BambuModel, SsdpDevice, parse_ssdp_payload, resolve_model};
 
 #[cfg(not(feature = "std"))]
 use alloc::format;
@@ -84,11 +84,17 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
         let query = self.m_search_query();
 
         let multicast_target = format!("{}:{}", MULTICAST_IP, self.port);
-        log::debug!("Transmitting multicast M-SEARCH request to: {}", multicast_target);
+        log::debug!(
+            "Transmitting multicast M-SEARCH request to: {}",
+            multicast_target
+        );
         let _ = self.socket.send_to(query, &multicast_target).await;
 
         let broadcast_target = format!("255.255.255.255:{}", self.port);
-        log::debug!("Transmitting fallback broadcast M-SEARCH request to: {}", broadcast_target);
+        log::debug!(
+            "Transmitting fallback broadcast M-SEARCH request to: {}",
+            broadcast_target
+        );
         let _ = self.socket.send_to(query, &broadcast_target).await;
 
         Ok(())
@@ -102,14 +108,22 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     pub async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, BambuError> {
         match self.socket.recv_from(buf).await {
             Ok((len, from_addr)) => {
-                log::trace!("UDP socket received datagram of size {} from: {}", len, from_addr);
+                log::trace!(
+                    "UDP socket received datagram of size {} from: {}",
+                    len,
+                    from_addr
+                );
 
                 let parsed = parse_ssdp_payload(&buf[..len]);
                 match &parsed {
                     Some(device) => {
                         log::debug!(
                             "Parsed Bambu Lab printer record: serial='{}', model={:?}, ip={}, name='{}', version='{}'",
-                            device.serial, device.model, device.ip, device.name, device.version
+                            device.serial,
+                            device.model,
+                            device.ip,
+                            device.name,
+                            device.version
                         );
                     }
                     None => {
@@ -182,7 +196,11 @@ where
     let mut elapsed_millis: u128 = 0;
     let mut millis_since_last_search: u128 = 0;
 
-    log::debug!("Commencing poll listener sequence ({}ms limit, {} port(s))", total_millis, engines.len());
+    log::debug!(
+        "Commencing poll listener sequence ({}ms limit, {} port(s))",
+        total_millis,
+        engines.len()
+    );
 
     // Alternate polling across all bound sockets. Each recv_from times out after ~100ms,
     // so we cycle through engines round-robin.
@@ -216,7 +234,10 @@ where
         }
     }
 
-    log::debug!("Completed discovery sweep. Total found unique machines: {}", devices.len());
+    log::debug!(
+        "Completed discovery sweep. Total found unique machines: {}",
+        devices.len()
+    );
 
     Ok(devices)
 }
@@ -225,8 +246,8 @@ where
 mod tests {
     use super::*;
     use crate::io::{AsyncUdpSocket, SocketError};
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Mock socket to test DiscoveryEngine search broadcasts and response parsing.
     struct MockDiscoverySocket {

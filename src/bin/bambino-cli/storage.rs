@@ -14,7 +14,7 @@ use tokio::net::TcpStream;
 use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
 use bambino::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use bambino::io::tokio::{build_unsafe_client_config, to_socket_error, TokioTlsConnector};
+use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
 use bambino::io::{SocketError, TokioIo};
 
 /// Concrete implementation of the passive data connection factory for the Tokio runtime.
@@ -94,7 +94,7 @@ pub async fn run(
     if action_args.is_empty() {
         return Err(BambuError::ProtocolViolation(
             "Missing storage action identifier".into(),
-            ));
+        ));
     }
 
     let action = action_args[0].to_lowercase();
@@ -144,9 +144,7 @@ pub async fn run(
             }
 
             println!("\nDirectory listing: {}\n", path);
-            let mut table = crate::table::Table::new(vec![
-                "Type", "Size", "Modified", "Name",
-            ]);
+            let mut table = crate::table::Table::new(vec!["Type", "Size", "Modified", "Name"]);
             for file in &files {
                 let type_str = if file.is_dir { "DIR" } else { "FILE" };
                 let size_str = if file.is_dir {
@@ -166,8 +164,9 @@ pub async fn run(
         "upload" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: files <ip> <serial> <access_code> upload <local_path> <remote_path>".into(),
-                    ));
+                    "Usage: files <ip> <serial> <access_code> upload <local_path> <remote_path>"
+                        .into(),
+                ));
             }
             let local_path_str = &action_args[1];
             let remote_path_str = &action_args[2];
@@ -176,19 +175,22 @@ pub async fn run(
             if !local_path.exists() {
                 return Err(BambuError::ProtocolViolation(
                     "Target local file does not exist".into(),
-                    ));
+                ));
             }
 
             println!("Reading source file '{}' into buffer...", local_path_str);
-            let payload = fs::read(local_path)
-                .map_err(|_| BambuError::ProtocolViolation("Failed to read local target file".into()))?;
+            let payload = fs::read(local_path).map_err(|_| {
+                BambuError::ProtocolViolation("Failed to read local target file".into())
+            })?;
 
             println!(
                 "Uploading file ({} bytes) to remote path '{}'...",
                 payload.len(),
                 remote_path_str
             );
-            println!("Note: Under heavy write latency, standard SD card flushing may require up to 300 seconds [REF-FTPS-FLUSH].");
+            println!(
+                "Note: Under heavy write latency, standard SD card flushing may require up to 300 seconds [REF-FTPS-FLUSH]."
+            );
             client.upload_file(remote_path_str, &payload).await?;
 
             println!("Success: File uploaded and non-volatile write-buffers successfully flushed.");
@@ -197,7 +199,7 @@ pub async fn run(
             if action_args.len() < 2 {
                 return Err(BambuError::ProtocolViolation(
                     "Usage: files <ip> <serial> <access_code> delete <remote_path>".into(),
-                    ));
+                ));
             }
             let remote_path_str = &action_args[1];
 
@@ -217,10 +219,9 @@ pub async fn run(
             println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
         }
         other => {
-            return Err(BambuError::ProtocolViolation(format!(
-                "Unrecognized storage action identifier '{}'",
-                other
-            ).into()));
+            return Err(BambuError::ProtocolViolation(
+                format!("Unrecognized storage action identifier '{}'", other).into(),
+            ));
         }
     }
 

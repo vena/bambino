@@ -14,7 +14,8 @@ impl Table {
     }
 
     pub fn add_row(&mut self, cells: Vec<&str>) {
-        self.rows.push(cells.into_iter().map(String::from).collect());
+        self.rows
+            .push(cells.into_iter().map(String::from).collect());
     }
 
     pub fn print(&self) {

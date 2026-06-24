@@ -180,8 +180,7 @@ mod tests {
 
     #[test]
     fn test_standard_unix_file_parsing() {
-        let payload =
-            "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 video_2026-06-17.mp4\r\n\
+        let payload = "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 video_2026-06-17.mp4\r\n\
                        drwxr-xr-x    2 1000     1000         4096 Jun 17  2025 cache\n";
 
         // Baseline: We evaluate these listings at Jun 17, 2026, 15:00

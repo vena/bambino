@@ -34,11 +34,17 @@ pub enum BambuError {
     ProtocolViolation(&'static str),
 
     /// Serializer and Deserializer mismatches during telemetry JSON parsing.
-    #[cfg_attr(feature = "std", error("JSON payload serialization or deserialization failure"))]
+    #[cfg_attr(
+        feature = "std",
+        error("JSON payload serialization or deserialization failure")
+    )]
     SerializationError,
 
     /// Emitted when the provided 8-character LAN access code fails verification checks.
-    #[cfg_attr(feature = "std", error("Authentication credentials rejected (access denied)"))]
+    #[cfg_attr(
+        feature = "std",
+        error("Authentication credentials rejected (access denied)")
+    )]
     AccessDenied,
 
     /// Handshake, read, or write negotiations exceeded designated timeouts.
@@ -46,12 +52,18 @@ pub enum BambuError {
     Timeout,
 
     /// Physical write or storage block exhaustion faults reported by the printer.
-    #[cfg_attr(feature = "std", error("Physical MicroSD read/write exception detected (System halted)"))]
+    #[cfg_attr(
+        feature = "std",
+        error("Physical MicroSD read/write exception detected (System halted)")
+    )]
     DiskWriteFailure,
 
     /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer)
     /// not present on the active model target.
-    #[cfg_attr(feature = "std", error("Physical model capability mismatch for the active hardware profile"))]
+    #[cfg_attr(
+        feature = "std",
+        error("Physical model capability mismatch for the active hardware profile")
+    )]
     ModelMismatch,
 }
 
@@ -68,11 +80,21 @@ impl core::fmt::Display for BambuError {
             BambuError::NetworkError(e) => write!(f, "Network transport failure: {:?}", e),
             BambuError::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
             BambuError::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
-            BambuError::SerializationError => write!(f, "JSON payload serialization or deserialization failure"),
-            BambuError::AccessDenied => write!(f, "Authentication credentials rejected (access denied)"),
+            BambuError::SerializationError => {
+                write!(f, "JSON payload serialization or deserialization failure")
+            }
+            BambuError::AccessDenied => {
+                write!(f, "Authentication credentials rejected (access denied)")
+            }
             BambuError::Timeout => write!(f, "Operational transaction timed out"),
-            BambuError::DiskWriteFailure => write!(f, "Physical MicroSD read/write exception detected (System halted)"),
-            BambuError::ModelMismatch => write!(f, "Physical model capability mismatch for the active hardware profile"),
+            BambuError::DiskWriteFailure => write!(
+                f,
+                "Physical MicroSD read/write exception detected (System halted)"
+            ),
+            BambuError::ModelMismatch => write!(
+                f,
+                "Physical model capability mismatch for the active hardware profile"
+            ),
         }
     }
 }
@@ -84,18 +106,44 @@ mod tests {
     #[test]
     fn test_display_consistency() {
         let variants: Vec<(BambuError, &str)> = vec![
-            (BambuError::NetworkError(crate::io::SocketError::TimedOut), "Network transport failure: TimedOut"),
-            (BambuError::TlsHandshakeFailed, "TLS secure channel handshake failed"),
-            (BambuError::ProtocolViolation("test message".into()), "Protocol violation: test message"),
-            (BambuError::SerializationError, "JSON payload serialization or deserialization failure"),
-            (BambuError::AccessDenied, "Authentication credentials rejected (access denied)"),
+            (
+                BambuError::NetworkError(crate::io::SocketError::TimedOut),
+                "Network transport failure: TimedOut",
+            ),
+            (
+                BambuError::TlsHandshakeFailed,
+                "TLS secure channel handshake failed",
+            ),
+            (
+                BambuError::ProtocolViolation("test message".into()),
+                "Protocol violation: test message",
+            ),
+            (
+                BambuError::SerializationError,
+                "JSON payload serialization or deserialization failure",
+            ),
+            (
+                BambuError::AccessDenied,
+                "Authentication credentials rejected (access denied)",
+            ),
             (BambuError::Timeout, "Operational transaction timed out"),
-            (BambuError::DiskWriteFailure, "Physical MicroSD read/write exception detected (System halted)"),
-            (BambuError::ModelMismatch, "Physical model capability mismatch for the active hardware profile"),
+            (
+                BambuError::DiskWriteFailure,
+                "Physical MicroSD read/write exception detected (System halted)",
+            ),
+            (
+                BambuError::ModelMismatch,
+                "Physical model capability mismatch for the active hardware profile",
+            ),
         ];
 
         for (variant, expected) in &variants {
-            assert_eq!(format!("{}", variant), *expected, "Display mismatch for {:?}", variant);
+            assert_eq!(
+                format!("{}", variant),
+                *expected,
+                "Display mismatch for {:?}",
+                variant
+            );
         }
     }
 
@@ -103,7 +151,10 @@ mod tests {
     fn test_from_socket_error() {
         let socket_err = crate::io::SocketError::ConnectionReset;
         let bambu_err: BambuError = socket_err.into();
-        assert!(matches!(bambu_err, BambuError::NetworkError(crate::io::SocketError::ConnectionReset)));
+        assert!(matches!(
+            bambu_err,
+            BambuError::NetworkError(crate::io::SocketError::ConnectionReset)
+        ));
     }
 
     #[test]

@@ -11,4 +11,4 @@ pub mod client;
 pub mod parser;
 
 pub use client::{BambuFtpsClient, FtpDataStreamFactory};
-pub use parser::{parse_unix_listing, FtpFile};
+pub use parser::{FtpFile, parse_unix_listing};

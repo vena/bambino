@@ -421,7 +421,8 @@ impl AmsTray {
     ///
     /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
     pub fn get_state(&self) -> u8 {
-        self.state.unwrap_or(crate::ams::parser::AMS_TRAY_STATE_EMPTY)
+        self.state
+            .unwrap_or(crate::ams::parser::AMS_TRAY_STATE_EMPTY)
     }
 }
 

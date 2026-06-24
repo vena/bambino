@@ -12,10 +12,10 @@ pub mod hms;
 pub mod kprofile;
 
 pub use hms::{
-    decode_hms_alert, decode_print_error, DecodedHmsAlert, DecodedPrintError, HmsSeverity,
+    DecodedHmsAlert, DecodedPrintError, HmsSeverity, decode_hms_alert, decode_print_error,
 };
 pub use kprofile::{
-    validate_setting_id, ExtrusionCaliGetRequest, ExtrusionCaliSelRequest, ExtrusionCaliSetRequest,
-    IdexCaliDelEntry, IdexCaliDelRequest, KProfileEntry, StandardCaliDelEntry,
-    StandardCaliDelRequest,
+    ExtrusionCaliGetRequest, ExtrusionCaliSelRequest, ExtrusionCaliSetRequest, IdexCaliDelEntry,
+    IdexCaliDelRequest, KProfileEntry, StandardCaliDelEntry, StandardCaliDelRequest,
+    validate_setting_id,
 };
