@@ -18,20 +18,23 @@ use alloc::vec::Vec;
 /// Standard Bambu Lab multicast group target for SSDP operations.
 pub const MULTICAST_IP: &str = "239.255.255.250";
 
-/// Standard UDP port allocated to physical Bambu Lab printer local services [REF-NET-PORTS].
+/// Primary UDP port allocated to physical Bambu Lab printer local services [REF-NET-PORTS].
 pub const SSDP_PORT: u16 = 2021;
 
-/// The strict HTTP/1.1 search query string mandated by physical printer firmware parsers [REF-NET-DISC].
-///
-/// **Payload Formatting Constraint:**
-/// This payload exactly mirrors the byte sequence utilized by official client implementations.
-/// The printer's onboard daemon relies on strict string matching. Any deviations in header casing,
-/// line endings, or host port specifications can result in the printer silently dropping the frame.
-const M_SEARCH_QUERY: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
-                                HOST: 239.255.255.250:2021\r\n\
-                                MAN: \"ssdp:discover\"\r\n\
-                                MX: 3\r\n\
-                                ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
+/// Alternative SSDP port listed in Bambu Lab documentation [REF-NET-PORTS].
+pub const SSDP_PORT_ALT: u16 = 1990;
+
+const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
+                                     HOST: 239.255.255.250:2021\r\n\
+                                     MAN: \"ssdp:discover\"\r\n\
+                                     MX: 3\r\n\
+                                     ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
+
+const M_SEARCH_QUERY_1990: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
+                                     HOST: 239.255.255.250:1990\r\n\
+                                     MAN: \"ssdp:discover\"\r\n\
+                                     MX: 3\r\n\
+                                     ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
 
 /// Retrieves the global verbose logging flag status.
 #[cfg(feature = "std")]
@@ -57,12 +60,21 @@ fn get_local_routing_ip() -> Option<std::net::IpAddr> {
 /// Asynchronous Discovery Engine providing search orchestration and passive monitoring.
 pub struct DiscoveryEngine<U: AsyncUdpSocket> {
     socket: U,
+    port: u16,
 }
 
 impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
-    /// Creates a new Discovery Engine using a pre-allocated UDP socket.
-    pub fn new(socket: U) -> Self {
-        Self { socket }
+    /// Creates a new Discovery Engine bound to a specific SSDP port.
+    pub fn new(socket: U, port: u16) -> Self {
+        Self { socket, port }
+    }
+
+    fn m_search_query(&self) -> &'static [u8] {
+        if self.port == SSDP_PORT_ALT {
+            M_SEARCH_QUERY_1990
+        } else {
+            M_SEARCH_QUERY_2021
+        }
     }
 
     /// Dispatches active search queries to trigger local printer reports.
@@ -73,8 +85,9 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     /// or if OS network interface routing routes multicast to inactive adapters, the query is
     /// successfully broadcast across all active local interfaces.
     pub async fn broadcast_search(&self) -> Result<(), BambuError> {
-        // Target A: Standard SSDP Multicast group
-        let multicast_target = format!("{}:{}", MULTICAST_IP, SSDP_PORT);
+        let query = self.m_search_query();
+
+        let multicast_target = format!("{}:{}", MULTICAST_IP, self.port);
         #[cfg(feature = "std")]
         if is_verbose() {
             println!(
@@ -82,10 +95,9 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                 multicast_target
             );
         }
-        let _ = self.socket.send_to(M_SEARCH_QUERY, &multicast_target).await;
+        let _ = self.socket.send_to(query, &multicast_target).await;
 
-        // Target B: Subnet-wide global broadcast fallback (forces interface transmission)
-        let broadcast_target = format!("255.255.255.255:{}", SSDP_PORT);
+        let broadcast_target = format!("255.255.255.255:{}", self.port);
         #[cfg(feature = "std")]
         if is_verbose() {
             println!(
@@ -93,7 +105,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                 broadcast_target
             );
         }
-        let _ = self.socket.send_to(M_SEARCH_QUERY, &broadcast_target).await;
+        let _ = self.socket.send_to(query, &broadcast_target).await;
 
         Ok(())
     }
@@ -161,12 +173,10 @@ where
     U: AsyncUdpSocket,
     T: TimerProvider,
 {
-    // Bind to the SSDP port on the wildcard address. Using port 2021 (SSDP_PORT) is required
-    // because printers send NOTIFY advertisements to 239.255.255.250:2021, and the OS only
+    // Bind sockets on both SSDP ports. Using the specific port is required because
+    // printers send NOTIFY advertisements to 239.255.255.250:<port>, and the OS only
     // delivers multicast packets when the socket's bound port matches the destination port.
-    // Binding to an ephemeral port (0) would receive unicast M-SEARCH responses but miss
-    // all multicast NOTIFY traffic, which many printers rely on exclusively.
-    let bind_addr = format!("0.0.0.0:{}", SSDP_PORT);
+    let ports: &[u16] = &[SSDP_PORT, SSDP_PORT_ALT];
 
     #[cfg(feature = "std")]
     if is_verbose() {
@@ -176,25 +186,35 @@ where
                 local_ip
             );
         }
-        println!(
-            "[VERBOSE] [SSDP] Binding UDP socket on wildcard address '{}'...",
-            bind_addr
-        );
     }
 
-    let socket = U::bind(&bind_addr).await.map_err(|e| {
+    let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
+    for &port in ports {
+        let bind_addr = format!("0.0.0.0:{}", port);
         #[cfg(feature = "std")]
         if is_verbose() {
             println!(
-                "[VERBOSE] [SSDP] Critical: Failed to bind UDP socket: {:?}",
-                e
+                "[VERBOSE] [SSDP] Binding UDP socket on '{}'...",
+                bind_addr
             );
         }
-        BambuError::NetworkError(e)
-    })?;
-    let engine = DiscoveryEngine::new(socket);
+        match U::bind(&bind_addr).await {
+            Ok(socket) => engines.push((DiscoveryEngine::new(socket, port), port)),
+            Err(e) => {
+                #[cfg(feature = "std")]
+                if is_verbose() {
+                    println!(
+                        "[VERBOSE] [SSDP] Failed to bind port {}: {:?} (skipping)",
+                        port, e
+                    );
+                }
+                if engines.is_empty() {
+                    return Err(BambuError::NetworkError(e));
+                }
+            }
+        }
+    }
 
-    // Send search query multiple times to insulate against standard wireless packet drops
     for _i in 0..2 {
         #[cfg(feature = "std")]
         if is_verbose() {
@@ -203,14 +223,15 @@ where
                 _i + 1
             );
         }
-        engine.broadcast_search().await?;
+        for (engine, _) in &engines {
+            engine.broadcast_search().await?;
+        }
         T::sleep(core::time::Duration::from_millis(50)).await;
     }
 
     let mut devices: Vec<SsdpDevice> = Vec::new();
     let mut buf = [0u8; 1500];
 
-    // Compute the polling bounds.
     let total_millis = timeout.as_millis();
     let mut elapsed_millis: u128 = 0;
     let mut millis_since_last_search: u128 = 0;
@@ -218,47 +239,49 @@ where
     #[cfg(feature = "std")]
     if is_verbose() {
         println!(
-            "[VERBOSE] [SSDP] Commencing poll listener sequence ({}ms limit)...",
-            total_millis
+            "[VERBOSE] [SSDP] Commencing poll listener sequence ({}ms limit, {} port(s))...",
+            total_millis,
+            engines.len()
         );
     }
 
-    // High-speed OS buffer draining loop with periodic M-SEARCH re-broadcasts.
-    // Some printers (e.g. P1S) do not respond to M-SEARCH with unicast replies and rely
-    // entirely on periodic NOTIFY advertisements with intervals exceeding 10 seconds.
-    // Re-broadcasting every 3 seconds maximizes the chance of eliciting a direct response
-    // from models that do support M-SEARCH, while NOTIFY-only models are caught by the
-    // extended poll window.
+    // Alternate polling across all bound sockets. Each recv_from times out after ~100ms,
+    // so we cycle through engines round-robin.
     while elapsed_millis < total_millis {
         if millis_since_last_search >= 3000 {
             #[cfg(feature = "std")]
             if is_verbose() {
-                println!("[VERBOSE] [SSDP] Re-broadcasting periodic M-SEARCH query...");
+                println!("[VERBOSE] [SSDP] Re-broadcasting periodic M-SEARCH queries...");
             }
-            let _ = engine.broadcast_search().await;
+            for (engine, _) in &engines {
+                let _ = engine.broadcast_search().await;
+            }
             millis_since_last_search = 0;
         }
 
-        match engine.poll_next_device(&mut buf).await {
-            Ok(Some(device)) => {
-                // Deduplicate devices based on unique serial number records
-                if !devices.iter().any(|d| d.serial == device.serial) {
-                    #[cfg(feature = "std")]
-                    if is_verbose() {
-                        println!("[VERBOSE] [SSDP] Adding newly discovered printer '{}' to active array.", device.serial);
+        for (engine, port) in &engines {
+            match engine.poll_next_device(&mut buf).await {
+                Ok(Some(mut device)) => {
+                    device.discovery_port = *port;
+                    if !devices.iter().any(|d| d.serial == device.serial) {
+                        #[cfg(feature = "std")]
+                        if is_verbose() {
+                            println!(
+                                "[VERBOSE] [SSDP] Discovered '{}' via port {}.",
+                                device.serial, port
+                            );
+                        }
+                        devices.push(device);
                     }
-                    devices.push(device);
                 }
-            }
-            Ok(None) => {
-                // The socket poll timed out (100ms interval).
-                elapsed_millis += 100;
-                millis_since_last_search += 100;
-            }
-            Err(_) => {
-                // Transient network error occurred.
-                elapsed_millis += 100;
-                millis_since_last_search += 100;
+                Ok(None) => {
+                    elapsed_millis += 100;
+                    millis_since_last_search += 100;
+                }
+                Err(_) => {
+                    elapsed_millis += 100;
+                    millis_since_last_search += 100;
+                }
             }
         }
     }
@@ -320,7 +343,7 @@ mod tests {
     async fn test_discovery_engine_broadcast_and_poll() {
         let socket = MockDiscoverySocket::bind("0.0.0.0:0").await.unwrap();
         let sent_ref = socket.sent_payloads.clone();
-        let engine = DiscoveryEngine::new(socket);
+        let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
         engine.broadcast_search().await.unwrap();
         {

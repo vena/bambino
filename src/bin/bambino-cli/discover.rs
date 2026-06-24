@@ -44,19 +44,36 @@ pub async fn run() -> Result<(), BambuError> {
     }
 
     println!("\nDetected {} printer(s):\n", devices.len());
-    let mut table = crate::table::Table::new(vec![
-        "Model", "Serial", "IP Address", "Name", "Firmware",
-    ]);
-    for device in &devices {
-        table.add_row(vec![
-            &format!("{:?}", device.model),
-            &device.serial,
-            &device.ip,
-            &device.name,
-            &device.version,
+    if is_verbose {
+        let mut table = crate::table::Table::new(vec![
+            "Model", "Serial", "IP Address", "Name", "Firmware", "SSDP Port",
         ]);
+        for device in &devices {
+            table.add_row(vec![
+                &format!("{:?}", device.model),
+                &device.serial,
+                &device.ip,
+                &device.name,
+                &device.version,
+                &device.discovery_port.to_string(),
+            ]);
+        }
+        table.print();
+    } else {
+        let mut table = crate::table::Table::new(vec![
+            "Model", "Serial", "IP Address", "Name", "Firmware",
+        ]);
+        for device in &devices {
+            table.add_row(vec![
+                &format!("{:?}", device.model),
+                &device.serial,
+                &device.ip,
+                &device.name,
+                &device.version,
+            ]);
+        }
+        table.print();
     }
-    table.print();
 
     Ok(())
 }

@@ -110,7 +110,10 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 
     let model = resolve_model(serial, None);
     let quirks = model.quirks();
-    println!("Monitoring active ({}). Press Ctrl+C to terminate.\n", serial);
+    println!(
+        "Monitoring active ({}). Press Ctrl+C to terminate.\n",
+        serial
+    );
 
     let mut state = serde_json::Map::new();
 
@@ -170,10 +173,7 @@ fn render_dashboard(
         .get("progress")
         .and_then(|p| p.as_f64())
         .unwrap_or(0.0);
-    let layer_num = state
-        .get("layer_num")
-        .and_then(|l| l.as_i64())
-        .unwrap_or(0);
+    let layer_num = state.get("layer_num").and_then(|l| l.as_i64()).unwrap_or(0);
     let total_layers = state
         .get("total_layers")
         .and_then(|l| l.as_i64())
@@ -207,10 +207,7 @@ fn render_dashboard(
         .get("nozzle_type")
         .and_then(|s| s.as_str())
         .unwrap_or("--");
-    println!(
-        "{:<20} : {}mm {}",
-        "Nozzle", nozzle_diameter, nozzle_type
-    );
+    println!("{:<20} : {}mm {}", "Nozzle", nozzle_diameter, nozzle_type);
 
     // -- Thermal --
     let nozzle_temper = state
@@ -225,15 +222,12 @@ fn render_dashboard(
         .unwrap_or(0) as u32;
     let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
 
-    println!("--- Thermal -----------------------------------------------------------");
+    println!("\n--- Thermal -----------------------------------------------------------");
     println!(
         "{:<20} : {:>3}°C / {:>3}°C",
         "Hotend", nozzle_act, nozzle_tgt
     );
-    println!(
-        "{:<20} : {:>3}°C / {:>3}°C",
-        "Heated Bed", bed_act, bed_tgt
-    );
+    println!("{:<20} : {:>3}°C / {:>3}°C", "Heated Bed", bed_act, bed_tgt);
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state
             .get("chamber_temper")
@@ -260,13 +254,9 @@ fn render_dashboard(
         .unwrap_or("--");
     let sdcard = match state.get("sdcard") {
         Some(serde_json::Value::Bool(true)) => "Inserted",
-        Some(serde_json::Value::String(s)) if s.to_uppercase() == "HAS_SDCARD_NORMAL" => {
-            "Inserted"
-        }
+        Some(serde_json::Value::String(s)) if s.to_uppercase() == "HAS_SDCARD_NORMAL" => "Inserted",
         Some(serde_json::Value::Number(n)) if n.as_i64().unwrap_or(0) != 0 => "Inserted",
-        Some(serde_json::Value::Bool(false)) | Some(serde_json::Value::Number(_)) => {
-            "Not Detected"
-        }
+        Some(serde_json::Value::Bool(false)) | Some(serde_json::Value::Number(_)) => "Not Detected",
         _ => "--",
     };
     let recording = state
@@ -285,7 +275,7 @@ fn render_dashboard(
         ("Timelapse", timelapse),
     ];
 
-    println!("--- Fans & System -----------------------------------------------------");
+    println!("\n--- Fans & System -----------------------------------------------------");
     for i in 0..4 {
         println!(
             "{:<14} : {:<6} {:>3} {:<14} : {}",
@@ -327,24 +317,20 @@ fn render_dashboard(
             };
 
             let header = format!(
-                "--- AMS #{} ({}°C, RH:{}){}",
+                "\n--- AMS #{} ({}°C, RH:{}){}",
                 unit_id, temp, humidity, dry_suffix
             );
             let pad = 71usize.saturating_sub(header.len());
             println!("{} {}", header, "-".repeat(pad));
 
             if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
-                let mut table = crate::table::Table::new(vec![
-                    "Slot", "Status", "Material", "Remaining",
-                ]);
+                let mut table =
+                    crate::table::Table::new(vec!["Slot", "Status", "Material", "Remaining"]);
 
                 for tray in trays {
                     let tray_id = json_as_str_or_num(tray.get("id"));
 
-                    let tray_state = tray
-                        .get("state")
-                        .and_then(|s| s.as_u64())
-                        .map(|s| s as u8);
+                    let tray_state = tray.get("state").and_then(|s| s.as_u64()).map(|s| s as u8);
                     let status = match tray_state {
                         Some(11) => "Loaded",
                         Some(10) => "Present",
@@ -352,10 +338,7 @@ fn render_dashboard(
                         _ => "Unknown",
                     };
 
-                    let material = tray
-                        .get("tray_type")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("");
+                    let material = tray.get("tray_type").and_then(|t| t.as_str()).unwrap_or("");
 
                     let remain = tray
                         .get("remain")
@@ -376,18 +359,13 @@ fn render_dashboard(
     if let Some(vt) = state.get("vt_tray") {
         let tray_type = vt.get("tray_type").and_then(|t| t.as_str()).unwrap_or("");
         if !tray_type.is_empty() {
-            let tray_color = vt
-                .get("tray_color")
-                .and_then(|c| c.as_str())
-                .unwrap_or("");
+            let tray_color = vt.get("tray_color").and_then(|c| c.as_str()).unwrap_or("");
             let nozzle_temp = vt
                 .get("nozzle_temp_max")
                 .and_then(|t| t.as_str())
                 .unwrap_or("--");
             let color_swatch = format_color_swatch(tray_color);
-            println!(
-                "--- External Spool ----------------------------------------------------"
-            );
+            println!("\n--- External Spool ----------------------------------------------------");
             println!(
                 "{:<20} : {} {} (max {}°C)",
                 "Material", tray_type, color_swatch, nozzle_temp

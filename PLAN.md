@@ -73,10 +73,10 @@ Extend `PrintTelemetry` in `src/types/telemetry.rs` with documented fields not y
 
 The Bambu Lab wiki lists both ports 1990 and 2021 for device discovery. Currently only port 2021 is implemented.
 
-* [ ] Bind a second socket to port 1990 in `discover_devices` (or run two engines concurrently)
-* [ ] Send M-SEARCH to both ports
-* [ ] Merge and deduplicate results by serial number
-* [ ] Update `bambino-cli` discover command to report which port each printer was found on (verbose only)
+* [x] Bind a second socket to port 1990 in `discover_devices` (or run two engines concurrently)
+* [x] Send M-SEARCH to both ports
+* [x] Merge and deduplicate results by serial number
+* [x] Update `bambino-cli` discover command to report which port each printer was found on (verbose only)
 
 ### Phase 18: Structured Logging Migration
 

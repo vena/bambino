@@ -56,6 +56,8 @@ pub struct SsdpDevice {
     pub ip: String,
     /// Discovery communications port parsed from the LOCATION header.
     pub port: u16,
+    /// SSDP port on which the device was discovered (2021 or 1990).
+    pub discovery_port: u16,
     /// Device firmware target version.
     pub version: String,
     /// Network connection medium (e.g. "lan", "wlan").
@@ -248,6 +250,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
         name: dev_name.unwrap_or("").to_owned(),
         ip: ip.to_owned(),
         port,
+        discovery_port: 0,
         version: dev_version.unwrap_or("").to_owned(),
         connect_type: dev_connect.unwrap_or("").to_owned(),
         raw_model_str: dev_model.unwrap_or("").to_owned(),
