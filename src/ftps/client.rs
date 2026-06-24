@@ -320,6 +320,115 @@ where
         }
     }
 
+    /// Downloads the contents of a remote file from MicroSD storage via the RETR command.
+    ///
+    /// Negotiates a passive data channel, retrieves the binary payload, and returns the raw bytes.
+    pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, BambuError> {
+        let port = self.negotiate_passive_port().await?;
+        let raw_data_socket = self
+            .data_factory
+            .create_data_stream(&self.ip, port)
+            .await
+            .map_err(BambuError::NetworkError)?;
+
+        let retr_cmd = format!("RETR {}", remote_path);
+        write_command(&mut self.control_stream, &retr_cmd).await?;
+
+        let mut ctrl_buf = Vec::new();
+        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        if code != 150 && code != 125 {
+            return Err(BambuError::ProtocolViolation(
+                "RETR transfer initialization failed",
+            ));
+        }
+
+        let mut file_payload = Vec::new();
+        if !self.model.quirks().uses_plaintext_ftps_data_channel() {
+            let mut secure_data_socket = self
+                .tls_connector
+                .connect(&self.ip, port, raw_data_socket)
+                .await
+                .map_err(BambuError::NetworkError)?;
+            read_to_eof(&mut secure_data_socket, &mut file_payload).await?;
+            drop(secure_data_socket);
+        } else {
+            let mut plain_data_socket = raw_data_socket;
+            read_to_eof(&mut plain_data_socket, &mut file_payload).await?;
+            drop(plain_data_socket);
+        }
+
+        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        if code != 226 {
+            return Err(BambuError::ProtocolViolation(
+                "RETR transfer confirmation aborted",
+            ));
+        }
+
+        Ok(file_payload)
+    }
+
+    /// Creates a directory on the printer's MicroSD storage.
+    pub async fn create_directory(&mut self, path: &str) -> Result<(), BambuError> {
+        let mkd_cmd = format!("MKD {}", path);
+        write_command(&mut self.control_stream, &mkd_cmd).await?;
+
+        let mut buf = Vec::new();
+        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        if code != 257 {
+            return Err(BambuError::ProtocolViolation(
+                "MKD directory creation failed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Removes a directory from the printer's MicroSD storage.
+    ///
+    /// Returns success for both `250` (deleted) and `550` (already absent),
+    /// matching the idempotent cleanup semantics of `delete_file`.
+    pub async fn remove_directory(&mut self, path: &str) -> Result<(), BambuError> {
+        let rmd_cmd = format!("RMD {}", path);
+        write_command(&mut self.control_stream, &rmd_cmd).await?;
+
+        let mut buf = Vec::new();
+        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        if code == 250 || code == 550 {
+            Ok(())
+        } else {
+            Err(BambuError::ProtocolViolation(
+                "RMD directory removal request failed",
+            ))
+        }
+    }
+
+    /// Renames a file or directory on the printer's MicroSD storage.
+    ///
+    /// Executes the standard FTP two-step rename sequence: `RNFR` (rename from)
+    /// followed by `RNTO` (rename to).
+    pub async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), BambuError> {
+        let rnfr_cmd = format!("RNFR {}", from);
+        write_command(&mut self.control_stream, &rnfr_cmd).await?;
+
+        let mut buf = Vec::new();
+        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        if code != 350 {
+            return Err(BambuError::ProtocolViolation(
+                "RNFR rename source path rejected",
+            ));
+        }
+
+        let rnto_cmd = format!("RNTO {}", to);
+        write_command(&mut self.control_stream, &rnto_cmd).await?;
+
+        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        if code != 250 {
+            return Err(BambuError::ProtocolViolation(
+                "RNTO rename destination path rejected",
+            ));
+        }
+        Ok(())
+    }
+
     /// Queries the available capacity of the MicroSD card, in bytes.
     pub async fn get_available_space(&mut self) -> Result<u64, BambuError> {
         write_command(&mut self.control_stream, "AVBL").await?;

@@ -101,7 +101,11 @@ let mut ftp = BambuFtpsClient::connect(
 
 let files = ftp.list_directory("/", year, month, day, hour, min).await?;
 ftp.upload_file("/model/print.3mf", &file_bytes).await?;
+let data = ftp.download_file("/timelapse/video.mp4").await?;
+ftp.create_directory("/model/subfolder").await?;
+ftp.rename_file("/model/old.3mf", "/model/backup.3mf").await?;
 ftp.delete_file("/model/old.3mf").await?;
+ftp.remove_directory("/model/subfolder").await?;
 ```
 
 ### Camera frames

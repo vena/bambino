@@ -51,10 +51,10 @@ Expose convenience methods on `PrinterClient` in `src/client.rs` for command str
 
 Add missing FTP commands to `BambuFtpsClient` in `src/ftps/client.rs`:
 
-* [ ] `download_file(remote_path) -> Vec<u8>` — RETR command with passive data channel
-* [ ] `create_directory(path)` — MKD command
-* [ ] `remove_directory(path)` — RMD command
-* [ ] `rename_file(from, to)` — RNFR + RNTO command pair
+* [x] `download_file(remote_path) -> Vec<u8>` — RETR command with passive data channel
+* [x] `create_directory(path)` — MKD command
+* [x] `remove_directory(path)` — RMD command
+* [x] `rename_file(from, to)` — RNFR + RNTO command pair
 
 ### Phase 16: Telemetry Struct Completeness
 
