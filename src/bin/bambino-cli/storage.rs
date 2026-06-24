@@ -112,8 +112,7 @@ pub async fn run(
 
     let tcp_stream = TcpStream::connect(format!("{}:990", ip))
         .await
-        .map_err(to_socket_error)
-        .map_err(BambuError::NetworkError)?;
+        .map_err(to_socket_error)?;
     let raw_control = TokioIo(tcp_stream);
 
     // 2. Perform connection, login, and security policy selection [REF-FTPS-CONN]

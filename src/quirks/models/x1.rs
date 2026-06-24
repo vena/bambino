@@ -62,7 +62,7 @@ impl ModelQuirks for X1Quirks {
     }
 
     fn relative_z_move_gcode(&self, _distance: f32, _feedrate: u32) -> String {
-        String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")
+        String::from(super::super::DEFAULT_Z_MOVE_GCODE)
     }
 
     fn is_unsupported_command(&self, _command: &str) -> bool {

@@ -108,6 +108,9 @@ impl BambuModel {
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
 
+pub(crate) const DEFAULT_Z_MOVE_GCODE: &str =
+    "M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode";
+
 pub(crate) const FAN_STEP_MAX: u8 = 15;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
 

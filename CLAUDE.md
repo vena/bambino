@@ -13,7 +13,7 @@ cargo test test_name                                 # Single test by name
 cargo build --no-default-features --features alloc --lib  # no_std compatibility check (must pass)
 ```
 
-Every change must compile under both the default `tokio` feature set and the `no_std`+`alloc` library target. The `--lib` flag scopes the no_std check to library code only — the CLI is a host-only verification tool and is not part of the embedded target. Use `#[cfg(not(feature = "std"))]` imports from `alloc` (String, Vec, format!) for no_std paths.
+Every change must compile under both the default `tokio` feature set and the `no_std`+`alloc` library target. Run `cargo clippy` as part of the verification gate and fix warnings before considering a phase complete. The `--lib` flag scopes the no_std check to library code only — the CLI is a host-only verification tool and is not part of the embedded target. Use `#[cfg(not(feature = "std"))]` imports from `alloc` (String, Vec, format!) for no_std paths.
 
 ## Architecture
 
@@ -32,13 +32,13 @@ MQTT commands follow a strict Payload+Request pattern:
 3. An `impl` block with `pub fn new(...)` constructor
 
 ### Client Coordinator (`src/client.rs`)
-`PrinterClient` wraps MQTT + optional FTPS. Client methods follow this pattern:
+`PrinterClient` wraps MQTT + optional FTPS. Client methods use the private `publish_request` helper:
 ```rust
 let seq = self.next_sequence_id();
 let req = SomeRequest::new(args, seq);
-let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-self.mqtt.publish_command(&payload).await
+self.publish_request(&req).await
 ```
+`publish_request<T: Serialize>` handles serialization via `serde_json::to_vec` and publishes to MQTT in one step.
 Public helper types (`PrintSpeed`, `CalibrationOption`) live alongside `PrinterClient` in this module. `CalibrationOption` is a newtype bitmask supporting `BitOr` for combining calibration routines.
 
 ### Reference Documentation (`reference/`)
@@ -55,3 +55,4 @@ Protocol specs live in numbered markdown files. When adding or modifying command
 - Magic numbers are extracted into named `pub(crate) const` blocks in each module (e.g., `PACKET_TYPE_*` and `MQTT_*` in `src/mqtt/client.rs`, `FTP_*` in `src/ftps/client.rs`, `AMS_*` in `src/ams/parser.rs`). Use existing constants rather than introducing new magic numbers.
 - `BambuError` implements `From<SocketError>`, so `?` can be used directly in functions returning `Result<_, BambuError>` for socket operations.
 - When adding public types, modules, traits, or changing conventions, update this file to reflect the new state. CLAUDE.md must stay in sync with the codebase — treat it as a living document, not a one-time snapshot.
+- Use context7 to look up current Rust and third-party crate documentation when working with APIs, especially for `serde`, `serde_json`, `tokio`, `embedded-io-async`, `thiserror`, and other dependencies. Don't rely solely on training data for crate APIs — versions and interfaces change.

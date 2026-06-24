@@ -33,14 +33,12 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), Bambu
 
     let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
         .await
-        .map_err(to_socket_error)
-        .map_err(BambuError::NetworkError)?;
+        .map_err(to_socket_error)?;
     let raw_io = TokioIo(tcp_stream);
 
     let secure_stream = tls_connector
         .connect(ip, 8883, raw_io)
-        .await
-        .map_err(BambuError::NetworkError)?;
+        .await?;
 
     let mut mqtt =
         BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
@@ -83,14 +81,12 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 
     let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
         .await
-        .map_err(to_socket_error)
-        .map_err(BambuError::NetworkError)?;
+        .map_err(to_socket_error)?;
     let raw_io = TokioIo(tcp_stream);
 
     let secure_stream = tls_connector
         .connect(ip, 8883, raw_io)
-        .await
-        .map_err(BambuError::NetworkError)?;
+        .await?;
 
     // 2. Perform the MQTT v3.1.1 protocol handshake
     let mut mqtt =

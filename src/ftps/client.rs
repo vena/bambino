@@ -88,8 +88,7 @@ where
         // Immediately wrap the control stream in TLS prior to reading greetings [REF-FTPS-CONN]
         let mut control_stream = tls_connector
             .connect(ip, FTPS_IMPLICIT_PORT, raw_control)
-            .await
-            .map_err(BambuError::NetworkError)?;
+            .await?;
 
         let mut buf = Vec::new();
 
@@ -165,8 +164,7 @@ where
         let raw_data_socket = self
             .data_factory
             .create_data_stream(&self.ip, port)
-            .await
-            .map_err(BambuError::NetworkError)?;
+            .await?;
 
         // Command the control socket to list files
         let list_cmd = format!("LIST {}", remote_path);
@@ -187,8 +185,7 @@ where
             let mut secure_data_socket = self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
-                .await
-                .map_err(BambuError::NetworkError)?;
+                .await?;
             read_to_eof(&mut secure_data_socket, &mut listing_payload).await?;
             // Abruptly terminate the data stream socket prior to parsing to avoid hangs [REF-FTPS-FLUSH]
             drop(secure_data_socket);
@@ -269,8 +266,7 @@ where
         let raw_data_socket = self
             .data_factory
             .create_data_stream(&self.ip, port)
-            .await
-            .map_err(BambuError::NetworkError)?;
+            .await?;
 
         let stor_cmd = format!("STOR {}", remote_path);
         write_command(&mut self.control_stream, &stor_cmd).await?;
@@ -287,8 +283,7 @@ where
             let mut secure_data_socket = self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
-                .await
-                .map_err(BambuError::NetworkError)?;
+                .await?;
 
             // Chunked upload sequence
             let mut offset = 0;
@@ -351,8 +346,7 @@ where
         let raw_data_socket = self
             .data_factory
             .create_data_stream(&self.ip, port)
-            .await
-            .map_err(BambuError::NetworkError)?;
+            .await?;
 
         let retr_cmd = format!("RETR {}", remote_path);
         write_command(&mut self.control_stream, &retr_cmd).await?;
@@ -370,8 +364,7 @@ where
             let mut secure_data_socket = self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
-                .await
-                .map_err(BambuError::NetworkError)?;
+                .await?;
             read_to_eof(&mut secure_data_socket, &mut file_payload).await?;
             drop(secure_data_socket);
         } else {

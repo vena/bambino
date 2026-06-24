@@ -65,11 +65,11 @@ The current structure: `BambuError` derives `Debug` only (not `Clone`). Under `s
 
 Extract repeated patterns into helper methods, reducing mechanical duplication. Depends on Phase 19 (`From` impl, constants).
 
-* [ ] Add `async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<u16, BambuError>` helper on `PrinterClient` in `src/client.rs` — replaces 18 identical `serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?; self.mqtt.publish_command(&payload).await` sequences
-* [ ] Deduplicate Z-axis safety G-code to a single location in `src/quirks/models/` — the identical `String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")` literal is copy-pasted across all 6 model files (a1, p1, p2, x1, x2, h2). For now, consolidate to one shared constant or default trait method; Phase 24 will later convert this to a parameterized format that uses the actual `distance`/`feedrate` arguments
-* [ ] Add `Vec::with_capacity` hints to MQTT encoding functions in `src/mqtt/client.rs` — `encode_remaining_length` (cap 4), `encode_connect`/`encode_subscribe`/`encode_publish_qos1` (pre-calculated from topic/payload lengths)
-* [ ] Propagate `From<SocketError>` from Phase 19 — replace the 29 manual `.map_err(BambuError::NetworkError)` calls with `?` where the calling function returns `Result<_, BambuError>`
-* [ ] Log discarded source errors — change `.map_err(|_| SocketError::ConnectionReset)` closures in `src/mqtt/client.rs` `read_exact_packet` (3 occurrences) to `log::trace!` the source error before converting
+* [x] Add `async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<u16, BambuError>` helper on `PrinterClient` in `src/client.rs` — replaces 18 identical `serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?; self.mqtt.publish_command(&payload).await` sequences
+* [x] Deduplicate Z-axis safety G-code to a single location in `src/quirks/models/` — the identical `String::from("M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode")` literal is copy-pasted across all 6 model files (a1, p1, p2, x1, x2, h2). Consolidated to `DEFAULT_Z_MOVE_GCODE` constant in `src/quirks/mod.rs`; Phase 24 will later convert this to a parameterized format that uses the actual `distance`/`feedrate` arguments
+* [x] Add `Vec::with_capacity` hints to MQTT encoding functions in `src/mqtt/client.rs` — `encode_remaining_length` (cap 4), `encode_connect`/`encode_subscribe`/`encode_publish_qos1` (pre-calculated from topic/payload lengths)
+* [x] Propagate `From<SocketError>` from Phase 19 — replaced 17 `.map_err(BambuError::NetworkError)` calls with `?` (10 library, 7 CLI) where the calling function returns `Result<_, BambuError>`
+* [x] Log discarded source errors — changed `.map_err(|_| SocketError::ConnectionReset)` closures in `src/mqtt/client.rs` `read_exact_packet` (3 occurrences) to `log::trace!` the source error before converting
 
 ### Phase 21: Collection Efficiency & API Surface Polish
 

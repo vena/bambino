@@ -37,15 +37,13 @@ async fn connect_mqtt(
     log::debug!("Dialing TCP socket to {}:8883", ip);
     let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
         .await
-        .map_err(to_socket_error)
-        .map_err(BambuError::NetworkError)?;
+        .map_err(to_socket_error)?;
     let raw_io = TokioIo(tcp_stream);
 
     log::debug!("Wrapping socket in secure TLS session");
     let secure_stream = tls_connector
         .connect(ip, 8883, raw_io)
-        .await
-        .map_err(BambuError::NetworkError)?;
+        .await?;
 
     log::debug!("Initiating secure MQTT v3.1.1 protocol handshake");
     let client = BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;

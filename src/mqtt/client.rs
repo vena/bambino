@@ -52,7 +52,7 @@ pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 
 /// Encodes an input length parameter into a variable-length MQTT remaining length block (1 to 4 bytes).
 fn encode_remaining_length(mut len: usize) -> Vec<u8> {
-    let mut bytes = Vec::new();
+    let mut bytes = Vec::with_capacity(4);
     loop {
         let mut byte = (len % 128) as u8;
         len /= 128;
@@ -69,7 +69,7 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 
 /// Encodes a standard MQTT CONNECT packet using Clean Session = True, Username, and Password flags.
 fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(16 + client_id.len() + username.len() + password.len());
 
     // Protocol Name length prefix and string
     payload.extend_from_slice(&[0x00, 0x04]);
@@ -103,7 +103,7 @@ fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
 
 /// Encodes an MQTT SUBSCRIBE packet with QoS 1 flags.
 fn encode_subscribe(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(5 + topic.len());
 
     // Packet ID
     payload.extend_from_slice(&packet_id.to_be_bytes());
@@ -123,7 +123,7 @@ fn encode_subscribe(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> {
 
 /// Encodes an MQTT PUBLISH packet with QoS 1 flags.
 fn encode_publish_qos1(packet_id: u16, topic: &str, payload: &[u8]) -> Vec<u8> {
-    let mut var_header = Vec::new();
+    let mut var_header = Vec::with_capacity(4 + topic.len());
 
     // Topic string length prefix and bytes
     var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());
@@ -162,7 +162,10 @@ async fn read_exact_packet<IO: AsyncIo>(
     stream
         .read_exact(&mut header)
         .await
-        .map_err(|_| SocketError::ConnectionReset)?;
+        .map_err(|e| {
+            log::trace!("MQTT header read failed: {:?}", e);
+            SocketError::ConnectionReset
+        })?;
 
     // Read variable-length remaining length
     let mut rem_len: usize = 0;
@@ -172,7 +175,10 @@ async fn read_exact_packet<IO: AsyncIo>(
         stream
             .read_exact(&mut single_byte)
             .await
-            .map_err(|_| SocketError::ConnectionReset)?;
+            .map_err(|e| {
+                log::trace!("MQTT remaining-length read failed: {:?}", e);
+                SocketError::ConnectionReset
+            })?;
         let b = single_byte[0];
         rem_len += ((b & 127) as usize) * multiplier;
         if (b & 128) == 0 {
@@ -190,7 +196,10 @@ async fn read_exact_packet<IO: AsyncIo>(
         stream
             .read_exact(payload_buf)
             .await
-            .map_err(|_| SocketError::ConnectionReset)?;
+            .map_err(|e| {
+                log::trace!("MQTT payload read failed: {:?}", e);
+                SocketError::ConnectionReset
+            })?;
     }
 
     Ok((header[0], rem_len))
@@ -253,9 +262,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         log::debug!("Awaiting broker CONNACK response packet");
 
-        let (header, rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
-            .await
-            .map_err(BambuError::NetworkError)?;
+        let (header, rem_len) = read_exact_packet(&mut stream, &mut payload_buf).await?;
 
         let packet_type = header >> 4;
 
@@ -295,9 +302,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // Read SUBACK packet
         log::debug!("Awaiting broker SUBACK verification packet");
 
-        let (sub_header, _sub_rem_len) = read_exact_packet(&mut stream, &mut payload_buf)
-            .await
-            .map_err(BambuError::NetworkError)?;
+        let (sub_header, _sub_rem_len) = read_exact_packet(&mut stream, &mut payload_buf).await?;
         let sub_type = sub_header >> 4;
 
         log::debug!("Received raw packet header type: {}", sub_type);
@@ -377,9 +382,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
         let mut payload_buf = Vec::new();
         loop {
-            let (header, rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf)
-                .await
-                .map_err(BambuError::NetworkError)?;
+            let (header, rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf).await?;
 
             self.secs_since_last_message = 0;
 

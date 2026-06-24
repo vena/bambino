@@ -23,6 +23,8 @@ use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use serde::Serialize;
+
 use crate::discovery::BambuModel;
 use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
@@ -199,14 +201,19 @@ where
         self.mqtt.poll_telemetry().await
     }
 
+    /// Serializes a request struct and publishes it to the printer's MQTT command channel.
+    async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<u16, BambuError> {
+        let payload = serde_json::to_vec(request).map_err(|_| BambuError::SerializationError)?;
+        self.mqtt.publish_command(&payload).await
+    }
+
     /// Dispatches a manual G-code string encapsulated in a `gcode_line` JSON request [REF-MOTO-GCODE].
     ///
     /// Returns the MQTT packet identifier assigned to track publication delivery status.
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = GCodeRequest::new(gcode_line, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Returns a reference to the printer's unique hardware serial number.
@@ -357,16 +364,14 @@ where
     pub async fn toggle_led(&mut self, node: &str, turn_on: bool) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Configures the active climate airduct damper mode (cooling vs heating recirculation) [REF-MQTT-LIFECYCLE].
     pub async fn set_airduct_mode(&mut self, recirculate_air: bool) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::AirductRequest::new(recirculate_air, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
@@ -375,8 +380,7 @@ where
     pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
@@ -385,8 +389,7 @@ where
     pub async fn set_buzzer_mode(&mut self, mode_code: i32) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::BuzzerRequest::new(mode_code, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     // ------------------------------------------------------------------------
@@ -397,24 +400,21 @@ where
     pub async fn pause_print(&mut self) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = StandardControlRequest::new("pause", seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Resumes a paused print job [REF-MQTT-LIFECYCLE].
     pub async fn resume_print(&mut self) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = StandardControlRequest::new("resume", seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].
     pub async fn stop_print(&mut self) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = StandardControlRequest::new("stop", seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     // ------------------------------------------------------------------------
@@ -439,8 +439,7 @@ where
         let req = crate::mqtt::AmsChangeFilamentRequest::new(
             ams_id, slot_id, target, curr_temp, tar_temp, seq,
         );
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
@@ -460,26 +459,29 @@ where
     ) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::AmsFilamentDryingRequest::new(
-            ams_id, 1, dry_temp, dry_time, rotate_tray, filament, seq,
+            ams_id,
+            1,
+            dry_temp,
+            dry_time,
+            rotate_tray,
+            filament,
+            seq,
         );
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
     pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, 0, 0, false, "", seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
     pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
@@ -500,8 +502,7 @@ where
             nozzle_diameter,
             seq,
         );
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     // ------------------------------------------------------------------------
@@ -512,8 +513,7 @@ where
     pub async fn clear_print_error(&mut self) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::CleanPrintErrorRequest::new(seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
@@ -526,16 +526,14 @@ where
             PrintSpeed::Ludicrous => "4",
         };
         let req = crate::mqtt::commands::PrintSpeedRequest::new(speed_str, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Bypasses rendering of specific objects within an active multi-model print job [REF-MQTT-LIFECYCLE].
     pub async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::SkipObjectsRequest::new(object_ids, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Triggers automated physical calibration routines on the printer chassis [REF-MQTT-LIFECYCLE].
@@ -552,8 +550,7 @@ where
     ) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::CalibrationRequest::new(options.0, seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 
     /// Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
@@ -591,8 +588,7 @@ where
             None,
             seq,
         );
-        let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.publish_request(&req).await
     }
 }
 
