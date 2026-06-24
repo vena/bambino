@@ -10,6 +10,8 @@
 pub mod models;
 
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 use crate::models::BambuModel;
@@ -58,7 +60,7 @@ pub trait ModelQuirks {
     ///
     /// * `1` for standard single-nozzle configurations.
     /// * `2` for independent dual-extruder (IDEX) platforms.
-    /// * `6` or more for automatic tool changer storage racks.
+    /// * `7` for automatic tool changer storage racks (1 dedicated + 6 interchangeable).
     fn physical_nozzle_count(&self) -> u8;
 
     /// Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.
@@ -68,19 +70,51 @@ pub trait ModelQuirks {
     fn is_bed_on_z(&self) -> bool;
 
     /// Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].
-    fn is_unsafe_homing_command(&self, gcode: &str) -> bool;
+    ///
+    /// Default: bed-on-Z models reject G28 with axis constraints (Z, X, or Y) to prevent
+    /// nozzle-to-plate collisions. Bed-slingers allow all homing variants.
+    fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
+        if !self.is_bed_on_z() {
+            return false;
+        }
+        let clean = gcode.to_uppercase();
+        clean.contains("G28") && (clean.contains('Z') || clean.contains('X') || clean.contains('Y'))
+    }
+
+    /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
+    fn z_max(&self) -> f32 {
+        256.0
+    }
 
     /// Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
     ///
     /// Evaluates travel limits specific to Bed-Slinger or CoreXY build envelopes. Returns an empty
     /// string if commanded relative distances exceed mechanical bounds.
-    fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String;
+    fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String {
+        format_z_move_gcode(distance, feedrate, self.z_max())
+    }
 
     /// Evaluates if the specified command string is unsupported or ignored on the target model.
-    ///
-    /// Enables core command routers to filter out invalid command payloads before transmitting
-    /// them across socket networks.
-    fn is_unsupported_command(&self, command: &str) -> bool;
+    fn is_unsupported_command(&self, _command: &str) -> bool {
+        false
+    }
+
+    /// Returns true if the model's RTSP camera stream requires wallclock timestamps
+    /// instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
+    fn requires_wallclock_rtsp_timestamps(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the model has a secondary right-side auxiliary fan (port 10) [REF-CLIM-FANS].
+    fn supports_auxiliary_right_fan(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the model's auxiliary fan telemetry reports speed as a direct
+    /// percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
+    fn auxiliary_fan_uses_percentage(&self) -> bool {
+        false
+    }
 }
 
 impl BambuModel {
@@ -94,12 +128,14 @@ impl BambuModel {
             BambuModel::A1 | BambuModel::A1Mini | BambuModel::A2L => &models::a1::A1Quirks,
             BambuModel::P1P | BambuModel::P1S => &models::p1::P1Quirks,
             BambuModel::P2S => &models::p2::P2Quirks,
-            BambuModel::X1C | BambuModel::X1E => &models::x1::X1Quirks,
+            BambuModel::X1C => &models::x1::X1CQuirks,
+            BambuModel::X1E => &models::x1::X1EQuirks,
             BambuModel::X2D => &models::x2::X2Quirks,
-            BambuModel::H2D | BambuModel::H2DPro | BambuModel::H2C | BambuModel::H2S => {
-                &models::h2::H2Quirks
-            }
-            _ => &models::x1::X1Quirks, // Safe default fallback
+            BambuModel::H2S => &models::h2::H2SQuirks,
+            BambuModel::H2D => &models::h2::H2DQuirks,
+            BambuModel::H2DPro => &models::h2::H2DProQuirks,
+            BambuModel::H2C => &models::h2::H2CQuirks,
+            _ => &models::x1::X1CQuirks,
         }
     }
 }
@@ -108,8 +144,18 @@ impl BambuModel {
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
 
-pub(crate) const DEFAULT_Z_MOVE_GCODE: &str =
-    "M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode";
+/// Generates a safe relative Z-axis movement G-code block with travel limit guards.
+///
+/// Returns an empty string if `distance` is zero or exceeds the model's Z bounds.
+pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> String {
+    if distance == 0.0 || distance.abs() > z_max {
+        return String::new();
+    }
+    format!(
+        "M211 S1\nM1002 push_ref_mode\nG91\nG0 Z{:.2} F{}\nG90\nM1002 pop_ref_mode",
+        distance, feedrate
+    )
+}
 
 pub(crate) const FAN_STEP_MAX: u8 = 15;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
@@ -192,6 +238,7 @@ impl FanSpeedDebouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::BambuModel;
 
     #[test]
     fn test_fan_step_rounding() {
@@ -214,5 +261,222 @@ mod tests {
 
         assert_eq!(debouncer.debounce(53), 47);
         assert_eq!(debouncer.debounce(47), 47);
+    }
+
+    // Per-model quirks assertion tests
+
+    #[test]
+    fn test_a1_quirks() {
+        for model in [BambuModel::A1, BambuModel::A1Mini, BambuModel::A2L] {
+            let q = model.quirks();
+            assert!(q.uses_plaintext_ftps_data_channel());
+            assert!(!q.enforce_ftps_tls_1_2());
+            assert!(!q.has_door_sensor());
+            assert_eq!(q.camera_stream_port(), 6000);
+            assert!(q.ignores_chamber_temperature());
+            assert!(q.has_stg_cur_idle_bug());
+            assert!(!q.has_active_chamber_heater());
+            assert_eq!(q.physical_nozzle_count(), 1);
+            assert!(!q.supports_nozzle_offset_calibration());
+            assert!(!q.is_bed_on_z());
+            assert!(!q.requires_wallclock_rtsp_timestamps());
+            assert!(!q.supports_auxiliary_right_fan());
+            assert!(!q.auxiliary_fan_uses_percentage());
+        }
+    }
+
+    #[test]
+    fn test_p1_quirks() {
+        for model in [BambuModel::P1P, BambuModel::P1S] {
+            let q = model.quirks();
+            assert!(!q.uses_plaintext_ftps_data_channel());
+            assert!(!q.enforce_ftps_tls_1_2());
+            assert!(!q.has_door_sensor());
+            assert_eq!(q.camera_stream_port(), 6000);
+            assert!(q.ignores_chamber_temperature());
+            assert!(q.has_stg_cur_idle_bug());
+            assert!(!q.has_active_chamber_heater());
+            assert_eq!(q.physical_nozzle_count(), 1);
+            assert!(!q.supports_nozzle_offset_calibration());
+            assert!(q.is_bed_on_z());
+            assert!(!q.requires_wallclock_rtsp_timestamps());
+            assert!(!q.supports_auxiliary_right_fan());
+        }
+    }
+
+    #[test]
+    fn test_p2s_quirks() {
+        let q = BambuModel::P2S.quirks();
+        assert!(!q.uses_plaintext_ftps_data_channel());
+        assert!(q.enforce_ftps_tls_1_2());
+        assert!(q.has_door_sensor());
+        assert_eq!(q.camera_stream_port(), 322);
+        assert!(!q.ignores_chamber_temperature());
+        assert!(!q.has_stg_cur_idle_bug());
+        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+        assert!(q.requires_wallclock_rtsp_timestamps());
+        assert!(!q.supports_auxiliary_right_fan());
+    }
+
+    #[test]
+    fn test_x1c_quirks() {
+        let q = BambuModel::X1C.quirks();
+        assert!(!q.uses_plaintext_ftps_data_channel());
+        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(q.has_door_sensor());
+        assert_eq!(q.camera_stream_port(), 322);
+        assert!(!q.ignores_chamber_temperature());
+        assert!(!q.has_stg_cur_idle_bug());
+        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+        assert!(!q.requires_wallclock_rtsp_timestamps());
+        assert!(!q.supports_auxiliary_right_fan());
+    }
+
+    #[test]
+    fn test_x1e_quirks() {
+        let q = BambuModel::X1E.quirks();
+        assert!(!q.uses_plaintext_ftps_data_channel());
+        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(q.has_door_sensor());
+        assert_eq!(q.camera_stream_port(), 322);
+        assert!(!q.ignores_chamber_temperature());
+        assert!(!q.has_stg_cur_idle_bug());
+        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+    }
+
+    #[test]
+    fn test_x2d_quirks() {
+        let q = BambuModel::X2D.quirks();
+        assert!(!q.uses_plaintext_ftps_data_channel());
+        assert!(q.enforce_ftps_tls_1_2());
+        assert!(q.has_door_sensor());
+        assert_eq!(q.camera_stream_port(), 322);
+        assert!(!q.ignores_chamber_temperature());
+        assert!(!q.has_stg_cur_idle_bug());
+        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 2);
+        assert!(q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+        assert!(q.supports_auxiliary_right_fan());
+        assert!(q.auxiliary_fan_uses_percentage());
+    }
+
+    #[test]
+    fn test_h2s_quirks() {
+        let q = BambuModel::H2S.quirks();
+        assert!(!q.uses_plaintext_ftps_data_channel());
+        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(q.has_door_sensor());
+        assert_eq!(q.camera_stream_port(), 322);
+        assert!(!q.ignores_chamber_temperature());
+        assert!(!q.has_stg_cur_idle_bug());
+        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+    }
+
+    #[test]
+    fn test_h2d_quirks() {
+        let q = BambuModel::H2D.quirks();
+        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 2);
+        assert!(q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+    }
+
+    #[test]
+    fn test_h2d_pro_quirks() {
+        let q = BambuModel::H2DPro.quirks();
+        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 2);
+        assert!(q.supports_nozzle_offset_calibration());
+    }
+
+    #[test]
+    fn test_h2c_quirks() {
+        let q = BambuModel::H2C.quirks();
+        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 7);
+        assert!(q.supports_nozzle_offset_calibration());
+        assert!(q.is_bed_on_z());
+    }
+
+    #[test]
+    fn test_unknown_fallback_quirks() {
+        let q = BambuModel::Unknown.quirks();
+        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+    }
+
+    // Z-move gcode parameterization tests
+
+    #[test]
+    fn test_z_move_gcode_parameterized() {
+        let gcode = format_z_move_gcode(10.0, 3000, 256.0);
+        assert!(gcode.contains("Z10.00"));
+        assert!(gcode.contains("F3000"));
+        assert!(gcode.contains("M211 S1"));
+        assert!(gcode.contains("push_ref_mode"));
+    }
+
+    #[test]
+    fn test_z_move_gcode_negative_distance() {
+        let gcode = format_z_move_gcode(-5.5, 1500, 256.0);
+        assert!(gcode.contains("Z-5.50"));
+        assert!(gcode.contains("F1500"));
+    }
+
+    #[test]
+    fn test_z_move_gcode_exceeds_bounds() {
+        assert!(format_z_move_gcode(300.0, 3000, 256.0).is_empty());
+        assert!(format_z_move_gcode(-300.0, 3000, 256.0).is_empty());
+    }
+
+    #[test]
+    fn test_z_move_gcode_zero_distance() {
+        assert!(format_z_move_gcode(0.0, 3000, 256.0).is_empty());
+    }
+
+    #[test]
+    fn test_z_move_gcode_at_boundary() {
+        let gcode = format_z_move_gcode(256.0, 3000, 256.0);
+        assert!(gcode.contains("Z256.00"));
+    }
+
+    #[test]
+    fn test_z_move_via_trait() {
+        let q = BambuModel::P1P.quirks();
+        let gcode = q.relative_z_move_gcode(15.0, 2000);
+        assert!(gcode.contains("Z15.00"));
+        assert!(gcode.contains("F2000"));
+    }
+
+    // Homing safety tests
+
+    #[test]
+    fn test_unsafe_homing_bed_on_z() {
+        let q = BambuModel::P1P.quirks();
+        assert!(q.is_unsafe_homing_command("G28 Z"));
+        assert!(q.is_unsafe_homing_command("g28 x"));
+        assert!(q.is_unsafe_homing_command("G28 X Y Z"));
+        assert!(!q.is_unsafe_homing_command("G28"));
+        assert!(!q.is_unsafe_homing_command("G1 Z10"));
+    }
+
+    #[test]
+    fn test_a1_homing_always_safe() {
+        let q = BambuModel::A1.quirks();
+        assert!(!q.is_unsafe_homing_command("G28 Z"));
+        assert!(!q.is_unsafe_homing_command("G28"));
     }
 }

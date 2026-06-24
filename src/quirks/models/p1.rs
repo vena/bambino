@@ -5,9 +5,6 @@
 use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
 
-#[cfg(not(feature = "std"))]
-use alloc::string::String;
-
 /// Standard post-boot socket preparation delay, in seconds
 pub const POST_BOOT_CONNECT_DELAY: u64 = 25;
 
@@ -59,24 +56,5 @@ impl ModelQuirks for P1Quirks {
 
     fn is_bed_on_z(&self) -> bool {
         true
-    }
-
-    fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
-        let clean = gcode.to_uppercase();
-        clean.contains("G28") && (clean.contains('Z') || clean.contains('X') || clean.contains('Y'))
-    }
-
-    fn relative_z_move_gcode(&self, _distance: f32, _feedrate: u32) -> String {
-        String::from(super::super::DEFAULT_Z_MOVE_GCODE)
-    }
-
-    /// Evaluates if the specified command string is unsupported or ignored on the target model.
-    ///
-    /// **Why get_version is allowed here:**
-    /// Previously, a gate blocked `get_version` on the P1 series due to assumptions about lack
-    /// of support. We are removing this restriction to verify if the P1S actually processes
-    /// and responds to expansion bus version queries under active LAN/Developer modes.
-    fn is_unsupported_command(&self, _command: &str) -> bool {
-        false
     }
 }

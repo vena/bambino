@@ -351,7 +351,7 @@ where
             FanTarget::AuxiliaryLeft => 2,
             FanTarget::ChamberExhaust => 3,
             FanTarget::AuxiliaryRight => {
-                if self.model != BambuModel::X2D {
+                if !self.model.quirks().supports_auxiliary_right_fan() {
                     return Err(BambuError::ModelMismatch);
                 }
                 10

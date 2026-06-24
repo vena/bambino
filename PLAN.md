@@ -110,24 +110,24 @@ Consolidate test mocking, replace magic numbers, and expand edge case coverage. 
 A deep audit of the quirks engine (`src/quirks/`) and its usage revealed correctness bugs, missing capabilities, architectural leaks, and dead code. This phase brings the engine into full alignment with the reference documentation (`reference/04_toolhead_thermal_motion.md` §4.2, `reference/06_cameras.md`) and enforces the design principle that ALL model-specific behavior routes through `model.quirks()`. Can be done independently of Phases 19-23 but is listed last since it's the largest scope.
 
 **Correctness fixes:**
-* [ ] Split H2 model family into separate quirks structs (`H2SQuirks`, `H2DQuirks`, `H2CQuirks`, `H2DProQuirks`) — currently all report `physical_nozzle_count=1`, but H2D/H2DPro=2 and H2C=7 (1 dedicated left nozzle + 6 interchangeable right-side hotends)
-* [ ] Fix X1E active chamber heater — `X1Quirks` returns `false` for `has_active_chamber_heater()` but reference §4.2 explicitly lists X1E as supporting it. Either split X1C/X1E quirks or add differentiation
-* [ ] Fix `relative_z_move_gcode` — all 6 implementations ignore `distance`/`feedrate` parameters, hardcoding `Z10.00 F3000`. Interpolate actual values and add per-model Z travel bounds validation
+* [x] Split H2 model family into separate quirks structs (`H2SQuirks`, `H2DQuirks`, `H2CQuirks`, `H2DProQuirks`) — H2S nozzle_count=1, H2D/H2DPro=2, H2C=7. Used macro_rules! `impl_h2_shared!` to deduplicate shared trait methods
+* [x] Fix X1E active chamber heater — split into `X1CQuirks` (has_active_chamber_heater=false) and `X1EQuirks` (true) in x1.rs with shared `x1_is_door_open` helper
+* [x] Fix `relative_z_move_gcode` — replaced hardcoded `DEFAULT_Z_MOVE_GCODE` with parameterized `format_z_move_gcode(distance, feedrate, z_max)` helper. Default trait impl calls `self.z_max()` for bounds validation. Returns empty string for zero or out-of-bounds distances
 
 **Architectural violations — model-specific behavior outside quirks:**
-* [ ] Move X2D auxiliary fan check out of `client.rs` — line 343 directly matches `BambuModel::X2D` instead of calling a quirks method. Add `supports_auxiliary_right_fan() -> bool` to `ModelQuirks`
-* [ ] Refactor door sensor decoding — `PrintTelemetry::is_door_open(is_x1_series: bool)` embeds model knowledge in the telemetry layer. Move field selection logic (X1 uses `home_flag`, others use `stat`) into the quirks implementations themselves
+* [x] Move X2D auxiliary fan check out of `client.rs` — replaced `self.model != BambuModel::X2D` with `!self.model.quirks().supports_auxiliary_right_fan()`. Added `supports_auxiliary_right_fan() -> bool` to `ModelQuirks` (default false, X2Quirks overrides to true)
+* [x] Refactor door sensor decoding — split `PrintTelemetry::is_door_open(bool)` into `is_door_open_from_home_flag()` (X1 series) and `is_door_open_from_stat()` (H2/P2/X2 series). Each quirks impl calls the appropriate helper directly
 
 **Missing quirks methods (documented in reference but not in trait):**
-* [ ] Add `requires_wallclock_rtsp_timestamps() -> bool` — P2S camera timestamp freezing workaround. Currently a standalone function in `p2.rs`, not a trait method
-* [ ] Add `auxiliary_fan_uses_percentage() -> bool` — X2D's right auxiliary fan (id: 160) uses 0-100% directly instead of 0-15 step conversion
+* [x] Add `requires_wallclock_rtsp_timestamps() -> bool` — default false, P2Quirks overrides to true. Orphaned standalone function removed from p2.rs
+* [x] Add `auxiliary_fan_uses_percentage() -> bool` — default false, X2Quirks overrides to true. Telemetry interpretation only; G-code commands still use S0-S255 PWM scale
 
 **Trait cleanup — reduce duplication, remove dead code:**
-* [ ] Add default implementation for `is_unsupported_command()` returning `false` — every model currently implements it identically, and no real filtering exists. Consider removing entirely if it serves no purpose
-* [ ] Extract shared `is_unsafe_homing_command` default for bed-on-Z models — 5 of 6 models have identical G28 axis-check logic
-* [ ] Extract shared `relative_z_move_gcode` default for CoreXY models (after fixing parameterization above)
-* [ ] Remove orphaned standalone functions in `p2.rs` (`force_tls_v12_for_ftps()`, `requires_wallclock_rtsp_timestamps()`) once integrated into the trait
+* [x] Add default implementation for `is_unsupported_command()` returning `false` — removed all per-model overrides
+* [x] Extract shared `is_unsafe_homing_command` default for bed-on-Z models — default checks `self.is_bed_on_z()` then G28+axis detection. A1 inherits false via `is_bed_on_z=false`
+* [x] Extract shared `relative_z_move_gcode` default — calls `format_z_move_gcode(distance, feedrate, self.z_max())`. Added `z_max() -> f32` (default 256.0) to trait
+* [x] Remove orphaned standalone functions in `p2.rs` (`force_tls_v12_for_ftps()`, `requires_wallclock_rtsp_timestamps()`) — deleted, functionality integrated into trait
 
 **Tests:**
-* [ ] Add per-model quirks assertion tests validating nozzle counts, chamber capabilities, and camera ports against reference documentation
-* [ ] Add unit tests for parameterized Z-move G-code output and limit clamping
+* [x] Add per-model quirks assertion tests — 12 tests covering all BambuModel variants including H2 split (nozzle counts, chamber heater, camera ports, door sensors, offset calibration, new capability methods) and Unknown fallback
+* [x] Add unit tests for parameterized Z-move G-code — 6 tests covering parameterized output, negative distance, bounds exceeded, zero distance, boundary values, and trait-level invocation. 3 door sensor tests added to telemetry.rs

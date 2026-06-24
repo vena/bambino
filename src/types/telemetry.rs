@@ -387,23 +387,24 @@ impl PrintTelemetry {
             .unwrap_or(false)
     }
 
-    /// Evaluates whether the physical front enclosure door is open [REF-NET-DOOR].
+    /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
     ///
-    /// Due to model polymorphism, sensor routing is dependent on the core series:
-    /// * **X1 Series**: Monitored via bit 23 (`0x00800000`) of the `home_flag` register.
-    /// * **Other Series**: Monitored via bit 23 (`0x00800000`) of the parsed hexadecimal `stat` field.
-    pub fn is_door_open(&self, is_x1_series: bool) -> bool {
-        if is_x1_series {
-            self.home_flag
-                .map(|flag| (flag & DOOR_SENSOR_BITMASK) != 0)
-                .unwrap_or(false)
-        } else {
-            self.stat
-                .as_ref()
-                .and_then(|s| Self::parse_hex_string(s))
-                .map(|val| (val & DOOR_SENSOR_BITMASK) != 0)
-                .unwrap_or(false)
-        }
+    /// Used by X1 series models where the door sensor is wired to the home_flag bitmask.
+    pub fn is_door_open_from_home_flag(&self) -> bool {
+        self.home_flag
+            .map(|flag| (flag & DOOR_SENSOR_BITMASK) != 0)
+            .unwrap_or(false)
+    }
+
+    /// Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
+    ///
+    /// Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
+    pub fn is_door_open_from_stat(&self) -> bool {
+        self.stat
+            .as_ref()
+            .and_then(|s| Self::parse_hex_string(s))
+            .map(|val| (val & DOOR_SENSOR_BITMASK) != 0)
+            .unwrap_or(false)
     }
 
     /// Helper converting raw hexadecimal state strings cleanly into standard numeric values.
@@ -693,5 +694,50 @@ mod tests {
         assert!(print.hms.unwrap().is_empty());
         assert_eq!(print.ipcam_record.as_deref(), Some("enable"));
         assert_eq!(print.timelapse.as_deref(), Some("disable"));
+    }
+
+    #[test]
+    fn test_door_open_from_home_flag() {
+        let json_open = r#"{ "print": { "home_flag": 8388608 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_open)
+            .expect("valid json")
+            .print
+            .expect("print present");
+        assert!(print.is_door_open_from_home_flag());
+
+        let json_closed = r#"{ "print": { "home_flag": 0 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_closed)
+            .expect("valid json")
+            .print
+            .expect("print present");
+        assert!(!print.is_door_open_from_home_flag());
+    }
+
+    #[test]
+    fn test_door_open_from_stat() {
+        let json_open = r#"{ "print": { "stat": "0x00800000" } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_open)
+            .expect("valid json")
+            .print
+            .expect("print present");
+        assert!(print.is_door_open_from_stat());
+
+        let json_closed = r#"{ "print": { "stat": "0x00000000" } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_closed)
+            .expect("valid json")
+            .print
+            .expect("print present");
+        assert!(!print.is_door_open_from_stat());
+    }
+
+    #[test]
+    fn test_door_open_missing_fields() {
+        let json_empty = r#"{ "print": {} }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_empty)
+            .expect("valid json")
+            .print
+            .expect("print present");
+        assert!(!print.is_door_open_from_home_flag());
+        assert!(!print.is_door_open_from_stat());
     }
 }

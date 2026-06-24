@@ -5,19 +5,6 @@
 use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
 
-#[cfg(not(feature = "std"))]
-use alloc::string::String;
-
-/// Forces TLS v1.2 restriction to avoid data channel session-close races
-pub fn force_tls_v12_for_ftps() -> bool {
-    true
-}
-
-/// Constant frame rate camera sync parameters to resolve RTP timestamp freezing bugs [REF-CAM-RTSPS]
-pub fn requires_wallclock_rtsp_timestamps() -> bool {
-    true
-}
-
 pub struct P2Quirks;
 
 impl ModelQuirks for P2Quirks {
@@ -30,7 +17,7 @@ impl ModelQuirks for P2Quirks {
     }
 
     fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool {
-        telemetry.is_door_open(false)
+        telemetry.is_door_open_from_stat()
     }
 
     fn has_door_sensor(&self) -> bool {
@@ -65,16 +52,7 @@ impl ModelQuirks for P2Quirks {
         true
     }
 
-    fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
-        let clean = gcode.to_uppercase();
-        clean.contains("G28") && (clean.contains('Z') || clean.contains('X') || clean.contains('Y'))
-    }
-
-    fn relative_z_move_gcode(&self, _distance: f32, _feedrate: u32) -> String {
-        String::from(super::super::DEFAULT_Z_MOVE_GCODE)
-    }
-
-    fn is_unsupported_command(&self, _command: &str) -> bool {
-        false
+    fn requires_wallclock_rtsp_timestamps(&self) -> bool {
+        true
     }
 }

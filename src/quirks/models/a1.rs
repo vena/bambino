@@ -6,9 +6,6 @@
 use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
 
-#[cfg(not(feature = "std"))]
-use alloc::string::String;
-
 /// Maximum physical workspace dimension boundaries (in millimeters)
 pub const MAX_X: f32 = 256.0;
 pub const MAX_Y: f32 = 256.0;
@@ -63,27 +60,6 @@ impl ModelQuirks for A1Quirks {
     }
 
     fn is_bed_on_z(&self) -> bool {
-        false
-    }
-
-    fn is_unsafe_homing_command(&self, _gcode: &str) -> bool {
-        false
-    }
-
-    fn relative_z_move_gcode(&self, distance: f32, _feedrate: u32) -> String {
-        let limit = MAX_Z;
-        if distance > limit || distance < -limit {
-            return String::new();
-        }
-        String::from(super::super::DEFAULT_Z_MOVE_GCODE)
-    }
-
-    /// Evaluates if the specified command string is unsupported or ignored on the target model.
-    ///
-    /// **Why get_version is allowed here:**
-    /// Similar to the P1 series, we are lifting the restriction on `get_version` for the A1
-    /// series to allow diagnostic evaluation and verification of device replies.
-    fn is_unsupported_command(&self, _command: &str) -> bool {
         false
     }
 }
