@@ -71,10 +71,7 @@ pub struct SsdpDevice {
 /// **Why this is used:** Bypasses heap-allocation overhead of `to_ascii_lowercase()`
 /// or standard matching in constraint-heavy embedded microcontrollers.
 fn eq_case_insensitive(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .all(|(char_a, char_b)| char_a.to_ascii_lowercase() == char_b.to_ascii_lowercase())
+    a.eq_ignore_ascii_case(b)
 }
 
 /// Resolves the specific printer model using physical serial number prefixes combined

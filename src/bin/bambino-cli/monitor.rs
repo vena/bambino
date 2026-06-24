@@ -16,7 +16,7 @@ use bambino::diagnostics::{decode_hms_alert, decode_print_error};
 use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
 use bambino::io::tokio::{
-    build_unsafe_client_config, to_socket_error, TokioTimer, TokioTlsConnector,
+    TokioTimer, TokioTlsConnector, build_unsafe_client_config, to_socket_error,
 };
 use bambino::io::{TlsConnector, TokioIo};
 use bambino::mqtt::{BambuMqttClient, PushAllRequest};
@@ -36,9 +36,7 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), Bambu
         .map_err(to_socket_error)?;
     let raw_io = TokioIo(tcp_stream);
 
-    let secure_stream = tls_connector
-        .connect(ip, 8883, raw_io)
-        .await?;
+    let secure_stream = tls_connector.connect(ip, 8883, raw_io).await?;
 
     let mut mqtt =
         BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
@@ -55,11 +53,11 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), Bambu
         tokio::select! {
             res = mqtt.poll_telemetry() => {
                 let msg = res?;
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
-                    if v.get("print").and_then(|p| p.get("gcode_state")).is_some() {
-                        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
-                        return Ok(());
-                    }
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+                    && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
+                {
+                    println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                    return Ok(());
                 }
             }
             _ = &mut timeout => {
@@ -84,9 +82,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
         .map_err(to_socket_error)?;
     let raw_io = TokioIo(tcp_stream);
 
-    let secure_stream = tls_connector
-        .connect(ip, 8883, raw_io)
-        .await?;
+    let secure_stream = tls_connector.connect(ip, 8883, raw_io).await?;
 
     // 2. Perform the MQTT v3.1.1 protocol handshake
     let mut mqtt =
@@ -317,10 +313,7 @@ fn render_dashboard(
     let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
 
     println!("\n--- Thermal -----------------------------------------------------------");
-    println!(
-        "{:<10} : {}°C / T: {}°C",
-        "Heated Bed", bed_act, bed_tgt
-    );
+    println!("{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt);
 
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state
@@ -470,15 +463,14 @@ fn render_dashboard(
     println!("=======================================================================");
 
     // -- Diagnostics --
-    if let Some(err_val) = state.get("print_error").and_then(|e| e.as_u64()) {
-        if let Some(decoded_err) = decode_print_error(err_val as u32) {
-            if decoded_err.is_genuine_fault {
-                println!(
-                    "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
-                    decoded_err.short_code
-                );
-            }
-        }
+    if let Some(err_val) = state.get("print_error").and_then(|e| e.as_u64())
+        && let Some(decoded_err) = decode_print_error(err_val as u32)
+        && decoded_err.is_genuine_fault
+    {
+        println!(
+            "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
+            decoded_err.short_code
+        );
     }
 
     if let Some(hms_array) = state.get("hms").and_then(|h| h.as_array()) {

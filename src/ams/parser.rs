@@ -48,7 +48,7 @@ pub fn evaluate_spool_presence(
 
     // High-temperature AMS-HT units (IDs 128-135) reside on their own bus addresses
     // and do not participate in standard bitwise exists strings.
-    if ams_id >= AMS_HT_ID_MIN && ams_id <= AMS_HT_ID_MAX {
+    if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
         return Some(true);
     }
 
@@ -69,10 +69,10 @@ pub fn evaluate_spool_presence(
 /// This routine inspects the tray's state (with 9 representing Empty / Absent) and clears all
 /// stale config keys if empty. It treats an empty `tray_type` string as an explicit clearing signal.
 pub fn clean_stale_tray_data(tray: &mut AmsTray) {
-    let is_absent_state = match tray.state {
-        Some(AMS_TRAY_STATE_EMPTY) | Some(AMS_TRAY_STATE_POWER_OFF) | None => true,
-        _ => false,
-    };
+    let is_absent_state = matches!(
+        tray.state,
+        Some(AMS_TRAY_STATE_EMPTY) | Some(AMS_TRAY_STATE_POWER_OFF) | None
+    );
 
     let is_type_cleared = tray
         .tray_type
@@ -103,7 +103,7 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> u8 {
-    if ams_id >= AMS_HT_ID_MIN && ams_id <= AMS_HT_ID_MAX {
+    if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
         ams_id
     } else if ams_id == AMS_EXTERNAL_SPOOL_ID || ams_id == AMS_EXTERNAL_SPOOL_ALT_ID {
         tray_id

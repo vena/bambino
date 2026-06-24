@@ -15,7 +15,7 @@ use bambino::client::{FanTarget, PrinterClient};
 use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
 use bambino::io::tokio::{
-    build_unsafe_client_config, to_socket_error, TokioTimer, TokioTlsConnector,
+    TokioTimer, TokioTlsConnector, build_unsafe_client_config, to_socket_error,
 };
 use bambino::io::{TlsConnector, TokioIo};
 use bambino::mqtt::{BambuMqttClient, GetVersionRequest};
@@ -41,9 +41,7 @@ async fn connect_mqtt(
     let raw_io = TokioIo(tcp_stream);
 
     log::debug!("Wrapping socket in secure TLS session");
-    let secure_stream = tls_connector
-        .connect(ip, 8883, raw_io)
-        .await?;
+    let secure_stream = tls_connector.connect(ip, 8883, raw_io).await?;
 
     log::debug!("Initiating secure MQTT v3.1.1 protocol handshake");
     let client = BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
@@ -68,7 +66,10 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
     log::debug!("Serializing get_version command structure to JSON");
     let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
 
-    log::debug!("Publishing payload to 'request' topic: {}", String::from_utf8_lossy(&payload));
+    log::debug!(
+        "Publishing payload to 'request' topic: {}",
+        String::from_utf8_lossy(&payload)
+    );
     mqtt.publish_command(&payload).await?;
 
     log::debug!("Published command successfully. Entering polling loop for telemetry responses");
@@ -76,7 +77,11 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
     let poll_future = async {
         loop {
             let msg = mqtt.poll_telemetry().await?;
-            log::debug!("Telemetry frame received on topic: '{}', size: {} bytes", msg.topic, msg.payload.len());
+            log::debug!(
+                "Telemetry frame received on topic: '{}', size: {} bytes",
+                msg.topic,
+                msg.payload.len()
+            );
 
             let v: serde_json::Value = match serde_json::from_slice(&msg.payload) {
                 Ok(val) => val,
@@ -87,7 +92,10 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
             };
 
             if !v.is_null() {
-                log::trace!("Parsed JSON Content: {}", serde_json::to_string(&v).unwrap_or_default());
+                log::trace!(
+                    "Parsed JSON Content: {}",
+                    serde_json::to_string(&v).unwrap_or_default()
+                );
             }
 
             // Polymorphic structure matching: We inspect if the payload maps command keys under
@@ -98,12 +106,12 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
                 Some(&v)
             };
 
-            if let Some(node) = target_node {
-                if node.get("command").and_then(|c| c.as_str()) == Some("get_version") {
-                    log::debug!("Matching 'get_version' command frame detected");
-                    if let Some(modules) = node.get("module").and_then(|m| m.as_array()) {
-                        return Ok::<_, BambuError>(modules.clone());
-                    }
+            if let Some(node) = target_node
+                && node.get("command").and_then(|c| c.as_str()) == Some("get_version")
+            {
+                log::debug!("Matching 'get_version' command frame detected");
+                if let Some(modules) = node.get("module").and_then(|m| m.as_array()) {
+                    return Ok::<_, BambuError>(modules.clone());
                 }
             }
         }
@@ -122,10 +130,7 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
                     continue;
                 }
 
-                let product = m
-                    .get("product_name")
-                    .and_then(|p| p.as_str())
-                    .unwrap_or("");
+                let product = m.get("product_name").and_then(|p| p.as_str()).unwrap_or("");
                 let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
                 let hw_ver = m.get("hw_ver").and_then(|h| h.as_str()).unwrap_or("");
                 let sw_ver = m
@@ -171,7 +176,7 @@ pub async fn run(
     if action_args.is_empty() {
         return Err(BambuError::ProtocolViolation(
             "Missing control action identifier".into(),
-            ));
+        ));
     }
 
     let action = action_args[0].to_lowercase();
@@ -191,8 +196,9 @@ pub async fn run(
         "move" => {
             if action_args.len() < 4 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> move <axis> <distance> [feedrate]".into(),
-                    ));
+                    "Usage: control <ip> <serial> <access_code> move <axis> <distance> [feedrate]"
+                        .into(),
+                ));
             }
             let axis_char = action_args[1]
                 .chars()
@@ -214,7 +220,7 @@ pub async fn run(
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
                     "Usage: control <ip> <serial> <access_code> extrude <length> [feedrate]".into(),
-                    ));
+                ));
             }
             let length = action_args[1]
                 .parse::<f32>()
@@ -231,8 +237,9 @@ pub async fn run(
         "fan" => {
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
-                    "Usage: control <ip> <serial> <access_code> fan <target> <speed_percent>".into(),
-                    ));
+                    "Usage: control <ip> <serial> <access_code> fan <target> <speed_percent>"
+                        .into(),
+                ));
             }
             let target = action_args[1].to_lowercase();
             let speed = action_args[2]
@@ -246,7 +253,7 @@ pub async fn run(
                 _ => {
                     return Err(BambuError::ProtocolViolation(
                         "Invalid fan target. Choose 'part', 'aux', or 'exhaust'".into(),
-                        ))
+                    ));
                 }
             };
 
@@ -258,12 +265,12 @@ pub async fn run(
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
                     "Usage: control <ip> <serial> <access_code> temp <target> <value>".into(),
-                    ));
+                ));
             }
             let target = action_args[1].to_lowercase();
-            let val = action_args[2]
-                .parse::<u16>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid temperature target value".into()))?;
+            let val = action_args[2].parse::<u16>().map_err(|_| {
+                BambuError::ProtocolViolation("Invalid temperature target value".into())
+            })?;
 
             match target.as_str() {
                 "nozzle" => {
@@ -281,7 +288,7 @@ pub async fn run(
                 _ => {
                     return Err(BambuError::ProtocolViolation(
                         "Invalid thermal target. Choose 'nozzle', 'bed', or 'chamber'".into(),
-                        ))
+                    ));
                 }
             }
             println!("Thermal command published successfully.");
@@ -290,7 +297,7 @@ pub async fn run(
             if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
                     "Usage: control <ip> <serial> <access_code> led <node> <on|off>".into(),
-                    ));
+                ));
             }
             let node = action_args[1].to_lowercase();
             let state = action_args[2].to_lowercase();
@@ -307,7 +314,7 @@ pub async fn run(
                 _ => {
                     return Err(BambuError::ProtocolViolation(
                         "Invalid LED switch. Choose 'on' or 'off'".into(),
-                        ))
+                    ));
                 }
             };
 
@@ -328,10 +335,9 @@ pub async fn run(
             client.stop_print().await?;
         }
         other => {
-            return Err(BambuError::ProtocolViolation(format!(
-                "Unrecognized control action identifier '{}'",
-                other
-            ).into()));
+            return Err(BambuError::ProtocolViolation(
+                format!("Unrecognized control action identifier '{}'", other).into(),
+            ));
         }
     }
 

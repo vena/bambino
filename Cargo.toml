@@ -1,7 +1,7 @@
 [package]
 name = "bambino"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Colleague <developer@bambulab.lan>"]
 description = "A multi-platform, asynchronous Rust library for direct local network control of Bambu Lab 3D printers."
 license = "MIT OR Apache-2.0"
