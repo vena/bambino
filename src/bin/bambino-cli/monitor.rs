@@ -13,13 +13,64 @@ use tokio::net::TcpStream;
 use tokio::time::interval;
 
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
+use bambino::discovery::resolve_model;
 use bambino::error::BambuError;
 use bambino::io::tokio::{
     build_unsafe_client_config, to_socket_error, TokioTimer, TokioTlsConnector,
 };
 use bambino::io::{TlsConnector, TokioIo};
 use bambino::mqtt::{BambuMqttClient, PushAllRequest};
+use bambino::quirks::ModelQuirks;
 use bambino::types::PrintTelemetry;
+
+/// Connects, sends `pushall`, and dumps the first response containing a `print` object as pretty JSON.
+pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
+    eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
+
+    let config = build_unsafe_client_config();
+    let connector = tokio_rustls::TlsConnector::from(config);
+    let tls_connector = TokioTlsConnector::new(connector);
+
+    let tcp_stream = TcpStream::connect(format!("{}:8883", ip))
+        .await
+        .map_err(to_socket_error)
+        .map_err(BambuError::NetworkError)?;
+    let raw_io = TokioIo(tcp_stream);
+
+    let secure_stream = tls_connector
+        .connect(ip, 8883, raw_io)
+        .await
+        .map_err(BambuError::NetworkError)?;
+
+    let mut mqtt =
+        BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
+
+    let push_req = PushAllRequest::new(10001);
+    let push_payload = serde_json::to_vec(&push_req).map_err(|_| BambuError::SerializationError)?;
+    mqtt.publish_command(&push_payload).await?;
+
+    // Collect messages until we get one with a "print" object containing "gcode_state"
+    let timeout = tokio::time::sleep(Duration::from_secs(10));
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            res = mqtt.poll_telemetry() => {
+                let msg = res?;
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                    if v.get("print").and_then(|p| p.get("gcode_state")).is_some() {
+                        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                        return Ok(());
+                    }
+                }
+            }
+            _ = &mut timeout => {
+                eprintln!("Timed out waiting for pushall response.");
+                return Ok(());
+            }
+        }
+    }
+}
 
 /// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
@@ -57,7 +108,9 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
     // Skip the first immediate tick
     ping_timer.tick().await;
 
-    println!("Monitoring active. Press Ctrl+C to terminate.\n");
+    let model = resolve_model(serial, None);
+    let quirks = model.quirks();
+    println!("Monitoring active ({}). Press Ctrl+C to terminate.\n", serial);
 
     let mut state = serde_json::Map::new();
 
@@ -67,7 +120,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
             telemetry_res = mqtt.poll_telemetry() => {
                 match telemetry_res {
                     Ok(msg) => {
-                        if let Err(e) = render_dashboard(&msg.payload, &mut state) {
+                        if let Err(e) = render_dashboard(&msg.payload, &mut state, quirks) {
                             eprintln!("Warning: Failed to render telemetry updates: {:?}", e);
                         }
                     }
@@ -89,6 +142,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 fn render_dashboard(
     payload: &[u8],
     state: &mut serde_json::Map<String, serde_json::Value>,
+    quirks: &dyn ModelQuirks,
 ) -> Result<(), serde_json::Error> {
     let v: serde_json::Value = serde_json::from_slice(payload)?;
 
@@ -144,6 +198,20 @@ fn render_dashboard(
     );
     println!("{:<20} : {}", "Time Remaining", remaining_formatted);
 
+    // -- Nozzle --
+    let nozzle_diameter = state
+        .get("nozzle_diameter")
+        .and_then(|s| s.as_str())
+        .unwrap_or("--");
+    let nozzle_type = state
+        .get("nozzle_type")
+        .and_then(|s| s.as_str())
+        .unwrap_or("--");
+    println!(
+        "{:<20} : {}mm {}",
+        "Nozzle", nozzle_diameter, nozzle_type
+    );
+
     // -- Thermal --
     let nozzle_temper = state
         .get("nozzle_temper")
@@ -157,12 +225,6 @@ fn render_dashboard(
         .unwrap_or(0) as u32;
     let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
 
-    let chamber_temper = state
-        .get("chamber_temper")
-        .and_then(|t| t.as_u64())
-        .unwrap_or(0) as u32;
-    let (chamber_act, chamber_tgt) = PrintTelemetry::unpack_temperature(chamber_temper);
-
     println!("--- Thermal -----------------------------------------------------------");
     println!(
         "{:<20} : {:>3}°C / {:>3}°C",
@@ -172,10 +234,17 @@ fn render_dashboard(
         "{:<20} : {:>3}°C / {:>3}°C",
         "Heated Bed", bed_act, bed_tgt
     );
-    println!(
-        "{:<20} : {:>3}°C / {:>3}°C",
-        "Chamber", chamber_act, chamber_tgt
-    );
+    if !quirks.ignores_chamber_temperature() {
+        let chamber_temper = state
+            .get("chamber_temper")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0) as u32;
+        let (chamber_act, chamber_tgt) = PrintTelemetry::unpack_temperature(chamber_temper);
+        println!(
+            "{:<20} : {:>3}°C / {:>3}°C",
+            "Chamber", chamber_act, chamber_tgt
+        );
+    }
 
     // -- Fans & System (two-column layout) --
     let fan_values = [
@@ -233,19 +302,16 @@ fn render_dashboard(
         for unit in ams_array {
             let unit_id = json_as_str_or_num(unit.get("id"));
             let temp = unit.get("temp").and_then(|t| t.as_str()).unwrap_or("--");
-            let humidity = unit
-                .get("humidity_raw")
-                .and_then(|h| h.as_u64())
+            let humidity = json_as_parsed_u64(unit.get("humidity_raw"))
                 .map(|h| format!("{}%", h))
                 .unwrap_or_else(|| {
-                    // Fall back to the 1-5 index if raw percentage is absent
                     unit.get("humidity")
                         .and_then(|h| h.as_str())
                         .map(|s| format!("idx:{}", s))
                         .unwrap_or_else(|| "--".to_string())
                 });
 
-            let dry_suffix = match unit.get("dry_time").and_then(|d| d.as_u64()) {
+            let dry_suffix = match json_as_parsed_u64(unit.get("dry_time")) {
                 Some(mins) if mins > 0 => {
                     let dry_temp = unit
                         .get("dry_setting")
@@ -303,6 +369,29 @@ fn render_dashboard(
 
                 table.print();
             }
+        }
+    }
+
+    // -- External Spool --
+    if let Some(vt) = state.get("vt_tray") {
+        let tray_type = vt.get("tray_type").and_then(|t| t.as_str()).unwrap_or("");
+        if !tray_type.is_empty() {
+            let tray_color = vt
+                .get("tray_color")
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            let nozzle_temp = vt
+                .get("nozzle_temp_max")
+                .and_then(|t| t.as_str())
+                .unwrap_or("--");
+            let color_swatch = format_color_swatch(tray_color);
+            println!(
+                "--- External Spool ----------------------------------------------------"
+            );
+            println!(
+                "{:<20} : {} {} (max {}°C)",
+                "Material", tray_type, color_swatch, nozzle_temp
+            );
         }
     }
 
@@ -365,4 +454,24 @@ fn json_as_str_or_num(val: Option<&serde_json::Value>) -> String {
         Some(serde_json::Value::Number(n)) => n.to_string(),
         _ => "?".to_string(),
     }
+}
+
+/// Parses a JSON value as u64, accepting both numeric and string-encoded integers.
+fn json_as_parsed_u64(val: Option<&serde_json::Value>) -> Option<u64> {
+    match val {
+        Some(serde_json::Value::Number(n)) => n.as_u64(),
+        Some(serde_json::Value::String(s)) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Converts an RRGGBBAA hex color string into an ANSI true-color swatch.
+fn format_color_swatch(hex_color: &str) -> String {
+    if hex_color.len() < 6 {
+        return String::new();
+    }
+    let r = u8::from_str_radix(&hex_color[0..2], 16).unwrap_or(0);
+    let g = u8::from_str_radix(&hex_color[2..4], 16).unwrap_or(0);
+    let b = u8::from_str_radix(&hex_color[4..6], 16).unwrap_or(0);
+    format!("\x1B[48;2;{};{};{}m  \x1B[0m", r, g, b)
 }

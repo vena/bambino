@@ -216,9 +216,11 @@ pub struct AmsUnit {
     pub humidity: String,
 
     /// Actual relative humidity percentage (1-100) from the onboard sensor.
-    pub humidity_raw: Option<u32>,
+    /// Sent as a string on the wire (e.g., `"17"`).
+    pub humidity_raw: Option<String>,
 
     /// Remaining drying time in minutes during an active dry cycle [REF-AMS-DRYER].
+    /// Sent as an integer on the wire but may vary by firmware.
     pub dry_time: Option<u32>,
 
     /// Drying configuration settings (target temperature, duration, filament type).
@@ -639,7 +641,7 @@ mod tests {
                             "id": "0",
                             "temp": "55.0",
                             "humidity": "1",
-                            "humidity_raw": 8,
+                            "humidity_raw": "8",
                             "dry_time": 142,
                             "dry_setting": {
                                 "dry_temperature": 55,
@@ -656,7 +658,7 @@ mod tests {
         let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
         let unit = &report.print.unwrap().ams.unwrap().ams[0];
         assert_eq!(unit.dry_time, Some(142));
-        assert_eq!(unit.humidity_raw, Some(8));
+        assert_eq!(unit.humidity_raw.as_deref(), Some("8"));
         let dry = unit.dry_setting.as_ref().unwrap();
         assert_eq!(dry.dry_temperature, Some(55));
         assert_eq!(dry.dry_duration, Some(480));

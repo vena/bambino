@@ -46,6 +46,7 @@ Commands:
   discover                                         Scan the local subnet for nearby active printers
   info    <ip> <serial> <access_code>              Query expansion bus module and firmware versions
   monitor <ip> <serial> <access_code>              Stream real-time status telemetry and HMS warnings
+  dump    <ip> <serial> <access_code>              Dump the raw pushall JSON response and exit
   control <ip> <serial> <access_code> <ACTION>     Dispatch a movement or hardware control command
   files   <ip> <serial> <access_code> <ACTION>     Traverse and transfer files on the printer's MicroSD card
 
@@ -107,6 +108,13 @@ async fn main() {
                 process::exit(1);
             }
             monitor::run(&args[2], &args[3], &args[4]).await
+        }
+        "dump" => {
+            if args.len() < 5 {
+                eprintln!("Error: Missing required parameters.\nUsage: bambino-cli dump <ip> <serial> <access_code>");
+                process::exit(1);
+            }
+            monitor::dump(&args[2], &args[3], &args[4]).await
         }
         "control" => {
             if args.len() < 6 {
