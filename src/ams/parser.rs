@@ -8,6 +8,7 @@
 use crate::types::AmsTray;
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
+pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
 pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
 pub(crate) const AMS_EXTERNAL_SPOOL_ID: u8 = 254;
@@ -98,17 +99,23 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
 
 /// Computes the unique global channel identifier for a given expansion unit and local tray.
 ///
+/// Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3,
+/// AMS-HT 128–135, external 254–255) or if `tray_id >= 4` on the standard path.
+///
 /// The physical mapping aligns as:
 /// * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
-pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> u8 {
-    if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
-        ams_id
-    } else if ams_id == AMS_EXTERNAL_SPOOL_ID || ams_id == AMS_EXTERNAL_SPOOL_ALT_ID {
-        tray_id
+pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
+    let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
+    let is_external = ams_id == AMS_EXTERNAL_SPOOL_ID || ams_id == AMS_EXTERNAL_SPOOL_ALT_ID;
+
+    if is_ht || is_external {
+        Some(ams_id)
+    } else if ams_id <= AMS_MAX_STANDARD_ID && tray_id < AMS_SLOTS_PER_UNIT {
+        Some(ams_id * AMS_SLOTS_PER_UNIT + tray_id)
     } else {
-        (ams_id * AMS_SLOTS_PER_UNIT) + tray_id
+        None
     }
 }
 
@@ -123,14 +130,9 @@ pub fn resolve_printing_global_id(
     active_extruder: Option<u8>,
     ams_extruder_map: &[u8],
 ) -> Option<u8> {
-    if let Some(extruder) = active_extruder {
-        let idx = extruder as usize;
-        if idx < ams_extruder_map.len() {
-            let ams_id = ams_extruder_map[idx];
-            return Some(resolve_global_tray_id(ams_id, tray_now));
-        }
-    }
-    None
+    let extruder = active_extruder?;
+    let ams_id = ams_extruder_map.get(extruder as usize)?;
+    resolve_global_tray_id(*ams_id, tray_now)
 }
 
 #[cfg(test)]
@@ -201,26 +203,151 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_global_tray_id() {
-        // Standard physical AMS 1, slot 2 -> (1 * 4) + 2 = 6
-        assert_eq!(resolve_global_tray_id(1, 2), 6);
-
-        // Standard physical AMS 2, slot 0 -> (2 * 4) + 0 = 8
-        assert_eq!(resolve_global_tray_id(2, 0), 8);
-
-        // High-temperature dry-chamber (AMS-HT) ID 128
-        assert_eq!(resolve_global_tray_id(128, 0), 128);
-
-        // Virtual spool target 254
-        assert_eq!(resolve_global_tray_id(254, 254), 254);
+    fn test_resolve_global_tray_id_standard() {
+        assert_eq!(resolve_global_tray_id(0, 0), Some(0));
+        assert_eq!(resolve_global_tray_id(0, 3), Some(3));
+        assert_eq!(resolve_global_tray_id(1, 2), Some(6));
+        assert_eq!(resolve_global_tray_id(2, 0), Some(8));
+        assert_eq!(resolve_global_tray_id(3, 3), Some(15));
     }
 
     #[test]
-    fn test_resolve_printing_global_id_idex() {
-        // Active extruder is Deputy (1), ams_extruder_map routes extruder 1 to ams_id 1
+    fn test_resolve_global_tray_id_ams_ht() {
+        assert_eq!(resolve_global_tray_id(128, 0), Some(128));
+        assert_eq!(resolve_global_tray_id(135, 0), Some(135));
+    }
+
+    #[test]
+    fn test_resolve_global_tray_id_external_spool() {
+        // IDEX left external spool (ams_id 254, slot 0)
+        assert_eq!(resolve_global_tray_id(254, 0), Some(254));
+        // IDEX right / single-nozzle external spool (ams_id 255, slot 0)
+        assert_eq!(resolve_global_tray_id(255, 0), Some(255));
+        // Single-nozzle telemetry reports tray_now=254
+        assert_eq!(resolve_global_tray_id(254, 254), Some(254));
+    }
+
+    #[test]
+    fn test_resolve_global_tray_id_invalid() {
+        // ams_id outside valid ranges
+        assert_eq!(resolve_global_tray_id(4, 0), None);
+        assert_eq!(resolve_global_tray_id(64, 0), None);
+        assert_eq!(resolve_global_tray_id(127, 0), None);
+        assert_eq!(resolve_global_tray_id(136, 0), None);
+        // tray_id out of range on standard path
+        assert_eq!(resolve_global_tray_id(0, 4), None);
+        assert_eq!(resolve_global_tray_id(3, 255), None);
+    }
+
+    #[test]
+    fn test_resolve_printing_global_id_idex_standard_ams() {
         let ams_extruder_map = [0u8, 1u8];
-        let global_id = resolve_printing_global_id(2, Some(1), &ams_extruder_map);
-        // (1 * 4) + 2 = 6
-        assert_eq!(global_id, Some(6));
+        assert_eq!(
+            resolve_printing_global_id(2, Some(1), &ams_extruder_map),
+            Some(6)
+        );
+        assert_eq!(
+            resolve_printing_global_id(0, Some(0), &ams_extruder_map),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_resolve_printing_global_id_idex_external_spool() {
+        // Extruder 0 → AMS 0 (standard), Extruder 1 → external spool right (255)
+        let ams_extruder_map = [0u8, 255u8];
+        assert_eq!(
+            resolve_printing_global_id(0, Some(1), &ams_extruder_map),
+            Some(255)
+        );
+    }
+
+    #[test]
+    fn test_resolve_printing_global_id_no_extruder() {
+        let ams_extruder_map = [0u8, 1u8];
+        assert_eq!(resolve_printing_global_id(0, None, &ams_extruder_map), None);
+    }
+
+    #[test]
+    fn test_resolve_printing_global_id_out_of_bounds() {
+        let ams_extruder_map = [0u8];
+        assert_eq!(
+            resolve_printing_global_id(0, Some(5), &ams_extruder_map),
+            None
+        );
+    }
+
+    #[test]
+    fn test_evaluate_spool_presence_multi_ams() {
+        // Hex "ff10" = binary ...1111_1111_0001_0000
+        // AMS 0 slots: bits 0-3 = 0000 (none present)
+        // AMS 1 slots: bits 4-7 = 0001 (slot 0 present)
+        // AMS 2 slots: bits 8-11 = 1111 (all present)
+        // AMS 3 slots: bits 12-15 = 1111 (all present)
+        assert_eq!(evaluate_spool_presence("ff10", 0, 0, true), Some(false));
+        assert_eq!(evaluate_spool_presence("ff10", 1, 0, true), Some(true));
+        assert_eq!(evaluate_spool_presence("ff10", 1, 1, true), Some(false));
+        assert_eq!(evaluate_spool_presence("ff10", 2, 0, true), Some(true));
+        assert_eq!(evaluate_spool_presence("ff10", 2, 3, true), Some(true));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_state_10_with_type() {
+        // State 10 (present but retracted) with tray_type present — should NOT clear
+        let mut tray = AmsTray {
+            id: "0".into(),
+            state: Some(10),
+            tray_type: Some("PLA".into()),
+            tray_color: Some("FF0000FF".into()),
+            tray_info_idx: Some("GFA01".into()),
+            tag_uid: None,
+            tray_uuid: None,
+            remain: Some(85),
+        };
+
+        clean_stale_tray_data(&mut tray);
+
+        assert_eq!(tray.tray_type.as_deref(), Some("PLA"));
+        assert_eq!(tray.tray_color.as_deref(), Some("FF0000FF"));
+        assert_eq!(tray.remain, Some(85));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_state_10_without_type() {
+        // State 10 with absent tray_type — H2D incremental case, should clear
+        let mut tray = AmsTray {
+            id: "0".into(),
+            state: Some(10),
+            tray_type: None,
+            tray_color: Some("FF0000FF".into()),
+            tray_info_idx: None,
+            tag_uid: None,
+            tray_uuid: None,
+            remain: Some(85),
+        };
+
+        clean_stale_tray_data(&mut tray);
+
+        assert_eq!(tray.tray_color, None);
+        assert_eq!(tray.remain, Some(-1));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_none_state_defaults_to_9() {
+        let mut tray = AmsTray {
+            id: "2".into(),
+            state: None,
+            tray_type: None,
+            tray_color: None,
+            tray_info_idx: None,
+            tag_uid: None,
+            tray_uuid: None,
+            remain: None,
+        };
+
+        clean_stale_tray_data(&mut tray);
+
+        assert_eq!(tray.state, Some(AMS_TRAY_STATE_EMPTY));
+        assert_eq!(tray.remain, Some(-1));
     }
 }

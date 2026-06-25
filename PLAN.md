@@ -97,28 +97,19 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 **CLAUDE.md:** Updated BambuModel canonical path — `src/models.rs` is single source, no discovery re-export
 </details>
 
----
+<details>
+<summary>Phase 7: AMS — 2 fixes (1 correctness bug), 16 new tests. External spool ID fix, API hardening</summary>
 
-## Phase 7: AMS Module (`src/ams/`)
+**Files:** `src/ams/parser.rs`, `mapping.rs`, `mod.rs` (~510 lines)
 
-**Reference:** `05_materials_ams.md` [REF-AMS-DECODE]
-**Lines:** ~510
+**Fixes:**
+- `resolve_global_tray_id`: returned `tray_id` for external spools (254/255) instead of `ams_id` — caused IDEX external spool global IDs to collide with standard AMS slot 0. Changed return type to `Option<u8>` with range validation (`AMS_MAX_STANDARD_ID` constant added, rejects invalid ams_id 4–127/136–253 and tray_id ≥ 4)
+- `resolve_printing_global_id`: simplified to propagate `Option` via `?` chains
 
-- [ ] **`src/ams/parser.rs`** (~226 lines)
-  - [ ] Audit bitmask decoding — verify bit positions and masks against [REF-AMS-DECODE]
-  - [ ] Check `AMS_*` constants against reference doc
-  - [ ] Verify tray status parsing — are all tray states covered?
-  - [ ] Check filament type/color parsing
-  - [ ] Audit humidity and temperature value ranges
+**Re-exports added:** `MaterialSource`, `AmsMapping2Entry`, `resolve_printing_global_id`
 
-- [ ] **`src/ams/mapping.rs`** (~270 lines)
-  - [ ] Audit slot/tray mapping logic — verify mapping algorithm against reference
-  - [ ] Check for off-by-one errors in AMS unit and tray indexing (0-based vs 1-based)
-  - [ ] Verify multi-AMS support — does mapping work with 1-4 AMS units?
-  - [ ] Check edge cases: empty trays, mixed AMS types, external spool
-
-- [ ] **`src/ams/mod.rs`** (~14 lines)
-  - [ ] Verify re-exports
+**Verified correct:** Bitmask decoding formula, all `AMS_*` constants, shutdown telemetry exception, flat/structured mapping builders, external spool safety validation, stale tray data cleansing (state 10 handled implicitly via `is_type_cleared`)
+</details>
 
 ---
 
@@ -355,7 +346,7 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 | 4 | FTPS | 3 | ~966 | **Complete** |
 | 5 | Telemetry & Types | 2 | ~754 | **Complete** |
 | 6 | Discovery | 2 | ~555 | **Complete** |
-| 7 | AMS | 3 | ~510 | Not started |
+| 7 | AMS | 3 | ~510 | **Complete** |
 | 8 | Camera | 3 | ~346 | Not started |
 | 9 | Diagnostics | 3 | ~591 | Not started |
 | 10 | Quirks Engine | 8 | ~820 | Not started |

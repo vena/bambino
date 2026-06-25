@@ -10,5 +10,11 @@
 pub mod mapping;
 pub mod parser;
 
-pub use mapping::{build_ams_mapping, build_ams_mapping2, validate_external_spool_safety};
-pub use parser::{clean_stale_tray_data, evaluate_spool_presence, resolve_global_tray_id};
+pub use mapping::{
+    AmsMapping2Entry, MaterialSource, build_ams_mapping, build_ams_mapping2,
+    validate_external_spool_safety,
+};
+pub use parser::{
+    clean_stale_tray_data, evaluate_spool_presence, resolve_global_tray_id,
+    resolve_printing_global_id,
+};

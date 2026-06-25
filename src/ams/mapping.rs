@@ -267,4 +267,64 @@ mod tests {
         let use_ams_ok = validate_external_spool_safety(true, &mapping_with_ams);
         assert!(use_ams_ok);
     }
+
+    #[test]
+    fn test_validate_external_spool_safety_with_ams_ht() {
+        // AMS-HT (ams_id 128) counts as physical — use_ams stays true
+        let mapping = vec![AmsMapping2Entry {
+            ams_id: 128,
+            slot_id: 0,
+        }];
+        assert!(validate_external_spool_safety(true, &mapping));
+    }
+
+    #[test]
+    fn test_validate_external_spool_safety_dual_nozzle_bypasses() {
+        // Dual-nozzle always returns true regardless of mapping contents
+        let mapping_all_external = vec![AmsMapping2Entry {
+            ams_id: 255,
+            slot_id: 0,
+        }];
+        assert!(validate_external_spool_safety(false, &mapping_all_external));
+    }
+
+    #[test]
+    fn test_build_ams_mapping_ams_ht() {
+        let allocations = [(1, MaterialSource::AmsHt { ams_id: 128 })];
+        let flat_map = build_ams_mapping(&allocations);
+        assert_eq!(flat_map, vec![128]);
+    }
+
+    #[test]
+    fn test_build_ams_mapping_empty() {
+        let allocations: [(usize, MaterialSource); 0] = [];
+        assert!(build_ams_mapping(&allocations).is_empty());
+        assert!(build_ams_mapping2(&allocations).is_empty());
+    }
+
+    #[test]
+    fn test_build_ams_mapping_idex_external_spools() {
+        let allocations = [
+            (1, MaterialSource::ExternalSpoolLeft),
+            (2, MaterialSource::ExternalSpoolRight),
+        ];
+        let flat_map = build_ams_mapping(&allocations);
+        assert_eq!(flat_map, vec![-1, -1]);
+
+        let mapping2 = build_ams_mapping2(&allocations);
+        assert_eq!(
+            mapping2[0],
+            AmsMapping2Entry {
+                ams_id: 254,
+                slot_id: 0
+            }
+        );
+        assert_eq!(
+            mapping2[1],
+            AmsMapping2Entry {
+                ams_id: 255,
+                slot_id: 0
+            }
+        );
+    }
 }
