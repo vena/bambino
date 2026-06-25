@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn test_clean_stale_tray_data_state_9() {
         let mut tray = AmsTray {
-            id: 0,
+            id: "0".into(),
             state: Some(9),
             tray_type: Some("PLA".into()),
             tray_color: Some("FFFFFFFF".into()),
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn test_clean_stale_tray_data_empty_string() {
         let mut tray = AmsTray {
-            id: 1,
+            id: "1".into(),
             state: Some(10),            // Supposedly present but retracted
             tray_type: Some("".into()), // Empty type constitutes a clearing signal
             tray_color: Some("FFFFFFFF".into()),

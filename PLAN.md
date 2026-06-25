@@ -142,23 +142,23 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ## Phase 5: Telemetry & Types (`src/types/`)
 
-**Reference:** `03_mqtt_telemetry.md` (telemetry payloads)
+**Reference:** `03_mqtt_telemetry.md`, `04_toolhead_thermal_motion.md` [REF-THER-DECODE], `05_materials_ams.md` [REF-AMS-DECODE]
 **Lines:** ~754
+**Status:** **Complete.** All 8 issues fixed, 17 new tests added (111 total). Verified against P1S real wire capture.
+**Verified against:** Real P1S wire capture (`tests/mocks/P1S.json`), pybambu mock captures (H2D real, P1P real, + 9 fabricated mocks)
 
-- [ ] **`src/types/telemetry.rs`** (~743 lines)
-  - [ ] Audit `TelemetryReport` struct — verify all fields against [REF-MQTT-CONN] telemetry schema
-  - [ ] Check `PrintTelemetry` fields — verify field names and types match the protocol
-  - [ ] Verify `DeviceTelemetry` fields
-  - [ ] Check serde `default` annotations — are missing fields handled correctly with sensible defaults?
-  - [ ] Audit `Option<>` wrapping — which fields are truly optional vs always-present?
-  - [ ] Verify numeric field types (u8 vs u16 vs u32 vs i32 vs f32) match protocol value ranges
-  - [ ] Check `is_door_open_from_home_flag()` and `is_door_open_from_stat()` — verify bitmask/flag logic against reference
-  - [ ] Audit HMS telemetry embedding — are HMS codes correctly nested?
-  - [ ] Check AMS telemetry fields — verify against [REF-AMS-DECODE]
-  - [ ] Verify xcam and other optional subsystem fields
+- [x] **`src/types/telemetry.rs`** — All review items complete. All fixes applied:
+  - [x] **Fix A (CRITICAL):** Temp fields `u32` → `f64` (wire sends floats on P1S/P1P/A1). `unpack_temperature()` now accepts `f64`. Monitor updated to use `as_f64()`.
+  - [x] **Fix B (CRITICAL):** `device` nesting fixed — added `device: Option<DeviceTelemetry>` to `PrintTelemetry`, moved `ctc` into `DeviceTelemetry`. Both pushall and incremental paths now captured.
+  - [x] **Fix C (CRITICAL):** `CtcInfo::temp` `f32` → `u32` (composite-packed integers)
+  - [x] **Fix D:** Added `VirtualTray` struct with full P1S/H2D schema, `vt_tray: Option<VirtualTray>` on `PrintTelemetry`
+  - [x] **Fix E:** Added `bed_target_temper: Option<f64>` field
+  - [x] **Fix F (CRITICAL):** `AmsTray.id` `u8` → `String` (wire sends strings). AMS parser tests updated.
+  - [x] **Fix G:** Created `IpcamTelemetry` struct replacing flat `ipcam_dev`/`ipcam_record`/`timelapse` fields. Captures `mode_bits`, `resolution`, `tutk_server`.
+  - [x] **Fix H:** Added `#[serde(alias = "total_layer_num")]` to `total_layers`, added `mc_percent: Option<i32>`
+  - [x] **Tests:** End-to-end P1S.json test + 16 unit tests covering: `deserialize_permissive_bool` variants, `parse_hex_string` variants, ethernet bitmask, temperature boundaries, CTC deserialization, device nesting paths, `power_on_flag`, `total_layer_num` alias, `mc_percent`, `VirtualTray`, nozzle info standard/IDEX keys
 
-- [ ] **`src/types/mod.rs`** (~11 lines)
-  - [ ] Verify re-exports
+- [x] **`src/types/mod.rs`** — Re-exports updated: added `AirductCollection`, `AirductPart`, `AmsDrySetting`, `CtcInfo`, `CtcTelemetry`, `IpcamTelemetry`, `VirtualTray`.
 
 ---
 
@@ -423,7 +423,7 @@ These items span the entire codebase and should be checked after module-level re
 | 2 | Platform I/O | 4 | ~475 | **Complete** |
 | 3 | MQTT | 3 | ~1470 | **Complete** |
 | 4 | FTPS | 3 | ~966 | **Complete** |
-| 5 | Telemetry & Types | 2 | ~754 | Not started |
+| 5 | Telemetry & Types | 2 | ~754 | **Complete** |
 | 6 | Discovery | 2 | ~555 | Not started |
 | 7 | AMS | 3 | ~510 | Not started |
 | 8 | Camera | 3 | ~346 | Not started |

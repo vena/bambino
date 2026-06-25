@@ -312,12 +312,12 @@ fn render_dashboard(
 
     let nozzle_temper = state
         .get("nozzle_temper")
-        .and_then(|t| t.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(|t| t.as_f64())
+        .unwrap_or(0.0);
     let nozzle_target = state
         .get("nozzle_target_temper")
-        .and_then(|t| t.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(|t| t.as_f64())
+        .unwrap_or(0.0);
     let (nozzle_act, _) = PrintTelemetry::unpack_temperature(nozzle_temper);
     let (_, nozzle_tgt) = PrintTelemetry::unpack_temperature(nozzle_target);
 
@@ -359,8 +359,8 @@ fn render_dashboard(
     // -- Thermal (bed + chamber) --
     let bed_temper = state
         .get("bed_temper")
-        .and_then(|t| t.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(|t| t.as_f64())
+        .unwrap_or(0.0);
     let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
 
     writeln!(
@@ -373,8 +373,8 @@ fn render_dashboard(
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state
             .get("chamber_temper")
-            .and_then(|t| t.as_u64())
-            .unwrap_or(0) as u32;
+            .and_then(|t| t.as_f64())
+            .unwrap_or(0.0);
         let (chamber_act, chamber_tgt) = PrintTelemetry::unpack_temperature(chamber_temper);
         writeln!(
             w,

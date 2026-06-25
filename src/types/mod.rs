@@ -6,6 +6,7 @@
 pub mod telemetry;
 
 pub use telemetry::{
-    AmsStatusReport, AmsTray, AmsUnit, DeviceTelemetry, HmsEntry, NozzleCollection, NozzleInfo,
-    PrintTelemetry, TelemetryReport,
+    AirductCollection, AirductPart, AmsDrySetting, AmsStatusReport, AmsTray, AmsUnit, CtcInfo,
+    CtcTelemetry, DeviceTelemetry, HmsEntry, IpcamTelemetry, NozzleCollection, NozzleInfo,
+    PrintTelemetry, TelemetryReport, VirtualTray,
 };

@@ -54,6 +54,8 @@ pub struct PrintTelemetry {
     pub layer_num: Option<i32>,
 
     /// Total layers within the sliced print pipeline.
+    /// Wire sends as `total_layer_num`; `total_layers` accepted for compatibility.
+    #[serde(alias = "total_layer_num")]
     pub total_layers: Option<i32>,
 
     /// Print job completion percentage (0.0 to 100.0).
@@ -61,6 +63,10 @@ pub struct PrintTelemetry {
 
     /// Estimated remaining duration of the active layer sequence, in seconds.
     pub mc_remaining_time: Option<i32>,
+
+    /// Motion controller progress percentage (0–100). Present on idle and active prints;
+    /// `progress` may only appear during active prints.
+    pub mc_percent: Option<i32>,
 
     /// Print sub-stage identifier tracking granular execution phases within the active print stage.
     pub mc_print_sub_stage: Option<i32>,
@@ -104,19 +110,23 @@ pub struct PrintTelemetry {
 
     /// Hotend target temperature register.
     ///
-    /// May carry packed composite values when actively heating [REF-THER-DECODE].
-    pub nozzle_target_temper: Option<u32>,
+    /// Wire sends both integers and floats depending on model. Use `unpack_temperature()`
+    /// to extract actual/target from composite-packed values [REF-THER-DECODE].
+    pub nozzle_target_temper: Option<f64>,
 
     /// Hotend actual temperature register.
     ///
-    /// May carry packed composite values when actively heating [REF-THER-DECODE].
-    pub nozzle_temper: Option<u32>,
+    /// Wire sends both integers and floats depending on model [REF-THER-DECODE].
+    pub nozzle_temper: Option<f64>,
 
     /// Heated build-plate temperature register (actual, target, or composite packed).
-    pub bed_temper: Option<u32>,
+    pub bed_temper: Option<f64>,
+
+    /// Explicit bed target temperature. Separate from composite-packed `bed_temper`.
+    pub bed_target_temper: Option<f64>,
 
     /// Active chamber heater or sensor telemetry (actual, target, or composite packed).
-    pub chamber_temper: Option<u32>,
+    pub chamber_temper: Option<f64>,
 
     /// Hexadecimal bitmask string representing the physical presence of loaded spools.
     pub tray_exist_bits: Option<String>,
@@ -125,14 +135,8 @@ pub struct PrintTelemetry {
     #[serde(default)]
     pub power_on_flag: Option<bool>,
 
-    /// Internal identifier or state of the hardware camera module [REF-CAM-RTSPS].
-    pub ipcam_dev: Option<String>,
-
-    /// Camera live feed recording status (`"enable"` or `"disable"`) [REF-CAM-RTSPS].
-    pub ipcam_record: Option<String>,
-
-    /// Frame-by-layer timelapse recording status (`"enable"` or `"disable"`) [REF-CAM-RTSPS].
-    pub timelapse: Option<String>,
+    /// Camera and recording telemetry. Nested as `print.ipcam` on the wire.
+    pub ipcam: Option<IpcamTelemetry>,
 
     /// AI detection settings (spaghetti detection, first-layer inspection, etc.).
     pub xcam: Option<serde_json::Value>,
@@ -144,8 +148,12 @@ pub struct PrintTelemetry {
     #[serde(default)]
     pub ams_mapping: Vec<i32>,
 
-    /// Chamber Temperature Controller telemetry mapping [REF-THER-DECODE].
-    pub ctc: Option<CtcTelemetry>,
+    /// Virtual/external spool holder state. Present on P1S, P1P, A1, H2D, X1C.
+    pub vt_tray: Option<VirtualTray>,
+
+    /// Device sub-object nested inside pushall `print` envelope on H2/P2/X2 models.
+    /// Contains CTC, nozzle, and airduct telemetry for enclosed printers.
+    pub device: Option<DeviceTelemetry>,
 }
 
 /// Chamber Temperature Controller (CTC) telemetry sub-object.
@@ -158,8 +166,31 @@ pub struct CtcTelemetry {
 /// Controller information segment detailing current temperature coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtcInfo {
-    /// Temperature value, typically composite packed or direct Celsius [REF-THER-DECODE].
-    pub temp: Option<f32>,
+    /// Composite-packed integer temperature value [REF-THER-DECODE].
+    /// Use `PrintTelemetry::unpack_temperature()` on this value cast to `f64`.
+    pub temp: Option<u32>,
+}
+
+/// Camera and recording state telemetry, nested as `print.ipcam` on the wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IpcamTelemetry {
+    /// Internal identifier or state of the hardware camera module.
+    pub ipcam_dev: Option<String>,
+
+    /// Camera live feed recording status (`"enable"` or `"disable"`).
+    pub ipcam_record: Option<String>,
+
+    /// Frame-by-layer timelapse recording status (`"enable"` or `"disable"`).
+    pub timelapse: Option<String>,
+
+    /// Camera mode bitmask.
+    pub mode_bits: Option<u32>,
+
+    /// Camera resolution setting.
+    pub resolution: Option<String>,
+
+    /// TUTK server status (`"enable"` or `"disable"`).
+    pub tutk_server: Option<String>,
 }
 
 /// Raw telemetry entry from the `hms` diagnostic array [REF-DIAG-HMS].
@@ -242,6 +273,74 @@ pub struct AmsDrySetting {
     pub dry_filament: Option<String>,
 }
 
+/// Virtual/external spool holder telemetry. Represents the filament loaded
+/// directly into the extruder without going through an AMS unit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualTray {
+    /// Virtual tray ID (typically `"254"`).
+    pub id: Option<String>,
+
+    /// Material class abbreviation (e.g. "PLA", "PETG"). Empty when no filament loaded.
+    pub tray_type: Option<String>,
+
+    /// RRGGBBAA hexadecimal color string.
+    pub tray_color: Option<String>,
+
+    /// Slicer filament preset index.
+    pub tray_info_idx: Option<String>,
+
+    /// Sub-brand or variant string.
+    pub tray_sub_brands: Option<String>,
+
+    /// Maximum nozzle temperature for the loaded filament (sent as string).
+    pub nozzle_temp_max: Option<String>,
+
+    /// Minimum nozzle temperature for the loaded filament (sent as string).
+    pub nozzle_temp_min: Option<String>,
+
+    /// Filament diameter in mm (sent as string, e.g. `"1.75"`).
+    pub tray_diameter: Option<String>,
+
+    /// Spool net weight in grams (sent as string).
+    pub tray_weight: Option<String>,
+
+    /// Filament temperature setting (sent as string).
+    pub tray_temp: Option<String>,
+
+    /// Filament print time accumulator (sent as string).
+    pub tray_time: Option<String>,
+
+    /// Bed temperature setting (sent as string).
+    pub bed_temp: Option<String>,
+
+    /// Bed temperature type/profile (sent as string).
+    pub bed_temp_type: Option<String>,
+
+    /// 16-character hexadecimal RFID tag UID.
+    pub tag_uid: Option<String>,
+
+    /// 32-character globally unique filament spool ID.
+    pub tray_uuid: Option<String>,
+
+    /// Filament preset display name.
+    pub tray_id_name: Option<String>,
+
+    /// XCam inspection info hex string.
+    pub xcam_info: Option<String>,
+
+    /// Remaining filament percentage (0–100, or 0 if unknown).
+    pub remain: Option<i32>,
+
+    /// Flow rate calibration K factor.
+    pub k: Option<f64>,
+
+    /// Flow rate calibration N factor.
+    pub n: Option<i32>,
+
+    /// Calibration index (-1 if uncalibrated).
+    pub cali_idx: Option<i32>,
+}
+
 /// Material spool state descriptor representing a single physical tray slot.
 ///
 /// **Zero-Warning Tolerant Parsing:**
@@ -250,8 +349,8 @@ pub struct AmsDrySetting {
 /// safe parsing under empty-slot conditions without triggering serialisation panics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AmsTray {
-    /// The physical index representing the slot (0 to 3).
-    pub id: u8,
+    /// The physical index representing the slot (0 to 3). Sent as a string on the wire.
+    pub id: String,
 
     /// The native state code representing filament routing status [REF-AMS-DECODE].
     pub state: Option<u8>,
@@ -276,6 +375,10 @@ pub struct AmsTray {
 }
 
 /// Device hardware state properties containing physical tooling descriptions.
+///
+/// Appears at two locations on the wire:
+/// - Top-level `{"device": {...}}` for incremental updates (e.g., `push_alt_nozzle_info`)
+/// - Nested inside `{"print": {"device": {...}}}` for pushall on H2/P2/X2 models
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceTelemetry {
     /// Structured descriptions representing the active extruder assembly properties.
@@ -283,6 +386,9 @@ pub struct DeviceTelemetry {
 
     /// Nested structures tracking cooling components and climate routing [REF-CLIM-FANS].
     pub airduct: Option<AirductCollection>,
+
+    /// Chamber Temperature Controller telemetry [REF-THER-DECODE].
+    pub ctc: Option<CtcTelemetry>,
 }
 
 /// Wrap block holding nozzle characteristics.
@@ -364,16 +470,18 @@ pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
 pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
 
 impl PrintTelemetry {
-    /// Resolves the actual and target values from a composite packed temperature u32 [REF-THER-DECODE].
+    /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
     ///
-    /// If the value is less than or equal to 500, the temperature is returned directly
-    /// and the target is assumed to be 0°C. If greater than 500, both fields are extracted.
-    pub fn unpack_temperature(raw_val: u32) -> (u16, u16) {
-        if raw_val <= TEMP_COMPOSITE_THRESHOLD {
-            (raw_val as u16, 0)
+    /// Accepts `f64` because the wire sends both integers and floats depending on model.
+    /// Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
+    /// composite-packed: upper 16 bits = target, lower 16 bits = actual.
+    pub fn unpack_temperature(raw_val: f64) -> (u16, u16) {
+        let int_val = raw_val as u32;
+        if int_val <= TEMP_COMPOSITE_THRESHOLD {
+            (int_val as u16, 0)
         } else {
-            let target = (raw_val >> 16) & 0xFFFF;
-            let actual = raw_val & 0xFFFF;
+            let target = (int_val >> 16) & 0xFFFF;
+            let actual = int_val & 0xFFFF;
             (actual as u16, target as u16)
         }
     }
@@ -464,13 +572,18 @@ mod tests {
 
     #[test]
     fn test_temperature_unpacking_composite() {
-        let (actual, target) = PrintTelemetry::unpack_temperature(6553700);
+        let (actual, target) = PrintTelemetry::unpack_temperature(6553700.0);
         assert_eq!(actual, 100);
         assert_eq!(target, 100);
 
-        let (actual_idle, target_idle) = PrintTelemetry::unpack_temperature(35);
+        let (actual_idle, target_idle) = PrintTelemetry::unpack_temperature(35.0);
         assert_eq!(actual_idle, 35);
         assert_eq!(target_idle, 0);
+
+        // Fractional temps from P1S/A1 models — truncated to integer
+        let (actual_frac, target_frac) = PrintTelemetry::unpack_temperature(27.625);
+        assert_eq!(actual_frac, 27);
+        assert_eq!(target_frac, 0);
     }
 
     #[test]
@@ -543,17 +656,24 @@ mod tests {
     fn test_camera_fields_deserialization() {
         let json_data = r#"{
             "print": {
-                "ipcam_dev": "1",
-                "ipcam_record": "enable",
-                "timelapse": "enable"
+                "ipcam": {
+                    "ipcam_dev": "1",
+                    "ipcam_record": "enable",
+                    "timelapse": "enable",
+                    "mode_bits": 3,
+                    "resolution": "",
+                    "tutk_server": "disable"
+                }
             }
         }"#;
 
         let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
-        let print = report.print.unwrap();
-        assert_eq!(print.ipcam_dev.as_deref(), Some("1"));
-        assert_eq!(print.ipcam_record.as_deref(), Some("enable"));
-        assert_eq!(print.timelapse.as_deref(), Some("enable"));
+        let ipcam = report.print.unwrap().ipcam.unwrap();
+        assert_eq!(ipcam.ipcam_dev.as_deref(), Some("1"));
+        assert_eq!(ipcam.ipcam_record.as_deref(), Some("enable"));
+        assert_eq!(ipcam.timelapse.as_deref(), Some("enable"));
+        assert_eq!(ipcam.mode_bits, Some(3));
+        assert_eq!(ipcam.tutk_server.as_deref(), Some("disable"));
     }
 
     #[test]
@@ -598,10 +718,10 @@ mod tests {
                             "temp": "26.0",
                             "humidity": "3",
                             "tray": [
-                                { "id": 0, "state": 10, "tray_type": "PLA", "tray_color": "FF0000FF", "remain": 85 },
-                                { "id": 1, "state": 11, "tray_type": "PETG", "tray_color": "0000FFFF", "remain": 42 },
-                                { "id": 2 },
-                                { "id": 3, "state": 10, "tray_type": "PLA", "tray_color": "FFFFFFFF", "remain": 100 }
+                                { "id": "0", "state": 10, "tray_type": "PLA", "tray_color": "FF0000FF", "remain": 85 },
+                                { "id": "1", "state": 11, "tray_type": "PETG", "tray_color": "0000FFFF", "remain": 42 },
+                                { "id": "2" },
+                                { "id": "3", "state": 10, "tray_type": "PLA", "tray_color": "FFFFFFFF", "remain": 100 }
                             ]
                         }
                     ],
@@ -679,9 +799,11 @@ mod tests {
                 "mc_print_sub_stage": 0,
                 "print_error": 0,
                 "hms": [],
-                "ipcam_dev": "1",
-                "ipcam_record": "enable",
-                "timelapse": "disable",
+                "ipcam": {
+                    "ipcam_dev": "1",
+                    "ipcam_record": "enable",
+                    "timelapse": "disable"
+                },
                 "xcam": { "allow_skip_parts": false }
             }
         }"#;
@@ -692,8 +814,9 @@ mod tests {
         assert_eq!(print.mc_print_sub_stage, Some(0));
         assert_eq!(print.print_error, Some(0));
         assert!(print.hms.unwrap().is_empty());
-        assert_eq!(print.ipcam_record.as_deref(), Some("enable"));
-        assert_eq!(print.timelapse.as_deref(), Some("disable"));
+        let ipcam = print.ipcam.unwrap();
+        assert_eq!(ipcam.ipcam_record.as_deref(), Some("enable"));
+        assert_eq!(ipcam.timelapse.as_deref(), Some("disable"));
     }
 
     #[test]
@@ -739,5 +862,441 @@ mod tests {
             .expect("print present");
         assert!(!print.is_door_open_from_home_flag());
         assert!(!print.is_door_open_from_stat());
+    }
+
+    #[test]
+    fn test_p1s_wire_capture_end_to_end() {
+        let json_data = include_str!("../../tests/mocks/P1S.json");
+        let report: TelemetryReport =
+            serde_json::from_str(json_data).expect("P1S wire capture must deserialize");
+        let print = report.print.expect("print present");
+
+        assert_eq!(print.gcode_state.as_deref(), Some("FINISH"));
+        assert_eq!(
+            print.subtask_name.as_deref(),
+            Some("8_Minute_Print_Multi-Fit_Cardboard_Spool_Ring")
+        );
+        assert_eq!(print.layer_num, Some(27));
+        assert_eq!(print.total_layers, Some(27));
+        assert_eq!(print.mc_percent, Some(100));
+        assert_eq!(print.mc_remaining_time, Some(0));
+        assert_eq!(print.home_flag, Some(6374672));
+        assert_eq!(print.stg_cur, Some(0));
+        assert_eq!(print.print_error, Some(0));
+        assert!(print.hms.unwrap().is_empty());
+        assert!(print.sdcard);
+        assert_eq!(print.wifi_signal.as_deref(), Some("-41dBm"));
+
+        // Fix A: float temps deserialize correctly
+        assert!((print.bed_temper.unwrap() - 27.625).abs() < 0.001);
+        assert!((print.nozzle_temper.unwrap() - 29.46875).abs() < 0.001);
+        assert_eq!(print.nozzle_target_temper.unwrap() as u32, 0);
+        assert_eq!(print.chamber_temper.unwrap() as u32, 5);
+
+        // Fix E: bed_target_temper
+        assert_eq!(print.bed_target_temper.unwrap() as u32, 0);
+
+        // Fix H: total_layer_num alias
+        assert_eq!(print.total_layers, Some(27));
+
+        // Fix G: nested ipcam
+        let ipcam = print.ipcam.expect("ipcam present");
+        assert_eq!(ipcam.ipcam_dev.as_deref(), Some("1"));
+        assert_eq!(ipcam.ipcam_record.as_deref(), Some("disable"));
+        assert_eq!(ipcam.timelapse.as_deref(), Some("disable"));
+        assert_eq!(ipcam.mode_bits, Some(3));
+
+        // Fix F: AMS tray IDs are strings
+        let ams = print.ams.expect("ams present");
+        assert_eq!(ams.ams.len(), 1);
+        let unit = &ams.ams[0];
+        assert_eq!(unit.id, "0");
+        assert_eq!(unit.tray.len(), 4);
+        assert_eq!(unit.tray[0].id, "0");
+        assert_eq!(unit.tray[3].id, "3");
+
+        // Fix D: vt_tray
+        let vt = print.vt_tray.expect("vt_tray present");
+        assert_eq!(vt.id.as_deref(), Some("254"));
+        assert_eq!(vt.tray_color.as_deref(), Some("FFFFFF00"));
+        assert_eq!(vt.remain, Some(0));
+        assert!((vt.k.unwrap() - 0.02).abs() < 0.001);
+        assert_eq!(vt.cali_idx, Some(-1));
+    }
+
+    #[test]
+    fn test_temperature_fields_accept_float_and_int() {
+        let json_float = r#"{ "print": { "bed_temper": 27.625, "nozzle_temper": 29.46875 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_float)
+            .unwrap()
+            .print
+            .unwrap();
+        assert!((print.bed_temper.unwrap() - 27.625).abs() < 0.001);
+        assert!((print.nozzle_temper.unwrap() - 29.46875).abs() < 0.001);
+
+        let json_int = r#"{ "print": { "bed_temper": 100, "nozzle_temper": 40 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_int)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.bed_temper.unwrap() as u32, 100);
+        assert_eq!(print.nozzle_temper.unwrap() as u32, 40);
+    }
+
+    #[test]
+    fn test_temperature_boundary_500_and_501() {
+        let (actual, target) = PrintTelemetry::unpack_temperature(500.0);
+        assert_eq!(actual, 500);
+        assert_eq!(target, 0);
+
+        // 501 = 0x000001F5 → actual=501, target=0 (but > threshold so unpacked)
+        let (actual, target) = PrintTelemetry::unpack_temperature(501.0);
+        assert_eq!(actual, 501);
+        assert_eq!(target, 0);
+
+        // Real composite: target=60, actual=48 → (60 << 16) | 48 = 3932208
+        let (actual, target) = PrintTelemetry::unpack_temperature(3932208.0);
+        assert_eq!(actual, 48);
+        assert_eq!(target, 60);
+    }
+
+    #[test]
+    fn test_ctc_info_deserialization_composite() {
+        let json_data = r#"{
+            "device": {
+                "ctc": {
+                    "info": { "temp": 3932208 }
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let ctc = report.device.unwrap().ctc.unwrap();
+        let temp = ctc.info.unwrap().temp.unwrap();
+        let (actual, target) = PrintTelemetry::unpack_temperature(temp as f64);
+        assert_eq!(actual, 48);
+        assert_eq!(target, 60);
+    }
+
+    #[test]
+    fn test_ctc_info_deserialization_direct() {
+        let json_data = r#"{
+            "device": {
+                "ctc": {
+                    "info": { "temp": 35 }
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let temp = report
+            .device
+            .unwrap()
+            .ctc
+            .unwrap()
+            .info
+            .unwrap()
+            .temp
+            .unwrap();
+        let (actual, target) = PrintTelemetry::unpack_temperature(temp as f64);
+        assert_eq!(actual, 35);
+        assert_eq!(target, 0);
+    }
+
+    #[test]
+    fn test_device_nesting_in_pushall() {
+        let json_data = r#"{
+            "print": {
+                "gcode_state": "IDLE",
+                "device": {
+                    "ctc": {
+                        "info": { "temp": 3932208 }
+                    },
+                    "nozzle": {
+                        "info": [{ "id": 0, "diameter": 0.4 }]
+                    },
+                    "airduct": {
+                        "parts": [{ "id": 160, "state": 50 }]
+                    }
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let print = report.print.unwrap();
+        let device = print.device.expect("device nested in print");
+        let ctc_temp = device.ctc.unwrap().info.unwrap().temp.unwrap();
+        assert_eq!(ctc_temp, 3932208);
+        assert_eq!(device.nozzle.unwrap().info[0].id, 0);
+        assert_eq!(device.airduct.unwrap().parts[0].state, Some(50));
+    }
+
+    #[test]
+    fn test_device_incremental_top_level() {
+        let json_data = r#"{
+            "device": {
+                "nozzle": {
+                    "info": [{ "id": 0, "diameter": 0.4 }, { "id": 1, "diameter": 0.6 }]
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        assert!(report.print.is_none());
+        let device = report.device.unwrap();
+        let nozzles = &device.nozzle.unwrap().info;
+        assert_eq!(nozzles.len(), 2);
+        assert_eq!(nozzles[1].id, 1);
+    }
+
+    #[test]
+    fn test_deserialize_permissive_bool_variants() {
+        // Bool true
+        let r: TelemetryReport =
+            serde_json::from_str(r#"{ "print": { "sdcard": true } }"#).unwrap();
+        assert!(r.print.unwrap().sdcard);
+
+        // Bool false
+        let r: TelemetryReport =
+            serde_json::from_str(r#"{ "print": { "sdcard": false } }"#).unwrap();
+        assert!(!r.print.unwrap().sdcard);
+
+        // Int 1
+        let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": 1 } }"#).unwrap();
+        assert!(r.print.unwrap().sdcard);
+
+        // Int 0
+        let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": 0 } }"#).unwrap();
+        assert!(!r.print.unwrap().sdcard);
+
+        // String "HAS_SDCARD_NORMAL"
+        let r: TelemetryReport =
+            serde_json::from_str(r#"{ "print": { "sdcard": "HAS_SDCARD_NORMAL" } }"#).unwrap();
+        assert!(r.print.unwrap().sdcard);
+
+        // String "TRUE"
+        let r: TelemetryReport =
+            serde_json::from_str(r#"{ "print": { "sdcard": "TRUE" } }"#).unwrap();
+        assert!(r.print.unwrap().sdcard);
+
+        // String "1"
+        let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": "1" } }"#).unwrap();
+        assert!(r.print.unwrap().sdcard);
+
+        // String other → false
+        let r: TelemetryReport =
+            serde_json::from_str(r#"{ "print": { "sdcard": "nope" } }"#).unwrap();
+        assert!(!r.print.unwrap().sdcard);
+
+        // Missing → default false
+        let r: TelemetryReport = serde_json::from_str(r#"{ "print": {} }"#).unwrap();
+        assert!(!r.print.unwrap().sdcard);
+    }
+
+    #[test]
+    fn test_parse_hex_string_variants() {
+        assert_eq!(
+            PrintTelemetry::parse_hex_string("0x00800000"),
+            Some(0x00800000)
+        );
+        assert_eq!(
+            PrintTelemetry::parse_hex_string("0X00800000"),
+            Some(0x00800000)
+        );
+        assert_eq!(
+            PrintTelemetry::parse_hex_string("00800000"),
+            Some(0x00800000)
+        );
+        assert_eq!(PrintTelemetry::parse_hex_string("ff"), Some(0xff));
+        assert_eq!(PrintTelemetry::parse_hex_string("zzzz"), None);
+        assert_eq!(PrintTelemetry::parse_hex_string(""), None);
+    }
+
+    #[test]
+    fn test_ethernet_active_bitmask() {
+        let json = r#"{ "print": { "home_flag": 262144 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert!(print.is_ethernet_active());
+
+        let json_off = r#"{ "print": { "home_flag": 0 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_off)
+            .unwrap()
+            .print
+            .unwrap();
+        assert!(!print.is_ethernet_active());
+
+        let json_missing = r#"{ "print": {} }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_missing)
+            .unwrap()
+            .print
+            .unwrap();
+        assert!(!print.is_ethernet_active());
+    }
+
+    #[test]
+    fn test_power_on_flag_deserialization() {
+        let json_true = r#"{ "print": { "power_on_flag": true } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_true)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.power_on_flag, Some(true));
+
+        let json_false = r#"{ "print": { "power_on_flag": false } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_false)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.power_on_flag, Some(false));
+
+        let json_missing = r#"{ "print": {} }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_missing)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.power_on_flag, None);
+    }
+
+    #[test]
+    fn test_total_layer_num_alias() {
+        // Wire name: total_layer_num
+        let json = r#"{ "print": { "total_layer_num": 42 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.total_layers, Some(42));
+
+        // Legacy name still works
+        let json2 = r#"{ "print": { "total_layers": 99 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json2)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.total_layers, Some(99));
+    }
+
+    #[test]
+    fn test_mc_percent_deserialization() {
+        let json = r#"{ "print": { "mc_percent": 100 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.mc_percent, Some(100));
+    }
+
+    #[test]
+    fn test_virtual_tray_deserialization() {
+        let json_data = r#"{
+            "print": {
+                "vt_tray": {
+                    "id": "254",
+                    "tray_type": "PLA",
+                    "tray_color": "FF0000FF",
+                    "nozzle_temp_max": "220",
+                    "nozzle_temp_min": "190",
+                    "tray_diameter": "1.75",
+                    "remain": 85,
+                    "k": 0.02,
+                    "n": 1,
+                    "cali_idx": -1,
+                    "tag_uid": "0000000000000000",
+                    "tray_uuid": "00000000000000000000000000000000"
+                }
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json_data)
+            .unwrap()
+            .print
+            .unwrap();
+        let vt = print.vt_tray.unwrap();
+        assert_eq!(vt.id.as_deref(), Some("254"));
+        assert_eq!(vt.tray_type.as_deref(), Some("PLA"));
+        assert_eq!(vt.tray_color.as_deref(), Some("FF0000FF"));
+        assert_eq!(vt.nozzle_temp_max.as_deref(), Some("220"));
+        assert_eq!(vt.remain, Some(85));
+        assert_eq!(vt.cali_idx, Some(-1));
+    }
+
+    #[test]
+    fn test_virtual_tray_empty() {
+        let json_data = r#"{
+            "print": {
+                "vt_tray": {
+                    "id": "254",
+                    "tray_type": "",
+                    "tray_color": "FFFFFF00",
+                    "remain": 0
+                }
+            }
+        }"#;
+        let vt = serde_json::from_str::<TelemetryReport>(json_data)
+            .unwrap()
+            .print
+            .unwrap()
+            .vt_tray
+            .unwrap();
+        assert_eq!(vt.tray_type.as_deref(), Some(""));
+        assert_eq!(vt.remain, Some(0));
+    }
+
+    #[test]
+    fn test_nozzle_info_standard_keys() {
+        let json_data = r#"{
+            "device": {
+                "nozzle": {
+                    "info": [{
+                        "id": 0,
+                        "diameter": 0.4,
+                        "tm": 300,
+                        "type": "hardened_steel",
+                        "sn": "SN123",
+                        "color_m": "FF0000",
+                        "fila_id": "GFA01"
+                    }]
+                }
+            }
+        }"#;
+        let nozzle = &serde_json::from_str::<TelemetryReport>(json_data)
+            .unwrap()
+            .device
+            .unwrap()
+            .nozzle
+            .unwrap()
+            .info[0];
+        assert_eq!(nozzle.id, 0);
+        assert_eq!(nozzle.tm, Some(300));
+        assert_eq!(nozzle.nozzle_type.as_deref(), Some("hardened_steel"));
+        assert_eq!(nozzle.sn.as_deref(), Some("SN123"));
+    }
+
+    #[test]
+    fn test_nozzle_info_idex_keys() {
+        let json_data = r#"{
+            "device": {
+                "nozzle": {
+                    "info": [{
+                        "id": 1,
+                        "diameter": 0.6,
+                        "max_temp": 350,
+                        "type": "stainless_steel",
+                        "serial_number": "IDEX-SN-456",
+                        "filament_colour": "00FF00",
+                        "filament_id": "GFB02"
+                    }]
+                }
+            }
+        }"#;
+        let nozzle = &serde_json::from_str::<TelemetryReport>(json_data)
+            .unwrap()
+            .device
+            .unwrap()
+            .nozzle
+            .unwrap()
+            .info[0];
+        assert_eq!(nozzle.id, 1);
+        assert_eq!(nozzle.max_temp, Some(350));
+        assert_eq!(nozzle.serial_number.as_deref(), Some("IDEX-SN-456"));
+        assert_eq!(nozzle.filament_colour.as_deref(), Some("00FF00"));
     }
 }

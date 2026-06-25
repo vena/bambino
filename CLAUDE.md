@@ -46,6 +46,16 @@ Public helper types (`PrintSpeed`, `CalibrationOption`) live alongside `PrinterC
 ### FTPS Client (`src/ftps/`)
 `BambuFtpsClient` implements implicit FTPS (port 990) over abstract `AsyncIo` + `TlsConnector` traits. The handshake sequence is: TLS wrap → greeting → USER/PASS → PBSZ 0 → PROT P (skipped for A1 via `uses_plaintext_ftps_data_channel()` quirk) → TYPE I. Data transfers negotiate passive ports via PASV. Uploads verify remote file size via SIZE after both 226 and 426 responses to catch SD card truncation and TLS 1.3 close races [REF-FTPS-CONN]. P2S and X2D models require TLS 1.2 enforcement — use `build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2())` when constructing the `TlsConnector` for FTPS. FTP response parsing accumulates multi-line bodies and enforces line length (`FTP_MAX_RESPONSE_LINE_BYTES`) and iteration (`FTP_MAX_RESPONSE_LINES`) limits.
 
+### Telemetry Types (`src/types/`)
+`TelemetryReport` is the top-level deserialization target for MQTT pushall/incremental messages. Key structural conventions:
+- **Temperature fields** are `Option<f64>` — the wire sends both integers (H2D) and floats (P1S/P1P/A1). `unpack_temperature(f64)` casts to `u32` internally before bit-shifting composite-packed values.
+- **`DeviceTelemetry`** appears at two wire locations: top-level `{"device": {...}}` for incremental updates, and nested inside `{"print": {"device": {...}}}` for pushall on H2/P2/X2 models. Both `TelemetryReport.device` and `PrintTelemetry.device` fields exist. CTC telemetry lives inside `DeviceTelemetry`, not `PrintTelemetry`.
+- **`IpcamTelemetry`** is nested as `print.ipcam` on the wire (not flat fields on `PrintTelemetry`).
+- **`AmsTray.id`** is `String` (wire sends `"0"`, not `0`). **`CtcInfo.temp`** is `u32` (composite-packed integers, not floats).
+- **`VirtualTray`** represents the external/virtual spool holder (`vt_tray`). All string-typed numeric fields (e.g., `nozzle_temp_max`) stay as `Option<String>` matching wire format.
+- `total_layers` has `#[serde(alias = "total_layer_num")]` for wire compatibility.
+- End-to-end deserialization is verified against `tests/mocks/P1S.json` (real wire capture).
+
 ### Reference Documentation (`reference/`)
 Protocol specs live in numbered markdown files. When adding or modifying commands, always verify field names and types against the reference docs — PLAN.md field names may be approximate.
 
