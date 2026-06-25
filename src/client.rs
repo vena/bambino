@@ -29,6 +29,7 @@ use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use crate::io::{AsyncIo, TlsConnector};
 use crate::models::BambuModel;
+use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{
     BambuMqttClient, GCodeRequest, MqttMessage, PrintJobConfig, StandardControlRequest,
 };
@@ -195,8 +196,14 @@ where
     Factory: FtpDataStreamFactory<RawIO>,
 {
     /// Increments and returns the next transaction/sequence identifier tracking commands.
+    ///
+    /// Wraps at `TASK_ID_MAX` (32-bit signed integer limit) to stay within firmware
+    /// parsing constraints [REF-MQTT-ENV].
     pub fn next_sequence_id(&mut self) -> u64 {
         self.sequence_counter = self.sequence_counter.wrapping_add(1);
+        if self.sequence_counter > TASK_ID_MAX {
+            self.sequence_counter = INITIAL_SEQUENCE_ID;
+        }
         self.sequence_counter
     }
 
@@ -211,10 +218,26 @@ where
         self.mqtt.publish_command(&payload).await
     }
 
-    /// Dispatches a manual G-code string encapsulated in a `gcode_line` JSON request [REF-MOTO-GCODE].
+    /// Dispatches a G-code string with model-aware safety validation [REF-MOTO-GCODE].
+    ///
+    /// Rejects commands that would be unsafe on the active model (e.g., partial-axis
+    /// homing on bed-on-Z platforms) or unsupported by its firmware. Use `send_gcode_raw()`
+    /// to bypass validation when you need unchecked access.
+    pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
+        let quirks = self.model.quirks();
+        if quirks.is_unsafe_homing_command(gcode_line) {
+            return Err(BambuError::ModelMismatch);
+        }
+        if quirks.is_unsupported_command(gcode_line) {
+            return Err(BambuError::ModelMismatch);
+        }
+        self.send_gcode_raw(gcode_line).await
+    }
+
+    /// Dispatches a raw G-code string without model safety checks [REF-MOTO-GCODE].
     ///
     /// Returns the MQTT packet identifier assigned to track publication delivery status.
-    pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
+    pub async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
         let req = GCodeRequest::new(gcode_line, seq);
         self.publish_request(&req).await
@@ -256,7 +279,7 @@ where
             "G28"
         };
 
-        self.send_gcode(gcode).await
+        self.send_gcode_raw(gcode).await
     }
 
     /// Dispatches a manual relative axis movement block.
@@ -280,10 +303,10 @@ where
             if gcode.is_empty() {
                 return Err(BambuError::ModelMismatch);
             }
-            self.send_gcode(&gcode).await
+            self.send_gcode_raw(&gcode).await
         } else {
             let gcode = format!("G91\nG0 {}{:.2} F{}\nG90", axis_upper, distance, feedrate);
-            self.send_gcode(&gcode).await
+            self.send_gcode_raw(&gcode).await
         }
     }
 
@@ -293,7 +316,7 @@ where
     /// the specified length of filament (in mm) at the designated feedrate (in mm/min).
     pub async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, BambuError> {
         let gcode = format!("M83\nG0 E{:.2} F{}", length, feedrate);
-        self.send_gcode(&gcode).await
+        self.send_gcode_raw(&gcode).await
     }
 
     // ------------------------------------------------------------------------
@@ -301,34 +324,72 @@ where
     // ------------------------------------------------------------------------
 
     /// Sets the target temperature of the build plate (bed) [REF-MOTO-GCODE].
+    ///
+    /// Values exceeding the model's maximum bed temperature are clamped automatically.
     pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
+        let max = self.model.quirks().bed_temp_max();
+        let target_temp = if target_temp > max {
+            log::warn!(
+                "Bed temperature {}°C exceeds model max {}°C, clamping",
+                target_temp,
+                max
+            );
+            max
+        } else {
+            target_temp
+        };
         let gcode = format!("M140 S{}", target_temp);
-        self.send_gcode(&gcode).await
+        self.send_gcode_raw(&gcode).await
     }
 
     /// Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
     ///
     /// * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on IDEX).
+    ///
+    /// Values exceeding the model's maximum nozzle temperature are clamped automatically.
     pub async fn set_nozzle_temperature(
         &mut self,
         nozzle_id: u8,
         target_temp: u16,
     ) -> Result<u16, BambuError> {
+        let max = self.model.quirks().nozzle_temp_max();
+        let target_temp = if target_temp > max {
+            log::warn!(
+                "Nozzle temperature {}°C exceeds model max {}°C, clamping",
+                target_temp,
+                max
+            );
+            max
+        } else {
+            target_temp
+        };
         let gcode = format!("M104 T{} S{}", nozzle_id, target_temp);
-        self.send_gcode(&gcode).await
+        self.send_gcode_raw(&gcode).await
     }
 
     /// Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
     ///
     /// **Chamber Temperature Safety Check [REF-THER-DECODE]:**
-    /// This is only supported on enclosed models equipped with active chamber heaters (such as X1E or P2S).
-    /// If issued to models without active chamber thermal capabilities, returns a capability mismatch error.
+    /// Only supported on models with active PTC chamber heaters (X1E, X2D, H2 series).
+    /// Models with passive chamber sensors but no heater (X1C, P2S) will return a capability
+    /// mismatch error — their firmware silently ignores M141.
     pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
-        if self.model.quirks().ignores_chamber_temperature() {
+        if !self.model.quirks().has_active_chamber_heater() {
             return Err(BambuError::ModelMismatch);
         }
+        let max = self.model.quirks().chamber_temp_max();
+        let target_temp = if target_temp > max {
+            log::warn!(
+                "Chamber temperature {}°C exceeds model max {}°C, clamping",
+                target_temp,
+                max
+            );
+            max
+        } else {
+            target_temp
+        };
         let gcode = format!("M141 S{}", target_temp);
-        self.send_gcode(&gcode).await
+        self.send_gcode_raw(&gcode).await
     }
 
     // ------------------------------------------------------------------------
@@ -361,7 +422,7 @@ where
         };
 
         let gcode = format!("M106 P{} S{}", port_id, pwm);
-        self.send_gcode(&gcode).await
+        self.send_gcode_raw(&gcode).await
     }
 
     /// Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
@@ -587,9 +648,11 @@ where
     }
 
     /// Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
+    ///
+    /// When `nozzle_offset_cali` is `None`, the model's quirks engine resolves the default.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
-        let req = crate::mqtt::ProjectFileRequest::from_config(config, seq);
+        let req = crate::mqtt::ProjectFileRequest::from_config(&config, seq, self.model);
         self.publish_request(&req).await
     }
 }

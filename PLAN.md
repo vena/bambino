@@ -180,28 +180,24 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ---
 
-## Phase 11: Client Coordinator (`src/client.rs`)
+<details>
+<summary>Phase 11: Client Coordinator — 6 fixes (2 correctness bugs), 6 new tests. Chamber guard, nozzle offset quirks default, temp clamping, safe G-code dispatch</summary>
 
-**Reference:** All chapters (orchestration layer)
-**Lines:** ~604
+**Files:** `src/client.rs`, `src/mqtt/commands.rs` (~650 lines)
 
-- [ ] Audit `PrinterClient` struct — are all fields necessary and correctly typed?
-- [ ] Verify `publish_request` helper — does serialization handle all command types correctly?
-- [ ] Check `next_sequence_id()` — is ID generation thread-safe? Does wrapping at `TASK_ID_MAX` work?
-- [ ] Audit every public method:
-  - [ ] `send_gcode()` — does it validate G-code? Does it check quirks for unsupported/unsafe commands?
-  - [ ] `set_print_speed()` — correct enum-to-protocol mapping?
-  - [ ] `set_bed_temperature()` / `set_nozzle_temperature()` — range validation?
-  - [ ] `control_light()` — correct LED control values?
-  - [ ] `start_print()` / `stop_print()` / `pause_print()` / `resume_print()`
-  - [ ] `start_print()` quirks integration: when `PrintJobConfig.nozzle_offset_cali` is `None`, apply `self.model.quirks().supports_nozzle_offset_calibration()` as the default before calling `ProjectFileRequest::from_config()`
-  - [ ] `select_filament()` / AMS operations
-  - [ ] Camera operations
-  - [ ] Calibration operations
-  - [ ] FTPS file operations
-- [ ] Verify error propagation — are errors from MQTT/FTPS/camera correctly surfaced?
-- [ ] Check for operations that should be mutually exclusive (e.g., printing while calibrating)
-- [ ] Audit connection lifecycle — connect, reconnect, disconnect, cleanup
+**Fixes:**
+- `set_chamber_temperature()`: guard changed from `ignores_chamber_temperature()` to `!has_active_chamber_heater()` — was allowing M141 on X1C and P2S (have sensor but no PTC heater, firmware silently ignores). Doc comment corrected to list X1E/X2D/H2 series as supported models
+- `ProjectFileRequest::from_config()` now takes `BambuModel` parameter and resolves `nozzle_offset_cali: None` via `model.quirks().supports_nozzle_offset_calibration()` — was defaulting to `false` via `unwrap_or(false)`, causing IDEX models (X2D, H2D, H2D Pro, H2C) to skip nozzle offset calibration by default
+- `send_gcode()` now validates against `is_unsafe_homing_command()` and `is_unsupported_command()` before dispatch. Raw escape hatch available via new `send_gcode_raw()` method. All internal callers (`home_axes`, `move_relative`, `extrude`, thermal setters, fan control) use `send_gcode_raw()` since they perform their own validation
+- `set_bed_temperature()`, `set_nozzle_temperature()`, `set_chamber_temperature()` now clamp to model-specific max values (`bed_temp_max()`, `nozzle_temp_max()`, `chamber_temp_max()`) with `log::warn` on clamp
+- `next_sequence_id()` wraps at `TASK_ID_MAX` (32-bit signed integer limit) instead of `u64::MAX` to stay within firmware parsing constraints [REF-MQTT-ENV]
+
+**Verified correct:** `PrinterClient` struct fields (all necessary, correctly typed), `publish_request` (uses `serde_json::to_vec` per convention, error mapping correct), `poll_telemetry` (clean delegation), `set_print_speed` (correct enum-to-string mapping), fan PWM calculation (no overflow), print lifecycle commands (pause/resume/stop — correct command strings), AMS operations (clean pass-through), K-profile priming (auto-prime + opt-out), error propagation (all paths correctly surface MQTT/serialization errors), connection lifecycle (coordinator wraps pre-connected clients, implicit cleanup via Drop), `home_axes` and `move_relative` (correct quirks integration), thread safety (`&mut self` on all mutation methods), `storage()` accessor (`Option<&mut>`, handles unattached FTPS), no mutually exclusive operation guards needed (firmware handles conflicts)
+
+**Tests added:** `test_send_gcode_rejects_unsafe_homing` (P1S bed-on-Z partial homing rejected), `test_send_gcode_raw_bypasses_safety` (raw escape hatch passes unsafe command through), `test_temperature_clamping` (bed/nozzle/chamber clamped to X1E model maxima), `test_nozzle_offset_cali_quirks_default_idex` (X2D auto-enables), `test_nozzle_offset_cali_quirks_default_single_nozzle` (P1S defaults to disabled), `test_nozzle_offset_cali_explicit_override` (explicit false overrides X2D quirks default)
+
+**Tests updated:** `test_thermal_guards_and_temperatures` — chamber temp positive case changed from X1C (no heater) to X1E (has PTC heater), added X1C negative case (sensor without heater correctly rejected)
+</details>
 
 ---
 
@@ -341,7 +337,7 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 | 8 | Camera | 3 | ~346 | **Complete** |
 | 9 | Diagnostics | 3 | ~591 | **Complete** |
 | 10 | Quirks Engine | 8 | ~820 | **Complete** |
-| 11 | Client Coordinator | 1 | ~604 | Not started |
+| 11 | Client Coordinator | 2 | ~650 | **Complete** |
 | 12 | CLI Tool | 7 | ~978 | Not started |
 | 13 | Test Infrastructure | 16+ | ~1398 | Not started |
 | 14 | Lint & Compatibility | — | — | Not started |

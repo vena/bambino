@@ -22,6 +22,8 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
+use crate::models::BambuModel;
+
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
 
 /// Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch
@@ -333,14 +335,18 @@ pub struct ProjectFileRequest {
 }
 
 impl ProjectFileRequest {
-    /// Constructs a print job request from a `PrintJobConfig` and an internal sequence ID.
+    /// Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
+    ///
+    /// When `nozzle_offset_cali` is `None`, defaults to the model's quirks-engine value
+    /// via `supports_nozzle_offset_calibration()` — enabling it automatically on IDEX
+    /// and tool-changer platforms.
     ///
     /// **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
     /// `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
     /// serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
     /// to treat the value as the physical carriage index (Target nozzle 1) instead of material
     /// routing parameters.
-    pub fn from_config(config: &PrintJobConfig, sequence_id: u64) -> Self {
+    pub fn from_config(config: &PrintJobConfig, sequence_id: u64, model: BambuModel) -> Self {
         let url = format!("ftp://{}", config.job_filename);
 
         let mapping = if config.use_ams {
@@ -348,6 +354,10 @@ impl ProjectFileRequest {
         } else {
             AmsMappingTable::Inactive(String::new())
         };
+
+        let nozzle_offset = config
+            .nozzle_offset_cali
+            .unwrap_or_else(|| model.quirks().supports_nozzle_offset_calibration());
 
         Self {
             print: ProjectFilePayload {
@@ -362,11 +372,7 @@ impl ProjectFileRequest {
                 bed_type: config.bed_type.clone(),
                 bed_leveling: config.bed_leveling,
                 extrude_cali_flag: if config.run_flow_calibration { 1 } else { 0 },
-                nozzle_offset_cali: if config.nozzle_offset_cali.unwrap_or(false) {
-                    1
-                } else {
-                    0
-                },
+                nozzle_offset_cali: if nozzle_offset { 1 } else { 0 },
                 vibration_cali: config.run_vibration_compensation,
                 layer_inspect: config.layer_inspect,
                 use_ams: config.use_ams,
@@ -810,7 +816,7 @@ mod tests {
             12345,
             "textured",
         );
-        let req = ProjectFileRequest::from_config(&config, 5000);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_mapping":"""#));
@@ -826,10 +832,55 @@ mod tests {
             "textured",
         )
         .with_ams(vec![0, -1, 1]);
-        let req = ProjectFileRequest::from_config(&config, 5000);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_mapping":[0,-1,1]"#));
+    }
+
+    #[test]
+    fn test_nozzle_offset_cali_quirks_default_idex() {
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        );
+        assert!(config.nozzle_offset_cali.is_none());
+
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::X2D);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""nozzle_offset_cali":1"#));
+    }
+
+    #[test]
+    fn test_nozzle_offset_cali_quirks_default_single_nozzle() {
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        );
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""nozzle_offset_cali":0"#));
+    }
+
+    #[test]
+    fn test_nozzle_offset_cali_explicit_override() {
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        )
+        .nozzle_offset_calibration(false);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::X2D);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""nozzle_offset_cali":0"#));
     }
 
     #[test]

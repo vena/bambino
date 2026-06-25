@@ -140,7 +140,7 @@ async fn test_thermal_guards_and_temperatures() {
         let json_nozzle = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_nozzle["print"]["param"], "M104 T0 S220\n");
 
-        // Active chamber temperature verification (CoreXY target)
+        // Active chamber temperature verification (X1E has active PTC heater)
         let json_chamber = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_chamber["print"]["param"], "M141 S45\n");
     });
@@ -150,24 +150,40 @@ async fn test_thermal_guards_and_temperatures() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client_x1c = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1C);
+    let mut client_x1e = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1E);
 
-    client_x1c
+    client_x1e
         .set_bed_temperature(60)
         .await
         .expect("Bed temp set failed");
-    client_x1c
+    client_x1e
         .set_nozzle_temperature(0, 220)
         .await
         .expect("Nozzle temp set failed");
 
-    // Chamber temperature should succeed on enclosed CoreXY models
-    client_x1c
+    // Chamber temperature should succeed on models with active PTC heaters
+    client_x1e
         .set_chamber_temperature(45)
         .await
         .expect("Chamber temp set failed");
 
-    // Open-frame model check
+    // X1C has a chamber sensor but no active heater — M141 must be rejected
+    let (client_stream_x1c, mut server_stream_x1c) = tokio::io::duplex(8192);
+    let broker_task_x1c = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_x1c).await;
+    });
+
+    let mqtt_client_x1c =
+        BambuMqttClient::connect(TokioIo(client_stream_x1c), "00M000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed for X1C");
+
+    let mut client_x1c = PrinterClient::new(mqtt_client_x1c, "00M000000000000", BambuModel::X1C);
+
+    let err_res = client_x1c.set_chamber_temperature(40).await;
+    assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
+
+    // Open-frame model check (A1 — no sensor, no heater)
     let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
     let broker_task_a1 = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_a1).await;
@@ -180,11 +196,11 @@ async fn test_thermal_guards_and_temperatures() {
 
     let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
-    // Chamber temperature targets on open-frame models must return capability mismatch
     let err_res = client_a1.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
 
-    broker_task.await.expect("X1C broker task panicked");
+    broker_task.await.expect("X1E broker task panicked");
+    broker_task_x1c.await.expect("X1C broker task panicked");
     broker_task_a1.await.expect("A1 broker task panicked");
 }
 
@@ -324,6 +340,113 @@ async fn test_peripheral_signals_and_climate_controls() {
         .set_buzzer_mode(2)
         .await
         .expect("Buzzer mode set failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+// ============================================================================
+// G-code Safety Validation Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_send_gcode_rejects_unsafe_homing() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Only safe G28 should arrive
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "G28\n");
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
+    let err = client.send_gcode("G28 Z").await;
+    assert!(matches!(err, Err(BambuError::ModelMismatch)));
+
+    // Safe bare G28 must pass
+    client
+        .send_gcode("G28")
+        .await
+        .expect("Safe G28 should pass");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_send_gcode_raw_bypasses_safety() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Raw mode should send the unsafe command through
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "G28 Z\n");
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // send_gcode_raw should bypass safety checks
+    client
+        .send_gcode_raw("G28 Z")
+        .await
+        .expect("Raw G-code should bypass safety");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_temperature_clamping() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Bed temp 500 should be clamped to X1E max (110)
+        let json_bed = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_bed["print"]["param"], "M140 S110\n");
+
+        // Nozzle temp 999 should be clamped to X1E max (320)
+        let json_nozzle = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_nozzle["print"]["param"], "M104 T0 S320\n");
+
+        // Chamber temp 200 should be clamped to X1E max (60)
+        let json_chamber = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_chamber["print"]["param"], "M141 S60\n");
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1E);
+
+    client
+        .set_bed_temperature(500)
+        .await
+        .expect("Bed temp clamp failed");
+    client
+        .set_nozzle_temperature(0, 999)
+        .await
+        .expect("Nozzle temp clamp failed");
+    client
+        .set_chamber_temperature(200)
+        .await
+        .expect("Chamber temp clamp failed");
 
     broker_task.await.expect("Broker task panicked");
 }
