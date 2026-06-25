@@ -41,6 +41,8 @@ pub(crate) const FTPS_UPLOAD_CHUNK_SIZE: usize = 65536;
 pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
 pub(crate) const FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD: u64 = 100_000_000;
 pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
+pub(crate) const FTP_MAX_RESPONSE_LINE_BYTES: usize = 4096;
+pub(crate) const FTP_MAX_RESPONSE_LINES: usize = 100;
 
 /// Factory trait used to establish standard TCP socket connections to passive ports.
 ///
@@ -140,6 +142,16 @@ where
         } else {
             // A1 series does not support TLS on passive channels due to ESP32 constraints.
             // Bypassing PROT P keeps the data channel in PROT C (Clear/Plaintext) while commands remain secure.
+        }
+
+        // Set binary transfer mode. RFC 959 defaults to ASCII which translates
+        // line endings, corrupting binary payloads like .3mf and .gcode files.
+        write_command(&mut control_stream, "TYPE I").await?;
+        let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+        if code != FTP_COMMAND_OK {
+            return Err(BambuError::ProtocolViolation(
+                "TYPE I binary mode configuration failed".into(),
+            ));
         }
 
         Ok(Self {
@@ -317,13 +329,13 @@ where
             drop(plain_data_socket);
         }
 
-        // Block-wait for transfer acknowledgment on the control socket
+        // Block-wait for transfer acknowledgment on the control socket.
+        // The 226 path is the standard success. The 426 path handles the TLS 1.3
+        // close-notify race on P2S/X2D models [REF-FTPS-CONN]. In both cases,
+        // verify via SIZE to catch silent SD card write truncation.
         let res = read_response(&mut self.control_stream, &mut ctrl_buf).await;
         match res {
             Ok((FTP_TRANSFER_COMPLETE, _)) | Ok((FTP_TRANSFER_ABORTED, _)) => {
-                // Verify the remote file size matches the expected upload length unconditionally.
-                // The 426 path handles the TLS 1.3 close-notify race on P2S/X2D models, but SIZE
-                // verification after 226 also catches silent SD card write truncation on all models.
                 let remote_size = self.get_file_size(remote_path).await?;
                 if remote_size == data.len() as u64 {
                     Ok(())
@@ -331,7 +343,8 @@ where
                     Err(BambuError::DiskWriteFailure)
                 }
             }
-            _ => Err(BambuError::DiskWriteFailure),
+            Ok((_, _)) => Err(BambuError::DiskWriteFailure),
+            Err(e) => Err(e),
         }
     }
 
@@ -491,6 +504,16 @@ where
 
         parse_pasv_port(&text)
     }
+
+    /// Sends a QUIT command and cleanly terminates the FTP session.
+    ///
+    /// Best-effort: errors during QUIT are silently ignored since the
+    /// connection is being torn down regardless.
+    pub async fn disconnect(&mut self) {
+        let _ = write_command(&mut self.control_stream, "QUIT").await;
+        let mut buf = Vec::new();
+        let _ = read_response(&mut self.control_stream, &mut buf).await;
+    }
 }
 
 // ============================================================================
@@ -499,11 +522,12 @@ where
 
 /// Sends a formatted ASCII FTP command string cleanly terminated with CRLF boundaries.
 async fn write_command<IO: AsyncIo>(stream: &mut IO, cmd: &str) -> Result<(), BambuError> {
-    let mut payload = String::from(cmd);
-    payload.push_str("\r\n");
-
     stream
-        .write_all(payload.as_bytes())
+        .write_all(cmd.as_bytes())
+        .await
+        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+    stream
+        .write_all(b"\r\n")
         .await
         .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
     stream
@@ -515,6 +539,8 @@ async fn write_command<IO: AsyncIo>(stream: &mut IO, cmd: &str) -> Result<(), Ba
 }
 
 /// Reads a line-by-line buffer stream incrementally up to the terminating LF character.
+///
+/// Enforces a maximum line length to prevent OOM from malformed server output.
 async fn read_line_raw<IO: AsyncIo>(
     stream: &mut IO,
     line_buf: &mut Vec<u8>,
@@ -531,6 +557,11 @@ async fn read_line_raw<IO: AsyncIo>(
         if b == b'\n' {
             break;
         }
+        if line_buf.len() >= FTP_MAX_RESPONSE_LINE_BYTES {
+            return Err(BambuError::ProtocolViolation(
+                "FTP response line exceeds maximum length".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -542,16 +573,26 @@ async fn read_line_raw<IO: AsyncIo>(
 /// * Multi-Line:
 ///   ```text
 ///   XYZ-Header description line\r\n
-///   XYZ-Another line\r\n
+///    Intermediate content lines\r\n
 ///   XYZ Termination line\r\n
 ///   ```
-/// This helper keeps reading line-buffers until the final terminal signature is parsed.
+/// Accumulates all response text across lines so multi-line body content (e.g., from STAT)
+/// is preserved in the returned string.
 async fn read_response<IO: AsyncIo>(
     stream: &mut IO,
     line_buf: &mut Vec<u8>,
 ) -> Result<(u16, String), BambuError> {
+    let mut accumulated = String::new();
+    let mut lines_read: usize = 0;
+
     loop {
         read_line_raw(stream, line_buf).await?;
+        lines_read += 1;
+        if lines_read > FTP_MAX_RESPONSE_LINES {
+            return Err(BambuError::ProtocolViolation(
+                "FTP response exceeded maximum line count".into(),
+            ));
+        }
         if line_buf.len() < 4 {
             continue;
         }
@@ -566,15 +607,21 @@ async fn read_response<IO: AsyncIo>(
         let separator = line_buf[3];
 
         if separator == b' ' {
-            // Found final terminal line for the response code
-            let text = core::str::from_utf8(&line_buf[4..])
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            return Ok((code, text));
+            let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+            if accumulated.is_empty() {
+                return Ok((code, text.to_string()));
+            }
+            if !text.is_empty() {
+                accumulated.push('\n');
+                accumulated.push_str(text);
+            }
+            return Ok((code, accumulated));
         } else if separator == b'-' {
-            // Multi-line continuation column. Keep looping.
-            continue;
+            let line_text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+            if !accumulated.is_empty() {
+                accumulated.push('\n');
+            }
+            accumulated.push_str(line_text);
         }
     }
 }
@@ -613,7 +660,13 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
                 "Failed to parse PORT_2 in PASV".into(),
             ))?;
 
-    Ok(p1 * FTPS_PASV_PORT_MULTIPLIER + p2)
+    let port = (p1 as u32) * (FTPS_PASV_PORT_MULTIPLIER as u32) + (p2 as u32);
+    if port > u16::MAX as u32 {
+        return Err(BambuError::ProtocolViolation(
+            "PASV port value out of range".into(),
+        ));
+    }
+    Ok(port as u16)
 }
 
 /// Utility capturing passive stream data up to socket EOF bounds.

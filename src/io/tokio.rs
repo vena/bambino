@@ -165,23 +165,33 @@ impl ServerCertVerifier for NoCertificateVerification {
     }
 }
 
-/// Builds an unsafe `ClientConfig` containing the `NoCertificateVerification` verifier.
+/// Builds an unsafe `ClientConfig` with configurable TLS version constraints.
 ///
-/// This provides standard support for local LAN mode printer handshakes
-/// without needing a pre-installed root trust anchor.
-pub fn build_unsafe_client_config() -> Arc<rustls::ClientConfig> {
+/// When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only. This is
+/// required for P2S and X2D models whose embedded vsFTPd servers fail on TLS 1.3
+/// session tickets [REF-FTPS-CONN].
+pub fn build_unsafe_client_config_with_options(force_tls_1_2: bool) -> Arc<rustls::ClientConfig> {
     let verifier = Arc::new(NoCertificateVerification);
 
-    // Configures client with Ring cryptographic provider, allowing self-signed handshakes.
     let provider = rustls::crypto::ring::default_provider();
+    let versions: &[&rustls::SupportedProtocolVersion] = if force_tls_1_2 {
+        &[&rustls::version::TLS12]
+    } else {
+        rustls::DEFAULT_VERSIONS
+    };
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_safe_default_protocol_versions()
+        .with_protocol_versions(versions)
         .expect("Protocols must be initialized successfully")
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
 
     Arc::new(config)
+}
+
+/// Builds an unsafe `ClientConfig` with default TLS version negotiation (TLS 1.2 + 1.3).
+pub fn build_unsafe_client_config() -> Arc<rustls::ClientConfig> {
+    build_unsafe_client_config_with_options(false)
 }
 
 /// TLS Secure connector wrapping Tokio-Rustls.

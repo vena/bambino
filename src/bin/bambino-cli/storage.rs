@@ -14,7 +14,9 @@ use tokio::net::TcpStream;
 
 use bambino::error::BambuError;
 use bambino::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
+use bambino::io::tokio::{
+    TokioTlsConnector, build_unsafe_client_config_with_options, to_socket_error,
+};
 use bambino::io::{SocketError, TokioIo};
 use bambino::models::resolve_model;
 
@@ -110,7 +112,7 @@ pub async fn run(
         ip
     );
 
-    let config = build_unsafe_client_config();
+    let config = build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2());
     let connector = tokio_rustls::TlsConnector::from(config);
     let tls_connector = TokioTlsConnector::new(connector);
 

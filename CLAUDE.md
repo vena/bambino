@@ -43,6 +43,9 @@ self.publish_request(&req).await
 `publish_request<T: Serialize>` handles serialization via `serde_json::to_vec` and publishes to MQTT in one step.
 Public helper types (`PrintSpeed`, `CalibrationOption`) live alongside `PrinterClient` in this module. `CalibrationOption` is a newtype bitmask supporting `BitOr` for combining calibration routines. `PrintJobConfig` (in `src/mqtt/commands.rs`, re-exported via `mqtt::PrintJobConfig`) is a builder struct for print job submission — use it with `start_print(&config)` instead of positional parameters. `clamp_task_id()` returns `u32` (not `String`).
 
+### FTPS Client (`src/ftps/`)
+`BambuFtpsClient` implements implicit FTPS (port 990) over abstract `AsyncIo` + `TlsConnector` traits. The handshake sequence is: TLS wrap → greeting → USER/PASS → PBSZ 0 → PROT P (skipped for A1 via `uses_plaintext_ftps_data_channel()` quirk) → TYPE I. Data transfers negotiate passive ports via PASV. Uploads verify remote file size via SIZE after both 226 and 426 responses to catch SD card truncation and TLS 1.3 close races [REF-FTPS-CONN]. P2S and X2D models require TLS 1.2 enforcement — use `build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2())` when constructing the `TlsConnector` for FTPS. FTP response parsing accumulates multi-line bodies and enforces line length (`FTP_MAX_RESPONSE_LINE_BYTES`) and iteration (`FTP_MAX_RESPONSE_LINES`) limits.
+
 ### Reference Documentation (`reference/`)
 Protocol specs live in numbered markdown files. When adding or modifying commands, always verify field names and types against the reference docs — PLAN.md field names may be approximate.
 

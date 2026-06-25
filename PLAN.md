@@ -118,25 +118,25 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 **Reference:** `02_ftps.md` [REF-FTPS-CONN]
 **Lines:** ~966
 
-- [ ] **`src/ftps/client.rs`** (~685 lines)
-  - [ ] Audit FTP command/response parsing — verify against [REF-FTPS-CONN]
-  - [ ] Check `FTP_*` constants against reference doc connection parameters
-  - [ ] Verify PASV mode port parsing (`parse_pasv_port`) — edge cases with malformed responses
-  - [ ] Audit TLS session reuse for data connections — does it match Bambu's FTPS behavior?
-  - [ ] Check file listing parsing — can malformed directory listings cause panics?
-  - [ ] Verify upload/download correctness — are partial transfers handled?
-  - [ ] Audit timeout handling during file transfers
-  - [ ] Check for off-by-one errors in buffer reads
-  - [ ] Verify the connection state machine — can commands be issued in wrong states?
+- [x] **`src/ftps/client.rs`** (~685 lines)
+  - [x] Audit FTP command/response parsing — verify against [REF-FTPS-CONN]. **Fixed:** `read_response` now accumulates multi-line response bodies (was discarding continuation lines, breaking STAT fallback). Added `FTP_MAX_RESPONSE_LINE_BYTES` (4096) guard to `read_line_raw` to prevent OOM. Added `FTP_MAX_RESPONSE_LINES` (100) iteration limit to `read_response` to prevent infinite loops on malformed input.
+  - [x] Check `FTP_*` constants against reference doc connection parameters — all match [REF-FTPS-CONN]. ✓
+  - [x] Verify PASV mode port parsing (`parse_pasv_port`) — edge cases with malformed responses. **Fixed:** arithmetic overflow on port computation now uses `u32` intermediate with range validation.
+  - [x] Audit TLS session reuse for data connections — matches Bambu's FTPS behavior. `TlsConnector` wraps each data channel. **Fixed:** P2S/X2D TLS 1.2 enforcement via `build_unsafe_client_config_with_options(force_tls_1_2)` driven by `enforce_ftps_tls_1_2()` quirk. CLI storage.rs updated.
+  - [x] Check file listing parsing — malformed listings gracefully skipped via `continue`. ✓
+  - [x] Verify upload/download correctness — uploads verified via SIZE after both 226 and 426 paths per [REF-FTPS-XFER]. **Fixed:** upload error propagation — network errors from `read_response` now propagate as `NetworkError` instead of being mapped to `DiskWriteFailure`.
+  - [x] Audit timeout handling during file transfers — timeouts rely on underlying socket/TLS layer. Post-upload 226 wait can take up to 300s per [REF-FTPS-FLUSH], handled by blocking on `read_response`. ✓
+  - [x] Check for off-by-one errors in buffer reads — chunked upload loop correctly handles `data.len()` boundary. ✓
+  - [x] Verify the connection state machine — sequential command/response pairs, no out-of-order risk. **Added:** `TYPE I` binary mode command during connect to prevent ASCII-mode line ending corruption per RFC 959. **Added:** `disconnect()` method sending `QUIT` for clean session teardown. **Fixed:** `write_command` no longer allocates a `String` per command — uses two `write_all` calls.
 
-- [ ] **`src/ftps/parser.rs`** (~267 lines)
-  - [ ] Audit FTP response parsing — are multi-line responses handled correctly?
-  - [ ] Check directory listing parsing against actual Bambu FTP output format
-  - [ ] Verify date/time parsing in directory listings
-  - [ ] Check for panics on malformed input — are all `.unwrap()` calls safe?
+- [x] **`src/ftps/parser.rs`** (~267 lines)
+  - [x] Audit FTP response parsing — multi-line responses now handled correctly (see `read_response` fix above). ✓
+  - [x] Check directory listing parsing against actual Bambu FTP output format — whitespace-insensitive tokenization via `split_whitespace()` matches [REF-FTPS-OPS] variable padding. Filenames with spaces correctly reconstructed via `join(" ")`. ✓
+  - [x] Verify date/time parsing in directory listings — temporal rollover heuristic correctly decrements year when parsed (month, day, hour, minute) tuple exceeds current time. ✓
+  - [x] Check for panics on malformed input — all parsing uses `and_then`/`ok()`/`unwrap_or()` with `continue` on failure. No `.unwrap()` calls on user input. ✓
 
-- [ ] **`src/ftps/mod.rs`** (~14 lines)
-  - [ ] Verify re-exports
+- [x] **`src/ftps/mod.rs`** (~14 lines)
+  - [x] Verify re-exports — `BambuFtpsClient`, `FtpDataStreamFactory`, `FtpFile`, `parse_unix_listing` all exported. ✓
 
 ---
 
@@ -422,7 +422,7 @@ These items span the entire codebase and should be checked after module-level re
 | 1 | Core Foundation | 3 | ~329 | **Complete** |
 | 2 | Platform I/O | 4 | ~475 | **Complete** |
 | 3 | MQTT | 3 | ~1470 | **Complete** |
-| 4 | FTPS | 3 | ~966 | Not started |
+| 4 | FTPS | 3 | ~966 | **Complete** |
 | 5 | Telemetry & Types | 2 | ~754 | Not started |
 | 6 | Discovery | 2 | ~555 | Not started |
 | 7 | AMS | 3 | ~510 | Not started |
