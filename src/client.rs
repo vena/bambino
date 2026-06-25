@@ -221,14 +221,10 @@ where
     /// Dispatches a G-code string with model-aware safety validation [REF-MOTO-GCODE].
     ///
     /// Rejects commands that would be unsafe on the active model (e.g., partial-axis
-    /// homing on bed-on-Z platforms) or unsupported by its firmware. Use `send_gcode_raw()`
-    /// to bypass validation when you need unchecked access.
+    /// homing on bed-on-Z platforms). Use `send_gcode_raw()` to bypass validation when
+    /// you need unchecked access.
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
-        let quirks = self.model.quirks();
-        if quirks.is_unsafe_homing_command(gcode_line) {
-            return Err(BambuError::ModelMismatch);
-        }
-        if quirks.is_unsupported_command(gcode_line) {
+        if self.model.quirks().is_unsafe_homing_command(gcode_line) {
             return Err(BambuError::ModelMismatch);
         }
         self.send_gcode_raw(gcode_line).await

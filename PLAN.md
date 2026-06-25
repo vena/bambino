@@ -188,7 +188,7 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 **Fixes:**
 - `set_chamber_temperature()`: guard changed from `ignores_chamber_temperature()` to `!has_active_chamber_heater()` — was allowing M141 on X1C and P2S (have sensor but no PTC heater, firmware silently ignores). Doc comment corrected to list X1E/X2D/H2 series as supported models
 - `ProjectFileRequest::from_config()` now takes `BambuModel` parameter and resolves `nozzle_offset_cali: None` via `model.quirks().supports_nozzle_offset_calibration()` — was defaulting to `false` via `unwrap_or(false)`, causing IDEX models (X2D, H2D, H2D Pro, H2C) to skip nozzle offset calibration by default
-- `send_gcode()` now validates against `is_unsafe_homing_command()` and `is_unsupported_command()` before dispatch. Raw escape hatch available via new `send_gcode_raw()` method. All internal callers (`home_axes`, `move_relative`, `extrude`, thermal setters, fan control) use `send_gcode_raw()` since they perform their own validation
+- `send_gcode()` now validates against `is_unsafe_homing_command()` before dispatch (rejects partial-axis homing on bed-on-Z models). Raw escape hatch available via new `send_gcode_raw()` method. All internal callers (`home_axes`, `move_relative`, `extrude`, thermal setters, fan control) use `send_gcode_raw()` since they perform their own validation
 - `set_bed_temperature()`, `set_nozzle_temperature()`, `set_chamber_temperature()` now clamp to model-specific max values (`bed_temp_max()`, `nozzle_temp_max()`, `chamber_temp_max()`) with `log::warn` on clamp
 - `next_sequence_id()` wraps at `TASK_ID_MAX` (32-bit signed integer limit) instead of `u64::MAX` to stay within firmware parsing constraints [REF-MQTT-ENV]
 
@@ -234,6 +234,7 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
   - [ ] Audit command dispatch — do CLI commands map to the correct client methods?
   - [ ] Check argument validation for user-provided values (temperatures, speeds, G-code)
   - [ ] Verify error messages are helpful
+  - [ ] Provide flag for sending through send_gcode_raw()
 
 - [ ] **`src/bin/bambino-cli/storage.rs`** (~260 lines)
   - [ ] Audit FTPS file operations — upload, download, list, delete
