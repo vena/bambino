@@ -43,14 +43,14 @@ use bambino::client::PrinterClient;
 use bambino::models::resolve_model;
 use bambino::mqtt::BambuMqttClient;
 use bambino::io::TokioIo;
-use bambino::io::tokio::{build_unsafe_client_config, TokioTlsConnector, TokioTimer};
+use bambino::io::tokio::{build_unsafe_client_config, TokioTlsConnector};
 
 // TLS + MQTT handshake
 let config = build_unsafe_client_config();
 let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 let tcp = tokio::net::TcpStream::connect("192.168.1.158:8883").await?;
 let tls = connector.connect("192.168.1.158", 8883, TokioIo(tcp)).await?;
-let mqtt = BambuMqttClient::connect::<TokioTimer>(tls, serial, access_code).await?;
+let mqtt = BambuMqttClient::connect(tls, serial, access_code).await?;
 
 let model = resolve_model(serial, None);
 let mut printer = PrinterClient::new(mqtt, serial, model);
