@@ -84,4 +84,8 @@ impl ModelQuirks for X2Quirks {
     fn chamber_temp_max(&self) -> u16 {
         X2D_CHAMBER_TEMP_MAX
     }
+
+    fn supports_airduct_mode(&self) -> bool {
+        true
+    }
 }

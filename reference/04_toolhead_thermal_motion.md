@@ -161,8 +161,9 @@ M620 R{global_tray_index}
 The high-level JSON command envelopes for controlling enclosure lighting, airduct directional dampers, and buzzer alarms (`ledctrl`, `set_airduct`, `print_option`, and `buzzer_ctrl`) are transmitted directly via the MQTTS API schemas documented in `[REF-MQTT-LIFECYCLE]`.
 
 *   **LED Systems**: Carriages and enclosures utilize dual physical light strips (`chamber_light` and `chamber_light2`) to provide illumination for camera-exposure and structural monitoring.
-*   **Airduct Climate Systems**: The damper actuators physically shift to redirect airflow. ModeId `0` (cooling) closes internal recirculation dampers to route hot air out through the filtration exhaust, while ModeId `1` (heating) closes exhaust flaps to seal the enclosure and leverage heat from the build plate or chamber heater.
-*   **Buzzer Alerting Systems**: The physical buzzer module operates under strict safety limits, allowing silent, triggered alarm, or attention beeping states depending on firmware events.
+*   **Airduct Climate Systems**: The damper actuators physically shift to redirect airflow. ModeId `0` (cooling) closes internal recirculation dampers to route hot air out through the filtration exhaust, while ModeId `1` (heating) closes exhaust flaps to seal the enclosure and leverage heat from the build plate or chamber heater. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`, `P2S`, `X2D` (confirmed by pybambu `Features.AIRDUCT_MODE`).
+*   **Prompt Sound Notifications**: Configures onboard speaker prompt sounds during user-facing events. Supported on: `A1`, `A1 Mini`, `A2L` (confirmed by Bambu Studio profiles `support_prompt_sound`).
+*   **Buzzer Alerting Systems**: The physical fire alarm buzzer module operates under strict safety limits, allowing silent, triggered alarm, or attention beeping states depending on firmware events. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C` (confirmed by pybambu `Features.FIRE_ALARM_BUZZER`).
 
 ---
 

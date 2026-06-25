@@ -80,4 +80,8 @@ impl ModelQuirks for P2Quirks {
     fn bed_temp_max(&self) -> u16 {
         P2S_BED_TEMP_MAX
     }
+
+    fn supports_airduct_mode(&self) -> bool {
+        true
+    }
 }

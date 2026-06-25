@@ -77,6 +77,10 @@ macro_rules! impl_a1_shared {
             fn bed_temp_max(&self) -> u16 {
                 $bed_max
             }
+
+            fn supports_prompt_sound(&self) -> bool {
+                true
+            }
         }
     };
 }

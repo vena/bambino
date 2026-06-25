@@ -299,22 +299,16 @@ async fn test_queue_lifecycle_control_blocks() {
 
 #[tokio::test]
 async fn test_peripheral_signals_and_climate_controls() {
+    // H2D supports airduct + buzzer
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
-        // Verify set_airduct_mode (set_airduct command, modeId = 0)
         let json_airduct = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_airduct["print"]["command"], "set_airduct");
         assert_eq!(json_airduct["print"]["modeId"], 0);
 
-        // Verify set_prompt_sound (print_option command, sound_enable = true)
-        let json_sound = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_sound["print"]["command"], "print_option");
-        assert_eq!(json_sound["print"]["sound_enable"], true);
-
-        // Verify set_buzzer_mode (buzzer_ctrl command, mode = 2)
         let json_buzzer = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_buzzer["print"]["command"], "buzzer_ctrl");
         assert_eq!(json_buzzer["print"]["mode"], 2);
@@ -325,23 +319,71 @@ async fn test_peripheral_signals_and_climate_controls() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client_h2d = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::H2D);
 
-    // Recirculate (cooling) damper path -> modeId = 0
-    client
+    client_h2d
         .set_airduct_mode(true)
         .await
         .expect("Airduct mode set failed");
-    client
-        .set_prompt_sound(true)
-        .await
-        .expect("Prompt sound set failed");
-    client
+    client_h2d
         .set_buzzer_mode(2)
         .await
         .expect("Buzzer mode set failed");
 
-    broker_task.await.expect("Broker task panicked");
+    broker_task.await.expect("H2D broker task panicked");
+
+    // A1 supports prompt sound
+    let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
+
+    let broker_task_a1 = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_a1).await;
+
+        let json_sound = read_publish_payload(&mut server_stream_a1).await;
+        assert_eq!(json_sound["print"]["command"], "print_option");
+        assert_eq!(json_sound["print"]["sound_enable"], true);
+    });
+
+    let mqtt_client_a1 =
+        BambuMqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed for A1");
+
+    let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
+
+    client_a1
+        .set_prompt_sound(true)
+        .await
+        .expect("Prompt sound set failed");
+
+    broker_task_a1.await.expect("A1 broker task panicked");
+
+    // P1S supports none of these
+    let (client_stream_p1s, mut server_stream_p1s) = tokio::io::duplex(8192);
+    let broker_task_p1s = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_p1s).await;
+    });
+
+    let mqtt_client_p1s =
+        BambuMqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed for P1S");
+
+    let mut client_p1s = PrinterClient::new(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
+
+    assert!(matches!(
+        client_p1s.set_airduct_mode(true).await,
+        Err(BambuError::ModelMismatch)
+    ));
+    assert!(matches!(
+        client_p1s.set_prompt_sound(true).await,
+        Err(BambuError::ModelMismatch)
+    ));
+    assert!(matches!(
+        client_p1s.set_buzzer_mode(1).await,
+        Err(BambuError::ModelMismatch)
+    ));
+
+    broker_task_p1s.await.expect("P1S broker task panicked");
 }
 
 // ============================================================================

@@ -124,6 +124,28 @@ pub trait ModelQuirks {
         false
     }
 
+    /// Returns true if the model has controllable airduct dampers for climate
+    /// mode switching (cooling vs heating recirculation) [REF-CLIM-FANS].
+    ///
+    /// Supported on: H2S, H2D, H2D Pro, H2C, P2S, X2D.
+    fn supports_airduct_mode(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the model has onboard speakers for prompt sound notifications.
+    ///
+    /// Supported on: A1, A1 Mini, A2L (confirmed by Bambu Studio profiles).
+    fn supports_prompt_sound(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the model has a physical fire alarm buzzer module.
+    ///
+    /// Supported on: H2S, H2D, H2D Pro, H2C (confirmed by pybambu).
+    fn supports_buzzer(&self) -> bool {
+        false
+    }
+
     /// Returns the maximum safe nozzle/hotend temperature in °C for this model.
     fn nozzle_temp_max(&self) -> u16;
 
@@ -309,6 +331,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 100);
         assert_eq!(q.chamber_temp_max(), 0);
+        assert!(!q.supports_airduct_mode());
+        assert!(q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -329,6 +354,9 @@ mod tests {
         assert!(!q.relative_z_move_gcode(300.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 80);
+        assert!(!q.supports_airduct_mode());
+        assert!(q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -349,6 +377,9 @@ mod tests {
         assert!(!q.relative_z_move_gcode(150.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 80);
+        assert!(!q.supports_airduct_mode());
+        assert!(q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -370,6 +401,9 @@ mod tests {
             assert_eq!(q.z_max(), 256.0);
             assert_eq!(q.nozzle_temp_max(), 300);
             assert_eq!(q.bed_temp_max(), 100);
+            assert!(!q.supports_airduct_mode());
+            assert!(!q.supports_prompt_sound());
+            assert!(!q.supports_buzzer());
         }
     }
 
@@ -393,6 +427,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 110);
         assert_eq!(q.chamber_temp_max(), 0);
+        assert!(q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -414,6 +451,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 0);
+        assert!(!q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -433,6 +473,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 320);
         assert_eq!(q.bed_temp_max(), 110);
         assert_eq!(q.chamber_temp_max(), 60);
+        assert!(!q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -454,6 +497,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(!q.supports_buzzer());
     }
 
     #[test]
@@ -473,6 +519,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(q.supports_buzzer());
     }
 
     #[test]
@@ -487,6 +536,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(q.supports_buzzer());
     }
 
     #[test]
@@ -500,6 +552,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(q.supports_buzzer());
     }
 
     #[test]
@@ -514,6 +569,9 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_airduct_mode());
+        assert!(!q.supports_prompt_sound());
+        assert!(q.supports_buzzer());
     }
 
     #[test]

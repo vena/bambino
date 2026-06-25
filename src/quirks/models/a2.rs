@@ -68,4 +68,8 @@ impl ModelQuirks for A2LQuirks {
     fn bed_temp_max(&self) -> u16 {
         A2L_BED_TEMP_MAX
     }
+
+    fn supports_prompt_sound(&self) -> bool {
+        true
+    }
 }

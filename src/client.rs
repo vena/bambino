@@ -429,7 +429,12 @@ where
     }
 
     /// Configures the active climate airduct damper mode (cooling vs heating recirculation) [REF-MQTT-LIFECYCLE].
+    ///
+    /// Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
     pub async fn set_airduct_mode(&mut self, recirculate_air: bool) -> Result<u16, BambuError> {
+        if !self.model.quirks().supports_airduct_mode() {
+            return Err(BambuError::ModelMismatch);
+        }
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::AirductRequest::new(recirculate_air, seq);
         self.publish_request(&req).await
@@ -437,8 +442,11 @@ where
 
     /// Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
     ///
-    /// Available on supported hardware architectures only (such as the A1 and H2D series).
+    /// Supported on models with onboard speakers (A1, A1 Mini, A2L).
     pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, BambuError> {
+        if !self.model.quirks().supports_prompt_sound() {
+            return Err(BambuError::ModelMismatch);
+        }
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq);
         self.publish_request(&req).await
@@ -447,7 +455,11 @@ where
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
     ///
     /// Buzzer mode codes map to: `0` (Silent/disarmed), `1` (Alarm triggered), `2` (Beeping attention).
+    /// Supported on models with a physical fire alarm buzzer (H2 series).
     pub async fn set_buzzer_mode(&mut self, mode_code: i32) -> Result<u16, BambuError> {
+        if !self.model.quirks().supports_buzzer() {
+            return Err(BambuError::ModelMismatch);
+        }
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::BuzzerRequest::new(mode_code, seq);
         self.publish_request(&req).await
@@ -648,7 +660,7 @@ where
     /// When `nozzle_offset_cali` is `None`, the model's quirks engine resolves the default.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, BambuError> {
         let seq = self.next_sequence_id();
-        let req = crate::mqtt::ProjectFileRequest::from_config(&config, seq, self.model);
+        let req = crate::mqtt::ProjectFileRequest::from_config(config, seq, self.model);
         self.publish_request(&req).await
     }
 }

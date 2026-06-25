@@ -94,6 +94,14 @@ macro_rules! impl_h2_shared {
             fn chamber_temp_max(&self) -> u16 {
                 H2_CHAMBER_TEMP_MAX
             }
+
+            fn supports_airduct_mode(&self) -> bool {
+                true
+            }
+
+            fn supports_buzzer(&self) -> bool {
+                true
+            }
         }
     };
 }

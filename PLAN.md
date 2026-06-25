@@ -181,9 +181,9 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 ---
 
 <details>
-<summary>Phase 11: Client Coordinator — 6 fixes (2 correctness bugs), 6 new tests. Chamber guard, nozzle offset quirks default, temp clamping, safe G-code dispatch</summary>
+<summary>Phase 11: Client Coordinator — 9 fixes (2 correctness bugs, 3 missing capability guards), 6 new tests. Chamber guard, nozzle offset quirks default, temp clamping, safe G-code dispatch, peripheral capability gates</summary>
 
-**Files:** `src/client.rs`, `src/mqtt/commands.rs` (~650 lines)
+**Files:** `src/client.rs`, `src/mqtt/commands.rs`, `src/quirks/mod.rs`, `src/quirks/models/{a1,a2,p2,x2,h2}.rs`, `reference/04_toolhead_thermal_motion.md`, `MODEL_MATRIX.md` (~650 lines)
 
 **Fixes:**
 - `set_chamber_temperature()`: guard changed from `ignores_chamber_temperature()` to `!has_active_chamber_heater()` — was allowing M141 on X1C and P2S (have sensor but no PTC heater, firmware silently ignores). Doc comment corrected to list X1E/X2D/H2 series as supported models
@@ -191,12 +191,18 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 - `send_gcode()` now validates against `is_unsafe_homing_command()` before dispatch (rejects partial-axis homing on bed-on-Z models). Raw escape hatch available via new `send_gcode_raw()` method. All internal callers (`home_axes`, `move_relative`, `extrude`, thermal setters, fan control) use `send_gcode_raw()` since they perform their own validation
 - `set_bed_temperature()`, `set_nozzle_temperature()`, `set_chamber_temperature()` now clamp to model-specific max values (`bed_temp_max()`, `nozzle_temp_max()`, `chamber_temp_max()`) with `log::warn` on clamp
 - `next_sequence_id()` wraps at `TASK_ID_MAX` (32-bit signed integer limit) instead of `u64::MAX` to stay within firmware parsing constraints [REF-MQTT-ENV]
+- Added three new `ModelQuirks` methods and gated corresponding client methods:
+  - `supports_airduct_mode()` → `set_airduct_mode()` now rejects unsupported models. Supported on: H2S, H2D, H2D Pro, H2C, P2S, X2D (confirmed by pybambu `Features.AIRDUCT_MODE`)
+  - `supports_prompt_sound()` → `set_prompt_sound()` now rejects unsupported models. Supported on: A1, A1 Mini, A2L (confirmed by Bambu Studio profiles `support_prompt_sound`)
+  - `supports_buzzer()` → `set_buzzer_mode()` now rejects unsupported models. Supported on: H2S, H2D, H2D Pro, H2C (confirmed by pybambu `Features.FIRE_ALARM_BUZZER`)
+
+**Cross-reference sources:** Bambu Studio official profiles (github.com/bambulab/BambuStudio), OrcaSlicer profiles (github.com/OrcaSlicer/OrcaSlicer), pybambu (ha-bambulab `models.py`). Prompt sound: Bambu Studio is first-party authority — only A1/A1 Mini/A2L. pybambu's broader list (H2/P2S/X2D) is gated on firmware encryption state we don't track
 
 **Verified correct:** `PrinterClient` struct fields (all necessary, correctly typed), `publish_request` (uses `serde_json::to_vec` per convention, error mapping correct), `poll_telemetry` (clean delegation), `set_print_speed` (correct enum-to-string mapping), fan PWM calculation (no overflow), print lifecycle commands (pause/resume/stop — correct command strings), AMS operations (clean pass-through), K-profile priming (auto-prime + opt-out), error propagation (all paths correctly surface MQTT/serialization errors), connection lifecycle (coordinator wraps pre-connected clients, implicit cleanup via Drop), `home_axes` and `move_relative` (correct quirks integration), thread safety (`&mut self` on all mutation methods), `storage()` accessor (`Option<&mut>`, handles unattached FTPS), no mutually exclusive operation guards needed (firmware handles conflicts)
 
 **Tests added:** `test_send_gcode_rejects_unsafe_homing` (P1S bed-on-Z partial homing rejected), `test_send_gcode_raw_bypasses_safety` (raw escape hatch passes unsafe command through), `test_temperature_clamping` (bed/nozzle/chamber clamped to X1E model maxima), `test_nozzle_offset_cali_quirks_default_idex` (X2D auto-enables), `test_nozzle_offset_cali_quirks_default_single_nozzle` (P1S defaults to disabled), `test_nozzle_offset_cali_explicit_override` (explicit false overrides X2D quirks default)
 
-**Tests updated:** `test_thermal_guards_and_temperatures` — chamber temp positive case changed from X1C (no heater) to X1E (has PTC heater), added X1C negative case (sensor without heater correctly rejected)
+**Tests updated:** `test_thermal_guards_and_temperatures` — chamber temp positive case changed from X1C (no heater) to X1E (has PTC heater), added X1C negative case (sensor without heater correctly rejected). `test_peripheral_signals_and_climate_controls` — split by model: H2D for airduct+buzzer, A1 for prompt sound, P1S for negative cases (all three rejected). All per-model quirks tests updated with `supports_airduct_mode`, `supports_prompt_sound`, `supports_buzzer` assertions
 </details>
 
 ---
