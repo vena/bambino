@@ -203,6 +203,12 @@ pub struct HmsEntry {
     pub attr: u32,
     /// Packed code word encoding fault category and error index.
     pub code: u32,
+    /// Seconds since boot when the alert was raised (present on X2/H2/P2 models).
+    #[serde(default)]
+    pub ts_boot: Option<u64>,
+    /// UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
+    #[serde(default)]
+    pub ts_unix: Option<String>,
 }
 
 /// Top-level AMS status wrapper containing the units array and bus-wide metadata [REF-AMS-DECODE].

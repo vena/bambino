@@ -219,6 +219,12 @@ Add `-v` for protocol-level debug output, or set `BAMBU_VERBOSE=1`.
 - **IP** and **Serial** — `bambino-cli discover` will show them
 - **Access Code** — on the printer's LCD under Network > LAN Mode
 
+## Firmware quirks
+
+### K-Profile priming
+
+The firmware ignores the first `extrusion_cali_get` command received after connecting. `PrinterClient::get_k_profiles()` handles this automatically by sending a throwaway priming request before the real query. If you manage priming yourself or target firmware that doesn't need it, call `set_k_profile_primed(true)` to skip the automatic prime.
+
 ## Acknowledgements
 
 Bambino would not have been possible without the reverse-engineering work of other excellent projects.

@@ -129,28 +129,25 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 **Deferred to Phase 10:** `CameraProtocol` enum is unused internally — `camera_stream_port() -> u16` returns raw port numbers instead of the type-safe enum. Integrate `CameraProtocol` into `ModelQuirks` trait.
 </details>
 
----
+<details>
+<summary>Phase 9: Diagnostics — 6 fixes, 11 new tests. K-profile priming, response type, HmsEntry timestamps</summary>
 
-## Phase 9: Diagnostics (`src/diagnostics/`)
+**Files:** `src/diagnostics/hms.rs`, `kprofile.rs`, `mod.rs`, `src/types/telemetry.rs`, `src/client.rs` (~591 lines)
 
-**Reference:** `07_diagnostics_hms.md` [REF-DIAG-HMS]
-**Lines:** ~591
+**Fixes:**
+- `KProfileEntry.n_coef`: added `skip_serializing_if = "Option::is_none"` — was serializing `None` as `null` to firmware instead of omitting the field
+- `decode_print_error`: removed dead `hex_val.len() != 8` check (format! always produces 8 chars for u32), replaced string-slicing with mathematical short_code computation
+- K-profile priming: added doc comment to `ExtrusionCaliGetRequest` warning about firmware quirk [REF-DIAG-KPROF §7.3], added `PrinterClient::get_k_profiles()` with auto-prime and `set_k_profile_primed()` opt-out
+- Added `ExtrusionCaliGetResponse` / `ExtrusionCaliGetResponsePayload` for deserializing printer's profile database reply
+- Added `ts_boot: Option<u64>` and `ts_unix: Option<String>` to `HmsEntry` (present on X2/H2/P2 models, verified against pybambu MOCK-X2D.json)
+- Updated `mod.rs` re-exports to include `ExtrusionCaliGetResponse`
 
-- [ ] **`src/diagnostics/hms.rs`** (~224 lines)
-  - [ ] Audit HMS code decoding — verify bitmask structure against [REF-DIAG-HMS]
-  - [ ] Check severity level parsing
-  - [ ] Verify module ID and sub-module ID extraction
-  - [ ] Check HMS code-to-human-readable message mapping (if any)
-  - [ ] Verify integration with `PrintTelemetry` HMS fields
+**Verified correct:** HMS bitmask structure (attr_high/low, code_high/low), wiki key format (underscore-delimited), short-code format (attr_high + code_low), severity extraction `(attr >> 8) & 0x0F`, module ID `(attr >> 24) & 0xFF`, fault threshold `0x4000`, cancel echo filtering, all kprofile command field names and envelope structures, setting ID validation, `setting_id` intentionally absent from `ExtrusionCaliSelPayload`, CLI HMS integration in `monitor.rs`
 
-- [ ] **`src/diagnostics/kprofile.rs`** (~346 lines)
-  - [ ] Audit K-profile command construction — verify field names and structure
-  - [ ] Check calibration data parsing
-  - [ ] Verify the Payload+Request pattern is followed correctly
-  - [ ] Check numeric precision — are floating-point comparisons safe?
+**Tests added:** all severity levels (Fatal/Serious/Warning/Info/Unknown), cancel echo A (`0300_400C`), print_error cancel echo A+B, print_error status step, real X2D HMS entry (severity=6→Unknown), real MISC HMS entry (module=0x0C, Warning), standard+IDEX delete JSON serialization, `n_coef` None omission + Some inclusion, response deserialization
 
-- [ ] **`src/diagnostics/mod.rs`** (~21 lines)
-  - [ ] Verify re-exports
+**CLAUDE.md:** Added Diagnostics architecture section. **README.md:** Added Firmware quirks section with K-profile priming.
+</details>
 
 ---
 
@@ -347,7 +344,7 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 | 6 | Discovery | 2 | ~555 | **Complete** |
 | 7 | AMS | 3 | ~510 | **Complete** |
 | 8 | Camera | 3 | ~346 | **Complete** |
-| 9 | Diagnostics | 3 | ~591 | Not started |
+| 9 | Diagnostics | 3 | ~591 | **Complete** |
 | 10 | Quirks Engine | 8 | ~820 | Not started |
 | 11 | Client Coordinator | 1 | ~604 | Not started |
 | 12 | CLI Tool | 7 | ~978 | Not started |

@@ -159,6 +159,7 @@ where
     serial: String,
     model: BambuModel,
     sequence_counter: u64,
+    k_profile_primed: bool,
 }
 
 // ============================================================================
@@ -177,6 +178,7 @@ where
             serial: String::from(serial),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
+            k_profile_primed: false,
         }
     }
 }
@@ -507,6 +509,35 @@ where
         self.publish_request(&req).await
     }
 
+    /// Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
+    ///
+    /// Automatically sends a priming request on the first call after connection, because the
+    /// firmware silently ignores the initial `extrusion_cali_get` command. Use
+    /// `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
+    ///
+    /// The response arrives asynchronously via `poll_telemetry()` — deserialize it with
+    /// `ExtrusionCaliGetResponse`.
+    pub async fn get_k_profiles(&mut self) -> Result<u16, BambuError> {
+        if !self.k_profile_primed {
+            let prime_seq = self.next_sequence_id();
+            let prime_req = crate::diagnostics::ExtrusionCaliGetRequest::new(prime_seq);
+            self.publish_request(&prime_req).await?;
+            self.k_profile_primed = true;
+        }
+
+        let seq = self.next_sequence_id();
+        let req = crate::diagnostics::ExtrusionCaliGetRequest::new(seq);
+        self.publish_request(&req).await
+    }
+
+    /// Controls whether `get_k_profiles()` sends an automatic priming request.
+    ///
+    /// Set to `true` to skip the firmware priming quirk — useful if you handle priming
+    /// yourself or target firmware that does not require it.
+    pub fn set_k_profile_primed(&mut self, primed: bool) {
+        self.k_profile_primed = primed;
+    }
+
     // ------------------------------------------------------------------------
     // Error, Speed & Calibration Helpers
     // ------------------------------------------------------------------------
@@ -587,6 +618,7 @@ where
             serial: String::from(serial),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
+            k_profile_primed: false,
         }
     }
 

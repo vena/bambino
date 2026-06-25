@@ -59,7 +59,7 @@ pub struct KProfileEntry {
     /// Calibrated Linear Advance constant serialized as a float string.
     pub k_value: String,
     /// Extrusion coefficient parameters.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub n_coef: Option<String>,
     /// Secure 19-character unique setting identifier.
     pub setting_id: String,
@@ -76,6 +76,14 @@ pub struct ExtrusionCaliGetPayload {
 }
 
 /// JSON request wrapper to trigger a complete dump of the stored calibration database.
+///
+/// # Firmware Quirk: Priming Required [REF-DIAG-KPROF]
+///
+/// The firmware ignores the first `extrusion_cali_get` command received after MQTTS
+/// connection establishment. A dummy "priming" request must be sent first before the
+/// real query will receive a response. `PrinterClient::get_k_profiles()` handles this
+/// automatically — use `set_k_profile_primed(true)` to opt out if you manage priming
+/// yourself.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliGetRequest {
     pub print: ExtrusionCaliGetPayload,
@@ -90,6 +98,31 @@ impl ExtrusionCaliGetRequest {
             },
         }
     }
+}
+
+// ============================================================================
+// 2b. Query Calibration Database Response (extrusion_cali_get reply)
+// ============================================================================
+
+/// Payload envelope returned by the printer in response to `extrusion_cali_get`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExtrusionCaliGetResponsePayload {
+    /// Echo of the command name (`"extrusion_cali_get"`).
+    pub command: String,
+    /// Echo of the original request sequence identifier.
+    pub sequence_id: String,
+    /// Nozzle diameter filter applied to the returned profile set.
+    #[serde(default)]
+    pub nozzle_diameter: Option<String>,
+    /// Complete array of stored calibration profiles matching the active nozzle.
+    #[serde(default)]
+    pub filaments: Vec<KProfileEntry>,
+}
+
+/// JSON response wrapper containing the printer's stored calibration profile database.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExtrusionCaliGetResponse {
+    pub print: ExtrusionCaliGetResponsePayload,
 }
 
 // ============================================================================
@@ -342,5 +375,116 @@ mod tests {
         assert!(json.contains(r#""nozzle_diameter":"0.4""#));
         // setting_id must be absent to prevent database mislinking
         assert!(!json.contains("setting_id"));
+    }
+
+    #[test]
+    fn test_standard_cali_del_json() {
+        let entry = StandardCaliDelEntry {
+            cali_idx: 4,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            setting_id: "PF12345678901234567".into(),
+        };
+        let req = StandardCaliDelRequest::new(entry, 50003).unwrap();
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"extrusion_cali_del"#));
+        assert!(json.contains(r#""cali_idx":4"#));
+        assert!(json.contains(r#""setting_id":"PF12345678901234567""#));
+        assert!(json.contains(r#""sequence_id":"50003""#));
+    }
+
+    #[test]
+    fn test_standard_cali_del_invalid_id() {
+        let entry = StandardCaliDelEntry {
+            cali_idx: 4,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            setting_id: "PFUS9be9e18f81828a".into(),
+        };
+        assert!(StandardCaliDelRequest::new(entry, 50003).is_err());
+    }
+
+    #[test]
+    fn test_idex_cali_del_json() {
+        let entry = IdexCaliDelEntry {
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            extruder_id: 0,
+        };
+        let req = IdexCaliDelRequest::new(entry, 50004);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"extrusion_cali_del"#));
+        assert!(json.contains(r#""extruder_id":0"#));
+        assert!(json.contains(r#""nozzle_id":"HS00-0.4""#));
+        assert!(json.contains(r#""sequence_id":"50004""#));
+        // IDEX deletion must not contain setting_id
+        assert!(!json.contains("setting_id"));
+    }
+
+    #[test]
+    fn test_n_coef_none_omitted_from_json() {
+        let profile = KProfileEntry {
+            cali_idx: -1,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            extruder_id: 0,
+            name: "Test".into(),
+            k_value: "0.022".into(),
+            n_coef: None,
+            setting_id: "PF12345678901234567".into(),
+        };
+        let json = serde_json::to_string(&profile).unwrap();
+        assert!(
+            !json.contains("n_coef"),
+            "None n_coef should be omitted, not sent as null"
+        );
+    }
+
+    #[test]
+    fn test_n_coef_some_included_in_json() {
+        let profile = KProfileEntry {
+            cali_idx: -1,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            extruder_id: 0,
+            name: "Test".into(),
+            k_value: "0.022".into(),
+            n_coef: Some("0.000000".into()),
+            setting_id: "PF12345678901234567".into(),
+        };
+        let json = serde_json::to_string(&profile).unwrap();
+        assert!(json.contains(r#""n_coef":"0.000000""#));
+    }
+
+    #[test]
+    fn test_extrusion_cali_get_response_deserialization() {
+        let json = r#"{
+            "print": {
+                "command": "extrusion_cali_get",
+                "sequence_id": "50001",
+                "nozzle_diameter": "0.4",
+                "filaments": [{
+                    "cali_idx": 4,
+                    "filament_id": "GFA01",
+                    "nozzle_diameter": "0.4",
+                    "nozzle_id": "HS00-0.4",
+                    "extruder_id": 0,
+                    "name": "My Custom PLA Matte",
+                    "k_value": "0.022000",
+                    "n_coef": "0.000000",
+                    "setting_id": "PF12345678901234567"
+                }]
+            }
+        }"#;
+        let resp: ExtrusionCaliGetResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.print.nozzle_diameter, Some("0.4".into()));
+        assert_eq!(resp.print.filaments.len(), 1);
+        assert_eq!(resp.print.filaments[0].cali_idx, 4);
+        assert_eq!(resp.print.filaments[0].k_value, "0.022000");
+        assert_eq!(resp.print.filaments[0].n_coef, Some("0.000000".into()));
     }
 }

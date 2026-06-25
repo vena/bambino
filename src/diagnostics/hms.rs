@@ -131,13 +131,11 @@ pub fn decode_print_error(print_error: u32) -> Option<DecodedPrintError> {
         return None;
     }
 
-    // Convert decimal representation to formatted 8-character hex equivalent
-    let hex_val = format!("{:08X}", print_error);
-    if hex_val.len() != 8 {
-        return None;
-    }
-
-    let short_code = format!("{}_{}", &hex_val[0..4], &hex_val[4..8]);
+    let short_code = format!(
+        "{:04X}_{:04X}",
+        (print_error >> 16) & 0xFFFF,
+        print_error & 0xFFFF
+    );
 
     // Unpack mathematically to prevent overflow hazards during string parsing [REF-DIAG-HMS]
     let module_id = ((print_error >> 24) & 0xFF) as u8;
@@ -218,7 +216,80 @@ mod tests {
 
     #[test]
     fn test_print_error_zero_value() {
-        // Register value of 0 means no active error condition
         assert!(decode_print_error(0).is_none());
+    }
+
+    #[test]
+    fn test_all_severity_levels() {
+        for (raw, expected) in [
+            (1u32, HmsSeverity::Fatal),
+            (2, HmsSeverity::Serious),
+            (3, HmsSeverity::Warning),
+            (4, HmsSeverity::Info),
+            (0, HmsSeverity::Unknown),
+            (5, HmsSeverity::Unknown),
+            (0x0F, HmsSeverity::Unknown),
+        ] {
+            let attr = raw << 8;
+            assert_eq!(HmsSeverity::from_attr(attr), expected, "raw severity {raw}");
+        }
+    }
+
+    #[test]
+    fn test_cancel_echo_a_exclusion() {
+        // Cancel echo A: short_code "0300_400C"
+        // attr_high = 0x0300, code_low = 0x400C
+        let attr: u32 = 0x03000200;
+        let code: u32 = 0x0001400C;
+
+        let decoded = decode_hms_alert(attr, code);
+        assert_eq!(decoded.short_code, "0300_400C");
+        assert!(!decoded.is_genuine_fault);
+    }
+
+    #[test]
+    fn test_print_error_cancel_echo_a() {
+        // print_error = 0x0300400C -> short_code "0300_400C"
+        let decoded = decode_print_error(0x0300400C).unwrap();
+        assert_eq!(decoded.short_code, "0300_400C");
+        assert!(!decoded.is_genuine_fault);
+    }
+
+    #[test]
+    fn test_print_error_cancel_echo_b() {
+        // print_error = 0x0500400E -> short_code "0500_400E"
+        let decoded = decode_print_error(0x0500400E).unwrap();
+        assert_eq!(decoded.short_code, "0500_400E");
+        assert!(!decoded.is_genuine_fault);
+    }
+
+    #[test]
+    fn test_print_error_status_step_not_genuine() {
+        // code_low = 0x0007 < 0x4000 -> status step
+        let decoded = decode_print_error(0x03000007).unwrap();
+        assert_eq!(decoded.short_code, "0300_0007");
+        assert!(!decoded.is_genuine_fault);
+    }
+
+    #[test]
+    fn test_real_x2d_hms_entry() {
+        // From pybambu MOCK-X2D.json: attr=83887616 code=131184
+        let decoded = decode_hms_alert(83887616, 131184);
+        assert_eq!(decoded.wiki_key, "0500_0600_0002_0070");
+        assert_eq!(decoded.short_code, "0500_0070");
+        assert_eq!(decoded.module_id, 0x05);
+        assert_eq!(decoded.severity, HmsSeverity::Unknown);
+        assert!(!decoded.is_genuine_fault);
+    }
+
+    #[test]
+    fn test_real_misc_hms_entry() {
+        // From pybambu MOCK-MISC.json: attr=201327360 code=196615
+        let decoded = decode_hms_alert(201327360, 196615);
+        assert_eq!(decoded.wiki_key, "0C00_0300_0003_0007");
+        assert_eq!(decoded.short_code, "0C00_0007");
+        assert_eq!(decoded.module_id, 0x0C);
+        assert_eq!(decoded.severity, HmsSeverity::Warning);
+        assert!(!decoded.is_genuine_fault);
     }
 }
