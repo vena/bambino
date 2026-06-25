@@ -1,17 +1,16 @@
-//! # Camera & Video Streaming Systems Module
+//! # Camera & Video Streaming
 //!
-//! Exposes interfaces and parsers for extraction of video/image feeds from
-//! physical Bambu Lab printers [REF-CAM-RTSPS].
+//! Bambu Lab printers expose camera feeds through two protocols:
 //!
-//! Physical printers support camera data extraction via two distinct interfaces
-//! to accommodate varied onboard network processor workloads:
+//! 1. **Binary JPEG (Port 6000)** — A1 and P1 series. A lightweight binary protocol that
+//!    streams discrete JPEG frames over TLS. This module provides a complete client
+//!    ([`binary::BambuBinaryCameraStream`]) that handles the handshake and frame extraction.
 //!
-//! 1. **Implicit TLS RTSPS Stream (Port 322)**: Supported on higher-capability CoreXY and H2/IDEX
-//!    platforms. Employs H.264 video streams requiring standard RTSP handshakes and Digest
-//!    Authentication challenges.
-//! 2. **Proprietary Binary JPEG Stream (Port 6000)**: Supported on constrained microcontrollers
-//!    (such as ESP32-based P1 and A1 lines). Delivers discrete JPEG frames over a lightweight,
-//!    custom-wrapped TCP stream to minimize memory and processing overhead [REF-CAM-BINARY].
+//! 2. **RTSPS (Port 322)** — X1, X2, H2, and P2S series. An RTSP server behind implicit TLS
+//!    with Digest authentication. This module provides helper utilities ([`rtsps`]) for
+//!    integrating with external media frameworks (FFmpeg, GStreamer, VLC), including URL
+//!    generation, proxy URI rewriting, and P2S timestamp correction. It does **not** include
+//!    an RTSP client or TLS proxy — see the [`rtsps`] module docs for the proxy architecture.
 
 pub mod binary;
 pub mod rtsps;

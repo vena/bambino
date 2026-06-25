@@ -13,7 +13,7 @@
 //! 1. Verifies that incoming payloads conform strictly to JPEG magic start (`FF D8`) and
 //!    end (`FF D9`) markers before returning buffers to upstream applications to insulate
 //!    against decoding crashes.
-//! 2. Clamps incoming frame sizes to a reasonable upper boundary (5MB) to protect against
+//! 2. Clamps incoming frame sizes to a reasonable upper boundary (10MB) to protect against
 //!    unbounded memory allocation crashes on low-resource environments if transport stream
 //!    corruption occurs.
 
@@ -152,18 +152,71 @@ mod tests {
     fn test_handshake_packet_construction() {
         let packet = build_handshake_packet("ABCDEF12").unwrap();
 
-        // Validate magic header payload
         assert_eq!(packet[0..4], 64u32.to_le_bytes());
-
-        // Validate control command payload
         assert_eq!(packet[4..8], 12288u32.to_le_bytes());
-
-        // Validate Null-padded username block
         assert_eq!(&packet[16..20], b"bblp");
         assert_eq!(packet[20], 0);
-
-        // Validate Null-padded access code
         assert_eq!(&packet[48..56], b"ABCDEF12");
         assert_eq!(packet[56], 0);
+    }
+
+    #[test]
+    fn test_handshake_max_length_access_code() {
+        let code = "A".repeat(CAMERA_PASSWORD_MAX_LEN);
+        let packet = build_handshake_packet(&code).unwrap();
+        assert_eq!(
+            &packet[CAMERA_PASSWORD_OFFSET..CAMERA_PASSWORD_OFFSET + 32],
+            code.as_bytes()
+        );
+    }
+
+    #[test]
+    fn test_handshake_oversized_access_code() {
+        let code = "A".repeat(CAMERA_PASSWORD_MAX_LEN + 1);
+        let result = build_handshake_packet(&code);
+        assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    }
+
+    #[cfg(feature = "tokio")]
+    mod async_tests {
+        use super::*;
+        use crate::io::TokioIo;
+
+        fn make_frame_header(size: u32) -> Vec<u8> {
+            let mut header = vec![0u8; CAMERA_FRAME_HEADER_SIZE];
+            header[0..4].copy_from_slice(&size.to_le_bytes());
+            header
+        }
+
+        #[tokio::test]
+        async fn test_read_frame_oversized() {
+            let data = make_frame_header((CAMERA_FRAME_MAX_SIZE + 1) as u32);
+            let cursor = std::io::Cursor::new(data);
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut buf = Vec::new();
+            let result = camera.read_next_frame(&mut buf).await;
+            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_read_frame_zero_size() {
+            let data = make_frame_header(0);
+            let cursor = std::io::Cursor::new(data);
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut buf = Vec::new();
+            let result = camera.read_next_frame(&mut buf).await;
+            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_read_frame_invalid_jpeg_markers() {
+            let mut data = make_frame_header(4);
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+            let cursor = std::io::Cursor::new(data);
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut buf = Vec::new();
+            let result = camera.read_next_frame(&mut buf).await;
+            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        }
     }
 }

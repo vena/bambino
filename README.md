@@ -122,23 +122,46 @@ ftp.delete_file("/model/old.3mf").await?;
 ftp.remove_directory("/model/subfolder").await?;
 ```
 
-### Camera frames
+### Camera streaming
+
+Bambu printers expose camera feeds through two different protocols depending on the model:
+
+**Binary JPEG (A1, P1P, P1S) — port 6000.** These models stream discrete JPEG frames over a lightweight binary protocol. Connect via TLS, send an 80-byte auth handshake, then read frames in a loop:
 
 ```rust
-// Binary JPEG (A1, P1P, P1S) — port 6000
 use bambino::camera::binary::BambuBinaryCameraStream;
 
 let mut cam = BambuBinaryCameraStream::new(tls_stream);
 cam.authenticate(access_code).await?;
 
 let mut frame = Vec::new();
-cam.read_next_frame(&mut frame).await?; // frame is a JPEG
-
-// RTSPS URL (X1, X2, H2, P2S) — port 322
-use bambino::camera::rtsps::build_rtsps_url;
-let url = build_rtsps_url(ip, access_code);
-// rtsps://bblp:<code>@<ip>:322/streaming/live/1
+loop {
+    cam.read_next_frame(&mut frame).await?;
+    // frame contains a complete JPEG image
+}
 ```
+
+**RTSPS (X1, X2, H2, P2S) — port 322.** These models host an RTSP server behind implicit TLS with Digest authentication. This library provides helper utilities for integration with external media frameworks (FFmpeg, GStreamer, VLC) — it does not include an RTSP client or TLS proxy.
+
+```rust
+use bambino::camera::rtsps::build_rtsps_url;
+
+// Generate the authenticated URL for your media framework
+let url = build_rtsps_url(ip, access_code);
+// → rtsps://bblp:<code>@<ip>:322/streaming/live/1
+```
+
+The printer's self-signed TLS certificate means most media players can't connect directly. The typical approach is a local decryption proxy that accepts plain `rtsp://` on localhost, wraps it in TLS, and forwards to the printer. When doing this, RTSP Digest auth hashes must match the printer's URI — use `rewrite_rtsp_request_uri` to rewrite the proxy-local URI before forwarding:
+
+```rust
+use bambino::camera::rtsps::rewrite_rtsp_request_uri;
+
+// Player sends:  rtsp://127.0.0.1:8554/streaming/live/1
+// Printer needs: rtsps://192.168.1.150:322/streaming/live/1
+let rewritten = rewrite_rtsp_request_uri(player_uri, printer_ip);
+```
+
+P2S printers on certain firmware versions have a bug where RTP timestamps don't advance, causing video freezes. Use `RtpTimestampCorrector` to synthesize correct timestamps when `model.quirks().requires_wallclock_rtsp_timestamps()` returns true.
 
 ## Platform targets
 
@@ -183,6 +206,10 @@ bambino-cli control <ip> <serial> <access_code> pause
 bambino-cli files <ip> <serial> <access_code> list /
 bambino-cli files <ip> <serial> <access_code> upload ./print.3mf /model/print.3mf
 bambino-cli files <ip> <serial> <access_code> space
+
+# Camera (A1/P1 binary JPEG protocol only)
+bambino-cli camera <ip> <serial> <access_code> snapshot            # saves snapshot.jpg
+bambino-cli camera <ip> <serial> <access_code> snapshot frame.jpg  # custom output path
 ```
 
 Add `-v` for protocol-level debug output, or set `BAMBU_VERBOSE=1`.

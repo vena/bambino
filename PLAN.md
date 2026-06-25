@@ -113,26 +113,21 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ---
 
-## Phase 8: Camera Module (`src/camera/`)
+<details>
+<summary>Phase 8: Camera — 4 fixes (1 correctness bug), 9 new tests. RTP overflow fix, API refactor</summary>
 
-**Reference:** `06_cameras.md` [REF-CAM-RTSPS]
-**Lines:** ~346
+**Files:** `src/camera/rtsps.rs`, `binary.rs`, `mod.rs` (~346 lines)
 
-- [ ] **`src/camera/rtsps.rs`** (~138 lines)
-  - [ ] Audit RTSP handshake implementation against [REF-CAM-RTSPS]
-  - [ ] Verify DESCRIBE/SETUP/PLAY sequence
-  - [ ] Check authentication handling
-  - [ ] Verify `requires_wallclock_rtsp_timestamps()` quirk integration — is it applied correctly?
-  - [ ] Audit session timeout handling
+**Fixes:**
+- `RtpTimestampCorrector::correct_timestamp()`: `f64 as u32` saturated to `u32::MAX` after ~13.25 hours of streaming instead of wrapping — broke the exact frame-freeze workaround it was designed for. Fixed via `u64` intermediate truncation
+- `RtpTimestampCorrector` API refactored: single `correct_timestamp(elapsed, embedded_rtp)` method split into `init(embedded_rtp)` constructor + `correct(elapsed_secs)` method — `embedded_rtp` was silently ignored after first call
+- `rewrite_rtsp_request_uri`: parameter renamed from `request_line` → `request_uri` to match actual semantics
+- Module doc in `binary.rs`: corrected "5MB" → "10MB" to match `CAMERA_FRAME_MAX_SIZE` and [REF-CAM-BINARY]
 
-- [ ] **`src/camera/binary.rs`** (~169 lines)
-  - [ ] Audit binary image protocol — verify packet structure against [REF-CAM-RTSPS] (or applicable camera binary section)
-  - [ ] Check header parsing — are magic bytes, length fields, and checksums validated?
-  - [ ] Verify JPEG frame extraction — are frame boundaries detected correctly?
-  - [ ] Check buffer management — can oversized frames cause issues?
+**Verified correct:** Binary handshake layout (magic/command ID/offsets), JPEG SOI/EOI validation, 10MB frame limit, RTSPS URL format, URI rewrite path/query preservation, `requires_wallclock_rtsp_timestamps()` P2S-only override, port constants (322/6000), `no_std` alloc gating
 
-- [ ] **`src/camera/mod.rs`** (~39 lines)
-  - [ ] Verify re-exports and module gating
+**Deferred to Phase 10:** `CameraProtocol` enum is unused internally — `camera_stream_port() -> u16` returns raw port numbers instead of the type-safe enum. Integrate `CameraProtocol` into `ModelQuirks` trait.
+</details>
 
 ---
 
@@ -171,6 +166,10 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
   - [ ] Check `relative_z_move_gcode()` default — is the G-code format correct?
   - [ ] Verify `z_max()` values per model family against printer specs
   - [ ] Audit capability methods: `requires_wallclock_rtsp_timestamps()`, `supports_auxiliary_right_fan()`, `auxiliary_fan_uses_percentage()`
+  - [ ] **[From Phase 8]** Replace `camera_stream_port() -> u16` with `camera_protocol() -> CameraProtocol` on the `ModelQuirks` trait. Port can be derived via `CameraProtocol::default_port()`. Requires changes in:
+    - `src/quirks/mod.rs`: trait definition + existing tests that assert `camera_stream_port()`
+    - `src/quirks/models/{a1,p1,p2,x1,x2,h2}.rs`: all model impls return `CameraProtocol` variant
+    - `src/camera/mod.rs`: verify `CameraProtocol` and port constants are re-exported as needed
 
 - [ ] **`src/quirks/models/a1.rs`** (~65 lines) — verify A1 family quirks
 - [ ] **`src/quirks/models/p1.rs`** (~60 lines) — verify P1 family quirks
@@ -347,7 +346,7 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 | 5 | Telemetry & Types | 2 | ~754 | **Complete** |
 | 6 | Discovery | 2 | ~555 | **Complete** |
 | 7 | AMS | 3 | ~510 | **Complete** |
-| 8 | Camera | 3 | ~346 | Not started |
+| 8 | Camera | 3 | ~346 | **Complete** |
 | 9 | Diagnostics | 3 | ~591 | Not started |
 | 10 | Quirks Engine | 8 | ~820 | Not started |
 | 11 | Client Coordinator | 1 | ~604 | Not started |

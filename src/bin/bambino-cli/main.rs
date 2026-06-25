@@ -12,6 +12,7 @@ use std::env;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod camera;
 mod connection;
 mod control;
 mod discover;
@@ -50,6 +51,7 @@ Commands:
   dump    <ip> <serial> <access_code>              Dump the raw pushall JSON response and exit
   control <ip> <serial> <access_code> <ACTION>     Dispatch a movement or hardware control command
   files   <ip> <serial> <access_code> <ACTION>     Traverse and transfer files on the printer's MicroSD card
+  camera  <ip> <serial> <access_code> <ACTION>     Camera streaming operations
 
 Control Actions:
   home                                             Home all structural motion axes safely
@@ -65,6 +67,9 @@ Files Actions:
   upload <local_path> <remote_path>                Upload a local file to the remote card path
   delete <remote_path>                             Remove a file from the remote filesystem path
   space                                            Query available MicroSD card capacity
+
+Camera Actions:
+  snapshot [output.jpg]                            Capture a single JPEG frame (A1/P1 binary protocol only)
 "#
     );
 }
@@ -144,6 +149,15 @@ async fn main() {
                 process::exit(1);
             }
             storage::run(&args[2], &args[3], &args[4], &args[5..]).await
+        }
+        "camera" => {
+            if args.len() < 6 {
+                eprintln!(
+                    "Error: Missing action parameter.\nUsage: bambino-cli camera <ip> <serial> <access_code> <ACTION> [ARGS]"
+                );
+                process::exit(1);
+            }
+            camera::run(&args[2], &args[3], &args[4], &args[5..]).await
         }
         "help" | "-h" | "--help" => {
             print_usage();

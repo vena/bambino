@@ -1,18 +1,38 @@
-//! # RTSPS Stream Configuration & Real-Time Correction (Port 322)
+//! # RTSPS Stream Helpers (Port 322)
 //!
-//! Exposes helper utilities for establishing secure video streams over Port 322 [REF-CAM-RTSPS].
-//! Includes helper utilities to generate authorization-compliant RTSPS endpoints,
-//! perform proxy request-line rewrites, and resolve P2S static RTP timestamp freezing bugs.
+//! Utilities for integrating with the RTSPS video stream on higher-capability Bambu Lab
+//! printers (X1, X2, H2, P2S series). These printers host a local RTSP server wrapped in
+//! implicit TLS on port 322, using Digest authentication with the printer's LAN access code.
 //!
-//! **P2S RTP Timestamp Freeze Quirk [REF-CAM-RTSPS]:**
-//! Certain premium printers (P2S series) running firmware tracks like `01.02.00.00` suffer
-//! from an embedded encoder bug where every H.264 frame is stamped with a static RTP timestamp
-//! of approximately `0.06` seconds. Standard decoders (such as FFmpeg/GStreamer) interpret
-//! non-advancing stream markers as duplicates and drop subsequent frames, causing video freezes.
+//! This module does **not** implement an RTSP client or TLS proxy. It provides building
+//! blocks for callers integrating with external media frameworks (FFmpeg, GStreamer, VLC):
 //!
-//! To circumvent this, the `RtpTimestampCorrector` tracks packet arrival intervals on the host
-//! and synthesizes monotonically advancing timestamps mapped to the standard 90,000 Hz video clock
-//! required by modern media frameworks.
+//! - [`build_rtsps_url`] — generates the authenticated RTSPS URL for direct consumption
+//! - [`rewrite_rtsp_request_uri`] — rewrites proxy-local URIs for Digest auth correctness
+//! - [`RtpTimestampCorrector`] — fixes frozen RTP timestamps on affected P2S firmware
+//!
+//! # RTSPS proxy architecture
+//!
+//! The printer's RTSPS server uses a self-signed TLS certificate that standard media players
+//! cannot validate. The common integration pattern is a local decryption proxy:
+//!
+//! 1. A proxy listens on `127.0.0.1:<local_port>` accepting plain `rtsp://` connections
+//! 2. The media player connects to `rtsp://127.0.0.1:<local_port>/streaming/live/1`
+//! 3. The proxy wraps traffic in TLS and forwards to `rtsps://<printer_ip>:322/...`
+//!
+//! RTSP Digest authentication hashes include the request-line URI. The printer expects
+//! `rtsps://<printer_ip>:322/...` but the player sends `rtsp://127.0.0.1:...`. If the
+//! proxy forwards the URI verbatim, the hash mismatches and the printer returns 401.
+//! [`rewrite_rtsp_request_uri`] performs the in-flight rewrite to fix this.
+//!
+//! # P2S RTP timestamp freeze
+//!
+//! P2S printers on firmware `01.02.00.00` have an encoder bug where every H.264 frame
+//! carries the same RTP timestamp (~0.06s). Decoders interpret non-advancing timestamps as
+//! duplicates and drop frames, freezing the video. [`RtpTimestampCorrector`] replaces the
+//! frozen timestamps with host-computed values on the standard 90 kHz RTP clock. Use
+//! [`ModelQuirks::requires_wallclock_rtsp_timestamps()`](crate::quirks::ModelQuirks::requires_wallclock_rtsp_timestamps)
+//! to check whether the connected model needs this correction.
 
 #[cfg(not(feature = "std"))]
 use alloc::format;
@@ -21,75 +41,65 @@ use alloc::string::String;
 
 pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 
-/// Formats the standard implicit TLS RTSPS connection path utilized by Bambu Lab printers [REF-CAM-RTSPS].
+/// Builds the authenticated RTSPS URL for a Bambu Lab printer's video stream.
+///
+/// The returned URL can be passed directly to media frameworks that support RTSPS with
+/// Digest authentication, or used as the target endpoint for a local decryption proxy
+/// (see module-level docs for the proxy pattern).
 pub fn build_rtsps_url(ip: &str, access_code: &str) -> String {
     format!("rtsps://bblp:{}@{}:322/streaming/live/1", access_code, ip)
 }
 
-/// Rewrites a plain RTSP request-line URL to its secure RTSPS counterpart in-transit.
+/// Rewrites a plain `rtsp://` proxy URI to the printer's `rtsps://` endpoint.
 ///
-/// **Why this is required [REF-CAM-RTSPS]:**
-/// Plain-to-secure decryption proxies wrapped around local mediaplayer instances receive plain
-/// connections (`rtsp://127.0.0.1:<local_port>`). However, when calculating cryptographic Digest
-/// hashes, the printer's broker verifies the request-line URI. If the URI string mismatches the
-/// printer's secure destination target, authorization fails with `401 Unauthorized`.
+/// When running a local decryption proxy (see module-level docs), media players send
+/// requests to `rtsp://127.0.0.1:<local_port>/...`. RTSP Digest authentication includes
+/// the request-line URI in its hash, so the printer expects `rtsps://<ip>:322/...`. This
+/// function performs the in-flight rewrite, replacing the scheme and host while preserving
+/// the path and query string.
 ///
-/// This helper replaces localhost references with the remote printer target while leaving
-/// query strings and transport blocks unmodified.
-pub fn rewrite_rtsp_request_uri(request_line: &str, printer_ip: &str) -> String {
-    if let Some(start_idx) = request_line.find("rtsp://") {
-        let remainder = &request_line[start_idx + 7..];
-        // Split by first slash to separate host segment from path segment
+/// If the input does not contain `rtsp://` (e.g. it's already `rtsps://`), it is returned
+/// unchanged.
+///
+/// This function expects proxy-generated URIs with a simple `rtsp://host:port/path` structure.
+/// It is not a general-purpose URI parser.
+pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> String {
+    if let Some(start_idx) = request_uri.find("rtsp://") {
+        let remainder = &request_uri[start_idx + 7..];
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
             return format!("rtsps://{}:322/{}", printer_ip, path);
         }
     }
-    String::from(request_line)
+    String::from(request_uri)
 }
 
 /// Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freezes.
 pub struct RtpTimestampCorrector {
     base_timestamp: u32,
-    has_initiated: bool,
     frequency_hz: u32,
 }
 
-impl Default for RtpTimestampCorrector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl RtpTimestampCorrector {
-    /// Instantiates a corrector mapping frame deltas to the standard 90,000 Hz video stream clock.
-    pub fn new() -> Self {
+    /// Initializes the corrector by capturing the stream's first embedded RTP timestamp
+    /// as the base coordinate for all subsequent corrections. This preserves alignment
+    /// with the SDP stream definition.
+    pub fn init(embedded_rtp: u32) -> Self {
         Self {
-            base_timestamp: 0,
-            has_initiated: false,
+            base_timestamp: embedded_rtp,
             frequency_hz: RTP_CLOCK_FREQUENCY_HZ,
         }
     }
 
-    /// Computes the corrected RTP timestamp sequence number based on host-observed arrival deltas.
+    /// Computes the corrected RTP timestamp from host-observed elapsed time.
     ///
     /// * `elapsed_secs`: Total accumulated seconds since the first stream packet arrived.
-    /// * `embedded_rtp`: The raw timestamp parsed from the stream packet.
-    ///
-    /// If the stream has just initialized, we preserve the original `embedded_rtp` as our base
-    /// coordinate to ensure alignment with standard SDP stream definitions.
-    pub fn correct_timestamp(&mut self, elapsed_secs: f64, embedded_rtp: u32) -> u32 {
-        if !self.has_initiated {
-            self.base_timestamp = embedded_rtp;
-            self.has_initiated = true;
-            return embedded_rtp;
-        }
-
-        // Multiply elapsed host seconds against 90kHz clock scale
+    pub fn correct(&self, elapsed_secs: f64) -> u32 {
         let raw = elapsed_secs * self.frequency_hz as f64;
-        let rtp_delta = (raw + 0.5) as u32;
-
+        // Truncate via u64 intermediate to preserve wrapping semantics for streams
+        // exceeding ~13.25 hours (where f64 -> u32 would saturate at u32::MAX).
+        let rtp_delta = (raw + 0.5) as u64 as u32;
         self.base_timestamp.wrapping_add(rtp_delta)
     }
 }
@@ -109,30 +119,58 @@ mod tests {
 
     #[test]
     fn test_rtsp_proxy_uri_rewrite() {
-        // Mock incoming proxy header from player
         let incoming_uri = "rtsp://127.0.0.1:8554/streaming/live/1";
-        let target_ip = "192.168.1.150";
-
-        let rewritten = rewrite_rtsp_request_uri(incoming_uri, target_ip);
+        let rewritten = rewrite_rtsp_request_uri(incoming_uri, "192.168.1.150");
         assert_eq!(rewritten, "rtsps://192.168.1.150:322/streaming/live/1");
     }
 
     #[test]
+    fn test_rewrite_uri_with_query_string() {
+        let uri = "rtsp://127.0.0.1:8554/streaming/live/1?token=abc&quality=high";
+        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5");
+        assert_eq!(
+            rewritten,
+            "rtsps://10.0.0.5:322/streaming/live/1?token=abc&quality=high"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_uri_already_rtsps_returns_unchanged() {
+        let uri = "rtsps://192.168.1.150:322/streaming/live/1";
+        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5");
+        assert_eq!(rewritten, uri);
+    }
+
+    #[test]
+    fn test_rewrite_uri_no_path() {
+        let uri = "rtsp://127.0.0.1:8554";
+        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150");
+        assert_eq!(rewritten, "rtsps://192.168.1.150:322/");
+    }
+
+    #[test]
     fn test_timestamp_freezing_correction() {
-        let mut corrector = RtpTimestampCorrector::new();
+        let corrector = RtpTimestampCorrector::init(54000);
 
-        // Frame 1: Embedded RTP starts at some arbitrary value
-        let corrected_1 = corrector.correct_timestamp(0.0, 54000);
-        assert_eq!(corrected_1, 54000);
+        // Frame at t=0: base timestamp returned via wrapping_add(0)
+        assert_eq!(corrector.correct(0.0), 54000);
 
-        // Frame 2: Arrives after 1.5 seconds. Embedded RTP remains stuck at 54000
-        let corrected_2 = corrector.correct_timestamp(1.5, 54000);
-        // Delta = 1.5 * 90000 = 135000 clock units. Expected = 54000 + 135000 = 189000
-        assert_eq!(corrected_2, 189000);
+        // Frame at t=1.5s: delta = 1.5 * 90000 = 135000
+        assert_eq!(corrector.correct(1.5), 189000);
 
-        // Frame 3: Arrives after 2.0 seconds. Embedded RTP still stuck at 54000
-        let corrected_3 = corrector.correct_timestamp(2.0, 54000);
-        // Delta = 2.0 * 90000 = 180000 clock units. Expected = 54000 + 180000 = 234000
-        assert_eq!(corrected_3, 234000);
+        // Frame at t=2.0s: delta = 2.0 * 90000 = 180000
+        assert_eq!(corrector.correct(2.0), 234000);
+    }
+
+    #[test]
+    fn test_timestamp_corrector_wraps_after_13_hours() {
+        let corrector = RtpTimestampCorrector::init(0);
+
+        // 50000 seconds (~13.9 hours) at 90kHz = 4,500,000,000 which exceeds u32::MAX
+        // Should wrap correctly, not saturate
+        let ts = corrector.correct(50000.0);
+        let expected = (50000.0 * 90000.0 + 0.5) as u64 as u32;
+        assert_eq!(ts, expected);
+        assert_ne!(ts, u32::MAX, "must wrap, not saturate");
     }
 }
