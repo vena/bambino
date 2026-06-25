@@ -15,7 +15,7 @@ use bambino::error::BambuError;
 use bambino::models::resolve_model;
 use bambino::mqtt::PushAllRequest;
 use bambino::quirks::ModelQuirks;
-use bambino::types::PrintTelemetry;
+use bambino::types::PrinterTelemetry;
 
 use crate::connection::connect_mqtt;
 
@@ -250,6 +250,20 @@ fn render_dashboard(
     .unwrap_or(());
     writeln!(w, "{:<20} : {}", "Time Remaining", remaining_formatted).unwrap_or(());
 
+    let spd_label = match state.get("spd_lvl").and_then(|v| v.as_u64()) {
+        Some(1) => "Silent",
+        Some(2) => "Standard",
+        Some(3) => "Sport",
+        Some(4) => "Ludicrous",
+        _ => "--",
+    };
+    let spd_mag = state
+        .get("spd_mag")
+        .and_then(|v| v.as_u64())
+        .map(|m| format!("{}%", m))
+        .unwrap_or_else(|| "--".to_string());
+    writeln!(w, "{:<20} : {} ({})", "Print Speed", spd_label, spd_mag).unwrap_or(());
+
     // -- Nozzles --
     struct NozzleEntry {
         id: u64,
@@ -318,8 +332,8 @@ fn render_dashboard(
         .get("nozzle_target_temper")
         .and_then(|t| t.as_f64())
         .unwrap_or(0.0);
-    let (nozzle_act, _) = PrintTelemetry::unpack_temperature(nozzle_temper);
-    let (_, nozzle_tgt) = PrintTelemetry::unpack_temperature(nozzle_target);
+    let (nozzle_act, _) = PrinterTelemetry::unpack_temperature(nozzle_temper);
+    let nozzle_tgt = nozzle_target as u16;
 
     if nozzles.len() == 1 {
         nozzles[0].temp = format!("{}°C / T: {}°C", nozzle_act, nozzle_tgt);
@@ -361,7 +375,12 @@ fn render_dashboard(
         .get("bed_temper")
         .and_then(|t| t.as_f64())
         .unwrap_or(0.0);
-    let (bed_act, bed_tgt) = PrintTelemetry::unpack_temperature(bed_temper);
+    let bed_target = state
+        .get("bed_target_temper")
+        .and_then(|t| t.as_f64())
+        .unwrap_or(0.0);
+    let (bed_act, _) = PrinterTelemetry::unpack_temperature(bed_temper);
+    let bed_tgt = bed_target as u16;
 
     writeln!(
         w,
@@ -375,7 +394,7 @@ fn render_dashboard(
             .get("chamber_temper")
             .and_then(|t| t.as_f64())
             .unwrap_or(0.0);
-        let (chamber_act, chamber_tgt) = PrintTelemetry::unpack_temperature(chamber_temper);
+        let (chamber_act, chamber_tgt) = PrinterTelemetry::unpack_temperature(chamber_temper);
         writeln!(
             w,
             "{:<20} : {:>3}°C / {:>3}°C",

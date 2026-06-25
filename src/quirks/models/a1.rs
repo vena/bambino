@@ -8,7 +8,7 @@
 
 use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
-use crate::types::PrintTelemetry;
+use crate::types::PrinterTelemetry;
 
 pub const A1_Z_MAX: f32 = 256.0;
 pub const A1_MINI_Z_MAX: f32 = 180.0;
@@ -30,7 +30,7 @@ macro_rules! impl_a1_shared {
                 false
             }
 
-            fn is_door_open(&self, _telemetry: &PrintTelemetry) -> bool {
+            fn is_door_open(&self, _telemetry: &PrinterTelemetry) -> bool {
                 false
             }
 

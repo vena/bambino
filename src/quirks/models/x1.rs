@@ -5,7 +5,7 @@
 
 use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
-use crate::types::PrintTelemetry;
+use crate::types::PrinterTelemetry;
 
 pub const X1_Z_MAX: f32 = 256.0;
 
@@ -19,7 +19,7 @@ pub const X1E_CHAMBER_TEMP_MAX: u16 = 60;
 pub struct X1CQuirks;
 pub struct X1EQuirks;
 
-fn x1_is_door_open(telemetry: &PrintTelemetry) -> bool {
+fn x1_is_door_open(telemetry: &PrinterTelemetry) -> bool {
     telemetry.is_door_open_from_home_flag()
 }
 
@@ -32,7 +32,7 @@ impl ModelQuirks for X1CQuirks {
         false
     }
 
-    fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool {
+    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
         x1_is_door_open(telemetry)
     }
 
@@ -90,7 +90,7 @@ impl ModelQuirks for X1EQuirks {
         false
     }
 
-    fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool {
+    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
         x1_is_door_open(telemetry)
     }
 

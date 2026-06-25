@@ -15,7 +15,7 @@
 
 use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
-use crate::types::PrintTelemetry;
+use crate::types::PrinterTelemetry;
 
 pub const H2S_Z_MAX: f32 = 340.0;
 pub const H2_DUAL_Z_MAX: f32 = 320.0;
@@ -28,7 +28,7 @@ pub struct H2DQuirks;
 pub struct H2DProQuirks;
 pub struct H2CQuirks;
 
-fn h2_is_door_open(telemetry: &PrintTelemetry) -> bool {
+fn h2_is_door_open(telemetry: &PrinterTelemetry) -> bool {
     telemetry.is_door_open_from_stat()
 }
 
@@ -43,7 +43,7 @@ macro_rules! impl_h2_shared {
                 false
             }
 
-            fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool {
+            fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
                 h2_is_door_open(telemetry)
             }
 

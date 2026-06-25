@@ -4,7 +4,7 @@
 
 use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
-use crate::types::PrintTelemetry;
+use crate::types::PrinterTelemetry;
 
 pub const P2S_Z_MAX: f32 = 256.0;
 pub const P2S_NOZZLE_TEMP_MAX: u16 = 300;
@@ -21,7 +21,7 @@ impl ModelQuirks for P2Quirks {
         true
     }
 
-    fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool {
+    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
         telemetry.is_door_open_from_stat()
     }
 

@@ -27,7 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub struct TelemetryReport {
     /// Telemetry parameters representing the physical printer state machine.
     #[serde(default)]
-    pub print: Option<PrintTelemetry>,
+    pub print: Option<PrinterTelemetry>,
 
     /// Network and hardware board capability descriptors.
     #[serde(default)]
@@ -37,7 +37,7 @@ pub struct TelemetryReport {
 /// Core printer state machine telemetry, containing kinematics, thermal targets,
 /// auxiliary fan configurations, and connected AMS arrays.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrintTelemetry {
+pub struct PrinterTelemetry {
     /// High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
     pub gcode_state: Option<String>,
 
@@ -63,6 +63,12 @@ pub struct PrintTelemetry {
 
     /// Estimated remaining duration of the active layer sequence, in seconds.
     pub mc_remaining_time: Option<i32>,
+
+    /// Active speed profile level (1=Silent, 2=Standard, 3=Sport, 4=Ludicrous).
+    pub spd_lvl: Option<u8>,
+
+    /// Speed magnitude as a percentage of the nominal feedrate.
+    pub spd_mag: Option<u16>,
 
     /// Motion controller progress percentage (0–100). Present on idle and active prints;
     /// `progress` may only appear during active prints.
@@ -167,7 +173,7 @@ pub struct CtcTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtcInfo {
     /// Composite-packed integer temperature value [REF-THER-DECODE].
-    /// Use `PrintTelemetry::unpack_temperature()` on this value cast to `f64`.
+    /// Use `PrinterTelemetry::unpack_temperature()` on this value cast to `f64`.
     pub temp: Option<u32>,
 }
 
@@ -475,7 +481,7 @@ pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
 pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
 pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
 
-impl PrintTelemetry {
+impl PrinterTelemetry {
     /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
     ///
     /// Accepts `f64` because the wire sends both integers and floats depending on model.
@@ -578,16 +584,16 @@ mod tests {
 
     #[test]
     fn test_temperature_unpacking_composite() {
-        let (actual, target) = PrintTelemetry::unpack_temperature(6553700.0);
+        let (actual, target) = PrinterTelemetry::unpack_temperature(6553700.0);
         assert_eq!(actual, 100);
         assert_eq!(target, 100);
 
-        let (actual_idle, target_idle) = PrintTelemetry::unpack_temperature(35.0);
+        let (actual_idle, target_idle) = PrinterTelemetry::unpack_temperature(35.0);
         assert_eq!(actual_idle, 35);
         assert_eq!(target_idle, 0);
 
         // Fractional temps from P1S/A1 models — truncated to integer
-        let (actual_frac, target_frac) = PrintTelemetry::unpack_temperature(27.625);
+        let (actual_frac, target_frac) = PrinterTelemetry::unpack_temperature(27.625);
         assert_eq!(actual_frac, 27);
         assert_eq!(target_frac, 0);
     }
@@ -951,17 +957,17 @@ mod tests {
 
     #[test]
     fn test_temperature_boundary_500_and_501() {
-        let (actual, target) = PrintTelemetry::unpack_temperature(500.0);
+        let (actual, target) = PrinterTelemetry::unpack_temperature(500.0);
         assert_eq!(actual, 500);
         assert_eq!(target, 0);
 
         // 501 = 0x000001F5 → actual=501, target=0 (but > threshold so unpacked)
-        let (actual, target) = PrintTelemetry::unpack_temperature(501.0);
+        let (actual, target) = PrinterTelemetry::unpack_temperature(501.0);
         assert_eq!(actual, 501);
         assert_eq!(target, 0);
 
         // Real composite: target=60, actual=48 → (60 << 16) | 48 = 3932208
-        let (actual, target) = PrintTelemetry::unpack_temperature(3932208.0);
+        let (actual, target) = PrinterTelemetry::unpack_temperature(3932208.0);
         assert_eq!(actual, 48);
         assert_eq!(target, 60);
     }
@@ -978,7 +984,7 @@ mod tests {
         let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
         let ctc = report.device.unwrap().ctc.unwrap();
         let temp = ctc.info.unwrap().temp.unwrap();
-        let (actual, target) = PrintTelemetry::unpack_temperature(temp as f64);
+        let (actual, target) = PrinterTelemetry::unpack_temperature(temp as f64);
         assert_eq!(actual, 48);
         assert_eq!(target, 60);
     }
@@ -1002,7 +1008,7 @@ mod tests {
             .unwrap()
             .temp
             .unwrap();
-        let (actual, target) = PrintTelemetry::unpack_temperature(temp as f64);
+        let (actual, target) = PrinterTelemetry::unpack_temperature(temp as f64);
         assert_eq!(actual, 35);
         assert_eq!(target, 0);
     }
@@ -1098,20 +1104,20 @@ mod tests {
     #[test]
     fn test_parse_hex_string_variants() {
         assert_eq!(
-            PrintTelemetry::parse_hex_string("0x00800000"),
+            PrinterTelemetry::parse_hex_string("0x00800000"),
             Some(0x00800000)
         );
         assert_eq!(
-            PrintTelemetry::parse_hex_string("0X00800000"),
+            PrinterTelemetry::parse_hex_string("0X00800000"),
             Some(0x00800000)
         );
         assert_eq!(
-            PrintTelemetry::parse_hex_string("00800000"),
+            PrinterTelemetry::parse_hex_string("00800000"),
             Some(0x00800000)
         );
-        assert_eq!(PrintTelemetry::parse_hex_string("ff"), Some(0xff));
-        assert_eq!(PrintTelemetry::parse_hex_string("zzzz"), None);
-        assert_eq!(PrintTelemetry::parse_hex_string(""), None);
+        assert_eq!(PrinterTelemetry::parse_hex_string("ff"), Some(0xff));
+        assert_eq!(PrinterTelemetry::parse_hex_string("zzzz"), None);
+        assert_eq!(PrinterTelemetry::parse_hex_string(""), None);
     }
 
     #[test]

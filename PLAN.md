@@ -226,6 +226,9 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
   - [ ] Verify telemetry display accuracy — are values formatted correctly (temps, percentages, times)?
   - [ ] Audit key event handling — are all exit paths clean?
   - [ ] Check for potential panics in rendering with unexpected telemetry data
+  - [ ] Refactor from raw `serde_json::Map` field access to typed `PrinterTelemetry` struct — will expose missing fields and catch type mismatches at compile time
+  - [x] Fix bed/nozzle target temperature display (was always 0°C — `bed_target_temper`/`nozzle_target_temper` ignored, `unpack_temperature` misapplied to non-composite fields)
+  - [x] Add print speed display (`spd_lvl` + `spd_mag`)
 
 - [ ] **`src/bin/bambino-cli/control.rs`** (~307 lines)
   - [ ] Audit command dispatch — do CLI commands map to the correct client methods?

@@ -31,7 +31,7 @@ Every change must compile under both the default `tokio` feature set and the `no
 
 ### Non-Obvious Type Decisions
 
-- **Temperature fields** are `Option<f64>` — the wire sends both integers (H2D) and floats (P1S/A1). Use `unpack_temperature()` for composite-packed values.
+- **Temperature fields** are `Option<f64>` — the wire sends both integers (H2D) and floats (P1S/A1). Bed and nozzle targets arrive as separate `_target_temper` fields (never composite-packed). Use `unpack_temperature()` only for `chamber_temper` on models with active chamber heaters.
 - **`DeviceTelemetry`** appears at two wire locations: top-level `{"device": {...}}` for incremental updates, and nested inside `{"print": {"device": {...}}}` for pushall on H2/P2/X2 models.
 - **`AmsTray.id`** is `String` (wire sends `"0"`, not `0`). **`CtcInfo.temp`** is `u32` (composite-packed integers, not floats).
 - **K-profile priming quirk:** the firmware silently ignores the first `extrusion_cali_get` after connection. `PrinterClient::get_k_profiles()` auto-primes; opt out via `set_k_profile_primed(true)`.

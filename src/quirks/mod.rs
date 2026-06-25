@@ -16,7 +16,7 @@ use alloc::string::String;
 
 use crate::camera::CameraProtocol;
 use crate::models::BambuModel;
-use crate::types::PrintTelemetry;
+use crate::types::PrinterTelemetry;
 
 /// Polymorphic interface tracking model-specific hardware variations and transport exceptions.
 pub trait ModelQuirks {
@@ -32,7 +32,7 @@ pub trait ModelQuirks {
     /// model-specific sensor routing [REF-NET-DOOR].
     ///
     /// If the target model lacks an electronic door sensor switch, returns `false`.
-    fn is_door_open(&self, telemetry: &PrintTelemetry) -> bool;
+    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool;
 
     /// Returns true if the physical machine chassis is equipped with an electronic
     /// front enclosure door open sensor switch.

@@ -4,7 +4,7 @@
 
 use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
-use crate::types::PrintTelemetry;
+use crate::types::PrinterTelemetry;
 
 /// Standard post-boot socket preparation delay, in seconds
 pub const POST_BOOT_CONNECT_DELAY: u64 = 25;
@@ -27,7 +27,7 @@ impl ModelQuirks for P1Quirks {
         false
     }
 
-    fn is_door_open(&self, _telemetry: &PrintTelemetry) -> bool {
+    fn is_door_open(&self, _telemetry: &PrinterTelemetry) -> bool {
         false
     }
 
