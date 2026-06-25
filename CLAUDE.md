@@ -63,7 +63,7 @@ Protocol specs live in numbered markdown files. When adding or modifying command
 
 - All MQTT sequence IDs and task IDs must be clamped to 32-bit signed integer max (`TASK_ID_MAX` in `src/mqtt/commands.rs`). Use `clamp_task_id()` for task IDs.
 - `serde_json` is used with `default-features = false` — always use `serde_json::to_vec` (not `to_string`) for payloads.
-- The `BambuModel` enum and `resolve_model()` live in `src/models.rs` as the canonical model identity module. Re-exported from `src/lib.rs` and `src/discovery/mod.rs` for backward compatibility. Internal crate code imports via `crate::models::BambuModel`.
+- The `BambuModel` enum and `resolve_model()` live in `src/models.rs` as the single source of model identity. Re-exported from `src/lib.rs` as the public API path (`bambino::BambuModel`). Internal crate code imports via `crate::models::BambuModel`.
 - The CLI (`src/bin/bambino-cli/`) is a testing/verification tool, not part of the library API.
 - Library code uses the `log` crate facade (`log::debug!`, `log::trace!`, `log::warn!`) for diagnostic output — never `println!`. The CLI initializes `env_logger` from the `-v` flag. No `#[cfg(feature = "std")]` gates are needed on log statements.
 - `BambuError` derives `Debug` and `Clone`. Under `std`, `thiserror` provides `Display`/`Error`. Under `no_std`, a manual `Display` impl is kept in sync (verified by `test_display_consistency`). `ProtocolViolation` uses `Cow<'static, str>` under `alloc`/`std` to accept both static and dynamic error messages.

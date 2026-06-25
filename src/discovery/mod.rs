@@ -95,16 +95,19 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
             "Transmitting multicast M-SEARCH request to: {}",
             multicast_target
         );
-        let _ = self.socket.send_to(query, &multicast_target).await;
+        let mcast_result = self.socket.send_to(query, &multicast_target).await;
 
         let broadcast_target = format!("255.255.255.255:{}", self.port);
         log::debug!(
             "Transmitting fallback broadcast M-SEARCH request to: {}",
             broadcast_target
         );
-        let _ = self.socket.send_to(query, &broadcast_target).await;
+        let bcast_result = self.socket.send_to(query, &broadcast_target).await;
 
-        Ok(())
+        match (mcast_result, bcast_result) {
+            (Err(_), Err(e)) => Err(BambuError::NetworkError(e)),
+            _ => Ok(()),
+        }
     }
 
     /// Listens on the bound socket interface and processes the next incoming SSDP packet.
@@ -206,8 +209,10 @@ where
         engines.len()
     );
 
-    // Alternate polling across all bound sockets. Each recv_from times out after ~100ms,
-    // so we cycle through engines round-robin.
+    // Alternate polling across all bound sockets. Each recv_from times out after ~100ms
+    // (on tokio), so we cycle through engines round-robin. Time is tracked via poll count
+    // rather than wall-clock to remain no_std-compatible; a proper TimerProvider-based
+    // deadline is tracked for a future phase.
     while elapsed_millis < total_millis {
         if millis_since_last_search >= SSDP_REBROADCAST_INTERVAL_MS {
             log::trace!("Re-broadcasting periodic M-SEARCH queries");
@@ -218,23 +223,15 @@ where
         }
 
         for (engine, port) in &engines {
-            match engine.poll_next_device(&mut buf).await {
-                Ok(Some(mut device)) => {
-                    device.discovery_port = *port;
-                    if seen_serials.insert(device.serial.clone()) {
-                        log::debug!("Discovered '{}' via port {}", device.serial, port);
-                        devices.push(device);
-                    }
-                }
-                Ok(None) => {
-                    elapsed_millis += 100;
-                    millis_since_last_search += 100;
-                }
-                Err(_) => {
-                    elapsed_millis += 100;
-                    millis_since_last_search += 100;
+            if let Ok(Some(mut device)) = engine.poll_next_device(&mut buf).await {
+                device.discovery_port = *port;
+                if seen_serials.insert(device.serial.clone()) {
+                    log::debug!("Discovered '{}' via port {}", device.serial, port);
+                    devices.push(device);
                 }
             }
+            elapsed_millis += 100;
+            millis_since_last_search += 100;
         }
     }
 
@@ -298,7 +295,6 @@ mod tests {
         engine.broadcast_search().await.unwrap();
         {
             let payloads = sent_ref.lock().unwrap();
-            // Expected 2 broadcasts (Multicast + Global Broadcast fallback)
             assert_eq!(payloads.len(), 2);
             assert!(payloads[0].starts_with(b"M-SEARCH"));
             assert!(payloads[0].ends_with(b"\r\n\r\n"));
@@ -311,8 +307,63 @@ mod tests {
         assert_eq!(device.serial, "01P06A521703222");
         assert_eq!(device.model, BambuModel::P1S);
 
-        // Next poll should encounter Mock timeout returning None
         let empty_device = engine.poll_next_device(&mut buf).await.unwrap();
         assert!(empty_device.is_none());
+    }
+
+    struct FailSocket;
+
+    impl AsyncUdpSocket for FailSocket {
+        async fn bind(_addr: &str) -> Result<Self, SocketError> {
+            Ok(Self)
+        }
+        async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+            Err(SocketError::ConnectionRefused)
+        }
+        async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+            Err(SocketError::TimedOut)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_search_returns_error_when_both_sends_fail() {
+        let socket = FailSocket::bind("0.0.0.0:0").await.unwrap();
+        let engine = DiscoveryEngine::new(socket, SSDP_PORT);
+
+        let result = engine.broadcast_search().await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_search_succeeds_when_one_send_works() {
+        use std::sync::atomic::AtomicBool;
+
+        struct HalfFailSocket {
+            first_call: AtomicBool,
+        }
+
+        impl AsyncUdpSocket for HalfFailSocket {
+            async fn bind(_addr: &str) -> Result<Self, SocketError> {
+                Ok(Self {
+                    first_call: AtomicBool::new(true),
+                })
+            }
+            async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+                if self.first_call.swap(false, Ordering::SeqCst) {
+                    Err(SocketError::ConnectionRefused)
+                } else {
+                    Ok(100)
+                }
+            }
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+                Err(SocketError::TimedOut)
+            }
+        }
+
+        let socket = HalfFailSocket::bind("0.0.0.0:0").await.unwrap();
+        let engine = DiscoveryEngine::new(socket, SSDP_PORT);
+
+        let result = engine.broadcast_search().await;
+        assert!(result.is_ok());
     }
 }

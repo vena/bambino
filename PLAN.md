@@ -15,172 +15,87 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ---
 
-## Phase 1: Core Foundation (`src/error.rs`, `src/models.rs`, `src/lib.rs`)
+## Phases 1–6: Completed Reviews
 
-**Reference:** N/A (internal plumbing)
-**Lines:** ~329
+<details>
+<summary>Phase 1: Core Foundation — 2 fixes, comprehensive model resolution tests added</summary>
 
-- [x] **`src/error.rs`** (~179 lines)
-  - [x] Verify `BambuError` variant completeness — `TlsHandshakeFailed` is defined but never constructed (TLS failures route through `SocketError` → `NetworkError`). Dead variant, kept for now.
-  - [x] Audit `Display` impl under `no_std` — in sync with `thiserror`. `test_display_consistency` covers all 8 variants. ✓
-  - [x] Check `Cow<'static, str>` usage in `ProtocolViolation` — all call sites pass `&'static str` literals via `.into()`. No dynamic strings currently. Design is sound for future use.
-  - [x] Verify `From<SocketError>` conversion — preserves variant name via `{:?}` in Display. Adequate.
-  - [x] Check `Clone` derive — all variants are cheap to clone (`SocketError` is `Copy`, `Cow::Borrowed` is cheap). ✓
+**Files:** `src/error.rs`, `src/models.rs`, `src/lib.rs` (~329 lines)
 
-- [x] **`src/models.rs`** (~117 lines)
-  - [x] Verify `resolve_model()` covers all known Bambu model identifiers — all 13 models covered via prefix and dev_model fallback. ✓
-  - [x] Check for model string variants that might be missed — **Fixed:** `&serial[0..3]` replaced with `serial.get(0..3).unwrap_or("")` to prevent panics on non-ASCII input. **Fixed:** removed redundant `m.contains("O1C2")` check (already caught by `m.contains("O1C")`).
-  - [x] Verify `BambuModel` enum is exhaustive for all models referenced in `src/quirks/models/` — all 13 non-Unknown variants have quirks structs. ✓
-  - [x] Audit the `quirks()` dispatch — every variant maps correctly; `Unknown` falls back to `X1CQuirks`. ✓. **Added** comprehensive tests for all prefix paths, all dev_model fallback paths, H2DPro/H2C resolution, and short/empty serial edge cases.
+**Fixes:**
+- `resolve_model()`: `&serial[0..3]` → `serial.get(0..3).unwrap_or("")` to prevent panics on non-ASCII/short input
+- Removed redundant `O1C2` check (already caught by `O1C` match)
 
-- [x] **`src/lib.rs`** (~33 lines)
-  - [x] Verify `#![cfg_attr(not(feature = "std"), no_std)]` is correctly gated ✓
-  - [x] Confirm all public modules are listed and re-exports are intentional ✓
-  - [x] Check that `extern crate alloc` gating is correct for `no_std + alloc` ✓
+**Verified:** All 13 model variants have quirks structs, `Unknown` falls back to `X1CQuirks`, `BambuError` Display consistency tested across std/no_std
+</details>
 
----
+<details>
+<summary>Phase 2: Platform I/O — 4 fixes across embassy/esp-idf, TimerProvider signature change</summary>
 
-## Phase 2: Platform Abstraction Layer (`src/io/`)
+**Files:** `src/io/mod.rs`, `tokio.rs`, `embassy.rs`, `esp_idf.rs` (~475 lines)
 
-**Reference:** Chapters 1-3 (transport parameters)
-**Lines:** ~475
+**Fixes:**
+- `TimerProvider::sleep` changed from static to `&self` for ESP-IDF async timer support
+- Embassy: narrowed `unsafe impl Sync` to concrete type, added `AtomicBool` buffer guard, removed fake `SimpleRng` — `EmbassyTlsConnector` now generic over `Rng: CryptoRng + RngCore`
+- ESP-IDF: `EspIdfTimer` now wraps `EspAsyncTimer` (was blocking `thread::sleep`), `bind()` now joins multicast group
 
-- [x] **`src/io/mod.rs`** (~170 lines)
-  - [x] Audit trait definitions: `AsyncIo`, `TlsConnector`, `AsyncUdpSocket`, `TimerProvider` — all sound. No `Send`/`Sync` bounds (correct: embassy single-threaded doesn't need them, tokio gets them from concrete types). ✓
-  - [x] Verify trait methods have correct lifetime bounds and `Send`/`Sync` constraints for all three targets ✓
-  - [x] Check associated type bounds — `TlsConnector::Stream: AsyncIo` is sufficient ✓
-  - [x] Verify `SocketError` is flexible enough — `Other(&'static str)` is `Copy`, covers all platforms ✓
-  - [x] **Changed:** `TimerProvider::sleep` signature changed from static to `&self` to support instance-based platform timers (ESP-IDF async timer)
+**Noted:** ESP-IDF `TlsConnector` gap tracked in Phase 16
+</details>
 
-- [x] **`src/io/tokio.rs`** (~220 lines)
-  - [x] Audit `build_unsafe_client_config()` — correctly uses Ring provider, `with_safe_default_protocol_versions()` (supports TLS 1.2 + 1.3). ✓
-  - [x] Check `NoCertificateVerification` — all four `ServerCertVerifier` methods implemented correctly. `supported_verify_schemes()` covers all common schemes (ED448 absent but unused by printers). ✓
-  - [x] Verify `TokioTlsConnector` correctly maps to the `TlsConnector` trait — SNI uses IP address, which is fine since `NoCertificateVerification` skips hostname checking per [REF-NET-SECURE]. ✓
-  - [x] Audit socket error conversion (`to_socket_error`) — comprehensive mapping; catch-all `Other` loses specificity for rare error kinds (`BrokenPipe`, `PermissionDenied`), acceptable. ✓
-  - [x] Verify `TokioTimer` precision and cancellation behavior — delegates to `tokio::time::sleep`. ✓
-  - [x] Check for resource leaks in UDP socket lifecycle — socket joins multicast group per [REF-NET-DISC], nonblocking set before Tokio conversion. ✓
+<details>
+<summary>Phase 3: MQTT — 6 fixes including QoS handling, OOM guard, dead generic removal</summary>
 
-- [x] **`src/io/embassy.rs`** (~207 lines)
-  - [x] **FIXED:** `unsafe impl Sync` narrowed from blanket `<T>` to concrete `[u8; 16384]`. Added `AtomicBool` guard (`TLS_BUFFERS_IN_USE`) with RAII `BufferGuard` and `GuardedTlsConnection` wrapper — prevents aliased `&mut` references and releases buffers on drop.
-  - [x] **FIXED:** Removed `SimpleRng` (constant-output fake CryptoRng). `EmbassyTlsConnector` is now generic over `Rng: CryptoRng + RngCore` — callers must provide a platform-appropriate hardware RNG.
-  - [x] Verify static buffer sizing — 16384 bytes matches max TLS record size (RFC 5246). ✓
-  - [x] Verify trait implementations match the `mod.rs` trait contracts ✓
+**Files:** `src/mqtt/client.rs`, `commands.rs`, `mod.rs` (~1470 lines)
 
-- [x] **`src/io/esp_idf.rs`** (~78 lines)
-  - [x] **FIXED:** `EspIdfTimer` now wraps `EspAsyncTimer` from `esp-idf-svc` instead of blocking `std::thread::sleep()`. Provides proper async sleep that integrates with FreeRTOS scheduler.
-  - [x] **FIXED:** `EspIdfUdpSocket::bind()` now joins multicast group `239.255.255.250` per [REF-NET-DISC] (previously missing — would silently drop NOTIFY advertisements).
-  - [x] Check error type conversions — identical mapping to tokio's `to_socket_error()`, acceptable given mutually exclusive feature gates. ✓
-  - [x] **Noted:** No `TlsConnector` implementation — trait mismatch between ESP-IDF's `EspTls` (manages own TCP) and `TlsConnector` (wraps existing stream). Tracked in Phase 14.
+**Fixes:**
+- Packet ID extraction: `qos == 1` → `qos >= 1` for correct QoS 0/1/2 handling
+- Added `MQTT_MAX_PAYLOAD_BYTES` (1 MiB) OOM guard in `read_exact_packet`
+- Pre-computed `request_topic` field (was per-publish `format!()` allocation)
+- Removed dead `Timer: TimerProvider` generic from `connect()` and all call sites
+- `PrintJobConfig`: `timelapse`, `layer_inspect`, `nozzle_offset_cali` now configurable via builder
+- `AmsFilamentSettingRequest::new()` accepts `Option<&str>` for `tray_sub_brands`
+- Added missing `ProjectAmsMapping2Entry` re-export
+</details>
 
----
+<details>
+<summary>Phase 4: FTPS — 5 fixes including multi-line response parsing, PASV overflow, TLS 1.2 enforcement</summary>
 
-## Phase 3: MQTT Client & Commands (`src/mqtt/`)
+**Files:** `src/ftps/client.rs`, `parser.rs`, `mod.rs` (~966 lines)
 
-**Reference:** `03_mqtt_telemetry.md` [REF-MQTT-CONN], `04_toolhead_thermal_motion.md` [REF-MOTO-GCODE]
-**Lines:** ~1470
+**Fixes:**
+- `read_response` now accumulates multi-line bodies (was discarding continuations). Added `FTP_MAX_RESPONSE_LINE_BYTES` (4096) and `FTP_MAX_RESPONSE_LINES` (100) guards
+- PASV port computation: arithmetic overflow fix via `u32` intermediate with range validation
+- P2S/X2D TLS 1.2 enforcement via `enforce_ftps_tls_1_2()` quirk
+- Upload error propagation: network errors no longer mapped to `DiskWriteFailure`
+- Added `TYPE I` binary mode during connect, `disconnect()` method, allocation-free `write_command`
+</details>
 
-- [x] **`src/mqtt/client.rs`** (~603 lines)
-  - [x] Audit MQTT packet construction — CONNECT, PUBLISH, SUBSCRIBE, PUBACK, PINGREQ byte layouts verified against MQTT 3.1.1 spec. ✓
-  - [x] Check `PACKET_TYPE_*` and `MQTT_*` constants against [REF-MQTT-CONN] — all match. ✓
-  - [x] Verify remaining-length encoding/decoding handles multi-byte lengths correctly — encoding and decoding both handle 1-4 byte lengths with overflow guard. ✓
-  - [x] Audit topic string construction — `device/{serial}/report` and `device/{serial}/request` match [REF-MQTT-CONN]. **Fixed:** pre-computed `request_topic` field replaces per-publish `format!()` allocation.
-  - [x] Check QoS handling — **Fixed:** packet ID extraction now triggers for `qos >= 1` (was `qos == 1`), correctly handling QoS 0/1/2 packet structure. PUBACK remains gated on QoS 1 only.
-  - [x] Verify connection keepalive logic and timeout handling — `MQTT_KEEP_ALIVE_SECS: 30`, `MQTT_ZOMBIE_TIMEOUT_SECS: 10` per [REF-MQTT-ZOMBIE], `MQTT_STALE_CONNECTION_SECS: 60` per [REF-MQTT-CONN]. ✓
-  - [x] Audit the read loop — `read_exact_packet` blocks on `read_exact`; no partial-packet panic or infinite loop risk. ✓
-  - [x] Check buffer management — **Fixed:** added `MQTT_MAX_PAYLOAD_BYTES` (1 MiB) upper bound in `read_exact_packet` to prevent OOM from malformed remaining-length headers.
-  - [x] Verify sequence ID generation and wrapping behavior — starts at 2, wraps via `wrapping_add(1)`, skips 0. Tested. ✓
-  - [x] **Fixed:** removed dead `Timer: TimerProvider` generic parameter from `connect()` and all call sites (CLI, tests). Cleaned up unused `DummyTimer`/`TokioTimer` imports.
-  - [x] **Fixed:** CONNACK non-zero return code now logged at `warn` level before returning `AccessDenied`.
+<details>
+<summary>Phase 5: Telemetry — 8 fixes (4 critical), 17 new tests. Verified against real P1S wire capture</summary>
 
-- [x] **`src/mqtt/commands.rs`** (~847 lines)
-  - [x] Audit every command payload struct — all serde field names verified against reference docs:
-    - [x] `GCodeRequest` — `gcode_line` command, `param` with `\n` suffix, `print:` envelope. ✓
-    - [x] `PrintSpeedRequest` — `print_speed` command, `param` as string. ✓. **Fixed:** `new()` visibility narrowed to `pub(crate)`; external consumers use `PrinterClient::set_print_speed(PrintSpeed)`.
-    - [x] Temperature commands via G-code wrapper — no dedicated structs (correct per architecture). ✓
-    - [x] `LedCtrlRequest` — `ledctrl` command, `system:` envelope, timing fields zeroed for on/off. ✓
-    - [x] `ProjectFileRequest` / `PrintJobConfig` — all fields match [REF-MQTT-LIFECYCLE]. **Fixed:** `timelapse`, `layer_inspect`, `nozzle_offset_cali` now configurable via builder methods instead of hardcoded. `nozzle_offset_cali` uses `Option<bool>` to defer to quirks engine default.
-    - [x] `CalibrationRequest` — `option` bitmask, `print:` envelope. ✓
-    - [x] AMS commands (`AmsFilamentSettingRequest`, `AmsControlRequest`, `AmsGetRfidRequest`, `AmsChangeFilamentRequest`, `AmsFilamentDryingRequest`) — all fields match [REF-MQTT-LIFECYCLE] and [REF-AMS-DRYER]. **Fixed:** `AmsFilamentSettingRequest::new()` accepts `Option<&str>` for `tray_sub_brands` (was hardcoded `"{type} Basic"`).
-  - [x] Verify `#[serde(rename = "...")]` — only `AirductPayload::mode_id` → `"modeId"`, matches ref camelCase. ✓
-  - [x] Check `TASK_ID_MAX` and `clamp_task_id()` — `i32::MAX as u64`, returns `u32`. Tested. ✓
-  - [x] Audit `PrintJobConfig` builder — sensible defaults, builder pattern, `AmsMappingTable` polymorphism verified by tests. ✓
-  - [x] Check `CalibrationOption` bitmask — values 2/4/8/16/32 match ref bits 1-5. Bits 0/6 (internal calibrations) deliberately omitted from public API. ✓
-  - [x] Verify `PrintSpeed` enum — values 1-4 match ref `"1"`-`"4"` string mapping in `client.rs`. ✓
-  - [x] Envelope wrappers verified — `pushing:` (pushall), `info:` (get_version), `system:` (ledctrl), `print:` (all others). ✓
+**Files:** `src/types/telemetry.rs`, `mod.rs` (~754 lines)
 
-- [x] **`src/mqtt/mod.rs`** (~20 lines)
-  - [x] Verify re-exports — **Fixed:** added missing `ProjectAmsMapping2Entry` re-export (needed by `PrintJobConfig::with_ams_mapping2()`).
+**Critical fixes:** temp fields `u32`→`f64`, `device` nesting for pushall/incremental, `CtcInfo::temp` `f32`→`u32`, `AmsTray.id` `u8`→`String`
 
----
+**Other fixes:** Added `VirtualTray`, `IpcamTelemetry`, `bed_target_temper`, `total_layer_num` alias, `mc_percent`
 
-## Phase 4: FTPS Client & Parser (`src/ftps/`)
+**Re-exports added:** `AirductCollection`, `AirductPart`, `AmsDrySetting`, `CtcInfo`, `CtcTelemetry`, `IpcamTelemetry`, `VirtualTray`
+</details>
 
-**Reference:** `02_ftps.md` [REF-FTPS-CONN]
-**Lines:** ~966
+<details>
+<summary>Phase 6: Discovery — 5 fixes, 9 new tests. NT/ST fallback, new SsdpDevice fields</summary>
 
-- [x] **`src/ftps/client.rs`** (~685 lines)
-  - [x] Audit FTP command/response parsing — verify against [REF-FTPS-CONN]. **Fixed:** `read_response` now accumulates multi-line response bodies (was discarding continuation lines, breaking STAT fallback). Added `FTP_MAX_RESPONSE_LINE_BYTES` (4096) guard to `read_line_raw` to prevent OOM. Added `FTP_MAX_RESPONSE_LINES` (100) iteration limit to `read_response` to prevent infinite loops on malformed input.
-  - [x] Check `FTP_*` constants against reference doc connection parameters — all match [REF-FTPS-CONN]. ✓
-  - [x] Verify PASV mode port parsing (`parse_pasv_port`) — edge cases with malformed responses. **Fixed:** arithmetic overflow on port computation now uses `u32` intermediate with range validation.
-  - [x] Audit TLS session reuse for data connections — matches Bambu's FTPS behavior. `TlsConnector` wraps each data channel. **Fixed:** P2S/X2D TLS 1.2 enforcement via `build_unsafe_client_config_with_options(force_tls_1_2)` driven by `enforce_ftps_tls_1_2()` quirk. CLI storage.rs updated.
-  - [x] Check file listing parsing — malformed listings gracefully skipped via `continue`. ✓
-  - [x] Verify upload/download correctness — uploads verified via SIZE after both 226 and 426 paths per [REF-FTPS-XFER]. **Fixed:** upload error propagation — network errors from `read_response` now propagate as `NetworkError` instead of being mapped to `DiskWriteFailure`.
-  - [x] Audit timeout handling during file transfers — timeouts rely on underlying socket/TLS layer. Post-upload 226 wait can take up to 300s per [REF-FTPS-FLUSH], handled by blocking on `read_response`. ✓
-  - [x] Check for off-by-one errors in buffer reads — chunked upload loop correctly handles `data.len()` boundary. ✓
-  - [x] Verify the connection state machine — sequential command/response pairs, no out-of-order risk. **Added:** `TYPE I` binary mode command during connect to prevent ASCII-mode line ending corruption per RFC 959. **Added:** `disconnect()` method sending `QUIT` for clean session teardown. **Fixed:** `write_command` no longer allocates a `String` per command — uses two `write_all` calls.
+**Files:** `src/discovery/mod.rs`, `parser.rs` (~555 lines)
 
-- [x] **`src/ftps/parser.rs`** (~267 lines)
-  - [x] Audit FTP response parsing — multi-line responses now handled correctly (see `read_response` fix above). ✓
-  - [x] Check directory listing parsing against actual Bambu FTP output format — whitespace-insensitive tokenization via `split_whitespace()` matches [REF-FTPS-OPS] variable padding. Filenames with spaces correctly reconstructed via `join(" ")`. ✓
-  - [x] Verify date/time parsing in directory listings — temporal rollover heuristic correctly decrements year when parsed (month, day, hour, minute) tuple exceeds current time. ✓
-  - [x] Check for panics on malformed input — all parsing uses `and_then`/`ok()`/`unwrap_or()` with `continue` on failure. No `.unwrap()` calls on user input. ✓
+**Fixes:**
+- UTF-8 bail-out: refactored into `extract_headers()` helper; non-UTF-8 optional headers skip instead of discarding entire packet
+- NT/ST fallback model resolution per [REF-NET-DISC] Protocol Violation #7
+- Added `signal_dbm: Option<i32>`, `bind_state`, `security_link` fields to `SsdpDevice`
+- `elapsed_millis` now advances on every poll cycle (was only on timeouts — could run indefinitely)
+- `broadcast_search()` returns `Err` when both multicast and broadcast sends fail
 
-- [x] **`src/ftps/mod.rs`** (~14 lines)
-  - [x] Verify re-exports — `BambuFtpsClient`, `FtpDataStreamFactory`, `FtpFile`, `parse_unix_listing` all exported. ✓
-
----
-
-## Phase 5: Telemetry & Types (`src/types/`)
-
-**Reference:** `03_mqtt_telemetry.md`, `04_toolhead_thermal_motion.md` [REF-THER-DECODE], `05_materials_ams.md` [REF-AMS-DECODE]
-**Lines:** ~754
-**Status:** **Complete.** All 8 issues fixed, 17 new tests added (111 total). Verified against P1S real wire capture.
-**Verified against:** Real P1S wire capture (`tests/mocks/P1S.json`), pybambu mock captures (H2D real, P1P real, + 9 fabricated mocks)
-
-- [x] **`src/types/telemetry.rs`** — All review items complete. All fixes applied:
-  - [x] **Fix A (CRITICAL):** Temp fields `u32` → `f64` (wire sends floats on P1S/P1P/A1). `unpack_temperature()` now accepts `f64`. Monitor updated to use `as_f64()`.
-  - [x] **Fix B (CRITICAL):** `device` nesting fixed — added `device: Option<DeviceTelemetry>` to `PrintTelemetry`, moved `ctc` into `DeviceTelemetry`. Both pushall and incremental paths now captured.
-  - [x] **Fix C (CRITICAL):** `CtcInfo::temp` `f32` → `u32` (composite-packed integers)
-  - [x] **Fix D:** Added `VirtualTray` struct with full P1S/H2D schema, `vt_tray: Option<VirtualTray>` on `PrintTelemetry`
-  - [x] **Fix E:** Added `bed_target_temper: Option<f64>` field
-  - [x] **Fix F (CRITICAL):** `AmsTray.id` `u8` → `String` (wire sends strings). AMS parser tests updated.
-  - [x] **Fix G:** Created `IpcamTelemetry` struct replacing flat `ipcam_dev`/`ipcam_record`/`timelapse` fields. Captures `mode_bits`, `resolution`, `tutk_server`.
-  - [x] **Fix H:** Added `#[serde(alias = "total_layer_num")]` to `total_layers`, added `mc_percent: Option<i32>`
-  - [x] **Tests:** End-to-end P1S.json test + 16 unit tests covering: `deserialize_permissive_bool` variants, `parse_hex_string` variants, ethernet bitmask, temperature boundaries, CTC deserialization, device nesting paths, `power_on_flag`, `total_layer_num` alias, `mc_percent`, `VirtualTray`, nozzle info standard/IDEX keys
-
-- [x] **`src/types/mod.rs`** — Re-exports updated: added `AirductCollection`, `AirductPart`, `AmsDrySetting`, `CtcInfo`, `CtcTelemetry`, `IpcamTelemetry`, `VirtualTray`.
-
----
-
-## Phase 6: Discovery (`src/discovery/`)
-
-**Reference:** `01_network_discovery.md` [REF-NET-DISC]
-**Lines:** ~555
-
-- [ ] **`src/discovery/mod.rs`** (~322 lines)
-  - [ ] Audit SSDP multicast implementation — verify multicast address, port, and M-SEARCH format against [REF-NET-DISC]
-  - [ ] Check discovery timeout and retry logic
-  - [ ] Verify device deduplication — can the same printer appear multiple times?
-  - [ ] Audit UDP socket binding — does it work on multi-homed hosts?
-  - [ ] Check for race conditions in concurrent discovery responses
-  - [ ] Verify re-export of `BambuModel` for backward compatibility
-
-- [ ] **`src/discovery/parser.rs`** (~233 lines)
-  - [ ] Audit SSDP response parsing — are all required headers extracted?
-  - [ ] Verify model string extraction and mapping to `BambuModel`
-  - [ ] Check IP address parsing — are IPv6 addresses handled or explicitly excluded?
-  - [ ] Verify serial number, device name extraction
-  - [ ] Test with malformed/partial SSDP responses — does parsing fail gracefully?
+**CLAUDE.md:** Updated BambuModel canonical path — `src/models.rs` is single source, no discovery re-export
+</details>
 
 ---
 
@@ -396,22 +311,37 @@ For each model file:
 
 ---
 
-## Phase 14: Cross-Cutting Concerns
+## Phase 14: Lint & Compatibility Sweep
 
-These items span the entire codebase and should be checked after module-level review is complete.
+Mechanical verification pass — run tools, fix warnings, ensure consistency.
 
 - [ ] **no_std compatibility:** Run `cargo build --no-default-features --features alloc --lib` and verify clean compilation
 - [ ] **Clippy:** Run `cargo clippy` across all feature combinations and resolve warnings
 - [ ] **Feature gating consistency:** Grep for `#[cfg(feature = "...")]` — verify all gates are correct and no dead code paths exist
 - [ ] **`alloc` imports under no_std:** Verify all `use alloc::{string::String, vec::Vec, format}` imports are correctly gated
 - [ ] **Magic numbers audit:** Grep for numeric literals in non-const positions — should they be named constants?
-- [ ] **Error message quality:** Spot-check error messages for clarity and actionability
 - [ ] **Logging discipline:** Verify `log::debug!`/`trace!`/`warn!` usage is consistent — no `println!` in library code
 - [ ] **Public API surface:** Review `pub` visibility — are internal helpers accidentally public?
+- [x] **Dead generic parameter:** `BambuMqttClient::connect<Timer: TimerProvider>` — **Removed** in Phase 3. All call sites updated.
+
+---
+
+## Phase 15: Dependency & Protocol Audit
+
+Read-heavy analysis — documentation alignment, dependency health, error UX.
+
 - [ ] **Dependency versions:** Check `Cargo.toml` dep versions against latest — any known CVEs or breaking changes?
 - [ ] **Reference doc alignment summary:** Compile a list of any protocol field names, constants, or behaviors in the code that deviate from the reference docs
-- [ ] **ESP-IDF `TlsConnector` gap:** ESP-IDF's `EspTls` manages its own TCP connection internally, which doesn't fit the `TlsConnector<RawStream>` "wrap an existing stream" trait model. Evaluate whether to (a) refactor `TlsConnector` into a higher-level `SecureConnect` trait supporting both models, or (b) use raw mbedtls bindings to wrap an existing socket fd. Blocked on ESP-IDF target maturity.
-- [x] **Dead generic parameter:** `BambuMqttClient::connect<Timer: TimerProvider>` — **Removed** in Phase 3. All call sites updated.
+- [ ] **Error message quality:** Spot-check error messages for clarity and actionability
+
+---
+
+## Phase 16: Platform Abstraction Gaps
+
+Design work on the trait layer — requires architectural decisions. Blocked on ESP-IDF target maturity.
+
+- [ ] **ESP-IDF `TlsConnector` gap:** ESP-IDF's `EspTls` manages its own TCP connection internally, which doesn't fit the `TlsConnector<RawStream>` "wrap an existing stream" trait model. Evaluate whether to (a) refactor `TlsConnector` into a higher-level `SecureConnect` trait supporting both models, or (b) use raw mbedtls bindings to wrap an existing socket fd.
+- [ ] **`TimerProvider`-based discovery deadline:** `discover_devices` tracks elapsed time by counting socket poll cycles (~100ms each) rather than measuring wall-clock time. This is inaccurate and prevents platform-agnostic timeout semantics. Evaluate adding a `timeout` method or `select`-style deadline to `TimerProvider`, and refactor `discover_devices` to use it instead of the poll counter.
 
 ---
 
@@ -424,7 +354,7 @@ These items span the entire codebase and should be checked after module-level re
 | 3 | MQTT | 3 | ~1470 | **Complete** |
 | 4 | FTPS | 3 | ~966 | **Complete** |
 | 5 | Telemetry & Types | 2 | ~754 | **Complete** |
-| 6 | Discovery | 2 | ~555 | Not started |
+| 6 | Discovery | 2 | ~555 | **Complete** |
 | 7 | AMS | 3 | ~510 | Not started |
 | 8 | Camera | 3 | ~346 | Not started |
 | 9 | Diagnostics | 3 | ~591 | Not started |
@@ -432,5 +362,7 @@ These items span the entire codebase and should be checked after module-level re
 | 11 | Client Coordinator | 1 | ~604 | Not started |
 | 12 | CLI Tool | 7 | ~978 | Not started |
 | 13 | Test Infrastructure | 16+ | ~1398 | Not started |
-| 14 | Cross-Cutting | — | — | Not started |
+| 14 | Lint & Compatibility | — | — | Not started |
+| 15 | Dependency & Protocol Audit | — | — | Not started |
+| 16 | Platform Abstraction Gaps | — | — | Blocked |
 | **Total** | | **~58** | **~9,796** | |
