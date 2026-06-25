@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
-use bambino::camera::CAMERA_PORT_BINARY_JPEG;
+use bambino::camera::CameraProtocol;
 use bambino::camera::binary::BambuBinaryCameraStream;
 use bambino::error::BambuError;
 use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
@@ -58,11 +58,12 @@ async fn run_snapshot(
     validate_params(ip, serial, access_code)?;
 
     let model = resolve_model(serial, None);
-    let port = model.quirks().camera_stream_port();
-    if port != CAMERA_PORT_BINARY_JPEG {
+    let protocol = model.quirks().camera_protocol();
+    if protocol != CameraProtocol::BinaryJpeg {
         eprintln!(
             "Warning: {} uses RTSPS (port {}), not the binary JPEG protocol.",
-            serial, port
+            serial,
+            protocol.default_port()
         );
         eprintln!("The snapshot command only supports binary camera streaming (A1/P1 series).");
         return Err(BambuError::ProtocolViolation(
@@ -70,13 +71,14 @@ async fn run_snapshot(
         ));
     }
 
-    println!("Connecting to {}:{} ...", ip, CAMERA_PORT_BINARY_JPEG);
+    let port = protocol.default_port();
+    println!("Connecting to {}:{} ...", ip, port);
 
     let config = build_unsafe_client_config();
     let connector = tokio_rustls::TlsConnector::from(config);
     let tls_connector = TokioTlsConnector::new(connector);
 
-    let addr = format!("{}:{}", ip, CAMERA_PORT_BINARY_JPEG);
+    let addr = format!("{}:{}", ip, port);
     let tcp = tokio::time::timeout(
         Duration::from_secs(CONNECT_TIMEOUT_SECS),
         TcpStream::connect(&addr),
@@ -85,9 +87,7 @@ async fn run_snapshot(
     .map_err(|_| BambuError::NetworkError(SocketError::TimedOut))?
     .map_err(to_socket_error)?;
 
-    let tls = tls_connector
-        .connect(ip, CAMERA_PORT_BINARY_JPEG, TokioIo(tcp))
-        .await?;
+    let tls = tls_connector.connect(ip, port, TokioIo(tcp)).await?;
 
     let mut camera = BambuBinaryCameraStream::new(tls);
 

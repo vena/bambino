@@ -1,9 +1,18 @@
 //! # X2 Series (X2D CoreXY) Quirks
 //!
 //! Handles parameters unique to the X2D dual-carriage auxiliary-cooling model.
+//!
+//! Build volumes: Main Nozzle 256×256×260mm, Aux/Dual 235.5×256×256mm.
+//! Z-max uses the conservative aux/dual value (256mm).
 
+use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
+
+pub const X2D_Z_MAX: f32 = 256.0;
+pub const X2D_NOZZLE_TEMP_MAX: u16 = 300;
+pub const X2D_BED_TEMP_MAX: u16 = 120;
+pub const X2D_CHAMBER_TEMP_MAX: u16 = 65;
 
 pub struct X2Quirks;
 
@@ -24,8 +33,8 @@ impl ModelQuirks for X2Quirks {
         true
     }
 
-    fn camera_stream_port(&self) -> u16 {
-        322
+    fn camera_protocol(&self) -> CameraProtocol {
+        CameraProtocol::Rtsps
     }
 
     fn ignores_chamber_temperature(&self) -> bool {
@@ -37,7 +46,7 @@ impl ModelQuirks for X2Quirks {
     }
 
     fn has_active_chamber_heater(&self) -> bool {
-        false
+        true
     }
 
     fn physical_nozzle_count(&self) -> u8 {
@@ -58,5 +67,21 @@ impl ModelQuirks for X2Quirks {
 
     fn auxiliary_fan_uses_percentage(&self) -> bool {
         true
+    }
+
+    fn z_max(&self) -> f32 {
+        X2D_Z_MAX
+    }
+
+    fn nozzle_temp_max(&self) -> u16 {
+        X2D_NOZZLE_TEMP_MAX
+    }
+
+    fn bed_temp_max(&self) -> u16 {
+        X2D_BED_TEMP_MAX
+    }
+
+    fn chamber_temp_max(&self) -> u16 {
+        X2D_CHAMBER_TEMP_MAX
     }
 }

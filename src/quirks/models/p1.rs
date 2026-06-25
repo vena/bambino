@@ -2,6 +2,7 @@
 //!
 //! Tracks constraints and kinematic properties of early and enclosed low-power RTOS machines.
 
+use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrintTelemetry;
 
@@ -10,6 +11,10 @@ pub const POST_BOOT_CONNECT_DELAY: u64 = 25;
 
 /// Connection handshake timeout limits specifically configured for low-resource ESP32 platforms
 pub const CRYPTO_HANDSHAKE_TIMEOUT_MS: u64 = 5000;
+
+pub const P1_Z_MAX: f32 = 256.0;
+pub const P1_NOZZLE_TEMP_MAX: u16 = 300;
+pub const P1_BED_TEMP_MAX: u16 = 100;
 
 pub struct P1Quirks;
 
@@ -30,8 +35,8 @@ impl ModelQuirks for P1Quirks {
         false
     }
 
-    fn camera_stream_port(&self) -> u16 {
-        6000
+    fn camera_protocol(&self) -> CameraProtocol {
+        CameraProtocol::BinaryJpeg
     }
 
     fn ignores_chamber_temperature(&self) -> bool {
@@ -56,5 +61,17 @@ impl ModelQuirks for P1Quirks {
 
     fn is_bed_on_z(&self) -> bool {
         true
+    }
+
+    fn z_max(&self) -> f32 {
+        P1_Z_MAX
+    }
+
+    fn nozzle_temp_max(&self) -> u16 {
+        P1_NOZZLE_TEMP_MAX
+    }
+
+    fn bed_temp_max(&self) -> u16 {
+        P1_BED_TEMP_MAX
     }
 }

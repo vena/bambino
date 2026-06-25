@@ -151,37 +151,32 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ---
 
-## Phase 10: Quirks Engine (`src/quirks/`)
+<details>
+<summary>Phase 10: Quirks Engine — 10 fixes (8 correctness bugs), 3 new tests, new a2.rs module. Cross-referenced against pybambu, Bambuddy, and Bambu Lab specs</summary>
 
-**Reference:** All chapters (model-specific behavior)
-**Lines:** ~820
+**Files:** `src/quirks/mod.rs`, `models/{a1,a2,p1,p2,x1,x2,h2}.rs`, `models/mod.rs`, `src/bin/bambino-cli/camera.rs`, `reference/04_toolhead_thermal_motion.md` (~820 lines)
 
-- [ ] **`src/quirks/mod.rs`** (~482 lines)
-  - [ ] Audit `ModelQuirks` trait — are all default implementations correct?
-  - [ ] Verify `is_unsafe_homing_command()` G-code parsing — edge cases: extra whitespace, lowercase, mixed case, trailing arguments
-  - [ ] Audit `format_z_move_gcode()` bounds validation — are min/max Z values correct per model?
-  - [ ] Check `relative_z_move_gcode()` default — is the G-code format correct?
-  - [ ] Verify `z_max()` values per model family against printer specs
-  - [ ] Audit capability methods: `requires_wallclock_rtsp_timestamps()`, `supports_auxiliary_right_fan()`, `auxiliary_fan_uses_percentage()`
-  - [ ] **[From Phase 8]** Replace `camera_stream_port() -> u16` with `camera_protocol() -> CameraProtocol` on the `ModelQuirks` trait. Port can be derived via `CameraProtocol::default_port()`. Requires changes in:
-    - `src/quirks/mod.rs`: trait definition + existing tests that assert `camera_stream_port()`
-    - `src/quirks/models/{a1,p1,p2,x1,x2,h2}.rs`: all model impls return `CameraProtocol` variant
-    - `src/camera/mod.rs`: verify `CameraProtocol` and port constants are re-exported as needed
+**Fixes:**
+- `A1MiniQuirks` split from `A1Quirks`: A1 Mini has 180mm Z-max but shared `A1Quirks` defaulted to 256mm — could command Z moves 76mm beyond physical limit. Added macro-based `impl_a1_shared!` with parameterized `z_max`
+- `A2LQuirks` extracted to new `models/a2.rs`: A2L has 330×320×325mm build volume (Z=325mm) but was sharing `A1Quirks` at 256mm. Separate product line warranted its own module
+- Per-model `z_max()` values set from Bambu Lab official specs. H2 series uses conservative (dual-nozzle) Z limits since the quirks engine cannot know which nozzle mode is active during a print:
+  - H2S: 340mm (single nozzle only)
+  - H2D/H2D Pro: 320mm (conservative; 325mm in single-nozzle mode)
+  - H2C: 320mm (conservative; 325mm with right nozzle only)
+  - X2D: 256mm (conservative for aux/dual nozzle; main nozzle reaches 260mm)
+- `P2Quirks::has_active_chamber_heater()` `true`→`false`: P2S has a chamber temperature sensor and airduct-based heat retention but no PTC heater element — M141 is silently ignored by P2S firmware. Confirmed by pybambu (`ACTIVE_CHAMBER_HEATER` excludes P2S) and Bambuddy (`CHAMBER_HEATER_MODELS` excludes P2S). Reference doc corrected
+- `X2Quirks::has_active_chamber_heater()` `false`→`true`: X2D ships with an active PTC chamber heater. Confirmed by both pybambu and Bambuddy
+- `P2Quirks`: added `supports_auxiliary_right_fan()→true` and `auxiliary_fan_uses_percentage()→true`. P2S mock telemetry contains `big_fan2_speed` and fan ID `160` in airduct control lists. Confirmed by pybambu (`SECONDARY_AUX_FAN` includes `p2_printers`)
+- **[From Phase 8]** Replaced `camera_stream_port()→u16` with `camera_protocol()→CameraProtocol` on `ModelQuirks` trait. All model impls return `CameraProtocol::Rtsps` or `::BinaryJpeg`. CLI `camera.rs` uses type-safe protocol matching instead of raw port number comparison. Port derivable via `CameraProtocol::default_port()`
 
-- [ ] **`src/quirks/models/a1.rs`** (~65 lines) — verify A1 family quirks
-- [ ] **`src/quirks/models/p1.rs`** (~60 lines) — verify P1 family quirks
-- [ ] **`src/quirks/models/p2.rs`** (~58 lines) — verify P2 family quirks (new model — extra scrutiny)
-- [ ] **`src/quirks/models/x1.rs`** (~106 lines) — verify X1C/X1E differentiation and TLS modes
-- [ ] **`src/quirks/models/x2.rs`** (~62 lines) — verify X2 quirks
-- [ ] **`src/quirks/models/h2.rs`** (~71 lines) — verify H2S/H2D/H2DPro/H2C differentiation
-- [ ] **`src/quirks/models/mod.rs`** (~12 lines) — verify re-exports
+**Reference doc fix:** `reference/04_toolhead_thermal_motion.md` M141 section corrected — P2S removed from active chamber heater list, X2D and full H2 series added
 
-For each model file:
-  - [ ] Verify `is_unsupported_command()` lists match known unsupported commands for that model
-  - [ ] Verify TLS mode is correct (TLS 1.2 vs 1.3, certificate behavior)
-  - [ ] Verify fan rounding and percentage quirks
-  - [ ] Verify door sensor method is correct (home_flag vs stat)
-  - [ ] Cross-reference Z-max, bed type, and axis configuration against printer hardware specs
+**Verified correct:** `is_unsafe_homing_command()` (whitespace/case/trailing args), `format_z_move_gcode()` (G-code sequence matches [REF-MOTO-GCODE], boundary handling), `FanSpeedDebouncer` (3-frame persistence, large-shift bypass), `fan_step_to_percentage()` (rounding formula), all door sensor routing (X1→`home_flag`, others→`stat`, per [REF-NET-DOOR]), `enforce_ftps_tls_1_2()` (P2S+X2D only), `stg_cur` idle bug (A1+P1 only), `requires_wallclock_rtsp_timestamps()` (P2S only), `is_unsupported_command()` (no-op scaffolding, acceptable), `quirks/models/mod.rs` re-exports
+
+**Tests added:** `test_a1_mini_quirks` (z_max=180, Z-move rejection at 200mm, acceptance at 150mm), `test_a2l_quirks` (z_max=325, Z-move bounds), z_max assertions added to all H2 model tests. All existing per-model tests updated for `camera_protocol()`, corrected chamber heater and aux fan assertions
+
+**Cross-reference sources:** pybambu (Home Assistant integration `models.py`), Bambuddy (`printer_manager.py`, `bambu_mqtt.py`), pybambu mock telemetry (`MOCK-P2S.json`, `MOCK-X2D.json`), Bambu Lab official comparison page (bambulab.com/en/compare)
+</details>
 
 ---
 
@@ -345,7 +340,7 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 | 7 | AMS | 3 | ~510 | **Complete** |
 | 8 | Camera | 3 | ~346 | **Complete** |
 | 9 | Diagnostics | 3 | ~591 | **Complete** |
-| 10 | Quirks Engine | 8 | ~820 | Not started |
+| 10 | Quirks Engine | 8 | ~820 | **Complete** |
 | 11 | Client Coordinator | 1 | ~604 | Not started |
 | 12 | CLI Tool | 7 | ~978 | Not started |
 | 13 | Test Infrastructure | 16+ | ~1398 | Not started |

@@ -44,7 +44,26 @@ On dual-extruder platforms equipped with active chamber heaters (such as the `H2
 *   **Value $\le 500$**: The chamber heater is inactive. The telemetry reports direct Celsius temperature, and the target is implicitly `0`.
 
 ##### Chamber Temperature Sensor Availability Constraints
-Only specific hardware lines (specifically the `X1C`, `X1E`, `X2D`, `P2S`, `H2C`, `H2D`, `H2D Pro`, and `H2S`) are equipped with physical chamber temperature sensors. For open-frame or entry-level models (specifically the `P1P`, `P1S`, `A1`, and `A1 Mini` series), no physical chamber temperature sensor exists on the toolhead or enclosure bus. Consequently, any `chamber_temper` or `ctc.info.temp` values reported in their telemetry status streams are meaningless static or junk values and must be ignored by state tracking systems.
+Only specific hardware lines (specifically the `X1C`, `X1E`, `X2D`, `P2S`, `H2C`, `H2D`, `H2D Pro`, and `H2S`) are equipped with physical chamber temperature sensors. For open-frame or entry-level models (specifically the `P1P`, `P1S`, `A1`, `A1 Mini`, and `A2L` series), no physical chamber temperature sensor exists on the toolhead or enclosure bus. Consequently, any `chamber_temper` or `ctc.info.temp` values reported in their telemetry status streams are meaningless static or junk values and must be ignored by state tracking systems.
+
+##### Temperature Operating Limits [REF-THER-LIMITS]
+Maximum safe operating temperatures per model, sourced from OrcaSlicer printer configuration files and Bambu Lab product specifications (bambulab.com/en/compare). These limits represent the hardware-enforced maximum values accepted by the firmware for `M104` (nozzle), `M140` (bed), and `M141` (chamber) G-code commands.
+
+| Model | Nozzle Max (°C) | Bed Max (°C) | Chamber Max (°C) | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| A1 | 300 | 100 | — | |
+| A1 Mini | 300 | 80 | — | |
+| A2L | 300 | 80 | — | |
+| P1P | 300 | 100 | — | |
+| P1S | 300 | 100 | — | |
+| P2S | 300 | 110 | — | Has chamber sensor but no active PTC heater |
+| X1C | 300 | 120 | — | Bed limit 110°C on 220V, 120°C on 110V |
+| X1E | 320 | 110 | 60 | |
+| X2D | 300 | 120 | 65 | |
+| H2S | 350 | 120 | 65 | |
+| H2D | 350 | 120 | 65 | |
+| H2D Pro | 350 | 120 | 65 | |
+| H2C | 350 | 120 | 65 | |
 
 #### Dual-Extruder Temperature Routing
 On dual-extruder IDEX architectures (such as the H2D), standard telemetry keys are mapped as follows:
@@ -86,7 +105,7 @@ M104 T0 S220
 ```
 
 #### Manual Active Chamber Temperature Target
-Sets the target temperature of the active chamber heating loop to 45°C (supported on enclosed models equipped with active chamber heaters, such as `P2S` and `X1E`):
+Sets the target temperature of the active chamber heating loop to 45°C (supported on enclosed models equipped with active PTC chamber heaters: `X1E`, `X2D`, `H2S`, `H2D`, `H2D Pro`, `H2C`). Note: `P2S` has a chamber temperature sensor and airduct-based heat retention but no dedicated PTC heater element — `M141` is silently ignored by P2S firmware:
 ```gcode
 M141 S45
 ```

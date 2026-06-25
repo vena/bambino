@@ -14,6 +14,7 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use crate::camera::CameraProtocol;
 use crate::models::BambuModel;
 use crate::types::PrintTelemetry;
 
@@ -37,11 +38,8 @@ pub trait ModelQuirks {
     /// front enclosure door open sensor switch.
     fn has_door_sensor(&self) -> bool;
 
-    /// Returns the physical local TCP port used by the model's camera interface [REF-NET-PORTS].
-    ///
-    /// * Port `322`: High-capability RTSPS stream.
-    /// * Port `6000`: Binary JPEG frame-buffer socket.
-    fn camera_stream_port(&self) -> u16;
+    /// Returns the camera streaming protocol used by this model's hardware [REF-NET-PORTS].
+    fn camera_protocol(&self) -> CameraProtocol;
 
     /// Returns true if the model is an open-frame or entry-level machine lacking
     /// a physical chamber temperature sensor [REF-THER-DECODE].
@@ -51,9 +49,9 @@ pub trait ModelQuirks {
     /// `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
     fn has_stg_cur_idle_bug(&self) -> bool;
 
-    /// Returns true if the model possesses an active heated chamber control loop [REF-MOTO-GCODE].
+    /// Returns true if the model possesses an active PTC chamber heater (M141) [REF-MOTO-GCODE].
     ///
-    /// Active chamber heating is restricted to specific enclosed models (e.g., X1E, P2S).
+    /// Supported on: X1E, X2D, H2S, H2D, H2D Pro, H2C.
     fn has_active_chamber_heater(&self) -> bool;
 
     /// Returns the number of physical extruder carriages present on the machine carriage bus.
@@ -125,6 +123,19 @@ pub trait ModelQuirks {
     fn auxiliary_fan_uses_percentage(&self) -> bool {
         false
     }
+
+    /// Returns the maximum safe nozzle/hotend temperature in °C for this model.
+    fn nozzle_temp_max(&self) -> u16;
+
+    /// Returns the maximum safe heated bed temperature in °C for this model.
+    fn bed_temp_max(&self) -> u16;
+
+    /// Returns the maximum active chamber heater temperature in °C for this model.
+    ///
+    /// Returns 0 for models without an active PTC chamber heater.
+    fn chamber_temp_max(&self) -> u16 {
+        0
+    }
 }
 
 impl BambuModel {
@@ -135,7 +146,9 @@ impl BambuModel {
     /// match-blocks across every single trait function in the quirks library.
     pub fn quirks(&self) -> &'static dyn ModelQuirks {
         match self {
-            BambuModel::A1 | BambuModel::A1Mini | BambuModel::A2L => &models::a1::A1Quirks,
+            BambuModel::A1 => &models::a1::A1Quirks,
+            BambuModel::A2L => &models::a2::A2LQuirks,
+            BambuModel::A1Mini => &models::a1::A1MiniQuirks,
             BambuModel::P1P | BambuModel::P1S => &models::p1::P1Quirks,
             BambuModel::P2S => &models::p2::P2Quirks,
             BambuModel::X1C => &models::x1::X1CQuirks,
@@ -248,6 +261,7 @@ impl FanSpeedDebouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera::CameraProtocol;
     use crate::models::BambuModel;
 
     #[test]
@@ -277,22 +291,64 @@ mod tests {
 
     #[test]
     fn test_a1_quirks() {
-        for model in [BambuModel::A1, BambuModel::A1Mini, BambuModel::A2L] {
-            let q = model.quirks();
-            assert!(q.uses_plaintext_ftps_data_channel());
-            assert!(!q.enforce_ftps_tls_1_2());
-            assert!(!q.has_door_sensor());
-            assert_eq!(q.camera_stream_port(), 6000);
-            assert!(q.ignores_chamber_temperature());
-            assert!(q.has_stg_cur_idle_bug());
-            assert!(!q.has_active_chamber_heater());
-            assert_eq!(q.physical_nozzle_count(), 1);
-            assert!(!q.supports_nozzle_offset_calibration());
-            assert!(!q.is_bed_on_z());
-            assert!(!q.requires_wallclock_rtsp_timestamps());
-            assert!(!q.supports_auxiliary_right_fan());
-            assert!(!q.auxiliary_fan_uses_percentage());
-        }
+        let q = BambuModel::A1.quirks();
+        assert!(q.uses_plaintext_ftps_data_channel());
+        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.has_door_sensor());
+        assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
+        assert!(q.ignores_chamber_temperature());
+        assert!(q.has_stg_cur_idle_bug());
+        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(!q.is_bed_on_z());
+        assert!(!q.requires_wallclock_rtsp_timestamps());
+        assert!(!q.supports_auxiliary_right_fan());
+        assert!(!q.auxiliary_fan_uses_percentage());
+        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.bed_temp_max(), 100);
+        assert_eq!(q.chamber_temp_max(), 0);
+    }
+
+    #[test]
+    fn test_a2l_quirks() {
+        let q = BambuModel::A2L.quirks();
+        assert!(!q.uses_plaintext_ftps_data_channel());
+        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.has_door_sensor());
+        assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
+        assert!(q.ignores_chamber_temperature());
+        assert!(!q.has_stg_cur_idle_bug());
+        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(!q.is_bed_on_z());
+        assert_eq!(q.z_max(), 325.0);
+        assert!(q.relative_z_move_gcode(330.0, 3000).is_empty());
+        assert!(!q.relative_z_move_gcode(300.0, 3000).is_empty());
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.bed_temp_max(), 80);
+    }
+
+    #[test]
+    fn test_a1_mini_quirks() {
+        let q = BambuModel::A1Mini.quirks();
+        assert!(q.uses_plaintext_ftps_data_channel());
+        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.has_door_sensor());
+        assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
+        assert!(q.ignores_chamber_temperature());
+        assert!(q.has_stg_cur_idle_bug());
+        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.physical_nozzle_count(), 1);
+        assert!(!q.supports_nozzle_offset_calibration());
+        assert!(!q.is_bed_on_z());
+        assert_eq!(q.z_max(), 180.0);
+        assert!(q.relative_z_move_gcode(200.0, 3000).is_empty());
+        assert!(!q.relative_z_move_gcode(150.0, 3000).is_empty());
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.bed_temp_max(), 80);
     }
 
     #[test]
@@ -302,7 +358,7 @@ mod tests {
             assert!(!q.uses_plaintext_ftps_data_channel());
             assert!(!q.enforce_ftps_tls_1_2());
             assert!(!q.has_door_sensor());
-            assert_eq!(q.camera_stream_port(), 6000);
+            assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
             assert!(q.ignores_chamber_temperature());
             assert!(q.has_stg_cur_idle_bug());
             assert!(!q.has_active_chamber_heater());
@@ -311,6 +367,9 @@ mod tests {
             assert!(q.is_bed_on_z());
             assert!(!q.requires_wallclock_rtsp_timestamps());
             assert!(!q.supports_auxiliary_right_fan());
+            assert_eq!(q.z_max(), 256.0);
+            assert_eq!(q.nozzle_temp_max(), 300);
+            assert_eq!(q.bed_temp_max(), 100);
         }
     }
 
@@ -320,15 +379,20 @@ mod tests {
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(q.enforce_ftps_tls_1_2());
         assert!(q.has_door_sensor());
-        assert_eq!(q.camera_stream_port(), 322);
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(q.has_active_chamber_heater());
+        assert!(!q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.supports_auxiliary_right_fan());
+        assert!(q.supports_auxiliary_right_fan());
+        assert!(q.auxiliary_fan_uses_percentage());
+        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.bed_temp_max(), 110);
+        assert_eq!(q.chamber_temp_max(), 0);
     }
 
     #[test]
@@ -337,7 +401,7 @@ mod tests {
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforce_ftps_tls_1_2());
         assert!(q.has_door_sensor());
-        assert_eq!(q.camera_stream_port(), 322);
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
         assert!(!q.has_active_chamber_heater());
@@ -346,6 +410,10 @@ mod tests {
         assert!(q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
         assert!(!q.supports_auxiliary_right_fan());
+        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.chamber_temp_max(), 0);
     }
 
     #[test]
@@ -354,13 +422,17 @@ mod tests {
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforce_ftps_tls_1_2());
         assert!(q.has_door_sensor());
-        assert_eq!(q.camera_stream_port(), 322);
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
         assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
+        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.nozzle_temp_max(), 320);
+        assert_eq!(q.bed_temp_max(), 110);
+        assert_eq!(q.chamber_temp_max(), 60);
     }
 
     #[test]
@@ -369,15 +441,19 @@ mod tests {
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(q.enforce_ftps_tls_1_2());
         assert!(q.has_door_sensor());
-        assert_eq!(q.camera_stream_port(), 322);
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(!q.has_active_chamber_heater());
+        assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(q.supports_auxiliary_right_fan());
         assert!(q.auxiliary_fan_uses_percentage());
+        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.chamber_temp_max(), 65);
     }
 
     #[test]
@@ -386,13 +462,17 @@ mod tests {
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforce_ftps_tls_1_2());
         assert!(q.has_door_sensor());
-        assert_eq!(q.camera_stream_port(), 322);
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
         assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
+        assert_eq!(q.z_max(), 340.0);
+        assert_eq!(q.nozzle_temp_max(), 350);
+        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.chamber_temp_max(), 65);
     }
 
     #[test]
@@ -402,6 +482,11 @@ mod tests {
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
+        assert_eq!(q.z_max(), 320.0);
+        assert_eq!(q.nozzle_temp_max(), 350);
+        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.chamber_temp_max(), 65);
     }
 
     #[test]
@@ -410,6 +495,11 @@ mod tests {
         assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
+        assert_eq!(q.z_max(), 320.0);
+        assert_eq!(q.nozzle_temp_max(), 350);
+        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.chamber_temp_max(), 65);
     }
 
     #[test]
@@ -419,6 +509,11 @@ mod tests {
         assert_eq!(q.physical_nozzle_count(), 7);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
+        assert_eq!(q.z_max(), 320.0);
+        assert_eq!(q.nozzle_temp_max(), 350);
+        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.chamber_temp_max(), 65);
     }
 
     #[test]
@@ -426,6 +521,7 @@ mod tests {
         let q = BambuModel::Unknown.quirks();
         assert!(!q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 1);
+        assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
     }
 
     // Z-move gcode parameterization tests

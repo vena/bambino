@@ -5,6 +5,7 @@
 //! as mapped in [PLAN.md].
 
 pub mod a1;
+pub mod a2;
 pub mod h2;
 pub mod p1;
 pub mod p2;
