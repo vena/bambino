@@ -196,6 +196,10 @@ pub struct PrintJobConfig {
     pub bed_leveling: bool,
     pub run_flow_calibration: bool,
     pub run_vibration_compensation: bool,
+    pub timelapse: bool,
+    pub layer_inspect: bool,
+    /// `None` defers to the quirks engine default in `PrinterClient::start_print()`.
+    pub nozzle_offset_cali: Option<bool>,
     pub use_ams: bool,
     pub ams_mapping: Vec<i32>,
     pub ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
@@ -218,6 +222,9 @@ impl PrintJobConfig {
             bed_leveling: true,
             run_flow_calibration: true,
             run_vibration_compensation: true,
+            timelapse: true,
+            layer_inspect: true,
+            nozzle_offset_cali: None,
             use_ams: false,
             ams_mapping: Vec::new(),
             ams_mapping2: None,
@@ -247,6 +254,21 @@ impl PrintJobConfig {
 
     pub fn vibration_compensation(mut self, enabled: bool) -> Self {
         self.run_vibration_compensation = enabled;
+        self
+    }
+
+    pub fn timelapse(mut self, enabled: bool) -> Self {
+        self.timelapse = enabled;
+        self
+    }
+
+    pub fn layer_inspect(mut self, enabled: bool) -> Self {
+        self.layer_inspect = enabled;
+        self
+    }
+
+    pub fn nozzle_offset_calibration(mut self, enabled: bool) -> Self {
+        self.nozzle_offset_cali = Some(enabled);
         self
     }
 }
@@ -336,13 +358,17 @@ impl ProjectFileRequest {
                 subtask_id: clamp_task_id(config.raw_subtask_id).to_string(),
                 file: config.job_filename.clone(),
                 url,
-                timelapse: true,
+                timelapse: config.timelapse,
                 bed_type: config.bed_type.clone(),
                 bed_leveling: config.bed_leveling,
                 extrude_cali_flag: if config.run_flow_calibration { 1 } else { 0 },
-                nozzle_offset_cali: 0,
+                nozzle_offset_cali: if config.nozzle_offset_cali.unwrap_or(false) {
+                    1
+                } else {
+                    0
+                },
                 vibration_cali: config.run_vibration_compensation,
-                layer_inspect: true,
+                layer_inspect: config.layer_inspect,
                 use_ams: config.use_ams,
                 ams_mapping: mapping,
                 ams_mapping2: config.ams_mapping2.clone(),
@@ -513,11 +539,16 @@ impl AmsFilamentSettingRequest {
         tray_id: i32,
         preset_code: &str,
         material_type: &str,
+        sub_brands: Option<&str>,
         color_hex: &str,
         temp_min: u32,
         temp_max: u32,
         sequence_id: u64,
     ) -> Self {
+        let tray_sub_brands = match sub_brands {
+            Some(s) => String::from(s),
+            None => format!("{} Basic", material_type),
+        };
         Self {
             print: AmsFilamentSettingPayload {
                 command: "ams_filament_setting",
@@ -526,7 +557,7 @@ impl AmsFilamentSettingRequest {
                 tray_id,
                 tray_info_idx: String::from(preset_code),
                 tray_type: String::from(material_type),
-                tray_sub_brands: format!("{} Basic", material_type),
+                tray_sub_brands,
                 tray_color: String::from(color_hex),
                 nozzle_temp_min: temp_min,
                 nozzle_temp_max: temp_max,
@@ -748,7 +779,7 @@ pub struct PrintSpeedRequest {
 }
 
 impl PrintSpeedRequest {
-    pub fn new(speed_index_str: &str, sequence_id: u64) -> Self {
+    pub(crate) fn new(speed_index_str: &str, sequence_id: u64) -> Self {
         Self {
             print: PrintSpeedPayload {
                 command: "print_speed",

@@ -4,9 +4,7 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 
 use bambino::error::BambuError;
-use bambino::io::tokio::{
-    TokioTimer, TokioTlsConnector, build_unsafe_client_config, to_socket_error,
-};
+use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
 use bambino::io::{SocketError, TlsConnector, TokioIo};
 use bambino::mqtt::BambuMqttClient;
 
@@ -43,7 +41,7 @@ pub async fn connect_mqtt(
     let secure_stream = tls_connector.connect(ip, MQTTS_PORT, raw_io).await?;
 
     log::debug!("Initiating secure MQTT v3.1.1 protocol handshake");
-    let client = BambuMqttClient::connect::<TokioTimer>(secure_stream, serial, access_code).await?;
+    let client = BambuMqttClient::connect(secure_stream, serial, access_code).await?;
 
     log::debug!("MQTT protocol session established successfully");
     Ok(client)

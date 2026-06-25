@@ -15,6 +15,6 @@ pub use commands::{
     AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsFilamentDryingRequest,
     AmsFilamentSettingRequest, AmsGetRfidRequest, BuzzerRequest, CalibrationRequest,
     CleanPrintErrorRequest, GCodeRequest, GetVersionRequest, LedCtrlRequest, PrintJobConfig,
-    ProjectFileRequest, PromptSoundRequest, PushAllRequest, SkipObjectsRequest,
-    StandardControlRequest, clamp_task_id,
+    ProjectAmsMapping2Entry, ProjectFileRequest, PromptSoundRequest, PushAllRequest,
+    SkipObjectsRequest, StandardControlRequest, clamp_task_id,
 };

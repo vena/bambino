@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use crate::error::BambuError;
-use crate::io::{AsyncIo, SocketError, TimerProvider};
+use crate::io::{AsyncIo, SocketError};
 
 /// Monotonic counter for generating unique MQTT client IDs across connections.
 /// Each `connect()` call increments this to avoid stale QoS 1 queue conflicts
@@ -46,6 +46,7 @@ pub(crate) const HEADER_PUBLISH_QOS1: u8 = 0x32;
 pub(crate) const HEADER_PUBACK: u8 = 0x40;
 pub(crate) const HEADER_PINGREQ: u8 = 0xC0;
 
+pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 pub(crate) const MQTT_IN_FLIGHT_LIMIT: usize = 200;
 pub(crate) const MQTT_KEEP_ALIVE_SECS: u16 = 30;
 pub(crate) const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10;
@@ -189,6 +190,11 @@ async fn read_exact_packet<IO: AsyncIo>(
         }
     }
 
+    if rem_len > MQTT_MAX_PAYLOAD_BYTES {
+        log::warn!("MQTT payload length {} exceeds maximum", rem_len);
+        return Err(SocketError::InvalidInput);
+    }
+
     // Resize our buffer and read exactly the remaining length bytes
     payload_buf.resize(rem_len, 0);
     if rem_len > 0 {
@@ -215,7 +221,7 @@ pub struct MqttMessage {
 /// Lightweight MQTT client session running over an established `AsyncIo` stream.
 pub struct BambuMqttClient<IO: AsyncIo> {
     stream: IO,
-    serial: String,
+    request_topic: String,
     next_packet_id: u16,
     /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
     in_flight: BTreeSet<u16>,
@@ -233,7 +239,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     ///
     /// **Authentication Note:** If the printer's physical broker rejects credentials due to
     /// an invalid access code, this function returns `BambuError::AccessDenied`.
-    pub async fn connect<Timer: TimerProvider>(
+    pub async fn connect(
         mut stream: IO,
         serial: &str,
         access_code: &str,
@@ -286,7 +292,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         log::debug!("Connection accepted response byte: {}", connack_code);
 
         if connack_code != 0 {
-            // Authentication credentials rejected by physical broker (LAN access code incorrect)
+            log::warn!(
+                "Broker rejected connection with CONNACK return code: {}",
+                connack_code
+            );
             return Err(BambuError::AccessDenied);
         }
 
@@ -337,7 +346,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         Ok(Self {
             stream,
-            serial: String::from(serial),
+            request_topic: format!("device/{}/request", serial),
             next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
             in_flight: BTreeSet::new(),
             write_pending_secs: None,
@@ -366,16 +375,14 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             self.next_packet_id = 1; // 0 is reserved in MQTT specifications
         }
 
-        let topic = format!("device/{}/request", self.serial);
-
         log::debug!(
             "Publishing QoS 1 command (packet_id: {}) to topic: '{}' (payload length: {} bytes)",
             packet_id,
-            topic,
+            self.request_topic,
             payload.len()
         );
 
-        let packet = encode_publish_qos1(packet_id, &topic, payload);
+        let packet = encode_publish_qos1(packet_id, &self.request_topic, payload);
 
         self.stream
             .write_all(&packet)
@@ -436,10 +443,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
                     let mut payload_start = 2 + topic_len;
                     let mut packet_id = None;
-                    if qos == 1 {
+                    if qos >= 1 {
                         if payload_buf.len() < payload_start + 2 {
                             return Err(BambuError::ProtocolViolation(
-                                "Missing packet ID in QoS 1".into(),
+                                "Missing packet ID in QoS 1+".into(),
                             ));
                         }
                         let id = u16::from_be_bytes([
@@ -460,8 +467,9 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                         payload.len()
                     );
 
-                    // If incoming message was QoS 1, immediately acknowledge to physical broker
-                    if let Some(id) = packet_id {
+                    // QoS 1 requires PUBACK; QoS 2 would require PUBREC (unsupported)
+                    if qos == 1 {
+                        let id = packet_id.expect("QoS 1 always has packet_id");
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         let ack = encode_puback(id);

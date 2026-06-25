@@ -8,23 +8,13 @@
 
 mod common;
 
-use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use bambino::error::BambuError;
-use bambino::io::{TimerProvider, TokioIo};
+use bambino::io::TokioIo;
 use bambino::mqtt::BambuMqttClient;
 
 use common::mock_mqtt::run_mock_mqtt_broker;
-
-/// Dummy timer satisfying the platform-agnostic `TimerProvider` bound during testing.
-struct DummyTimer;
-
-impl TimerProvider for DummyTimer {
-    async fn sleep(&self, _duration: Duration) {
-        // No-op for instantaneous mock tests
-    }
-}
 
 #[tokio::test]
 async fn test_mqtt_client_lifecycle_and_telemetry() {
@@ -42,10 +32,9 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     ));
 
     // 2. Initialize Client (Executes CONNECT -> CONNACK and SUBSCRIBE -> SUBACK)
-    let mut client =
-        BambuMqttClient::connect::<DummyTimer>(TokioIo(client_stream), serial, "12345678")
-            .await
-            .expect("Failed to execute MQTT login and subscription handshake");
+    let mut client = BambuMqttClient::connect(TokioIo(client_stream), serial, "12345678")
+        .await
+        .expect("Failed to execute MQTT login and subscription handshake");
 
     // 3. Test QoS 1 Command Publishing and Tracking
     let _packet_id = client

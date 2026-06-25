@@ -79,35 +79,37 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 **Reference:** `03_mqtt_telemetry.md` [REF-MQTT-CONN], `04_toolhead_thermal_motion.md` [REF-MOTO-GCODE]
 **Lines:** ~1470
 
-- [ ] **`src/mqtt/client.rs`** (~603 lines)
-  - [ ] Audit MQTT packet construction — verify CONNECT, PUBLISH, SUBSCRIBE packet byte layouts against MQTT 3.1.1 spec
-  - [ ] Check `PACKET_TYPE_*` and `MQTT_*` constants against the reference doc [REF-MQTT-CONN]
-  - [ ] Verify remaining-length encoding/decoding handles multi-byte lengths correctly (values > 127)
-  - [ ] Audit topic string construction — are topic paths correct for all printer models?
-  - [ ] Check QoS handling — is QoS 0/1 used correctly for commands vs telemetry?
-  - [ ] Verify connection keepalive logic and timeout handling
-  - [ ] Audit the read loop — can partial MQTT packets cause panics or infinite loops?
-  - [ ] Check buffer management — are there overflow risks with large telemetry payloads?
-  - [ ] Verify sequence ID generation and wrapping behavior at `TASK_ID_MAX`
+- [x] **`src/mqtt/client.rs`** (~603 lines)
+  - [x] Audit MQTT packet construction — CONNECT, PUBLISH, SUBSCRIBE, PUBACK, PINGREQ byte layouts verified against MQTT 3.1.1 spec. ✓
+  - [x] Check `PACKET_TYPE_*` and `MQTT_*` constants against [REF-MQTT-CONN] — all match. ✓
+  - [x] Verify remaining-length encoding/decoding handles multi-byte lengths correctly — encoding and decoding both handle 1-4 byte lengths with overflow guard. ✓
+  - [x] Audit topic string construction — `device/{serial}/report` and `device/{serial}/request` match [REF-MQTT-CONN]. **Fixed:** pre-computed `request_topic` field replaces per-publish `format!()` allocation.
+  - [x] Check QoS handling — **Fixed:** packet ID extraction now triggers for `qos >= 1` (was `qos == 1`), correctly handling QoS 0/1/2 packet structure. PUBACK remains gated on QoS 1 only.
+  - [x] Verify connection keepalive logic and timeout handling — `MQTT_KEEP_ALIVE_SECS: 30`, `MQTT_ZOMBIE_TIMEOUT_SECS: 10` per [REF-MQTT-ZOMBIE], `MQTT_STALE_CONNECTION_SECS: 60` per [REF-MQTT-CONN]. ✓
+  - [x] Audit the read loop — `read_exact_packet` blocks on `read_exact`; no partial-packet panic or infinite loop risk. ✓
+  - [x] Check buffer management — **Fixed:** added `MQTT_MAX_PAYLOAD_BYTES` (1 MiB) upper bound in `read_exact_packet` to prevent OOM from malformed remaining-length headers.
+  - [x] Verify sequence ID generation and wrapping behavior — starts at 2, wraps via `wrapping_add(1)`, skips 0. Tested. ✓
+  - [x] **Fixed:** removed dead `Timer: TimerProvider` generic parameter from `connect()` and all call sites (CLI, tests). Cleaned up unused `DummyTimer`/`TokioTimer` imports.
+  - [x] **Fixed:** CONNACK non-zero return code now logged at `warn` level before returning `AccessDenied`.
 
-- [ ] **`src/mqtt/commands.rs`** (~847 lines)
-  - [ ] Audit every command payload struct — verify serde field names match the reference docs exactly:
-    - [ ] `GcodeLineRequest` against [REF-MOTO-GCODE]
-    - [ ] `PrintSpeedRequest` against reference
-    - [ ] Temperature commands against [REF-MOTO-GCODE]
-    - [ ] Light control commands
-    - [ ] Print job commands (`PrintJobConfig` builder)
-    - [ ] Calibration commands
-    - [ ] AMS-related commands against [REF-AMS-DECODE]
-  - [ ] Verify all `#[serde(rename = "...")]` annotations match protocol field names
-  - [ ] Check `TASK_ID_MAX` and `clamp_task_id()` — verify the clamp value is correct (i32::MAX)
-  - [ ] Audit `PrintJobConfig` builder — can invalid configurations be constructed? Are required fields enforced?
-  - [ ] Check `CalibrationOption` bitmask — verify flag values match protocol spec
-  - [ ] Verify `PrintSpeed` enum values map to the correct protocol integers
-  - [ ] Check that envelope wrappers (`print`, `pushing`, `system`, `info`) are used correctly per command type
+- [x] **`src/mqtt/commands.rs`** (~847 lines)
+  - [x] Audit every command payload struct — all serde field names verified against reference docs:
+    - [x] `GCodeRequest` — `gcode_line` command, `param` with `\n` suffix, `print:` envelope. ✓
+    - [x] `PrintSpeedRequest` — `print_speed` command, `param` as string. ✓. **Fixed:** `new()` visibility narrowed to `pub(crate)`; external consumers use `PrinterClient::set_print_speed(PrintSpeed)`.
+    - [x] Temperature commands via G-code wrapper — no dedicated structs (correct per architecture). ✓
+    - [x] `LedCtrlRequest` — `ledctrl` command, `system:` envelope, timing fields zeroed for on/off. ✓
+    - [x] `ProjectFileRequest` / `PrintJobConfig` — all fields match [REF-MQTT-LIFECYCLE]. **Fixed:** `timelapse`, `layer_inspect`, `nozzle_offset_cali` now configurable via builder methods instead of hardcoded. `nozzle_offset_cali` uses `Option<bool>` to defer to quirks engine default.
+    - [x] `CalibrationRequest` — `option` bitmask, `print:` envelope. ✓
+    - [x] AMS commands (`AmsFilamentSettingRequest`, `AmsControlRequest`, `AmsGetRfidRequest`, `AmsChangeFilamentRequest`, `AmsFilamentDryingRequest`) — all fields match [REF-MQTT-LIFECYCLE] and [REF-AMS-DRYER]. **Fixed:** `AmsFilamentSettingRequest::new()` accepts `Option<&str>` for `tray_sub_brands` (was hardcoded `"{type} Basic"`).
+  - [x] Verify `#[serde(rename = "...")]` — only `AirductPayload::mode_id` → `"modeId"`, matches ref camelCase. ✓
+  - [x] Check `TASK_ID_MAX` and `clamp_task_id()` — `i32::MAX as u64`, returns `u32`. Tested. ✓
+  - [x] Audit `PrintJobConfig` builder — sensible defaults, builder pattern, `AmsMappingTable` polymorphism verified by tests. ✓
+  - [x] Check `CalibrationOption` bitmask — values 2/4/8/16/32 match ref bits 1-5. Bits 0/6 (internal calibrations) deliberately omitted from public API. ✓
+  - [x] Verify `PrintSpeed` enum — values 1-4 match ref `"1"`-`"4"` string mapping in `client.rs`. ✓
+  - [x] Envelope wrappers verified — `pushing:` (pushall), `info:` (get_version), `system:` (ledctrl), `print:` (all others). ✓
 
-- [ ] **`src/mqtt/mod.rs`** (~20 lines)
-  - [ ] Verify re-exports are complete and intentional
+- [x] **`src/mqtt/mod.rs`** (~20 lines)
+  - [x] Verify re-exports — **Fixed:** added missing `ProjectAmsMapping2Entry` re-export (needed by `PrintJobConfig::with_ams_mapping2()`).
 
 ---
 
@@ -295,6 +297,7 @@ For each model file:
   - [ ] `set_bed_temperature()` / `set_nozzle_temperature()` — range validation?
   - [ ] `control_light()` — correct LED control values?
   - [ ] `start_print()` / `stop_print()` / `pause_print()` / `resume_print()`
+  - [ ] `start_print()` quirks integration: when `PrintJobConfig.nozzle_offset_cali` is `None`, apply `self.model.quirks().supports_nozzle_offset_calibration()` as the default before calling `ProjectFileRequest::from_config()`
   - [ ] `select_filament()` / AMS operations
   - [ ] Camera operations
   - [ ] Calibration operations
@@ -408,7 +411,7 @@ These items span the entire codebase and should be checked after module-level re
 - [ ] **Dependency versions:** Check `Cargo.toml` dep versions against latest — any known CVEs or breaking changes?
 - [ ] **Reference doc alignment summary:** Compile a list of any protocol field names, constants, or behaviors in the code that deviate from the reference docs
 - [ ] **ESP-IDF `TlsConnector` gap:** ESP-IDF's `EspTls` manages its own TCP connection internally, which doesn't fit the `TlsConnector<RawStream>` "wrap an existing stream" trait model. Evaluate whether to (a) refactor `TlsConnector` into a higher-level `SecureConnect` trait supporting both models, or (b) use raw mbedtls bindings to wrap an existing socket fd. Blocked on ESP-IDF target maturity.
-- [ ] **Dead generic parameter:** `BambuMqttClient::connect<Timer: TimerProvider>` declares a `Timer` bound that is never used in the method body. Remove or justify.
+- [x] **Dead generic parameter:** `BambuMqttClient::connect<Timer: TimerProvider>` — **Removed** in Phase 3. All call sites updated.
 
 ---
 
@@ -418,7 +421,7 @@ These items span the entire codebase and should be checked after module-level re
 |-------|--------|-------|-------|--------|
 | 1 | Core Foundation | 3 | ~329 | **Complete** |
 | 2 | Platform I/O | 4 | ~475 | **Complete** |
-| 3 | MQTT | 3 | ~1470 | Not started |
+| 3 | MQTT | 3 | ~1470 | **Complete** |
 | 4 | FTPS | 3 | ~966 | Not started |
 | 5 | Telemetry & Types | 2 | ~754 | Not started |
 | 6 | Discovery | 2 | ~555 | Not started |
