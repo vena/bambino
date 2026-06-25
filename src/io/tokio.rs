@@ -23,7 +23,7 @@ use alloc::string::String;
 pub struct TokioTimer;
 
 impl TimerProvider for TokioTimer {
-    async fn sleep(duration: core::time::Duration) {
+    async fn sleep(&self, duration: core::time::Duration) {
         ::tokio::time::sleep(duration).await;
     }
 }

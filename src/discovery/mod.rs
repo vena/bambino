@@ -150,14 +150,10 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 ///
 /// Combines the SSDP search request and polling loop within a unified, allocation-friendly API.
 /// Runs platform-agnostically by driving delay timings through the parameterized `TimerProvider`.
-///
-/// **Why `_timer` is prefixed with an underscore:** Sleep timings are invoked directly via the
-/// associated type function `T::sleep` to preserve clean generic signatures. The variable is retained
-/// as `_timer` to document the provider dependency while cleanly bypassing compiler warnings.
 #[cfg(any(feature = "std", feature = "alloc"))]
 pub async fn discover_devices<U, T>(
     timeout: core::time::Duration,
-    _timer: &T,
+    timer: &T,
 ) -> Result<Vec<SsdpDevice>, BambuError>
 where
     U: AsyncUdpSocket,
@@ -193,7 +189,7 @@ where
         for (engine, _) in &engines {
             engine.broadcast_search().await?;
         }
-        T::sleep(core::time::Duration::from_millis(50)).await;
+        timer.sleep(core::time::Duration::from_millis(50)).await;
     }
 
     let mut devices: Vec<SsdpDevice> = Vec::new();

@@ -25,7 +25,7 @@ use common::mock_mqtt::{handle_mqtt_handshake, read_publish_payload};
 struct DummyTimer;
 
 impl TimerProvider for DummyTimer {
-    async fn sleep(_duration: Duration) {
+    async fn sleep(&self, _duration: Duration) {
         // No-op for high-frequency in-memory tests
     }
 }

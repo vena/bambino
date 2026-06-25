@@ -91,7 +91,7 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 #[allow(async_fn_in_trait)]
 pub trait TimerProvider {
     /// Suspends execution of the calling task for the specified duration.
-    async fn sleep(duration: core::time::Duration);
+    async fn sleep(&self, duration: core::time::Duration);
 }
 
 /// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation

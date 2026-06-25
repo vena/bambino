@@ -45,30 +45,32 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 **Reference:** Chapters 1-3 (transport parameters)
 **Lines:** ~475
 
-- [ ] **`src/io/mod.rs`** (~170 lines)
-  - [ ] Audit trait definitions: `AsyncIo`, `TlsConnector`, `AsyncUdpSocket`, `TimerProvider`
-  - [ ] Verify trait methods have correct lifetime bounds and `Send`/`Sync` constraints for all three targets
-  - [ ] Check associated type bounds — are they unnecessarily restrictive or insufficiently constrained?
-  - [ ] Verify `SocketError` is flexible enough for all platform error types
+- [x] **`src/io/mod.rs`** (~170 lines)
+  - [x] Audit trait definitions: `AsyncIo`, `TlsConnector`, `AsyncUdpSocket`, `TimerProvider` — all sound. No `Send`/`Sync` bounds (correct: embassy single-threaded doesn't need them, tokio gets them from concrete types). ✓
+  - [x] Verify trait methods have correct lifetime bounds and `Send`/`Sync` constraints for all three targets ✓
+  - [x] Check associated type bounds — `TlsConnector::Stream: AsyncIo` is sufficient ✓
+  - [x] Verify `SocketError` is flexible enough — `Other(&'static str)` is `Copy`, covers all platforms ✓
+  - [x] **Changed:** `TimerProvider::sleep` signature changed from static to `&self` to support instance-based platform timers (ESP-IDF async timer)
 
-- [ ] **`src/io/tokio.rs`** (~220 lines)
-  - [ ] Audit `build_unsafe_client_config()` — is the TLS certificate bypass correctly scoped and documented?
-  - [ ] Check `NoCertificateVerification` — does it properly implement the rustls verifier trait?
-  - [ ] Verify `TokioTlsConnector` correctly maps to the `TlsConnector` trait
-  - [ ] Audit socket error conversion (`to_socket_error`) — are all `std::io::Error` kinds mapped meaningfully?
-  - [ ] Verify `TokioTimer` precision and cancellation behavior
-  - [ ] Check for resource leaks in UDP socket lifecycle
+- [x] **`src/io/tokio.rs`** (~220 lines)
+  - [x] Audit `build_unsafe_client_config()` — correctly uses Ring provider, `with_safe_default_protocol_versions()` (supports TLS 1.2 + 1.3). ✓
+  - [x] Check `NoCertificateVerification` — all four `ServerCertVerifier` methods implemented correctly. `supported_verify_schemes()` covers all common schemes (ED448 absent but unused by printers). ✓
+  - [x] Verify `TokioTlsConnector` correctly maps to the `TlsConnector` trait — SNI uses IP address, which is fine since `NoCertificateVerification` skips hostname checking per [REF-NET-SECURE]. ✓
+  - [x] Audit socket error conversion (`to_socket_error`) — comprehensive mapping; catch-all `Other` loses specificity for rare error kinds (`BrokenPipe`, `PermissionDenied`), acceptable. ✓
+  - [x] Verify `TokioTimer` precision and cancellation behavior — delegates to `tokio::time::sleep`. ✓
+  - [x] Check for resource leaks in UDP socket lifecycle — socket joins multicast group per [REF-NET-DISC], nonblocking set before Tokio conversion. ✓
 
-- [ ] **`src/io/embassy.rs`** (~207 lines)
-  - [ ] **CRITICAL:** Audit `unsafe impl Sync for SyncUnsafeCell<T>` — verify soundness; is `Sync` actually required? Is there concurrent access?
-  - [ ] Audit `unsafe { &mut *TLS_READ_BUFFER.0.get() }` and write buffer — check for aliasing violations
-  - [ ] Verify static buffer sizing is adequate for all expected TLS frames
-  - [ ] Check `rand_core` / `rand_core_legacy` bridging — does the RNG seeding produce cryptographically adequate randomness on target hardware?
-  - [ ] Verify trait implementations match the `mod.rs` trait contracts
+- [x] **`src/io/embassy.rs`** (~207 lines)
+  - [x] **FIXED:** `unsafe impl Sync` narrowed from blanket `<T>` to concrete `[u8; 16384]`. Added `AtomicBool` guard (`TLS_BUFFERS_IN_USE`) with RAII `BufferGuard` and `GuardedTlsConnection` wrapper — prevents aliased `&mut` references and releases buffers on drop.
+  - [x] **FIXED:** Removed `SimpleRng` (constant-output fake CryptoRng). `EmbassyTlsConnector` is now generic over `Rng: CryptoRng + RngCore` — callers must provide a platform-appropriate hardware RNG.
+  - [x] Verify static buffer sizing — 16384 bytes matches max TLS record size (RFC 5246). ✓
+  - [x] Verify trait implementations match the `mod.rs` trait contracts ✓
 
-- [ ] **`src/io/esp_idf.rs`** (~78 lines)
-  - [ ] Verify trait implementations are complete and correct
-  - [ ] Check error type conversions from ESP-IDF native errors
+- [x] **`src/io/esp_idf.rs`** (~78 lines)
+  - [x] **FIXED:** `EspIdfTimer` now wraps `EspAsyncTimer` from `esp-idf-svc` instead of blocking `std::thread::sleep()`. Provides proper async sleep that integrates with FreeRTOS scheduler.
+  - [x] **FIXED:** `EspIdfUdpSocket::bind()` now joins multicast group `239.255.255.250` per [REF-NET-DISC] (previously missing — would silently drop NOTIFY advertisements).
+  - [x] Check error type conversions — identical mapping to tokio's `to_socket_error()`, acceptable given mutually exclusive feature gates. ✓
+  - [x] **Noted:** No `TlsConnector` implementation — trait mismatch between ESP-IDF's `EspTls` (manages own TCP) and `TlsConnector` (wraps existing stream). Tracked in Phase 14.
 
 ---
 
@@ -405,6 +407,8 @@ These items span the entire codebase and should be checked after module-level re
 - [ ] **Public API surface:** Review `pub` visibility — are internal helpers accidentally public?
 - [ ] **Dependency versions:** Check `Cargo.toml` dep versions against latest — any known CVEs or breaking changes?
 - [ ] **Reference doc alignment summary:** Compile a list of any protocol field names, constants, or behaviors in the code that deviate from the reference docs
+- [ ] **ESP-IDF `TlsConnector` gap:** ESP-IDF's `EspTls` manages its own TCP connection internally, which doesn't fit the `TlsConnector<RawStream>` "wrap an existing stream" trait model. Evaluate whether to (a) refactor `TlsConnector` into a higher-level `SecureConnect` trait supporting both models, or (b) use raw mbedtls bindings to wrap an existing socket fd. Blocked on ESP-IDF target maturity.
+- [ ] **Dead generic parameter:** `BambuMqttClient::connect<Timer: TimerProvider>` declares a `Timer` bound that is never used in the method body. Remove or justify.
 
 ---
 
@@ -413,7 +417,7 @@ These items span the entire codebase and should be checked after module-level re
 | Phase | Module | Files | Lines | Status |
 |-------|--------|-------|-------|--------|
 | 1 | Core Foundation | 3 | ~329 | **Complete** |
-| 2 | Platform I/O | 4 | ~475 | Not started |
+| 2 | Platform I/O | 4 | ~475 | **Complete** |
 | 3 | MQTT | 3 | ~1470 | Not started |
 | 4 | FTPS | 3 | ~966 | Not started |
 | 5 | Telemetry & Types | 2 | ~754 | Not started |

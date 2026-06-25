@@ -21,7 +21,7 @@ use common::mock_mqtt::run_mock_mqtt_broker;
 struct DummyTimer;
 
 impl TimerProvider for DummyTimer {
-    async fn sleep(_duration: Duration) {
+    async fn sleep(&self, _duration: Duration) {
         // No-op for instantaneous mock tests
     }
 }

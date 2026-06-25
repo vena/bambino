@@ -13,7 +13,7 @@ pub struct EmbassyTimer;
 
 #[cfg(feature = "embassy")]
 impl TimerProvider for EmbassyTimer {
-    async fn sleep(duration: core::time::Duration) {
+    async fn sleep(&self, duration: core::time::Duration) {
         let micros = duration.as_micros() as u64;
         ::embassy_time::Timer::after(::embassy_time::Duration::from_micros(micros)).await;
     }
@@ -103,14 +103,16 @@ fn parse_endpoint(addr: &str) -> Option<::embassy_net::IpEndpoint> {
 
 /// A wrapper around `UnsafeCell` that implements `Sync` to satisfy raw static storage bounds.
 ///
-/// **Why this is used:** Modern Rust editions deprecate mutable references to `static mut` because
-/// they violate exclusive borrow models. Using `SyncUnsafeCell` allows the async stack to safely
-/// negotiate dynamic TLS record slices without triggering compiler warnings or UB.
+/// The blanket `Sync` impl is restricted to the concrete buffer type used below.
+/// On single-threaded Embassy executors, concurrent access is structurally prevented
+/// by the `TLS_BUFFERS_IN_USE` atomic guard (see `BufferGuard`).
 #[cfg(feature = "embassy")]
 struct SyncUnsafeCell<T>(core::cell::UnsafeCell<T>);
 
+// SAFETY: Only safe when exclusive access is enforced externally.
+// The `BufferGuard` atomic flag guarantees at most one live borrow at a time.
 #[cfg(feature = "embassy")]
-unsafe impl<T> Sync for SyncUnsafeCell<T> {}
+unsafe impl Sync for SyncUnsafeCell<[u8; 16384]> {}
 
 #[cfg(feature = "embassy")]
 static TLS_READ_BUFFER: SyncUnsafeCell<[u8; 16384]> =
@@ -119,37 +121,114 @@ static TLS_READ_BUFFER: SyncUnsafeCell<[u8; 16384]> =
 static TLS_WRITE_BUFFER: SyncUnsafeCell<[u8; 16384]> =
     SyncUnsafeCell(core::cell::UnsafeCell::new([0u8; 16384]));
 
-/// TLS Secure connector wrapping the static, stack-friendly `embedded-tls` engine.
 #[cfg(feature = "embassy")]
-pub struct EmbassyTlsConnector<'a, CipherSuite>
+static TLS_BUFFERS_IN_USE: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// RAII guard ensuring exclusive access to the static TLS buffers.
+///
+/// Panics on construction if buffers are already held by another `TlsConnection`.
+/// Automatically releases the buffers when the owning `GuardedTlsConnection` is dropped.
+#[cfg(feature = "embassy")]
+struct BufferGuard;
+
+#[cfg(feature = "embassy")]
+impl BufferGuard {
+    fn acquire() -> Self {
+        if TLS_BUFFERS_IN_USE.swap(true, core::sync::atomic::Ordering::SeqCst) {
+            panic!("TLS buffers already in use — only one concurrent TLS connection is supported");
+        }
+        BufferGuard
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl Drop for BufferGuard {
+    fn drop(&mut self) {
+        TLS_BUFFERS_IN_USE.store(false, core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Wrapper coupling a `TlsConnection` with its `BufferGuard` lifetime.
+///
+/// Dropping this struct releases the static TLS buffers for reuse by a subsequent connection.
+#[cfg(feature = "embassy")]
+pub struct GuardedTlsConnection<'a, RawStream: AsyncIo, CipherSuite: ::embedded_tls::TlsCipherSuite>
+{
+    connection: ::embedded_tls::TlsConnection<'a, RawStream, CipherSuite>,
+    _guard: BufferGuard,
+}
+
+#[cfg(feature = "embassy")]
+impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::ErrorType
+    for GuardedTlsConnection<'a, S, C>
+{
+    type Error = <::embedded_tls::TlsConnection<'a, S, C> as embedded_io_async::ErrorType>::Error;
+}
+
+#[cfg(feature = "embassy")]
+impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::Read
+    for GuardedTlsConnection<'a, S, C>
+{
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.connection.read(buf).await
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::Write
+    for GuardedTlsConnection<'a, S, C>
+{
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.connection.write(buf).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.connection.flush().await
+    }
+}
+
+/// TLS Secure connector wrapping the static, stack-friendly `embedded-tls` engine.
+///
+/// Generic over `Rng`: callers must provide a platform-appropriate RNG implementation
+/// (e.g., hardware TRNG peripheral). The RNG must implement the legacy `rand_core` v0.6
+/// traits expected by `embedded-tls` v0.19.
+#[cfg(feature = "embassy")]
+pub struct EmbassyTlsConnector<'a, CipherSuite, Rng>
 where
     CipherSuite: ::embedded_tls::TlsCipherSuite,
+    Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
 {
     config: &'a ::embedded_tls::TlsConfig<'a>,
+    rng: core::cell::RefCell<Rng>,
     _phantom: core::marker::PhantomData<CipherSuite>,
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, CipherSuite> EmbassyTlsConnector<'a, CipherSuite>
+impl<'a, CipherSuite, Rng> EmbassyTlsConnector<'a, CipherSuite, Rng>
 where
     CipherSuite: ::embedded_tls::TlsCipherSuite,
+    Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
 {
-    /// Creates a new Embassy secure connector using a pre-allocated static config block.
-    pub fn new(config: &'a ::embedded_tls::TlsConfig<'a>) -> Self {
+    /// Creates a new Embassy secure connector with a caller-provided RNG.
+    pub fn new(config: &'a ::embedded_tls::TlsConfig<'a>, rng: Rng) -> Self {
         Self {
             config,
+            rng: core::cell::RefCell::new(rng),
             _phantom: core::marker::PhantomData,
         }
     }
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, RawStream, CipherSuite> TlsConnector<RawStream> for EmbassyTlsConnector<'a, CipherSuite>
+impl<'a, RawStream, CipherSuite, Rng> TlsConnector<RawStream>
+    for EmbassyTlsConnector<'a, CipherSuite, Rng>
 where
     RawStream: AsyncIo + 'static,
     CipherSuite: ::embedded_tls::TlsCipherSuite + 'static,
+    Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
 {
-    type Stream = ::embedded_tls::TlsConnection<'a, RawStream, CipherSuite>;
+    type Stream = GuardedTlsConnection<'a, RawStream, CipherSuite>;
 
     async fn connect(
         &self,
@@ -157,44 +236,19 @@ where
         _port: u16,
         raw_stream: RawStream,
     ) -> Result<Self::Stream, SocketError> {
-        // Safe conversion of UnsafeCell arrays to dynamic record buffers.
-        // embedded-tls 0.19.0 requires distinct read and write buffers for full-duplex session lifetimes.
+        let guard = BufferGuard::acquire();
+
+        // SAFETY: Exclusive access is enforced by BufferGuard — only one borrow
+        // can exist at a time, and the guard lives as long as the returned connection.
         let read_buf = unsafe { &mut *TLS_READ_BUFFER.0.get() };
         let write_buf = unsafe { &mut *TLS_WRITE_BUFFER.0.get() };
 
         let mut connection = ::embedded_tls::TlsConnection::new(raw_stream, read_buf, write_buf);
 
-        // Simple, lightweight RNG implementing the legacy v0.6.4 rand_core traits expected by embedded-tls.
-        // This decouples the TLS handshake dependencies from standard workspace v0.10.1 layouts.
-        struct SimpleRng;
-
-        impl ::rand_core_legacy::RngCore for SimpleRng {
-            fn next_u32(&mut self) -> u32 {
-                0x12345678
-            }
-            fn next_u64(&mut self) -> u64 {
-                0x123456789abcdef0
-            }
-            fn fill_bytes(&mut self, dest: &mut [u8]) {
-                for (i, byte) in dest.iter_mut().enumerate() {
-                    *byte = (i & 0xFF) as u8;
-                }
-            }
-            fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), ::rand_core_legacy::Error> {
-                self.fill_bytes(dest);
-                Ok(())
-            }
-        }
-
-        impl ::rand_core_legacy::CryptoRng for SimpleRng {}
-
-        let mut rng = SimpleRng;
-
-        // Under embedded-tls 0.19.0, establishing a connection requires calling `.open` with a TlsContext
-        // carrying the configuration structure and legacy CryptoRng provider.
+        let mut rng = self.rng.borrow_mut();
         let context = ::embedded_tls::TlsContext::new(
             self.config,
-            ::embedded_tls::UnsecureProvider::new::<CipherSuite>(&mut rng),
+            ::embedded_tls::UnsecureProvider::new::<CipherSuite>(&mut *rng),
         );
 
         connection
@@ -202,6 +256,9 @@ where
             .await
             .map_err(|_| SocketError::ConnectionAborted)?;
 
-        Ok(connection)
+        Ok(GuardedTlsConnection {
+            connection,
+            _guard: guard,
+        })
     }
 }
