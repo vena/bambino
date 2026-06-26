@@ -31,8 +31,10 @@ Every change must compile under both the default `tokio` feature set and the `no
 
 ### Non-Obvious Type Decisions
 
-- **Temperature fields** are `Option<f64>` — the wire sends both integers (H2D) and floats (P1S/A1). Bed and nozzle targets arrive as separate `_target_temper` fields (never composite-packed). Use `unpack_temperature()` only for `chamber_temper` on models with active chamber heaters.
+- **Temperature fields** are `Option<f64>` — the wire sends both integers (H2D) and floats (P1S/A1). Bed and nozzle targets arrive as separate `_target_temper` fields (never composite-packed). Use `unpack_temperature()` only for `chamber_temper` on models with active chamber heaters, and for `ExtruderInfo.temp` on IDEX platforms.
 - **`DeviceTelemetry`** appears at two wire locations: top-level `{"device": {...}}` for incremental updates, and nested inside `{"print": {"device": {...}}}` for pushall on H2/P2/X2 models.
+- **`ExtruderInfo.temp`** uses the same composite packing as `chamber_temper` (values > 500 encode target << 16 | actual). Use `ExtruderInfo::temperatures()` to decode. The `ExtruderCollection.state` bitmask encodes extruder count (low 4 bits) and active index (bits 4–7); use `active_extruder_index()` / `extruder_count()`.
+- **`PrinterClient::poll_telemetry()`** returns `TelemetryEvent` (discriminated enum), not raw `MqttMessage`. Use `poll_raw()` or `BambuMqttClient::poll_telemetry()` for raw access.
 - **`AmsTray.id`** is `String` (wire sends `"0"`, not `0`). **`CtcInfo.temp`** is `u32` (composite-packed integers, not floats).
 - **K-profile priming quirk:** the firmware silently ignores the first `extrusion_cali_get` after connection. `PrinterClient::get_k_profiles()` auto-primes; opt out via `set_k_profile_primed(true)`.
 
@@ -46,3 +48,4 @@ Every change must compile under both the default `tokio` feature set and the `no
 - Protocol specs live in `reference/` as numbered markdown files. Always verify field names and types against reference docs when adding or modifying commands. When external sources (pybambu, Bambuddy, Bambu Studio, wire captures) contradict a reference doc, update the reference doc with the correction and note the verification source.
 - Use MODEL_MATRIX.md to track physical characteristics of printer models. When new information is learned about a printer model, update MODEL_MATRIX.md
 - When adding public types, modules, traits, or changing conventions, update this file. Keep it concise — document constraints and gotchas, not API summaries.
+- **PLAN.md phases must be self-contained.** Each phase must be implementable by a clean session with zero prior conversation context beyond the existing codebase. Inform the next session of what we learned and guide it by spelling out: the problem being solved (not just what to build), design constraints and trade-offs that shape the implementation, ordering dependencies between items, and which items are trivially independent. If a task has a hard design decision, state the options and either pick one or mark it as "decide first." A phase that requires reading git history or guessing at intent is underspecified.

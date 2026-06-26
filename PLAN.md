@@ -15,30 +15,52 @@ When completing a phase, replace its section with a 2–3 line summary — detai
 
 **Phase 16** (Platform Abstraction Gaps): Added `SecureConnect` trait for ESP-IDF's "TLS manages its own transport" model with impls for Tokio (`TokioSecureConnector`) and ESP-IDF (`EspIdfSecureConnector` via `EspTls` syscalls). Added `TimerProvider::now_millis()` monotonic clock method (tokio: `std::time::Instant`, ESP-IDF: `esp_timer_get_time`, embassy: `embassy_time::Instant`). Refactored `discover_devices` from poll-count timing to wall-clock measurement. `TlsConnector` retained for FTPS data channel wrapping. 3 new tests.
 
-**Current state:** 227 tests (192 unit + 35 integration), all passing. `no_std`+`alloc` clean. Clippy clean.
+**Phase 17** (Typed Library API & IDEX Schema): Added `TelemetryEvent` discriminated enum — `PrinterClient::poll_telemetry()` now returns typed `Report(Box<TelemetryReport>)` or `Unknown(MqttMessage)` with `.into_raw()` / `.raw()` / `.report()` accessors. `BambuMqttClient::poll_telemetry()` retained as raw escape hatch; `PrinterClient::poll_raw()` added. Added `ExtruderCollection` + `ExtruderInfo` to `DeviceTelemetry` for `device.extruder.info[]` IDEX schema (composite-packed temps via `unpack_temperature()`, active extruder index from state bitmask, AMS slot routing, z_bias). Split `monitor.rs` into `monitor/mod.rs` (lifecycle) + `monitor/dashboard.rs` (rendering). IDEX per-nozzle temp display fixed: dashboard now reads `device.extruder.info` first, falling back to top-level fields. 3 new tests.
+
+**Current state:** 234 tests (199 unit + 35 integration), all passing. `no_std`+`alloc` clean. Clippy clean.
 
 ---
 
-## Phase 17: Monitor Typed Telemetry Refactor & IDEX Schema
+## Phase 18: Typed Command-Response Methods
 
-Structural refactor of the CLI monitor from raw JSON to typed telemetry structs. The library returns `MqttMessage` with raw bytes — state accumulation and deserialization is the consumer's responsibility. This phase makes the CLI a better consumer.
+### Problem
 
-**Design constraints:**
-- The library should NOT accumulate state — that's the application's job
-- The library SHOULD return predictable, typed structures for developer UX (evaluate whether `poll_telemetry()` should return something more useful than `MqttMessage`)
-- The monitor currently doesn't use `PrinterClient` — evaluate whether it should, and whether `PrinterClient` should offer typed telemetry deserialization (without accumulation)
+The library has request structs (`GetVersionRequest`, `ExtrusionCaliGetRequest`) and response structs (`ExtrusionCaliGetResponse`) but no typed round-trip API. Consumers must: call a fire-and-forget publish method, poll `poll_telemetry()` in a loop, pattern-match raw JSON to identify the response, and deserialize manually.
 
-- [ ] **Evaluate library-level telemetry return type:** `poll_telemetry() → MqttMessage` forces every consumer to deserialize from raw bytes. Consider `poll_telemetry() → TelemetryReport` or a typed enum distinguishing print/device/info responses. The library handles deserialization once; consumers handle accumulation
-- [ ] **Add `device.extruder.info` to telemetry schema:** IDEX per-nozzle current temperatures live in `device.extruder.info[]` per [REF-THER-DECODE §Dual-Extruder]. Currently only `device.nozzle.info` exists in `DeviceTelemetry`. Cross-reference against pybambu test mocks and Bambuddy backend services for field names
-- [ ] **Refactor monitor state accumulation:** Keep JSON merge for partial updates, deserialize accumulated map into `PrinterTelemetry` via `serde_json::from_value()` before each render. Rendering function takes typed struct instead of string-key map
-- [ ] **Split monitor.rs into module:** `monitor/mod.rs` (connection lifecycle, event loop, state accumulation) + `monitor/dashboard.rs` (rendering logic and helpers). Current file is 621 lines and does too many things
-- [ ] **Fix IDEX per-nozzle temperature display:** Once `device.extruder.info` schema exists, extract right nozzle actual temp and left nozzle target temp from the per-nozzle array
+Additionally, `PrinterClient` is missing a `request_pushall()` convenience method — both CLI monitor functions (`dump` and `run` in `src/bin/bambino-cli/monitor/mod.rs`) construct `PushAllRequest` manually, serialize with `serde_json::to_vec`, and call `mqtt.publish_command()` directly. The monitor also bypasses `PrinterClient` entirely, using raw `BambuMqttClient` for its event loop.
+
+### Core design constraint: the single-stream problem
+
+`BambuMqttClient::poll_telemetry()` is a single MQTT read stream. If `get_version()` internally polls that stream waiting for its response, it will **consume and discard** any telemetry updates that arrive before the response. This is the central design problem of this phase.
+
+**Recommended approach:** Internal polling methods should buffer consumed-but-unmatched messages into a `VecDeque<MqttMessage>` on `PrinterClient`. The public `poll_telemetry()` / `poll_raw()` methods drain this buffer before reading from the wire. This way, no messages are lost. The buffer lives on `PrinterClient` (not `BambuMqttClient`) so the low-level client stays stateless.
+
+**Alternative considered:** Splitting into separate channels (e.g., command-response channel vs telemetry channel). Rejected because the MQTT broker delivers everything on one topic — there's no wire-level separation to leverage.
+
+### Items (order matters — sequential dependencies noted)
+
+**Independent (do anytime):**
+
+- [ ] **`PrinterClient::request_pushall()`:** Fire-and-forget publish wrapper. Constructs `PushAllRequest` with `next_sequence_id()`, serializes, publishes. No response handling — this is purely a convenience method, not a typed round-trip. Defined in `src/client.rs`
+- [ ] **Update README telemetry example:** `README.md` lines 121–133 still show `serde_json::from_slice(&msg.payload)` — update to use `TelemetryEvent` API (`printer.poll_telemetry().await?.report()`)
+
+**Sequential (build in order):**
+
+- [ ] **1. Add message buffer to `PrinterClient`:** Add `pending_messages: VecDeque<MqttMessage>` field. Modify `poll_telemetry()` and `poll_raw()` to drain the buffer before calling `self.mqtt.poll_telemetry()`. This is the foundation for all command-response methods. Uses `alloc::collections::VecDeque` for no_std compatibility
+- [ ] **2. Add internal `poll_until()` helper on `PrinterClient`:** `async fn poll_until<F, T>(&mut self, matcher: F, timeout_secs: u64) → Result<T, BambuError>` — polls the MQTT stream, pushes non-matching messages into `pending_messages`, returns when `matcher` returns `Some(T)` or timeout expires (default ~10s). This is `pub(crate)` — not part of the public API
+- [ ] **3. Add `VersionInfo` response struct:** Typed representation of `get_version` module array. Fields per module: `product_name: String`, `name: String`, `hw_ver: String`, `sw_ver: String`, `sn: String`, `visible: bool`. Currently only exists as raw `serde_json::Value` in CLI `control.rs` (lines 87–106). Defined in a new `src/types/version.rs` or alongside existing types
+- [ ] **4. `PrinterClient::get_version() → Result<VersionInfo, BambuError>`:** Uses `poll_until()` to match on `info.command == "get_version"`, deserializes into `VersionInfo`. Replaces manual JSON matching in CLI `control.rs` `run_info()` (lines 22–130)
+- [ ] **5. Refactor `get_k_profiles()` to return typed response:** Current signature returns `Result<u16, BambuError>` (packet ID). Change to `Result<ExtrusionCaliGetResponse, BambuError>` using `poll_until()`. K-profile priming quirk stays internal. Note: this is a breaking API change for any consumer currently using the packet ID return
+
+**After the above:**
+
+- [ ] **Migrate monitor `run()` to use `PrinterClient`:** Currently `src/bin/bambino-cli/monitor/mod.rs` creates a raw `BambuMqttClient` and runs its own `select!` loop with `mqtt.poll_telemetry()`, `mqtt.send_ping()`, and keyboard input. Migration requires: (a) `request_pushall()` exists, (b) the event loop calls `printer.poll_telemetry()` → `TelemetryEvent` instead of raw `mqtt.poll_telemetry()`. **Open question:** `PrinterClient` doesn't currently expose `send_ping()`. Options: (1) add `PrinterClient::send_ping()` as a passthrough, (2) have `PrinterClient` manage keep-alive internally, (3) keep the monitor holding a reference to the underlying `BambuMqttClient` for pings only. Option 1 is simplest. The `dump()` function should stay on raw `BambuMqttClient` — its purpose is debugging raw wire output
 
 ---
 
-## Phase 18: Expanded CLI Control Commands
+## Phase 19: Expanded CLI Control Commands
 
-Add commonly useful control commands to the CLI for hardware testing.
+Add commonly useful control commands to the CLI for hardware testing. With Phase 18's typed responses, new commands that query state (e.g. version, calibration status) can use typed return values directly.
 
 - [ ] **`speed <level>`** — Set print speed (silent, standard, sport, ludicrous) via `set_print_speed()`
 - [ ] **`clear-error`** — Clear active print error codes via `clear_print_error()`
@@ -55,5 +77,6 @@ Add commonly useful control commands to the CLI for hardware testing.
 |-------|--------|--------|
 | 1–15 | Core through Protocol Audit | **Complete** |
 | 16 | Platform Abstraction Gaps | **Complete** |
-| 17 | Monitor Typed Telemetry | Not started |
-| 18 | Expanded CLI Commands | Not started |
+| 17 | Typed Library API & IDEX Schema | **Complete** |
+| 18 | Typed Command-Response Methods | Not started |
+| 19 | Expanded CLI Commands | Not started |

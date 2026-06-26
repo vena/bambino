@@ -403,6 +403,9 @@ pub struct DeviceTelemetry {
     /// Structured descriptions representing the active extruder assembly properties.
     pub nozzle: Option<NozzleCollection>,
 
+    /// Per-extruder thermal and routing state for IDEX platforms [REF-THER-DECODE §Dual-Extruder].
+    pub extruder: Option<ExtruderCollection>,
+
     /// Nested structures tracking cooling components and climate routing [REF-CLIM-FANS].
     pub airduct: Option<AirductCollection>,
 
@@ -460,6 +463,82 @@ pub struct NozzleInfo {
 
     /// Abbreviated filament preset calibration index.
     pub fila_id: Option<String>,
+}
+
+/// IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtruderCollection {
+    /// Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
+    #[serde(default)]
+    pub info: Vec<ExtruderInfo>,
+
+    /// Bitmask: low 4 bits = extruder count, bits 4–7 = active extruder index.
+    pub state: Option<u32>,
+}
+
+impl ExtruderCollection {
+    /// Returns the active extruder index extracted from the `state` bitmask.
+    pub fn active_extruder_index(&self) -> u8 {
+        self.state.map(|s| ((s >> 4) & 0xF) as u8).unwrap_or(0)
+    }
+
+    /// Returns the extruder count extracted from the `state` bitmask.
+    pub fn extruder_count(&self) -> u8 {
+        self.state.map(|s| (s & 0xF) as u8).unwrap_or(0)
+    }
+}
+
+/// Per-extruder thermal and routing state for IDEX platforms.
+///
+/// The `temp` field uses the same composite packing as `chamber_temper`:
+/// values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual temps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtruderInfo {
+    /// Extruder carriage index (0 = right/main, 1 = left/deputy).
+    pub id: u8,
+
+    /// Composite-packed temperature (use `unpack_temperature()` to decode).
+    pub temp: Option<u32>,
+
+    /// Current AMS slot routing (low 4 bits = tray index, upper bits = AMS unit index).
+    pub snow: Option<u32>,
+
+    /// Previous AMS slot routing.
+    pub spre: Option<u32>,
+
+    /// Target AMS slot routing.
+    pub star: Option<u32>,
+
+    /// Current head routing index.
+    pub hnow: Option<u8>,
+
+    /// Previous head routing index.
+    pub hpre: Option<u8>,
+
+    /// Target head routing index.
+    pub htar: Option<u8>,
+
+    /// Status bitmask.
+    pub stat: Option<u32>,
+
+    /// Info bitmask.
+    pub info: Option<u32>,
+
+    /// Filament backup slot indices.
+    #[serde(default)]
+    pub filam_bak: Vec<u32>,
+
+    /// Z-axis offset compensation (X2D).
+    pub z_bias: Option<f64>,
+}
+
+impl ExtruderInfo {
+    /// Unpacks the composite temperature into (actual, target) degrees Celsius.
+    pub fn temperatures(&self) -> (u16, u16) {
+        self.temp
+            .map(|t| PrinterTelemetry::unpack_temperature(t as f64))
+            .unwrap_or((0, 0))
+    }
 }
 
 /// Climate parts collection nested within `device` parameters.
@@ -1444,5 +1523,124 @@ mod tests {
         let airduct = report.device.unwrap().airduct.unwrap();
         assert_eq!(airduct.mode_cur, None);
         assert!(airduct.mode_list.is_empty());
+    }
+
+    #[test]
+    fn test_extruder_info_h2d_mock() {
+        let json_data = r#"{
+            "device": {
+                "extruder": {
+                    "info": [
+                        {
+                            "filam_bak": [48],
+                            "hnow": 0, "hpre": 0, "htar": 0,
+                            "id": 0,
+                            "info": 79,
+                            "snow": 259, "spre": 259, "star": 259,
+                            "stat": 197376,
+                            "temp": 16056565
+                        },
+                        {
+                            "filam_bak": [10],
+                            "hnow": 1, "hpre": 1, "htar": 1,
+                            "id": 1,
+                            "info": 8,
+                            "snow": 65279, "spre": 65279, "star": 65279,
+                            "stat": 0,
+                            "temp": 47
+                        }
+                    ],
+                    "state": 2
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let extruder = report.device.unwrap().extruder.unwrap();
+        assert_eq!(extruder.info.len(), 2);
+        assert_eq!(extruder.extruder_count(), 2);
+        assert_eq!(extruder.active_extruder_index(), 0);
+
+        // id 0 (right/main): temp 16056565 = 0x00F500F5 → composite packed
+        let right = &extruder.info[0];
+        assert_eq!(right.id, 0);
+        let (right_actual, right_target) = right.temperatures();
+        assert_eq!(right_actual, 245);
+        assert_eq!(right_target, 245);
+        assert_eq!(right.filam_bak, vec![48]);
+        assert_eq!(right.stat, Some(197376));
+
+        // id 1 (left/deputy): temp 47 → direct (≤ 500)
+        let left = &extruder.info[1];
+        assert_eq!(left.id, 1);
+        let (left_actual, left_target) = left.temperatures();
+        assert_eq!(left_actual, 47);
+        assert_eq!(left_target, 0);
+    }
+
+    #[test]
+    fn test_extruder_info_x2d_mock() {
+        let json_data = r#"{
+            "device": {
+                "extruder": {
+                    "info": [
+                        {
+                            "filam_bak": [],
+                            "hnow": 0, "hpre": 0, "htar": 0,
+                            "id": 0,
+                            "info": 1176,
+                            "snow": 65535, "spre": 65535, "star": 65535,
+                            "stat": 0,
+                            "temp": 50,
+                            "z_bias": 0.0
+                        },
+                        {
+                            "filam_bak": [],
+                            "hnow": 1, "hpre": 1, "htar": 1,
+                            "id": 1,
+                            "info": 1102,
+                            "snow": 1, "spre": 1, "star": 1,
+                            "stat": 197376,
+                            "temp": 16384250,
+                            "z_bias": 0.0
+                        }
+                    ],
+                    "state": 33042
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let extruder = report.device.unwrap().extruder.unwrap();
+        assert_eq!(extruder.info.len(), 2);
+
+        // state 33042: low 4 bits = 2 (count), bits 4-7 = 1 (active = left)
+        assert_eq!(extruder.extruder_count(), 2);
+        assert_eq!(extruder.active_extruder_index(), 1);
+
+        // id 0: temp 50 (direct, ≤ 500)
+        let right = &extruder.info[0];
+        let (right_actual, right_target) = right.temperatures();
+        assert_eq!(right_actual, 50);
+        assert_eq!(right_target, 0);
+        assert_eq!(right.z_bias, Some(0.0));
+
+        // id 1: temp 16384250 (composite packed, > 500)
+        // 16384250 = 0xFA00FA → target = 250, actual = 250
+        let left = &extruder.info[1];
+        let (left_actual, left_target) = left.temperatures();
+        assert_eq!(left_target, 250);
+        assert_eq!(left_actual, 250);
+    }
+
+    #[test]
+    fn test_extruder_absent_on_single_nozzle() {
+        let json_data = r#"{
+            "device": {
+                "nozzle": {
+                    "info": [{ "id": 0, "diameter": 0.4 }]
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        assert!(report.device.unwrap().extruder.is_none());
     }
 }

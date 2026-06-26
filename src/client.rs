@@ -33,6 +33,45 @@ use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{
     BambuMqttClient, GCodeRequest, MqttMessage, PrintJobConfig, StandardControlRequest,
 };
+use crate::types::TelemetryReport;
+
+/// Typed telemetry event from the printer's MQTT channel.
+///
+/// The library deserializes wire payloads into structured types so consumers don't
+/// have to reimplement JSON parsing and model-quirk handling. Raw access is always
+/// available via [`into_raw`](TelemetryEvent::into_raw).
+#[derive(Debug, Clone)]
+pub enum TelemetryEvent {
+    /// State telemetry update (print status, device hardware, or both).
+    Report(Box<TelemetryReport>, MqttMessage),
+    /// Payload that didn't match any known telemetry structure.
+    Unknown(MqttMessage),
+}
+
+impl TelemetryEvent {
+    /// Consumes the event and returns the underlying raw MQTT message.
+    pub fn into_raw(self) -> MqttMessage {
+        match self {
+            Self::Report(_, raw) => raw,
+            Self::Unknown(raw) => raw,
+        }
+    }
+
+    /// Returns a reference to the underlying raw MQTT message.
+    pub fn raw(&self) -> &MqttMessage {
+        match self {
+            Self::Report(_, raw) | Self::Unknown(raw) => raw,
+        }
+    }
+
+    /// Returns the typed report if this is a `Report` variant.
+    pub fn report(&self) -> Option<&TelemetryReport> {
+        match self {
+            Self::Report(report, _) => Some(report),
+            Self::Unknown(_) => None,
+        }
+    }
+}
 
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 
@@ -207,8 +246,25 @@ where
         self.sequence_counter
     }
 
-    /// Pulls the next available telemetry update or response payload from the MQTTS channel.
-    pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
+    /// Pulls the next available telemetry event from the MQTTS channel.
+    ///
+    /// Returns a typed [`TelemetryEvent`] — either a deserialized [`TelemetryReport`]
+    /// for state updates, or `Unknown` for payloads that don't match known schemas.
+    /// The raw [`MqttMessage`] is always accessible via [`TelemetryEvent::raw`] or
+    /// [`TelemetryEvent::into_raw`].
+    pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
+        let msg = self.mqtt.poll_telemetry().await?;
+        match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
+            Ok(report) => Ok(TelemetryEvent::Report(Box::new(report), msg)),
+            Err(_) => Ok(TelemetryEvent::Unknown(msg)),
+        }
+    }
+
+    /// Pulls the next raw MQTT message without deserialization.
+    ///
+    /// Use this when you need direct access to wire bytes or want to handle
+    /// deserialization yourself. Most consumers should prefer [`poll_telemetry`](Self::poll_telemetry).
+    pub async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError> {
         self.mqtt.poll_telemetry().await
     }
 

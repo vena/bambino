@@ -7,6 +7,7 @@ pub mod telemetry;
 
 pub use telemetry::{
     AirductCollection, AirductModeListEntry, AirductPart, AmsDrySetting, AmsStatusReport, AmsTray,
-    AmsUnit, CtcInfo, CtcTelemetry, DeviceTelemetry, HmsEntry, IpcamTelemetry, NozzleCollection,
-    NozzleInfo, PrinterTelemetry, TelemetryReport, VirtualTray, is_developer_mode,
+    AmsUnit, CtcInfo, CtcTelemetry, DeviceTelemetry, ExtruderCollection, ExtruderInfo, HmsEntry,
+    IpcamTelemetry, NozzleCollection, NozzleInfo, PrinterTelemetry, TelemetryReport, VirtualTray,
+    is_developer_mode,
 };
