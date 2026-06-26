@@ -199,9 +199,9 @@ where
     let mut seen_serials: BTreeSet<String> = BTreeSet::new();
     let mut buf = [0u8; 1500];
 
-    let total_millis = timeout.as_millis();
-    let mut elapsed_millis: u128 = 0;
-    let mut millis_since_last_search: u128 = 0;
+    let total_millis = timeout.as_millis() as u64;
+    let start = timer.now_millis();
+    let mut last_search = start;
 
     log::debug!(
         "Commencing poll listener sequence ({}ms limit, {} port(s))",
@@ -209,17 +209,14 @@ where
         engines.len()
     );
 
-    // Alternate polling across all bound sockets. Each recv_from times out after ~100ms
-    // (on tokio), so we cycle through engines round-robin. Time is tracked via poll count
-    // rather than wall-clock to remain no_std-compatible; a proper TimerProvider-based
-    // deadline is tracked for a future phase.
-    while elapsed_millis < total_millis {
-        if millis_since_last_search >= SSDP_REBROADCAST_INTERVAL_MS {
+    while timer.now_millis().saturating_sub(start) < total_millis {
+        let now = timer.now_millis();
+        if now.saturating_sub(last_search) >= SSDP_REBROADCAST_INTERVAL_MS as u64 {
             log::trace!("Re-broadcasting periodic M-SEARCH queries");
             for (engine, _) in &engines {
                 let _ = engine.broadcast_search().await;
             }
-            millis_since_last_search = 0;
+            last_search = timer.now_millis();
         }
 
         for (engine, port) in &engines {
@@ -230,8 +227,6 @@ where
                     devices.push(device);
                 }
             }
-            elapsed_millis += 100;
-            millis_since_last_search += 100;
         }
     }
 
@@ -365,5 +360,89 @@ mod tests {
 
         let result = engine.broadcast_search().await;
         assert!(result.is_ok());
+    }
+
+    struct MockTimer {
+        clock: std::sync::Mutex<u64>,
+    }
+
+    impl MockTimer {
+        fn new() -> Self {
+            Self {
+                clock: std::sync::Mutex::new(0),
+            }
+        }
+
+        fn advance(&self, ms: u64) {
+            *self.clock.lock().unwrap() += ms;
+        }
+    }
+
+    impl TimerProvider for MockTimer {
+        async fn sleep(&self, _duration: core::time::Duration) {}
+
+        fn now_millis(&self) -> u64 {
+            *self.clock.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tokio_timer_now_millis_advances() {
+        use crate::io::tokio::TokioTimer;
+
+        let timer = TokioTimer::new();
+        let t0 = timer.now_millis();
+        timer.sleep(core::time::Duration::from_millis(10)).await;
+        let t1 = timer.now_millis();
+        assert!(t1 > t0, "now_millis must advance with real time");
+    }
+
+    #[tokio::test]
+    async fn test_mock_timer_now_millis_controllable() {
+        let timer = MockTimer::new();
+        assert_eq!(timer.now_millis(), 0);
+        timer.advance(250);
+        assert_eq!(timer.now_millis(), 250);
+        timer.advance(750);
+        assert_eq!(timer.now_millis(), 1000);
+    }
+
+    #[tokio::test]
+    async fn test_discover_devices_wall_clock_timeout() {
+        use crate::io::tokio::TokioTimer;
+
+        struct QuickExitSocket;
+
+        impl AsyncUdpSocket for QuickExitSocket {
+            async fn bind(_addr: &str) -> Result<Self, SocketError> {
+                Ok(Self)
+            }
+            async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+                Ok(100)
+            }
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+                Err(SocketError::TimedOut)
+            }
+        }
+
+        // Use a real TokioTimer with a very short timeout to verify wall-clock
+        // termination. The old poll-counting approach would have run for
+        // (timeout_ms / 100ms) iterations regardless of actual elapsed time.
+        let timer = TokioTimer::new();
+        let before = std::time::Instant::now();
+        let devices = discover_devices::<QuickExitSocket, TokioTimer>(
+            core::time::Duration::from_millis(300),
+            &timer,
+        )
+        .await
+        .unwrap();
+        let elapsed = before.elapsed();
+
+        assert!(devices.is_empty());
+        // Wall-clock should be close to 300ms (not 0ms or much longer)
+        assert!(
+            elapsed.as_millis() >= 200,
+            "discovery should run for approximately the timeout duration"
+        );
     }
 }

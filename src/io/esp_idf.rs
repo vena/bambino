@@ -4,7 +4,7 @@
 //! our transport-agnostic client traits under Espressif's Rust standard library.
 
 #[cfg(feature = "esp-idf")]
-use crate::io::{AsyncIo, AsyncUdpSocket, SocketError, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector};
 
 /// Async timer utilizing the ESP-IDF high-resolution timer service.
 ///
@@ -34,6 +34,11 @@ impl TimerProvider for EspIdfTimer {
             .after(duration)
             .await
             .expect("ESP-IDF hardware timer scheduling failed");
+    }
+
+    fn now_millis(&self) -> u64 {
+        // esp_timer_get_time() returns microseconds since boot as i64
+        (unsafe { ::esp_idf_svc::sys::esp_timer_get_time() } as u64) / 1000
     }
 }
 
@@ -91,5 +96,150 @@ fn to_esp_socket_error(err: std::io::Error) -> SocketError {
         std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
         std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
         _ => SocketError::Other("ESP-IDF platform BSD network error"),
+    }
+}
+
+/// Secure connector for ESP-IDF using the platform's native `EspTls` stack.
+///
+/// Unlike tokio/embassy where TLS wraps a caller-supplied TCP stream, ESP-IDF's
+/// `EspTls` manages TCP connection establishment internally. This implements
+/// `SecureConnect` directly — callers provide host+port and receive a ready stream.
+///
+/// The resulting stream wraps a raw POSIX file descriptor obtained from `EspTls`,
+/// adapted to `embedded-io-async` via blocking-mode reads/writes on the FreeRTOS
+/// task thread. Full async integration requires `esp-idf-svc` socket-async support
+/// which is not yet stable.
+#[cfg(feature = "esp-idf")]
+pub struct EspIdfSecureConnector {
+    ca_cert: Option<Vec<u8>>,
+    client_cert: Option<Vec<u8>>,
+    client_key: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "esp-idf")]
+impl EspIdfSecureConnector {
+    /// Creates a connector that skips server certificate verification.
+    pub fn new() -> Self {
+        Self {
+            ca_cert: None,
+            client_cert: None,
+            client_key: None,
+        }
+    }
+
+    /// Creates a connector that verifies the server certificate against a CA cert.
+    ///
+    /// `ca_cert_pem`: PEM or DER-encoded CA certificate bytes.
+    /// `client_auth`: Optional (cert_pem, key_pem) for mutual TLS.
+    pub fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
+        let (client_cert, client_key) = match client_auth {
+            Some((cert, key)) => (Some(cert), Some(key)),
+            None => (None, None),
+        };
+        Self {
+            ca_cert: Some(ca_cert),
+            client_cert,
+            client_key,
+        }
+    }
+}
+
+/// Wrapper adapting an ESP-IDF TLS socket fd to `embedded-io-async` traits.
+#[cfg(feature = "esp-idf")]
+pub struct EspTlsStream {
+    // Raw POSIX fd from EspTls — reads/writes use lwIP BSD socket calls.
+    fd: i32,
+}
+
+#[cfg(feature = "esp-idf")]
+impl embedded_io_async::ErrorType for EspTlsStream {
+    type Error = embedded_io_async::ErrorKind;
+}
+
+#[cfg(feature = "esp-idf")]
+impl embedded_io_async::Read for EspTlsStream {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        let ret = unsafe {
+            ::esp_idf_svc::sys::read(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32)
+        };
+        if ret < 0 {
+            Err(embedded_io_async::ErrorKind::Other)
+        } else {
+            Ok(ret as usize)
+        }
+    }
+}
+
+#[cfg(feature = "esp-idf")]
+impl embedded_io_async::Write for EspTlsStream {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        let ret = unsafe {
+            ::esp_idf_svc::sys::write(self.fd, buf.as_ptr() as *const _, buf.len() as u32)
+        };
+        if ret < 0 {
+            Err(embedded_io_async::ErrorKind::Other)
+        } else {
+            Ok(ret as usize)
+        }
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "esp-idf")]
+impl SecureConnect for EspIdfSecureConnector {
+    type Stream = EspTlsStream;
+
+    async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
+        let host_cstr = std::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
+
+        let mut cfg: ::esp_idf_svc::sys::esp_tls_cfg = unsafe { core::mem::zeroed() };
+
+        if let Some(ca) = &self.ca_cert {
+            cfg.cacert_buf = ca.as_ptr();
+            cfg.cacert_bytes = ca.len() as u32;
+        } else {
+            cfg.skip_common_name = true;
+        }
+
+        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
+            cfg.clientcert_buf = cert.as_ptr();
+            cfg.clientcert_bytes = cert.len() as u32;
+            cfg.clientkey_buf = key.as_ptr();
+            cfg.clientkey_bytes = key.len() as u32;
+        }
+
+        let tls = unsafe { ::esp_idf_svc::sys::esp_tls_init() };
+        if tls.is_null() {
+            return Err(SocketError::Other("ESP-TLS initialization failed"));
+        }
+
+        let ret = unsafe {
+            ::esp_idf_svc::sys::esp_tls_conn_new_sync(
+                host_cstr.as_ptr(),
+                host_cstr.as_bytes().len() as i32,
+                port as i32,
+                &cfg,
+                tls,
+            )
+        };
+        if ret != 0 {
+            unsafe { ::esp_idf_svc::sys::esp_tls_conn_destroy(tls) };
+            return Err(SocketError::ConnectionRefused);
+        }
+
+        let mut fd: i32 = -1;
+        let get_ret =
+            unsafe { ::esp_idf_svc::sys::esp_tls_get_conn_sockfd(tls, &mut fd as *mut i32) };
+        if get_ret != 0 || fd < 0 {
+            unsafe { ::esp_idf_svc::sys::esp_tls_conn_destroy(tls) };
+            return Err(SocketError::Other(
+                "Failed to extract socket fd from ESP-TLS",
+            ));
+        }
+
+        Ok(EspTlsStream { fd })
     }
 }

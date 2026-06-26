@@ -17,6 +17,10 @@ impl TimerProvider for EmbassyTimer {
         let micros = duration.as_micros() as u64;
         ::embassy_time::Timer::after(::embassy_time::Duration::from_micros(micros)).await;
     }
+
+    fn now_millis(&self) -> u64 {
+        ::embassy_time::Instant::now().as_millis()
+    }
 }
 
 /// UDP Socket implementation designed for the Embassy network stack.

@@ -28,7 +28,7 @@ use std::time::Duration;
 
 let devices = discover_devices::<TokioUdpSocket, TokioTimer>(
     Duration::from_secs(20),
-    &TokioTimer,
+    &TokioTimer::new(),
 ).await?;
 
 for d in &devices {
@@ -60,6 +60,34 @@ printer.set_bed_temperature(60).await?;
 printer.set_nozzle_temperature(0, 220).await?;
 printer.toggle_led("chamber_light", true).await?;
 ```
+
+### Custom TLS certificates
+
+By default, `build_unsafe_client_config()` skips certificate verification — matching how Bambu printers present self-signed certs. If you want to verify the printer's certificate or use mutual TLS (mTLS), use `build_verified_client_config()` instead:
+
+```rust
+use bambino::io::tokio::{build_verified_client_config, TokioTlsConnector};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+
+// Load CA cert to verify the printer's certificate
+let ca_cert = CertificateDer::from_pem_file("printer-ca.pem").unwrap();
+
+// Server verification only
+let config = build_verified_client_config(vec![ca_cert], None).unwrap();
+
+// Or with mutual TLS (client certificate + key)
+let client_cert = CertificateDer::from_pem_file("client.pem").unwrap();
+let client_key = PrivateKeyDer::from_pem_file("client-key.pem").unwrap();
+let config = build_verified_client_config(
+    vec![ca_cert],
+    Some((vec![client_cert], client_key)),
+).unwrap();
+
+let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+// Use connector exactly like the unsafe version
+```
+
+The `_with_options` variant adds a `force_tls_1_2` flag for FTPS connections to P2S/X2D models.
 
 ### AMS filament control
 

@@ -92,6 +92,28 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 pub trait TimerProvider {
     /// Suspends execution of the calling task for the specified duration.
     async fn sleep(&self, duration: core::time::Duration);
+
+    /// Returns the current monotonic clock value in milliseconds.
+    ///
+    /// The epoch is platform-specific (process start, system boot, etc.) — only
+    /// *differences* between two calls are meaningful.
+    fn now_millis(&self) -> u64;
+}
+
+/// Higher-level secure connection trait for platforms where TLS manages its own transport.
+///
+/// `TlsConnector` requires callers to supply a pre-established raw stream, which works
+/// for rustls (tokio) and embedded-tls (embassy) where TLS wraps an existing socket.
+/// ESP-IDF's `EspTls` creates its own TCP connection internally, so it cannot implement
+/// `TlsConnector`. This trait abstracts over both models: callers provide host+port and
+/// receive a ready-to-use secure stream.
+#[allow(async_fn_in_trait)]
+pub trait SecureConnect {
+    /// The resulting encrypted stream type.
+    type Stream: AsyncIo;
+
+    /// Establishes a new secure connection to the specified host and port.
+    async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError>;
 }
 
 /// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation

@@ -22,7 +22,7 @@ pub async fn run() -> Result<(), BambuError> {
     // on port 1990 within ~5s but only sends passive NOTIFY on port 2021 at ~10.1s intervals.
     // A 20-second window covers both discovery paths across model generations.
     let devices =
-        discover_devices::<TokioUdpSocket, TokioTimer>(Duration::from_secs(20), &TokioTimer)
+        discover_devices::<TokioUdpSocket, TokioTimer>(Duration::from_secs(20), &TokioTimer::new())
             .await?;
 
     if devices.is_empty() {

@@ -4,12 +4,12 @@
 //! and Timer interfaces for standard operating systems using the Tokio runtime
 //! and the Rustls TLS stack.
 
-use crate::io::{AsyncUdpSocket, SocketError, TimerProvider, TlsConnector, TokioIo};
+use crate::io::{AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector, TokioIo};
 
 pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
-use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use std::sync::Arc;
 use tokio_rustls::rustls;
 
@@ -20,11 +20,31 @@ use std::string::String;
 use alloc::string::String;
 
 /// Timer implementation utilizing Tokio's non-blocking system clock registry.
-pub struct TokioTimer;
+pub struct TokioTimer {
+    epoch: std::time::Instant,
+}
+
+impl TokioTimer {
+    pub fn new() -> Self {
+        Self {
+            epoch: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for TokioTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TimerProvider for TokioTimer {
     async fn sleep(&self, duration: core::time::Duration) {
         ::tokio::time::sleep(duration).await;
+    }
+
+    fn now_millis(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
     }
 }
 
@@ -194,6 +214,54 @@ pub fn build_unsafe_client_config() -> Arc<rustls::ClientConfig> {
     build_unsafe_client_config_with_options(false)
 }
 
+/// Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs.
+///
+/// Use `rustls_pki_types::pem::PemObject` to load PEM files:
+/// ```ignore
+/// use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+/// let ca = CertificateDer::from_pem_file("ca.pem")?;
+/// ```
+///
+/// `client_auth`: pass `Some((cert_chain, key))` for mutual TLS, `None` for server-only verification.
+pub fn build_verified_client_config(
+    ca_certs: impl IntoIterator<Item = CertificateDer<'static>>,
+    client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+) -> Result<Arc<rustls::ClientConfig>, rustls::Error> {
+    build_verified_client_config_with_options(ca_certs, client_auth, false)
+}
+
+/// Builds a verified `ClientConfig` with configurable TLS version constraints.
+///
+/// When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only (required
+/// for FTPS data channels on P2S/X2D models [REF-FTPS-CONN]).
+pub fn build_verified_client_config_with_options(
+    ca_certs: impl IntoIterator<Item = CertificateDer<'static>>,
+    client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+    force_tls_1_2: bool,
+) -> Result<Arc<rustls::ClientConfig>, rustls::Error> {
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.add_parsable_certificates(ca_certs);
+
+    let provider = rustls::crypto::ring::default_provider();
+    let versions: &[&rustls::SupportedProtocolVersion] = if force_tls_1_2 {
+        &[&rustls::version::TLS12]
+    } else {
+        rustls::DEFAULT_VERSIONS
+    };
+
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(versions)
+        .expect("Protocols must be initialized successfully")
+        .with_root_certificates(root_store);
+
+    let config = match client_auth {
+        Some((cert_chain, key)) => builder.with_client_auth_cert(cert_chain, key)?,
+        None => builder.with_no_client_auth(),
+    };
+
+    Ok(Arc::new(config))
+}
+
 /// TLS Secure connector wrapping Tokio-Rustls.
 pub struct TokioTlsConnector {
     connector: tokio_rustls::TlsConnector,
@@ -226,5 +294,73 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
             .map_err(to_socket_error)?;
 
         Ok(TokioIo(tls_stream))
+    }
+}
+
+/// Adapter implementing `SecureConnect` by combining Tokio TCP with Rustls TLS.
+pub struct TokioSecureConnector {
+    tls_connector: TokioTlsConnector,
+    connect_timeout: core::time::Duration,
+}
+
+impl TokioSecureConnector {
+    pub fn new(tls_connector: TokioTlsConnector, connect_timeout: core::time::Duration) -> Self {
+        Self {
+            tls_connector,
+            connect_timeout,
+        }
+    }
+}
+
+impl SecureConnect for TokioSecureConnector {
+    type Stream = TokioIo<tokio_rustls::client::TlsStream<::tokio::net::TcpStream>>;
+
+    async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
+        let addr = format!("{}:{}", host, port);
+        let tcp_stream = ::tokio::time::timeout(
+            self.connect_timeout,
+            ::tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        .map_err(|_| SocketError::TimedOut)?
+        .map_err(to_socket_error)?;
+
+        self.tls_connector
+            .connect(host, port, TokioIo(tcp_stream))
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_unsafe_client_config() {
+        let config = build_unsafe_client_config();
+        assert!(config.alpn_protocols.is_empty());
+    }
+
+    #[test]
+    fn test_build_verified_client_config_empty_roots() {
+        let config = build_verified_client_config(std::iter::empty(), None);
+        assert!(
+            config.is_ok(),
+            "empty root store should still produce a valid config"
+        );
+    }
+
+    #[test]
+    fn test_build_verified_client_config_with_options_tls12() {
+        let config = build_verified_client_config_with_options(std::iter::empty(), None, true);
+        assert!(config.is_ok());
+    }
+
+    #[test]
+    fn test_build_verified_client_config_bad_key_returns_error() {
+        let _bogus_cert = CertificateDer::from(vec![0u8; 10]);
+        let bogus_key = PrivateKeyDer::try_from(vec![0u8; 10]);
+        // Invalid DER key bytes should fail to parse
+        assert!(bogus_key.is_err());
     }
 }

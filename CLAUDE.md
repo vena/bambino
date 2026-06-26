@@ -20,7 +20,7 @@ Every change must compile under both the default `tokio` feature set and the `no
 
 ### Key Invariants
 
-1. **No direct platform I/O in library code.** All network I/O goes through abstract traits in `src/io/` (`AsyncIo`, `TlsConnector`, `AsyncUdpSocket`, `TimerProvider`). Never use `tokio::` or `std::net::` outside `src/io/`.
+1. **No direct platform I/O in library code.** All network I/O goes through abstract traits in `src/io/` (`AsyncIo`, `TlsConnector`, `SecureConnect`, `AsyncUdpSocket`, `TimerProvider`). Never use `tokio::` or `std::net::` outside `src/io/`. `TlsConnector` wraps an existing stream (tokio/embassy); `SecureConnect` creates its own TCP+TLS connection (ESP-IDF). `TimerProvider::now_millis()` provides monotonic clock for platform-agnostic timeouts.
 
 2. **All model-specific behavior goes through the quirks engine.** Access via `model.quirks()` — never match on `BambuModel` variants for behavioral dispatch. Strategy structs live in `src/quirks/models/`.
 

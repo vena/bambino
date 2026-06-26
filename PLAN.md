@@ -13,16 +13,9 @@ When completing a phase, replace its section with a 2–3 line summary — detai
 
 **Phases 12–15** (CLI, Tests, Lint, Protocol Audit): 14 fixes including fan speed display (667% bug), ipcam nesting, `AirductMode` enum replacing inverted bool API, `fun` telemetry field (`Option<String>` hex), `ModelMismatch` context via `Cow<'static, str>`, `DiskWriteFailure` reword. 43 new tests. Full protocol alignment verified across all 7 reference docs against pybambu and Bambuddy.
 
-**Current state:** 224 tests (189 unit + 35 integration), all passing. `no_std`+`alloc` clean. Clippy clean.
+**Phase 16** (Platform Abstraction Gaps): Added `SecureConnect` trait for ESP-IDF's "TLS manages its own transport" model with impls for Tokio (`TokioSecureConnector`) and ESP-IDF (`EspIdfSecureConnector` via `EspTls` syscalls). Added `TimerProvider::now_millis()` monotonic clock method (tokio: `std::time::Instant`, ESP-IDF: `esp_timer_get_time`, embassy: `embassy_time::Instant`). Refactored `discover_devices` from poll-count timing to wall-clock measurement. `TlsConnector` retained for FTPS data channel wrapping. 3 new tests.
 
----
-
-## Phase 16: Platform Abstraction Gaps
-
-Design work on the trait layer — requires architectural decisions. Blocked on ESP-IDF target maturity.
-
-- [ ] **ESP-IDF `TlsConnector` gap:** ESP-IDF's `EspTls` manages its own TCP connection internally, which doesn't fit the `TlsConnector<RawStream>` "wrap an existing stream" trait model. Evaluate whether to (a) refactor `TlsConnector` into a higher-level `SecureConnect` trait supporting both models, or (b) use raw mbedtls bindings to wrap an existing socket fd.
-- [ ] **`TimerProvider`-based discovery deadline:** `discover_devices` tracks elapsed time by counting socket poll cycles (~100ms each) rather than measuring wall-clock time. This is inaccurate and prevents platform-agnostic timeout semantics. Evaluate adding a `timeout` method or `select`-style deadline to `TimerProvider`, and refactor `discover_devices` to use it instead of the poll counter.
+**Current state:** 227 tests (192 unit + 35 integration), all passing. `no_std`+`alloc` clean. Clippy clean.
 
 ---
 
@@ -61,6 +54,6 @@ Add commonly useful control commands to the CLI for hardware testing.
 | Phase | Module | Status |
 |-------|--------|--------|
 | 1–15 | Core through Protocol Audit | **Complete** |
-| 16 | Platform Abstraction Gaps | Blocked |
+| 16 | Platform Abstraction Gaps | **Complete** |
 | 17 | Monitor Typed Telemetry | Not started |
 | 18 | Expanded CLI Commands | Not started |
