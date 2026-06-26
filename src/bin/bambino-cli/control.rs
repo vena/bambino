@@ -14,94 +14,29 @@ use std::time::Duration;
 use bambino::client::{FanTarget, PrinterClient};
 use bambino::error::BambuError;
 use bambino::models::resolve_model;
-use bambino::mqtt::GetVersionRequest;
 
 use crate::connection::connect_mqtt;
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
 pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     let is_verbose = crate::is_verbose();
-    let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
+    let mqtt = connect_mqtt(ip, serial, access_code).await?;
+    let model = resolve_model(serial, None);
+    let mut printer = PrinterClient::new(mqtt, serial, model);
 
     println!("Querying expansion bus version database...");
-    let req = GetVersionRequest::new(10002);
 
-    log::debug!("Serializing get_version command structure to JSON");
-    let payload = serde_json::to_vec(&req).map_err(|_| BambuError::SerializationError)?;
-
-    log::debug!(
-        "Publishing payload to 'request' topic: {}",
-        String::from_utf8_lossy(&payload)
-    );
-    mqtt.publish_command(&payload).await?;
-
-    log::debug!("Published command successfully. Entering polling loop for telemetry responses");
-
-    let poll_future = async {
-        loop {
-            let msg = mqtt.poll_telemetry().await?;
-            log::debug!(
-                "Telemetry frame received on topic: '{}', size: {} bytes",
-                msg.topic,
-                msg.payload.len()
-            );
-
-            let v: serde_json::Value = match serde_json::from_slice(&msg.payload) {
-                Ok(val) => val,
-                Err(e) => {
-                    log::debug!("Failed to parse JSON frame payload: {:?}", e);
-                    serde_json::Value::Null
-                }
-            };
-
-            if !v.is_null() {
-                log::trace!(
-                    "Parsed JSON Content: {}",
-                    serde_json::to_string(&v).unwrap_or_default()
-                );
-            }
-
-            // Polymorphic structure matching: We inspect if the payload maps command keys under
-            // the root object directly, or if they are nested inside an 'info' sub-block.
-            let target_node = if v.get("info").is_some() {
-                v.get("info")
-            } else {
-                Some(&v)
-            };
-
-            if let Some(node) = target_node
-                && node.get("command").and_then(|c| c.as_str()) == Some("get_version")
-            {
-                log::debug!("Matching 'get_version' command frame detected");
-                if let Some(modules) = node.get("module").and_then(|m| m.as_array()) {
-                    return Ok::<_, BambuError>(modules.clone());
-                }
-            }
-        }
-    };
-
-    // We use a generous timeout to allow latency-heavy ESP32 targets to complete the query.
-    match tokio::time::timeout(Duration::from_secs(10), poll_future).await {
-        Ok(Ok(modules)) => {
+    match tokio::time::timeout(Duration::from_secs(10), printer.get_version()).await {
+        Ok(Ok(info)) => {
             let mut table = crate::table::Table::new(vec![
                 "Product", "Module", "Hardware", "Firmware", "Serial",
             ]);
 
-            for m in &modules {
-                let visible = m.get("visible").and_then(|v| v.as_bool()).unwrap_or(true);
-                if !visible && !is_verbose {
+            for m in &info.module {
+                if !m.visible && !is_verbose {
                     continue;
                 }
-
-                let product = m.get("product_name").and_then(|p| p.as_str()).unwrap_or("");
-                let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                let hw_ver = m.get("hw_ver").and_then(|h| h.as_str()).unwrap_or("");
-                let sw_ver = m
-                    .get("sw_ver")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("unknown");
-                let sn = m.get("sn").and_then(|s| s.as_str()).unwrap_or("N/A");
-                table.add_row(vec![product, name, hw_ver, sw_ver, sn]);
+                table.add_row(vec![&m.product_name, &m.name, &m.hw_ver, &m.sw_ver, &m.sn]);
             }
 
             println!();
@@ -112,7 +47,7 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
             println!();
         }
         Ok(Err(e)) => {
-            log::debug!("Polling loop generated an active error: {:?}", e);
+            log::debug!("Version query generated an error: {:?}", e);
             return Err(e);
         }
         Err(_) => {

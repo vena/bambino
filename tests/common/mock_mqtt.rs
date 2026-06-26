@@ -115,20 +115,63 @@ pub async fn handle_mqtt_handshake(stream: &mut DuplexStream) {
 }
 
 /// Intercepts and parses the JSON body of the next MQTT PUBLISH packet sent by the client.
+/// Silently skips any PUBACK frames that arrive before the PUBLISH (these are the client's
+/// acknowledgements for server-sent PUBLISH frames).
 pub async fn read_publish_payload(stream: &mut DuplexStream) -> serde_json::Value {
-    let (header, packet) = read_packet(stream)
-        .await
-        .expect("Failed to read PUBLISH packet");
+    loop {
+        let (header, packet) = read_packet(stream).await.expect("Failed to read packet");
+        let packet_type = header >> 4;
+        if packet_type == PACKET_TYPE_PUBACK {
+            continue;
+        }
+        assert_eq!(
+            header, HEADER_PUBLISH_QOS1,
+            "Expected PUBLISH QoS 1 header (0x{:02X}), got 0x{:02X}",
+            HEADER_PUBLISH_QOS1, header
+        );
+
+        let topic_len = u16::from_be_bytes([packet[0], packet[1]]) as usize;
+        let payload_start = 2 + topic_len + 2; // +2 topic len prefix, +2 packet ID
+
+        return serde_json::from_slice(&packet[payload_start..])
+            .expect("Failed to parse PUBLISH JSON payload");
+    }
+}
+
+/// Reads and discards the client's PUBACK for a server-sent PUBLISH.
+/// Call after `send_publish_payload` to keep the broker stream in sync.
+pub async fn read_puback(stream: &mut DuplexStream) {
+    let (header, _) = read_packet(stream).await.expect("Failed to read PUBACK");
     assert_eq!(
-        header, HEADER_PUBLISH_QOS1,
-        "Expected PUBLISH QoS 1 header (0x{:02X})",
-        HEADER_PUBLISH_QOS1
+        header >> 4,
+        PACKET_TYPE_PUBACK,
+        "Expected PUBACK packet type"
     );
+}
 
-    let topic_len = u16::from_be_bytes([packet[0], packet[1]]) as usize;
-    let payload_start = 2 + topic_len + 2; // +2 topic len prefix, +2 packet ID
+/// Sends a QoS 1 PUBLISH frame containing `payload` on the given `topic` from the server side.
+pub async fn send_publish_payload(
+    stream: &mut DuplexStream,
+    topic: &str,
+    packet_id: u16,
+    payload: &[u8],
+) {
+    let mut var_header = Vec::new();
+    var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());
+    var_header.extend_from_slice(topic.as_bytes());
+    var_header.extend_from_slice(&packet_id.to_be_bytes());
 
-    serde_json::from_slice(&packet[payload_start..]).expect("Failed to parse PUBLISH JSON payload")
+    let remaining_length = var_header.len() + payload.len();
+    let mut packet = vec![HEADER_PUBLISH_QOS1];
+    packet.extend_from_slice(&encode_remaining_length(remaining_length));
+    packet.extend(var_header);
+    packet.extend_from_slice(payload);
+
+    stream
+        .write_all(&packet)
+        .await
+        .expect("Failed to write PUBLISH");
+    stream.flush().await.expect("Failed to flush PUBLISH");
 }
 
 /// Executes the mock MQTT v3.1.1 broker task on the provided bidirectional stream.

@@ -14,7 +14,9 @@ use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 use bambino::mqtt::{BambuMqttClient, PrintJobConfig};
 
-use common::mock_mqtt::{handle_mqtt_handshake, read_publish_payload};
+use common::mock_mqtt::{
+    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
+};
 
 // ============================================================================
 // Core behavioral verification cases
@@ -947,9 +949,14 @@ async fn test_select_k_profile_wire_payload() {
     broker_task.await.expect("Broker task panicked");
 }
 
+const K_PROFILE_RESPONSE: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10002","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+
+const SERIAL: &str = "01P000000000000";
+
 #[tokio::test]
 async fn test_get_k_profiles_auto_priming() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
@@ -961,29 +968,51 @@ async fn test_get_k_profiles_auto_priming() {
         let json_real = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_real["print"]["command"], "extrusion_cali_get");
 
+        // Send response and wait for client's PUBACK
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1000,
+            K_PROFILE_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
         // Second call: already primed, only one command
         let json_second = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_second["print"]["command"], "extrusion_cali_get");
+
+        // Send response for second call
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1001,
+            K_PROFILE_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
 
     // First call triggers auto-prime (2 publishes)
-    client
+    let resp = client
         .get_k_profiles()
         .await
         .expect("get_k_profiles failed");
+    assert_eq!(resp.print.filaments.len(), 1);
+    assert_eq!(resp.print.filaments[0].filament_id, "GFA01");
 
     // Second call skips prime (1 publish)
-    client
+    let resp2 = client
         .get_k_profiles()
         .await
         .expect("get_k_profiles second call failed");
+    assert_eq!(resp2.print.filaments.len(), 1);
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -991,6 +1020,7 @@ async fn test_get_k_profiles_auto_priming() {
 #[tokio::test]
 async fn test_get_k_profiles_manual_prime_skip() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
@@ -998,20 +1028,30 @@ async fn test_get_k_profiles_manual_prime_skip() {
         // With manual priming, only one command should be sent
         let json = read_publish_payload(&mut server_stream).await;
         assert_eq!(json["print"]["command"], "extrusion_cali_get");
+
+        // Send response and wait for client's PUBACK
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1000,
+            K_PROFILE_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
     client.set_k_profile_primed(true);
 
-    client
+    let resp = client
         .get_k_profiles()
         .await
         .expect("get_k_profiles failed");
+    assert_eq!(resp.print.command, "extrusion_cali_get");
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1040,6 +1080,149 @@ async fn test_sequence_id_wrapping() {
     let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client.send_gcode("G28").await.expect("send_gcode failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+// ============================================================================
+// Command-response round-trip tests (Phase 18)
+// ============================================================================
+
+const VERSION_RESPONSE: &str = r#"{"info":{"command":"get_version","sequence_id":"10001","module":[{"product_name":"Bambu Lab P1S","name":"ota","hw_ver":"OTA","sw_ver":"01.09.00.00","sn":"01P000000000001","visible":true},{"name":"esp32","sw_ver":"01.02.03.04","sn":"01P000000000002"}]}}"#;
+
+#[tokio::test]
+async fn test_get_version_round_trip() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Read the get_version request
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["info"]["command"], "get_version");
+
+        // Send a telemetry message first (should get buffered by poll_until)
+        let telemetry = br#"{"print":{"gcode_state":"IDLE","mc_percent":0}}"#;
+        send_publish_payload(&mut server_stream, &topic, 1000, telemetry).await;
+        read_puback(&mut server_stream).await;
+
+        // Then send the version response
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1001,
+            VERSION_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+
+    let info = client.get_version().await.expect("get_version failed");
+
+    assert_eq!(info.command, "get_version");
+    assert_eq!(info.module.len(), 2);
+    assert_eq!(info.module[0].name, "ota");
+    assert_eq!(info.module[0].sw_ver, "01.09.00.00");
+    assert_eq!(info.module[1].product_name, "");
+    assert!(info.module[1].visible);
+
+    // The buffered telemetry message should be recoverable
+    let event = client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should drain buffer");
+    let report = event.report().expect("should be a Report variant");
+    assert_eq!(
+        report.print.as_ref().unwrap().gcode_state,
+        Some("IDLE".into())
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_poll_until_buffers_unmatched_messages() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Read the get_version request
+        let _json = read_publish_payload(&mut server_stream).await;
+
+        // Send 3 telemetry messages before the version response
+        for i in 0..3u16 {
+            let telemetry = format!(
+                r#"{{"print":{{"gcode_state":"RUNNING","mc_percent":{}}}}}"#,
+                i * 10
+            );
+            send_publish_payload(&mut server_stream, &topic, 1000 + i, telemetry.as_bytes()).await;
+            read_puback(&mut server_stream).await;
+        }
+
+        // Finally send the matching response
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1003,
+            VERSION_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+
+    let info = client
+        .get_version()
+        .await
+        .expect("get_version should find response after unmatched messages");
+    assert_eq!(info.module.len(), 2);
+
+    // All 3 buffered messages should be drainable in order
+    for i in 0..3 {
+        let event = client.poll_telemetry().await.expect("should drain buffer");
+        let report = event.report().expect("should be Report");
+        assert_eq!(report.print.as_ref().unwrap().mc_percent, Some(i * 10));
+    }
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_request_pushall() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["pushing"]["command"], "pushall");
+        assert!(json["pushing"]["sequence_id"].is_string());
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+
+    client
+        .request_pushall()
+        .await
+        .expect("request_pushall failed");
 
     broker_task.await.expect("Broker task panicked");
 }

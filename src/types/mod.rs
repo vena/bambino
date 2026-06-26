@@ -4,6 +4,7 @@
 //! interface and state telemetry report channels.
 
 pub mod telemetry;
+pub mod version;
 
 pub use telemetry::{
     AirductCollection, AirductModeListEntry, AirductPart, AmsDrySetting, AmsStatusReport, AmsTray,
@@ -11,3 +12,4 @@ pub use telemetry::{
     IpcamTelemetry, NozzleCollection, NozzleInfo, PrinterTelemetry, TelemetryReport, VirtualTray,
     is_developer_mode,
 };
+pub use version::{VersionInfo, VersionModule};

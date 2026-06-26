@@ -121,13 +121,12 @@ printer.start_print(&config).await?;
 ### Read telemetry
 
 ```rust
-use bambino::types::TelemetryReport;
-
 loop {
-    let msg = printer.poll_telemetry().await?;
-    let report: TelemetryReport = serde_json::from_slice(&msg.payload)?;
-    if let Some(print) = &report.print {
-        println!("{:?} — {:?}%", print.gcode_state, print.progress);
+    let event = printer.poll_telemetry().await?;
+    if let Some(report) = event.report() {
+        if let Some(print) = &report.print {
+            println!("{:?} — {:?}%", print.gcode_state, print.progress);
+        }
     }
 }
 ```

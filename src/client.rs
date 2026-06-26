@@ -17,23 +17,31 @@
 //!    handling secondary right-hand auxiliary fan controllers on specialized platforms.
 
 #[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
+use alloc::collections::VecDeque;
+#[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+#[cfg(feature = "std")]
+use std::collections::VecDeque;
+
 use serde::Serialize;
 
+use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use crate::io::{AsyncIo, TlsConnector};
+use crate::io::{AsyncIo, TimerProvider, TlsConnector};
 use crate::models::BambuModel;
 use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{
     BambuMqttClient, GCodeRequest, MqttMessage, PrintJobConfig, StandardControlRequest,
 };
-use crate::types::TelemetryReport;
+use crate::types::{TelemetryReport, VersionInfo};
 
 /// Typed telemetry event from the printer's MQTT channel.
 ///
@@ -130,6 +138,20 @@ impl FtpDataStreamFactory<DummyRawIo> for DummyFactory {
     }
 }
 
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct DummyTimer;
+
+impl TimerProvider for DummyTimer {
+    async fn sleep(&self, _duration: core::time::Duration) {}
+    fn now_millis(&self) -> u64 {
+        0
+    }
+}
+
+pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
+pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
+
 // ============================================================================
 // Core Struct Definition
 // ============================================================================
@@ -187,26 +209,35 @@ impl core::ops::BitOr for CalibrationOption {
 /// This struct wraps an active MQTT session and an optional FTPS file-system client.
 /// Type parameters default to dummy implementations to allow lightweight MQTT-only deployment on
 /// memory-constrained microcontrollers without violating recursive trait boundaries.
-pub struct PrinterClient<IO, RawIO = DummyRawIo, Tls = DummyTls, Factory = DummyFactory>
-where
+pub struct PrinterClient<
+    IO,
+    Timer = DummyTimer,
+    RawIO = DummyRawIo,
+    Tls = DummyTls,
+    Factory = DummyFactory,
+> where
     IO: AsyncIo,
+    Timer: TimerProvider,
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
     mqtt: BambuMqttClient<IO>,
     ftps: Option<BambuFtpsClient<RawIO, Tls, Factory>>,
+    timer: Timer,
     serial: String,
     model: BambuModel,
     sequence_counter: u64,
     k_profile_primed: bool,
+    pending_messages: VecDeque<MqttMessage>,
+    command_timeout_secs: u64,
 }
 
 // ============================================================================
 // MQTT-Only & Shared Connection Block
 // ============================================================================
 
-impl<IO> PrinterClient<IO, DummyRawIo, DummyTls, DummyFactory>
+impl<IO> PrinterClient<IO, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
 where
     IO: AsyncIo,
 {
@@ -215,10 +246,39 @@ where
         Self {
             mqtt: mqtt_client,
             ftps: None,
+            timer: DummyTimer,
             serial: String::from(serial),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
+            pending_messages: VecDeque::new(),
+            command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+        }
+    }
+}
+
+impl<IO, Timer> PrinterClient<IO, Timer, DummyRawIo, DummyTls, DummyFactory>
+where
+    IO: AsyncIo,
+    Timer: TimerProvider,
+{
+    /// Instantiates a coordinator client with an integrated timer for command-response timeouts.
+    pub fn new_with_timer(
+        mqtt_client: BambuMqttClient<IO>,
+        timer: Timer,
+        serial: &str,
+        model: BambuModel,
+    ) -> Self {
+        Self {
+            mqtt: mqtt_client,
+            ftps: None,
+            timer,
+            serial: String::from(serial),
+            model,
+            sequence_counter: INITIAL_SEQUENCE_ID,
+            k_profile_primed: false,
+            pending_messages: VecDeque::new(),
+            command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
         }
     }
 }
@@ -227,9 +287,10 @@ where
 // Core Functional API Blocks (Thermals, Motion, Queue Lifecycle)
 // ============================================================================
 
-impl<IO, RawIO, Tls, Factory> PrinterClient<IO, RawIO, Tls, Factory>
+impl<IO, Timer, RawIO, Tls, Factory> PrinterClient<IO, Timer, RawIO, Tls, Factory>
 where
     IO: AsyncIo,
+    Timer: TimerProvider,
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
@@ -246,14 +307,22 @@ where
         self.sequence_counter
     }
 
+    /// Sets the timeout (in seconds) used by command-response methods like
+    /// `get_version()` and `get_k_profiles()`.
+    pub fn set_command_timeout(&mut self, secs: u64) {
+        self.command_timeout_secs = secs;
+    }
+
     /// Pulls the next available telemetry event from the MQTTS channel.
     ///
-    /// Returns a typed [`TelemetryEvent`] — either a deserialized [`TelemetryReport`]
-    /// for state updates, or `Unknown` for payloads that don't match known schemas.
-    /// The raw [`MqttMessage`] is always accessible via [`TelemetryEvent::raw`] or
-    /// [`TelemetryEvent::into_raw`].
+    /// Drains any internally buffered messages (from command-response round-trips)
+    /// before reading from the wire.
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
-        let msg = self.mqtt.poll_telemetry().await?;
+        let msg = if let Some(buffered) = self.pending_messages.pop_front() {
+            buffered
+        } else {
+            self.mqtt.poll_telemetry().await?
+        };
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
             Ok(report) => Ok(TelemetryEvent::Report(Box::new(report), msg)),
             Err(_) => Ok(TelemetryEvent::Unknown(msg)),
@@ -262,16 +331,62 @@ where
 
     /// Pulls the next raw MQTT message without deserialization.
     ///
-    /// Use this when you need direct access to wire bytes or want to handle
-    /// deserialization yourself. Most consumers should prefer [`poll_telemetry`](Self::poll_telemetry).
+    /// Drains any internally buffered messages before reading from the wire.
     pub async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError> {
-        self.mqtt.poll_telemetry().await
+        if let Some(buffered) = self.pending_messages.pop_front() {
+            Ok(buffered)
+        } else {
+            self.mqtt.poll_telemetry().await
+        }
+    }
+
+    /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching
+    /// messages for later retrieval via `poll_telemetry()` / `poll_raw()`.
+    ///
+    /// Returns `BambuError::Timeout` if the wall-clock timeout (`command_timeout_secs`)
+    /// or message-count safety valve (`POLL_UNTIL_MAX_MESSAGES`) is exceeded.
+    pub(crate) async fn poll_until<F, T>(&mut self, mut matcher: F) -> Result<T, BambuError>
+    where
+        F: FnMut(&MqttMessage) -> Option<T>,
+    {
+        let start = self.timer.now_millis();
+        let timeout_ms = self.command_timeout_secs * 1000;
+        let mut count: usize = 0;
+
+        loop {
+            let msg = self.mqtt.poll_telemetry().await?;
+            if let Some(result) = matcher(&msg) {
+                return Ok(result);
+            }
+            self.pending_messages.push_back(msg);
+            count += 1;
+
+            if count >= POLL_UNTIL_MAX_MESSAGES {
+                return Err(BambuError::Timeout);
+            }
+            let elapsed = self.timer.now_millis().wrapping_sub(start);
+            if timeout_ms > 0 && elapsed >= timeout_ms {
+                return Err(BambuError::Timeout);
+            }
+        }
     }
 
     /// Serializes a request struct and publishes it to the printer's MQTT command channel.
     async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<u16, BambuError> {
         let payload = serde_json::to_vec(request).map_err(|_| BambuError::SerializationError)?;
         self.mqtt.publish_command(&payload).await
+    }
+
+    /// Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
+    pub async fn request_pushall(&mut self) -> Result<u16, BambuError> {
+        let seq = self.next_sequence_id();
+        let req = crate::mqtt::PushAllRequest::new(seq);
+        self.publish_request(&req).await
+    }
+
+    /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
+    pub async fn send_ping(&mut self) -> Result<(), BambuError> {
+        self.mqtt.send_ping().await
     }
 
     /// Dispatches a G-code string with model-aware safety validation [REF-MOTO-GCODE].
@@ -653,15 +768,34 @@ where
         self.publish_request(&req).await
     }
 
+    /// Queries the printer's expansion bus version database and returns typed module info.
+    ///
+    /// Sends a `get_version` command and waits for the response, buffering any
+    /// telemetry messages that arrive in the interim. Wrap in a platform-specific
+    /// timeout if you need a shorter deadline than `command_timeout_secs`.
+    pub async fn get_version(&mut self) -> Result<VersionInfo, BambuError> {
+        let seq = self.next_sequence_id();
+        let req = crate::mqtt::GetVersionRequest::new(seq);
+        self.publish_request(&req).await?;
+
+        self.poll_until(|msg| {
+            let v: serde_json::Value = serde_json::from_slice(&msg.payload).ok()?;
+            let node = v.get("info").unwrap_or(&v);
+            if node.get("command")?.as_str()? == "get_version" {
+                serde_json::from_value::<VersionInfo>(node.clone()).ok()
+            } else {
+                None
+            }
+        })
+        .await
+    }
+
     /// Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
     ///
     /// Automatically sends a priming request on the first call after connection, because the
     /// firmware silently ignores the initial `extrusion_cali_get` command. Use
     /// `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
-    ///
-    /// The response arrives asynchronously via `poll_telemetry()` — deserialize it with
-    /// `ExtrusionCaliGetResponse`.
-    pub async fn get_k_profiles(&mut self) -> Result<u16, BambuError> {
+    pub async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, BambuError> {
         if !self.k_profile_primed {
             let prime_seq = self.next_sequence_id();
             let prime_req = crate::diagnostics::ExtrusionCaliGetRequest::new(prime_seq);
@@ -671,7 +805,17 @@ where
 
         let seq = self.next_sequence_id();
         let req = crate::diagnostics::ExtrusionCaliGetRequest::new(seq);
-        self.publish_request(&req).await
+        self.publish_request(&req).await?;
+
+        self.poll_until(|msg| {
+            let resp: ExtrusionCaliGetResponse = serde_json::from_slice(&msg.payload).ok()?;
+            if resp.print.command == "extrusion_cali_get" {
+                Some(resp)
+            } else {
+                None
+            }
+        })
+        .await
     }
 
     /// Controls whether `get_k_profiles()` sends an automatic priming request.
@@ -744,9 +888,10 @@ where
 // Full Storage / FTPS Dual Client Block
 // ============================================================================
 
-impl<IO, RawIO, Tls, Factory> PrinterClient<IO, RawIO, Tls, Factory>
+impl<IO, Timer, RawIO, Tls, Factory> PrinterClient<IO, Timer, RawIO, Tls, Factory>
 where
     IO: AsyncIo,
+    Timer: TimerProvider,
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
@@ -755,16 +900,20 @@ where
     pub fn new_with_storage(
         mqtt_client: BambuMqttClient<IO>,
         ftps_client: BambuFtpsClient<RawIO, Tls, Factory>,
+        timer: Timer,
         serial: &str,
         model: BambuModel,
     ) -> Self {
         Self {
             mqtt: mqtt_client,
             ftps: Some(ftps_client),
+            timer,
             serial: String::from(serial),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
+            pending_messages: VecDeque::new(),
+            command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
         }
     }
 

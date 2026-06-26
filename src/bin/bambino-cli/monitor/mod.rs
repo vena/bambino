@@ -12,6 +12,7 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
+use bambino::client::PrinterClient;
 use bambino::error::BambuError;
 use bambino::models::resolve_model;
 use bambino::mqtt::PushAllRequest;
@@ -76,19 +77,17 @@ impl Drop for TerminalGuard {
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
 
-    let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
+    let mqtt = connect_mqtt(ip, serial, access_code).await?;
     eprintln!("MQTT Connection successfully established. Querying status database...");
-
-    let seq_id = 10001;
-    let push_req = PushAllRequest::new(seq_id);
-    let push_payload = serde_json::to_vec(&push_req).map_err(|_| BambuError::SerializationError)?;
-    mqtt.publish_command(&push_payload).await?;
-
-    let mut ping_timer = interval(Duration::from_secs(15));
-    ping_timer.tick().await;
 
     let model = resolve_model(serial, None);
     let quirks = model.quirks();
+    let mut printer = PrinterClient::new(mqtt, serial, model);
+
+    printer.request_pushall().await?;
+
+    let mut ping_timer = interval(Duration::from_secs(15));
+    ping_timer.tick().await;
 
     let _guard = TerminalGuard::enter().map_err(|_| {
         BambuError::ProtocolViolation("failed to initialize terminal raw mode".into())
@@ -112,10 +111,11 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 
     let result = loop {
         tokio::select! {
-            telemetry_res = mqtt.poll_telemetry() => {
+            telemetry_res = printer.poll_telemetry() => {
                 match telemetry_res {
-                    Ok(msg) => {
-                        if let Err(e) = dashboard::render_dashboard(&msg.payload, &mut state, quirks) {
+                    Ok(event) => {
+                        let payload = &event.raw().payload;
+                        if let Err(e) = dashboard::render_dashboard(payload, &mut state, quirks) {
                             log::warn!("Failed to render telemetry updates: {:?}", e);
                         }
                     }
@@ -124,7 +124,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
             }
 
             _ = ping_timer.tick() => {
-                if let Err(e) = mqtt.send_ping().await {
+                if let Err(e) = printer.send_ping().await {
                     log::warn!("Failed to dispatch keep-alive ping: {:?}", e);
                 }
             }
