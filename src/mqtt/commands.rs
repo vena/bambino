@@ -926,4 +926,161 @@ mod tests {
             r#"{"print":{"command":"clean_print_error","sequence_id":"20010"}}"#
         );
     }
+
+    #[test]
+    fn test_pushall_request_json() {
+        let req = PushAllRequest::new(10001);
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"pushing":{"command":"pushall","sequence_id":"10001"}}"#
+        );
+    }
+
+    #[test]
+    fn test_get_version_request_json() {
+        let req = GetVersionRequest::new(10002);
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"info":{"command":"get_version","sequence_id":"10002"}}"#
+        );
+    }
+
+    #[test]
+    fn test_gcode_request_appends_newline() {
+        let req = GCodeRequest::new("G28", 10003);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"gcode_line"#));
+        assert!(json.contains(r#""param":"G28\n""#));
+
+        let req_with_nl = GCodeRequest::new("G28\n", 10004);
+        let json2 = serde_json::to_string(&req_with_nl).unwrap();
+        assert!(json2.contains(r#""param":"G28\n""#));
+        assert!(!json2.contains(r#""param":"G28\n\n""#));
+    }
+
+    #[test]
+    fn test_led_ctrl_request_json() {
+        let req_on = LedCtrlRequest::new("chamber_light", true, 10005);
+        let json = serde_json::to_string(&req_on).unwrap();
+        assert!(json.contains(r#""command":"ledctrl"#));
+        assert!(json.contains(r#""led_node":"chamber_light""#));
+        assert!(json.contains(r#""led_mode":"on""#));
+
+        let req_off = LedCtrlRequest::new("chamber_light", false, 10006);
+        let json_off = serde_json::to_string(&req_off).unwrap();
+        assert!(json_off.contains(r#""led_mode":"off""#));
+    }
+
+    #[test]
+    fn test_airduct_request_json() {
+        let req = AirductRequest::new(true, 10007);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"set_airduct"#));
+        assert!(json.contains(r#""modeId":0"#));
+
+        let req_heat = AirductRequest::new(false, 10008);
+        let json_heat = serde_json::to_string(&req_heat).unwrap();
+        assert!(json_heat.contains(r#""modeId":1"#));
+    }
+
+    #[test]
+    fn test_prompt_sound_request_json() {
+        let req = PromptSoundRequest::new(true, 10009);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"print_option"#));
+        assert!(json.contains(r#""sound_enable":true"#));
+    }
+
+    #[test]
+    fn test_buzzer_request_json() {
+        let req = BuzzerRequest::new(2, 10010);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"buzzer_ctrl"#));
+        assert!(json.contains(r#""mode":2"#));
+        assert!(json.contains(r#""reason":"""#));
+    }
+
+    #[test]
+    fn test_calibration_request_json() {
+        let req = CalibrationRequest::new(6, 10011);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"calibration"#));
+        assert!(json.contains(r#""option":6"#));
+    }
+
+    #[test]
+    fn test_print_speed_request_json() {
+        let req = PrintSpeedRequest::new("3", 10012);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"print_speed"#));
+        assert!(json.contains(r#""param":"3""#));
+    }
+
+    #[test]
+    fn test_ams_control_request_json() {
+        let req = AmsControlRequest::new("resume", 10013);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"ams_control"#));
+        assert!(json.contains(r#""param":"resume""#));
+    }
+
+    #[test]
+    fn test_ams_get_rfid_request_json() {
+        let req = AmsGetRfidRequest::new(0, 2, 10014);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"ams_get_rfid"#));
+        assert!(json.contains(r#""ams_id":0"#));
+        assert!(json.contains(r#""slot_id":2"#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_request_json() {
+        let req = AmsFilamentSettingRequest::new(
+            0,
+            1,
+            "GFA01",
+            "PLA",
+            Some("Bambu PLA Basic"),
+            "FF0000FF",
+            190,
+            220,
+            10015,
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"ams_filament_setting"#));
+        assert!(json.contains(r#""tray_info_idx":"GFA01""#));
+        assert!(json.contains(r#""tray_type":"PLA""#));
+        assert!(json.contains(r#""tray_sub_brands":"Bambu PLA Basic""#));
+        assert!(json.contains(r#""tray_color":"FF0000FF""#));
+        assert!(json.contains(r#""nozzle_temp_min":190"#));
+        assert!(json.contains(r#""nozzle_temp_max":220"#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_default_sub_brands() {
+        let req = AmsFilamentSettingRequest::new(
+            255, 254, "GFA01", "PLA", None, "FFFFFFFF", 190, 220, 10016,
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""tray_sub_brands":"PLA Basic""#));
+    }
+
+    #[test]
+    fn test_skip_objects_request_json() {
+        let req = SkipObjectsRequest::new(vec![0, 3, 7], 10017);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"skip_objects"#));
+        assert!(json.contains(r#""obj_list":[0,3,7]"#));
+    }
+
+    #[test]
+    fn test_standard_control_request_json() {
+        for cmd in ["pause", "resume", "stop"] {
+            let req = StandardControlRequest::new(cmd, 10018);
+            let json = serde_json::to_string(&req).unwrap();
+            assert!(json.contains(&format!(r#""command":"{}""#, cmd)));
+        }
+    }
 }

@@ -210,6 +210,27 @@ async fn test_ftps_upload_426_recovery_via_size() {
 }
 
 #[tokio::test]
+async fn test_ftps_upload_size_mismatch_returns_disk_failure() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_upload_size_mismatch(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P2S).await;
+
+    let result = client.upload_file("/model/job.3mf", b"TEST_DATA").await;
+    assert!(
+        matches!(result, Err(bambino::error::BambuError::DiskWriteFailure)),
+        "Expected DiskWriteFailure on SIZE mismatch, got {:?}",
+        result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
 async fn test_ftps_disconnect() {
     let (client_control, server_control, data_container, factory) = setup();
 

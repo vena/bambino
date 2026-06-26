@@ -313,6 +313,41 @@ pub async fn run_mock_server_upload_426_recovery(
     .await;
 }
 
+/// Mock server for upload with 426 + SIZE mismatch (should trigger DiskWriteFailure).
+pub async fn run_mock_server_upload_size_mismatch(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    // STOR upload
+    let mut server_upload_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "STOR /model/job.3mf\r\n");
+    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+
+    let mut upload_buf = vec![0u8; 100];
+    let _bytes_read = server_upload_data
+        .read(&mut upload_buf)
+        .await
+        .expect("upload data read");
+    drop(server_upload_data);
+
+    // Return 426 (TLS close race)
+    respond(
+        &mut server_control,
+        b"426 Failure reading network stream.\r\n",
+    )
+    .await;
+
+    // SIZE verification — report WRONG size (truncated write)
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert!(cmd.starts_with("SIZE "));
+    respond(&mut server_control, b"213 0\r\n").await;
+}
+
 /// Mock server for disconnect (QUIT) test.
 pub async fn run_mock_server_disconnect(
     mut server_control: tokio::io::DuplexStream,

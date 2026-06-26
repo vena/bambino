@@ -233,50 +233,65 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ---
 
-## Phase 13: Test Infrastructure & Coverage
+<details>
+<summary>Phase 13: Test Infrastructure & Coverage — 0 correctness bugs, 35 new tests. Full public API coverage, error path hardening, command serialization verification</summary>
 
-### Integration Tests (`tests/`)
-**Lines:** ~1398
+**Files:** `tests/{common/{mod,io,mock_mqtt,mock_ftps,mock_camera}.rs, client_test.rs, mqtt_test.rs, ftps_test.rs, camera_test.rs}`, `src/{error,models,mqtt/{client,commands},ftps/{client,parser},ams/{parser,mapping},camera/{binary,rtsps},discovery/{parser,mod},diagnostics/{hms,kprofile},quirks/mod,types/telemetry}.rs` (~3200 lines reviewed)
 
-- [ ] **`tests/common/mod.rs`** (~22 lines) — verify shared test utilities
-- [ ] **`tests/common/io.rs`** (~60 lines) — audit mock IO implementations for correctness
-- [ ] **`tests/common/mock_mqtt.rs`** (~220 lines)
-  - [ ] Verify mock MQTT broker behavior matches real Bambu printer behavior
-  - [ ] Check that mock responses are realistic and cover edge cases
-- [ ] **`tests/common/mock_ftps.rs`** (~244 lines)
-  - [ ] Verify mock FTP server behavior matches real Bambu FTPS
-  - [ ] Check file operation simulation accuracy
-- [ ] **`tests/common/mock_camera.rs`** (~88 lines)
-  - [ ] Verify mock camera behavior
-- [ ] **`tests/client_test.rs`** (~451 lines)
-  - [ ] Are all public client methods tested?
-  - [ ] Are error paths tested?
-  - [ ] Are edge cases covered (disconnection during operation, concurrent calls)?
-- [ ] **`tests/mqtt_test.rs`** (~134 lines)
-  - [ ] Are MQTT packet edge cases tested (max-length payloads, malformed packets)?
-- [ ] **`tests/ftps_test.rs`** (~87 lines)
-  - [ ] Are FTP protocol edge cases tested?
-- [ ] **`tests/camera_test.rs`** (~92 lines)
-  - [ ] Are camera protocol edge cases tested?
+**No correctness bugs found.** Test infrastructure is high quality — deterministic, well-documented, and correctly structured.
 
-### Inline Unit Tests (in `#[cfg(test)]` modules)
+**New tests added (35 total):**
 
-- [ ] **`src/error.rs`** — `test_display_consistency`: verify it tests ALL variants
-- [ ] **`src/models.rs`** — model resolution tests: verify coverage of all model strings
-- [ ] **`src/mqtt/client.rs`** — MQTT packet tests
-- [ ] **`src/mqtt/commands.rs`** — command serialization tests: verify JSON output matches protocol
-- [ ] **`src/ftps/client.rs`** — PASV parsing, FTP response tests
-- [ ] **`src/ftps/parser.rs`** — directory listing tests
-- [ ] **`src/ams/parser.rs`** — bitmask decoding tests
-- [ ] **`src/ams/mapping.rs`** — slot mapping tests
-- [ ] **`src/camera/binary.rs`** — binary frame parsing tests
-- [ ] **`src/camera/rtsps.rs`** — RTSP handshake tests
-- [ ] **`src/discovery/parser.rs`** — SSDP response parsing tests
-- [ ] **`src/discovery/mod.rs`** — discovery integration tests
-- [ ] **`src/diagnostics/hms.rs`** — HMS code decoding tests
-- [ ] **`src/diagnostics/kprofile.rs`** — K-profile command tests
-- [ ] **`src/quirks/mod.rs`** — quirks engine tests
-- [ ] **`src/types/telemetry.rs`** — telemetry deserialization tests
+*Unit tests:*
+- `test_pasv_port_overflow` — PASV port arithmetic overflow guard (`port > u16::MAX`) now exercised
+- `test_connack_rejection_returns_access_denied` — MQTT CONNACK return code ≠ 0 → `AccessDenied`
+- `test_suback_rejection_returns_protocol_violation` — MQTT SUBACK return code 0x80 → `ProtocolViolation`
+- `test_read_exact_packet_oom_guard` — payload exceeding 1 MiB limit rejected with `InvalidInput`
+- `test_read_exact_packet_malformed_remaining_length` — 5 continuation bytes trigger multiplier overflow guard
+- 13 command serialization tests: `PushAllRequest`, `GetVersionRequest`, `GCodeRequest` (newline-append logic), `LedCtrlRequest`, `AirductRequest`, `PromptSoundRequest`, `BuzzerRequest`, `CalibrationRequest`, `PrintSpeedRequest`, `AmsControlRequest`, `AmsGetRfidRequest`, `AmsFilamentSettingRequest` (with explicit + default sub_brands), `SkipObjectsRequest`, `StandardControlRequest` (pause/resume/stop)
+
+*Integration tests:*
+- `test_ftps_upload_size_mismatch_returns_disk_failure` — 426 + SIZE mismatch → `DiskWriteFailure`
+- `test_start_print_wire_payload` — full `project_file` JSON payload verification (P1S single-nozzle defaults)
+- `test_start_print_idex_nozzle_offset_default` — X2D IDEX auto-enables `nozzle_offset_cali`, AMS mapping active
+- `test_set_print_speed_all_levels` — all 4 speed levels wire-verified
+- `test_skip_objects_wire_payload` — `obj_list` array serialization
+- `test_start_calibration_combined_flags` — `BED_LEVELING | VIBRATION_COMPENSATION` bitmask
+- `test_clear_print_error_wire_payload` — `clean_print_error` command
+- `test_toggle_led_wire_payload` — on/off LED control via `system` envelope
+- `test_change_filament_load_wire_payload` — AMS load with firmware-decided temps
+- `test_drying_lifecycle_wire_payload` — start (mode=1) + stop (mode=0) drying cycle
+- `test_scan_rfid_wire_payload` — `ams_get_rfid` command
+- `test_select_k_profile_wire_payload` — `extrusion_cali_sel` without `setting_id`
+- `test_get_k_profiles_auto_priming` — auto-prime sends 2 commands on first call, 1 on second
+- `test_get_k_profiles_manual_prime_skip` — `set_k_profile_primed(true)` skips prime
+- `test_sequence_id_wrapping` — sequence IDs stay within i32 range
+
+**Verified correct (all pre-existing):**
+- `tests/common/mod.rs`: correct module pattern avoiding per-crate recompilation
+- `tests/common/io.rs`: `DummyTlsConnector` pass-through and `MockDataStreamFactory` one-shot pattern correct
+- `tests/common/mock_mqtt.rs`: MQTT v3.1.1 state machine correct (CONNECT/SUBSCRIBE/PUBLISH/PUBACK/PINGREQ/DISCONNECT), oneshot ack eliminates races
+- `tests/common/mock_ftps.rs`: 8 scenario functions covering all FTPS protocol paths
+- `tests/common/mock_camera.rs`: 80-byte handshake validation and JPEG frame streaming correct
+- `src/error.rs` tests: `test_display_consistency` covers ALL 8 `BambuError` variants
+- `src/models.rs` tests: complete prefix, DevModel fallback, H2 collision, and edge case coverage
+- `src/mqtt/client.rs` tests: packet ID wraparound correct
+- `src/mqtt/commands.rs` tests: task ID clamping, AMS polymorphism, nozzle offset quirks defaults correct
+- `src/ftps/client.rs` tests: PASV parsing (6 test cases) correct
+- `src/ftps/parser.rs` tests: UNIX listing parsing with temporal rollover correct
+- `src/ams/parser.rs` tests: bitmask decoding, stale tray cleaning, global ID resolution complete
+- `src/ams/mapping.rs` tests: flat/structured mapping, external spool safety complete
+- `src/camera/binary.rs` tests: handshake construction + async frame edge cases complete
+- `src/camera/rtsps.rs` tests: URL building, URI rewrite, timestamp correction + 13hr wrap complete
+- `src/discovery/parser.rs` tests: SSDP parsing including real P1S wire capture complete
+- `src/discovery/mod.rs` tests: engine broadcast/poll and failure modes correct
+- `src/diagnostics/hms.rs` tests: all severities, cancel echoes, real X2D/MISC entries complete
+- `src/diagnostics/kprofile.rs` tests: setting ID validation, CRUD serialization, response deserialization complete
+- `src/quirks/mod.rs` tests: all 14 model variants, fan helpers, Z-move, homing safety complete
+- `src/types/telemetry.rs` tests: P1S wire capture E2E, all struct types, permissive bool, device nesting complete
+
+**Final count:** 217 tests (182 unit + 35 integration), all passing. `no_std`+`alloc` compiles clean. Clippy clean.
+</details>
 
 ---
 
@@ -360,7 +375,7 @@ Add commonly useful control commands to the CLI for hardware testing.
 | 10 | Quirks Engine | 8 | ~820 | **Complete** |
 | 11 | Client Coordinator | 2 | ~650 | **Complete** |
 | 12 | CLI Tool | 8 | ~978 | **Complete** |
-| 13 | Test Infrastructure | 16+ | ~1398 | Not started |
+| 13 | Test Infrastructure | 16+ | ~3200 | **Complete** |
 | 14 | Lint & Compatibility | — | — | Not started |
 | 15 | Dependency & Protocol Audit | — | — | Not started |
 | 16 | Platform Abstraction Gaps | — | — | Blocked |

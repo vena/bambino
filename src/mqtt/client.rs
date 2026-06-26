@@ -608,4 +608,110 @@ mod tests {
             "ID before MAX should increment normally"
         );
     }
+
+    #[cfg(feature = "tokio")]
+    mod async_tests {
+        use super::super::*;
+        use crate::io::TokioIo;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        #[tokio::test]
+        async fn test_connack_rejection_returns_access_denied() {
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+            let server_task = tokio::spawn(async move {
+                // Read and discard the CONNECT packet
+                let mut discard = vec![0u8; 256];
+                let _ = server_stream.read(&mut discard).await;
+
+                // Reply with CONNACK: return code 5 (not authorized)
+                server_stream
+                    .write_all(&[0x20, 0x02, 0x00, 0x05])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+            });
+
+            let result =
+                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                    .await;
+            let err = result.err().expect("Expected error, got Ok");
+            assert!(
+                matches!(err, crate::error::BambuError::AccessDenied),
+                "Expected AccessDenied, got {:?}",
+                err
+            );
+            server_task.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn test_suback_rejection_returns_protocol_violation() {
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+            let server_task = tokio::spawn(async move {
+                let mut discard = vec![0u8; 256];
+                // Read CONNECT
+                let _ = server_stream.read(&mut discard).await;
+                // Reply CONNACK accepted
+                server_stream
+                    .write_all(&[0x20, 0x02, 0x00, 0x00])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+
+                // Read SUBSCRIBE
+                let _ = server_stream.read(&mut discard).await;
+                // Reply SUBACK with return code 0x80 (rejected)
+                server_stream
+                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x80])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+            });
+
+            let result =
+                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                    .await;
+            let err = result.err().expect("Expected error, got Ok");
+            assert!(
+                matches!(err, crate::error::BambuError::ProtocolViolation(_)),
+                "Expected ProtocolViolation for SUBACK rejection, got {:?}",
+                err
+            );
+            server_task.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn test_read_exact_packet_oom_guard() {
+            // Craft a packet with remaining length exceeding MQTT_MAX_PAYLOAD_BYTES (1 MiB)
+            let oversized_len: usize = MQTT_MAX_PAYLOAD_BYTES + 1;
+            let mut data = vec![0x30u8]; // PUBLISH header
+            data.extend_from_slice(&encode_remaining_length(oversized_len));
+
+            let cursor = std::io::Cursor::new(data);
+            let mut stream = TokioIo(cursor);
+            let mut buf = Vec::new();
+            let result = read_exact_packet(&mut stream, &mut buf).await;
+            assert!(
+                matches!(result, Err(crate::io::SocketError::InvalidInput)),
+                "Expected InvalidInput for oversized payload, got {:?}",
+                result
+            );
+        }
+
+        #[tokio::test]
+        async fn test_read_exact_packet_malformed_remaining_length() {
+            // 5 continuation bytes → multiplier exceeds 128^3, protocol violation
+            let data = vec![0x30, 0x80, 0x80, 0x80, 0x80, 0x01];
+            let cursor = std::io::Cursor::new(data);
+            let mut stream = TokioIo(cursor);
+            let mut buf = Vec::new();
+            let result = read_exact_packet(&mut stream, &mut buf).await;
+            assert!(
+                matches!(result, Err(crate::io::SocketError::InvalidInput)),
+                "Expected InvalidInput for malformed remaining length, got {:?}",
+                result
+            );
+        }
+    }
 }

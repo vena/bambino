@@ -735,4 +735,13 @@ mod tests {
             "Expected ProtocolViolation for empty parentheses"
         );
     }
+
+    #[test]
+    fn test_pasv_port_overflow() {
+        let result = parse_pasv_port("(127,0,0,1,256,0)");
+        assert!(
+            matches!(result, Err(BambuError::ProtocolViolation(_))),
+            "Expected ProtocolViolation for port exceeding u16::MAX"
+        );
+    }
 }
