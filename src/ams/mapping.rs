@@ -10,6 +10,7 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use super::parser::{AMS_EXTERNAL_SPOOL_ALT_ID, AMS_EXTERNAL_SPOOL_ID};
 use serde::{Deserialize, Serialize};
 
 /// Enumeration of possible physical feed locations for loaded spools.
@@ -59,20 +60,20 @@ impl MaterialSource {
                 slot_id: 0,
             },
             MaterialSource::ExternalSpool => AmsMapping2Entry {
-                ams_id: 255,
+                ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
                 slot_id: 0,
             },
             MaterialSource::ExternalSpoolLeft => AmsMapping2Entry {
-                ams_id: 254,
+                ams_id: AMS_EXTERNAL_SPOOL_ID,
                 slot_id: 0,
             },
             MaterialSource::ExternalSpoolRight => AmsMapping2Entry {
-                ams_id: 255,
+                ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
                 slot_id: 0,
             },
             MaterialSource::Unmapped => AmsMapping2Entry {
-                ams_id: 255,
-                slot_id: 255,
+                ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                slot_id: AMS_EXTERNAL_SPOOL_ALT_ID,
             },
         }
     }
@@ -121,8 +122,8 @@ pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMap
     let max_id = allocations.iter().map(|(id, _)| *id).max().unwrap_or(1);
     let mut mapping2 = vec![
         AmsMapping2Entry {
-            ams_id: 255,
-            slot_id: 255
+            ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+            slot_id: AMS_EXTERNAL_SPOOL_ALT_ID
         };
         max_id
     ];
@@ -154,8 +155,9 @@ pub fn validate_external_spool_safety(
 
     let mut has_physical_ams = false;
     for entry in mapping2 {
-        let is_unmapped = entry.ams_id == 255 && entry.slot_id == 255;
-        let is_external = entry.ams_id == 255 && entry.slot_id == 0;
+        let is_unmapped =
+            entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID && entry.slot_id == AMS_EXTERNAL_SPOOL_ALT_ID;
+        let is_external = entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID && entry.slot_id == 0;
         if !is_unmapped && !is_external {
             has_physical_ams = true;
             break;

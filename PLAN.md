@@ -299,13 +299,13 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 Mechanical verification pass — run tools, fix warnings, ensure consistency.
 
-- [ ] **no_std compatibility:** Run `cargo build --no-default-features --features alloc --lib` and verify clean compilation
-- [ ] **Clippy:** Run `cargo clippy` across all feature combinations and resolve warnings
-- [ ] **Feature gating consistency:** Grep for `#[cfg(feature = "...")]` — verify all gates are correct and no dead code paths exist
-- [ ] **`alloc` imports under no_std:** Verify all `use alloc::{string::String, vec::Vec, format}` imports are correctly gated
-- [ ] **Magic numbers audit:** Grep for numeric literals in non-const positions — should they be named constants?
-- [ ] **Logging discipline:** Verify `log::debug!`/`trace!`/`warn!` usage is consistent — no `println!` in library code
-- [ ] **Public API surface:** Review `pub` visibility — are internal helpers accidentally public?
+- [x] **no_std compatibility:** `cargo build --no-default-features --features alloc --lib` — clean
+- [x] **Clippy:** `cargo clippy` on both default and `no_std+alloc` feature sets — clean (zero warnings)
+- [x] **Feature gating consistency:** All `#[cfg(feature = "...")]` gates correct. No dead code paths
+- [x] **`alloc` imports under no_std:** All 17 files with `use alloc::` are correctly gated behind `#[cfg(not(feature = "std"))]`
+- [x] **Magic numbers audit:** Replaced raw `254`/`255` literals in `ams/mapping.rs` with `AMS_EXTERNAL_SPOOL_ID`/`AMS_EXTERNAL_SPOOL_ALT_ID` constants from `ams/parser.rs`. Fan port IDs (1/2/3/10) and PWM max (255) in `client.rs` are self-documenting in context (single-use, enum match arms)
+- [x] **Logging discipline:** Zero `println!`/`eprintln!` in library code. All instances correctly in `src/bin/bambino-cli/`
+- [x] **Public API surface:** `DummyRawIo`/`DummyTls`/`DummyFactory` are `pub` but `#[doc(hidden)]` — required as type parameter defaults on public `PrinterClient`. No internal helpers accidentally public
 - [x] **Dead generic parameter:** `BambuMqttClient::connect<Timer: TimerProvider>` — **Removed** in Phase 3. All call sites updated.
 
 ---
@@ -376,7 +376,7 @@ Add commonly useful control commands to the CLI for hardware testing.
 | 11 | Client Coordinator | 2 | ~650 | **Complete** |
 | 12 | CLI Tool | 8 | ~978 | **Complete** |
 | 13 | Test Infrastructure | 16+ | ~3200 | **Complete** |
-| 14 | Lint & Compatibility | — | — | Not started |
+| 14 | Lint & Compatibility | — | — | **Complete** |
 | 15 | Dependency & Protocol Audit | — | — | Not started |
 | 16 | Platform Abstraction Gaps | — | — | Blocked |
 | 17 | Monitor Typed Telemetry | 3+ | — | Not started |
