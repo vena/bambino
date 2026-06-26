@@ -47,7 +47,7 @@ async fn test_homing_safety_interlocks() {
 
     // Bed-on-Z Safety Guard Verification: home_z_only_danger must return ModelMismatch
     let err_res = client_x1c.home_axes(true).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
+    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
 
     // Standard homing should succeed with bare G28
     client_x1c
@@ -181,7 +181,7 @@ async fn test_thermal_guards_and_temperatures() {
     let mut client_x1c = PrinterClient::new(mqtt_client_x1c, "00M000000000000", BambuModel::X1C);
 
     let err_res = client_x1c.set_chamber_temperature(40).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
+    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
 
     // Open-frame model check (A1 — no sensor, no heater)
     let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
@@ -197,7 +197,7 @@ async fn test_thermal_guards_and_temperatures() {
     let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
     let err_res = client_a1.set_chamber_temperature(40).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
+    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
 
     broker_task.await.expect("X1E broker task panicked");
     broker_task_x1c.await.expect("X1C broker task panicked");
@@ -240,7 +240,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     let err_res = client_p1s
         .set_fan_speed(FanTarget::AuxiliaryRight, 80)
         .await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch)));
+    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
 
     // Verify right auxiliary cooling fan is supported on X2D model (using Port 10)
     let (client_stream_x2, mut server_stream_x2) = tokio::io::duplex(8192);
@@ -322,7 +322,7 @@ async fn test_peripheral_signals_and_climate_controls() {
     let mut client_h2d = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::H2D);
 
     client_h2d
-        .set_airduct_mode(true)
+        .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
         .await
         .expect("Airduct mode set failed");
     client_h2d
@@ -371,16 +371,18 @@ async fn test_peripheral_signals_and_climate_controls() {
     let mut client_p1s = PrinterClient::new(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
 
     assert!(matches!(
-        client_p1s.set_airduct_mode(true).await,
-        Err(BambuError::ModelMismatch)
+        client_p1s
+            .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
+            .await,
+        Err(BambuError::ModelMismatch(_))
     ));
     assert!(matches!(
         client_p1s.set_prompt_sound(true).await,
-        Err(BambuError::ModelMismatch)
+        Err(BambuError::ModelMismatch(_))
     ));
     assert!(matches!(
         client_p1s.set_buzzer_mode(1).await,
-        Err(BambuError::ModelMismatch)
+        Err(BambuError::ModelMismatch(_))
     ));
 
     broker_task_p1s.await.expect("P1S broker task panicked");
@@ -411,7 +413,7 @@ async fn test_send_gcode_rejects_unsafe_homing() {
 
     // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
     let err = client.send_gcode("G28 Z").await;
-    assert!(matches!(err, Err(BambuError::ModelMismatch)));
+    assert!(matches!(err, Err(BambuError::ModelMismatch(_))));
 
     // Safe bare G28 must pass
     client

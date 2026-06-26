@@ -163,13 +163,16 @@ pub async fn run(
                         .into(),
                 ));
             }
-            let axis_char = action_args[1]
-                .chars()
-                .next()
-                .ok_or(BambuError::ProtocolViolation("Invalid axis".into()))?;
-            let distance = action_args[2]
-                .parse::<f32>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid distance format".into()))?;
+            let axis_char = action_args[1].chars().next().ok_or_else(|| {
+                BambuError::ProtocolViolation(
+                    format!("Invalid axis: '{}' (expected X, Y, or Z)", action_args[1]).into(),
+                )
+            })?;
+            let distance = action_args[2].parse::<f32>().map_err(|_| {
+                BambuError::ProtocolViolation(
+                    format!("Invalid distance: '{}' (expected a number)", action_args[2]).into(),
+                )
+            })?;
             let feedrate = action_args
                 .get(3)
                 .and_then(|f| f.parse::<u32>().ok())
@@ -185,9 +188,11 @@ pub async fn run(
                     "Usage: control <ip> <serial> <access_code> extrude <length> [feedrate]".into(),
                 ));
             }
-            let length = action_args[1]
-                .parse::<f32>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid length format".into()))?;
+            let length = action_args[1].parse::<f32>().map_err(|_| {
+                BambuError::ProtocolViolation(
+                    format!("Invalid length: '{}' (expected a number)", action_args[1]).into(),
+                )
+            })?;
             let feedrate = action_args
                 .get(2)
                 .and_then(|f| f.parse::<u32>().ok())
@@ -205,9 +210,11 @@ pub async fn run(
                 ));
             }
             let target = action_args[1].to_lowercase();
-            let speed = action_args[2]
-                .parse::<u8>()
-                .map_err(|_| BambuError::ProtocolViolation("Invalid speed percent".into()))?;
+            let speed = action_args[2].parse::<u8>().map_err(|_| {
+                BambuError::ProtocolViolation(
+                    format!("Invalid speed: '{}' (expected 0-100)", action_args[2]).into(),
+                )
+            })?;
 
             let fan_target = match target.as_str() {
                 "part" => FanTarget::PartCooling,
@@ -233,7 +240,13 @@ pub async fn run(
             }
             let target = action_args[1].to_lowercase();
             let val = action_args[2].parse::<u16>().map_err(|_| {
-                BambuError::ProtocolViolation("Invalid temperature target value".into())
+                BambuError::ProtocolViolation(
+                    format!(
+                        "Invalid temperature: '{}' (expected 0-65535)",
+                        action_args[2]
+                    )
+                    .into(),
+                )
             })?;
 
             match target.as_str() {

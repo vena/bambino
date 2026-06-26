@@ -43,5 +43,6 @@ Every change must compile under both the default `tokio` feature set and the `no
 - `BambuError` has dual `Display` impls: `thiserror` under `std`, manual under `no_std` (kept in sync by `test_display_consistency`). `ProtocolViolation` uses `Cow<'static, str>`.
 - Magic numbers are extracted into named `pub(crate) const` blocks in each module. Use existing constants rather than introducing new literals.
 - All MQTT sequence IDs and task IDs must be clamped to 32-bit signed integer max (`TASK_ID_MAX`). Use `clamp_task_id()` for task IDs.
-- Protocol specs live in `reference/` as numbered markdown files. Always verify field names and types against reference docs when adding or modifying commands.
+- Protocol specs live in `reference/` as numbered markdown files. Always verify field names and types against reference docs when adding or modifying commands. When external sources (pybambu, Bambuddy, Bambu Studio, wire captures) contradict a reference doc, update the reference doc with the correction and note the verification source.
+- Use MODEL_MATRIX.md to track physical characteristics of printer models. When new information is learned about a printer model, update MODEL_MATRIX.md
 - When adding public types, modules, traits, or changing conventions, update this file. Keep it concise — document constraints and gotchas, not API summaries.

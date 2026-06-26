@@ -32,6 +32,10 @@ pub struct TelemetryReport {
     /// Network and hardware board capability descriptors.
     #[serde(default)]
     pub device: Option<DeviceTelemetry>,
+
+    /// Developer LAN Mode bitmask field (hex string). Drifts between top-level
+    /// and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
+    pub fun: Option<String>,
 }
 
 /// Core printer state machine telemetry, containing kinematics, thermal targets,
@@ -160,6 +164,9 @@ pub struct PrinterTelemetry {
     /// Device sub-object nested inside pushall `print` envelope on H2/P2/X2 models.
     /// Contains CTC, nozzle, and airduct telemetry for enclosed printers.
     pub device: Option<DeviceTelemetry>,
+
+    /// Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
+    pub fun: Option<String>,
 }
 
 /// Chamber Temperature Controller (CTC) telemetry sub-object.
@@ -461,6 +468,22 @@ pub struct AirductCollection {
     /// Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
     #[serde(default)]
     pub parts: Vec<AirductPart>,
+
+    /// Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
+    #[serde(rename = "modeCur")]
+    pub mode_cur: Option<i32>,
+
+    /// List of airduct modes available on this model.
+    #[serde(rename = "modeList", default)]
+    pub mode_list: Vec<AirductModeListEntry>,
+}
+
+/// Entry in the airduct mode availability list reported by the printer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AirductModeListEntry {
+    /// Mode identifier (0=cooling, 1=heating, 2=laser).
+    #[serde(rename = "modeId")]
+    pub mode_id: i32,
 }
 
 /// Represents an individual auxiliary routing component.
@@ -480,6 +503,18 @@ pub struct AirductPart {
 pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
 pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
 pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
+pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
+
+/// Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].
+///
+/// Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required),
+/// `Some(false)` when disabled, or `None` if the hex string is unparseable.
+/// The `fun` field is a variable-length hex string (up to 64 bits). Bit 29
+/// (`0x20000000`) is the `MQTT_SIGNATURE_REQUIRED` flag — when clear, developer mode is on.
+pub fn is_developer_mode(fun_hex: &str) -> Option<bool> {
+    let val = u64::from_str_radix(fun_hex, 16).ok()?;
+    Some((val & FUN_MQTT_SIGNATURE_REQUIRED) == 0)
+}
 
 impl PrinterTelemetry {
     /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
@@ -1310,5 +1345,104 @@ mod tests {
         assert_eq!(nozzle.max_temp, Some(350));
         assert_eq!(nozzle.serial_number.as_deref(), Some("IDEX-SN-456"));
         assert_eq!(nozzle.filament_colour.as_deref(), Some("00FF00"));
+    }
+
+    #[test]
+    fn test_fun_field_deserialization_top_level() {
+        let json = r#"{ "fun": "3EC1AFFF9CFF" }"#;
+        let report: TelemetryReport = serde_json::from_str(json).unwrap();
+        assert_eq!(report.fun.as_deref(), Some("3EC1AFFF9CFF"));
+    }
+
+    #[test]
+    fn test_fun_field_deserialization_nested_in_print() {
+        let json = r#"{ "print": { "fun": "1AFFF9CFF" } }"#;
+        let report: TelemetryReport = serde_json::from_str(json).unwrap();
+        assert_eq!(report.print.unwrap().fun.as_deref(), Some("1AFFF9CFF"));
+    }
+
+    #[test]
+    fn test_is_developer_mode() {
+        // Bit 0x20000000 SET → signature required → developer mode OFF
+        assert_eq!(is_developer_mode("3EC1AFFF9CFF"), Some(false));
+        // Bit 0x20000000 CLEAR → developer mode ON
+        assert_eq!(is_developer_mode("3EC18FFF9CFF"), Some(true));
+        // Short value with bit clear
+        assert_eq!(is_developer_mode("0"), Some(true));
+        // Exact bit value
+        assert_eq!(is_developer_mode("20000000"), Some(false));
+        // Invalid hex
+        assert_eq!(is_developer_mode("zzzz"), None);
+        // Empty string
+        assert_eq!(is_developer_mode(""), None);
+    }
+
+    #[test]
+    fn test_is_developer_mode_real_mock_values() {
+        // From pybambu MOCK-H2D.json
+        assert_eq!(is_developer_mode("1AFFF9CFF"), Some(false));
+        // From pybambu MOCK-P2S.json
+        assert_eq!(is_developer_mode("60029FD1A3FF9CB7"), Some(false));
+        // From pybambu MOCK-X2D.json
+        assert_eq!(is_developer_mode("40029FD1B30F9CB7"), Some(false));
+    }
+
+    #[test]
+    fn test_airduct_mode_telemetry() {
+        let json_data = r#"{
+            "device": {
+                "airduct": {
+                    "parts": [{ "id": 160, "state": 50 }],
+                    "modeCur": 1,
+                    "modeList": [
+                        { "modeId": 0 },
+                        { "modeId": 1 }
+                    ]
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let airduct = report.device.unwrap().airduct.unwrap();
+        assert_eq!(airduct.mode_cur, Some(1));
+        assert_eq!(airduct.mode_list.len(), 2);
+        assert_eq!(airduct.mode_list[0].mode_id, 0);
+        assert_eq!(airduct.mode_list[1].mode_id, 1);
+    }
+
+    #[test]
+    fn test_airduct_mode_telemetry_with_laser() {
+        let json_data = r#"{
+            "device": {
+                "airduct": {
+                    "parts": [],
+                    "modeCur": 0,
+                    "modeList": [
+                        { "modeId": 0 },
+                        { "modeId": 1 },
+                        { "modeId": 2 }
+                    ]
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let airduct = report.device.unwrap().airduct.unwrap();
+        assert_eq!(airduct.mode_cur, Some(0));
+        assert_eq!(airduct.mode_list.len(), 3);
+        assert_eq!(airduct.mode_list[2].mode_id, 2);
+    }
+
+    #[test]
+    fn test_airduct_mode_absent() {
+        let json_data = r#"{
+            "device": {
+                "airduct": {
+                    "parts": [{ "id": 160, "state": 85 }]
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+        let airduct = report.device.unwrap().airduct.unwrap();
+        assert_eq!(airduct.mode_cur, None);
+        assert!(airduct.mode_list.is_empty());
     }
 }

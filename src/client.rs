@@ -225,7 +225,9 @@ where
     /// you need unchecked access.
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
         if self.model.quirks().is_unsafe_homing_command(gcode_line) {
-            return Err(BambuError::ModelMismatch);
+            return Err(BambuError::ModelMismatch(
+                "partial-axis homing unsafe on bed-on-Z model".into(),
+            ));
         }
         self.send_gcode_raw(gcode_line).await
     }
@@ -266,7 +268,9 @@ where
 
         let gcode = if is_bed_on_z {
             if home_z_only_danger {
-                return Err(BambuError::ModelMismatch);
+                return Err(BambuError::ModelMismatch(
+                    "Z-only homing unsafe on bed-on-Z model".into(),
+                ));
             }
             "G28"
         } else if home_z_only_danger {
@@ -297,7 +301,9 @@ where
                 .quirks()
                 .relative_z_move_gcode(distance, feedrate);
             if gcode.is_empty() {
-                return Err(BambuError::ModelMismatch);
+                return Err(BambuError::ModelMismatch(
+                    "Z-axis move exceeds model travel limits".into(),
+                ));
             }
             self.send_gcode_raw(&gcode).await
         } else {
@@ -371,7 +377,9 @@ where
     /// mismatch error — their firmware silently ignores M141.
     pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
         if !self.model.quirks().has_active_chamber_heater() {
-            return Err(BambuError::ModelMismatch);
+            return Err(BambuError::ModelMismatch(
+                "active chamber heater not available on this model".into(),
+            ));
         }
         let max = self.model.quirks().chamber_temp_max();
         let target_temp = if target_temp > max {
@@ -411,7 +419,9 @@ where
             FanTarget::ChamberExhaust => 3,
             FanTarget::AuxiliaryRight => {
                 if !self.model.quirks().supports_auxiliary_right_fan() {
-                    return Err(BambuError::ModelMismatch);
+                    return Err(BambuError::ModelMismatch(
+                        "auxiliary right fan not available on this model".into(),
+                    ));
                 }
                 10
             }
@@ -428,15 +438,20 @@ where
         self.publish_request(&req).await
     }
 
-    /// Configures the active climate airduct damper mode (cooling vs heating recirculation) [REF-MQTT-LIFECYCLE].
+    /// Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
     ///
     /// Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
-    pub async fn set_airduct_mode(&mut self, recirculate_air: bool) -> Result<u16, BambuError> {
+    pub async fn set_airduct_mode(
+        &mut self,
+        mode: crate::mqtt::commands::AirductMode,
+    ) -> Result<u16, BambuError> {
         if !self.model.quirks().supports_airduct_mode() {
-            return Err(BambuError::ModelMismatch);
+            return Err(BambuError::ModelMismatch(
+                "airduct damper control not available on this model".into(),
+            ));
         }
         let seq = self.next_sequence_id();
-        let req = crate::mqtt::commands::AirductRequest::new(recirculate_air, seq);
+        let req = crate::mqtt::commands::AirductRequest::new(mode, seq);
         self.publish_request(&req).await
     }
 
@@ -445,7 +460,9 @@ where
     /// Supported on models with onboard speakers (A1, A1 Mini, A2L).
     pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, BambuError> {
         if !self.model.quirks().supports_prompt_sound() {
-            return Err(BambuError::ModelMismatch);
+            return Err(BambuError::ModelMismatch(
+                "prompt sound not available on this model".into(),
+            ));
         }
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq);
@@ -458,7 +475,9 @@ where
     /// Supported on models with a physical fire alarm buzzer (H2 series).
     pub async fn set_buzzer_mode(&mut self, mode_code: i32) -> Result<u16, BambuError> {
         if !self.model.quirks().supports_buzzer() {
-            return Err(BambuError::ModelMismatch);
+            return Err(BambuError::ModelMismatch(
+                "buzzer control not available on this model".into(),
+            ));
         }
         let seq = self.next_sequence_id();
         let req = crate::mqtt::commands::BuzzerRequest::new(mode_code, seq);

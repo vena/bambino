@@ -12,9 +12,9 @@ pub mod commands;
 
 pub use client::{BambuMqttClient, MqttMessage};
 pub use commands::{
-    AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsFilamentDryingRequest,
-    AmsFilamentSettingRequest, AmsGetRfidRequest, BuzzerRequest, CalibrationRequest,
-    CleanPrintErrorRequest, GCodeRequest, GetVersionRequest, LedCtrlRequest, PrintJobConfig,
-    ProjectAmsMapping2Entry, ProjectFileRequest, PromptSoundRequest, PushAllRequest,
-    SkipObjectsRequest, StandardControlRequest, clamp_task_id,
+    AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest,
+    AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, BuzzerRequest,
+    CalibrationRequest, CleanPrintErrorRequest, GCodeRequest, GetVersionRequest, LedCtrlRequest,
+    PrintJobConfig, ProjectAmsMapping2Entry, ProjectFileRequest, PromptSoundRequest,
+    PushAllRequest, SkipObjectsRequest, StandardControlRequest, clamp_task_id,
 };

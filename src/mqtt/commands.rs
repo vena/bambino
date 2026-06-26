@@ -424,11 +424,23 @@ impl LedCtrlRequest {
     }
 }
 
+/// Airduct damper operating mode [REF-MQTT-LIFECYCLE].
+///
+/// `Cooling` (0): closes internal recirculation dampers, routes hot air out through exhaust.
+/// `Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
+/// `Laser` (2): configuration for laser engraving module operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AirductMode {
+    Cooling = 0,
+    Heating = 1,
+    Laser = 2,
+}
+
 /// Redirects internal climate airflows using active damper deflection plates.
 #[derive(Debug, Clone, Serialize)]
 pub struct AirductPayload {
     pub command: &'static str,
-    /// `0` represents cooling mode (recirculation), `1` represents heating mode (exhaust) [REF-MQTT-LIFECYCLE].
+    /// Damper mode: 0=cooling (exhaust), 1=heating (sealed), 2=laser [REF-MQTT-LIFECYCLE].
     #[serde(rename = "modeId")]
     pub mode_id: i32,
     pub submode: i32,
@@ -441,11 +453,11 @@ pub struct AirductRequest {
 }
 
 impl AirductRequest {
-    pub fn new(recirculate_air: bool, sequence_id: u64) -> Self {
+    pub fn new(mode: AirductMode, sequence_id: u64) -> Self {
         Self {
             print: AirductPayload {
                 command: "set_airduct",
-                mode_id: if recirculate_air { 0 } else { 1 },
+                mode_id: mode as i32,
                 submode: -1,
                 sequence_id: sequence_id.to_string(),
             },
@@ -975,14 +987,18 @@ mod tests {
 
     #[test]
     fn test_airduct_request_json() {
-        let req = AirductRequest::new(true, 10007);
+        let req = AirductRequest::new(AirductMode::Cooling, 10007);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"set_airduct"#));
         assert!(json.contains(r#""modeId":0"#));
 
-        let req_heat = AirductRequest::new(false, 10008);
+        let req_heat = AirductRequest::new(AirductMode::Heating, 10008);
         let json_heat = serde_json::to_string(&req_heat).unwrap();
         assert!(json_heat.contains(r#""modeId":1"#));
+
+        let req_laser = AirductRequest::new(AirductMode::Laser, 10009);
+        let json_laser = serde_json::to_string(&req_laser).unwrap();
+        assert!(json_laser.contains(r#""modeId":2"#));
     }
 
     #[test]

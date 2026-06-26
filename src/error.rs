@@ -51,20 +51,22 @@ pub enum BambuError {
     #[cfg_attr(feature = "std", error("Operational transaction timed out"))]
     Timeout,
 
-    /// Physical write or storage block exhaustion faults reported by the printer.
+    /// Upload verification failed — printer reported unexpected file size after transfer.
     #[cfg_attr(
         feature = "std",
-        error("Physical MicroSD read/write exception detected (System halted)")
+        error("File upload verification failed (possible SD card write error)")
     )]
     DiskWriteFailure,
 
     /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer)
     /// not present on the active model target.
-    #[cfg_attr(
-        feature = "std",
-        error("Physical model capability mismatch for the active hardware profile")
-    )]
-    ModelMismatch,
+    #[cfg(any(feature = "alloc", feature = "std"))]
+    #[cfg_attr(feature = "std", error("Model capability mismatch: {0}"))]
+    ModelMismatch(Cow<'static, str>),
+
+    /// Emitted when requesting capabilities not present on the active model target.
+    #[cfg(not(any(feature = "alloc", feature = "std")))]
+    ModelMismatch(&'static str),
 }
 
 impl From<crate::io::SocketError> for BambuError {
@@ -89,12 +91,11 @@ impl core::fmt::Display for BambuError {
             BambuError::Timeout => write!(f, "Operational transaction timed out"),
             BambuError::DiskWriteFailure => write!(
                 f,
-                "Physical MicroSD read/write exception detected (System halted)"
+                "File upload verification failed (possible SD card write error)"
             ),
-            BambuError::ModelMismatch => write!(
-                f,
-                "Physical model capability mismatch for the active hardware profile"
-            ),
+            BambuError::ModelMismatch(s) => {
+                write!(f, "Model capability mismatch: {}", s)
+            }
         }
     }
 }
@@ -129,11 +130,11 @@ mod tests {
             (BambuError::Timeout, "Operational transaction timed out"),
             (
                 BambuError::DiskWriteFailure,
-                "Physical MicroSD read/write exception detected (System halted)",
+                "File upload verification failed (possible SD card write error)",
             ),
             (
-                BambuError::ModelMismatch,
-                "Physical model capability mismatch for the active hardware profile",
+                BambuError::ModelMismatch("test capability".into()),
+                "Model capability mismatch: test capability",
             ),
         ];
 
