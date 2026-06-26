@@ -207,48 +207,29 @@ When reviewing, always cross-reference the corresponding reference doc (listed i
 
 ---
 
-## Phase 12: CLI Tool (`src/bin/bambino-cli/`)
+<details>
+<summary>Phase 12: CLI Tool — 7 fixes (1 high-severity correctness bug), 2 new subcommands. Fan speed, ipcam nesting, IDEX temps, FTPS disconnect, G-code dispatch</summary>
 
-**Reference:** N/A (user-facing tool)
-**Lines:** ~978
+**Files:** `src/bin/bambino-cli/{main,connection,discover,monitor,control,storage,camera,table}.rs` (~978 lines)
 
-- [ ] **`src/bin/bambino-cli/main.rs`** (~163 lines)
-  - [ ] Audit CLI argument parsing — are all subcommands well-defined?
-  - [ ] Verify `env_logger` initialization from `-v` flag
-  - [ ] Check error display for user-facing messages
+**Fixes:**
+- `get_fan_pct()`: always divided by 15 (step scale) — P2S/X2D models report fan speeds as direct 0–100 percentages via `auxiliary_fan_uses_percentage()`. A fan at 100% displayed as "667%". Now uses library `fan_step_to_percentage()` for step-based models and raw percentage for percentage-based models
+- `ipcam_record`/`timelapse` display: always showed "--" because fields were looked up at the top level of the accumulated state map, but they're nested inside `print.ipcam`. Fixed to traverse `state["ipcam"]["ipcam_record"]`
+- `unpack_temperature()` removed from `nozzle_temper` and `bed_temper` — these are direct temperature values, not composite-packed. Only `chamber_temper` is composite-packed [REF-THER-DECODE]. Values were coincidentally correct (≤500 pass through unchanged) but semantically wrong
+- IDEX nozzle temp display: labels corrected to match [REF-THER-DECODE §Dual-Extruder]: `nozzle_temper` = left nozzle actual (id 1), `nozzle_target_temper` = right nozzle target (id 0). Full per-nozzle temps deferred to Phase 17 (requires `device.extruder.info` telemetry schema addition)
+- `main.rs` error display: `{:?}` (Debug) → `{}` (Display) for user-facing output
+- `storage.rs`: added `client.disconnect().await` before all return paths — FTPS QUIT was never sent, connection dropped abruptly
+- `control.rs` fan target: added `"right" => FanTarget::AuxiliaryRight` for IDEX models (X2D, P2S)
 
-- [ ] **`src/bin/bambino-cli/connection.rs`** (~81 lines)
-  - [ ] Audit connection setup — is `build_unsafe_client_config()` appropriate here?
-  - [ ] Check connection timeout handling
-  - [ ] Verify credential passing
+**New subcommands:**
+- `control ... gcode "<line>"` — sends G-code through `send_gcode()` with model safety checks
+- `control ... gcode-raw [--unsafe] "<line>"` — sends via `send_gcode_raw()` bypassing safety. Prompts for interactive confirmation unless `--unsafe` flag is passed
 
-- [ ] **`src/bin/bambino-cli/discover.rs`** (~88 lines)
-  - [ ] Audit discovery output formatting
-  - [ ] Check timeout and retry behavior for user experience
+**Verified correct:** CLI argument parsing (positional matching, verbose flag stripping), `env_logger` initialization (`-v` → debug, default → warn), `build_unsafe_client_config()` appropriate for dev CLI, `validate_params()` (IP, serial format, access code length), connection timeout (5s), discovery timeout (20s with diagnostic hints), `TerminalGuard` RAII cleanup (raw mode + alt screen restored on drop/panic), key event handling (q/x/Esc/Ctrl-C), no panic paths in rendering (all JSON access uses `unwrap_or`), `current_date_utc()` calendar algorithm (leap year handling correct), `format_size()` output, upload 1GB limit, file path validation via `fs::metadata()`, camera protocol check with clear RTSPS rejection message, table column alignment
 
-- [ ] **`src/bin/bambino-cli/monitor.rs`** (~621 lines)
-  - [ ] Audit TUI rendering — are crossterm operations correctly sequenced?
-  - [ ] Check alternate screen and raw mode cleanup on exit/panic
-  - [ ] Verify telemetry display accuracy — are values formatted correctly (temps, percentages, times)?
-  - [ ] Audit key event handling — are all exit paths clean?
-  - [ ] Check for potential panics in rendering with unexpected telemetry data
-  - [ ] Refactor from raw `serde_json::Map` field access to typed `PrinterTelemetry` struct — will expose missing fields and catch type mismatches at compile time
-  - [x] Fix bed/nozzle target temperature display (was always 0°C — `bed_target_temper`/`nozzle_target_temper` ignored, `unpack_temperature` misapplied to non-composite fields)
-  - [x] Add print speed display (`spd_lvl` + `spd_mag`)
-
-- [ ] **`src/bin/bambino-cli/control.rs`** (~307 lines)
-  - [ ] Audit command dispatch — do CLI commands map to the correct client methods?
-  - [ ] Check argument validation for user-provided values (temperatures, speeds, G-code)
-  - [ ] Verify error messages are helpful
-  - [ ] Provide flag for sending through send_gcode_raw()
-
-- [ ] **`src/bin/bambino-cli/storage.rs`** (~260 lines)
-  - [ ] Audit FTPS file operations — upload, download, list, delete
-  - [ ] Check file path handling — are paths sanitized? Can path traversal occur?
-  - [ ] Verify progress reporting accuracy
-
-- [ ] **`src/bin/bambino-cli/table.rs`** (~58 lines)
-  - [ ] Audit table formatting — edge cases with long strings, Unicode, empty data
+**Deferred to Phase 17:** Typed telemetry refactor (raw `serde_json::Map` → `PrinterTelemetry`), monitor module split, `device.extruder.info` schema gap for IDEX per-nozzle temps
+**Deferred to Phase 18:** Expanded CLI commands (print speed, AMS drying, calibration)
+</details>
 
 ---
 
@@ -333,6 +314,36 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 
 ---
 
+## Phase 17: Monitor Typed Telemetry Refactor & IDEX Schema
+
+Structural refactor of the CLI monitor from raw JSON to typed telemetry structs. The library returns `MqttMessage` with raw bytes — state accumulation and deserialization is the consumer's responsibility. This phase makes the CLI a better consumer.
+
+**Design constraints:**
+- The library should NOT accumulate state — that's the application's job
+- The library SHOULD return predictable, typed structures for developer UX (evaluate whether `poll_telemetry()` should return something more useful than `MqttMessage`)
+- The monitor currently doesn't use `PrinterClient` — evaluate whether it should, and whether `PrinterClient` should offer typed telemetry deserialization (without accumulation)
+
+- [ ] **Evaluate library-level telemetry return type:** `poll_telemetry() → MqttMessage` forces every consumer to deserialize from raw bytes. Consider `poll_telemetry() → TelemetryReport` or a typed enum distinguishing print/device/info responses. The library handles deserialization once; consumers handle accumulation
+- [ ] **Add `device.extruder.info` to telemetry schema:** IDEX per-nozzle current temperatures live in `device.extruder.info[]` per [REF-THER-DECODE §Dual-Extruder]. Currently only `device.nozzle.info` exists in `DeviceTelemetry`. Cross-reference against pybambu test mocks and Bambuddy backend services for field names
+- [ ] **Refactor monitor state accumulation:** Keep JSON merge for partial updates, deserialize accumulated map into `PrinterTelemetry` via `serde_json::from_value()` before each render. Rendering function takes typed struct instead of string-key map
+- [ ] **Split monitor.rs into module:** `monitor/mod.rs` (connection lifecycle, event loop, state accumulation) + `monitor/dashboard.rs` (rendering logic and helpers). Current file is 621 lines and does too many things
+- [ ] **Fix IDEX per-nozzle temperature display:** Once `device.extruder.info` schema exists, extract right nozzle actual temp and left nozzle target temp from the per-nozzle array
+
+---
+
+## Phase 18: Expanded CLI Control Commands
+
+Add commonly useful control commands to the CLI for hardware testing.
+
+- [ ] **`speed <level>`** — Set print speed (silent, standard, sport, ludicrous) via `set_print_speed()`
+- [ ] **`clear-error`** — Clear active print error codes via `clear_print_error()`
+- [ ] **`airduct <cool|heat>`** — Switch airduct damper mode via `set_airduct_mode()` (H2/P2S/X2D)
+- [ ] **`calibrate <options>`** — Trigger calibration routines via `start_calibration()` (bed-leveling, vibration, motor-noise, nozzle-height, heatbed-thermal)
+- [ ] **`ams dry <ams_id> <temp> <time> <filament>`** — Start AMS drying cycle via `start_drying()`
+- [ ] **`ams dry-stop <ams_id>`** — Stop AMS drying cycle via `stop_drying()`
+
+---
+
 ## Progress Tracker
 
 | Phase | Module | Files | Lines | Status |
@@ -348,9 +359,11 @@ Design work on the trait layer — requires architectural decisions. Blocked on 
 | 9 | Diagnostics | 3 | ~591 | **Complete** |
 | 10 | Quirks Engine | 8 | ~820 | **Complete** |
 | 11 | Client Coordinator | 2 | ~650 | **Complete** |
-| 12 | CLI Tool | 7 | ~978 | Not started |
+| 12 | CLI Tool | 8 | ~978 | **Complete** |
 | 13 | Test Infrastructure | 16+ | ~1398 | Not started |
 | 14 | Lint & Compatibility | — | — | Not started |
 | 15 | Dependency & Protocol Audit | — | — | Not started |
 | 16 | Platform Abstraction Gaps | — | — | Blocked |
-| **Total** | | **~58** | **~9,796** | |
+| 17 | Monitor Typed Telemetry | 3+ | — | Not started |
+| 18 | Expanded CLI Commands | 2 | — | Not started |
+| **Total** | | **~63+** | **~10,000+** | |

@@ -151,6 +151,7 @@ pub async fn run(
 
             if files.is_empty() {
                 println!("Directory is empty or path does not exist.");
+                client.disconnect().await;
                 return Ok(());
             }
 
@@ -246,6 +247,7 @@ pub async fn run(
         }
     }
 
+    client.disconnect().await;
     Ok(())
 }
 

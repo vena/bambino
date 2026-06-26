@@ -8,6 +8,7 @@
 //! Incorporates detailed diagnostic telemetry printing if `--verbose` is enabled
 //! to isolate connection, handshake, and packet serialization issues.
 
+use std::io::{self, Write};
 use std::time::Duration;
 
 use bambino::client::{FanTarget, PrinterClient};
@@ -212,9 +213,10 @@ pub async fn run(
                 "part" => FanTarget::PartCooling,
                 "aux" => FanTarget::AuxiliaryLeft,
                 "exhaust" => FanTarget::ChamberExhaust,
+                "right" => FanTarget::AuxiliaryRight,
                 _ => {
                     return Err(BambuError::ProtocolViolation(
-                        "Invalid fan target. Choose 'part', 'aux', or 'exhaust'".into(),
+                        "Invalid fan target. Choose 'part', 'aux', 'exhaust', or 'right'".into(),
                     ));
                 }
             };
@@ -295,6 +297,58 @@ pub async fn run(
         "stop" => {
             println!("Aborting active print job pipeline...");
             client.stop_print().await?;
+        }
+        "gcode" => {
+            if action_args.len() < 2 {
+                return Err(BambuError::ProtocolViolation(
+                    "Usage: control <ip> <serial> <access_code> gcode \"<gcode_line>\"".into(),
+                ));
+            }
+            let gcode_line = &action_args[1];
+            println!("Dispatching G-code (with safety checks)...");
+            client.send_gcode(gcode_line).await?;
+            println!("G-code command published successfully.");
+        }
+        "gcode-raw" => {
+            if action_args.len() < 2 {
+                return Err(BambuError::ProtocolViolation(
+                    "Usage: control <ip> <serial> <access_code> gcode-raw [--unsafe] \"<gcode_line>\""
+                        .into(),
+                ));
+            }
+
+            let (unsafe_flag, gcode_line) = if action_args[1] == "--unsafe" {
+                if action_args.len() < 3 {
+                    return Err(BambuError::ProtocolViolation(
+                        "Usage: control <ip> <serial> <access_code> gcode-raw --unsafe \"<gcode_line>\""
+                            .into(),
+                    ));
+                }
+                (true, &action_args[2])
+            } else {
+                (false, &action_args[1])
+            };
+
+            if !unsafe_flag {
+                eprint!(
+                    "WARNING: gcode-raw bypasses all safety checks. \
+                     Sending unsafe commands can damage your printer.\n\
+                     Type 'yes' to confirm: "
+                );
+                io::stderr().flush().unwrap_or(());
+                let mut confirmation = String::new();
+                io::stdin().read_line(&mut confirmation).map_err(|_| {
+                    BambuError::ProtocolViolation("Failed to read confirmation".into())
+                })?;
+                if confirmation.trim().to_lowercase() != "yes" {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            println!("Dispatching raw G-code (no safety checks)...");
+            client.send_gcode_raw(gcode_line).await?;
+            println!("Raw G-code command published successfully.");
         }
         other => {
             return Err(BambuError::ProtocolViolation(

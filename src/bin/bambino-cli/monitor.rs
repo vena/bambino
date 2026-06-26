@@ -14,7 +14,7 @@ use bambino::diagnostics::{decode_hms_alert, decode_print_error};
 use bambino::error::BambuError;
 use bambino::models::resolve_model;
 use bambino::mqtt::PushAllRequest;
-use bambino::quirks::ModelQuirks;
+use bambino::quirks::{ModelQuirks, fan_step_to_percentage};
 use bambino::types::PrinterTelemetry;
 
 use crate::connection::connect_mqtt;
@@ -324,22 +324,23 @@ fn render_dashboard(
         });
     }
 
-    let nozzle_temper = state
+    let nozzle_act = state
         .get("nozzle_temper")
         .and_then(|t| t.as_f64())
-        .unwrap_or(0.0);
-    let nozzle_target = state
+        .unwrap_or(0.0) as u16;
+    let nozzle_tgt = state
         .get("nozzle_target_temper")
         .and_then(|t| t.as_f64())
-        .unwrap_or(0.0);
-    let (nozzle_act, _) = PrinterTelemetry::unpack_temperature(nozzle_temper);
-    let nozzle_tgt = nozzle_target as u16;
+        .unwrap_or(0.0) as u16;
 
     if nozzles.len() == 1 {
         nozzles[0].temp = format!("{}°C / T: {}°C", nozzle_act, nozzle_tgt);
     } else if nozzles.len() >= 2 {
+        // IDEX routing [REF-THER-DECODE §Dual-Extruder]:
+        //   nozzle_temper     = left nozzle (id 1) actual
+        //   nozzle_target_temper = right nozzle (id 0) target
         if let Some(right) = nozzles.iter_mut().find(|n| n.id == 0) {
-            right.temp = format!("target: {}°C", nozzle_tgt);
+            right.temp = format!("T: {}°C", nozzle_tgt);
         }
         if let Some(left) = nozzles.iter_mut().find(|n| n.id == 1) {
             left.temp = format!("{}°C", nozzle_act);
@@ -371,16 +372,14 @@ fn render_dashboard(
     }
 
     // -- Thermal (bed + chamber) --
-    let bed_temper = state
+    let bed_act = state
         .get("bed_temper")
         .and_then(|t| t.as_f64())
-        .unwrap_or(0.0);
-    let bed_target = state
+        .unwrap_or(0.0) as u16;
+    let bed_tgt = state
         .get("bed_target_temper")
         .and_then(|t| t.as_f64())
-        .unwrap_or(0.0);
-    let (bed_act, _) = PrinterTelemetry::unpack_temperature(bed_temper);
-    let bed_tgt = bed_target as u16;
+        .unwrap_or(0.0) as u16;
 
     writeln!(
         w,
@@ -405,10 +404,16 @@ fn render_dashboard(
 
     // -- Fans & System (two-column layout) --
     let fan_values = [
-        ("Part Cooling", get_fan_pct(state, "cooling_fan_speed")),
-        ("Aux Fan", get_fan_pct(state, "big_fan1_speed")),
-        ("Chamber Fan", get_fan_pct(state, "big_fan2_speed")),
-        ("Heatbreak Fan", get_fan_pct(state, "heatbreak_fan_speed")),
+        (
+            "Part Cooling",
+            get_fan_pct(state, "cooling_fan_speed", quirks),
+        ),
+        ("Aux Fan", get_fan_pct(state, "big_fan1_speed", quirks)),
+        ("Chamber Fan", get_fan_pct(state, "big_fan2_speed", quirks)),
+        (
+            "Heatbreak Fan",
+            get_fan_pct(state, "heatbreak_fan_speed", quirks),
+        ),
     ];
 
     let wifi = state
@@ -422,12 +427,13 @@ fn render_dashboard(
         Some(serde_json::Value::Bool(false)) | Some(serde_json::Value::Number(_)) => "Not Detected",
         _ => "--",
     };
-    let recording = state
-        .get("ipcam_record")
+    let ipcam = state.get("ipcam");
+    let recording = ipcam
+        .and_then(|i| i.get("ipcam_record"))
         .and_then(|s| s.as_str())
         .unwrap_or("--");
-    let timelapse = state
-        .get("timelapse")
+    let timelapse = ipcam
+        .and_then(|i| i.get("timelapse"))
         .and_then(|s| s.as_str())
         .unwrap_or("--");
 
@@ -600,13 +606,26 @@ fn render_dashboard(
     Ok(())
 }
 
-/// Extracts a fan speed field as a percentage string (0-15 step scale).
-fn get_fan_pct(state: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
+/// Extracts a fan speed field as a percentage string.
+///
+/// Models with `auxiliary_fan_uses_percentage()` report 0–100 directly;
+/// others report 0–15 discrete steps that need conversion.
+fn get_fan_pct(
+    state: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    quirks: &dyn ModelQuirks,
+) -> String {
     state
         .get(key)
         .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<u32>().ok())
-        .map(|step| format!("{}%", (step as f32 / 15.0 * 100.0).round() as u32))
+        .and_then(|s| s.parse::<u8>().ok())
+        .map(|raw| {
+            if quirks.auxiliary_fan_uses_percentage() {
+                format!("{}%", raw.min(100))
+            } else {
+                format!("{}%", fan_step_to_percentage(raw))
+            }
+        })
         .unwrap_or_else(|| "--".to_string())
 }
 

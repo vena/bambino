@@ -202,6 +202,13 @@ bambino-cli control <ip> <serial> <access_code> fan part 80
 bambino-cli control <ip> <serial> <access_code> led chamber on
 bambino-cli control <ip> <serial> <access_code> pause
 
+# Send gcode—with some safety checks
+bambino-cli control <ip> <serial> <access_code> gcode "G28"
+
+# Send gcode—without safety checks
+bambino-cli control <ip> <serial> <access_code> gcode-raw "M106 P1 S255"  # prompts for confirmation
+bambino-cli control <ip> <serial> <access_code> gcode-raw --unsafe "M106 P1 S255"  # bypasses confirmation
+
 # File management
 bambino-cli files <ip> <serial> <access_code> list /
 bambino-cli files <ip> <serial> <access_code> upload ./print.3mf /model/print.3mf
@@ -212,7 +219,7 @@ bambino-cli camera <ip> <serial> <access_code> snapshot            # saves snaps
 bambino-cli camera <ip> <serial> <access_code> snapshot frame.jpg  # custom output path
 ```
 
-Add `-v` for protocol-level debug output, or set `BAMBU_VERBOSE=1`.
+Add `-v` for protocol-level debug output.
 
 ### Where to find your credentials
 

@@ -57,9 +57,11 @@ Control Actions:
   home                                             Home all structural motion axes safely
   move <axis> <distance> <feedrate>                Execute relative motion (e.g., move z -10 3000)
   extrude <length> <feedrate>                      Extrude relative filament length (e.g., extrude 10 900)
-  fan <target> <speed_percent>                     Configure PWM fan speed (targets: part, aux, exhaust)
+  fan <target> <speed_percent>                     Configure PWM fan speed (targets: part, aux, exhaust, right)
   temp <target> <value>                            Set hotend or build-plate temperatures (targets: nozzle, bed)
   led <node> <on|off>                              Toggle chamber or auxiliary LEDs (nodes: chamber, work)
+  gcode <gcode_line>                               Send G-code with model safety checks
+  gcode-raw [--unsafe] <gcode_line>                Send raw G-code bypassing safety checks
   pause | resume | stop                            Manage active print queue execution states
 
 Files Actions:
@@ -171,7 +173,7 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Command Execution Failure: {:?}", e);
+        eprintln!("Error: {}", e);
         process::exit(1);
     }
 }
