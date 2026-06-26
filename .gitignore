@@ -18,3 +18,4 @@ env/
 *.log
 *.so
 /certs
+.lean-ctx/

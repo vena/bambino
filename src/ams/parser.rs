@@ -89,6 +89,21 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
         tray.tag_uid = None;
         tray.tray_uuid = None;
         tray.remain = Some(-1);
+        tray.tray_sub_brands = None;
+        tray.nozzle_temp_max = None;
+        tray.nozzle_temp_min = None;
+        tray.tray_diameter = None;
+        tray.tray_weight = None;
+        tray.tray_id_name = None;
+        tray.xcam_info = None;
+        tray.k = None;
+        tray.n = None;
+        tray.cali_idx = None;
+        tray.cols = None;
+        tray.ctype = None;
+        tray.total_len = None;
+        tray.bed_temp = None;
+        tray.bed_temp_type = None;
 
         // Standardize absent state representation to 9
         if tray.state.is_none() {
@@ -173,6 +188,7 @@ mod tests {
             tag_uid: Some("ABCDEF1234567890".into()),
             tray_uuid: Some("UUID_SOME_MOCK_VAL".into()),
             remain: Some(85),
+            ..Default::default()
         };
 
         clean_stale_tray_data(&mut tray);
@@ -194,6 +210,7 @@ mod tests {
             tag_uid: None,
             tray_uuid: None,
             remain: Some(100),
+            ..Default::default()
         };
 
         clean_stale_tray_data(&mut tray);
@@ -303,6 +320,7 @@ mod tests {
             tag_uid: None,
             tray_uuid: None,
             remain: Some(85),
+            ..Default::default()
         };
 
         clean_stale_tray_data(&mut tray);
@@ -324,6 +342,7 @@ mod tests {
             tag_uid: None,
             tray_uuid: None,
             remain: Some(85),
+            ..Default::default()
         };
 
         clean_stale_tray_data(&mut tray);
@@ -343,6 +362,7 @@ mod tests {
             tag_uid: None,
             tray_uuid: None,
             remain: None,
+            ..Default::default()
         };
 
         clean_stale_tray_data(&mut tray);

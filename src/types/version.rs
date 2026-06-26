@@ -23,6 +23,18 @@ pub struct VersionModule {
     pub sn: String,
     #[serde(default = "default_visible")]
     pub visible: bool,
+    /// Used by older firmware (P1P/P1S/A1) for printer type identification via esp32 module.
+    #[serde(default)]
+    pub project_name: Option<String>,
+    /// Bootloader version.
+    #[serde(default)]
+    pub loader_ver: Option<String>,
+    /// OTA update version.
+    #[serde(default)]
+    pub ota_ver: Option<String>,
+    /// Module flags.
+    #[serde(default)]
+    pub flag: Option<i32>,
 }
 
 /// Typed response from a `get_version` command containing all expansion bus modules.

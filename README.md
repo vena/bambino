@@ -125,7 +125,7 @@ loop {
     let event = printer.poll_telemetry().await?;
     if let Some(report) = event.report() {
         if let Some(print) = &report.print {
-            println!("{:?} — {:?}%", print.gcode_state, print.progress);
+            println!("{:?} — {:?}%", print.gcode_state, print.mc_percent);
         }
     }
 }

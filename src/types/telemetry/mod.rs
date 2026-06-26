@@ -12,12 +12,25 @@
 //!   are fully parsed into clean schemas to allow model-specific behaviors to be evaluated
 //!   via the quirks engine.
 
+pub mod ams;
+pub mod device;
+pub mod diagnostics;
+pub mod report;
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
 
 use serde::{Deserialize, Deserializer, Serialize};
+
+pub use ams::{AmsDrySetting, AmsStatusReport, AmsTray, AmsUnit, VirtualTray};
+pub use device::{
+    AirductCollection, AirductModeListEntry, AirductPart, BedInfo, BedTelemetry, DeviceTelemetry,
+    ExtToolTelemetry, ExtruderCollection, ExtruderInfo, NozzleCollection, NozzleInfo,
+};
+pub use diagnostics::{CtcInfo, CtcTelemetry, HmsEntry, IpcamTelemetry};
+pub use report::{LightReport, PrinterTelemetry};
+
+pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
 
 /// Unified top-level telemetry report received from the printer's local MQTT broker.
 ///
@@ -38,552 +51,6 @@ pub struct TelemetryReport {
     pub fun: Option<String>,
 }
 
-/// Core printer state machine telemetry, containing kinematics, thermal targets,
-/// auxiliary fan configurations, and connected AMS arrays.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrinterTelemetry {
-    /// High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
-    pub gcode_state: Option<String>,
-
-    /// Path or parent project file currently loaded for execution.
-    pub gcode_file: Option<String>,
-
-    /// User-assigned name of the active print queue task.
-    pub subtask_name: Option<String>,
-
-    /// Hardware-enforced unique 32-bit transaction identifier tracking active jobs.
-    pub subtask_id: Option<String>,
-
-    /// Active layer progress tracker.
-    pub layer_num: Option<i32>,
-
-    /// Total layers within the sliced print pipeline.
-    /// Wire sends as `total_layer_num`; `total_layers` accepted for compatibility.
-    #[serde(alias = "total_layer_num")]
-    pub total_layers: Option<i32>,
-
-    /// Print job completion percentage (0.0 to 100.0).
-    pub progress: Option<f32>,
-
-    /// Estimated remaining duration of the active layer sequence, in seconds.
-    pub mc_remaining_time: Option<i32>,
-
-    /// Active speed profile level (1=Silent, 2=Standard, 3=Sport, 4=Ludicrous).
-    pub spd_lvl: Option<u8>,
-
-    /// Speed magnitude as a percentage of the nominal feedrate.
-    pub spd_mag: Option<u16>,
-
-    /// Motion controller progress percentage (0–100). Present on idle and active prints;
-    /// `progress` may only appear during active prints.
-    pub mc_percent: Option<i32>,
-
-    /// Print sub-stage identifier tracking granular execution phases within the active print stage.
-    pub mc_print_sub_stage: Option<i32>,
-
-    /// Kinematics flag field tracking homing states, networking interfaces, and door nodes.
-    pub home_flag: Option<u32>,
-
-    /// State field used in newer enclosed printer lines to track sensors (e.g., door status hex strings).
-    pub stat: Option<String>,
-
-    /// Active print stage. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
-    pub stg_cur: Option<i32>,
-
-    /// Active error code register, packed as a 32-bit integer [REF-DIAG-HMS].
-    pub print_error: Option<u32>,
-
-    /// Active hardware fault and diagnostic alert entries [REF-DIAG-HMS].
-    #[serde(default)]
-    pub hms: Option<Vec<HmsEntry>>,
-
-    /// Permissive indicator tracking physical MicroSD card insertion.
-    ///
-    /// Evaluated via custom deserializer to absorb structural variations between firmwares.
-    #[serde(deserialize_with = "deserialize_permissive_bool", default)]
-    pub sdcard: bool,
-
-    /// Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
-    pub wifi_signal: Option<String>,
-
-    /// On-board part cooling fan speed (represented as discrete steps 0 to 15) [REF-CLIM-FANS].
-    pub cooling_fan_speed: Option<String>,
-
-    /// On-board left-side auxiliary fan speed (represented as discrete steps 0 to 15).
-    pub big_fan1_speed: Option<String>,
-
-    /// On-board filtration or chamber exhaust fan speed (represented as discrete steps 0 to 15).
-    pub big_fan2_speed: Option<String>,
-
-    /// On-board toolhead heatbreak fan speed (represented as discrete steps 0 to 15).
-    pub heatbreak_fan_speed: Option<String>,
-
-    /// Hotend target temperature register.
-    ///
-    /// Wire sends both integers and floats depending on model. Use `unpack_temperature()`
-    /// to extract actual/target from composite-packed values [REF-THER-DECODE].
-    pub nozzle_target_temper: Option<f64>,
-
-    /// Hotend actual temperature register.
-    ///
-    /// Wire sends both integers and floats depending on model [REF-THER-DECODE].
-    pub nozzle_temper: Option<f64>,
-
-    /// Heated build-plate temperature register (actual, target, or composite packed).
-    pub bed_temper: Option<f64>,
-
-    /// Explicit bed target temperature. Separate from composite-packed `bed_temper`.
-    pub bed_target_temper: Option<f64>,
-
-    /// Active chamber heater or sensor telemetry (actual, target, or composite packed).
-    pub chamber_temper: Option<f64>,
-
-    /// Hexadecimal bitmask string representing the physical presence of loaded spools.
-    pub tray_exist_bits: Option<String>,
-
-    /// Power status of the printer core logic board.
-    #[serde(default)]
-    pub power_on_flag: Option<bool>,
-
-    /// Camera and recording telemetry. Nested as `print.ipcam` on the wire.
-    pub ipcam: Option<IpcamTelemetry>,
-
-    /// AI detection settings (spaghetti detection, first-layer inspection, etc.).
-    pub xcam: Option<serde_json::Value>,
-
-    /// AMS expansion bus status container [REF-AMS-DECODE].
-    pub ams: Option<AmsStatusReport>,
-
-    /// Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
-    #[serde(default)]
-    pub ams_mapping: Vec<i32>,
-
-    /// Virtual/external spool holder state. Present on P1S, P1P, A1, H2D, X1C.
-    pub vt_tray: Option<VirtualTray>,
-
-    /// Device sub-object nested inside pushall `print` envelope on H2/P2/X2 models.
-    /// Contains CTC, nozzle, and airduct telemetry for enclosed printers.
-    pub device: Option<DeviceTelemetry>,
-
-    /// Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
-    pub fun: Option<String>,
-}
-
-/// Chamber Temperature Controller (CTC) telemetry sub-object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CtcTelemetry {
-    /// Controller info containing thermal actuals and targets.
-    pub info: Option<CtcInfo>,
-}
-
-/// Controller information segment detailing current temperature coordinates.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CtcInfo {
-    /// Composite-packed integer temperature value [REF-THER-DECODE].
-    /// Use `PrinterTelemetry::unpack_temperature()` on this value cast to `f64`.
-    pub temp: Option<u32>,
-}
-
-/// Camera and recording state telemetry, nested as `print.ipcam` on the wire.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IpcamTelemetry {
-    /// Internal identifier or state of the hardware camera module.
-    pub ipcam_dev: Option<String>,
-
-    /// Camera live feed recording status (`"enable"` or `"disable"`).
-    pub ipcam_record: Option<String>,
-
-    /// Frame-by-layer timelapse recording status (`"enable"` or `"disable"`).
-    pub timelapse: Option<String>,
-
-    /// Camera mode bitmask.
-    pub mode_bits: Option<u32>,
-
-    /// Camera resolution setting.
-    pub resolution: Option<String>,
-
-    /// TUTK server status (`"enable"` or `"disable"`).
-    pub tutk_server: Option<String>,
-}
-
-/// Raw telemetry entry from the `hms` diagnostic array [REF-DIAG-HMS].
-///
-/// Each entry represents an active hardware fault or status indication. Use
-/// `diagnostics::decode_hms_alert()` to unpack into wiki keys, short-codes, and severity levels.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HmsEntry {
-    /// Packed attribute word encoding module ID, severity, and subsystem address.
-    pub attr: u32,
-    /// Packed code word encoding fault category and error index.
-    pub code: u32,
-    /// Seconds since boot when the alert was raised (present on X2/H2/P2 models).
-    #[serde(default)]
-    pub ts_boot: Option<u64>,
-    /// UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
-    #[serde(default)]
-    pub ts_unix: Option<String>,
-}
-
-/// Top-level AMS status wrapper containing the units array and bus-wide metadata [REF-AMS-DECODE].
-///
-/// On the wire, AMS telemetry is nested as `print.ams.ams[...]` — this struct represents
-/// the intermediate `print.ams` object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AmsStatusReport {
-    /// Array of connected AMS units on the expansion bus.
-    #[serde(default)]
-    pub ams: Vec<AmsUnit>,
-
-    /// Hexadecimal bitmask string indicating which AMS units are physically present.
-    pub ams_exist_bits: Option<String>,
-
-    /// Hexadecimal bitmask string indicating which tray slots contain a physical spool.
-    pub tray_exist_bits: Option<String>,
-
-    /// Hexadecimal bitmask string indicating which trays contain Bambu Lab branded spools.
-    pub tray_is_bbl_bits: Option<String>,
-
-    /// Index of the currently active tray feeding filament to the toolhead.
-    pub tray_now: Option<String>,
-
-    /// Index of the previously active tray.
-    pub tray_pre: Option<String>,
-
-    /// AMS protocol version.
-    pub version: Option<i32>,
-}
-
-/// Modular standard expansion unit managing up to 4 physical spool slots.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AmsUnit {
-    /// Unique index representing the unit position on the physical expansion bus (0 to 3).
-    pub id: String,
-
-    /// Ambient temperature inside the expansion enclosure, in degrees Celsius.
-    pub temp: String,
-
-    /// Enclosure climate relative humidity index (1-5 scale).
-    pub humidity: String,
-
-    /// Actual relative humidity percentage (1-100) from the onboard sensor.
-    /// Sent as a string on the wire (e.g., `"17"`).
-    pub humidity_raw: Option<String>,
-
-    /// Remaining drying time in minutes during an active dry cycle [REF-AMS-DRYER].
-    /// Sent as an integer on the wire but may vary by firmware.
-    pub dry_time: Option<u32>,
-
-    /// Drying configuration settings (target temperature, duration, filament type).
-    pub dry_setting: Option<AmsDrySetting>,
-
-    /// Trays / spool slots configured inside the designated unit.
-    #[serde(default)]
-    pub tray: Vec<AmsTray>,
-}
-
-/// Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AmsDrySetting {
-    /// Target drying temperature in degrees Celsius.
-    pub dry_temperature: Option<i32>,
-    /// Configured drying duration in minutes.
-    pub dry_duration: Option<i32>,
-    /// Filament type string for the active drying profile (e.g. "PA-CF").
-    pub dry_filament: Option<String>,
-}
-
-/// Virtual/external spool holder telemetry. Represents the filament loaded
-/// directly into the extruder without going through an AMS unit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VirtualTray {
-    /// Virtual tray ID (typically `"254"`).
-    pub id: Option<String>,
-
-    /// Material class abbreviation (e.g. "PLA", "PETG"). Empty when no filament loaded.
-    pub tray_type: Option<String>,
-
-    /// RRGGBBAA hexadecimal color string.
-    pub tray_color: Option<String>,
-
-    /// Slicer filament preset index.
-    pub tray_info_idx: Option<String>,
-
-    /// Sub-brand or variant string.
-    pub tray_sub_brands: Option<String>,
-
-    /// Maximum nozzle temperature for the loaded filament (sent as string).
-    pub nozzle_temp_max: Option<String>,
-
-    /// Minimum nozzle temperature for the loaded filament (sent as string).
-    pub nozzle_temp_min: Option<String>,
-
-    /// Filament diameter in mm (sent as string, e.g. `"1.75"`).
-    pub tray_diameter: Option<String>,
-
-    /// Spool net weight in grams (sent as string).
-    pub tray_weight: Option<String>,
-
-    /// Filament temperature setting (sent as string).
-    pub tray_temp: Option<String>,
-
-    /// Filament print time accumulator (sent as string).
-    pub tray_time: Option<String>,
-
-    /// Bed temperature setting (sent as string).
-    pub bed_temp: Option<String>,
-
-    /// Bed temperature type/profile (sent as string).
-    pub bed_temp_type: Option<String>,
-
-    /// 16-character hexadecimal RFID tag UID.
-    pub tag_uid: Option<String>,
-
-    /// 32-character globally unique filament spool ID.
-    pub tray_uuid: Option<String>,
-
-    /// Filament preset display name.
-    pub tray_id_name: Option<String>,
-
-    /// XCam inspection info hex string.
-    pub xcam_info: Option<String>,
-
-    /// Remaining filament percentage (0–100, or 0 if unknown).
-    pub remain: Option<i32>,
-
-    /// Flow rate calibration K factor.
-    pub k: Option<f64>,
-
-    /// Flow rate calibration N factor.
-    pub n: Option<i32>,
-
-    /// Calibration index (-1 if uncalibrated).
-    pub cali_idx: Option<i32>,
-}
-
-/// Material spool state descriptor representing a single physical tray slot.
-///
-/// **Zero-Warning Tolerant Parsing:**
-/// Under standard P1/A1 firmware tracks, removing a physical spool truncates the
-/// JSON output to only contain the ID key. Making descriptive keys optional permits
-/// safe parsing under empty-slot conditions without triggering serialisation panics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AmsTray {
-    /// The physical index representing the slot (0 to 3). Sent as a string on the wire.
-    pub id: String,
-
-    /// The native state code representing filament routing status [REF-AMS-DECODE].
-    pub state: Option<u8>,
-
-    /// Material class abbreviation (e.g. "PLA", "PETG", "PA-CF").
-    pub tray_type: Option<String>,
-
-    /// RRGGBBAA hexadecimal color string defining the filament profile.
-    pub tray_color: Option<String>,
-
-    /// Short or unique customized preset index matching slicer calibrations.
-    pub tray_info_idx: Option<String>,
-
-    /// 16-character hexadecimal RFID tag UID, if reading a native spool.
-    pub tag_uid: Option<String>,
-
-    /// 32-character globally unique ID of the filament spool.
-    pub tray_uuid: Option<String>,
-
-    /// Remaining filament volume percentage (or -1 if uncalculated).
-    pub remain: Option<i32>,
-}
-
-/// Device hardware state properties containing physical tooling descriptions.
-///
-/// Appears at two locations on the wire:
-/// - Top-level `{"device": {...}}` for incremental updates (e.g., `push_alt_nozzle_info`)
-/// - Nested inside `{"print": {"device": {...}}}` for pushall on H2/P2/X2 models
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceTelemetry {
-    /// Structured descriptions representing the active extruder assembly properties.
-    pub nozzle: Option<NozzleCollection>,
-
-    /// Per-extruder thermal and routing state for IDEX platforms [REF-THER-DECODE §Dual-Extruder].
-    pub extruder: Option<ExtruderCollection>,
-
-    /// Nested structures tracking cooling components and climate routing [REF-CLIM-FANS].
-    pub airduct: Option<AirductCollection>,
-
-    /// Chamber Temperature Controller telemetry [REF-THER-DECODE].
-    pub ctc: Option<CtcTelemetry>,
-}
-
-/// Wrap block holding nozzle characteristics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NozzleCollection {
-    /// Polymorphic array representing active carriages and tool configurations.
-    #[serde(default)]
-    pub info: Vec<NozzleInfo>,
-}
-
-/// Dynamic extruder nozzle details.
-///
-/// Integrates both legacy abbreviated keys (standard platforms) and descriptive keys
-/// (IDEX platforms) to provide unified schema matching.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NozzleInfo {
-    /// Extruder carriage index (0 = Right/Main, 1 = Left/Deputy) or storage rack index.
-    pub id: u8,
-
-    /// Nozzle orifice diameter in millimeters (e.g. 0.4).
-    pub diameter: Option<f32>,
-
-    /// Target maximum temperature (Standard Platform abbreviated representation).
-    pub tm: Option<u32>,
-
-    /// Target maximum temperature (IDEX Platform verbose representation).
-    pub max_temp: Option<u32>,
-
-    /// Core physical nozzle composition or tool type designation.
-    #[serde(rename = "type")]
-    pub nozzle_type: Option<String>,
-
-    /// Normalized physical wear tracker value.
-    pub wear: Option<u32>,
-
-    /// Hotend manufacturer serial number (verbose IDEX platform representation).
-    pub serial_number: Option<String>,
-
-    /// Hotend manufacturer serial number (standard platform abbreviated representation).
-    pub sn: Option<String>,
-
-    /// Physical filament color hex code loaded into the extruder.
-    pub filament_colour: Option<String>,
-
-    /// Abbreviated filament color hex code.
-    pub color_m: Option<String>,
-
-    /// Filament preset calibration index.
-    pub filament_id: Option<String>,
-
-    /// Abbreviated filament preset calibration index.
-    pub fila_id: Option<String>,
-}
-
-/// IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtruderCollection {
-    /// Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
-    #[serde(default)]
-    pub info: Vec<ExtruderInfo>,
-
-    /// Bitmask: low 4 bits = extruder count, bits 4–7 = active extruder index.
-    pub state: Option<u32>,
-}
-
-impl ExtruderCollection {
-    /// Returns the active extruder index extracted from the `state` bitmask.
-    pub fn active_extruder_index(&self) -> u8 {
-        self.state.map(|s| ((s >> 4) & 0xF) as u8).unwrap_or(0)
-    }
-
-    /// Returns the extruder count extracted from the `state` bitmask.
-    pub fn extruder_count(&self) -> u8 {
-        self.state.map(|s| (s & 0xF) as u8).unwrap_or(0)
-    }
-}
-
-/// Per-extruder thermal and routing state for IDEX platforms.
-///
-/// The `temp` field uses the same composite packing as `chamber_temper`:
-/// values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual temps.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtruderInfo {
-    /// Extruder carriage index (0 = right/main, 1 = left/deputy).
-    pub id: u8,
-
-    /// Composite-packed temperature (use `unpack_temperature()` to decode).
-    pub temp: Option<u32>,
-
-    /// Current AMS slot routing (low 4 bits = tray index, upper bits = AMS unit index).
-    pub snow: Option<u32>,
-
-    /// Previous AMS slot routing.
-    pub spre: Option<u32>,
-
-    /// Target AMS slot routing.
-    pub star: Option<u32>,
-
-    /// Current head routing index.
-    pub hnow: Option<u8>,
-
-    /// Previous head routing index.
-    pub hpre: Option<u8>,
-
-    /// Target head routing index.
-    pub htar: Option<u8>,
-
-    /// Status bitmask.
-    pub stat: Option<u32>,
-
-    /// Info bitmask.
-    pub info: Option<u32>,
-
-    /// Filament backup slot indices.
-    #[serde(default)]
-    pub filam_bak: Vec<u32>,
-
-    /// Z-axis offset compensation (X2D).
-    pub z_bias: Option<f64>,
-}
-
-impl ExtruderInfo {
-    /// Unpacks the composite temperature into (actual, target) degrees Celsius.
-    pub fn temperatures(&self) -> (u16, u16) {
-        self.temp
-            .map(|t| PrinterTelemetry::unpack_temperature(t as f64))
-            .unwrap_or((0, 0))
-    }
-}
-
-/// Climate parts collection nested within `device` parameters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AirductCollection {
-    /// Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
-    #[serde(default)]
-    pub parts: Vec<AirductPart>,
-
-    /// Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
-    #[serde(rename = "modeCur")]
-    pub mode_cur: Option<i32>,
-
-    /// List of airduct modes available on this model.
-    #[serde(rename = "modeList", default)]
-    pub mode_list: Vec<AirductModeListEntry>,
-}
-
-/// Entry in the airduct mode availability list reported by the printer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AirductModeListEntry {
-    /// Mode identifier (0=cooling, 1=heating, 2=laser).
-    #[serde(rename = "modeId")]
-    pub mode_id: i32,
-}
-
-/// Represents an individual auxiliary routing component.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AirductPart {
-    /// Part index matching hardware configurations (e.g., `160` for the right auxiliary fan).
-    pub id: u32,
-
-    /// The active operating speed percentage ($0$ to $100$) or damper direction flag.
-    pub state: Option<i32>,
-}
-
-// ============================================================================
-// Unpacking Helpers and Structural Evaluation Functions
-// ============================================================================
-
-pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
-pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
-pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
-pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
-
 /// Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].
 ///
 /// Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required),
@@ -594,76 +61,6 @@ pub fn is_developer_mode(fun_hex: &str) -> Option<bool> {
     let val = u64::from_str_radix(fun_hex, 16).ok()?;
     Some((val & FUN_MQTT_SIGNATURE_REQUIRED) == 0)
 }
-
-impl PrinterTelemetry {
-    /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
-    ///
-    /// Accepts `f64` because the wire sends both integers and floats depending on model.
-    /// Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
-    /// composite-packed: upper 16 bits = target, lower 16 bits = actual.
-    pub fn unpack_temperature(raw_val: f64) -> (u16, u16) {
-        let int_val = raw_val as u32;
-        if int_val <= TEMP_COMPOSITE_THRESHOLD {
-            (int_val as u16, 0)
-        } else {
-            let target = (int_val >> 16) & 0xFFFF;
-            let actual = int_val & 0xFFFF;
-            (actual as u16, target as u16)
-        }
-    }
-
-    /// Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
-    ///
-    /// Inspects bit 18 (`0x00040000`) of the `home_flag` register.
-    pub fn is_ethernet_active(&self) -> bool {
-        self.home_flag
-            .map(|flag| (flag & ETHERNET_ACTIVE_BITMASK) != 0)
-            .unwrap_or(false)
-    }
-
-    /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
-    ///
-    /// Used by X1 series models where the door sensor is wired to the home_flag bitmask.
-    pub fn is_door_open_from_home_flag(&self) -> bool {
-        self.home_flag
-            .map(|flag| (flag & DOOR_SENSOR_BITMASK) != 0)
-            .unwrap_or(false)
-    }
-
-    /// Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
-    ///
-    /// Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
-    pub fn is_door_open_from_stat(&self) -> bool {
-        self.stat
-            .as_ref()
-            .and_then(|s| Self::parse_hex_string(s))
-            .map(|val| (val & DOOR_SENSOR_BITMASK) != 0)
-            .unwrap_or(false)
-    }
-
-    /// Helper converting raw hexadecimal state strings cleanly into standard numeric values.
-    fn parse_hex_string(hex_str: &str) -> Option<u32> {
-        let clean = hex_str
-            .strip_prefix("0x")
-            .or_else(|| hex_str.strip_prefix("0X"))
-            .unwrap_or(hex_str);
-        u32::from_str_radix(clean, 16).ok()
-    }
-}
-
-impl AmsTray {
-    /// Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
-    ///
-    /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
-    pub fn get_state(&self) -> u8 {
-        self.state
-            .unwrap_or(crate::ams::parser::AMS_TRAY_STATE_EMPTY)
-    }
-}
-
-// ============================================================================
-// Custom Permissive Boolean Deserializer
-// ============================================================================
 
 /// Custom deserializer mapping various over-the-wire `sdcard` formats to a unified boolean.
 ///
@@ -992,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_p1s_wire_capture_end_to_end() {
-        let json_data = include_str!("../../tests/mocks/P1S.json");
+        let json_data = include_str!("../../../tests/mocks/P1S.json");
         let report: TelemetryReport =
             serde_json::from_str(json_data).expect("P1S wire capture must deserialize");
         let print = report.print.expect("print present");
@@ -1642,5 +1039,627 @@ mod tests {
         }"#;
         let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
         assert!(report.device.unwrap().extruder.is_none());
+    }
+
+    #[test]
+    fn test_lights_report_deserialization() {
+        let json = r#"{
+            "print": {
+                "lights_report": [
+                    { "node": "chamber_light", "mode": "on" },
+                    { "node": "work_light", "mode": "flashing" },
+                    { "node": "chamber_light2", "mode": "off" }
+                ]
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        let lights = print.lights_report.unwrap();
+        assert_eq!(lights.len(), 3);
+        assert_eq!(lights[0].node, "chamber_light");
+        assert_eq!(lights[0].mode, "on");
+        assert_eq!(lights[1].node, "work_light");
+        assert_eq!(lights[1].mode, "flashing");
+    }
+
+    #[test]
+    fn test_print_type_and_action_fields() {
+        let json = r#"{
+            "print": {
+                "print_type": "local",
+                "print_gcode_action": 0,
+                "print_real_action": 0,
+                "mc_print_stage": "2",
+                "fan_gear": 5373952
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.print_type.as_deref(), Some("local"));
+        assert_eq!(print.print_gcode_action, Some(0));
+        assert_eq!(print.print_real_action, Some(0));
+        assert_eq!(print.mc_print_stage.as_deref(), Some("2"));
+        assert_eq!(print.fan_gear, Some(5373952));
+    }
+
+    #[test]
+    fn test_job_identifiers_and_timing() {
+        let json = r#"{
+            "print": {
+                "task_id": "9012",
+                "job_id": "0",
+                "remain_time": 549,
+                "gcode_start_time": "1681479206",
+                "gcode_file_prepare_percent": "100",
+                "cali_version": 0
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.task_id.as_deref(), Some("9012"));
+        assert_eq!(print.job_id.as_deref(), Some("0"));
+        assert_eq!(print.remain_time, Some(549));
+        assert_eq!(print.gcode_start_time.as_deref(), Some("1681479206"));
+        assert_eq!(print.gcode_file_prepare_percent.as_deref(), Some("100"));
+        assert_eq!(print.cali_version, Some(0));
+    }
+
+    #[test]
+    fn test_hw_switch_state_and_ams_status() {
+        let json = r#"{
+            "print": {
+                "hw_switch_state": 1,
+                "ams_status": 768,
+                "s_obj": [2, 5, 7]
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.hw_switch_state, Some(1));
+        assert_eq!(print.ams_status, Some(768));
+        assert_eq!(print.s_obj, Some(vec![2, 5, 7]));
+    }
+
+    #[test]
+    fn test_legacy_nozzle_fields() {
+        let json = r#"{
+            "print": {
+                "nozzle_type": "stainless_steel",
+                "nozzle_diameter": "0.4"
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.nozzle_type.as_deref(), Some("stainless_steel"));
+        assert_eq!(print.nozzle_diameter.as_deref(), Some("0.4"));
+    }
+
+    #[test]
+    fn test_cfg_stg_mapping_fields() {
+        let json = r#"{
+            "print": {
+                "cfg": "3C5FDAD9",
+                "stg": [0, 1, 2, 3, 4, 5, 6, 7],
+                "mapping": [1]
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.cfg.as_deref(), Some("3C5FDAD9"));
+        assert_eq!(print.stg, Some(vec![0, 1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(print.mapping, Some(vec![1]));
+    }
+
+    #[test]
+    fn test_error_and_failure_fields() {
+        let json = r#"{
+            "print": {
+                "err": "0",
+                "fail_reason": "0"
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.err.as_deref(), Some("0"));
+        assert_eq!(print.fail_reason.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn test_cloud_project_ids() {
+        let json = r#"{
+            "print": {
+                "design_id": "467269",
+                "model_id": "US1fccd3bfcb9084",
+                "profile_id": "731239480",
+                "project_id": "904240393"
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.design_id.as_deref(), Some("467269"));
+        assert_eq!(print.model_id.as_deref(), Some("US1fccd3bfcb9084"));
+        assert_eq!(print.profile_id.as_deref(), Some("731239480"));
+        assert_eq!(print.project_id.as_deref(), Some("904240393"));
+    }
+
+    #[test]
+    fn test_vir_slot_deserialization() {
+        let json = r#"{
+            "print": {
+                "vir_slot": [
+                    {
+                        "id": "254",
+                        "tray_type": "PLA",
+                        "tray_color": "76D9F4FF",
+                        "remain": 0,
+                        "cali_idx": -1,
+                        "k": 0.02
+                    },
+                    {
+                        "id": "255",
+                        "tray_type": "PETG",
+                        "tray_color": "FF0000FF",
+                        "remain": 50
+                    }
+                ]
+            }
+        }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        let slots = print.vir_slot.unwrap();
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[0].id.as_deref(), Some("254"));
+        assert_eq!(slots[0].tray_type.as_deref(), Some("PLA"));
+        assert_eq!(slots[1].id.as_deref(), Some("255"));
+        assert_eq!(slots[1].tray_type.as_deref(), Some("PETG"));
+        assert_eq!(slots[1].remain, Some(50));
+    }
+
+    #[test]
+    fn test_bed_telemetry_composite_packed() {
+        let json = r#"{
+            "device": {
+                "bed": {
+                    "info": { "temp": 4587590 },
+                    "state": 2
+                },
+                "bed_temp": 4587590
+            }
+        }"#;
+        let device = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap();
+        let bed = device.bed.unwrap();
+        assert_eq!(bed.state, Some(2));
+        let temp = bed.info.unwrap().temp.unwrap();
+        let (actual, target) = PrinterTelemetry::unpack_temperature(temp as f64);
+        assert_eq!(actual, 70);
+        assert_eq!(target, 70);
+        assert_eq!(device.bed_temp, Some(4587590));
+    }
+
+    #[test]
+    fn test_ext_tool_laser_mounted() {
+        let json = r#"{
+            "device": {
+                "ext_tool": {
+                    "calib": 0,
+                    "low_prec": false,
+                    "mount": 1,
+                    "th_temp": 29,
+                    "type": "LB00"
+                }
+            }
+        }"#;
+        let device = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap();
+        let ext_tool = device.ext_tool.unwrap();
+        assert_eq!(ext_tool.mount, Some(1));
+        assert_eq!(ext_tool.tool_type.as_deref(), Some("LB00"));
+        assert_eq!(ext_tool.calib, Some(0));
+        assert_eq!(ext_tool.low_prec, Some(false));
+        assert_eq!(ext_tool.th_temp, Some(29));
+    }
+
+    #[test]
+    fn test_ext_tool_not_mounted() {
+        let json = r#"{
+            "device": {
+                "ext_tool": { "mount": 0 }
+            }
+        }"#;
+        let ext_tool = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap()
+            .ext_tool
+            .unwrap();
+        assert_eq!(ext_tool.mount, Some(0));
+        assert!(ext_tool.tool_type.is_none());
+    }
+
+    #[test]
+    fn test_fire_ext_opaque_value() {
+        let json = r#"{
+            "device": {
+                "fire_ext": { "status": 1, "alarm": false }
+            }
+        }"#;
+        let device = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap();
+        assert!(device.fire_ext.is_some());
+    }
+
+    #[test]
+    fn test_nozzle_collection_extra_fields() {
+        let json = r#"{
+            "device": {
+                "nozzle": {
+                    "info": [{ "id": 0, "diameter": 0.4 }],
+                    "exist": 3,
+                    "state": 1,
+                    "src_id": 0,
+                    "tar_id": 1
+                }
+            }
+        }"#;
+        let nozzle = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap()
+            .nozzle
+            .unwrap();
+        assert_eq!(nozzle.exist, Some(3));
+        assert_eq!(nozzle.state, Some(1));
+        assert_eq!(nozzle.src_id, Some(0));
+        assert_eq!(nozzle.tar_id, Some(1));
+    }
+
+    #[test]
+    fn test_nozzle_info_stat_field() {
+        let json = r#"{
+            "device": {
+                "nozzle": {
+                    "info": [{ "id": 0, "diameter": 0.4, "stat": 256 }]
+                }
+            }
+        }"#;
+        let nozzle = &serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap()
+            .nozzle
+            .unwrap()
+            .info[0];
+        assert_eq!(nozzle.stat, Some(256));
+    }
+
+    #[test]
+    fn test_ctc_state_and_target() {
+        let json = r#"{
+            "device": {
+                "ctc": {
+                    "info": { "temp": 38, "target": 45 },
+                    "state": 2
+                }
+            }
+        }"#;
+        let ctc = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap()
+            .ctc
+            .unwrap();
+        assert_eq!(ctc.state, Some(2));
+        assert_eq!(ctc.info.as_ref().unwrap().temp, Some(38));
+        assert_eq!(ctc.info.as_ref().unwrap().target, Some(45));
+    }
+
+    #[test]
+    fn test_ctc_state_idle() {
+        let json = r#"{
+            "device": {
+                "ctc": {
+                    "info": { "temp": 38 },
+                    "state": 0
+                }
+            }
+        }"#;
+        let ctc = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .device
+            .unwrap()
+            .ctc
+            .unwrap();
+        assert_eq!(ctc.state, Some(0));
+        assert!(ctc.info.as_ref().unwrap().target.is_none());
+    }
+
+    #[test]
+    fn test_ipcam_rtsp_url() {
+        let json = r#"{
+            "print": {
+                "ipcam": {
+                    "ipcam_dev": "1",
+                    "ipcam_record": "enable",
+                    "timelapse": "disable",
+                    "rtsp_url": "rtsps://192.168.1.64/streaming/live/1"
+                }
+            }
+        }"#;
+        let ipcam = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap()
+            .ipcam
+            .unwrap();
+        assert_eq!(
+            ipcam.rtsp_url.as_deref(),
+            Some("rtsps://192.168.1.64/streaming/live/1")
+        );
+    }
+
+    #[test]
+    fn test_ipcam_rtsp_url_disabled() {
+        let json = r#"{
+            "print": {
+                "ipcam": {
+                    "rtsp_url": "disable"
+                }
+            }
+        }"#;
+        let ipcam = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap()
+            .ipcam
+            .unwrap();
+        assert_eq!(ipcam.rtsp_url.as_deref(), Some("disable"));
+    }
+
+    #[test]
+    fn test_ams_status_report_extra_fields() {
+        let json = r#"{
+            "print": {
+                "ams": {
+                    "ams": [],
+                    "tray_read_done_bits": "ff",
+                    "tray_reading_bits": "0",
+                    "tray_tar": "3",
+                    "insert_flag": true,
+                    "power_on_flag": false,
+                    "cali_id": 1,
+                    "cali_stat": 0
+                }
+            }
+        }"#;
+        let ams = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap()
+            .ams
+            .unwrap();
+        assert_eq!(ams.tray_read_done_bits.as_deref(), Some("ff"));
+        assert_eq!(ams.tray_reading_bits.as_deref(), Some("0"));
+        assert_eq!(ams.tray_tar.as_deref(), Some("3"));
+        assert_eq!(ams.insert_flag, Some(true));
+        assert_eq!(ams.power_on_flag, Some(false));
+        assert_eq!(ams.cali_id, Some(1));
+        assert_eq!(ams.cali_stat, Some(0));
+    }
+
+    #[test]
+    fn test_ams_unit_info_bitmask() {
+        let json = r#"{
+            "print": {
+                "ams": {
+                    "ams": [
+                        {
+                            "id": "0",
+                            "temp": "26.0",
+                            "humidity": "3",
+                            "info": "11002103",
+                            "dry_sf_reason": [0, 0, 0, 0],
+                            "tray": []
+                        }
+                    ]
+                }
+            }
+        }"#;
+        let unit = &serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap()
+            .ams
+            .unwrap()
+            .ams[0];
+        assert_eq!(unit.info.as_deref(), Some("11002103"));
+        assert_eq!(unit.dry_sf_reason, Some(vec![0, 0, 0, 0]));
+
+        // Verify bitmask parsing: bits 0-3 = AMS type, bits 8-11 = extruder assignment
+        let info_val = u64::from_str_radix("11002103", 16).unwrap();
+        let ams_type = (info_val & 0xF) as u8;
+        let extruder_id = ((info_val >> 8) & 0xF) as u8;
+        assert_eq!(ams_type, 3); // AMS Lite type
+        assert_eq!(extruder_id, 1); // Left/deputy extruder
+    }
+
+    #[test]
+    fn test_version_module_extra_fields() {
+        let json = r#"{
+            "name": "ap2",
+            "hw_ver": "AP04",
+            "sw_ver": "00.01.02.03",
+            "sn": "00W000000000001",
+            "project_name": "C12",
+            "loader_ver": "00.00.02.04",
+            "ota_ver": "01.00.00.00",
+            "flag": 0
+        }"#;
+        let module: crate::types::version::VersionModule = serde_json::from_str(json).unwrap();
+        assert_eq!(module.project_name.as_deref(), Some("C12"));
+        assert_eq!(module.loader_ver.as_deref(), Some("00.00.02.04"));
+        assert_eq!(module.ota_ver.as_deref(), Some("01.00.00.00"));
+        assert_eq!(module.flag, Some(0));
+    }
+
+    #[test]
+    fn test_kprofile_ams_linking_fields() {
+        let json = r#"{
+            "cali_idx": 4,
+            "filament_id": "GFA01",
+            "nozzle_diameter": "0.4",
+            "nozzle_id": "HS00-0.4",
+            "extruder_id": 0,
+            "name": "PLA Matte",
+            "k_value": "0.022000",
+            "setting_id": "PF12345678901234567",
+            "ams_id": 0,
+            "tray_id": 2
+        }"#;
+        let entry: crate::diagnostics::KProfileEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.ams_id, Some(0));
+        assert_eq!(entry.tray_id, Some(2));
+    }
+
+    #[test]
+    fn test_kprofile_ams_fields_absent() {
+        let json = r#"{
+            "cali_idx": 4,
+            "filament_id": "GFA01",
+            "nozzle_diameter": "0.4",
+            "nozzle_id": "HS00-0.4",
+            "extruder_id": 0,
+            "name": "PLA",
+            "k_value": "0.022",
+            "setting_id": "PF12345678901234567"
+        }"#;
+        let entry: crate::diagnostics::KProfileEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.ams_id.is_none());
+        assert!(entry.tray_id.is_none());
+    }
+
+    #[test]
+    fn test_progress_field_removed() {
+        let json = r#"{ "print": { "mc_percent": 75 } }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.mc_percent, Some(75));
+    }
+
+    #[test]
+    fn test_new_fields_absent_by_default() {
+        let json = r#"{ "print": {} }"#;
+        let print = serde_json::from_str::<TelemetryReport>(json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert!(print.print_type.is_none());
+        assert!(print.lights_report.is_none());
+        assert!(print.hw_switch_state.is_none());
+        assert!(print.ams_status.is_none());
+        assert!(print.s_obj.is_none());
+        assert!(print.vir_slot.is_none());
+        assert!(print.fan_gear.is_none());
+        assert!(print.task_id.is_none());
+        assert!(print.cfg.is_none());
+        assert!(print.stg.is_none());
+        assert!(print.mapping.is_none());
+        assert!(print.err.is_none());
+        assert!(print.fail_reason.is_none());
+    }
+
+    #[test]
+    fn test_h2d_pushall_comprehensive() {
+        let json = r#"{
+            "print": {
+                "gcode_state": "RUNNING",
+                "print_type": "local",
+                "lights_report": [
+                    { "node": "chamber_light", "mode": "on" },
+                    { "node": "work_light", "mode": "off" },
+                    { "node": "chamber_light2", "mode": "on" }
+                ],
+                "hw_switch_state": 1,
+                "ams_status": 768,
+                "task_id": "9012",
+                "fan_gear": 5373952,
+                "cfg": "3C5FDAD9",
+                "stg": [0, 1, 2, 3],
+                "vir_slot": [
+                    { "id": "254", "tray_type": "PLA", "tray_color": "76D9F4FF", "remain": 0 },
+                    { "id": "255", "tray_type": "", "tray_color": "FFFFFF00", "remain": 0 }
+                ],
+                "ams": {
+                    "ams": [
+                        { "id": "0", "temp": "26.0", "humidity": "3", "info": "2103", "tray": [] },
+                        { "id": "1", "temp": "25.0", "humidity": "4", "info": "2003", "tray": [] }
+                    ],
+                    "tray_read_done_bits": "ff",
+                    "tray_tar": "3",
+                    "insert_flag": true,
+                    "power_on_flag": false
+                },
+                "device": {
+                    "bed": { "info": { "temp": 4587590 }, "state": 2 },
+                    "ext_tool": { "mount": 1, "type": "LB00", "th_temp": 29 },
+                    "ctc": { "info": { "temp": 38 }, "state": 0 }
+                }
+            }
+        }"#;
+        let report: TelemetryReport = serde_json::from_str(json).unwrap();
+        let print = report.print.unwrap();
+
+        assert_eq!(print.print_type.as_deref(), Some("local"));
+        assert_eq!(print.lights_report.as_ref().unwrap().len(), 3);
+        assert_eq!(print.hw_switch_state, Some(1));
+        assert_eq!(print.ams_status, Some(768));
+        assert_eq!(print.fan_gear, Some(5373952));
+
+        let slots = print.vir_slot.as_ref().unwrap();
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[0].tray_type.as_deref(), Some("PLA"));
+
+        let ams = print.ams.as_ref().unwrap();
+        assert_eq!(ams.tray_read_done_bits.as_deref(), Some("ff"));
+        assert_eq!(ams.insert_flag, Some(true));
+        assert_eq!(ams.ams[0].info.as_deref(), Some("2103"));
+        assert_eq!(ams.ams[1].info.as_deref(), Some("2003"));
+
+        let device = print.device.unwrap();
+        let bed = device.bed.unwrap();
+        assert_eq!(bed.state, Some(2));
+        let bed_temp = bed.info.unwrap().temp.unwrap();
+        let (actual, target) = PrinterTelemetry::unpack_temperature(bed_temp as f64);
+        assert_eq!(actual, 70);
+        assert_eq!(target, 70);
+
+        let ext_tool = device.ext_tool.unwrap();
+        assert_eq!(ext_tool.tool_type.as_deref(), Some("LB00"));
     }
 }

@@ -63,6 +63,12 @@ pub struct KProfileEntry {
     pub n_coef: Option<String>,
     /// Secure 19-character unique setting identifier.
     pub setting_id: String,
+    /// Links K-profile to AMS unit (default 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ams_id: Option<i32>,
+    /// Links K-profile to AMS tray slot (default -1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tray_id: Option<i32>,
 }
 
 // ============================================================================
@@ -336,7 +342,9 @@ mod tests {
             name: "Faulty ID".into(),
             k_value: "0.022".into(),
             n_coef: None,
-            setting_id: "PF_BAD_ALPHANUM_KEY".into(), // Violated boundary
+            setting_id: "PF_BAD_ALPHANUM_KEY".into(),
+            ams_id: None,
+            tray_id: None,
         };
 
         let result = ExtrusionCaliSetRequest::new(vec![bad_profile], 50002);
@@ -355,6 +363,8 @@ mod tests {
             k_value: "0.022".into(),
             n_coef: None,
             setting_id: "PF12345678901234567".into(),
+            ams_id: None,
+            tray_id: None,
         };
 
         let req = ExtrusionCaliSetRequest::new(vec![good_profile], 50002).unwrap();
@@ -435,6 +445,8 @@ mod tests {
             k_value: "0.022".into(),
             n_coef: None,
             setting_id: "PF12345678901234567".into(),
+            ams_id: None,
+            tray_id: None,
         };
         let json = serde_json::to_string(&profile).unwrap();
         assert!(
@@ -455,6 +467,8 @@ mod tests {
             k_value: "0.022".into(),
             n_coef: Some("0.000000".into()),
             setting_id: "PF12345678901234567".into(),
+            ams_id: None,
+            tray_id: None,
         };
         let json = serde_json::to_string(&profile).unwrap();
         assert!(json.contains(r#""n_coef":"0.000000""#));
