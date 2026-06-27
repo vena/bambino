@@ -11,9 +11,10 @@
 use std::io::{self, Write};
 use std::time::Duration;
 
-use bambino::client::{FanTarget, PrinterClient};
+use bambino::client::{CalibrationOption, FanTarget, PrintSpeed, PrinterClient};
 use bambino::error::BambuError;
 use bambino::models::resolve_model;
+use bambino::mqtt::AirductMode;
 
 use crate::connection::connect_mqtt;
 
@@ -297,6 +298,179 @@ pub async fn run(
             println!("Dispatching raw G-code (no safety checks)...");
             client.send_gcode_raw(gcode_line).await?;
             println!("Raw G-code command published successfully.");
+        }
+        "speed" => {
+            if action_args.len() < 2 {
+                return Err(BambuError::ProtocolViolation(
+                    "Usage: control <ip> <serial> <access_code> speed <silent|standard|sport|ludicrous>"
+                        .into(),
+                ));
+            }
+            let level = match action_args[1].to_lowercase().as_str() {
+                "silent" => PrintSpeed::Silent,
+                "standard" => PrintSpeed::Standard,
+                "sport" => PrintSpeed::Sport,
+                "ludicrous" => PrintSpeed::Ludicrous,
+                _ => {
+                    return Err(BambuError::ProtocolViolation(
+                        "Invalid speed level. Choose 'silent', 'standard', 'sport', or 'ludicrous'"
+                            .into(),
+                    ));
+                }
+            };
+
+            println!(
+                "Setting print speed to {}...",
+                action_args[1].to_lowercase()
+            );
+            client.set_print_speed(level).await?;
+            println!("Print speed command published successfully.");
+        }
+        "clear-error" => {
+            println!("Clearing active print error codes...");
+            client.clear_print_error().await?;
+            println!("Clear error command published successfully.");
+        }
+        "airduct" => {
+            if action_args.len() < 2 {
+                return Err(BambuError::ProtocolViolation(
+                    "Usage: control <ip> <serial> <access_code> airduct <cooling|heating|laser>"
+                        .into(),
+                ));
+            }
+            let mode = match action_args[1].to_lowercase().as_str() {
+                "cooling" => AirductMode::Cooling,
+                "heating" => AirductMode::Heating,
+                "laser" => AirductMode::Laser,
+                _ => {
+                    return Err(BambuError::ProtocolViolation(
+                        "Invalid airduct mode. Choose 'cooling', 'heating', or 'laser'".into(),
+                    ));
+                }
+            };
+
+            println!(
+                "Switching airduct damper to {} mode...",
+                action_args[1].to_lowercase()
+            );
+            client.set_airduct_mode(mode).await?;
+            println!("Airduct command published successfully.");
+        }
+        "calibrate" => {
+            if action_args.len() < 2 {
+                return Err(BambuError::ProtocolViolation(
+                    "Usage: control <ip> <serial> <access_code> calibrate <routine> [routine...]\n  \
+                     Routines: bed-leveling, vibration, motor-noise, nozzle-height, heatbed-thermal"
+                        .into(),
+                ));
+            }
+
+            let mut options = CalibrationOption(0);
+            for arg in &action_args[1..] {
+                let flag = match arg.to_lowercase().as_str() {
+                    "bed-leveling" => CalibrationOption::BED_LEVELING,
+                    "vibration" => CalibrationOption::VIBRATION_COMPENSATION,
+                    "motor-noise" => CalibrationOption::MOTOR_NOISE_CANCELLATION,
+                    "nozzle-height" => CalibrationOption::NOZZLE_HEIGHT,
+                    "heatbed-thermal" => CalibrationOption::HEATBED_THERMAL,
+                    other => {
+                        return Err(BambuError::ProtocolViolation(
+                            format!(
+                                "Unknown calibration routine '{}'. Choose from: \
+                                 bed-leveling, vibration, motor-noise, nozzle-height, heatbed-thermal",
+                                other
+                            )
+                            .into(),
+                        ));
+                    }
+                };
+                options = options | flag;
+            }
+
+            println!("Triggering calibration routines...");
+            client.start_calibration(options).await?;
+            println!("Calibration command published successfully.");
+        }
+        "ams" => {
+            if action_args.len() < 2 {
+                return Err(BambuError::ProtocolViolation(
+                    "Usage: control <ip> <serial> <access_code> ams <dry|dry-stop> [ARGS]".into(),
+                ));
+            }
+            let ams_action = action_args[1].to_lowercase();
+            match ams_action.as_str() {
+                "dry" => {
+                    if action_args.len() < 7 {
+                        return Err(BambuError::ProtocolViolation(
+                            "Usage: control <ip> <serial> <access_code> ams dry <ams_id> <temp> <time_min> <rotate_tray> <filament>"
+                                .into(),
+                        ));
+                    }
+                    let ams_id = action_args[2].parse::<i32>().map_err(|_| {
+                        BambuError::ProtocolViolation(
+                            format!("Invalid AMS ID: '{}' (expected integer)", action_args[2])
+                                .into(),
+                        )
+                    })?;
+                    let temp = action_args[3].parse::<u32>().map_err(|_| {
+                        BambuError::ProtocolViolation(
+                            format!(
+                                "Invalid temperature: '{}' (expected integer)",
+                                action_args[3]
+                            )
+                            .into(),
+                        )
+                    })?;
+                    let time = action_args[4].parse::<u32>().map_err(|_| {
+                        BambuError::ProtocolViolation(
+                            format!("Invalid time: '{}' (expected minutes)", action_args[4]).into(),
+                        )
+                    })?;
+                    let rotate = match action_args[5].to_lowercase().as_str() {
+                        "true" | "yes" | "1" => true,
+                        "false" | "no" | "0" => false,
+                        _ => {
+                            return Err(BambuError::ProtocolViolation(
+                                "Invalid rotate_tray value. Choose 'true' or 'false'".into(),
+                            ));
+                        }
+                    };
+                    let filament = &action_args[6];
+
+                    println!(
+                        "Starting AMS {} drying cycle at {}°C for {} minutes...",
+                        ams_id, temp, time
+                    );
+                    client
+                        .start_drying(ams_id, temp, time, rotate, filament)
+                        .await?;
+                    println!("AMS drying command published successfully.");
+                }
+                "dry-stop" => {
+                    if action_args.len() < 3 {
+                        return Err(BambuError::ProtocolViolation(
+                            "Usage: control <ip> <serial> <access_code> ams dry-stop <ams_id>"
+                                .into(),
+                        ));
+                    }
+                    let ams_id = action_args[2].parse::<i32>().map_err(|_| {
+                        BambuError::ProtocolViolation(
+                            format!("Invalid AMS ID: '{}' (expected integer)", action_args[2])
+                                .into(),
+                        )
+                    })?;
+
+                    println!("Stopping AMS {} drying cycle...", ams_id);
+                    client.stop_drying(ams_id).await?;
+                    println!("AMS drying stop command published successfully.");
+                }
+                other => {
+                    return Err(BambuError::ProtocolViolation(
+                        format!("Unknown AMS action '{}'. Choose 'dry' or 'dry-stop'", other)
+                            .into(),
+                    ));
+                }
+            }
         }
         other => {
             return Err(BambuError::ProtocolViolation(

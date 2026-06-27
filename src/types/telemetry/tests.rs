@@ -1,4 +1,3 @@
-
 use super::*;
 
 #[test]
@@ -1565,4 +1564,200 @@ fn test_h2d_pushall_comprehensive() {
 
     let ext_tool = device.ext_tool.unwrap();
     assert_eq!(ext_tool.tool_type.as_deref(), Some("LB00"));
+}
+
+// --- Phase 21: AmsUnit bitmask accessor tests ---
+
+#[test]
+fn test_ams_unit_info_accessors_full_bitmask() {
+    // "11002103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-25 = 4
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: Some("11002103".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.parse_info(), Some(0x11002103));
+    assert_eq!(unit.ams_type(), Some(3));
+    assert_eq!(unit.dry_status(), Some(0));
+    assert_eq!(unit.extruder_assignment(), Some(1));
+    assert_eq!(unit.dry_sub_status(), Some(4));
+}
+
+#[test]
+fn test_ams_unit_info_accessors_short_bitmask() {
+    // "2103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-25 = 0
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: Some("2103".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.parse_info(), Some(0x2103));
+    assert_eq!(unit.ams_type(), Some(3));
+    assert_eq!(unit.dry_status(), Some(0));
+    assert_eq!(unit.extruder_assignment(), Some(1));
+    assert_eq!(unit.dry_sub_status(), Some(0));
+}
+
+#[test]
+fn test_ams_unit_info_accessors_right_extruder() {
+    // "2003": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 0 (right/main)
+    let unit = AmsUnit {
+        id: "1".into(),
+        temp: "25.0".into(),
+        humidity: "4".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: Some("2003".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.ams_type(), Some(3));
+    assert_eq!(unit.dry_status(), Some(0));
+    assert_eq!(unit.extruder_assignment(), Some(0));
+    assert_eq!(unit.dry_sub_status(), Some(0));
+}
+
+#[test]
+fn test_ams_unit_info_uninitialized_extruder() {
+    // 0xE in bits 8-11 → extruder_assignment returns None
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: Some("E03".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.ams_type(), Some(3));
+    assert_eq!(unit.extruder_assignment(), None);
+}
+
+#[test]
+fn test_ams_unit_info_absent() {
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: None,
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.parse_info(), None);
+    assert_eq!(unit.ams_type(), None);
+    assert_eq!(unit.dry_status(), None);
+    assert_eq!(unit.extruder_assignment(), None);
+    assert_eq!(unit.dry_sub_status(), None);
+}
+
+#[test]
+fn test_ams_unit_info_with_dry_status() {
+    // bits 4-7 = 5 → dry_status = 5
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: Some("2053".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.ams_type(), Some(3));
+    assert_eq!(unit.dry_status(), Some(5));
+    assert_eq!(unit.extruder_assignment(), Some(0));
+}
+
+// --- Phase 21: bed_temperatures() accessor tests ---
+
+#[test]
+fn test_bed_temperatures_new_gen_top_level() {
+    // 4587590 = (70 << 16) | 70
+    let json = r#"{
+            "device": {
+                "bed": { "info": { "temp": 4587590 }, "state": 2 }
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.bed_temperatures(), (70, 70));
+}
+
+#[test]
+fn test_bed_temperatures_new_gen_nested_in_print() {
+    let json = r#"{
+            "print": {
+                "device": {
+                    "bed": { "info": { "temp": 3932261 }, "state": 2 }
+                }
+            }
+        }"#;
+    // 3932261 = (60 << 16) | 0x0065 = 3932261 → actual=101, target=60? No...
+    // Let me calculate: (60 << 16) | 55 = 3932215. Let me use 60/55: (60 << 16) | 55 = 3932215
+    // Actually let me just use a known value: (60 << 16) | 55 = 0x3C0037 = 3932215
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let (actual, target) = report.bed_temperatures();
+    // 3932261 = 0x3C0065 → actual = 0x65 = 101, target = 0x3C = 60
+    assert_eq!(actual, 101);
+    assert_eq!(target, 60);
+}
+
+#[test]
+fn test_bed_temperatures_old_gen_direct() {
+    let json = r#"{
+            "print": {
+                "bed_temper": 55.5,
+                "bed_target_temper": 60.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.bed_temperatures(), (55, 60));
+}
+
+#[test]
+fn test_bed_temperatures_both_present_new_gen_wins() {
+    // When both top-level device.bed and print.bed_temper exist, device.bed wins
+    let json = r#"{
+            "device": {
+                "bed": { "info": { "temp": 4587590 }, "state": 2 }
+            },
+            "print": {
+                "bed_temper": 25.0,
+                "bed_target_temper": 0.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.bed_temperatures(), (70, 70));
+}
+
+#[test]
+fn test_bed_temperatures_neither_present() {
+    let json = r#"{ "print": {} }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.bed_temperatures(), (0, 0));
+}
+
+#[test]
+fn test_bed_temperatures_empty_report() {
+    let json = r#"{}"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.bed_temperatures(), (0, 0));
 }

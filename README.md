@@ -228,6 +228,12 @@ bambino-cli control <ip> <serial> <access_code> temp nozzle 220
 bambino-cli control <ip> <serial> <access_code> fan part 80
 bambino-cli control <ip> <serial> <access_code> led chamber on
 bambino-cli control <ip> <serial> <access_code> pause
+bambino-cli control <ip> <serial> <access_code> speed sport
+bambino-cli control <ip> <serial> <access_code> clear-error
+bambino-cli control <ip> <serial> <access_code> airduct cooling
+bambino-cli control <ip> <serial> <access_code> calibrate bed-leveling vibration
+bambino-cli control <ip> <serial> <access_code> ams dry 0 55 480 true PA-CF
+bambino-cli control <ip> <serial> <access_code> ams dry-stop 0
 
 # Send gcode—with some safety checks
 bambino-cli control <ip> <serial> <access_code> gcode "G28"

@@ -51,6 +51,36 @@ pub struct TelemetryReport {
     pub fun: Option<String>,
 }
 
+impl TelemetryReport {
+    /// Returns normalized bed (actual, target) temperatures in degrees Celsius.
+    ///
+    /// Checks `device.bed` first (new-gen H2/P2/X2 composite-packed), then
+    /// `print.device.bed` (pushall-nested), falling back to the old-gen
+    /// `bed_temper`/`bed_target_temper` direct fields. Returns (0, 0) if absent.
+    pub fn bed_temperatures(&self) -> (u16, u16) {
+        if let Some(temps) = self.device.as_ref().and_then(Self::unpack_bed_telemetry) {
+            return temps;
+        }
+
+        if let Some(print) = &self.print {
+            if let Some(temps) = print.device.as_ref().and_then(Self::unpack_bed_telemetry) {
+                return temps;
+            }
+
+            let actual = print.bed_temper.unwrap_or(0.0) as u16;
+            let target = print.bed_target_temper.unwrap_or(0.0) as u16;
+            return (actual, target);
+        }
+
+        (0, 0)
+    }
+
+    fn unpack_bed_telemetry(device: &DeviceTelemetry) -> Option<(u16, u16)> {
+        let temp = device.bed.as_ref()?.info.as_ref()?.temp?;
+        Some(PrinterTelemetry::unpack_temperature(temp as f64))
+    }
+}
+
 /// Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].
 ///
 /// Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required),

@@ -271,6 +271,56 @@ pub struct AmsTray {
     pub total_len: Option<u32>,
 }
 
+const AMS_UNIT_INFO_TYPE_MASK: u64 = 0xF;
+const AMS_UNIT_INFO_DRY_STATUS_SHIFT: u32 = 4;
+const AMS_UNIT_INFO_DRY_STATUS_MASK: u64 = 0xF;
+const AMS_UNIT_INFO_EXTRUDER_SHIFT: u32 = 8;
+const AMS_UNIT_INFO_EXTRUDER_MASK: u64 = 0xF;
+const AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED: u8 = 0xE;
+const AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT: u32 = 22;
+const AMS_UNIT_INFO_DRY_SUB_STATUS_MASK: u64 = 0xF;
+
+impl AmsUnit {
+    /// Parses the hex-encoded `info` bitmask string into an integer.
+    pub fn parse_info(&self) -> Option<u64> {
+        self.info
+            .as_ref()
+            .and_then(|s| u64::from_str_radix(s, 16).ok())
+    }
+
+    /// AMS unit type from bits 0–3 (e.g. 3 = AMS Lite).
+    pub fn ams_type(&self) -> Option<u8> {
+        self.parse_info()
+            .map(|v| (v & AMS_UNIT_INFO_TYPE_MASK) as u8)
+    }
+
+    /// Drying status from bits 4–7.
+    pub fn dry_status(&self) -> Option<u8> {
+        self.parse_info()
+            .map(|v| ((v >> AMS_UNIT_INFO_DRY_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_STATUS_MASK) as u8)
+    }
+
+    /// Extruder assignment from bits 8–11 (0 = right/main, 1 = left/deputy).
+    /// Returns `None` when `info` is absent or the value is 0xE (uninitialized).
+    pub fn extruder_assignment(&self) -> Option<u8> {
+        self.parse_info().and_then(|v| {
+            let raw = ((v >> AMS_UNIT_INFO_EXTRUDER_SHIFT) & AMS_UNIT_INFO_EXTRUDER_MASK) as u8;
+            if raw == AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED {
+                None
+            } else {
+                Some(raw)
+            }
+        })
+    }
+
+    /// Drying sub-status from bits 22–25.
+    pub fn dry_sub_status(&self) -> Option<u8> {
+        self.parse_info().map(|v| {
+            ((v >> AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_SUB_STATUS_MASK) as u8
+        })
+    }
+}
+
 impl AmsTray {
     /// Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
     ///

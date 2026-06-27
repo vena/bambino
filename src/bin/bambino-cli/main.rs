@@ -60,6 +60,13 @@ Control Actions:
   fan <target> <speed_percent>                     Configure PWM fan speed (targets: part, aux, exhaust, right)
   temp <target> <value>                            Set hotend or build-plate temperatures (targets: nozzle, bed)
   led <node> <on|off>                              Toggle chamber or auxiliary LEDs (nodes: chamber, work)
+  speed <level>                                    Set print speed (silent, standard, sport, ludicrous)
+  clear-error                                      Clear active print error codes
+  airduct <mode>                                   Switch airduct damper (cooling, heating, laser)
+  calibrate <routine> [routine...]                 Trigger calibration (bed-leveling, vibration, motor-noise,
+                                                     nozzle-height, heatbed-thermal)
+  ams dry <id> <temp> <time> <rotate> <filament>   Start AMS drying cycle (time in minutes)
+  ams dry-stop <id>                                Stop AMS drying cycle
   gcode <gcode_line>                               Send G-code with model safety checks
   gcode-raw [--unsafe] <gcode_line>                Send raw G-code bypassing safety checks
   pause | resume | stop                            Manage active print queue execution states
