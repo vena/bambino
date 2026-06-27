@@ -424,10 +424,10 @@ where
             if code == FTP_STAT_OK {
                 let mut size_found = None;
                 for word in stat_text.split_whitespace() {
-                    if let Ok(val) = word.parse::<u64>() {
-                        if val > FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD {
-                            size_found = Some(val);
-                        }
+                    if let Ok(val) = word.parse::<u64>()
+                        && val > FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD
+                    {
+                        size_found = Some(val);
                     }
                 }
                 size_found.ok_or(BambuError::ProtocolViolation(
