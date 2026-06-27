@@ -1,16 +1,20 @@
 # bambino
 
-Async Rust library for talking to Bambu Lab 3D printers over your local network (LAN mode). No cloud, no Bambu Studio — just direct MQTT, FTPS, and camera access.
-
-Designed for use on host machines, powerful ESP32 platforms with `std` support (like the ESP32-P4 via ESP-IDF), and `no_std` embedded targets (via Embassy). Same codebase across all three.
+Async Rust library for talking to Bambu Lab 3D printers over your local network. No cloud, no Bambu Studio — just direct MQTT, FTPS, and camera access from one codebase that compiles to desktop, ESP32 (ESP-IDF), and bare-metal (Embassy) targets.
 
 ## What it does
 
-- **Discovery** — finds printers on your LAN via SSDP (ports 2021/1990)
-- **MQTT control** — connect to the printer's local broker on port 8883, send commands, stream telemetry
-- **File transfer** — implicit FTPS on port 990 for listing, uploading, downloading, and deleting files on the SD card
-- **Camera** — binary JPEG streaming on port 6000 (A1/P1) and RTSPS on port 322 (X1/X2/H2/P2S)
-- **Model quirks** — handles per-model differences polymorphically: TLS data channel modes, fan step rounding, Z-axis homing safety, door sensor routing, camera timestamp corrections, nozzle counts (single/IDEX/tool changer), and chamber heater capabilities
+- **Discovery** — find printers on your LAN via SSDP (ports 2021/1990)
+- **MQTT control** — connect to the printer's local broker (port 8883), send commands, receive telemetry
+- **File transfer** — implicit FTPS (port 990) for listing, uploading, downloading, and managing files on the SD card
+- **Camera** — binary JPEG streaming (port 6000, A1/P1 series) and RTSPS (port 322, X1/X2/H2/P2S series)
+- **Model quirks** — per-model differences handled polymorphically: FTPS TLS requirements, fan step resolution, Z-axis homing safety, door sensors, camera protocols, nozzle counts (single/IDEX/tool changer), temperature limits, and chamber heater capabilities
+
+## Two levels of API
+
+`PrinterClient` is the high-level interface — it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits, Z-axis homing validation, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
+
+The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access — useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
 ## Quick start
 
@@ -19,24 +23,25 @@ Designed for use on host machines, powerful ESP32 platforms with `std` support (
 bambino = { path = "../bambino" }
 ```
 
-### Find printers
+### Discover printers
 
 ```rust
 use bambino::discovery::discover_devices;
 use bambino::io::tokio::{TokioTimer, TokioUdpSocket};
 use std::time::Duration;
 
-let devices = discover_devices::<TokioUdpSocket, TokioTimer>(
-    Duration::from_secs(20),
-    &TokioTimer::new(),
+let timer = TokioTimer::new();
+let printers = discover_devices::<TokioUdpSocket, _>(
+    Duration::from_secs(5),
+    &timer,
 ).await?;
 
-for d in &devices {
-    println!("{:?} at {} ({})", d.model, d.ip, d.serial);
+for p in &printers {
+    println!("{} ({:?}) at {}", p.name, p.model, p.ip);
 }
 ```
 
-### Connect and send commands
+### Connect
 
 ```rust
 use bambino::client::PrinterClient;
@@ -45,93 +50,96 @@ use bambino::mqtt::BambuMqttClient;
 use bambino::io::TokioIo;
 use bambino::io::tokio::{build_unsafe_client_config, TokioTlsConnector};
 
-// TLS + MQTT handshake
+// Printers use self-signed certs, so we skip verification for MQTT
 let config = build_unsafe_client_config();
 let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
-let tcp = tokio::net::TcpStream::connect("192.168.1.158:8883").await?;
-let tls = connector.connect("192.168.1.158", 8883, TokioIo(tcp)).await?;
+
+let tcp = tokio::net::TcpStream::connect("192.168.1.100:8883").await?;
+let tls = connector.connect("192.168.1.100", 8883, TokioIo(tcp)).await?;
 let mqtt = BambuMqttClient::connect(tls, serial, access_code).await?;
 
 let model = resolve_model(serial, None);
 let mut printer = PrinterClient::new(mqtt, serial, model);
+```
 
-printer.home_axes(false).await?;
-printer.set_bed_temperature(60).await?;
-printer.set_nozzle_temperature(0, 220).await?;
+### Send commands
+
+```rust
+printer.request_pushall().await?;              // request full state dump
+printer.home_axes(false).await?;               // safe homing (bare G28)
+printer.set_bed_temperature(60).await?;        // clamped to model max
+printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
 printer.toggle_led("chamber_light", true).await?;
-```
-
-### Custom TLS certificates
-
-By default, `build_unsafe_client_config()` skips certificate verification. If you want to verify the printer's certificate or use mutual TLS (mTLS), use `build_verified_client_config()` instead:
-
-```rust
-use bambino::io::tokio::{build_verified_client_config, TokioTlsConnector};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-
-// Load CA cert to verify the printer's certificate
-let ca_cert = CertificateDer::from_pem_file("printer-ca.pem").unwrap();
-
-// Server verification only
-let config = build_verified_client_config(vec![ca_cert], None).unwrap();
-
-// Or with mutual TLS (client certificate + key)
-let client_cert = CertificateDer::from_pem_file("client.pem").unwrap();
-let client_key = PrivateKeyDer::from_pem_file("client-key.pem").unwrap();
-let config = build_verified_client_config(
-    vec![ca_cert],
-    Some((vec![client_cert], client_key)),
-).unwrap();
-
-let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
-// Use connector exactly like the unsafe version
-```
-
-The `_with_options` variant adds a `force_tls_1_2` flag for FTPS connections to P2S/X2D models.
-
-### AMS filament control
-
-```rust
-printer.change_filament(0, 1, 1, -1, -1).await?;  // load slot 1
-printer.start_drying(0, 55, 480, true, "PA-CF").await?;
-```
-
-### Print jobs
-
-```rust
-use bambino::client::{PrintSpeed, CalibrationOption};
-use bambino::mqtt::PrintJobConfig;
-
-printer.set_print_speed(PrintSpeed::Sport).await?;
-printer.start_calibration(
-    CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
-).await?;
-
-let config = PrintJobConfig::new(
-    "job.3mf",
-    "Metadata/plate_1.gcode",
-    "My Print",
-    12345,
-    "textured",
-).with_ams(vec![0, -1, 1]);
-
-printer.start_print(&config).await?;
+printer.send_gcode("M106 P1 S255").await?;     // validated against model quirks
 ```
 
 ### Read telemetry
 
 ```rust
+use bambino::client::TelemetryEvent;
+
 loop {
-    let event = printer.poll_telemetry().await?;
-    if let Some(report) = event.report() {
-        if let Some(print) = &report.print {
-            println!("{:?} — {:?}%", print.gcode_state, print.mc_percent);
+    match printer.poll_telemetry().await? {
+        TelemetryEvent::Report(report, _raw) => {
+            let (bed_actual, bed_target) = report.bed_temperatures();
+            if let Some(print) = &report.print {
+                println!(
+                    "{:?} — bed {}°C/{}°C — {:?}%",
+                    print.gcode_state, bed_actual, bed_target, print.mc_percent
+                );
+            }
         }
+        TelemetryEvent::Unknown(_) => {}
     }
 }
 ```
 
-### Transfer files
+### Print jobs
+
+```rust
+use bambino::mqtt::PrintJobConfig;
+
+let config = PrintJobConfig::new(
+    "job.3mf",                      // file on SD card
+    "Metadata/plate_1.gcode",       // plate gcode path inside the 3mf
+    "My Print",                     // task name
+    12345,                          // subtask ID
+    "textured",                     // bed type
+).with_ams(vec![0, -1, 1]);        // AMS slot mapping
+
+printer.start_print(&config).await?;
+```
+
+Bed leveling, flow calibration, and vibration compensation run automatically as part of the print (all enabled by default in `PrintJobConfig`). Use the builder methods to change them:
+
+```rust
+let config = PrintJobConfig::new("job.3mf", "Metadata/plate_1.gcode", "My Print", 12345, "textured")
+    .bed_leveling(false)
+    .flow_calibration(false)
+    .timelapse(false);
+```
+
+### Standalone calibration
+
+Run calibration routines outside of a print:
+
+```rust
+use bambino::client::CalibrationOption;
+
+printer.start_calibration(
+    CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
+).await?;
+```
+
+### AMS filament control
+
+```rust
+printer.change_filament(0, 1, 1, -1, -1).await?;           // load AMS 0, slot 1
+printer.start_drying(0, 55, 480, true, "PA-CF").await?;     // dry at 55°C for 8h
+printer.stop_drying(0).await?;
+```
+
+### File transfer
 
 ```rust
 use bambino::ftps::BambuFtpsClient;
@@ -143,17 +151,19 @@ let mut ftp = BambuFtpsClient::connect(
 let files = ftp.list_directory("/", year, month, day, hour, min).await?;
 ftp.upload_file("/model/print.3mf", &file_bytes).await?;
 let data = ftp.download_file("/timelapse/video.mp4").await?;
+let free = ftp.get_available_space().await?;
+
 ftp.create_directory("/model/subfolder").await?;
-ftp.rename_file("/model/old.3mf", "/model/backup.3mf").await?;
+ftp.rename_file("/model/old.3mf", "/model/new.3mf").await?;
 ftp.delete_file("/model/old.3mf").await?;
 ftp.remove_directory("/model/subfolder").await?;
 ```
 
-### Camera streaming
+### Camera
 
-Bambu printers expose camera feeds through two different protocols depending on the model:
+Bambu printers use two different camera protocols depending on the model. Check which one with `model.quirks().camera_protocol()`.
 
-**Binary JPEG (A1, P1P, P1S) — port 6000.** These models stream discrete JPEG frames over a lightweight binary protocol. Connect via TLS, send an 80-byte auth handshake, then read frames in a loop:
+**Binary JPEG (A1, P1 series) — port 6000.** Streams JPEG frames over a lightweight binary protocol on TLS:
 
 ```rust
 use bambino::camera::binary::BambuBinaryCameraStream;
@@ -164,21 +174,20 @@ cam.authenticate(access_code).await?;
 let mut frame = Vec::new();
 loop {
     cam.read_next_frame(&mut frame).await?;
-    // frame contains a complete JPEG image
+    // frame is a complete JPEG image
 }
 ```
 
-**RTSPS (X1, X2, H2, P2S) — port 322.** These models host an RTSP server behind implicit TLS with Digest authentication. This library provides helper utilities for integration with external media frameworks (FFmpeg, GStreamer, VLC) — it does not include an RTSP client or TLS proxy.
+**RTSPS (X1, X2, H2, P2S series) — port 322.** RTSP behind implicit TLS with Digest auth. This library provides helpers for integrating with external media players — it does not include an RTSP client.
 
 ```rust
 use bambino::camera::rtsps::build_rtsps_url;
 
-// Generate the authenticated URL for your media framework
 let url = build_rtsps_url(ip, access_code);
 // → rtsps://bblp:<code>@<ip>:322/streaming/live/1
 ```
 
-The printer's self-signed TLS certificate means most media players can't connect directly. The typical approach is a local decryption proxy that accepts plain `rtsp://` on localhost, wraps it in TLS, and forwards to the printer. When doing this, RTSP Digest auth hashes must match the printer's URI — use `rewrite_rtsp_request_uri` to rewrite the proxy-local URI before forwarding:
+Since the printer uses self-signed TLS, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to fix Digest auth hashes when proxying:
 
 ```rust
 use bambino::camera::rtsps::rewrite_rtsp_request_uri;
@@ -188,23 +197,51 @@ use bambino::camera::rtsps::rewrite_rtsp_request_uri;
 let rewritten = rewrite_rtsp_request_uri(player_uri, printer_ip);
 ```
 
-P2S printers on certain firmware versions have a bug where RTP timestamps don't advance, causing video freezes. Use `RtpTimestampCorrector` to synthesize correct timestamps when `model.quirks().requires_wallclock_rtsp_timestamps()` returns true.
+P2S models on certain firmware versions have a bug where RTP timestamps don't advance, causing video freezes. Use `RtpTimestampCorrector` to synthesize correct timestamps when `model.quirks().requires_wallclock_rtsp_timestamps()` is true.
+
+## TLS configuration
+
+By default, `build_unsafe_client_config()` skips certificate verification — necessary because all Bambu printers use self-signed certs. For environments where you can provision your own CA, use `build_verified_client_config()`:
+
+```rust
+use bambino::io::tokio::{build_verified_client_config, TokioTlsConnector};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+
+let ca_cert = CertificateDer::from_pem_file("printer-ca.pem").unwrap();
+
+// Server-only verification
+let config = build_verified_client_config(vec![ca_cert], None).unwrap();
+
+// Mutual TLS (mTLS)
+let client_cert = CertificateDer::from_pem_file("client.pem").unwrap();
+let client_key = PrivateKeyDer::from_pem_file("client-key.pem").unwrap();
+let config = build_verified_client_config(
+    vec![ca_cert],
+    Some((vec![client_cert], client_key)),
+).unwrap();
+
+let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+```
+
+Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — check with `model.quirks().enforce_ftps_tls_1_2()`.
 
 ## Platform targets
 
-The default feature set (`tokio`) targets desktop. For embedded, swap the feature flag:
+The default feature set (`tokio`) targets desktop/server. For embedded, swap the feature flag:
 
 ```toml
-# ESP32 with ESP-IDF
+# ESP32 with ESP-IDF (std)
 bambino = { path = "../bambino", default-features = false, features = ["esp-idf"] }
 
-# Bare-metal with Embassy
+# Bare-metal with Embassy (no_std + alloc)
 bambino = { path = "../bambino", default-features = false, features = ["embassy"] }
 ```
 
+All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerProvider`, etc.) so library code is platform-agnostic. Platform-specific implementations live in `io::tokio`, `io::esp_idf`, and `io::embassy`.
+
 ## bambino-cli
 
-A small CLI for testing against real printers. Ships as a binary in the same crate.
+A CLI using our own library client for testing against real printers. Ships as a binary in the same crate.
 
 ```sh
 cargo build --bin bambino-cli
@@ -213,66 +250,72 @@ cargo build --bin bambino-cli
 ### Usage
 
 ```sh
-# Find printers
+# Discovery
 bambino-cli discover
 
-# Hardware info
+# Printer info and firmware versions
 bambino-cli info <ip> <serial> <access_code>
 
 # Live telemetry dashboard
 bambino-cli monitor <ip> <serial> <access_code>
 
-# Control
+# Commands
 bambino-cli control <ip> <serial> <access_code> home
 bambino-cli control <ip> <serial> <access_code> temp nozzle 220
+bambino-cli control <ip> <serial> <access_code> temp bed 60
 bambino-cli control <ip> <serial> <access_code> fan part 80
 bambino-cli control <ip> <serial> <access_code> led chamber on
 bambino-cli control <ip> <serial> <access_code> pause
+bambino-cli control <ip> <serial> <access_code> resume
+bambino-cli control <ip> <serial> <access_code> stop
 bambino-cli control <ip> <serial> <access_code> speed sport
 bambino-cli control <ip> <serial> <access_code> clear-error
 bambino-cli control <ip> <serial> <access_code> airduct cooling
 bambino-cli control <ip> <serial> <access_code> calibrate bed-leveling vibration
+
+# AMS
 bambino-cli control <ip> <serial> <access_code> ams dry 0 55 480 true PA-CF
 bambino-cli control <ip> <serial> <access_code> ams dry-stop 0
 
-# Send gcode—with some safety checks
+# G-code (validated against model quirks)
 bambino-cli control <ip> <serial> <access_code> gcode "G28"
 
-# Send gcode—without safety checks
-bambino-cli control <ip> <serial> <access_code> gcode-raw "M106 P1 S255"  # prompts for confirmation
-bambino-cli control <ip> <serial> <access_code> gcode-raw --unsafe "M106 P1 S255"  # bypasses confirmation
+# G-code (no safety checks — prompts for confirmation)
+bambino-cli control <ip> <serial> <access_code> gcode-raw "M106 P1 S255"
+bambino-cli control <ip> <serial> <access_code> gcode-raw --unsafe "M106 P1 S255"
 
 # File management
 bambino-cli files <ip> <serial> <access_code> list /
 bambino-cli files <ip> <serial> <access_code> upload ./print.3mf /model/print.3mf
+bambino-cli files <ip> <serial> <access_code> download /timelapse/video.mp4 ./video.mp4
 bambino-cli files <ip> <serial> <access_code> space
 
-# Camera (A1/P1 binary JPEG protocol only)
-bambino-cli camera <ip> <serial> <access_code> snapshot            # saves snapshot.jpg
-bambino-cli camera <ip> <serial> <access_code> snapshot frame.jpg  # custom output path
+# Camera snapshot (A1/P1 binary JPEG only)
+bambino-cli camera <ip> <serial> <access_code> snapshot
+bambino-cli camera <ip> <serial> <access_code> snapshot frame.jpg
 ```
 
-Add `-v` for protocol-level debug output.
+Use `-v` for protocol-level debug logging.
 
-### Where to find your credentials
+### Credentials
 
-- **IP** and **Serial** — `bambino-cli discover` will show them
-- **Access Code** — on the printer's LCD under Network > LAN Mode
+- **IP** and **Serial** — shown by `bambino-cli discover`
+- **Access Code** — on the printer's touchscreen under Network > LAN Mode
 
-## Firmware quirks
+## Known firmware quirks
 
-### K-Profile priming
+### K-profile priming
 
-The firmware ignores the first `extrusion_cali_get` command received after connecting. `PrinterClient::get_k_profiles()` handles this automatically by sending a throwaway priming request before the real query. If you manage priming yourself or target firmware that doesn't need it, call `set_k_profile_primed(true)` to skip the automatic prime.
+The firmware silently ignores the first `extrusion_cali_get` command after connecting. `PrinterClient::get_k_profiles()` handles this automatically by sending a throwaway priming request first. If you manage priming yourself, call `set_k_profile_primed(true)` to skip it.
 
 ## Acknowledgements
 
-Bambino would not have been possible without the reverse-engineering work of other excellent projects.
+Built on the reverse-engineering work of:
 
-*  [Bambuddy](https://github.com/maziggy/bambuddy)
-*  [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
-*  [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
-*  [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
+- [Bambuddy](https://github.com/maziggy/bambuddy)
+- [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
+- [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
+- [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
 
 ## License
 
