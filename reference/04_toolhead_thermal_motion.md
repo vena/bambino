@@ -33,6 +33,13 @@ The system must unpack these composite integers dynamically:
 
     $$\text{Actual} = \text{packed\_val} \ \& \ 0\text{xFFFF}$$
 
+##### Bed Temperature Wire Paths
+Bed temperature telemetry arrives via different wire paths depending on the hardware generation:
+*   **New-gen models (H2, P2, X2 series)**: Bed temperature is reported at `device.bed.info.temp` as a composite-packed integer (values > 500 encode target and actual). The `device.bed.state` field indicates heater state (e.g. `2` = heating).
+*   **Old-gen models (P1, A1, X1 series)**: Bed temperature is reported via two direct fields: `print.bed_temper` (actual temperature as a float) and `print.bed_target_temper` (target temperature as a float). These are not composite-packed.
+
+Clients should check `device.bed` first (including the nested `print.device.bed` path used in pushall responses on new-gen models), then fall back to the old-gen direct fields.
+
 ##### Case Study: Bed Temperature Composite Encoding
 When the heatbed target temperature and actual temperature are both set to 100°C, the telemetry channel transmits the packed decimal integer `6553700` (which is hex `0x00640064`).
 *   $\text{Target} = 0\text{x}00640064 \gg 16 = 0\text{x}0064 = 100^\circ\text{C}$
@@ -72,6 +79,13 @@ On dual-extruder IDEX architectures (such as the H2D), standard telemetry keys a
 *   The actual temperature of the right nozzle and target temperature of the left nozzle must be parsed from the `device.extruder.info` array:
     *   Index `0` represents the Right/Main nozzle.
     *   Index `1` represents the Left/Deputy nozzle.
+
+##### Extruder Collection State Bitmask
+The `device.extruder.state` field is a 32-bit unsigned integer encoding the physical extruder topology:
+*   **Bits 0–3 (low nibble)**: Extruder count (e.g. `2` for dual-nozzle IDEX).
+*   **Bits 4–7**: Active extruder index (`0` = Right/Main, `1` = Left/Deputy).
+
+To extract: `extruder_count = state & 0xF`, `active_index = (state >> 4) & 0xF`.
 
 #### Nozzle & Carriage Kinematics
 Carriage structural parameters are parsed from `device.nozzle.info` (refer to `[REF-NOZZLE-KEYS]` for raw key mappings). 
@@ -164,6 +178,15 @@ The high-level JSON command envelopes for controlling enclosure lighting, airduc
 *   **Airduct Climate Systems**: The damper actuators physically shift to redirect airflow. ModeId `0` (cooling) closes internal recirculation dampers to route hot air out through the filtration exhaust, ModeId `1` (heating) closes exhaust flaps to seal the enclosure and leverage heat from the build plate or chamber heater, and ModeId `2` (laser) configures airflow for laser engraving module operation. The printer reports available modes via `device.airduct.modeList` (array of `{"modeId": N}` entries) and the current mode via `device.airduct.modeCur`. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`, `P2S`, `X2D` (confirmed by pybambu `Features.AIRDUCT_MODE` and `AIRDUCT_MODES` constant).
 *   **Prompt Sound Notifications**: Configures onboard speaker prompt sounds during user-facing events. Supported on: `A1`, `A1 Mini`, `A2L` (confirmed by Bambu Studio profiles `support_prompt_sound`).
 *   **Buzzer Alerting Systems**: The physical fire alarm buzzer module operates under strict safety limits, allowing silent, triggered alarm, or attention beeping states depending on firmware events. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C` (confirmed by pybambu `Features.FIRE_ALARM_BUZZER`).
+
+#### External Tool Mount Telemetry (`device.ext_tool`)
+On models supporting laser engraving or cutting attachments, the `device.ext_tool` object reports the current state of the externally mounted tool:
+*   `mount`: Mount detection state (`0` = not mounted, `1` = mounted).
+*   `type`: Tool type code string identifying the mounted accessory (`"LB00"` = 10W laser module, `"LB01"` = 40W laser module, `"CP00"` = cutting/plotting module).
+*   `calib`: Calibration state indicator.
+*   `low_prec`: Low-precision mode flag (boolean).
+*   `th_temp`: Thermal head temperature of the mounted tool.
+*   `mount_3d`: 3D print head mount state (tracks whether the standard FDM printhead is installed alongside or instead of the external tool).
 
 ---
 

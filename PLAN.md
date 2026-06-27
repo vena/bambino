@@ -20,9 +20,28 @@ When completing a phase, collapse its section into the completed summary below.
 
 ## Phase 22: Review and Align Reference Docs
 
-Review the reference documentation in `/reference` for alignment with the now expansive typed structs and quirks modules. It's likely that we have discovered and implemented things that were not known or incorrect during the creation of the reference docs. Update the reference docs to fix any errors, confusion, or mis-alignment.
+Cross-referenced all 7 reference chapters against the typed structs, quirks engine, MQTT command builders, and MODEL_MATRIX.csv (wiki-confirmed specs). The reference docs document Bambu Lab 3D printer protocols as a language-agnostic guidebook — they do not document the bambino library API. Phase 23 covers library documentation separately.
 
-Note: the reference docs document Bambu Lab 3D printer protocols as a language-agnostic guidebook, they do not document the bambino library API. This project is dual-tract: document the protocols AND build a library to use them. Phase 23 covers library documentation separately.
+### Completed (22a): Serial Prefix Corrections
+
+Updated `resolve_model()` and Section 1.5 with wiki-confirmed serial prefixes. Each H2-series model has a distinct prefix — the "H2S/H2D collision rule" was invalid and has been removed.
+
+- `094` → H2D only (was shared by all H2 models)
+- `093` → H2S (new)
+- `239` → H2D Pro (new, was incorrectly mapped to H2D)
+- `31B` → H2C (new)
+
+### Completed (22b): Reference Doc Alignment
+
+All 20 discrepancies between the reference docs and the codebase have been resolved. Changes by chapter:
+
+- **Chapter 2**: Added `TYPE I` to handshake command sequence; added RETR download pipeline documentation.
+- **Chapter 3**: Fixed example JSON (`progress` → `mc_percent`); added `spd_lvl`/`spd_mag`/`mc_percent`/`stat`/`lights_report`/`print_type` field docs; documented dual-location `DeviceTelemetry`; added H2S to door sensor routing; added P2S to secondary aux fan list; added X2D to IDEX and A2L to Standard nozzle key categories; added laser mode to `set_airduct`; fixed prompt sound support list (A1/A1 Mini/A2L); fixed buzzer support list (H2S/H2D/H2D Pro/H2C).
+- **Chapter 4**: Documented `device.bed` wire path cascade (new-gen vs old-gen); documented `device.extruder.state` bitmask; added `device.ext_tool` laser/cutter mount telemetry.
+- **Chapter 5**: Documented `AmsUnit.info` hex bitmask; documented `vt_tray`/`vir_slot` telemetry paths; documented `ams_status` combined state bitmask; removed FTS from index (requires further research).
+- **Chapter 6**: Added A2L to Port 6000 model list; documented `rtsp_url` telemetry field.
+- **Chapter 7**: Documented `ts_boot`/`ts_unix` optional timestamp fields on HMS entries.
+- **Index (`00_index.md`)**: Updated all affected section descriptions.
 
 ---
 
@@ -53,5 +72,6 @@ Run `cargo doc --no-deps` and audit the rendered output, not just the source com
 | Phase | Module | Status |
 |-------|--------|--------|
 | 1–21 | Core → Telemetry Accessors | **Complete** |
-| 22 | Review and Align Reference Docs | Not Started |
+| 22a | Serial Prefix Corrections | **Complete** |
+| 22b | Reference Doc Alignment (20 items) | **Complete** |
 | 23 | Rustdoc Library Documentation | Not Started |

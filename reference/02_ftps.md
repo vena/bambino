@@ -72,9 +72,12 @@ USER bblp\r\n            <- Transmission of secure username
 PASS <access_code>\r\n   <- Transmission of access code password
 PBSZ 0\r\n               <- Set Protection Buffer Size to zero
 PROT P\r\n               <- Enforces full TLS encryption on Passive Data channels
+TYPE I\r\n               <- Sets binary transfer mode (prevents ASCII corruption)
 PASV\r\n                 <- Requests passive port mapping allocation
 AVBL\r\n                 <- Queries available storage space on MicroSD card
 ```
+
+**Note:** The `TYPE I` command is mandatory. RFC 959 defaults to ASCII mode, which applies line-ending transformations that corrupt binary payloads (`.3mf`, `.gcode`, timelapse videos). On A1 series models where `PROT P` is omitted (see §2.1), `TYPE I` must still be transmitted.
 
 #### Directory Mutator Commands
 ```text
@@ -110,6 +113,24 @@ Upon closing the data socket, the client must await the positive completion code
 226 Transfer complete.\r\n
 ```
 After receiving the `226` response (or a `426` on models affected by the TLS 1.3 close race described below), the client must unconditionally verify the remote file size by issuing `SIZE <remote_path>` on the control channel. The returned byte count must match the original upload payload length exactly. This guards against silent SD card write truncation on all models, not only the P2S/X2D TLS 1.3 race condition.
+
+#### Download Pipeline Schema
+To retrieve a file from the printer's storage, the client negotiates a passive data port, transmits the `RETR` command over the control socket, and reads the binary payload from the passive data channel.
+
+##### Control Channel Command Sequence
+```text
+RETR /timelapse/video_2026-06-17_12-12-18.mp4\r\n
+```
+The server responds with a transient code (typically `150`) indicating the data channel is opening.
+
+##### Data Channel Binary Stream
+The client reads raw binary data from the passive data channel until the server closes the connection (EOF). The same TLS session reuse and model-specific plaintext constraints described in §2.1 apply to the data channel.
+
+##### Verification
+Upon reaching EOF on the data socket, the client must close the data channel and await the positive completion code on the control socket:
+```text
+226 Transfer complete.\r\n
+```
 
 ---
 

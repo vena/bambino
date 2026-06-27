@@ -50,6 +50,32 @@ When multiple standard AMS units or virtual slots are connected, the printer's s
 *   **IDEX / Dual-Nozzle Printers (H2D series)**: Reports only slot numbers `0-3` representing the active tray position on the active extruder's linked AMS. State trackers must evaluate the `active_extruder` (0 = Right/Main, 1 = Left/Deputy) alongside the `ams_extruder_map` to determine which physical AMS unit has loaded the filament, then calculate the global ID accordingly.
 *   **Single-Nozzle Printers (P2S series)**: Multi-AMS configurations on single-nozzle printers may also report local slot indices in `tray_now`. State trackers must evaluate the MQTT `mapping` array field (refer to Section 5.3) to match the local slot position to the active physical AMS unit.
 
+#### AMS Unit Info Bitmask (`info` Field)
+Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` field — a hex-encoded bitmask string (e.g. `"11002103"`). Parse via `u64::from_str_radix(s, 16)`. The bit layout encodes unit metadata and IDEX routing:
+
+| Bit Range | Mask | Field | Values |
+| :--- | :--- | :--- | :--- |
+| **0–3** | `0xF` | AMS unit type | e.g. `3` = AMS Lite |
+| **4–7** | `0xF0` | Dry status | Drying cycle state |
+| **8–11** | `0xF00` | Extruder assignment | `0` = right/main, `1` = left/deputy, `0xE` = uninitialized |
+| **22–25** | `0x3C00000` | Dry sub-status | Drying sub-state detail |
+
+The extruder assignment field is used on IDEX platforms to track which extruder carriage an AMS unit is physically wired to. A value of `0xE` indicates the assignment has not been initialized by the firmware.
+
+#### Virtual / External Spool Telemetry (`vt_tray` and `vir_slot`)
+External spool holders (filament loaded directly into the extruder without an AMS unit) report their state via two distinct telemetry paths depending on the platform architecture:
+*   **Single-Nozzle Platforms (P1S, A1, X1C, H2S, etc.)**: The `print.vt_tray` field contains a single object with the same schema as an AMS tray (`tray_type`, `tray_color`, `tray_info_idx`, `tag_uid`, `tray_uuid`, `remain`, temperature limits, calibration indices, etc.). The virtual tray ID is typically `"254"`.
+*   **Dual-Nozzle IDEX Platforms (H2D, H2D Pro, X2D)**: The `print.vir_slot` field contains an array of objects (one per extruder), each using the same schema. Index `0` corresponds to the right/primary external spool, index `1` to the left/deputy external spool.
+
+Both fields are optional — they are only present when the printer has external spool data to report.
+
+#### Combined AMS Status Bitmask (`ams_status`)
+The `print.ams_status` field is a 32-bit integer encoding the combined operational state of the AMS expansion bus:
+*   **Bits 0–7 (low byte)**: AMS sub-status code.
+*   **Bits 8–15**: AMS main status code.
+
+This field provides a high-level summary of the AMS bus state (e.g. idle, feeding, retracting, error) without requiring inspection of individual unit or tray states.
+
 #### Bus Module Firmware & Serial Number Query (get_version Response)
 The unique hardware serial numbers and active firmware versions of expansion bus modules are not broadcast in standard telemetry heartbeats. Instead, they are queried over the command channel using the `get_version` request (`[REF-MQTT-LIFECYCLE]`).
 

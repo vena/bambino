@@ -35,22 +35,39 @@ Status telemetry structures, string emission anomalies, and task-ID overflow lim
     "subtask_name": "MyPrintJob",
     "subtask_id": "14852932",
     "mc_print_sub_stage": 0,
+    "mc_percent": 10,
     "layer_num": 12,
-    "total_layers": 120,
-    "progress": 10.0,
+    "total_layer_num": 120,
     "mc_remaining_time": 3600,
+    "spd_lvl": 2,
+    "spd_mag": 100,
     "home_flag": 131072,
     "sdcard": true,
-    "wifi_signal": "-52dBm"
+    "wifi_signal": "-52dBm",
+    "print_type": "local",
+    "lights_report": [{"node": "chamber_light", "mode": "on"}]
   }
 }
 ```
 
+#### Dual-Location Device Telemetry
+The `device` sub-object containing nozzle, extruder, airduct, CTC (chamber temperature controller), bed, and ext_tool telemetry appears at two distinct wire locations:
+*   **Top-level `{"device": {...}}`**: Sent as incremental updates (e.g., nozzle info pushes, airduct state changes).
+*   **Nested `{"print": {"device": {...}}}`**: Included inside `pushall` responses on H2, P2, and X2 series models.
+
+Both locations use the identical schema. Clients must merge data from both paths into a unified device state representation.
+
 #### Telemetry Field Specifics
 1.  **gcode_state**: Indicates the high-level operational state of the printer (such as `IDLE`, `RUNNING`, `PAUSE`, `FINISH`, `FAILED`).
-2.  **sdcard**: The top-level `sdcard` field is a permissive truthy check covering boolean, integer, or string (`HAS_SDCARD_NORMAL`) formats depending on firmware. The underlying `home_flag` bit 8 and 9 presence signals are unreliable because periodic heartbeat pushes clear these bits even when a card is physically present.
-3.  **gcode_file Emission Anomaly**: The `gcode_file` property does not strictly guarantee a `.gcode` path. On certain firmwares (such as P1S `01.10.00.00`), the printer transmits the parent `.3mf` filename instead of the specific sliced plate `.gcode` path.
-4.  **A1/P1 Series `stg_cur = 0` Idle Bug [REF-MQTT-IDLEBUG]**: The firmware on the A1, A1 Mini, and P1 series exhibits an idle reporting anomaly where `stg_cur = 0` (which normally maps to `"Printing"`) is transmitted in telemetry even when the machine is in an idle, non-printing state. Wire-state evaluation models must ignore the `stg_cur` value when the high-level `gcode_state` is not `RUNNING` or `PAUSE`.
+2.  **mc_percent**: Motion controller progress percentage (integer, 0 to 100). This is the authoritative progress field.
+3.  **spd_lvl / spd_mag**: Active speed profile level (`1`=Silent, `2`=Standard, `3`=Sport, `4`=Ludicrous) and speed magnitude as a percentage of the nominal feedrate.
+4.  **stat**: Hexadecimal bitmask string used on P2S, X2D, and H2 series models to track sensor states such as the enclosure door open sensor (bit 23). See §3.2.1 for door sensor routing details.
+5.  **lights_report**: Array of `{"node": "<strip_name>", "mode": "<on|off|flashing>"}` objects reporting the current state of chamber, work, and heatbed light strips.
+6.  **print_type**: Print source identifier string (`"cloud"`, `"local"`, `"idle"`, `"system"`).
+7.  **sdcard**: The top-level `sdcard` field is a permissive truthy check covering boolean, integer, or string (`HAS_SDCARD_NORMAL`) formats depending on firmware. The underlying `home_flag` bit 8 and 9 presence signals are unreliable because periodic heartbeat pushes clear these bits even when a card is physically present.
+8.  **gcode_file Emission Anomaly**: The `gcode_file` property does not strictly guarantee a `.gcode` path. On certain firmwares (such as P1S `01.10.00.00`), the printer transmits the parent `.3mf` filename instead of the specific sliced plate `.gcode` path.
+9.  **total_layer_num**: Total layers within the sliced print pipeline. Some firmware versions send this as `total_layers` instead — clients should accept both keys.
+10.  **A1/P1 Series `stg_cur = 0` Idle Bug [REF-MQTT-IDLEBUG]**: The firmware on the A1, A1 Mini, and P1 series exhibits an idle reporting anomaly where `stg_cur = 0` (which normally maps to `"Printing"`) is transmitted in telemetry even when the machine is in an idle, non-printing state. Wire-state evaluation models must ignore the `stg_cur` value when the high-level `gcode_state` is not `RUNNING` or `PAUSE`.
 
 #### Task Tracking & Sequence Boundaries
 When generating identity fields for command payloads and print job submissions (such as `task_id` and `subtask_id`), values must strictly conform to hardware parser limits.
@@ -74,14 +91,14 @@ This represents an active Wired Ethernet Mode rather than a degraded Wi-Fi link.
 #### Enclosure Door Open Sensor Routing [REF-NET-DOOR]
 The active state of the front enclosure door is tracked via bit 23 (`0x00800000`) of a telemetry status field. This diagnostic function is physically restricted to enclosed models equipped with an electronic door sensor switch (`X1`, `X1C`, `X1E`, `X2D`, `P2S`, `H2C`, `H2D`, `H2D Pro`, `H2S`). Open-frame bed-slingers and non-sensor models (`P1P`, `P1S`, `A1`, `A1 Mini`) do not support physical door sensing on the hardware bus. For supported sensor-equipped models, routing is model-dependent:
 *   X1 Series (X1, X1C, X1E): Monitored via bit 23 of `home_flag`.
-*   Other Sensor Families (P2S, X2D, H2C, H2D, H2D Pro): Monitored via bit 23 of the `stat` field (hex string) nested inside the `"print"` status object (e.g., `payload["print"]["stat"]`).
+*   Other Sensor Families (P2S, X2D, H2C, H2D, H2D Pro, H2S): Monitored via bit 23 of the `stat` field (hex string) nested inside the `"print"` status object (e.g., `payload["print"]["stat"]`).
 
 Supported sensor-equipped architectures share the same bitmask (`0x00800000`) but live in different telemetry fields. For unmonitored models, this bit remains static or fluctuates meaninglessly and must be ignored.
 
 #### Divergent Nozzle Info Telemetry Keys [REF-NOZZLE-KEYS]
 The structured array nested within `device.nozzle.info` contains nozzle characteristics that programmatically vary based on the physical extruder and carriage architecture. Evaluators must map these keys conditionally based on the active model prefix:
 
-*   **Standard Platforms (X1, P1, A1, P2S, H2S)**:
+*   **Standard Platforms (X1, P1, A1, A2L, P2S, H2S)**:
     These models utilize standard abbreviated telemetry keys inside the `device.nozzle.info` array:
     *   `"diameter"`: Nozzle diameter (e.g. `0.4`).
     *   `"id"`: Extruder/hotend ID (always `0` on single-nozzle configurations).
@@ -89,7 +106,7 @@ The structured array nested within `device.nozzle.info` contains nozzle characte
     *   `"type"`: Nozzle material/type code (e.g. `"HS01"`).
     *   `"wear"`: Nozzle wear index.
 
-*   **Dual-Nozzle IDEX Platforms (H2D, H2D Pro)**:
+*   **Dual-Nozzle IDEX Platforms (H2D, H2D Pro, X2D)**:
     These models support dual independent extruders (ID `0` for Right/Main, `1` for Left/Deputy). They expand the telemetry dictionary with alternative descriptive keys:
     *   `"diameter"`: Nozzle diameter.
     *   `"id"`: Extruder carriage ID (`0` or `1`).
@@ -113,7 +130,7 @@ On-board cooling fan speeds are represented in telemetry via the following JSON 
 *   `big_fan1_speed`: Auxiliary cooling fan speed (represents the primary left-side auxiliary fan).
 *   `big_fan2_speed`: Chamber exhaust or filtration fan speed.
 *   `heatbreak_fan_speed`: Toolhead heatbreak/hotend fan speed.
-*   `device.airduct.parts`: For dual-auxiliary models (such as `X2D`), the secondary right-hand auxiliary fan speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage ($0$ to $100$).
+*   `device.airduct.parts`: On models with a secondary right-hand auxiliary fan (`X2D` and `P2S`), its speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage ($0$ to $100$) and does not require the 0–15 step conversion used by the other fan telemetry keys.
 
 #### Developer LAN Mode Bitmask Evaluation
 Developer LAN Mode is evaluated via the `fun` telemetry field bit `0x20000000` (which represents the `MQTT_SIGNATURE_REQUIRED` flag). The boolean evaluation is inverted:
@@ -322,12 +339,12 @@ Controls the target routing of the internal air circulation flaps.
   }
 }
 ```
-*   `modeId`: Set to `0` for cooling mode (recirculation) or `1` for heating mode (exhaust).
+*   `modeId`: `0` = cooling mode (recirculation dampers close, hot air routes through exhaust), `1` = heating mode (exhaust flaps close, enclosure seals for heat retention), `2` = laser mode (airflow configured for laser engraving module operation).
 
 #### Sound & Alerting Commands
 
 ##### Configure Prompt Sound Enablement (`print_option`)
-Configures whether the printer's onboard speakers emit structural sound notifications during user-facing events (supported on A1 and H2D series only).
+Configures whether the printer's onboard speakers emit structural sound notifications during user-facing events. Supported on: `A1`, `A1 Mini`, `A2L`.
 ```json
 {
   "print": {
@@ -339,7 +356,7 @@ Configures whether the printer's onboard speakers emit structural sound notifica
 ```
 
 ##### Configure Enclosure Buzzer Mode (`buzzer_ctrl`)
-Controls the operating behavior of the physical fire alarm buzzer module on supported platforms (such as the `H2D`).
+Controls the operating behavior of the physical fire alarm buzzer module. Supported on: `H2S`, `H2D`, `H2D Pro`, `H2C`.
 ```json
 {
   "print": {

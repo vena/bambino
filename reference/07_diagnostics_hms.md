@@ -14,7 +14,11 @@ The `"print_error"` field contains a single 32-bit packed integer representing t
 3. Split the string into two 4-character blocks separated by an underscore (e.g., `"0500_400C"`).
 
 #### 2. The `"hms"` Telemetry Array
-The `"hms"` array contains active system faults represented as objects with `"attr"` and `"code"` keys. To convert these fields into a standard 16-character wiki troubleshooting key (`MMMM_MMMM_CCCC_CCCC`), apply the following binary unpacking steps:
+The `"hms"` array contains active system faults represented as objects with `"attr"` and `"code"` keys. On X2, H2, and P2 series models, each entry may also include optional timestamp fields:
+*   `ts_boot`: Seconds since boot when the alert was raised (`u64`).
+*   `ts_unix`: UTC timestamp string when the alert was raised (e.g. `"20260426002648"`, format `YYYYMMDDHHmmss`).
+
+To convert the `attr` and `code` fields into a standard 16-character wiki troubleshooting key (`MMMM_MMMM_CCCC_CCCC`), apply the following binary unpacking steps:
 
 ```python
 attr_high = (attr >> 16) & 0xFFFF

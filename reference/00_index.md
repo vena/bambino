@@ -55,7 +55,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **[REF-FTPS-OPS] Section 2.2: Over-the-Wire Telemetry Payload Schema (The Read Stream)**
     *   UNIX listing parser, spacing tokens, rollover logic, and AVBL/STAT space queries
 *   **[REF-FTPS-XFER] Section 2.3: Over-the-Wire Control Command Schema (The Write Stream)**
-    *   Handshake and session protection commands, and chunked binary uploads (STOR/RETR)
+    *   Handshake and session protection commands (including mandatory `TYPE I` binary mode), chunked binary uploads (STOR), and file downloads (RETR)
 *   **Section 2.4: Mechanical & Firmware Quirks**
     *   P2S/X2D session close race, Command Channel Post-Transfer Response Synchronization, and MicroSD flush validation & 0500-C010 exceptions [REF-FTPS-FLUSH]
 
@@ -63,7 +63,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **[REF-MQTT-CONN] Section 3.1: Network Boundary & Interface Parameters**
     *   Local broker authentication on Port 8883, topic topology, QoS/Clean Session rules, and broker in-flight limits
 *   **[REF-MQTT-ENV] Section 3.2: Over-the-Wire Telemetry Payload Schema (The Read Stream)**
-    *   Status telemetry structures, string emission anomalies, task-ID overflow limits, and A1/P1 series "stg_cur = 0" idle bug state gating [REF-MQTT-IDLEBUG]
+    *   Status telemetry structures, dual-location device telemetry, speed profiles, light state arrays, string emission anomalies, task-ID overflow limits, and A1/P1 series "stg_cur = 0" idle bug state gating [REF-MQTT-IDLEBUG]
 *   **Section 3.2.1: Model-Specific Telemetry Polymorphism & Bitmasks**
     *   Wired Ethernet Wi-Fi Signal Sentinel & home_flag Bit 18 [REF-NET-PORTS]
     *   Enclosure Door Open Sensor Routing [REF-NET-DOOR]
@@ -90,6 +90,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Synchronous G-code command line queue routing over MQTTS Port 8883 using the gcode_line control wrapper
 *   **[REF-THER-DECODE] Section 4.2: State Telemetry Decoding**
     *   High-word/low-word temperature decoding, Right (T0)/Left (T1) IDEX thermal mappings, Hotend Configuration Query Stale Data Quirk, and Fan Speed Telemetry Quantization with oscillation artifacts [REF-CLIM-FANS]
+    *   Bed temperature wire paths (`device.bed` vs `bed_temper`/`bed_target_temper`) and extruder state bitmask
     *   Divergent nozzle properties physical mappings [REF-NOZZLE-KEYS]
     *   Active Chamber Thermal Targeting State Encoding
     *   Chamber temperature sensor availability constraints
@@ -97,16 +98,18 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Raw G-code command strings (M140, M104, manual active chamber M141, manual extrusion [REF-GCODE-EXTRUDE], active RFID tag scan M620 [REF-GCODE-RFID])
     *   Manual relative axis movement and travel limit wrap controls
     *   Raw chamber and auxiliary fan PWM speed control channels [REF-CLIM-FANS]
-    *   Physical control envelopes for lights, climate dampers, and buzzers
+    *   Physical control envelopes for lights, climate dampers, buzzers, and external tool mount telemetry
 *   **Section 4.4: Mechanical & Firmware Quirks**
     *   Z-axis homing crash hazards (bare G28 constraints vs bed-slinger coordinates) and hotend fan safety control overrides
 
 ### Chapter 5: Physical Material Expansion (AMS, AMS-HT & Spools)
 *   **[REF-AMS-DECODE] Section 5.1: Bus Telemetry & Bitmask Parsing**
-    *   Tray presence masks, printer-shutdown telemetry exception, ams_status binary packing, and Filament Track Switch (FTS) dynamic routing
+    *   Tray presence masks, printer-shutdown telemetry exception, and ams_status combined state bitmask
     *   Incremental telemetry update slot cleansing rules
     *   Symmetrical absent-key empty slot signalling (P1S & A1 Mini)
     *   Multi-AMS local index resolution (`tray_now`)
+    *   AMS unit info hex bitmask (type, dry status, extruder assignment)
+    *   Virtual/external spool telemetry paths (`vt_tray` and `vir_slot`)
     *   Bus module firmware and serial number query (`get_version` response)
 *   **[REF-AMS-SP_CFG] Section 5.2: Spool Presets, Colors & RFID Serialization**
     *   RFID tag UIDs, preset short index lookup tables, and RRGGBBAA hex colors
@@ -123,7 +126,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **[REF-CAM-RTSPS] Section 6.1: Network Boundary & Interface Parameters**
     *   RTSP streaming over Port 322, proprietary binary TCP stream over Port 6000 [REF-CAM-BINARY]
 *   **Section 6.2: Over-the-Wire Telemetry Payload Schema (The Read Stream)**
-    *   Interactive camera and recording indicators
+    *   Interactive camera and recording indicators, RTSP URL availability field
 *   **Section 6.3: Over-the-Wire Control Command Schema (The Write Stream)**
     *   RTSPS connection headers, digest auth challenges, and 80-byte binary handshake payloads [REF-CAM-BINARY]
 *   **Section 6.4: Mechanical & Firmware Quirks**
@@ -132,6 +135,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 ### Chapter 7: Diagnostic Mapping & Calibration Profiles
 *   **[REF-DIAG-HMS] Section 7.1: HMS Telemetry Decoding**
     *   Converting 32-bit packed integers to Unified HMS Keys, severity module IDs, and local 8-character short-code format
+    *   Optional timestamp fields (`ts_boot`, `ts_unix`) on X2/H2/P2 models
     *   Real hardware faults vs. non-error status codes and user-action cancellation echoes
 *   **[REF-DIAG-KPROF] Section 7.2: Pressure Advance (K-Profile) Calibration**
     *   Onboard EEPROM querying, creation/edition/deletion transactions, and single vs IDEX command parameters

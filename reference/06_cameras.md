@@ -7,7 +7,7 @@
 Bambu Lab printers support video streaming via two different protocol interfaces, divided cleanly by the processing capabilities of the model's core network processor:
 
 1.  **RTSPS Interface (Port 322)**: Supported on high-capability models (`X1`, `X1C`, `X1E`, `X2D`, `P2S`, and `H2` series). These printers host a local RTSP server wrapped in TLS (RTSPS) with digest authentication.
-2.  **Chamber Image Interface (Port 6000)**: Supported on constrained models (`P1P`, `P1S`, `A1`, and `A1 Mini`). These printers utilize a proprietary, low-overhead binary TCP socket protocol that delivers discrete JPEG frames [REF-CAM-BINARY].
+2.  **Chamber Image Interface (Port 6000)**: Supported on constrained models (`P1P`, `P1S`, `A1`, `A1 Mini`, and `A2L`). These printers utilize a proprietary, low-overhead binary TCP socket protocol that delivers discrete JPEG frames [REF-CAM-BINARY].
 
 ---
 
@@ -17,6 +17,7 @@ The state of the camera is reported on the report topic under the `"print"` or `
 *   `ipcam_dev`: Internal identifier or state of the hardware camera module.
 *   `ipcam_record`: Indicates whether the local user stream or camera live feed is active (`"enable"` or `"disable"`).
 *   `timelapse`: Indicates whether frame-by-layer timelapse recording is active (`"enable"` or `"disable"`).
+*   `rtsp_url`: The RTSPS streaming URL (e.g. `"rtsps://192.168.1.64/streaming/live/1"`) or `"disable"` when RTSP streaming is turned off. On the H2 series, Port 322 is closed by default in factory firmware and this field reports `"disable"` until manually enabled via the physical touchscreen interface. Clients should check this field before attempting an RTSPS connection.
 
 ---
 
