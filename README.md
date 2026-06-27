@@ -63,7 +63,7 @@ printer.toggle_led("chamber_light", true).await?;
 
 ### Custom TLS certificates
 
-By default, `build_unsafe_client_config()` skips certificate verification — matching how Bambu printers present self-signed certs. If you want to verify the printer's certificate or use mutual TLS (mTLS), use `build_verified_client_config()` instead:
+By default, `build_unsafe_client_config()` skips certificate verification. If you want to verify the printer's certificate or use mutual TLS (mTLS), use `build_verified_client_config()` instead:
 
 ```rust
 use bambino::io::tokio::{build_verified_client_config, TokioTlsConnector};

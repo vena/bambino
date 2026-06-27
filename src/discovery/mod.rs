@@ -1,8 +1,12 @@
-//! # Simple Service Discovery Protocol (SSDP) Network Discovery
+//! # Printer Discovery (SSDP)
 //!
-//! Coordinates active printer searches (M-SEARCH queries) and passive NOTIFY
-//! listener loops on Port 2021 utilizing the abstract `AsyncUdpSocket` layer.
-//! Enables multi-platform discovery across std, ESP-IDF, and Embassy environments.
+//! Find Bambu Lab printers on the local network using SSDP (Simple Service Discovery Protocol).
+//!
+//! [`DiscoveryEngine`] sends M-SEARCH queries on UDP port 2021 (and the alternate port 1990)
+//! and parses incoming NOTIFY/response packets into [`SsdpDevice`] records.
+//! The [`discover_devices()`] convenience function runs a timed broadcast-and-listen sweep
+//! and returns all unique printers found. Works across std, ESP-IDF, and Embassy via the
+//! [`AsyncUdpSocket`] trait.
 
 pub mod parser;
 
@@ -149,10 +153,27 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     }
 }
 
-/// Helper executing an active multi-second broadcast and scanning sweep for nearby printers.
+/// Broadcasts SSDP search queries and listens for printer responses for the given duration.
 ///
-/// Combines the SSDP search request and polling loop within a unified, allocation-friendly API.
-/// Runs platform-agnostically by driving delay timings through the parameterized `TimerProvider`.
+/// Returns a deduplicated list of all printers found. The timer parameter drives sleep
+/// timing, making this work across std, ESP-IDF, and Embassy.
+///
+/// # Example
+///
+/// ```ignore
+/// use bambino::discovery::discover_devices;
+/// use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
+///
+/// let timer = TokioTimer::new();
+/// let printers = discover_devices::<TokioUdpSocket, _>(
+///     std::time::Duration::from_secs(5),
+///     &timer,
+/// ).await?;
+///
+/// for printer in &printers {
+///     println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
+/// }
+/// ```
 #[cfg(any(feature = "std", feature = "alloc"))]
 pub async fn discover_devices<U, T>(
     timeout: core::time::Duration,

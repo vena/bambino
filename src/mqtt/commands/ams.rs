@@ -1,3 +1,5 @@
+//! AMS-related MQTT command payloads (filament change, drying, RFID scan, settings).
+
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
@@ -22,6 +24,7 @@ pub struct AmsFilamentSettingPayload {
     pub nozzle_temp_max: u32,
 }
 
+/// Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentSettingRequest {
     pub print: AmsFilamentSettingPayload,
@@ -76,6 +79,7 @@ pub struct AmsControlPayload {
     pub sequence_id: String,
 }
 
+/// Sends a resume, pause, or reset command to the AMS feed mechanism.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsControlRequest {
     pub print: AmsControlPayload,
@@ -102,6 +106,7 @@ pub struct AmsGetRfidPayload {
     pub sequence_id: String,
 }
 
+/// Requests an RFID tag scan on a specific AMS slot.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsGetRfidRequest {
     pub print: AmsGetRfidPayload,
@@ -135,6 +140,7 @@ pub struct AmsChangeFilamentPayload {
     pub sequence_id: String,
 }
 
+/// Loads or unloads filament from an AMS slot or external spool to the toolhead.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsChangeFilamentRequest {
     pub print: AmsChangeFilamentPayload,
@@ -178,6 +184,7 @@ pub struct AmsFilamentDryingPayload {
     pub sequence_id: String,
 }
 
+/// Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentDryingRequest {
     pub print: AmsFilamentDryingPayload,

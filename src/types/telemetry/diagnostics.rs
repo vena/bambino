@@ -1,3 +1,5 @@
+//! Diagnostic telemetry types (HMS alerts, light reports).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 

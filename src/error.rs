@@ -1,3 +1,12 @@
+//! # Error Types
+//!
+//! [`BambuError`] is the single error type returned by all fallible operations in the
+//! crate. It covers network failures, TLS handshake issues, protocol violations,
+//! authentication rejections, timeouts, and model capability mismatches.
+//!
+//! Under `std`, variants get `Display`/`Error` impls via `thiserror`. Under `no_std`,
+//! a manual `Display` impl is kept in sync (verified by `test_display_consistency`).
+
 #[cfg(feature = "std")]
 use thiserror::Error;
 

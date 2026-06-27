@@ -1,10 +1,17 @@
 //! # Transport Abstraction Layer
 //!
-//! Abstracts standard IO, secure TLS streams, UDP datagrams, and sleep timers
-//! across standard, embedded, and bare-metal environments.
+//! Defines the async I/O traits that let the rest of the crate work without knowing
+//! which runtime it's running on. The key traits:
 //!
-//! Provides the `TokioIo` adaptor to translate Tokio's standard `AsyncRead` and
-//! `AsyncWrite` trait bounds to the `embedded-io-async` boundaries used inside this crate.
+//! - [`AsyncIo`] — Read + Write (blanket-implemented for anything satisfying `embedded-io-async`).
+//! - [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/embedded-tls).
+//! - [`SecureConnect`] — Creates its own TCP+TLS connection (used by ESP-IDF, where TLS manages transport).
+//! - [`AsyncUdpSocket`] — UDP send/recv for SSDP discovery.
+//! - [`TimerProvider`] — Async sleep and monotonic clock for platform-agnostic timeouts.
+//!
+//! Platform implementations live in the `tokio`, `esp_idf`, and `embassy` submodules
+//! (each gated behind its respective feature flag).
+//! The [`TokioIo`] adapter bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
@@ -121,6 +128,7 @@ pub trait SecureConnect {
 #[cfg(feature = "tokio")]
 pub struct TokioIo<T>(pub T);
 
+/// Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
 #[cfg(feature = "tokio")]
 #[derive(Debug)]
 pub struct TokioIoError(pub std::io::Error);

@@ -1,7 +1,9 @@
-//! # Common Protocol Types and Schemas
+//! # Types & Telemetry Schemas
 //!
-//! Exposes structural types and state schemas used across the printer control
-//! interface and state telemetry report channels.
+//! Shared data types used across the crate — most importantly [`PrinterTelemetry`],
+//! the deserialized form of the JSON state reports the printer pushes over MQTT.
+//! Also includes [`VersionInfo`] for firmware version queries and AMS/device
+//! sub-structures like [`AmsTray`], [`DeviceTelemetry`], and [`ExtruderInfo`].
 
 pub mod telemetry;
 pub mod version;

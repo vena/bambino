@@ -1,3 +1,5 @@
+//! G-code dispatch command payload.
+
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 
@@ -14,6 +16,7 @@ pub struct GCodePayload {
     pub sequence_id: String,
 }
 
+/// Sends a raw G-code line to the printer for immediate execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct GCodeRequest {
     pub print: GCodePayload,

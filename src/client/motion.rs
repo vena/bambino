@@ -16,11 +16,21 @@ where
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
-    /// Dispatches a G-code string with model-aware safety validation [REF-MOTO-GCODE].
+    /// Sends a G-code command with model-aware safety validation.
     ///
     /// Rejects commands that would be unsafe on the active model (e.g., partial-axis
-    /// homing on bed-on-Z platforms). Use `send_gcode_raw()` to bypass validation when
-    /// you need unchecked access.
+    /// homing on bed-on-Z platforms). Use [`send_gcode_raw()`](Self::send_gcode_raw)
+    /// to bypass validation when you need unchecked access.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Turn on the part cooling fan at 100%
+    /// printer.send_gcode("M106 P1 S255").await?;
+    ///
+    /// // This will be rejected on CoreXY printers (unsafe partial homing):
+    /// // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
+    /// ```
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
         if self.model.quirks().is_unsafe_homing_command(gcode_line) {
             return Err(BambuError::ModelMismatch(

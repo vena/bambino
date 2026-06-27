@@ -1,3 +1,5 @@
+//! Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
+
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
@@ -156,6 +158,7 @@ pub struct ProjectFilePayload {
     pub ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
 }
 
+/// Submits a `.3mf` print job from the SD card for execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectFileRequest {
     pub print: ProjectFilePayload,

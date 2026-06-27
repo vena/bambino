@@ -1,3 +1,5 @@
+//! Top-level telemetry report envelope (`print` and `device` wire locations).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
@@ -12,8 +14,10 @@ use super::diagnostics::{HmsEntry, IpcamTelemetry};
 /// Chamber/work/heatbed light state entry from the `lights_report` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightReport {
+    /// Light identifier (e.g. "chamber_light", "work_light").
     #[serde(default)]
     pub node: String,
+    /// Current state (e.g. "on", "off", "flashing").
     #[serde(default)]
     pub mode: String,
 }

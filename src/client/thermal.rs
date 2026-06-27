@@ -15,9 +15,16 @@ where
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
-    /// Sets the target temperature of the build plate (bed) [REF-MOTO-GCODE].
+    /// Sets the heated bed target temperature.
     ///
-    /// Values exceeding the model's maximum bed temperature are clamped automatically.
+    /// Values exceeding the model's maximum (e.g. 120°C for X1C, 80°C for A1 Mini) are
+    /// clamped automatically.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// printer.set_bed_temperature(60).await?;
+    /// ```
     pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
         let max = self.model.quirks().bed_temp_max();
         let target_temp = if target_temp > max {

@@ -1,3 +1,5 @@
+//! Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]

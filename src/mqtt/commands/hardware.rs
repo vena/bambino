@@ -1,3 +1,5 @@
+//! Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 
@@ -18,6 +20,7 @@ pub struct LedCtrlPayload {
     pub interval_time: u32,
 }
 
+/// Turns chamber or toolhead LEDs on or off.
 #[derive(Debug, Clone, Serialize)]
 pub struct LedCtrlRequest {
     pub system: LedCtrlPayload,
@@ -63,6 +66,7 @@ pub struct AirductPayload {
     pub sequence_id: String,
 }
 
+/// Switches the enclosure airduct damper between cooling, heating, and laser modes.
 #[derive(Debug, Clone, Serialize)]
 pub struct AirductRequest {
     pub print: AirductPayload,
@@ -89,6 +93,7 @@ pub struct PromptSoundPayload {
     pub sequence_id: String,
 }
 
+/// Enables or disables the printer's notification sounds.
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptSoundRequest {
     pub print: PromptSoundPayload,
@@ -116,6 +121,7 @@ pub struct BuzzerPayload {
     pub sequence_id: String,
 }
 
+/// Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
 #[derive(Debug, Clone, Serialize)]
 pub struct BuzzerRequest {
     pub print: BuzzerPayload,

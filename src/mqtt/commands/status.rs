@@ -1,3 +1,5 @@
+//! Status query commands (pushall, get_version, clean_print_error).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 
@@ -10,6 +12,7 @@ pub struct PushAllPayload {
     pub sequence_id: String,
 }
 
+/// Requests a full state dump from the printer (all telemetry fields at once).
 #[derive(Debug, Clone, Serialize)]
 pub struct PushAllRequest {
     pub pushing: PushAllPayload,
@@ -33,6 +36,7 @@ pub struct GetVersionPayload {
     pub sequence_id: String,
 }
 
+/// Queries the printer for its hardware and firmware version info.
 #[derive(Debug, Clone, Serialize)]
 pub struct GetVersionRequest {
     pub info: GetVersionPayload,

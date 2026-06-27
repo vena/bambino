@@ -1,20 +1,19 @@
-//! # Unified Printer Client Coordinator & Developer API
+//! # Printer Client
 //!
-//! Provides a high-level, platform-agnostic client interface designed to aggregate
-//! MQTTS telemetry channels, implicit FTPS storage nodes, and video feeds under a
-//! safe, unified controller boundary.
+//! This is the main entry point for most users. [`PrinterClient`] wraps an MQTT session
+//! (and optionally an FTPS connection) into a single coordinated interface with methods
+//! for thermal control, motion, print management, AMS operations, and hardware queries.
 //!
-//! ## Architectural Safety Interlocks
-//! 1. **Bed-on-Z vs Bed-Slinger Homing [REF-MOTO-GCODE]:** Prevents structural nozzle
-//!    collisions by enforcing bare `G28` homing commands on Bed-on-Z platforms (CoreXY),
-//!    blocking dangerous partial homing parameters (such as `G28 Z`) that bypass safe parking.
-//! 2. **Reference Mode Position Isolation:** Wraps relative movements on the Z-axis in
-//!    travel-limit clamps (`M211 S1`) and coordinate push/pop boundaries (`M1002`) to insulate
-//!    against mechanical bed crashes.
-//! 3. **Chamber Thermal Guards [REF-THER-DECODE]:** Enforces capability checks prior to
-//!    dispatching active heated chamber operations (`M141`), rejecting requests on open-frame models.
-//! 4. **Auxiliary Fan Safety Routing [REF-CLIM-FANS]:** Directs fan cooling commands dynamically,
-//!    handling secondary right-hand auxiliary fan controllers on specialized platforms.
+//! The client applies model-aware safety checks automatically:
+//!
+//! - **Homing safety** — On CoreXY (bed-on-Z) printers, partial homing commands like
+//!   `G28 Z` can crash the nozzle into the plate. The client enforces bare `G28` only.
+//! - **Z-axis travel limits** — Relative Z moves are clamped to the model's mechanical
+//!   bounds and wrapped in reference-mode push/pop (`M1002`) to prevent bed crashes.
+//! - **Chamber heater guards** — `set_chamber_temperature()` rejects requests on models
+//!   without an active PTC heater (open-frame machines like A1/P1).
+//! - **Fan routing** — Fan commands are directed to the correct controller, including
+//!   the secondary right-side auxiliary fan on models that have one (P2S, X2D, etc.).
 
 mod ams;
 pub mod dummy;
@@ -26,6 +25,7 @@ mod thermal;
 pub mod types;
 
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls};
+#[doc(inline)]
 pub use types::{CalibrationOption, FanTarget, PrintSpeed, TelemetryEvent};
 
 #[cfg(not(feature = "std"))]
@@ -52,11 +52,11 @@ pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
 
-/// A high-level, multi-platform coordinator client for Bambu Lab printers.
+/// High-level client for controlling a Bambu Lab printer.
 ///
-/// This struct wraps an active MQTT session and an optional FTPS file-system client.
-/// Type parameters default to dummy implementations to allow lightweight MQTT-only deployment on
-/// memory-constrained microcontrollers without violating recursive trait boundaries.
+/// Wraps an active [`BambuMqttClient`] session and optionally a [`BambuFtpsClient`] for
+/// SD card access. The type parameters default to [`DummyTimer`]/[`DummyTls`]/etc. so
+/// you can create an MQTT-only client without specifying the FTPS generics.
 pub struct PrinterClient<
     IO,
     Timer = DummyTimer,
@@ -85,7 +85,11 @@ impl<IO> PrinterClient<IO, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
 where
     IO: AsyncIo,
 {
-    /// Instantiates a standard, lightweight coordinate client wrapping an active MQTT session.
+    /// Creates an MQTT-only client with no FTPS or timer support.
+    ///
+    /// This is the simplest way to get started. Without a [`TimerProvider`], command-response
+    /// methods like [`get_version()`](Self::get_version) rely on a message-count safety valve
+    /// instead of wall-clock timeouts — fine for most use cases.
     pub fn new(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
         Self {
             mqtt: mqtt_client,
@@ -106,7 +110,10 @@ where
     IO: AsyncIo,
     Timer: TimerProvider,
 {
-    /// Instantiates a coordinator client with an integrated timer for command-response timeouts.
+    /// Creates a client with a [`TimerProvider`] for wall-clock command-response timeouts.
+    ///
+    /// Use this when you need reliable timeouts on methods like [`get_version()`](Self::get_version)
+    /// and [`get_k_profiles()`](Self::get_k_profiles).
     pub fn new_with_timer(
         mqtt_client: BambuMqttClient<IO>,
         timer: Timer,
@@ -148,15 +155,32 @@ where
     }
 
     /// Sets the timeout (in seconds) used by command-response methods like
-    /// `get_version()` and `get_k_profiles()`.
+    /// [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
     pub fn set_command_timeout(&mut self, secs: u64) {
         self.command_timeout_secs = secs;
     }
 
-    /// Pulls the next available telemetry event from the MQTTS channel.
+    /// Pulls the next telemetry event from the MQTT channel.
     ///
-    /// Drains any internally buffered messages (from command-response round-trips)
-    /// before reading from the wire.
+    /// Returns a [`TelemetryEvent::Report`] if the payload deserializes as a known
+    /// telemetry structure, or [`TelemetryEvent::Unknown`] otherwise. Drains any
+    /// internally buffered messages (from command-response round-trips) before
+    /// reading from the wire.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// loop {
+    ///     match printer.poll_telemetry().await? {
+    ///         TelemetryEvent::Report(report, _raw) => {
+    ///             if let Some(state) = &report.print.gcode_state {
+    ///                 println!("Printer state: {}", state);
+    ///             }
+    ///         }
+    ///         TelemetryEvent::Unknown(_) => {}
+    ///     }
+    /// }
+    /// ```
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
         let msg = if let Some(buffered) = self.pending_messages.pop_front() {
             buffered

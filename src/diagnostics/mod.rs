@@ -1,12 +1,12 @@
-//! # Diagnostics & Calibration Systems Module
+//! # Diagnostics & Calibration
 //!
-//! Consolidates hardware diagnostic utilities and linear advance (K-Profile) database
-//! management APIs under a unified module namespace [REF-DIAG-HMS] [REF-DIAG-KPROF].
+//! Tools for interpreting printer health alerts and managing calibration data.
 //!
-//! Provides callers with direct access to:
-//! 1. Telemetry parsing models resolving active `hms` fault matrices and `print_error` registers.
-//! 2. Database command wrappers handling Linear Advance queries, creation commits, and
-//!    polymorphic deletions.
+//! The [`hms`] submodule decodes HMS (Health Management System) fault codes and print
+//! error registers into human-readable alerts with severity levels. The [`kprofile`]
+//! submodule manages Linear Advance (K-factor) calibration profiles — querying the
+//! printer's stored profiles, creating new ones, and deleting them (with separate
+//! request types for standard and IDEX platforms).
 
 pub mod hms;
 pub mod kprofile;

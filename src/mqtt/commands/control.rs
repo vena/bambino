@@ -1,3 +1,5 @@
+//! Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
@@ -12,6 +14,7 @@ pub struct StandardControlPayload {
     pub sequence_id: String,
 }
 
+/// Sends a print lifecycle command (pause, resume, stop) to the printer.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardControlRequest {
     pub print: StandardControlPayload,
@@ -36,6 +39,7 @@ pub struct SkipObjectsPayload {
     pub sequence_id: String,
 }
 
+/// Tells the printer to skip specific objects in a multi-object print.
 #[derive(Debug, Clone, Serialize)]
 pub struct SkipObjectsRequest {
     pub print: SkipObjectsPayload,
@@ -60,6 +64,7 @@ pub struct CleanPrintErrorPayload {
     pub sequence_id: String,
 }
 
+/// Clears the printer's current error state so it can resume operation.
 #[derive(Debug, Clone, Serialize)]
 pub struct CleanPrintErrorRequest {
     pub print: CleanPrintErrorPayload,
@@ -85,6 +90,7 @@ pub struct CalibrationPayload {
     pub sequence_id: String,
 }
 
+/// Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
 #[derive(Debug, Clone, Serialize)]
 pub struct CalibrationRequest {
     pub print: CalibrationPayload,
@@ -115,6 +121,7 @@ pub struct PrintSpeedPayload {
     pub sequence_id: String,
 }
 
+/// Changes the active print speed profile (silent, standard, sport, ludicrous).
 #[derive(Debug, Clone, Serialize)]
 pub struct PrintSpeedRequest {
     pub print: PrintSpeedPayload,

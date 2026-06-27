@@ -15,10 +15,12 @@
 pub mod binary;
 pub mod rtsps;
 
+/// Default port for RTSPS camera streams (X1, X2, H2, P2S series).
 pub const CAMERA_PORT_RTSPS: u16 = 322;
+/// Default port for binary JPEG camera streams (A1 and P1 series).
 pub const CAMERA_PORT_BINARY_JPEG: u16 = 6000;
 
-/// Defines the operational camera interface type associated with the printer hardware line.
+/// Which camera streaming protocol a printer model uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CameraProtocol {
     /// RTSP stream wrapped in implicit TLS on Port 322 (X1, X2D, P2S, and H2 series).

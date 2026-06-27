@@ -52,11 +52,18 @@ pub struct TelemetryReport {
 }
 
 impl TelemetryReport {
-    /// Returns normalized bed (actual, target) temperatures in degrees Celsius.
+    /// Returns the bed's (actual, target) temperatures in °C.
     ///
-    /// Checks `device.bed` first (new-gen H2/P2/X2 composite-packed), then
-    /// `print.device.bed` (pushall-nested), falling back to the old-gen
-    /// `bed_temper`/`bed_target_temper` direct fields. Returns (0, 0) if absent.
+    /// Handles the different wire formats across printer generations automatically:
+    /// new-gen composite-packed `device.bed`, pushall-nested `print.device.bed`, and
+    /// old-gen direct `bed_temper`/`bed_target_temper` fields. Returns (0, 0) if absent.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let (actual, target) = report.bed_temperatures();
+    /// println!("Bed: {}°C (target {}°C)", actual, target);
+    /// ```
     pub fn bed_temperatures(&self) -> (u16, u16) {
         if let Some(temps) = self.device.as_ref().and_then(Self::unpack_bed_telemetry) {
             return temps;

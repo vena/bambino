@@ -1,3 +1,5 @@
+//! AMS telemetry types (tray slots, units, dry settings, virtual trays).
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]

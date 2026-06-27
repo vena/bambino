@@ -1,3 +1,5 @@
+//! Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration).
+
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
@@ -76,10 +78,15 @@ pub enum PrintSpeed {
 pub struct CalibrationOption(pub u32);
 
 impl CalibrationOption {
+    /// Automatic bed mesh leveling.
     pub const BED_LEVELING: Self = Self(2);
+    /// Input shaper vibration compensation tuning.
     pub const VIBRATION_COMPENSATION: Self = Self(4);
+    /// Motor noise cancellation profiling.
     pub const MOTOR_NOISE_CANCELLATION: Self = Self(8);
+    /// First-layer nozzle height calibration.
     pub const NOZZLE_HEIGHT: Self = Self(16);
+    /// Heated bed thermal compensation mapping.
     pub const HEATBED_THERMAL: Self = Self(32);
 }
 

@@ -75,6 +75,7 @@ pub struct KProfileEntry {
 // 2. Query Calibration Database Commands (extrusion_cali_get)
 // ============================================================================
 
+/// Inner payload for [`ExtrusionCaliGetRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliGetPayload {
     pub command: &'static str,
@@ -135,6 +136,7 @@ pub struct ExtrusionCaliGetResponse {
 // 3. Save or Write Calibration Commands (extrusion_cali_set)
 // ============================================================================
 
+/// Inner payload for [`ExtrusionCaliSetRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliSetPayload {
     pub command: &'static str,
@@ -177,6 +179,7 @@ impl ExtrusionCaliSetRequest {
 // 3b. Bind Calibration Profile to AMS Slot (extrusion_cali_sel)
 // ============================================================================
 
+/// Inner payload for [`ExtrusionCaliSelRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliSelPayload {
     pub command: &'static str,
@@ -243,6 +246,7 @@ pub struct IdexCaliDelEntry {
     pub extruder_id: u8,
 }
 
+/// Inner payload for [`StandardCaliDelRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardCaliDelPayload {
     pub command: &'static str,
@@ -276,6 +280,7 @@ impl StandardCaliDelRequest {
     }
 }
 
+/// Inner payload for [`IdexCaliDelRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct IdexCaliDelPayload {
     pub command: &'static str,

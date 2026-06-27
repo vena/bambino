@@ -1,11 +1,14 @@
-//! # Physical Printer Quirks & Polymorphic Model Behaviors
+//! # Model-Specific Quirks
 //!
-//! Defines the core `ModelQuirks` trait and peripheral filtering helpers to isolate
-//! model-specific network configurations, thermal architectures, kinematics, and telemetry
-//! quirks [REF-NET-DOOR] [REF-THER-DECODE] [REF-CLIM-FANS].
+//! Bambu Lab printers vary in hardware capabilities — door sensors, chamber heaters,
+//! fan step resolution, FTPS TLS requirements, camera protocols, and more. Rather than
+//! scattering `match model { ... }` blocks everywhere, the [`ModelQuirks`] trait captures
+//! all model-specific behavior in one place. Call [`BambuModel::quirks()`] to get the
+//! strategy implementation for any model.
 //!
-//! Behavioral variations are isolated polymorphically using the Strategy Pattern to avoid
-//! match-statement cluttering and duplicate dispatching branches inside primary commands.
+//! Per-model strategy structs live in the [`models`] submodule. This module also provides
+//! shared helpers like [`fan_step_to_percentage()`] and [`FanSpeedDebouncer`] for dealing
+//! with the low-resolution PWM fan telemetry common across most models.
 
 pub mod models;
 
@@ -161,11 +164,10 @@ pub trait ModelQuirks {
 }
 
 impl BambuModel {
-    /// Resolves the static `ModelQuirks` strategy matching this model variant.
+    /// Returns the [`ModelQuirks`] strategy for this model variant.
     ///
-    /// **Why this is used:**
-    /// Consolidates polymorphic dispatching into exactly one place, eliminating duplicated
-    /// match-blocks across every single trait function in the quirks library.
+    /// This is the single dispatch point — all model-specific behavior goes through
+    /// the trait object returned here, rather than match-blocks scattered across the crate.
     pub fn quirks(&self) -> &'static dyn ModelQuirks {
         match self {
             BambuModel::A1 => &models::a1::A1Quirks,

@@ -1,11 +1,11 @@
-//! # Implicit FTPS State Client & Storage Traversal
+//! # FTPS File Transfer Client
 //!
-//! Exposes secure file transfer commands, passive socket connection builders,
-//! and UNIX-style directory listing parsers to interface with the printer's
-//! local MicroSD card.
+//! Implicit FTPS client for reading and writing files on the printer's SD card.
 //!
-//! Consolidates implementation structures under a unified module namespace,
-//! simplifying local storage interaction across standard, RTOS, and bare-metal environments.
+//! [`BambuFtpsClient`] handles the TLS control channel, passive-mode data connections,
+//! and FTP command sequencing. It supports listing directories, uploading/downloading
+//! files, checking free space, and basic file management (rename, delete, mkdir).
+//! The [`parser`] submodule handles UNIX-style directory listing output.
 
 pub mod client;
 pub mod parser;

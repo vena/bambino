@@ -1,3 +1,5 @@
+//! Firmware version information returned by the `get_version` command.
+
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(not(feature = "std"))]
@@ -12,15 +14,21 @@ fn default_visible() -> bool {
 /// Hardware or firmware module entry from the printer's expansion bus version database.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionModule {
+    /// Marketing product name (e.g. "Bambu Lab X1 Carbon"). Empty if not reported.
     #[serde(default)]
     pub product_name: String,
+    /// Internal module name (e.g. "ota", "esp32", "mc", "ams").
     pub name: String,
+    /// Hardware revision string.
     #[serde(default)]
     pub hw_ver: String,
+    /// Firmware version string (e.g. "01.09.00.00").
     #[serde(default)]
     pub sw_ver: String,
+    /// Module serial number.
     #[serde(default)]
     pub sn: String,
+    /// Whether this module shows in user-facing version lists. Defaults to true.
     #[serde(default = "default_visible")]
     pub visible: bool,
     /// Used by older firmware (P1P/P1S/A1) for printer type identification via esp32 module.
@@ -40,8 +48,11 @@ pub struct VersionModule {
 /// Typed response from a `get_version` command containing all expansion bus modules.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionInfo {
+    /// Command name echoed back (always "get_version").
     pub command: String,
+    /// Sequence ID echoed back from the request.
     pub sequence_id: String,
+    /// All hardware and firmware modules on the expansion bus.
     #[serde(default)]
     pub module: Vec<VersionModule>,
 }

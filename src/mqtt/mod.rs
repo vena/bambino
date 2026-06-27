@@ -1,11 +1,14 @@
-//! # MQTT v3.1.1 State Engine & Printer Control API
+//! # MQTT Client & Command Serialization
 //!
-//! Exposes state telemetry handshakes, QoS 1 publish confirmation lists, keep-alive
-//! PING checks, write-channel zombie detection trackers, and serializable G-code and
-//! print dispatch payloads.
+//! Low-level MQTT v3.1.1 implementation for talking to Bambu Lab printers.
 //!
-//! Consolidates core structures under a unified module namespace, promoting zero-modification
-//! usage across host systems and constraint-heavy bare-metal configurations.
+//! [`BambuMqttClient`] handles the connection handshake, QoS 1 publish/subscribe,
+//! keep-alive pings, and zombie detection. The [`commands`] submodule contains all
+//! the serializable request structs (G-code dispatch, print control, AMS operations,
+//! LED/fan/buzzer commands, etc.) that get published to the printer's command topic.
+//!
+//! Most users should use [`crate::client::PrinterClient`] instead of this module
+//! directly — it wraps `BambuMqttClient` with higher-level methods and safety checks.
 
 pub mod client;
 pub mod commands;

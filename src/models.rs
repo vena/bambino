@@ -1,8 +1,9 @@
-//! # Canonical Printer Model Identity
+//! # Printer Model Identification
 //!
-//! Defines the `BambuModel` enum representing all supported Bambu Lab printer
-//! hardware variants, and `resolve_model()` for mapping serial prefixes and
-//! SSDP device model strings to the correct variant.
+//! Every Bambu Lab printer has a 3-character serial number prefix that identifies
+//! its model. [`BambuModel`] enumerates all known models, and [`resolve_model()`]
+//! maps serial prefixes (with an SSDP `DevModel` fallback) to the right variant.
+//! The resolved model drives behavioral dispatch through the [`crate::quirks`] engine.
 
 /// Enumeration of physical Bambu Lab printer models supported on the local interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -2,9 +2,9 @@
 name = "bambino"
 version = "0.1.0"
 edition = "2024"
-authors = ["Colleague <developer@bambulab.lan>"]
+authors = ["vena <deaconvena+bambino@gmail.com>"]
 description = "A multi-platform, asynchronous Rust library for direct local network control of Bambu Lab 3D printers."
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0"
 
 [features]
 # Default features: compilation targeting high-capability host systems using Tokio and Rustls

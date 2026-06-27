@@ -1,11 +1,10 @@
-//! # AMS Expansion Bus & Material Systems Module
+//! # AMS Filament System
 //!
-//! Exposes presence bitmask calculation helpers, slot-sanitization routines,
-//! multi-AMS index resolution, and filament change/drying configuration builders.
+//! Helpers for working with Bambu Lab's Automatic Material System.
 //!
-//! This module coordinates communication between sliced project materials and the
-//! physical expansion slots of standard AMS units, AMS-HT dry-chambers, and
-//! virtual external spools.
+//! Handles the mapping between slicer material slots and physical AMS tray positions,
+//! including multi-AMS index resolution, spool presence detection, and stale tray data
+//! cleanup. Supports standard AMS units, AMS-HT dry chambers, and virtual external spools.
 
 pub mod mapping;
 pub mod parser;
