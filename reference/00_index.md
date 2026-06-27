@@ -45,7 +45,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **Section 1.4: SSDP Hardware Model Code Mapping**
     *   Hardware capabilities and camera interface allocations
 *   **Section 1.5: Printer Serial Prefix Mapping Table**
-    *   Model identification via serial number prefix and H2S/H2D serial prefix collision rule
+    *   Model identification via serial number prefix (each H2-series model has a distinct prefix)
 *   **Section 1.6: Mechanical & Firmware Discovery Quirks**
     *   SSDP Unicast Query Availability, Post-Boot Local Broker Handshake Delay, and Case-Sensitive Serial Routing
 

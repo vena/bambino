@@ -38,23 +38,19 @@ pub enum BambuModel {
 }
 
 /// Resolves the specific printer model using physical serial number prefixes combined
-/// with target SSDP model advertisements to bypass collision signatures.
+/// with target SSDP model advertisements as a secondary signal.
 ///
-/// **Why prefix checks alone are insufficient:**
-/// The single-nozzle `H2S` and dual-nozzle `H2D` share the identical hardware label
-/// serial prefix `094`. We must query the optional `DevModel` header to resolve
-/// which printer model is active before routing commands `[REF-NET-PORTS]`.
+/// Each H2-series model has a distinct serial prefix confirmed by the Bambu Lab wiki:
+/// `094` = H2D, `093` = H2S, `239` = H2D Pro, `31B` = H2C. When the prefix is
+/// unrecognized, the optional `DevModel` SSDP header provides a fallback path.
 pub fn resolve_model(serial: &str, dev_model: Option<&str>) -> BambuModel {
     let prefix = serial.get(0..3).unwrap_or("");
 
     match prefix {
-        "094" => match dev_model {
-            Some("O1S") => BambuModel::H2S,
-            Some("O1D") => BambuModel::H2D,
-            Some("O1E") | Some("O2D") => BambuModel::H2DPro,
-            Some("O1C") | Some("O1C2") => BambuModel::H2C,
-            _ => BambuModel::H2S, // Safe default fallback
-        },
+        "094" => BambuModel::H2D,
+        "093" => BambuModel::H2S,
+        "239" => BambuModel::H2DPro,
+        "31B" => BambuModel::H2C,
         "00M" => BambuModel::X1C,
         "03W" => BambuModel::X1E,
         "20P" => BambuModel::X2D,
@@ -94,32 +90,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_h2_collision_resolution() {
-        assert_eq!(
-            resolve_model("09406A521703533", Some("O1S")),
-            BambuModel::H2S
-        );
-        assert_eq!(
-            resolve_model("09406A521703533", Some("O1D")),
-            BambuModel::H2D
-        );
-        assert_eq!(
-            resolve_model("09406A521703533", Some("O1E")),
-            BambuModel::H2DPro
-        );
-        assert_eq!(
-            resolve_model("09406A521703533", Some("O2D")),
-            BambuModel::H2DPro
-        );
-        assert_eq!(
-            resolve_model("09406A521703533", Some("O1C")),
-            BambuModel::H2C
-        );
-        assert_eq!(
-            resolve_model("09406A521703533", Some("O1C2")),
-            BambuModel::H2C
-        );
-        assert_eq!(resolve_model("09406A521703533", None), BambuModel::H2S);
+    fn test_h2_distinct_prefix_resolution() {
+        assert_eq!(resolve_model("09406A521703533", None), BambuModel::H2D);
+        assert_eq!(resolve_model("09306A521703533", None), BambuModel::H2S);
+        assert_eq!(resolve_model("23906A521703533", None), BambuModel::H2DPro);
+        assert_eq!(resolve_model("31B06A521703533", None), BambuModel::H2C);
+    }
+
+    #[test]
+    fn test_h2_dev_model_fallback() {
+        assert_eq!(resolve_model("999000000", Some("O1D")), BambuModel::H2D);
+        assert_eq!(resolve_model("999000000", Some("O1S")), BambuModel::H2S);
+        assert_eq!(resolve_model("999000000", Some("O1E")), BambuModel::H2DPro);
+        assert_eq!(resolve_model("999000000", Some("O2D")), BambuModel::H2DPro);
+        assert_eq!(resolve_model("999000000", Some("O1C")), BambuModel::H2C);
+        assert_eq!(resolve_model("999000000", Some("O1C2")), BambuModel::H2C);
     }
 
     #[test]
@@ -133,6 +118,10 @@ mod tests {
         assert_eq!(resolve_model("030123456789", None), BambuModel::A1Mini);
         assert_eq!(resolve_model("039123456789", None), BambuModel::A1);
         assert_eq!(resolve_model("26A123456789", None), BambuModel::A2L);
+        assert_eq!(resolve_model("094123456789", None), BambuModel::H2D);
+        assert_eq!(resolve_model("093123456789", None), BambuModel::H2S);
+        assert_eq!(resolve_model("239123456789", None), BambuModel::H2DPro);
+        assert_eq!(resolve_model("31B123456789", None), BambuModel::H2C);
     }
 
     #[test]
@@ -146,12 +135,6 @@ mod tests {
         assert_eq!(resolve_model("999000000", Some("C11")), BambuModel::P1P);
         assert_eq!(resolve_model("999000000", Some("C12")), BambuModel::P1S);
         assert_eq!(resolve_model("999000000", Some("N7")), BambuModel::P2S);
-        assert_eq!(resolve_model("999000000", Some("O1D")), BambuModel::H2D);
-        assert_eq!(resolve_model("999000000", Some("O1E")), BambuModel::H2DPro);
-        assert_eq!(resolve_model("999000000", Some("O2D")), BambuModel::H2DPro);
-        assert_eq!(resolve_model("999000000", Some("O1C")), BambuModel::H2C);
-        assert_eq!(resolve_model("999000000", Some("O1C2")), BambuModel::H2C);
-        assert_eq!(resolve_model("999000000", Some("O1S")), BambuModel::H2S);
         assert_eq!(
             resolve_model("999000000", Some("FUTURE")),
             BambuModel::Unknown

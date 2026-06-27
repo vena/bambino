@@ -174,21 +174,19 @@ Discovery systems may match the leading 3-character prefix of the printer serial
 
 | Prefix | Printer Model | Printer Series |
 | :--- | :--- | :--- |
-| **`094`** | H2D / H2C / H2S | H2 |
+| **`094`** | H2D | H2 |
+| **`093`** | H2S | H2 |
+| **`239`** | H2D Pro | H2 |
+| **`31B`** | H2C | H2 |
 | **`00M`** | X1C / X1 | X1 |
 | **`03W`** | X1E | X1 |
 | **`20P`** | X2D | X2 |
 | **`01S`** | P1P | P1 |
 | **`01P`** | P1S | P1 |
 | **`22E`** | P2S | P2 |
-| **`030`** | A1_MINI | A1 |
+| **`030`** | A1 Mini | A1 |
 | **`039`** | A1 | A1 |
 | **`26A`** | A2L | A2 |
-
-#### H2S & H2D Serial Prefix Collision Rule
-The single-nozzle `H2S` and dual-nozzle `H2D` share the identical serial number prefix `094` on their physical hardware labels. To prevent routing incompatibilities, discovery engines must execute secondary validation:
-1.  **SSDP Verification**: Parse the incoming `DevModel.bambu.com` (or `DevModel`) header, which correctly differentiates the models (`O1S` for `H2S` and `O1D` for `H2D`).
-2.  **Telemetry Verification**: Verify the nozzle or extruder count on the telemetry topic `device/status` (refer to Chapter 5).
 
 ---
 

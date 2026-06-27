@@ -252,14 +252,14 @@ mod tests {
         let payload = b"NOTIFY * HTTP/1.1\r\n\
                         HOST: 239.255.255.250:2021\r\n\
                         LOCATION: http://192.168.1.150:80/\r\n\
-                        USN: uuid:09406A521703533\r\n\
+                        USN: uuid:09306A521703533\r\n\
                         DevName.bambu.com: MyPrinterName\r\n\
                         DevModel.bambu.com: O1S\r\n\
                         DevConnect.bambu.com: lan\r\n\
                         DevVersion.bambu.com: 01.02.00.00\r\n\r\n";
 
         let device = parse_ssdp_payload(payload).unwrap();
-        assert_eq!(device.serial, "09406A521703533");
+        assert_eq!(device.serial, "09306A521703533");
         assert_eq!(device.model, BambuModel::H2S);
         assert_eq!(device.ip, "192.168.1.150");
         assert_eq!(device.port, 80);
@@ -303,7 +303,7 @@ mod tests {
         let payload = b"NOTIFY * HTTP/1.1\r\n\
                         HOST: 239.255.255.250:2021\r\n\
                         LOCATION: http://192.168.1.150:80/\r\n\
-                        USN: 09406A521703533\r\n\
+                        USN: 09306A521703533\r\n\
                         DevModel.bambu.com: O1S\r\n\
                         DevSignal.bambu.com: -43\r\n\
                         DevBind.bambu.com: bound\r\n\

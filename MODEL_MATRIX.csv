@@ -1,0 +1,54 @@
+,"A1","A1 mini","A2L","H2C","H2D","H2D Pro","H2S","P1P","P1S","P2S","X1C","X1E","X2D"
+"Serial Prefix","039","030","26A","31B","094","239","093","01S","01P","22E","00M","03W","20P"
+"Type","Bed-Slinger","Bed-Slinger","Bed-Slinger","CoreXY / Vortek Tool-Changer","CoreXY","CoreXY","CoreXY","CoreXY","CoreXY","CoreXY","CoreXY","CoreXY","CoreXY"
+"Chamber","No","No","No","Yes","Yes","Yes","Yes","No","Yes","Yes","Yes","Yes","Yes"
+"Build Volume","256*256*256 mm³","180*180*180 mm³","330*320*325 mm³","Single Nozzle: 305*320*325 mm³
+Dual Nozzle: 300*320*325 mm³
+Total for Two: 330*320*325 mm³","Single Nozzle: 325*320*325 mm³
+Dual Nozzle: 300*320*325 mm³
+Total for Two: 350*320*325 mm³","Single Nozzle: 325*320*325 mm³
+Dual Nozzle: 300*320*325 mm³
+Total for Two: 350*320*325 mm³","340*320*340 mm³","256*256*256 mm³","256*256*256 mm³","256*256*256 mm³","256*256*256 mm³","256*256*256 mm³","Main Nozzle: 256*256*260 mm³
+Auxiliary Nozzle: 235.5*256*256 mm³
+Dual Nozzle: 235.5*256*256 mm³
+Total for Two: 256*256*260 mm³"
+"# Nozzles","1","1","1","2 Slots, up to 7 active nozzles","2","2","1","1","1","1","1","1","2"
+"Included Extruder Gears","Hardened Steel","Steel","Hardened Steel","Hardened Steel","Hardened Steel","Hardened Steel","Hardened Steel","Steel","Steel","Hardened Steel","Hardened Steel","Hardened Steel","Hardened Steel"
+"Included Toolhead Nozzle","Stainless Steel 0.4mm","Stainless Steel 0.4mm","Stainless Steel 0.4mm","Hardened Steel 0.4mm","Hardened Steel 0.4mm","Tungsten Carbide 0.4mm","Hardened Steel 0.4mm","Stainless Steel 0.4mm","Stainless Steel 0.4mm","Hardened Steel 0.4mm","Hardened Steel 0.4mm","Hardened Steel 0.4mm","Hardened Steel 0.4mm"
+"Max Hot End Temperature","300°C","300°C","300°C","350°C","350°C","350°C","350°C","300°C","300°C","300°C","300°C","320°C","300°C"
+"Max Build Plate Temperature","100°C","80°C","80°C","120°C","120°C","120°C","120°C","100°C","100°C","110°C","110°C","110°C","120°C"
+"Chamber Heater","No","No","No","Yes","Yes","Yes","Yes","No","No","No","No","Yes","Yes"
+"Max Chamber Temperature","N/A","N/A","N/A","65°C","65°C","65°C","65°C","N/A","N/A","N/A","N/A","60°C","65°C"
+"Air Purification Filter","No","No","No","Yes (HEPA H12 + Activated Carbon)","Yes (HEPA H12 + Activated Carbon)","Yes (HEPA H12 + Activated Carbon)","Yes (HEPA H12 + Activated Carbon)","No","Yes (Activated Carbon)","Yes (Activated Carbon)","Yes (Activated Carbon)","Yes (HEPA H12 + Activated Carbon)","Yes (HEPA H12 + Activated Carbon)"
+"Part Cooling Fan","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes"
+"Aux Part Cooling Fan","No","No","No","Yes","Yes","Yes","Yes","Optional","Yes","Yes","Yes","Yes","Yes"
+"Chamber Heat Circulation Fan","N/A","N/A","N/A","Yes","Yes","Yes","Yes","N/A","Yes","No","Yes","Yes","Yes"
+"Chamber Exhaust Fan","N/A","N/A","N/A","Yes","Yes","Yes","Yes","N/A","No","No","No","No","Yes"
+"Hotend Fan","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes"
+"Airduct Damper Control (Adaptive Airflow System)","No","No","No","Yes","Yes","Yes","Yes","No","No","Yes","No","No","Yes"
+"Door Sensor","N/A","N/A","N/A","Yes","Yes","Yes","Yes","N/A","No","Yes","Yes","Yes","Yes"
+"Filament Run Out Sensor","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes"
+"Filament Tangle Sensor","Yes","Yes","Yes","Yes","Yes","Yes","Yes","No","No","Yes","No","No","Yes"
+"Filament Odometry","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes (with AMS)","Yes (with AMS)","Yes (with AMS)","Yes (with AMS)","Yes (with AMS)","Yes (with AMS)"
+"Power Loss Recovery","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes"
+"Clumping Detection","No","No","Yes","No","No","No","No","No","No","No","No","No","No"
+"Micro Lidar","No","No","No","No","No","No","No","No","No","No","Yes","Yes","No"
+"Cameras","Low Rate Camera (up to 1080P)","Low Rate Camera (up to 1080P)","Low Rate Camera (up to 1080P)","Live View 1080P
+Nozzle 1080P
+BirdsEye 3264x2448
+Toolhead 1080P","Live View 1080P
+Nozzle 1080P
+BirdsEye 3264x2448 (Laser Edition only)
+Toolhead 1080P","Live View 1080P
+Nozzle 1080P
+Toolhead 1080P","Live View 1080P
+Toolhead 1600x1200
+BirdsEye 3264x2448 (Laser Edition only)","Low Rate Camera (720P)","Low Rate Camera (720P)","1080P 30fps HD","Chamber 1080P","Chamber 1080P","Live View 1080P
+Toolhead 1600x1200"
+"Video Streaming Protocol","Chamber Image JPEG","Chamber Image JPEG","Chamber Image JPEG","RTSPS","RTSPS","RTSPS","RTSPS","Chamber Image JPEG","Chamber Image JPEG","RTSPS","RTSPS","RTSPS","RTSPS"
+"Application Processor","ESP32-S3","ESP32-S3","Single-core Cortex M7","Quad-core 1.5 GHz ARM A7","Quad-core 1.5 GHz ARM A7","Quad-core 1.5 GHz ARM A7","Single-core Cortex M7","ESP32-WROOM-32","ESP32-WROOM-32","Quad-core 1.5 GHz ARM A7","Quad ARM A7 1.2 GHz","Quad ARM A7 1.2 GHz","Quad-core ARM with dedicated NPU"
+"Storage","MicroSD","MicroSD","MicroSD","8GB EMMC and USB port","8GB EMMC and USB port","32GB EMMC and USB port","8GB EMMC and USB Port","MicroSD","MicroSD","8GB EMMC and USB port","4GB EMMC and MicroSD","4GB EMMC and MicroSD","8GB EMMC and USB port"
+"LED Lighting","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes","Yes"
+"AI Engine","No","No","No","Yes (2 TOPS NPU)","Yes (2 TOPS NPU)","Yes (2 TOPS NPU)","Yes (2 TOPS NPU)","No","No","Yes (2 TOPS NPU)","Yes (2 TOPS NPU)","Yes (2 TOPS NPU)","Yes (NPU)"
+"Prompt Sound (Speaker)","Yes","Yes","Yes","No","No","No","No","No","No","No","No","No","No"
+"Fire Alarm Buzzer","No","No","No","Yes","Yes","Yes","Yes","No","No","No","No","No","No"
