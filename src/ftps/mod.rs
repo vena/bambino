@@ -9,6 +9,7 @@
 
 pub mod client;
 pub mod parser;
+pub(crate) mod protocol;
 
 pub use client::{BambuFtpsClient, FtpDataStreamFactory};
 pub use parser::{FtpFile, parse_unix_listing};

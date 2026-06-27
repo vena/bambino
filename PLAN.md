@@ -14,8 +14,6 @@ When completing a phase, collapse its section into the completed summary below.
 
 **Deferred from 19b:** `AmsUnit.info` bitmask helper methods (quirks phase), `device.bed` vs `bed_temper` model-aware selection (temperature normalization phase).
 
-**Current state:** 267 tests (229 unit + 38 integration), all passing. `no_std`+`alloc` clean. Clippy clean.
-
 ---
 
 ## Phase 20: Expanded CLI Control Commands
@@ -26,8 +24,12 @@ Add commonly useful control commands to the CLI for hardware testing. With Phase
 - [ ] **`clear-error`** — Clear active print error codes via `clear_print_error()`
 - [ ] **`airduct <cooling|heating|laser>`** — Switch airduct damper mode via `set_airduct_mode(AirductMode)` (H2/P2S/X2D)
 - [ ] **`calibrate <options>`** — Trigger calibration routines via `start_calibration()` (bed-leveling, vibration, motor-noise, nozzle-height, heatbed-thermal)
-- [ ] **`ams dry <ams_id> <temp> <time> <filament>`** — Start AMS drying cycle via `start_drying()`
+- [ ] **`ams dry <ams_id> <temp> <time> <rotate_tray> <filament>`** — Start AMS drying cycle via `start_drying()`
 - [ ] **`ams dry-stop <ams_id>`** — Stop AMS drying cycle via `stop_drying()`
+
+## Phase 21: Review and Align Reference Docs
+
+Review the reference documentation in `/reference` for alignment with the now expansive typed structs and quirks modules. It's likely that we have discovered and implemented things that were not known or incorrect during the creation of the reference docs. Update the reference docs to fix any errors, confusion, or mis-alignment.
 
 ---
 
@@ -37,3 +39,4 @@ Add commonly useful control commands to the CLI for hardware testing. With Phase
 |-------|--------|--------|
 | 1–19b | Core → Wire Field Completeness | **Complete** |
 | 20 | Expanded CLI Commands | Not started |
+| 21 | Review and Align Reference Docs | Not Started |
