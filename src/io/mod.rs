@@ -51,6 +51,13 @@ pub enum SocketError {
     Other(&'static str),
 }
 
+/// TLS protocol version negotiated during a handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsVersion {
+    Tls12,
+    Tls13,
+}
+
 /// Consolidated Async Read + Write trait boundary.
 ///
 /// Intermediates communication across all layers (MQTTS, FTPS, RTSPS, Port 6000).
@@ -89,6 +96,14 @@ pub trait TlsConnector<RawStream: AsyncIo> {
         port: u16,
         raw_stream: RawStream,
     ) -> Result<Self::Stream, SocketError>;
+
+    /// Returns the TLS protocol version negotiated on the given stream.
+    ///
+    /// Platforms that cannot inspect the negotiated version return `None`,
+    /// which causes the FTPS client to skip TLS version validation (best-effort).
+    fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        None
+    }
 }
 
 /// Platform-neutral asynchronous sleep controller.

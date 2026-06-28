@@ -16,7 +16,7 @@ use embedded_io_async::Write;
 
 use crate::error::BambuError;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
-use crate::io::{AsyncIo, SocketError, TlsConnector};
+use crate::io::{AsyncIo, SocketError, TlsConnector, TlsVersion};
 use crate::models::BambuModel;
 
 use super::protocol::*;
@@ -68,6 +68,17 @@ where
         let mut control_stream = tls_connector
             .connect(ip, FTPS_IMPLICIT_PORT, raw_control)
             .await?;
+
+        if model.quirks().enforce_ftps_tls_1_2()
+            && let Some(version) = tls_connector.negotiated_version(&control_stream)
+            && version != TlsVersion::Tls12
+        {
+            return Err(BambuError::ProtocolViolation(
+                "This model requires TLS 1.2 for FTPS but TLS 1.3 was negotiated \
+                 — configure the TlsConnector with force_tls_1_2 enabled"
+                    .into(),
+            ));
+        }
 
         let mut buf = Vec::new();
 

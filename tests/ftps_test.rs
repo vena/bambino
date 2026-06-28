@@ -16,7 +16,9 @@ use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 
-use common::io::{DummyTlsConnector, MockDataStreamFactory};
+use bambino::io::TlsVersion;
+
+use common::io::{DummyTlsConnector, MockDataStreamFactory, VersionReportingTlsConnector};
 use common::mock_ftps;
 
 /// Helper: creates the standard test infrastructure (duplex control stream, data container, factory).
@@ -243,5 +245,119 @@ async fn test_ftps_disconnect() {
 
     client.disconnect().await;
 
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_tls13_rejected_for_p2s() {
+    let (client_control, _server_control, _data_container, factory) = setup();
+
+    let result = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
+        factory,
+        BambuModel::P2S,
+        "127.0.0.1",
+        "12345678",
+    )
+    .await;
+
+    match result {
+        Err(bambino::error::BambuError::ProtocolViolation(_)) => {}
+        Err(e) => panic!("Expected ProtocolViolation for TLS 1.3 on P2S, got {:?}", e),
+        Ok(_) => panic!("Expected error for TLS 1.3 on P2S, but connect succeeded"),
+    }
+}
+
+#[tokio::test]
+async fn test_ftps_tls13_rejected_for_x2d() {
+    let (client_control, _server_control, _data_container, factory) = setup();
+
+    let result = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
+        factory,
+        BambuModel::X2D,
+        "127.0.0.1",
+        "12345678",
+    )
+    .await;
+
+    match result {
+        Err(bambino::error::BambuError::ProtocolViolation(_)) => {}
+        Err(e) => panic!("Expected ProtocolViolation for TLS 1.3 on X2D, got {:?}", e),
+        Ok(_) => panic!("Expected error for TLS 1.3 on X2D, but connect succeeded"),
+    }
+}
+
+#[tokio::test]
+async fn test_ftps_tls12_accepted_for_p2s() {
+    let (client_control, server_control, _data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        server_control,
+        Arc::new(Mutex::new(None)),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
+        factory,
+        BambuModel::P2S,
+        "127.0.0.1",
+        "12345678",
+    )
+    .await
+    .expect("TLS 1.2 should be accepted for P2S");
+
+    client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_tls13_accepted_for_p1s() {
+    let (client_control, server_control, _data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        server_control,
+        Arc::new(Mutex::new(None)),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
+        factory,
+        BambuModel::P1S,
+        "127.0.0.1",
+        "12345678",
+    )
+    .await
+    .expect("TLS 1.3 should be accepted for P1S");
+
+    client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_version_none_skips_check_for_p2s() {
+    let (client_control, server_control, _data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        server_control,
+        Arc::new(Mutex::new(None)),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(None),
+        factory,
+        BambuModel::P2S,
+        "127.0.0.1",
+        "12345678",
+    )
+    .await
+    .expect("None version should skip check even for P2S");
+
+    client.disconnect().await;
     server_handle.await.expect("Mock server panicked");
 }

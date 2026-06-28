@@ -4,7 +4,9 @@
 //! and Timer interfaces for standard operating systems using the Tokio runtime
 //! and the Rustls TLS stack.
 
-use crate::io::{AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector, TokioIo};
+use crate::io::{
+    AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector, TlsVersion, TokioIo,
+};
 
 pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
@@ -294,6 +296,14 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
             .map_err(to_socket_error)?;
 
         Ok(TokioIo(tls_stream))
+    }
+
+    fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
+        match stream.0.get_ref().1.protocol_version()? {
+            rustls::ProtocolVersion::TLSv1_2 => Some(TlsVersion::Tls12),
+            rustls::ProtocolVersion::TLSv1_3 => Some(TlsVersion::Tls13),
+            _ => None,
+        }
     }
 }
 

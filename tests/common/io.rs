@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bambino::ftps::FtpDataStreamFactory;
-use bambino::io::{AsyncIo, SocketError, TlsConnector, TokioIo};
+use bambino::io::{AsyncIo, SocketError, TlsConnector, TlsVersion, TokioIo};
 
 /// A pass-through TLS connector for testing.
 ///
@@ -32,6 +32,26 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for DummyTlsConnector {
         raw_stream: RawIO,
     ) -> Result<Self::Stream, SocketError> {
         Ok(raw_stream)
+    }
+}
+
+/// A pass-through TLS connector that reports a specific negotiated TLS version.
+pub struct VersionReportingTlsConnector(pub Option<TlsVersion>);
+
+impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
+    type Stream = RawIO;
+
+    async fn connect(
+        &self,
+        _host: &str,
+        _port: u16,
+        raw_stream: RawIO,
+    ) -> Result<Self::Stream, SocketError> {
+        Ok(raw_stream)
+    }
+
+    fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        self.0
     }
 }
 

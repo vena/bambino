@@ -225,7 +225,7 @@ let config = build_verified_client_config(
 let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 ```
 
-Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — check with `model.quirks().enforce_ftps_tls_1_2()`.
+Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — use `model.quirks().enforce_ftps_tls_1_2()` to query this. If a misconfigured `TlsConnector` negotiates TLS 1.3 on a model that requires 1.2, `BambuFtpsClient::connect()` will return a `ProtocolViolation` error immediately.
 
 ## Platform targets
 
