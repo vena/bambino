@@ -11,17 +11,13 @@
 pub mod parser;
 
 use crate::error::BambuError;
-use crate::io::{AsyncUdpSocket, TimerProvider};
+use crate::io::AsyncUdpSocket;
+#[cfg(feature = "std")]
+use crate::io::TimerProvider;
 pub use parser::{SsdpDevice, parse_ssdp_payload};
 
 #[cfg(not(feature = "std"))]
-use alloc::collections::BTreeSet;
-#[cfg(not(feature = "std"))]
 use alloc::format;
-#[cfg(not(feature = "std"))]
-use alloc::string::String;
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
 use std::collections::BTreeSet;
@@ -36,6 +32,7 @@ pub const SSDP_PORT: u16 = 2021;
 pub const SSDP_PORT_ALT: u16 = 1990;
 
 /// Interval between periodic M-SEARCH re-broadcasts during discovery sweeps (milliseconds).
+#[cfg(feature = "std")]
 pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u128 = 3000;
 
 const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
@@ -174,7 +171,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 ///     println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
 /// }
 /// ```
-#[cfg(any(feature = "std", feature = "alloc"))]
+#[cfg(feature = "std")]
 pub async fn discover_devices<U, T>(
     timeout: core::time::Duration,
     timer: &T,

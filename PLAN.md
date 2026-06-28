@@ -4,27 +4,7 @@
 
 ---
 
-## Phase 1: Gate `discover_devices()` for Embassy
-
-### Problem
-
-`AsyncUdpSocket::bind()` is a trait associated function that creates a new socket. `EmbassyUdpSocket` can't implement it — Embassy sockets require a pre-existing stack reference with lifetime constraints. The impl panics with `unimplemented!()`. `discover_devices()` calls `U::bind()`, so it's a runtime panic on Embassy.
-
-In practice, SSDP discovery on a bare-metal Embassy device is unlikely — you'd configure the printer IP at build time or via some other mechanism. The fix is probably gating `discover_devices()` behind `std` rather than redesigning the trait.
-
-### Investigation
-
-- Confirm `discover_devices()` is the only caller of `U::bind()`.
-- Check the current gate: `#[cfg(any(feature = "std", feature = "alloc"))]`. Since Embassy implies `alloc`, the function is available but panics. Changing to `#[cfg(feature = "std")]` would fix it.
-- Check if `DiscoveryEngine::new()` (which takes a pre-bound socket) still works on Embassy — it should, since it doesn't call `bind()`.
-
-### Fix
-
-Gate `discover_devices()` behind `std`. Verify the `no_std` library build.
-
----
-
-## Phase 2: Add `TokioFtpDataStreamFactory`
+## Phase 1: Add `TokioFtpDataStreamFactory`
 
 ### Problem
 
@@ -42,7 +22,7 @@ Add `TokioFtpDataStreamFactory` (or similar) to `io/tokio.rs`. Verify builds and
 
 ---
 
-## Phase 3: CLI dependencies leak into library `tokio` feature
+## Phase 2: CLI dependencies leak into library `tokio` feature
 
 ### Problem
 
@@ -60,7 +40,7 @@ Apply if warranted. Verify `cargo build`, `cargo build --no-default-features --f
 
 ---
 
-## Phase 4: Architectural review
+## Phase 3: Architectural review
 
 ### What this phase is — and is not
 
@@ -144,7 +124,6 @@ For each of the 6 questions, write a **Sound / Concern / Problem** verdict with 
 
 | Phase | Status |
 |-------|--------|
-| 1 | Gate `discover_devices()` for Embassy | Not Started |
-| 2 | Add `TokioFtpDataStreamFactory` | Not Started |
-| 3 | CLI dependency leakage | Not Started |
-| 4 | Architectural review | Not Started |
+| 1 | Add `TokioFtpDataStreamFactory` | Not Started |
+| 2 | CLI dependency leakage | Not Started |
+| 3 | Architectural review | Not Started |

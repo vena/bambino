@@ -241,6 +241,8 @@ bambino = { path = "../bambino", default-features = false, features = ["embassy"
 
 All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerProvider`, etc.) so library code is platform-agnostic. Platform-specific implementations live in `io::tokio`, `io::esp_idf`, and `io::embassy`.
 
+**Embassy note:** `discover_devices()` is not available on Embassy — the convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
+
 ## bambino-cli
 
 A CLI using our own library client for testing against real printers. Ships as a binary in the same crate.
