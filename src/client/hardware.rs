@@ -3,14 +3,14 @@ use alloc::format;
 
 use crate::error::BambuError;
 use crate::ftps::FtpDataStreamFactory;
-use crate::io::{AsyncIo, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
 use super::types::FanTarget;
 
-impl<IO, Timer, RawIO, Tls, Factory> PrinterClient<IO, Timer, RawIO, Tls, Factory>
+impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
 where
-    IO: AsyncIo,
+    Conn: SecureConnect,
     Timer: TimerProvider,
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,

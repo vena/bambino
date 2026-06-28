@@ -1,4 +1,4 @@
-# bambino — Review Plan
+# bambino — Lazy connections and API consistency
 
 **Important:** Before starting any phase, read `README.md` cover to cover. Understand what this library does and who it's for. Do not apply generic software engineering heuristics without grounding them in the project's actual goals.
 
@@ -16,33 +16,18 @@ Added building blocks for phases 2–4. Pure additions, no existing code changed
 
 ---
 
-## Phase 2: PrinterClient Struct Migration (Backward Compatible)
+## Phase 2: PrinterClient Struct Migration — Complete
 
-### Problem
+Migrated `PrinterClient` from `IO: AsyncIo` (passive stream) to `Conn: SecureConnect` (active connector) as its first type parameter. All existing constructors and callers still work — they now produce `PrinterClient<PreConnected<IO>, ...>` instead of `PrinterClient<IO, ...>`, invisible through type inference.
 
-`PrinterClient`'s first type parameter is `IO: AsyncIo` — a passive stream type. Phases 3–4 need it to be `Conn: SecureConnect` — an active connector. This phase performs the structural migration while keeping all existing constructor signatures working, so tests and the CLI compile without modification.
-
-### Design
-
-Change the struct definition and all impl blocks from `IO: AsyncIo` to `Conn: SecureConnect`. The MQTT client type becomes `BambuMqttClient<Conn::Stream>`. The `mqtt` field becomes `Option<BambuMqttClient<Conn::Stream>>` to prepare for lazy connection.
-
-New struct fields: `connector: Conn`, `ip: String`, `access_code: String`, `ftps_config: Option<(Tls, Factory)>`, `mqtt_port: u16`, `ftps_port: u16`.
-
-**Backward compatibility strategy:** The existing constructors (`new`, `new_with_timer`, `new_with_storage`) keep their parameter signatures but now constrain `Conn = PreConnected<IO>`. Since all callers use type inference (`let mut client = PrinterClient::new(mqtt, serial, model)`), the return type change from `PrinterClient<IO, ...>` to `PrinterClient<PreConnected<IO>, ...>` is invisible to them. No test or CLI changes needed.
-
-**`ensure_mqtt()` pattern:** Add a private `ensure_mqtt(&mut self) -> Result<(), BambuError>` that checks if `self.mqtt` is `Some` (short-circuit) or creates a new connection via `self.connector.secure_connect()` + `BambuMqttClient::connect()`. In this phase, it's structurally a no-op (mqtt is always `Some` from the constructors) but establishes the pattern for phase 3.
-
-Update every method in `mod.rs` that accesses `self.mqtt` to use `ensure_mqtt().await?` + `self.mqtt.as_mut().unwrap()`. Update the `mqtt()` accessor to return `Option<&mut BambuMqttClient<Conn::Stream>>` — no current caller uses it (the escape hatch was added for future use), so the signature change is safe.
-
-**Submodule updates:** Every impl block in `thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs`, `storage.rs` changes its first type bound from `IO: AsyncIo` to `Conn: SecureConnect`. No method bodies change — all MQTT access flows through `self.publish_request()` and `self.poll_until()` in `mod.rs`.
-
-### Verification
-
-```sh
-cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
-```
-
-All existing tests and the CLI must pass without modification.
+**What changed:**
+- Struct field `mqtt` is now `Option<BambuMqttClient<Conn::Stream>>` (was non-optional `BambuMqttClient<IO>`).
+- New struct fields added for Phase 3: `connector: Conn`, `ip: String`, `access_code: String`, `mqtt_port: u16`, `ftps_port: u16`. Currently unused — set to defaults by existing constructors.
+- Private `ensure_mqtt()` method gates all MQTT access (`poll_telemetry`, `poll_raw`, `poll_until`, `publish_request`, `send_ping`). Currently a no-op (mqtt is always `Some`); Phase 3 will implement lazy connect in the `None` branch.
+- `mqtt()` accessor returns `Option<&mut BambuMqttClient<Conn::Stream>>` (was `&mut BambuMqttClient<IO>`). No callers use it.
+- `new_with_storage()` lives in its own `PreConnected<IO>`-constrained impl block in `storage.rs`; `attach_storage()` and `storage()` are in the general `Conn: SecureConnect` impl block.
+- All submodule impl blocks (`thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs`) use `Conn: SecureConnect` bound. No method body changes — they access MQTT through `self.publish_request()` / `self.poll_until()`.
+- `PreConnected`'s inner `PhantomData` field is `pub(crate)` so constructors in `mod.rs` / `storage.rs` can instantiate it.
 
 ---
 
@@ -219,7 +204,7 @@ Answer the design questions based on the current codebase, then write a concrete
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Foundation types and library adapters | Complete |
-| 2 | `PrinterClient` struct migration (backward compatible) | Not Started |
+| 2 | `PrinterClient` struct migration (backward compatible) | Complete |
 | 3 | Lazy MQTT connection and constructor redesign | Not Started |
 | 4 | Lazy FTPS connection and API alignment | Not Started |
 | 5 | Documentation | Not Started |

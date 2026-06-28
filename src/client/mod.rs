@@ -40,9 +40,11 @@ use std::collections::VecDeque;
 
 use serde::Serialize;
 
+use core::marker::PhantomData;
+
 use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use crate::io::{AsyncIo, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, SecureConnect, SocketError, TimerProvider, TlsConnector};
 use crate::models::BambuModel;
 use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{BambuMqttClient, MqttMessage};
@@ -54,34 +56,41 @@ pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
 
 /// High-level client for controlling a Bambu Lab printer.
 ///
-/// Wraps an active [`BambuMqttClient`] session and optionally a [`BambuFtpsClient`] for
-/// SD card access. The type parameters default to [`DummyTimer`]/[`DummyTls`]/etc. so
-/// you can create an MQTT-only client without specifying the FTPS generics.
+/// Wraps an MQTT session (connected or lazy) and optionally a [`BambuFtpsClient`] for
+/// SD card access. The first type parameter is a [`SecureConnect`] connector that
+/// determines the MQTT stream type. Use [`PreConnected`] when wrapping an already-connected
+/// [`BambuMqttClient`], or a platform connector (e.g. `TokioSecureConnector`) for lazy
+/// connection.
 pub struct PrinterClient<
-    IO,
+    Conn,
     Timer = DummyTimer,
     RawIO = DummyRawIo,
     Tls = DummyTls,
     Factory = DummyFactory,
 > where
-    IO: AsyncIo,
+    Conn: SecureConnect,
     Timer: TimerProvider,
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
-    pub(crate) mqtt: BambuMqttClient<IO>,
+    pub(crate) mqtt: Option<BambuMqttClient<Conn::Stream>>,
     pub(crate) ftps: Option<BambuFtpsClient<RawIO, Tls, Factory>>,
+    pub(crate) connector: Conn,
     pub(crate) timer: Timer,
     pub(crate) serial: String,
+    pub(crate) ip: String,
+    pub(crate) access_code: String,
     pub(crate) model: BambuModel,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
     pub(crate) pending_messages: VecDeque<MqttMessage>,
     pub(crate) command_timeout_secs: u64,
+    pub(crate) mqtt_port: u16,
+    pub(crate) ftps_port: u16,
 }
 
-impl<IO> PrinterClient<IO, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
+impl<IO> PrinterClient<PreConnected<IO>, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
 where
     IO: AsyncIo,
 {
@@ -93,20 +102,25 @@ where
     pub fn new(mut mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
         mqtt_client.owned_by_printerclient = true;
         Self {
-            mqtt: mqtt_client,
+            mqtt: Some(mqtt_client),
             ftps: None,
+            connector: PreConnected(PhantomData),
             timer: DummyTimer,
             serial: String::from(serial),
+            ip: String::new(),
+            access_code: String::new(),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
             pending_messages: VecDeque::new(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            mqtt_port: crate::mqtt::MQTTS_PORT,
+            ftps_port: crate::ftps::FTPS_PORT,
         }
     }
 }
 
-impl<IO, Timer> PrinterClient<IO, Timer, DummyRawIo, DummyTls, DummyFactory>
+impl<IO, Timer> PrinterClient<PreConnected<IO>, Timer, DummyRawIo, DummyTls, DummyFactory>
 where
     IO: AsyncIo,
     Timer: TimerProvider,
@@ -123,27 +137,43 @@ where
     ) -> Self {
         mqtt_client.owned_by_printerclient = true;
         Self {
-            mqtt: mqtt_client,
+            mqtt: Some(mqtt_client),
             ftps: None,
+            connector: PreConnected(PhantomData),
             timer,
             serial: String::from(serial),
+            ip: String::new(),
+            access_code: String::new(),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
             pending_messages: VecDeque::new(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            mqtt_port: crate::mqtt::MQTTS_PORT,
+            ftps_port: crate::ftps::FTPS_PORT,
         }
     }
 }
 
-impl<IO, Timer, RawIO, Tls, Factory> PrinterClient<IO, Timer, RawIO, Tls, Factory>
+impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
 where
-    IO: AsyncIo,
+    Conn: SecureConnect,
     Timer: TimerProvider,
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
+    /// Ensures the MQTT client is connected, returning an error if not.
+    ///
+    /// In the current phase, all constructors provide a pre-connected client, so the
+    /// `None` branch is unreachable. Phase 3 will implement lazy connection here.
+    async fn ensure_mqtt(&mut self) -> Result<(), BambuError> {
+        if self.mqtt.is_some() {
+            return Ok(());
+        }
+        Err(BambuError::NetworkError(SocketError::NotConnected))
+    }
+
     /// Increments and returns the next transaction/sequence identifier tracking commands.
     ///
     /// Wraps at `TASK_ID_MAX` (32-bit signed integer limit) to stay within firmware
@@ -184,10 +214,11 @@ where
     /// }
     /// ```
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
+        self.ensure_mqtt().await?;
         let msg = if let Some(buffered) = self.pending_messages.pop_front() {
             buffered
         } else {
-            self.mqtt.poll_message().await?
+            self.mqtt.as_mut().unwrap().poll_message().await?
         };
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
             Ok(report) => Ok(TelemetryEvent::Report(Box::new(report), msg)),
@@ -199,10 +230,11 @@ where
     ///
     /// Drains any internally buffered messages before reading from the wire.
     pub async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError> {
+        self.ensure_mqtt().await?;
         if let Some(buffered) = self.pending_messages.pop_front() {
             Ok(buffered)
         } else {
-            self.mqtt.poll_message().await
+            self.mqtt.as_mut().unwrap().poll_message().await
         }
     }
 
@@ -215,12 +247,13 @@ where
     where
         F: FnMut(&MqttMessage) -> Option<T>,
     {
+        self.ensure_mqtt().await?;
         let start = self.timer.now_millis();
         let timeout_ms = self.command_timeout_secs * 1000;
         let mut count: usize = 0;
 
         loop {
-            let msg = self.mqtt.poll_message().await?;
+            let msg = self.mqtt.as_mut().unwrap().poll_message().await?;
             if let Some(result) = matcher(&msg) {
                 return Ok(result);
             }
@@ -242,8 +275,9 @@ where
         &mut self,
         request: &T,
     ) -> Result<u16, BambuError> {
+        self.ensure_mqtt().await?;
         let payload = serde_json::to_vec(request).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.publish_command(&payload).await
+        self.mqtt.as_mut().unwrap().publish_command(&payload).await
     }
 
     /// Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
@@ -255,7 +289,8 @@ where
 
     /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
     pub async fn send_ping(&mut self) -> Result<(), BambuError> {
-        self.mqtt.send_ping().await
+        self.ensure_mqtt().await?;
+        self.mqtt.as_mut().unwrap().send_ping().await
     }
 
     /// Returns a reference to the printer's unique hardware serial number.
@@ -268,7 +303,7 @@ where
         self.model
     }
 
-    /// Returns direct access to the underlying [`BambuMqttClient`].
+    /// Returns direct access to the underlying [`BambuMqttClient`], if connected.
     ///
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
@@ -278,7 +313,7 @@ where
     /// client will log a warning — use [`PrinterClient::poll_telemetry()`](Self::poll_telemetry)
     /// or [`poll_raw()`](Self::poll_raw) instead to keep the internal message buffer
     /// consistent.
-    pub fn mqtt(&mut self) -> &mut BambuMqttClient<IO> {
-        &mut self.mqtt
+    pub fn mqtt(&mut self) -> Option<&mut BambuMqttClient<Conn::Stream>> {
+        self.mqtt.as_mut()
     }
 }

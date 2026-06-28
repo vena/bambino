@@ -83,7 +83,7 @@ impl SecureConnect for DummySecureConnect {
 }
 
 #[doc(hidden)]
-pub struct PreConnected<IO: AsyncIo>(PhantomData<IO>);
+pub struct PreConnected<IO: AsyncIo>(pub(crate) PhantomData<IO>);
 
 impl<IO: AsyncIo> SecureConnect for PreConnected<IO> {
     type Stream = IO;
