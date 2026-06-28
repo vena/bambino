@@ -232,6 +232,7 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
     secs_since_last_message: u32,
+    pub(crate) owned_by_printerclient: bool,
 }
 
 impl<IO: AsyncIo> BambuMqttClient<IO> {
@@ -352,6 +353,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             write_pending_secs: None,
             ping_outstanding: false,
             secs_since_last_message: 0,
+            owned_by_printerclient: false,
         })
     }
 
@@ -406,7 +408,25 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// Evaluates protocol frames and handles internal responses (e.g. sending `PUBACK` replies
     /// to incoming reports, stripping out matching packet IDs from `in_flight` lists, and
     /// acknowledging PINGRESPs) seamlessly before returning telemetry packets.
+    ///
+    /// **Warning:** If this client is owned by a [`crate::client::PrinterClient`], use
+    /// [`PrinterClient::poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)
+    /// or [`PrinterClient::poll_raw()`](crate::client::PrinterClient::poll_raw) instead.
+    /// Calling this method directly bypasses `PrinterClient`'s internal message buffer,
+    /// causing messages to silently disappear from the high-level polling methods.
     pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
+        if self.owned_by_printerclient {
+            log::warn!(
+                "poll_telemetry() called directly on a PrinterClient-owned BambuMqttClient — \
+                 messages read here will not appear in PrinterClient::poll_telemetry()/poll_raw(); \
+                 use those methods instead"
+            );
+        }
+        self.poll_message().await
+    }
+
+    /// Internal poll implementation used by `PrinterClient` to bypass the ownership warning.
+    pub(crate) async fn poll_message(&mut self) -> Result<MqttMessage, BambuError> {
         let mut payload_buf = Vec::new();
         loop {
             let (header, rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf).await?;

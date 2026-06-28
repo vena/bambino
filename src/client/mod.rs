@@ -90,7 +90,8 @@ where
     /// This is the simplest way to get started. Without a [`TimerProvider`], command-response
     /// methods like [`get_version()`](Self::get_version) rely on a message-count safety valve
     /// instead of wall-clock timeouts — fine for most use cases.
-    pub fn new(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
+    pub fn new(mut mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
+        mqtt_client.owned_by_printerclient = true;
         Self {
             mqtt: mqtt_client,
             ftps: None,
@@ -115,11 +116,12 @@ where
     /// Use this when you need reliable timeouts on methods like [`get_version()`](Self::get_version)
     /// and [`get_k_profiles()`](Self::get_k_profiles).
     pub fn new_with_timer(
-        mqtt_client: BambuMqttClient<IO>,
+        mut mqtt_client: BambuMqttClient<IO>,
         timer: Timer,
         serial: &str,
         model: BambuModel,
     ) -> Self {
+        mqtt_client.owned_by_printerclient = true;
         Self {
             mqtt: mqtt_client,
             ftps: None,
@@ -185,7 +187,7 @@ where
         let msg = if let Some(buffered) = self.pending_messages.pop_front() {
             buffered
         } else {
-            self.mqtt.poll_telemetry().await?
+            self.mqtt.poll_message().await?
         };
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
             Ok(report) => Ok(TelemetryEvent::Report(Box::new(report), msg)),
@@ -200,7 +202,7 @@ where
         if let Some(buffered) = self.pending_messages.pop_front() {
             Ok(buffered)
         } else {
-            self.mqtt.poll_telemetry().await
+            self.mqtt.poll_message().await
         }
     }
 
@@ -218,7 +220,7 @@ where
         let mut count: usize = 0;
 
         loop {
-            let msg = self.mqtt.poll_telemetry().await?;
+            let msg = self.mqtt.poll_message().await?;
             if let Some(result) = matcher(&msg) {
                 return Ok(result);
             }
@@ -264,5 +266,19 @@ where
     /// Returns the resolved printer hardware model.
     pub fn model(&self) -> BambuModel {
         self.model
+    }
+
+    /// Returns direct access to the underlying [`BambuMqttClient`].
+    ///
+    /// Use this for sending custom MQTT payloads, managing zombie detection via
+    /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
+    /// in-flight state — anything that [`PrinterClient`] doesn't expose directly.
+    ///
+    /// Calling [`poll_telemetry()`](BambuMqttClient::poll_telemetry) on the returned
+    /// client will log a warning — use [`PrinterClient::poll_telemetry()`](Self::poll_telemetry)
+    /// or [`poll_raw()`](Self::poll_raw) instead to keep the internal message buffer
+    /// consistent.
+    pub fn mqtt(&mut self) -> &mut BambuMqttClient<IO> {
+        &mut self.mqtt
     }
 }

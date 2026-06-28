@@ -14,6 +14,8 @@ Async Rust library for talking to Bambu Lab 3D printers over your local network.
 
 `PrinterClient` is the high-level interface — it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits, Z-axis homing validation, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
+For advanced use cases, `PrinterClient::mqtt()` provides direct access to the underlying `BambuMqttClient` without giving up the high-level client. Use it to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks, and calling `poll_telemetry()` on the retrieved client will log a warning — it bypasses `PrinterClient`'s internal message buffer, so responses read directly from the MQTT client won't appear in `PrinterClient::poll_telemetry()` / `poll_raw()`. Always read responses through `PrinterClient`'s poll methods.
+
 The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access — useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
 ## Quick start
