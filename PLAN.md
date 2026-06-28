@@ -4,21 +4,173 @@
 
 ---
 
-## Phase 1: Add `TokioFtpDataStreamFactory`
+## Phase 1: `PrinterClient` Lazy Connection Redesign
 
 ### Problem
 
-The library provides `TokioTlsConnector`, `TokioSecureConnector`, `TokioTimer`, and `TokioUdpSocket` as ready-to-use tokio implementations of the io traits. But there's no tokio implementation of `FtpDataStreamFactory`. Consumers wanting FTPS with tokio must write their own data stream factory (TCP connect + TLS wrap for the passive data channel). The CLI does this internally.
+`PrinterClient` requires a pre-connected `BambuMqttClient` at construction time. This means:
 
-### Investigation
+1. **FTPS-only use is impossible through `PrinterClient`.** The CLI's storage command (`src/bin/bambino-cli/storage.rs`) bypasses `PrinterClient` entirely, creating `BambuFtpsClient` directly. The CLI should demonstrate `PrinterClient` throughout — it's the library's primary API.
+2. **Consumers must manually orchestrate TCP→TLS→MQTT before they can create a `PrinterClient`.** The README "Connect" example is 6 lines of connection plumbing before `PrinterClient::new()` is even called.
+3. **There's no tokio implementation of `FtpDataStreamFactory`.** The CLI has a private `TokioDataStreamFactory` in `storage.rs` that should be in the library alongside `TokioTlsConnector`, `TokioTimer`, etc.
 
-- Read the CLI's FTPS connection code to see how it creates data streams.
-- Determine the minimal implementation: TCP connect + TLS wrap using `TokioTlsConnector`.
-- Decide where it lives — `io/tokio.rs` is the natural fit alongside the other tokio impls.
+### Design
 
-### Fix
+`PrinterClient` becomes the single coordination point for a printer. You construct it with the printer's identity and platform adapters, then opt into whichever protocols you need. Connections are established on demand or eagerly at the consumer's discretion.
 
-Add `TokioFtpDataStreamFactory` (or similar) to `io/tokio.rs`. Verify builds and tests.
+#### 1. Type parameters
+
+The first type param changes from `IO` (a passive stream type) to `Conn: SecureConnect` (an active connector that can create streams). The MQTT stream type becomes `Conn::Stream`. The other 4 params stay the same.
+
+```
+Before: PrinterClient<IO,   Timer, RawIO, Tls, Factory>
+After:  PrinterClient<Conn, Timer, RawIO, Tls, Factory>
+        where Conn: SecureConnect
+```
+
+Still 5 type params, but `Conn` carries the ability to establish connections, not just a stream type. Defaults stay the same pattern — `DummySecureConnect` replaces the old `IO` default.
+
+#### 2. New struct fields
+
+`PrinterClient` gains:
+
+- `connector: Conn` — stored `SecureConnect` for lazy MQTT connection
+- `ip: String` — printer IP, needed by both MQTT and FTPS lazy connection
+- `access_code: String` — needed by MQTT and FTPS handshakes
+- `ftps_config: Option<(Tls, Factory)>` — FTPS adapters stored before connection, consumed by `connect_ftps()`
+
+`mqtt` changes from `BambuMqttClient<IO>` to `Option<BambuMqttClient<Conn::Stream>>`.
+
+#### 3. Constructors
+
+Two construction paths:
+
+**Lazy path** (tokio, ESP-IDF) — primary API:
+```rust
+let secure = TokioSecureConnector::new(tls_connector, timeout);
+let mut printer = PrinterClient::new(secure, ip, serial, access_code, model);
+```
+
+**Pre-connected path** (Embassy, backward compat):
+```rust
+let mut printer = PrinterClient::from_mqtt(mqtt_client, serial, model);
+```
+
+`from_mqtt()` wraps the connector type in a `PreConnected<IO>` marker that implements `SecureConnect` with `type Stream = IO` and returns an error if lazy connection is attempted. Since Embassy can't create its own TCP sockets (they must be pre-allocated from the network stack), this is the appropriate API for that platform.
+
+Timer and FTPS are configured separately:
+```rust
+printer.set_timer(TokioTimer::new());
+printer.configure_ftps(ftps_tls_connector, TokioFtpDataStreamFactory);
+```
+
+#### 4. Lazy MQTT connection
+
+A private `ensure_mqtt(&mut self) -> Result<(), BambuError>` helper:
+1. If `self.mqtt.is_some()`, return `Ok(())`
+2. Call `self.connector.secure_connect(&self.ip, MQTTS_PORT)` to get a TLS stream
+3. Call `BambuMqttClient::connect(stream, &self.serial, &self.access_code)` to handshake
+4. Store the client in `self.mqtt`
+
+Every method that uses MQTT calls `self.ensure_mqtt().await?` first, then accesses `self.mqtt.as_mut().unwrap()`. This is a mechanical change across all submodule files (`thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs`).
+
+Public `connect_mqtt()` exposes the same logic for eager pre-connection. Idempotent — safe to call multiple times.
+
+#### 5. FTPS connection
+
+`configure_ftps(tls, factory)` stores adapters in `self.ftps_config`.
+
+`connect_ftps()`:
+1. Takes `(tls, factory)` from `self.ftps_config` (errors if not configured)
+2. Calls `factory.create_data_stream(&self.ip, 990)` to create raw TCP to the FTPS port
+3. Calls `BambuFtpsClient::connect(raw, tls, factory, ...)` — this moves `tls` and `factory` into the FTPS client
+4. Stores the connected client in `self.ftps`
+
+`storage()` stays as `fn storage(&mut self) -> Option<&mut BambuFtpsClient<...>>` — returns `None` if FTPS isn't connected. Consumers call `connect_ftps()` explicitly. (FTPS is explicitly opted into, so lazy connection adds less value than for MQTT.)
+
+#### 6. `DummySecureConnect` and `PreConnected<IO>`
+
+Add to `src/client/dummy.rs`:
+
+```rust
+pub struct DummySecureConnect;
+
+impl SecureConnect for DummySecureConnect {
+    type Stream = DummyRawIo;
+    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<DummyRawIo, SocketError> {
+        Err(SocketError::Other("dummy connector"))
+    }
+}
+```
+
+Add `PreConnected<IO>` (for `from_mqtt()`):
+
+```rust
+pub struct PreConnected<IO>(PhantomData<IO>);
+
+impl<IO: AsyncIo> SecureConnect for PreConnected<IO> {
+    type Stream = IO;
+    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<IO, SocketError> {
+        Err(SocketError::Other("pre-connected client cannot create new connections"))
+    }
+}
+```
+
+#### 7. `TokioFtpDataStreamFactory`
+
+Add to `src/io/tokio.rs` — a unit struct implementing `FtpDataStreamFactory<TokioIo<TcpStream>>`. Identical to the CLI's private `TokioDataStreamFactory`: TCP connect + `TokioIo` wrap. This is the missing tokio adapter.
+
+#### 8. `MQTTS_PORT` constant
+
+Add `pub(crate) const MQTTS_PORT: u16 = 8883;` to `src/mqtt/client.rs` (or `src/mqtt/mod.rs`). Currently only defined in the CLI's `connection.rs`. `PrinterClient::ensure_mqtt()` needs it.
+
+### Implementation order
+
+These are ordered by dependency. Items at the same level are independent of each other.
+
+**Step 1** — Independent additions (no existing code changes):
+- Add `TokioFtpDataStreamFactory` to `src/io/tokio.rs`
+- Add `DummySecureConnect` and `PreConnected<IO>` to `src/client/dummy.rs`
+- Add `MQTTS_PORT` constant to `src/mqtt/`
+
+**Step 2** — Core refactor (depends on step 1):
+- Redesign `PrinterClient` struct in `src/client/mod.rs`: change type params, add new fields, rewrite constructors, add `ensure_mqtt()` / `connect_mqtt()` / `configure_ftps()` / `connect_ftps()`
+- Update `src/client/storage.rs`: remove `new_with_storage()` (replaced by `configure_ftps()` + `connect_ftps()`), keep `attach_storage()` for direct injection, keep `storage()` accessor
+
+**Step 3** — Mechanical updates (depend on step 2):
+- Update every method in `thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs` to call `self.ensure_mqtt().await?` before accessing `self.mqtt`
+- Update `poll_telemetry()`, `poll_raw()`, `poll_until()`, `publish_request()`, `request_pushall()`, `send_ping()`, `mqtt()` in `mod.rs`
+
+**Step 4** — CLI refactor (depends on steps 1–3):
+- Rewrite `src/bin/bambino-cli/connection.rs`: `connect_mqtt()` becomes a helper that creates a `TokioSecureConnector` and returns a `PrinterClient` (or just returns the connector + config for the caller to construct `PrinterClient`)
+- Rewrite `src/bin/bambino-cli/storage.rs`: use `PrinterClient` with `configure_ftps()` + `connect_ftps()` instead of direct `BambuFtpsClient`. Delete the private `TokioDataStreamFactory` (replaced by library's `TokioFtpDataStreamFactory`).
+- Update `control.rs`, `monitor/mod.rs` to use the new `PrinterClient` constructor
+
+**Step 5** — Tests and docs (depends on steps 1–3):
+- Update `tests/client_test.rs` and `tests/ftps_test.rs` for new constructor signatures
+- Update README "Connect" and "File transfer" examples to show the new API
+- Update `src/lib.rs` doc example
+
+### Verification
+
+All of these must pass:
+```sh
+cargo build
+cargo test
+cargo clippy
+cargo build --no-default-features --features alloc --lib
+```
+
+Verify the CLI commands still work:
+```sh
+cargo build --bin bambino-cli
+```
+
+### What this phase intentionally does NOT do
+
+- **Lazy FTPS connection** — FTPS requires explicit `connect_ftps()`. The consumer has already opted in by calling `configure_ftps()`, so the extra method call is not burdensome.
+- **Reconnection** — `ensure_mqtt()` connects once. If the connection drops, the consumer must handle it. Reconnection logic is a separate concern.
+- **Change `BambuFtpsClient` or `BambuMqttClient` APIs** — those stay as-is. Only `PrinterClient` (the wrapper) and the CLI change.
 
 ---
 
@@ -63,6 +215,8 @@ Every question below should be answered with: "Does this design decision serve t
 Do NOT produce findings about file organization, import paths, or feature flag placement. Those were already reviewed and resolved.
 
 ### Questions to evaluate
+
+**Note:** Questions 1 and 2 were substantively addressed by the Phase 1 redesign (type parameter change from `IO` to `Conn: SecureConnect`, lazy connection, FTPS integration). Evaluate them lightly — confirm Phase 1's design is sound or flag remaining concerns, but don't deep-dive.
 
 **1. Multi-platform type parameter strategy**
 
@@ -120,10 +274,38 @@ For each of the 6 questions, write a **Sound / Concern / Problem** verdict with 
 
 ---
 
+## Phase 4: Camera integration in `PrinterClient`
+
+### Problem
+
+`PrinterClient` has no camera awareness. The CLI's camera command (`src/bin/bambino-cli/camera.rs`) bypasses `PrinterClient` and uses `BambuBinaryCameraStream` directly. `PrinterClient` is the library's high-level coordination point for a printer — it manages MQTT and FTPS connections, holds the printer's identity (ip, serial, access code, model), and applies model-aware safety checks. Camera should be accessible through it too.
+
+The CLI should demonstrate `PrinterClient` throughout. Today, the camera command manually creates a TLS connection, builds a `BambuBinaryCameraStream`, and handles authentication — duplicating connection logic that `PrinterClient` already has (it holds a `SecureConnect` connector and the printer's credentials).
+
+### Background: camera module structure
+
+Bambu printers use two camera protocols (determined by `model.quirks().camera_protocol()`):
+
+- **Binary JPEG (port 6000, A1/P1 series)** — `src/camera/binary.rs` provides `BambuBinaryCameraStream`, a complete client that authenticates and streams JPEG frames over TLS. This is a persistent streaming connection.
+- **RTSPS (port 322, X1/X2/H2/P2S series)** — `src/camera/rtsps.rs` provides helper utilities only (URL generation, proxy URI rewriting, P2S RTP timestamp correction). There is no RTSP client — consumers integrate with external media frameworks.
+
+### Design questions to answer first
+
+- **Binary JPEG has a persistent streaming connection** — unlike FTPS (connect, do operation, disconnect), the camera stream stays open and pushes frames continuously. `PrinterClient` manages FTPS via `configure_ftps()` + `connect_ftps()` + `storage()` accessor. Does the same pattern work for a long-lived stream, or does the streaming nature need a different API shape?
+- **Two protocols, one slot?** A printer uses either binary JPEG or RTSPS, never both. Should `PrinterClient` expose a single `camera()` accessor that returns an enum, or separate `binary_camera()` / `rtsps_helpers()` methods? The RTSPS side is just utility functions with no connection state — it may not need the connect-on-demand pattern at all.
+- **Type parameter impact** — binary JPEG needs a TLS stream. `PrinterClient` already holds a `Conn: SecureConnect` connector that can create TLS streams (used for lazy MQTT connection). Can camera reuse this, or does it need its own type parameter (e.g., if the camera TLS config differs from MQTT's)?
+
+### Scope
+
+This phase is intentionally underspecified. Answer the design questions above based on the current codebase, then write a concrete implementation plan. Do not start implementation without a plan.
+
+---
+
 ## Progress Tracker
 
-| Phase | Status |
-|-------|--------|
-| 1 | Add `TokioFtpDataStreamFactory` | Not Started |
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | `PrinterClient` lazy connection redesign | Not Started |
 | 2 | CLI dependency leakage | Not Started |
 | 3 | Architectural review | Not Started |
+| 4 | Camera integration in `PrinterClient` | Not Started |

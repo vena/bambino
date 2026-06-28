@@ -7,7 +7,7 @@ Async Rust library for talking to Bambu Lab 3D printers over your local network.
 - **Discovery** — find printers on your LAN via SSDP (ports 2021/1990)
 - **MQTT control** — connect to the printer's local broker (port 8883), send commands, receive telemetry
 - **File transfer** — implicit FTPS (port 990) for listing, uploading, downloading, and managing files on the SD card
-- **Camera** — binary JPEG streaming (port 6000, A1/P1 series) and RTSPS (port 322, X1/X2/H2/P2S series)
+- **Camera** — complete binary JPEG streaming client (port 6000, A1/P1 series); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
 - **Model quirks** — per-model differences handled polymorphically: FTPS TLS requirements, fan step resolution, Z-axis homing safety, door sensors, camera protocols, nozzle counts (single/IDEX/tool changer), temperature limits, and chamber heater capabilities
 
 ## Two levels of API
