@@ -2,46 +2,20 @@
 
 //! # MicroSD Storage Traversal and File Transfer Subcommand
 //!
-//! Handles established implicitly secure FTPS sessions on Port 990 [REF-FTPS-CONN],
-//! negotiating passive data channels with custom TLS verification bypass.
-//!
-//! Provides directory listings, space checks, deletions, and chunked upload dispatches.
+//! Routes storage filesystem commands through [`PrinterClient`] with lazy FTPS
+//! connection via `.with_ftps()`. The FTPS session is established on first use.
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
-use tokio::net::TcpStream;
 
 use bambino::error::BambuError;
-use bambino::ftps::{BambuFtpsClient, FtpDataStreamFactory};
 use bambino::io::tokio::{
-    TokioTlsConnector, build_unsafe_client_config_with_options, to_socket_error,
+    TokioFtpDataStreamFactory, TokioTlsConnector, build_unsafe_client_config_with_options,
 };
-use bambino::io::{SocketError, TokioIo};
-use bambino::models::resolve_model;
 
-use crate::connection::validate_params;
-
-/// Concrete implementation of the passive data connection factory for the Tokio runtime.
-struct TokioDataStreamFactory;
-
-impl FtpDataStreamFactory<TokioIo<TcpStream>> for TokioDataStreamFactory {
-    async fn create_data_stream(
-        &self,
-        host: &str,
-        port: u16,
-    ) -> Result<TokioIo<TcpStream>, SocketError> {
-        let stream = TcpStream::connect(format!("{}:{}", host, port))
-            .await
-            .map_err(to_socket_error)?;
-        Ok(TokioIo(stream))
-    }
-}
+use crate::connection::{create_printer, validate_params};
 
 /// Dynamic calendar epoch helper converting UNIX timestamps to calendar date parts.
-///
-/// **Why this is used:** Bypasses massive dependency additions (such as `chrono` or `time`)
-/// inside a standard embedded-friendly repository.
 fn current_date_utc() -> (i32, u8, u8, u8, u8) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -105,37 +79,22 @@ pub async fn run(
     validate_params(ip, serial, access_code)?;
 
     let action = action_args[0].to_lowercase();
-    let model = resolve_model(serial, None);
+
+    let printer = create_printer(ip, serial, access_code)?;
+    let model = printer.model();
+
+    let ftps_config =
+        build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2());
+    let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
+
+    let mut printer = printer.with_ftps(ftps_tls, TokioFtpDataStreamFactory);
 
     println!(
         "Connecting to implicitly secure FTPS server at {}:990...",
         ip
     );
 
-    let config = build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2());
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tls_connector = TokioTlsConnector::new(connector);
-
-    const CONNECT_TIMEOUT_SECS: u64 = 5;
-    let tcp_stream = tokio::time::timeout(
-        Duration::from_secs(CONNECT_TIMEOUT_SECS),
-        TcpStream::connect(format!("{}:990", ip)),
-    )
-    .await
-    .map_err(|_| BambuError::NetworkError(SocketError::TimedOut))?
-    .map_err(to_socket_error)?;
-    let raw_control = TokioIo(tcp_stream);
-
-    // 2. Perform connection, login, and security policy selection [REF-FTPS-CONN]
-    let mut client = BambuFtpsClient::connect(
-        raw_control,
-        tls_connector,
-        TokioDataStreamFactory,
-        model,
-        ip,
-        access_code,
-    )
-    .await?;
+    let client = printer.storage().await?;
 
     println!("FTPS connection authenticated. Executing operational action...\n");
 

@@ -76,6 +76,7 @@ pub struct PrinterClient<
 {
     pub(crate) mqtt: Option<BambuMqttClient<Conn::Stream>>,
     pub(crate) ftps: Option<BambuFtpsClient<RawIO, Tls, Factory>>,
+    pub(crate) ftps_config: Option<(Tls, Factory)>,
     pub(crate) connector: Conn,
     pub(crate) timer: Timer,
     pub(crate) serial: String,
@@ -115,6 +116,7 @@ where
         Self {
             mqtt: None,
             ftps: None,
+            ftps_config: None,
             connector,
             timer: DummyTimer,
             serial: String::from(serial),
@@ -151,6 +153,7 @@ where
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
+            ftps_config: None,
             connector: PreConnected(PhantomData),
             timer: DummyTimer,
             serial: String::from(serial),
@@ -218,6 +221,7 @@ where
         PrinterClient {
             mqtt: self.mqtt,
             ftps: self.ftps,
+            ftps_config: self.ftps_config,
             connector: self.connector,
             timer,
             serial: self.serial,
@@ -237,6 +241,87 @@ where
     pub fn with_mqtt_port(mut self, port: u16) -> Self {
         self.mqtt_port = port;
         self
+    }
+
+    /// Configures FTPS for lazy connection on first storage method call.
+    ///
+    /// Consuming builder — changes the `RawIO`, `Tls`, and `Factory` type parameters.
+    /// The FTPS [`TlsConnector`] is independent from MQTT's (some models require
+    /// different TLS settings for FTPS, e.g. `force_tls_1_2`).
+    pub fn with_ftps<NewRawIO, NewTls, NewFactory>(
+        self,
+        tls: NewTls,
+        factory: NewFactory,
+    ) -> PrinterClient<Conn, Timer, NewRawIO, NewTls, NewFactory>
+    where
+        NewRawIO: AsyncIo,
+        NewTls: TlsConnector<NewRawIO>,
+        NewFactory: FtpDataStreamFactory<NewRawIO>,
+    {
+        PrinterClient {
+            mqtt: self.mqtt,
+            ftps: None,
+            ftps_config: Some((tls, factory)),
+            connector: self.connector,
+            timer: self.timer,
+            serial: self.serial,
+            ip: self.ip,
+            access_code: self.access_code,
+            model: self.model,
+            sequence_counter: self.sequence_counter,
+            k_profile_primed: self.k_profile_primed,
+            pending_messages: self.pending_messages,
+            command_timeout_secs: self.command_timeout_secs,
+            mqtt_port: self.mqtt_port,
+            ftps_port: self.ftps_port,
+        }
+    }
+
+    /// Overrides the default FTPS port (990).
+    pub fn with_ftps_port(mut self, port: u16) -> Self {
+        self.ftps_port = port;
+        self
+    }
+
+    /// Establishes the FTPS connection if not already connected.
+    ///
+    /// Short-circuits when `self.ftps` is already `Some`. Otherwise, takes the
+    /// TLS connector and data factory from `ftps_config`, creates a raw TCP
+    /// connection, and calls `BambuFtpsClient::connect()`. The config is consumed
+    /// on first connection — reconnecting requires a new `PrinterClient`.
+    async fn ensure_ftps(&mut self) -> Result<(), BambuError> {
+        if self.ftps.is_some() {
+            return Ok(());
+        }
+        let (tls, factory) = self.ftps_config.take().ok_or_else(|| {
+            BambuError::ProtocolViolation(
+                "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
+            )
+        })?;
+        let raw_stream = factory.create_data_stream(&self.ip, self.ftps_port).await?;
+        let ftps_client = BambuFtpsClient::connect(
+            raw_stream,
+            tls,
+            factory,
+            self.model,
+            &self.ip,
+            &self.access_code,
+        )
+        .await?;
+        self.ftps = Some(ftps_client);
+        Ok(())
+    }
+
+    /// Eagerly establishes the FTPS connection.
+    ///
+    /// Idempotent — returns `Ok(())` if already connected.
+    pub async fn connect_ftps(&mut self) -> Result<(), BambuError> {
+        self.ensure_ftps().await
+    }
+
+    /// Returns whether the FTPS session is currently established.
+    pub fn ftps_connected(&self) -> bool {
+        self.ftps.is_some()
     }
 
     /// Increments and returns the next transaction/sequence identifier tracking commands.
@@ -368,7 +453,8 @@ where
         self.model
     }
 
-    /// Returns direct access to the underlying [`BambuMqttClient`], if connected.
+    /// Returns direct access to the underlying [`BambuMqttClient`], auto-connecting
+    /// if needed.
     ///
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
@@ -378,7 +464,8 @@ where
     /// client will log a warning — use [`PrinterClient::poll_telemetry()`](Self::poll_telemetry)
     /// or [`poll_raw()`](Self::poll_raw) instead to keep the internal message buffer
     /// consistent.
-    pub fn mqtt(&mut self) -> Option<&mut BambuMqttClient<Conn::Stream>> {
-        self.mqtt.as_mut()
+    pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<Conn::Stream>, BambuError> {
+        self.ensure_mqtt().await?;
+        Ok(self.mqtt.as_mut().unwrap())
     }
 }

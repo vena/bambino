@@ -1,6 +1,6 @@
 # bambino — Lazy connections and API consistency
 
-**Important:** Before starting any phase, read `README.md` cover to cover. Understand what this library does and who it's for. Do not apply generic software engineering heuristics without grounding them in the project's actual goals.
+**Important:** Before starting any phase, read this document in its entirety. Read the `README.md` cover to cover. Understand what this library does and who it's for. Do not apply generic software engineering heuristics without grounding them in the project's actual goals.
 
 **Pre-release:** This library has not been released. All API changes are on the table. Do not preserve backward compatibility for external consumers — only for tests and the CLI within the same crate, and only when the phase specifies it.
 
@@ -8,71 +8,16 @@
 
 ---
 
-## Phases 1–3: Complete
+## Phases 1–4: Complete
 
-Phases 1–3 migrated `PrinterClient` from requiring a pre-connected `BambuMqttClient` at construction to supporting lazy MQTT connection via a `SecureConnect` connector.
+Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols.
 
 **Decisions informing future phases:**
 
-- **Consuming builders change type params; non-consuming builders return `Self`.** `.with_timer(timer)` consumes `self` because it changes the `Timer` type parameter. `.with_mqtt_port(port)` returns `Self` because it only changes a field value. Phase 4's `.with_ftps()` must follow the consuming pattern since it changes `RawIO`, `Tls`, and `Factory`.
-- **`ensure_*()` is the lazy connection pattern.** `ensure_mqtt()` short-circuits on `Some`, otherwise calls `connector.secure_connect()` + `BambuMqttClient::connect()`. Phase 4's `ensure_ftps()` should mirror this.
-- **CLI connection helper absorbs model resolution.** `create_printer()` in `connection.rs` validates params, creates the `TokioSecureConnector`, resolves the model, and returns a fully-configured lazy `PrinterClient`. Phase 4's FTPS support will extend this helper or the call sites — the CLI's `storage.rs` currently bypasses `PrinterClient` entirely.
-- **`TokioFtpDataStreamFactory`** was added in Phase 1 specifically to replace the CLI's private `TokioDataStreamFactory` during Phase 4's storage migration.
-- **`new_with_storage()` still exists** in `storage.rs` in its own `PreConnected<IO>` impl block. Phase 4 removes it (replaced by `.with_ftps()`).
-
----
-
-## Phase 4: Lazy FTPS Connection and API Alignment
-
-### Problem
-
-After phase 3, MQTT has lazy connection but FTPS does not. The CLI's storage command still bypasses `PrinterClient`. The MQTT and FTPS APIs are asymmetric. This phase completes the lazy connection story and aligns both protocols to a consistent API.
-
-### Design: MQTT / FTPS symmetry
-
-After this phase, both protocols follow the same pattern:
-
-| Aspect | MQTT | FTPS |
-|--------|------|------|
-| Configure | `new(connector, ...)` | `.with_ftps(tls, factory)` |
-| Port override | `.with_mqtt_port(port)` | `.with_ftps_port(port)` |
-| Default port | 8883 | 990 |
-| Eager connect | `connect_mqtt().await?` | `connect_ftps().await?` |
-| Lazy connect | auto on first MQTT method | auto on first storage method |
-| Raw access | `mqtt().await?` → `Result<&mut BambuMqttClient>` | `storage().await?` → `Result<&mut BambuFtpsClient>` |
-| Status | `mqtt_connected()` | `ftps_connected()` |
-
-The one inherent asymmetry: the MQTT connector is provided at `new()` because it determines the primary type parameter `Conn::Stream`. FTPS adapters are provided via `.with_ftps()` because FTPS is optional. This reflects domain reality, not an API inconsistency.
-
-### `.with_ftps()` builder
-
-A consuming builder that changes the `RawIO`, `Tls`, and `Factory` type parameters. Stores the adapters in `ftps_config` for lazy connection. The consumer's FTPS TLS config may differ from MQTT's (e.g., `force_tls_1_2` for P2S/X2D models), so the FTPS `TlsConnector` is independent.
-
-Type constraint: `.with_ftps()` can't be a `&mut self` method because it changes type parameters. It must consume `self` and return a new type. This means FTPS configuration happens at construction time (builder chain), not at runtime.
-
-### `ensure_ftps()`
-
-Private helper mirroring `ensure_mqtt()`. If `self.ftps.is_some()`, short-circuit. Otherwise, take `(tls, factory)` from `self.ftps_config` via `.take()`, create a raw TCP connection to port `self.ftps_port` via `factory.create_data_stream()`, then call `BambuFtpsClient::connect()` which moves `tls` and `factory` into the FTPS client. Error if FTPS was never configured.
-
-Note: `.take()` means the config is consumed on first connection. Reconnecting requires reconstructing the `PrinterClient` with `.with_ftps()` again. This is acceptable — FTPS reconnection is not a hot path.
-
-### Raw accessor alignment
-
-Change `mqtt()` from synchronous `Option<&mut ...>` to `async fn mqtt() -> Result<&mut BambuMqttClient<Conn::Stream>, BambuError>` with auto-connect. Make `storage()` match: `async fn storage() -> Result<&mut BambuFtpsClient<...>, BambuError>`. Both auto-connect, both return `Result`, both have synchronous `_connected()` companions for non-connecting state checks.
-
-### Removals
-
-Remove `new_with_storage()` — replaced by `.with_ftps()` builder + lazy connection. Keep `attach_storage()` for direct injection of a pre-connected `BambuFtpsClient` (test mocks, Embassy).
-
-### CLI storage migration
-
-Rewrite `src/bin/bambino-cli/storage.rs` to use `PrinterClient` with `.with_ftps()` instead of constructing `BambuFtpsClient` directly. Delete the private `TokioDataStreamFactory` (replaced by the library's `TokioFtpDataStreamFactory` from phase 1).
-
-### Verification
-
-```sh
-cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
-```
+- **Consuming builders change type params; non-consuming builders return `Self`.** `.with_timer()` and `.with_ftps()` consume `self` because they change type parameters. `.with_mqtt_port()` and `.with_ftps_port()` return `Self`. Phase 7's camera builder must follow the same convention.
+- **`ensure_*()` is the lazy connection pattern.** `ensure_mqtt()` and `ensure_ftps()` short-circuit on `Some`, otherwise connect lazily. `ensure_ftps()` uses `.take()` to consume `ftps_config`, so reconnection requires a new `PrinterClient`. Phase 7 should consider whether camera's persistent streaming nature needs a different reconnection story.
+- **Each protocol's TLS config is independent.** FTPS may need `force_tls_1_2` (model quirk) while MQTT does not. Phase 7's camera TLS may also differ — don't assume a shared connector.
+- **CLI storage now routes through `PrinterClient`.** Phase 7's camera CLI command should follow the same pattern rather than constructing protocol clients directly.
 
 ---
 
@@ -155,7 +100,7 @@ Answer the design questions based on the current codebase, then write a concrete
 | 1 | Foundation types and library adapters | Complete |
 | 2 | `PrinterClient` struct migration (backward compatible) | Complete |
 | 3 | Lazy MQTT connection and constructor redesign | Complete |
-| 4 | Lazy FTPS connection and API alignment | Not Started |
+| 4 | Lazy FTPS connection and API alignment | Complete |
 | 5 | Documentation | Not Started |
 | 6 | CLI dependency leakage | Not Started |
 | 7 | Camera integration in `PrinterClient` | Not Started |
