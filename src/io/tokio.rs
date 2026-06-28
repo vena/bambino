@@ -4,6 +4,7 @@
 //! and Timer interfaces for standard operating systems using the Tokio runtime
 //! and the Rustls TLS stack.
 
+use crate::ftps::FtpDataStreamFactory;
 use crate::io::{
     AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector, TlsVersion, TokioIo,
 };
@@ -338,6 +339,25 @@ impl SecureConnect for TokioSecureConnector {
         self.tls_connector
             .connect(host, port, TokioIo(tcp_stream))
             .await
+    }
+}
+
+/// Passive data connection factory for the Tokio runtime.
+///
+/// Creates raw TCP connections wrapped in [`TokioIo`] for FTPS passive-mode
+/// data transfers — the Tokio counterpart to [`DummyFactory`](crate::client::dummy::DummyFactory).
+pub struct TokioFtpDataStreamFactory;
+
+impl FtpDataStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioFtpDataStreamFactory {
+    async fn create_data_stream(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError> {
+        let stream = ::tokio::net::TcpStream::connect(format!("{}:{}", host, port))
+            .await
+            .map_err(to_socket_error)?;
+        Ok(TokioIo(stream))
     }
 }
 

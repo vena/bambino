@@ -6,31 +6,13 @@
 
 ---
 
-## Phase 1: Foundation Types and Library Adapters
+## Phase 1: Foundation Types and Library Adapters — Complete
 
-### Problem
+Added building blocks for phases 2–4. Pure additions, no existing code changed.
 
-Phases 2–4 redesign `PrinterClient` to own connection lifecycle. Before any structural changes, the codebase needs building blocks that don't exist yet.
-
-### What to add
-
-This phase is pure additions — no existing code changes, no API breaks.
-
-**`DummySecureConnect`** — `src/client/dummy.rs`. A zero-cost default for `PrinterClient`'s upcoming `Conn` type parameter (same role as `DummyTimer`, `DummyTls`, etc.). Implements `SecureConnect` with `type Stream = DummyRawIo`, returning an error if called. Export from `src/client/mod.rs`.
-
-**`PreConnected<IO>`** — `src/client/dummy.rs`. A `PhantomData`-based marker wrapping a pre-connected stream's `IO` type into a `SecureConnect` bound. Implements `SecureConnect` with `type Stream = IO`, returning an error if called (lazy connection is not possible with pre-connected streams). This exists for `from_mqtt()` in phase 3 — Embassy can't create TCP sockets on demand, so it needs a pre-connected path. Export from `src/client/mod.rs`.
-
-**`TokioFtpDataStreamFactory`** — `src/io/tokio.rs`. A public unit struct implementing `FtpDataStreamFactory<TokioIo<TcpStream>>` — TCP connect + `TokioIo` wrap. Identical to the CLI's private `TokioDataStreamFactory` in `src/bin/bambino-cli/storage.rs`. This is the missing tokio platform adapter alongside `TokioTlsConnector` and `TokioTimer`.
-
-**Port constants** — `pub(crate) const MQTTS_PORT: u16 = 8883` in `src/mqtt/mod.rs` and `pub(crate) const FTPS_PORT: u16 = 990` in `src/ftps/mod.rs`. These are Bambu firmware protocol constants (IANA-registered ports). All current models use them. They serve as defaults — phases 3–4 add builder methods to override them for non-standard setups (proxies, tunnels, future firmware changes). Currently `MQTTS_PORT` is duplicated as a local constant in the CLI's `connection.rs`.
-
-### Verification
-
-```sh
-cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
-```
-
-All must pass with zero regressions.
+- `DummySecureConnect` and `PreConnected<IO>` in `src/client/dummy.rs`, exported from `src/client/mod.rs`. Both implement `SecureConnect` and return `Err(SocketError::NotConnected)` if called. `DummySecureConnect` uses `Stream = DummyRawIo` (default type param). `PreConnected<IO>` is a `PhantomData<IO>` marker with `Stream = IO` (for wrapping pre-connected streams in phase 3's `from_mqtt()`).
+- `TokioFtpDataStreamFactory` in `src/io/tokio.rs`. Public unit struct implementing `FtpDataStreamFactory<TokioIo<TcpStream>>`. Mirrors the CLI's private `TokioDataStreamFactory`.
+- `pub(crate) const MQTTS_PORT: u16 = 8883` in `src/mqtt/mod.rs`, `pub(crate) const FTPS_PORT: u16 = 990` in `src/ftps/mod.rs`. Default ports for lazy connection builders.
 
 ---
 
@@ -236,7 +218,7 @@ Answer the design questions based on the current codebase, then write a concrete
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Foundation types and library adapters | Not Started |
+| 1 | Foundation types and library adapters | Complete |
 | 2 | `PrinterClient` struct migration (backward compatible) | Not Started |
 | 3 | Lazy MQTT connection and constructor redesign | Not Started |
 | 4 | Lazy FTPS connection and API alignment | Not Started |

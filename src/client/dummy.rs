@@ -4,8 +4,10 @@
 //! TLS, or timer types. They're the defaults — you'll never need to reference them directly
 //! unless you're building a fully custom client configuration.
 
+use core::marker::PhantomData;
+
 use crate::ftps::FtpDataStreamFactory;
-use crate::io::{TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, SecureConnect, SocketError, TimerProvider, TlsConnector};
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
@@ -66,5 +68,27 @@ impl TimerProvider for DummyTimer {
     async fn sleep(&self, _duration: core::time::Duration) {}
     fn now_millis(&self) -> u64 {
         0
+    }
+}
+
+#[doc(hidden)]
+pub struct DummySecureConnect;
+
+impl SecureConnect for DummySecureConnect {
+    type Stream = DummyRawIo;
+
+    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<DummyRawIo, SocketError> {
+        Err(SocketError::NotConnected)
+    }
+}
+
+#[doc(hidden)]
+pub struct PreConnected<IO: AsyncIo>(PhantomData<IO>);
+
+impl<IO: AsyncIo> SecureConnect for PreConnected<IO> {
+    type Stream = IO;
+
+    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<IO, SocketError> {
+        Err(SocketError::NotConnected)
     }
 }

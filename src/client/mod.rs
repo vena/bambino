@@ -24,7 +24,7 @@ mod storage;
 mod thermal;
 pub mod types;
 
-pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls};
+pub use dummy::{DummyFactory, DummyRawIo, DummySecureConnect, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
 pub use types::{CalibrationOption, FanTarget, PrintSpeed, TelemetryEvent};
 
