@@ -41,7 +41,7 @@ async fn test_homing_safety_interlocks() {
             .expect("MQTT connect handshake failed");
 
     // CoreXY Bed-on-Z initialization
-    let mut client_x1c = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1C);
+    let mut client_x1c = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1C);
 
     // Assert public serial and model getters expose the correct fields
     assert_eq!(client_x1c.serial(), "00M000000000000");
@@ -72,7 +72,7 @@ async fn test_homing_safety_interlocks() {
             .await
             .expect("MQTT connect handshake failed for A1");
 
-    let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
+    let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
     // Bed-Slingers do not share upward bed collision hazards; G28 Z homing is permitted
     client_a1
@@ -112,7 +112,7 @@ async fn test_kinematic_and_extrusion_moves() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .move_relative('z', 10.0, 3000)
@@ -152,7 +152,7 @@ async fn test_thermal_guards_and_temperatures() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client_x1e = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1E);
+    let mut client_x1e = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1E);
 
     client_x1e
         .set_bed_temperature(60)
@@ -180,7 +180,8 @@ async fn test_thermal_guards_and_temperatures() {
             .await
             .expect("MQTT connect handshake failed for X1C");
 
-    let mut client_x1c = PrinterClient::new(mqtt_client_x1c, "00M000000000000", BambuModel::X1C);
+    let mut client_x1c =
+        PrinterClient::from_mqtt(mqtt_client_x1c, "00M000000000000", BambuModel::X1C);
 
     let err_res = client_x1c.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
@@ -196,7 +197,7 @@ async fn test_thermal_guards_and_temperatures() {
             .await
             .expect("MQTT connect handshake failed for A1");
 
-    let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
+    let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
     let err_res = client_a1.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
@@ -227,7 +228,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client_p1s = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client_p1s = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client_p1s
         .set_fan_speed(FanTarget::PartCooling, 50)
@@ -257,7 +258,8 @@ async fn test_cooling_fans_and_peripheral_switches() {
             .await
             .expect("MQTT connect handshake failed for X2D");
 
-    let mut client_x2 = PrinterClient::new(mqtt_client_x2, "20P000000000000", BambuModel::X2D);
+    let mut client_x2 =
+        PrinterClient::from_mqtt(mqtt_client_x2, "20P000000000000", BambuModel::X2D);
 
     client_x2
         .set_fan_speed(FanTarget::AuxiliaryRight, 80)
@@ -290,7 +292,7 @@ async fn test_queue_lifecycle_control_blocks() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client.pause_print().await.expect("Pause failed");
     client.resume_print().await.expect("Resume failed");
@@ -321,7 +323,7 @@ async fn test_peripheral_signals_and_climate_controls() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client_h2d = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::H2D);
+    let mut client_h2d = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::H2D);
 
     client_h2d
         .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
@@ -350,7 +352,7 @@ async fn test_peripheral_signals_and_climate_controls() {
             .await
             .expect("MQTT connect handshake failed for A1");
 
-    let mut client_a1 = PrinterClient::new(mqtt_client_a1, "039000000000000", BambuModel::A1);
+    let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
     client_a1
         .set_prompt_sound(true)
@@ -370,7 +372,8 @@ async fn test_peripheral_signals_and_climate_controls() {
             .await
             .expect("MQTT connect handshake failed for P1S");
 
-    let mut client_p1s = PrinterClient::new(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
+    let mut client_p1s =
+        PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
 
     assert!(matches!(
         client_p1s
@@ -411,7 +414,7 @@ async fn test_send_gcode_rejects_unsafe_homing() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
     let err = client.send_gcode("G28 Z").await;
@@ -443,7 +446,7 @@ async fn test_send_gcode_raw_bypasses_safety() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     // send_gcode_raw should bypass safety checks
     client
@@ -479,7 +482,7 @@ async fn test_temperature_clamping() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "00M000000000000", BambuModel::X1E);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1E);
 
     client
         .set_bed_temperature(500)
@@ -522,7 +525,7 @@ async fn test_in_flight_saturation() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     // Fill the in-flight queue to capacity (200 commands)
     for i in 0..200 {
@@ -555,7 +558,7 @@ async fn test_connection_drop_during_operation() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     broker_task.await.expect("Broker task panicked");
 
@@ -603,7 +606,7 @@ async fn test_start_print_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -639,7 +642,7 @@ async fn test_start_print_idex_nozzle_offset_default() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "20P000000000000", BambuModel::X2D);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "20P000000000000", BambuModel::X2D);
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -689,7 +692,7 @@ async fn test_set_print_speed_all_levels() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     for level in [
         PrintSpeed::Silent,
@@ -723,7 +726,7 @@ async fn test_skip_objects_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .skip_objects(vec![0, 3, 7])
@@ -751,7 +754,7 @@ async fn test_start_calibration_combined_flags() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .start_calibration(
@@ -779,7 +782,7 @@ async fn test_clear_print_error_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .clear_print_error()
@@ -810,7 +813,7 @@ async fn test_toggle_led_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .toggle_led("chamber_light", true)
@@ -847,7 +850,7 @@ async fn test_change_filament_load_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .change_filament(0, 1, 1, -1, -1)
@@ -882,7 +885,7 @@ async fn test_drying_lifecycle_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .start_drying(128, 55, 480, true, "PA-CF")
@@ -911,7 +914,7 @@ async fn test_scan_rfid_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client.scan_rfid(0, 2).await.expect("scan_rfid failed");
 
@@ -939,7 +942,7 @@ async fn test_select_k_profile_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
         .select_k_profile(0, 1, 4, "GFA01", "0.4")
@@ -997,7 +1000,7 @@ async fn test_get_k_profiles_auto_priming() {
         .await
         .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
 
     // First call triggers auto-prime (2 publishes)
     let resp = client
@@ -1044,7 +1047,7 @@ async fn test_get_k_profiles_manual_prime_skip() {
         .await
         .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -1077,7 +1080,7 @@ async fn test_sequence_id_wrapping() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client.send_gcode("G28").await.expect("send_gcode failed");
 
@@ -1122,7 +1125,7 @@ async fn test_get_version_round_trip() {
         .await
         .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
 
     let info = client.get_version().await.expect("get_version failed");
 
@@ -1183,7 +1186,7 @@ async fn test_poll_until_buffers_unmatched_messages() {
         .await
         .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
 
     let info = client
         .get_version()
@@ -1217,7 +1220,7 @@ async fn test_request_pushall() {
         .await
         .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::new(mqtt_client, SERIAL, BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
 
     client
         .request_pushall()

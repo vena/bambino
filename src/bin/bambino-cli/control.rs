@@ -11,19 +11,16 @@
 use std::io::{self, Write};
 use std::time::Duration;
 
-use bambino::client::{CalibrationOption, FanTarget, PrintSpeed, PrinterClient};
+use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
 use bambino::error::BambuError;
-use bambino::models::resolve_model;
 use bambino::mqtt::AirductMode;
 
-use crate::connection::connect_mqtt;
+use crate::connection::create_printer;
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
 pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     let is_verbose = crate::is_verbose();
-    let mqtt = connect_mqtt(ip, serial, access_code).await?;
-    let model = resolve_model(serial, None);
-    let mut printer = PrinterClient::new(mqtt, serial, model);
+    let mut printer = create_printer(ip, serial, access_code)?;
 
     println!("Querying expansion bus version database...");
 
@@ -82,9 +79,7 @@ pub async fn run(
 
     log::debug!("Running control subcommand action: '{}'", action);
 
-    let mqtt = connect_mqtt(ip, serial, access_code).await?;
-    let model = resolve_model(serial, None);
-    let mut client = PrinterClient::new(mqtt, serial, model);
+    let mut client = create_printer(ip, serial, access_code)?;
 
     match action.as_str() {
         "home" => {

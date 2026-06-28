@@ -44,7 +44,7 @@ use core::marker::PhantomData;
 
 use crate::error::BambuError;
 use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use crate::io::{AsyncIo, SecureConnect, SocketError, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
 use crate::models::BambuModel;
 use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{BambuMqttClient, MqttMessage};
@@ -90,25 +90,36 @@ pub struct PrinterClient<
     pub(crate) ftps_port: u16,
 }
 
-impl<IO> PrinterClient<PreConnected<IO>, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
+impl<Conn> PrinterClient<Conn, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
 where
-    IO: AsyncIo,
+    Conn: SecureConnect,
 {
-    /// Creates an MQTT-only client with no FTPS or timer support.
+    /// Creates a lazy client that defers MQTT connection until first use.
     ///
-    /// This is the simplest way to get started. Without a [`TimerProvider`], command-response
-    /// methods like [`get_version()`](Self::get_version) rely on a message-count safety valve
-    /// instead of wall-clock timeouts — fine for most use cases.
-    pub fn new(mut mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
-        mqtt_client.owned_by_printerclient = true;
+    /// The MQTT session is established automatically on the first method call that
+    /// requires it (e.g. [`poll_telemetry()`](Self::poll_telemetry),
+    /// [`request_pushall()`](Self::request_pushall)), or eagerly via
+    /// [`connect_mqtt()`](Self::connect_mqtt).
+    ///
+    /// Without a [`TimerProvider`], command-response methods like
+    /// [`get_version()`](Self::get_version) rely on a message-count safety valve
+    /// instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
+    /// for real timeouts.
+    pub fn new(
+        connector: Conn,
+        ip: &str,
+        serial: &str,
+        access_code: &str,
+        model: BambuModel,
+    ) -> Self {
         Self {
-            mqtt: Some(mqtt_client),
+            mqtt: None,
             ftps: None,
-            connector: PreConnected(PhantomData),
+            connector,
             timer: DummyTimer,
             serial: String::from(serial),
-            ip: String::new(),
-            access_code: String::new(),
+            ip: String::from(ip),
+            access_code: String::from(access_code),
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
@@ -120,18 +131,19 @@ where
     }
 }
 
-impl<IO, Timer> PrinterClient<PreConnected<IO>, Timer, DummyRawIo, DummyTls, DummyFactory>
+impl<IO> PrinterClient<PreConnected<IO>, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
 where
     IO: AsyncIo,
-    Timer: TimerProvider,
 {
-    /// Creates a client with a [`TimerProvider`] for wall-clock command-response timeouts.
+    /// Wraps an already-connected [`BambuMqttClient`] in a `PrinterClient`.
     ///
-    /// Use this when you need reliable timeouts on methods like [`get_version()`](Self::get_version)
-    /// and [`get_k_profiles()`](Self::get_k_profiles).
-    pub fn new_with_timer(
+    /// Use this when you have a pre-established MQTT session (tests, Embassy,
+    /// or any context where the caller manages the connection). The resulting
+    /// client uses [`PreConnected`] as its connector — calling
+    /// [`connect_mqtt()`](Self::connect_mqtt) on a disconnected `PreConnected`
+    /// client will return [`SocketError::NotConnected`].
+    pub fn from_mqtt(
         mut mqtt_client: BambuMqttClient<IO>,
-        timer: Timer,
         serial: &str,
         model: BambuModel,
     ) -> Self {
@@ -140,7 +152,7 @@ where
             mqtt: Some(mqtt_client),
             ftps: None,
             connector: PreConnected(PhantomData),
-            timer,
+            timer: DummyTimer,
             serial: String::from(serial),
             ip: String::new(),
             access_code: String::new(),
@@ -163,15 +175,68 @@ where
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
-    /// Ensures the MQTT client is connected, returning an error if not.
+    /// Establishes the MQTT connection if not already connected.
     ///
-    /// In the current phase, all constructors provide a pre-connected client, so the
-    /// `None` branch is unreachable. Phase 3 will implement lazy connection here.
+    /// Short-circuits when `self.mqtt` is already `Some`. Otherwise, calls
+    /// `self.connector.secure_connect()` followed by `BambuMqttClient::connect()`
+    /// to create the session lazily.
     async fn ensure_mqtt(&mut self) -> Result<(), BambuError> {
         if self.mqtt.is_some() {
             return Ok(());
         }
-        Err(BambuError::NetworkError(SocketError::NotConnected))
+        let stream = self
+            .connector
+            .secure_connect(&self.ip, self.mqtt_port)
+            .await?;
+        let mut mqtt_client =
+            BambuMqttClient::connect(stream, &self.serial, &self.access_code).await?;
+        mqtt_client.owned_by_printerclient = true;
+        self.mqtt = Some(mqtt_client);
+        Ok(())
+    }
+
+    /// Eagerly establishes the MQTT connection.
+    ///
+    /// Idempotent — returns `Ok(())` if already connected.
+    pub async fn connect_mqtt(&mut self) -> Result<(), BambuError> {
+        self.ensure_mqtt().await
+    }
+
+    /// Returns whether the MQTT session is currently established.
+    pub fn mqtt_connected(&self) -> bool {
+        self.mqtt.is_some()
+    }
+
+    /// Sets a [`TimerProvider`] for wall-clock command-response timeouts.
+    ///
+    /// Consuming builder — works on both [`new()`](Self::new) and
+    /// [`from_mqtt()`](PrinterClient::from_mqtt) construction paths.
+    pub fn with_timer<NewTimer: TimerProvider>(
+        self,
+        timer: NewTimer,
+    ) -> PrinterClient<Conn, NewTimer, RawIO, Tls, Factory> {
+        PrinterClient {
+            mqtt: self.mqtt,
+            ftps: self.ftps,
+            connector: self.connector,
+            timer,
+            serial: self.serial,
+            ip: self.ip,
+            access_code: self.access_code,
+            model: self.model,
+            sequence_counter: self.sequence_counter,
+            k_profile_primed: self.k_profile_primed,
+            pending_messages: self.pending_messages,
+            command_timeout_secs: self.command_timeout_secs,
+            mqtt_port: self.mqtt_port,
+            ftps_port: self.ftps_port,
+        }
+    }
+
+    /// Overrides the default MQTT port (8883).
+    pub fn with_mqtt_port(mut self, port: u16) -> Self {
+        self.mqtt_port = port;
+        self
     }
 
     /// Increments and returns the next transaction/sequence identifier tracking commands.

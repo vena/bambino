@@ -1,50 +1,31 @@
 #![cfg(feature = "std")]
 
 use std::time::Duration;
-use tokio::net::TcpStream;
 
+use bambino::client::PrinterClient;
+use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
 use bambino::error::BambuError;
-use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
-use bambino::io::{SocketError, TlsConnector, TokioIo};
-use bambino::mqtt::BambuMqttClient;
+use bambino::io::tokio::{
+    TokioSecureConnector, TokioTimer, TokioTlsConnector, build_unsafe_client_config,
+};
+use bambino::models::resolve_model;
 
-const MQTTS_PORT: u16 = 8883;
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
-pub type MqttClient =
-    BambuMqttClient<<TokioTlsConnector as TlsConnector<TokioIo<TcpStream>>>::Stream>;
+pub type Printer =
+    PrinterClient<TokioSecureConnector, TokioTimer, DummyRawIo, DummyTls, DummyFactory>;
 
-pub async fn connect_mqtt(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-) -> Result<MqttClient, BambuError> {
+pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, BambuError> {
     validate_params(ip, serial, access_code)?;
 
-    log::debug!("Configuring TLS client context utilizing self-signed certificate verifier");
     let config = build_unsafe_client_config();
-    let connector = tokio_rustls::TlsConnector::from(config);
-    let tls_connector = TokioTlsConnector::new(connector);
+    let tls_connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+    let connector =
+        TokioSecureConnector::new(tls_connector, Duration::from_secs(CONNECT_TIMEOUT_SECS));
 
-    let addr = format!("{}:{}", ip, MQTTS_PORT);
-    log::debug!("Dialing TCP socket to {}", addr);
-    let tcp_stream = tokio::time::timeout(
-        Duration::from_secs(CONNECT_TIMEOUT_SECS),
-        TcpStream::connect(&addr),
-    )
-    .await
-    .map_err(|_| BambuError::NetworkError(SocketError::TimedOut))?
-    .map_err(to_socket_error)?;
-    let raw_io = TokioIo(tcp_stream);
+    let model = resolve_model(serial, None);
 
-    log::debug!("Wrapping socket in secure TLS session");
-    let secure_stream = tls_connector.connect(ip, MQTTS_PORT, raw_io).await?;
-
-    log::debug!("Initiating secure MQTT v3.1.1 protocol handshake");
-    let client = BambuMqttClient::connect(secure_stream, serial, access_code).await?;
-
-    log::debug!("MQTT protocol session established successfully");
-    Ok(client)
+    Ok(PrinterClient::new(connector, ip, serial, access_code, model).with_timer(TokioTimer::new()))
 }
 
 pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {

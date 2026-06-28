@@ -12,29 +12,23 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use bambino::client::PrinterClient;
 use bambino::error::BambuError;
-use bambino::models::resolve_model;
-use bambino::mqtt::PushAllRequest;
 
-use crate::connection::connect_mqtt;
+use crate::connection::create_printer;
 
 /// Connects, sends `pushall`, and dumps the first response containing a `print` object as pretty JSON.
 pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
-    let mut mqtt = connect_mqtt(ip, serial, access_code).await?;
-
-    let push_req = PushAllRequest::new(10001);
-    let push_payload = serde_json::to_vec(&push_req).map_err(|_| BambuError::SerializationError)?;
-    mqtt.publish_command(&push_payload).await?;
+    let mut printer = create_printer(ip, serial, access_code)?;
+    printer.request_pushall().await?;
 
     let timeout = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(timeout);
 
     loop {
         tokio::select! {
-            res = mqtt.poll_telemetry() => {
+            res = printer.poll_raw() => {
                 let msg = res?;
                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
                     && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
@@ -77,12 +71,8 @@ impl Drop for TerminalGuard {
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
     eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
 
-    let mqtt = connect_mqtt(ip, serial, access_code).await?;
-    eprintln!("MQTT Connection successfully established. Querying status database...");
-
-    let model = resolve_model(serial, None);
-    let quirks = model.quirks();
-    let mut printer = PrinterClient::new(mqtt, serial, model);
+    let mut printer = create_printer(ip, serial, access_code)?;
+    let quirks = printer.model().quirks();
 
     printer.request_pushall().await?;
 
