@@ -2,179 +2,193 @@
 
 **Important:** Before starting any phase, read `README.md` cover to cover. Understand what this library does and who it's for. Do not apply generic software engineering heuristics without grounding them in the project's actual goals.
 
+**Pre-release:** This library has not been released. All API changes are on the table. Do not preserve backward compatibility for external consumers — only for tests and the CLI within the same crate, and only when the phase specifies it.
+
 ---
 
-## Phase 1: `PrinterClient` Lazy Connection Redesign
+## Phase 1: Foundation Types and Library Adapters
 
 ### Problem
 
-`PrinterClient` requires a pre-connected `BambuMqttClient` at construction time. This means:
+Phases 2–4 redesign `PrinterClient` to own connection lifecycle. Before any structural changes, the codebase needs building blocks that don't exist yet.
 
-1. **FTPS-only use is impossible through `PrinterClient`.** The CLI's storage command (`src/bin/bambino-cli/storage.rs`) bypasses `PrinterClient` entirely, creating `BambuFtpsClient` directly. The CLI should demonstrate `PrinterClient` throughout — it's the library's primary API.
-2. **Consumers must manually orchestrate TCP→TLS→MQTT before they can create a `PrinterClient`.** The README "Connect" example is 6 lines of connection plumbing before `PrinterClient::new()` is even called.
-3. **There's no tokio implementation of `FtpDataStreamFactory`.** The CLI has a private `TokioDataStreamFactory` in `storage.rs` that should be in the library alongside `TokioTlsConnector`, `TokioTimer`, etc.
+### What to add
 
-### Design
+This phase is pure additions — no existing code changes, no API breaks.
 
-`PrinterClient` becomes the single coordination point for a printer. You construct it with the printer's identity and platform adapters, then opt into whichever protocols you need. Connections are established on demand or eagerly at the consumer's discretion.
+**`DummySecureConnect`** — `src/client/dummy.rs`. A zero-cost default for `PrinterClient`'s upcoming `Conn` type parameter (same role as `DummyTimer`, `DummyTls`, etc.). Implements `SecureConnect` with `type Stream = DummyRawIo`, returning an error if called. Export from `src/client/mod.rs`.
 
-#### 1. Type parameters
+**`PreConnected<IO>`** — `src/client/dummy.rs`. A `PhantomData`-based marker wrapping a pre-connected stream's `IO` type into a `SecureConnect` bound. Implements `SecureConnect` with `type Stream = IO`, returning an error if called (lazy connection is not possible with pre-connected streams). This exists for `from_mqtt()` in phase 3 — Embassy can't create TCP sockets on demand, so it needs a pre-connected path. Export from `src/client/mod.rs`.
 
-The first type param changes from `IO` (a passive stream type) to `Conn: SecureConnect` (an active connector that can create streams). The MQTT stream type becomes `Conn::Stream`. The other 4 params stay the same.
+**`TokioFtpDataStreamFactory`** — `src/io/tokio.rs`. A public unit struct implementing `FtpDataStreamFactory<TokioIo<TcpStream>>` — TCP connect + `TokioIo` wrap. Identical to the CLI's private `TokioDataStreamFactory` in `src/bin/bambino-cli/storage.rs`. This is the missing tokio platform adapter alongside `TokioTlsConnector` and `TokioTimer`.
 
-```
-Before: PrinterClient<IO,   Timer, RawIO, Tls, Factory>
-After:  PrinterClient<Conn, Timer, RawIO, Tls, Factory>
-        where Conn: SecureConnect
-```
-
-Still 5 type params, but `Conn` carries the ability to establish connections, not just a stream type. Defaults stay the same pattern — `DummySecureConnect` replaces the old `IO` default.
-
-#### 2. New struct fields
-
-`PrinterClient` gains:
-
-- `connector: Conn` — stored `SecureConnect` for lazy MQTT connection
-- `ip: String` — printer IP, needed by both MQTT and FTPS lazy connection
-- `access_code: String` — needed by MQTT and FTPS handshakes
-- `ftps_config: Option<(Tls, Factory)>` — FTPS adapters stored before connection, consumed by `connect_ftps()`
-
-`mqtt` changes from `BambuMqttClient<IO>` to `Option<BambuMqttClient<Conn::Stream>>`.
-
-#### 3. Constructors
-
-Two construction paths:
-
-**Lazy path** (tokio, ESP-IDF) — primary API:
-```rust
-let secure = TokioSecureConnector::new(tls_connector, timeout);
-let mut printer = PrinterClient::new(secure, ip, serial, access_code, model);
-```
-
-**Pre-connected path** (Embassy, backward compat):
-```rust
-let mut printer = PrinterClient::from_mqtt(mqtt_client, serial, model);
-```
-
-`from_mqtt()` wraps the connector type in a `PreConnected<IO>` marker that implements `SecureConnect` with `type Stream = IO` and returns an error if lazy connection is attempted. Since Embassy can't create its own TCP sockets (they must be pre-allocated from the network stack), this is the appropriate API for that platform.
-
-Timer and FTPS are configured separately:
-```rust
-printer.set_timer(TokioTimer::new());
-printer.configure_ftps(ftps_tls_connector, TokioFtpDataStreamFactory);
-```
-
-#### 4. Lazy MQTT connection
-
-A private `ensure_mqtt(&mut self) -> Result<(), BambuError>` helper:
-1. If `self.mqtt.is_some()`, return `Ok(())`
-2. Call `self.connector.secure_connect(&self.ip, MQTTS_PORT)` to get a TLS stream
-3. Call `BambuMqttClient::connect(stream, &self.serial, &self.access_code)` to handshake
-4. Store the client in `self.mqtt`
-
-Every method that uses MQTT calls `self.ensure_mqtt().await?` first, then accesses `self.mqtt.as_mut().unwrap()`. This is a mechanical change across all submodule files (`thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs`).
-
-Public `connect_mqtt()` exposes the same logic for eager pre-connection. Idempotent — safe to call multiple times.
-
-#### 5. FTPS connection
-
-`configure_ftps(tls, factory)` stores adapters in `self.ftps_config`.
-
-`connect_ftps()`:
-1. Takes `(tls, factory)` from `self.ftps_config` (errors if not configured)
-2. Calls `factory.create_data_stream(&self.ip, 990)` to create raw TCP to the FTPS port
-3. Calls `BambuFtpsClient::connect(raw, tls, factory, ...)` — this moves `tls` and `factory` into the FTPS client
-4. Stores the connected client in `self.ftps`
-
-`storage()` stays as `fn storage(&mut self) -> Option<&mut BambuFtpsClient<...>>` — returns `None` if FTPS isn't connected. Consumers call `connect_ftps()` explicitly. (FTPS is explicitly opted into, so lazy connection adds less value than for MQTT.)
-
-#### 6. `DummySecureConnect` and `PreConnected<IO>`
-
-Add to `src/client/dummy.rs`:
-
-```rust
-pub struct DummySecureConnect;
-
-impl SecureConnect for DummySecureConnect {
-    type Stream = DummyRawIo;
-    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<DummyRawIo, SocketError> {
-        Err(SocketError::Other("dummy connector"))
-    }
-}
-```
-
-Add `PreConnected<IO>` (for `from_mqtt()`):
-
-```rust
-pub struct PreConnected<IO>(PhantomData<IO>);
-
-impl<IO: AsyncIo> SecureConnect for PreConnected<IO> {
-    type Stream = IO;
-    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<IO, SocketError> {
-        Err(SocketError::Other("pre-connected client cannot create new connections"))
-    }
-}
-```
-
-#### 7. `TokioFtpDataStreamFactory`
-
-Add to `src/io/tokio.rs` — a unit struct implementing `FtpDataStreamFactory<TokioIo<TcpStream>>`. Identical to the CLI's private `TokioDataStreamFactory`: TCP connect + `TokioIo` wrap. This is the missing tokio adapter.
-
-#### 8. `MQTTS_PORT` constant
-
-Add `pub(crate) const MQTTS_PORT: u16 = 8883;` to `src/mqtt/client.rs` (or `src/mqtt/mod.rs`). Currently only defined in the CLI's `connection.rs`. `PrinterClient::ensure_mqtt()` needs it.
-
-### Implementation order
-
-These are ordered by dependency. Items at the same level are independent of each other.
-
-**Step 1** — Independent additions (no existing code changes):
-- Add `TokioFtpDataStreamFactory` to `src/io/tokio.rs`
-- Add `DummySecureConnect` and `PreConnected<IO>` to `src/client/dummy.rs`
-- Add `MQTTS_PORT` constant to `src/mqtt/`
-
-**Step 2** — Core refactor (depends on step 1):
-- Redesign `PrinterClient` struct in `src/client/mod.rs`: change type params, add new fields, rewrite constructors, add `ensure_mqtt()` / `connect_mqtt()` / `configure_ftps()` / `connect_ftps()`
-- Update `src/client/storage.rs`: remove `new_with_storage()` (replaced by `configure_ftps()` + `connect_ftps()`), keep `attach_storage()` for direct injection, keep `storage()` accessor
-
-**Step 3** — Mechanical updates (depend on step 2):
-- Update every method in `thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs` to call `self.ensure_mqtt().await?` before accessing `self.mqtt`
-- Update `poll_telemetry()`, `poll_raw()`, `poll_until()`, `publish_request()`, `request_pushall()`, `send_ping()`, `mqtt()` in `mod.rs`
-
-**Step 4** — CLI refactor (depends on steps 1–3):
-- Rewrite `src/bin/bambino-cli/connection.rs`: `connect_mqtt()` becomes a helper that creates a `TokioSecureConnector` and returns a `PrinterClient` (or just returns the connector + config for the caller to construct `PrinterClient`)
-- Rewrite `src/bin/bambino-cli/storage.rs`: use `PrinterClient` with `configure_ftps()` + `connect_ftps()` instead of direct `BambuFtpsClient`. Delete the private `TokioDataStreamFactory` (replaced by library's `TokioFtpDataStreamFactory`).
-- Update `control.rs`, `monitor/mod.rs` to use the new `PrinterClient` constructor
-
-**Step 5** — Tests and docs (depends on steps 1–3):
-- Update `tests/client_test.rs` and `tests/ftps_test.rs` for new constructor signatures
-- Update README "Connect" and "File transfer" examples to show the new API
-- Update `src/lib.rs` doc example
+**Port constants** — `pub(crate) const MQTTS_PORT: u16 = 8883` in `src/mqtt/mod.rs` and `pub(crate) const FTPS_PORT: u16 = 990` in `src/ftps/mod.rs`. These are Bambu firmware protocol constants (IANA-registered ports). All current models use them. They serve as defaults — phases 3–4 add builder methods to override them for non-standard setups (proxies, tunnels, future firmware changes). Currently `MQTTS_PORT` is duplicated as a local constant in the CLI's `connection.rs`.
 
 ### Verification
 
-All of these must pass:
 ```sh
-cargo build
-cargo test
-cargo clippy
-cargo build --no-default-features --features alloc --lib
+cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
 ```
 
-Verify the CLI commands still work:
-```sh
-cargo build --bin bambino-cli
-```
-
-### What this phase intentionally does NOT do
-
-- **Lazy FTPS connection** — FTPS requires explicit `connect_ftps()`. The consumer has already opted in by calling `configure_ftps()`, so the extra method call is not burdensome.
-- **Reconnection** — `ensure_mqtt()` connects once. If the connection drops, the consumer must handle it. Reconnection logic is a separate concern.
-- **Change `BambuFtpsClient` or `BambuMqttClient` APIs** — those stay as-is. Only `PrinterClient` (the wrapper) and the CLI change.
+All must pass with zero regressions.
 
 ---
 
-## Phase 2: CLI dependencies leak into library `tokio` feature
+## Phase 2: PrinterClient Struct Migration (Backward Compatible)
+
+### Problem
+
+`PrinterClient`'s first type parameter is `IO: AsyncIo` — a passive stream type. Phases 3–4 need it to be `Conn: SecureConnect` — an active connector. This phase performs the structural migration while keeping all existing constructor signatures working, so tests and the CLI compile without modification.
+
+### Design
+
+Change the struct definition and all impl blocks from `IO: AsyncIo` to `Conn: SecureConnect`. The MQTT client type becomes `BambuMqttClient<Conn::Stream>`. The `mqtt` field becomes `Option<BambuMqttClient<Conn::Stream>>` to prepare for lazy connection.
+
+New struct fields: `connector: Conn`, `ip: String`, `access_code: String`, `ftps_config: Option<(Tls, Factory)>`, `mqtt_port: u16`, `ftps_port: u16`.
+
+**Backward compatibility strategy:** The existing constructors (`new`, `new_with_timer`, `new_with_storage`) keep their parameter signatures but now constrain `Conn = PreConnected<IO>`. Since all callers use type inference (`let mut client = PrinterClient::new(mqtt, serial, model)`), the return type change from `PrinterClient<IO, ...>` to `PrinterClient<PreConnected<IO>, ...>` is invisible to them. No test or CLI changes needed.
+
+**`ensure_mqtt()` pattern:** Add a private `ensure_mqtt(&mut self) -> Result<(), BambuError>` that checks if `self.mqtt` is `Some` (short-circuit) or creates a new connection via `self.connector.secure_connect()` + `BambuMqttClient::connect()`. In this phase, it's structurally a no-op (mqtt is always `Some` from the constructors) but establishes the pattern for phase 3.
+
+Update every method in `mod.rs` that accesses `self.mqtt` to use `ensure_mqtt().await?` + `self.mqtt.as_mut().unwrap()`. Update the `mqtt()` accessor to return `Option<&mut BambuMqttClient<Conn::Stream>>` — no current caller uses it (the escape hatch was added for future use), so the signature change is safe.
+
+**Submodule updates:** Every impl block in `thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs`, `storage.rs` changes its first type bound from `IO: AsyncIo` to `Conn: SecureConnect`. No method bodies change — all MQTT access flows through `self.publish_request()` and `self.poll_until()` in `mod.rs`.
+
+### Verification
+
+```sh
+cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
+```
+
+All existing tests and the CLI must pass without modification.
+
+---
+
+## Phase 3: Lazy MQTT Connection and Constructor Redesign
+
+### Problem
+
+After phase 2, `PrinterClient` has the internal structure for lazy connection but still requires a pre-connected `BambuMqttClient` at construction time. This phase activates lazy MQTT connection, introduces the new constructor API, and migrates all consumers.
+
+### Design: constructor API
+
+**Rename** the existing `new(mqtt_client, serial, model)` to `from_mqtt()`. It keeps its behavior — wraps a pre-connected `BambuMqttClient` in `PrinterClient<PreConnected<IO>>`.
+
+**Add** a new `new(connector, ip, serial, access_code, model)` that takes a `SecureConnect` connector and defers MQTT connection. The `mqtt` field starts as `None`; `ensure_mqtt()` creates the connection on first use.
+
+**Replace** `new_with_timer()` and `from_mqtt_with_timer()` (if it exists) with a consuming `.with_timer(timer)` builder method that works on either construction path. This returns a `PrinterClient` with a different `Timer` type parameter. Same pattern: `.with_mqtt_port(port)` overrides the default port (non-type-changing, returns `Self`).
+
+```rust
+// Lazy (tokio, ESP-IDF):
+let mut printer = PrinterClient::new(secure, ip, serial, access_code, model)
+    .with_timer(TokioTimer::new());
+
+// Pre-connected (Embassy, tests):
+let mut printer = PrinterClient::from_mqtt(mqtt, serial, model)
+    .with_timer(timer);
+```
+
+**Add** `connect_mqtt()` (public, idempotent, delegates to `ensure_mqtt()`) and `mqtt_connected() -> bool`.
+
+### Consumer migration
+
+**Tests (`tests/client_test.rs`):** Mechanical rename — `PrinterClient::new(mqtt,` → `PrinterClient::from_mqtt(mqtt,`. Mock infrastructure unchanged.
+
+**CLI (`src/bin/bambino-cli/connection.rs`):** Replace `connect_mqtt()` (which returns a raw `BambuMqttClient`) with a helper that constructs a lazy `PrinterClient` using `TokioSecureConnector`. Remove the `MqttClient` type alias. Keep `validate_params()`.
+
+**CLI consumers (`control.rs`, `monitor/mod.rs`):** Replace the 3-line connect+resolve+construct pattern with a single call to the new connection helper. Convert `monitor/mod.rs`'s `dump()` function from raw `BambuMqttClient` usage to `PrinterClient` — this eliminates the need for the CLI to expose a raw MQTT client at all.
+
+### Verification
+
+```sh
+cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
+```
+
+---
+
+## Phase 4: Lazy FTPS Connection and API Alignment
+
+### Problem
+
+After phase 3, MQTT has lazy connection but FTPS does not. The CLI's storage command still bypasses `PrinterClient`. The MQTT and FTPS APIs are asymmetric. This phase completes the lazy connection story and aligns both protocols to a consistent API.
+
+### Design: MQTT / FTPS symmetry
+
+After this phase, both protocols follow the same pattern:
+
+| Aspect | MQTT | FTPS |
+|--------|------|------|
+| Configure | `new(connector, ...)` | `.with_ftps(tls, factory)` |
+| Port override | `.with_mqtt_port(port)` | `.with_ftps_port(port)` |
+| Default port | 8883 | 990 |
+| Eager connect | `connect_mqtt().await?` | `connect_ftps().await?` |
+| Lazy connect | auto on first MQTT method | auto on first storage method |
+| Raw access | `mqtt().await?` → `Result<&mut BambuMqttClient>` | `storage().await?` → `Result<&mut BambuFtpsClient>` |
+| Status | `mqtt_connected()` | `ftps_connected()` |
+
+The one inherent asymmetry: the MQTT connector is provided at `new()` because it determines the primary type parameter `Conn::Stream`. FTPS adapters are provided via `.with_ftps()` because FTPS is optional. This reflects domain reality, not an API inconsistency.
+
+### `.with_ftps()` builder
+
+A consuming builder that changes the `RawIO`, `Tls`, and `Factory` type parameters. Stores the adapters in `ftps_config` for lazy connection. The consumer's FTPS TLS config may differ from MQTT's (e.g., `force_tls_1_2` for P2S/X2D models), so the FTPS `TlsConnector` is independent.
+
+Type constraint: `.with_ftps()` can't be a `&mut self` method because it changes type parameters. It must consume `self` and return a new type. This means FTPS configuration happens at construction time (builder chain), not at runtime.
+
+### `ensure_ftps()`
+
+Private helper mirroring `ensure_mqtt()`. If `self.ftps.is_some()`, short-circuit. Otherwise, take `(tls, factory)` from `self.ftps_config` via `.take()`, create a raw TCP connection to port `self.ftps_port` via `factory.create_data_stream()`, then call `BambuFtpsClient::connect()` which moves `tls` and `factory` into the FTPS client. Error if FTPS was never configured.
+
+Note: `.take()` means the config is consumed on first connection. Reconnecting requires reconstructing the `PrinterClient` with `.with_ftps()` again. This is acceptable — FTPS reconnection is not a hot path.
+
+### Raw accessor alignment
+
+Change `mqtt()` from synchronous `Option<&mut ...>` to `async fn mqtt() -> Result<&mut BambuMqttClient<Conn::Stream>, BambuError>` with auto-connect. Make `storage()` match: `async fn storage() -> Result<&mut BambuFtpsClient<...>, BambuError>`. Both auto-connect, both return `Result`, both have synchronous `_connected()` companions for non-connecting state checks.
+
+### Removals
+
+Remove `new_with_storage()` — replaced by `.with_ftps()` builder + lazy connection. Keep `attach_storage()` for direct injection of a pre-connected `BambuFtpsClient` (test mocks, Embassy).
+
+### CLI storage migration
+
+Rewrite `src/bin/bambino-cli/storage.rs` to use `PrinterClient` with `.with_ftps()` instead of constructing `BambuFtpsClient` directly. Delete the private `TokioDataStreamFactory` (replaced by the library's `TokioFtpDataStreamFactory` from phase 1).
+
+### Verification
+
+```sh
+cargo build && cargo test && cargo clippy && cargo build --no-default-features --features alloc --lib
+```
+
+---
+
+## Phase 5: Documentation
+
+### Problem
+
+After phases 1–4, the `PrinterClient` API has changed significantly. The doc examples and README show the old pre-connected API.
+
+### Changes
+
+**`src/lib.rs` doc example** — Update to show lazy connection via `PrinterClient::new()` with a `TokioSecureConnector`.
+
+**README "Connect" section** — Replace the 6-line connection plumbing with the new builder API. Show both construction paths (lazy and pre-connected via `from_mqtt()`).
+
+**README "File transfer" section** — Show `PrinterClient` with `.with_ftps()` as the primary example. Keep direct `BambuFtpsClient` usage in a "Direct protocol access" note.
+
+**README raw access** — Document `mqtt().await?` and `storage().await?` as async `Result`-returning accessors.
+
+**CLAUDE.md** — Update the "Non-Obvious Type Decisions" section for `PrinterClient` to reflect the new constructor patterns, lazy connection semantics, builder methods, and `Conn: SecureConnect` type parameter.
+
+### Verification
+
+```sh
+cargo build && cargo test && cargo clippy && cargo doc --no-deps
+```
+
+Verify `cargo doc` produces no warnings for broken doc links.
+
+---
+
+## Phase 6: CLI dependencies leak into library `tokio` feature
 
 ### Problem
 
@@ -192,112 +206,29 @@ Apply if warranted. Verify `cargo build`, `cargo build --no-default-features --f
 
 ---
 
-## Phase 3: Architectural review
-
-### What this phase is — and is not
-
-This is an evaluation of bambino's high-level design decisions against its stated goals. It is NOT a code review, a bug hunt, or a search for types in the wrong file. The previous attempt (phase 26) failed by doing exactly that — it grepped for import paths and `#[cfg]` gates and produced findings like "this enum should live in a different module." That's not architecture.
-
-### Before you start
-
-Read `README.md` cover to cover. The library's identity:
-- Async Rust library for direct LAN control of Bambu Lab 3D printers
-- One codebase compiling to three targets: desktop (tokio), ESP32 (ESP-IDF), bare-metal (Embassy)
-- Two API levels: `PrinterClient` (high-level with model-aware safety) and direct protocol access
-- Ships as a single crate with an integrated CLI for testing
-- Protocols: MQTT (commands + telemetry), FTPS (file transfer), SSDP (discovery), camera (binary JPEG + RTSPS)
-
-Every question below should be answered with: "Does this design decision serve these goals well? Will it hold up as the crate grows?" The output for each question is one of:
-- **Sound** — the design is right, with a sentence on why
-- **Concern** — the design works today but has a specific scaling/usability risk, with the risk stated
-- **Problem** — the design is wrong and here's a concrete better approach
-
-Do NOT produce findings about file organization, import paths, or feature flag placement. Those were already reviewed and resolved.
-
-### Questions to evaluate
-
-**Note:** Questions 1 and 2 were substantively addressed by the Phase 1 redesign (type parameter change from `IO` to `Conn: SecureConnect`, lazy connection, FTPS integration). Evaluate them lightly — confirm Phase 1's design is sound or flag remaining concerns, but don't deep-dive.
-
-**1. Multi-platform type parameter strategy**
-
-`PrinterClient<IO, Timer, RawIO, Tls, Factory>` has 5 generic type parameters to abstract over platforms. Default generics (`DummyTimer`, `DummyTls`, etc.) let the common case (`PrinterClient::new()`) avoid specifying them all.
-
-- Does this strategy compose well when a consumer actually uses FTPS (suddenly all 5 params are real)?
-- What happens when a 4th platform is added — do all 5 trait impls need new types?
-- Is 5 type parameters the natural complexity for this domain, or is there a simpler formulation that achieves the same multi-platform story? Consider alternatives: trait objects with platform-specific constructors, feature-gated concrete types, a platform adapter struct that bundles all the transport pieces.
-- Read the README's FTPS example — the consumer has to supply `raw_control, tls_connector, data_factory, model, ip, access_code`. Is this the right ergonomic tradeoff?
-
-**2. PrinterClient scope and layering**
-
-`PrinterClient` wraps MQTT (and optionally FTPS) with methods spanning thermal control, motion, print jobs, AMS operations, hardware (fans/LEDs/buzzers), and diagnostics (version queries, K-profiles). It's split into submodule files (`thermal.rs`, `motion.rs`, `print.rs`, `hardware.rs`, `ams.rs`, `storage.rs`).
-
-- Is one struct doing too much, or is the submodule split sufficient to manage the complexity?
-- The `.mqtt()` escape hatch gives raw access while keeping the high-level client. Does this layering hold up? Are there operations that are awkward because they don't fit either level?
-- The `pending_messages` buffer: when `poll_until()` waits for a specific response, non-matching messages accumulate in a `VecDeque` with no bound. Is this a problem for long-running connections that call command-response methods frequently?
-- `PrinterClient` holds `Option<BambuFtpsClient<...>>` — FTPS is optional and bolted on. Does this optional composition work well in practice, or does it create awkward `None` checks and type signature noise?
-
-**3. Quirks engine scalability**
-
-`ModelQuirks` is a trait with ~20 methods, dispatched as `&'static dyn ModelQuirks` via `BambuModel::quirks()`. Per-model strategy structs implement it.
-
-- Bambu Lab ships new printer models regularly. What's the process for adding a model? Is it: add a variant to `BambuModel`, create a strategy struct, implement `ModelQuirks`, add a match arm in `quirks()`? Is this mechanical or does it require design decisions each time?
-- Is `ModelQuirks` becoming a god-trait? At 20+ methods, is every method genuinely about "model-specific behavior," or have some accumulated that are really about feature presence (capabilities) vs. behavioral differences (quirks)?
-- The trait uses default method implementations for most methods. Is there a risk of a new model silently inheriting wrong defaults?
-
-**4. MQTT command pattern**
-
-Every command follows: `#[derive(Serialize)]` payload struct → wrapper struct with `pub print:` (or `pushing:`, `system:`) field → `impl` with `pub fn new()`. There are ~20 command types across `mqtt/commands/` and `diagnostics/kprofile.rs`.
-
-- Is the boilerplate justified? Does the two-struct pattern (payload + wrapper) earn its keep, or could a single struct with serde rename do the job?
-- What happens at 50 commands? 100? Is there a macro or code-generation path that would reduce repetition without sacrificing readability?
-- Are the command types well-grouped (by domain: `ams.rs`, `control.rs`, `gcode.rs`, `hardware.rs`, `print_job.rs`, `status.rs`), or would they be better organized differently at scale?
-
-**5. Telemetry data model**
-
-The printer pushes JSON state dumps over MQTT. These are deserialized into `TelemetryReport` (which contains `PrinterTelemetry` with dozens of optional fields). `poll_telemetry()` returns `TelemetryEvent::Report` or `TelemetryEvent::Unknown`.
-
-- `TelemetryReport` / `PrinterTelemetry` are large flat(ish) structs with many `Option<>` fields because different messages populate different subsets. Is this the right representation, or would a delta/event model work better?
-- The `Unknown` variant swallows all unrecognized messages. Is there telemetry data being silently dropped that consumers might want?
-- How well does the telemetry model handle the `DeviceTelemetry` dual-location issue noted in CLAUDE.md (top-level vs nested inside `print`)? Is this transparent to consumers or a source of bugs?
-
-**6. io/ trait surface area**
-
-The transport traits are: `AsyncIo` (blanket impl), `TlsConnector` (wrap stream), `SecureConnect` (create connection), `AsyncUdpSocket`, `TimerProvider`, and `FtpDataStreamFactory`.
-
-- Do these traits compose cleanly? Can a platform implementor look at the trait list and understand what they need to provide?
-- `TlsConnector` vs `SecureConnect` exists because ESP-IDF manages its own TCP. Is this split well-documented? Would a new platform implementor understand when to use which?
-- Could a hypothetical 4th platform (e.g., WASM, or a different RTOS) be added by just implementing these traits, or would the trait surface need to change?
-
-### Output format
-
-For each of the 6 questions, write a **Sound / Concern / Problem** verdict with 2–4 sentences of reasoning. If the verdict is Concern or Problem, state specifically what would go wrong and under what conditions. Do not produce code changes in this phase — it's evaluation only.
-
----
-
-## Phase 4: Camera integration in `PrinterClient`
+## Phase 7: Camera integration in `PrinterClient`
 
 ### Problem
 
-`PrinterClient` has no camera awareness. The CLI's camera command (`src/bin/bambino-cli/camera.rs`) bypasses `PrinterClient` and uses `BambuBinaryCameraStream` directly. `PrinterClient` is the library's high-level coordination point for a printer — it manages MQTT and FTPS connections, holds the printer's identity (ip, serial, access code, model), and applies model-aware safety checks. Camera should be accessible through it too.
+`PrinterClient` has no camera awareness. The CLI's camera command bypasses `PrinterClient` and uses `BambuBinaryCameraStream` directly, duplicating connection logic that `PrinterClient` already owns.
 
-The CLI should demonstrate `PrinterClient` throughout. Today, the camera command manually creates a TLS connection, builds a `BambuBinaryCameraStream`, and handles authentication — duplicating connection logic that `PrinterClient` already has (it holds a `SecureConnect` connector and the printer's credentials).
-
-### Background: camera module structure
+### Background
 
 Bambu printers use two camera protocols (determined by `model.quirks().camera_protocol()`):
 
-- **Binary JPEG (port 6000, A1/P1 series)** — `src/camera/binary.rs` provides `BambuBinaryCameraStream`, a complete client that authenticates and streams JPEG frames over TLS. This is a persistent streaming connection.
-- **RTSPS (port 322, X1/X2/H2/P2S series)** — `src/camera/rtsps.rs` provides helper utilities only (URL generation, proxy URI rewriting, P2S RTP timestamp correction). There is no RTSP client — consumers integrate with external media frameworks.
+- **Binary JPEG (port 6000, A1/P1 series)** — `src/camera/binary.rs` provides `BambuBinaryCameraStream`, a complete client that authenticates and streams JPEG frames over TLS. Persistent streaming connection.
+- **RTSPS (port 322, X1/X2/H2/P2S series)** — `src/camera/rtsps.rs` provides helper utilities only (URL generation, proxy URI rewriting, timestamp correction). No RTSP client — consumers integrate with external media frameworks.
 
 ### Design questions to answer first
 
-- **Binary JPEG has a persistent streaming connection** — unlike FTPS (connect, do operation, disconnect), the camera stream stays open and pushes frames continuously. `PrinterClient` manages FTPS via `configure_ftps()` + `connect_ftps()` + `storage()` accessor. Does the same pattern work for a long-lived stream, or does the streaming nature need a different API shape?
-- **Two protocols, one slot?** A printer uses either binary JPEG or RTSPS, never both. Should `PrinterClient` expose a single `camera()` accessor that returns an enum, or separate `binary_camera()` / `rtsps_helpers()` methods? The RTSPS side is just utility functions with no connection state — it may not need the connect-on-demand pattern at all.
-- **Type parameter impact** — binary JPEG needs a TLS stream. `PrinterClient` already holds a `Conn: SecureConnect` connector that can create TLS streams (used for lazy MQTT connection). Can camera reuse this, or does it need its own type parameter (e.g., if the camera TLS config differs from MQTT's)?
+- **Streaming vs request/response** — Binary JPEG is a persistent stream, unlike FTPS's connect-operate-disconnect pattern. Does the `.with_ftps()` + lazy `storage()` pattern work for a long-lived stream?
+- **Two protocols, one slot?** A printer uses either binary JPEG or RTSPS, never both. Single `camera()` accessor returning an enum, or separate methods? RTSPS has no connection state.
+- **Type parameter impact** — Can camera reuse the existing `Conn: SecureConnect` connector, or does camera TLS differ from MQTT's?
+- **Lazy connection** - like MQTT and FTPS, camera connection should be lazy and not required to instantiate a PrinterClient.
 
 ### Scope
 
-This phase is intentionally underspecified. Answer the design questions above based on the current codebase, then write a concrete implementation plan. Do not start implementation without a plan.
+Answer the design questions based on the current codebase, then write a concrete implementation plan. Do not start implementation without a plan.
 
 ---
 
@@ -305,7 +236,10 @@ This phase is intentionally underspecified. Answer the design questions above ba
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | `PrinterClient` lazy connection redesign | Not Started |
-| 2 | CLI dependency leakage | Not Started |
-| 3 | Architectural review | Not Started |
-| 4 | Camera integration in `PrinterClient` | Not Started |
+| 1 | Foundation types and library adapters | Not Started |
+| 2 | `PrinterClient` struct migration (backward compatible) | Not Started |
+| 3 | Lazy MQTT connection and constructor redesign | Not Started |
+| 4 | Lazy FTPS connection and API alignment | Not Started |
+| 5 | Documentation | Not Started |
+| 6 | CLI dependency leakage | Not Started |
+| 7 | Camera integration in `PrinterClient` | Not Started |
