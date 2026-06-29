@@ -11,6 +11,8 @@
 #[cfg(not(feature = "std"))]
 use alloc::collections::BTreeSet;
 #[cfg(not(feature = "std"))]
+use alloc::collections::VecDeque;
+#[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
@@ -21,6 +23,8 @@ use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
 use std::collections::BTreeSet;
+#[cfg(feature = "std")]
+use std::collections::VecDeque;
 
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
@@ -225,6 +229,9 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     next_packet_id: u16,
     /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
     in_flight: BTreeSet<u16>,
+    /// Messages buffered by request-response round-trips (e.g. `poll_until`),
+    /// drained first by `poll_telemetry()` before reading from the wire.
+    pending_messages: VecDeque<MqttMessage>,
     /// Accumulated elapsed seconds since the last command publish while waiting for a response update.
     write_pending_secs: Option<u32>,
     /// Incremental scale of unacknowledged ping requests.
@@ -232,7 +239,6 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
     secs_since_last_message: u32,
-    pub(crate) owned_by_printerclient: bool,
 }
 
 impl<IO: AsyncIo> BambuMqttClient<IO> {
@@ -350,10 +356,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             request_topic: format!("device/{}/request", serial),
             next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
             in_flight: BTreeSet::new(),
+            pending_messages: VecDeque::new(),
             write_pending_secs: None,
             ping_outstanding: false,
             secs_since_last_message: 0,
-            owned_by_printerclient: false,
         })
     }
 
@@ -403,30 +409,29 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         Ok(packet_id)
     }
 
-    /// Block-waits and parses the next incoming packet from the printer connection.
+    /// Returns the next MQTT message, draining any buffered messages first.
     ///
-    /// Evaluates protocol frames and handles internal responses (e.g. sending `PUBACK` replies
-    /// to incoming reports, stripping out matching packet IDs from `in_flight` lists, and
-    /// acknowledging PINGRESPs) seamlessly before returning telemetry packets.
+    /// Messages are buffered when request-response methods (e.g. `get_version()`) read
+    /// non-matching messages off the wire while waiting for a specific response. This
+    /// method drains those buffered messages in FIFO order before reading new packets
+    /// from the wire.
     ///
-    /// **Warning:** If this client is owned by a [`crate::client::PrinterClient`], use
-    /// [`PrinterClient::poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)
-    /// or [`PrinterClient::poll_raw()`](crate::client::PrinterClient::poll_raw) instead.
-    /// Calling this method directly bypasses `PrinterClient`'s internal message buffer,
-    /// causing messages to silently disappear from the high-level polling methods.
+    /// Handles MQTT protocol frames transparently: sends `PUBACK` for incoming QoS 1
+    /// publishes, clears matching packet IDs from the in-flight tracker on `PUBACK`,
+    /// and acknowledges `PINGRESP` — only application-level `PUBLISH` payloads are
+    /// returned.
     pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
-        if self.owned_by_printerclient {
-            log::warn!(
-                "poll_telemetry() called directly on a PrinterClient-owned BambuMqttClient — \
-                 messages read here will not appear in PrinterClient::poll_telemetry()/poll_raw(); \
-                 use those methods instead"
-            );
+        if let Some(buffered) = self.pending_messages.pop_front() {
+            return Ok(buffered);
         }
-        self.poll_message().await
+        self.poll_wire().await
     }
 
-    /// Internal poll implementation used by `PrinterClient` to bypass the ownership warning.
-    pub(crate) async fn poll_message(&mut self) -> Result<MqttMessage, BambuError> {
+    /// Reads the next message directly from the wire, bypassing the pending buffer.
+    ///
+    /// Used by `PrinterClient::poll_until()` which manages its own buffer stashing
+    /// and must not re-read messages it just pushed.
+    pub(crate) async fn poll_wire(&mut self) -> Result<MqttMessage, BambuError> {
         let mut payload_buf = Vec::new();
         loop {
             let (header, rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf).await?;
@@ -582,6 +587,14 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// Returns a slice containing current un-acknowledged QoS 1 packet identifiers.
     pub fn get_in_flight_count(&self) -> usize {
         self.in_flight.len()
+    }
+
+    /// Stashes a message back into the pending buffer for later retrieval.
+    ///
+    /// Used by `PrinterClient::poll_until()` to buffer non-matching messages
+    /// during request-response round-trips.
+    pub(crate) fn push_pending(&mut self, msg: MqttMessage) {
+        self.pending_messages.push_back(msg);
     }
 }
 

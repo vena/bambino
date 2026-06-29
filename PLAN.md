@@ -8,9 +8,9 @@
 
 ---
 
-## Phases 1–5: Complete
+## Phases 1–6: Complete
 
-Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation (lib.rs doc example, README Connect/File transfer/raw access sections, CLAUDE.md) to reflect the new API, and fixed pre-existing broken doc links.
+Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag.
 
 **Decisions informing future phases:**
 
@@ -18,53 +18,7 @@ Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS
 - **`ensure_*()` is the lazy connection pattern.** `ensure_mqtt()` and `ensure_ftps()` short-circuit on `Some`, otherwise connect lazily. `ensure_ftps()` uses `.take()` to consume `ftps_config`, so reconnection requires a new `PrinterClient`. Phase 9 should consider whether camera's persistent streaming nature needs a different reconnection story.
 - **Each protocol's TLS config is independent.** FTPS may need `force_tls_1_2` (model quirk) while MQTT does not. Phase 9's camera TLS may also differ — don't assume a shared connector.
 - **CLI storage now routes through `PrinterClient`.** Phase 9's camera CLI command should follow the same pattern rather than constructing protocol clients directly.
-
----
-
-## Phase 6: Move message buffer from `PrinterClient` to `BambuMqttClient`
-
-### Problem
-
-`PrinterClient` owns a `pending_messages: VecDeque<MqttMessage>` buffer that exists because `poll_until()` reads messages off the wire while waiting for a specific response, stashing non-matching messages for later. This buffer lives on `PrinterClient`, but `BambuMqttClient` is the thing reading from the wire. The result is a split-brain read path: `PrinterClient::poll_telemetry()` drains the buffer first, but `mqtt().await?` hands back `&mut BambuMqttClient` which reads from the wire directly, bypassing the buffer. This forced a `poll_telemetry()` warning on `BambuMqttClient` and an `owned_by_printerclient` flag to detect the situation at runtime.
-
-The message buffer is inherently an MQTT-level concern. Any consumer doing request-response over a shared MQTT topic needs it, not just `PrinterClient`.
-
-### Changes
-
-**`BambuMqttClient`** — gains the buffer and buffered read path:
-
-- Add `pending_messages: VecDeque<MqttMessage>` field (initialized empty in `connect()`).
-- `poll_message()` drains from `pending_messages` first, then reads from the wire. This is the single read path — there is no longer a way to bypass the buffer.
-- Add `pub(crate) fn push_pending(&mut self, msg: MqttMessage)` for `PrinterClient::poll_until()` to stash non-matching messages back.
-- Remove `owned_by_printerclient` field.
-- Remove the `poll_telemetry()` wrapper method and its warning. `poll_message()` becomes the only public read method (rename to `poll_telemetry()` if preferred — the name should reflect that it's the right thing to call).
-
-**`PrinterClient`** — loses the buffer, delegates:
-
-- Remove `pending_messages` field.
-- `poll_telemetry()` and `poll_raw()` call straight through to `self.mqtt.as_mut().unwrap().poll_message()` (after `ensure_mqtt()`). No buffer drain needed — the MQTT client handles that.
-- `poll_until()` stays on `PrinterClient` (it needs `self.timer` for wall-clock timeouts), but pushes non-matching messages via `self.mqtt.as_mut().unwrap().push_pending(msg)` instead of `self.pending_messages.push_back(msg)`.
-- Remove the `owned_by_printerclient = true` assignments in `new()` constructors and `ensure_mqtt()`.
-
-**`from_mqtt()` constructor** — remove the `mqtt_client.owned_by_printerclient = true` line.
-
-**Documentation** — remove the `mqtt()` accessor warning from:
-- `PrinterClient::mqtt()` doc comment in `src/client/mod.rs`
-- README "Two levels of API" section
-- `src/lib.rs` module guide (if mentioned)
-
-**Tests** — existing tests should continue to pass since the behavior is identical, just owned by the right layer. No new tests needed beyond verifying the existing suite still passes.
-
-### Ordering
-
-All changes are tightly coupled — the buffer removal from `PrinterClient` and addition to `BambuMqttClient` must happen atomically. This is a single commit.
-
-### Verification
-
-```sh
-cargo build && cargo test && cargo clippy && cargo doc --no-deps
-cargo build --no-default-features --features alloc --lib
-```
+- **Message buffer is on `BambuMqttClient`.** `poll_telemetry()` drains buffered messages first, then reads the wire. `poll_wire()` bypasses the buffer (used by `PrinterClient::poll_until()`). `push_pending()` stashes non-matching messages. `PrinterClient` delegates all reads through these methods. `mqtt().await?` returns a client whose `poll_telemetry()` is safe to call directly — no split-brain, no warnings.
 
 ---
 
@@ -162,7 +116,7 @@ Answer the design questions based on the current codebase, then write a concrete
 | 3 | Lazy MQTT connection and constructor redesign | Complete |
 | 4 | Lazy FTPS connection and API alignment | Complete |
 | 5 | Documentation | Complete |
-| 6 | Move message buffer to `BambuMqttClient` | Not Started |
+| 6 | Move message buffer to `BambuMqttClient` | Complete |
 | 7 | Command response validation | Not Started |
 | 8 | CLI dependency leakage | Not Started |
 | 9 | Camera integration in `PrinterClient` | Not Started |

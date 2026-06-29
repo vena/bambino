@@ -31,12 +31,7 @@ pub use types::{CalibrationOption, FanTarget, PrintSpeed, TelemetryEvent};
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 #[cfg(not(feature = "std"))]
-use alloc::collections::VecDeque;
-#[cfg(not(feature = "std"))]
 use alloc::string::String;
-
-#[cfg(feature = "std")]
-use std::collections::VecDeque;
 
 use serde::Serialize;
 
@@ -85,7 +80,6 @@ pub struct PrinterClient<
     pub(crate) model: BambuModel,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
-    pub(crate) pending_messages: VecDeque<MqttMessage>,
     pub(crate) command_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
@@ -125,7 +119,6 @@ where
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
-            pending_messages: VecDeque::new(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
@@ -144,12 +137,7 @@ where
     /// client uses [`PreConnected`] as its connector — calling
     /// [`connect_mqtt()`](Self::connect_mqtt) on a disconnected `PreConnected`
     /// client will return [`SocketError::NotConnected`](crate::io::SocketError::NotConnected).
-    pub fn from_mqtt(
-        mut mqtt_client: BambuMqttClient<IO>,
-        serial: &str,
-        model: BambuModel,
-    ) -> Self {
-        mqtt_client.owned_by_printerclient = true;
+    pub fn from_mqtt(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
@@ -162,7 +150,6 @@ where
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
-            pending_messages: VecDeque::new(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
@@ -191,9 +178,7 @@ where
             .connector
             .secure_connect(&self.ip, self.mqtt_port)
             .await?;
-        let mut mqtt_client =
-            BambuMqttClient::connect(stream, &self.serial, &self.access_code).await?;
-        mqtt_client.owned_by_printerclient = true;
+        let mqtt_client = BambuMqttClient::connect(stream, &self.serial, &self.access_code).await?;
         self.mqtt = Some(mqtt_client);
         Ok(())
     }
@@ -230,7 +215,6 @@ where
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
-            pending_messages: self.pending_messages,
             command_timeout_secs: self.command_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
@@ -270,7 +254,6 @@ where
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
-            pending_messages: self.pending_messages,
             command_timeout_secs: self.command_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
@@ -365,11 +348,7 @@ where
     /// ```
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
         self.ensure_mqtt().await?;
-        let msg = if let Some(buffered) = self.pending_messages.pop_front() {
-            buffered
-        } else {
-            self.mqtt.as_mut().unwrap().poll_message().await?
-        };
+        let msg = self.mqtt.as_mut().unwrap().poll_telemetry().await?;
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
             Ok(report) => Ok(TelemetryEvent::Report(Box::new(report), msg)),
             Err(_) => Ok(TelemetryEvent::Unknown(msg)),
@@ -377,15 +356,9 @@ where
     }
 
     /// Pulls the next raw MQTT message without deserialization.
-    ///
-    /// Drains any internally buffered messages before reading from the wire.
     pub async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError> {
         self.ensure_mqtt().await?;
-        if let Some(buffered) = self.pending_messages.pop_front() {
-            Ok(buffered)
-        } else {
-            self.mqtt.as_mut().unwrap().poll_message().await
-        }
+        self.mqtt.as_mut().unwrap().poll_telemetry().await
     }
 
     /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching
@@ -403,11 +376,11 @@ where
         let mut count: usize = 0;
 
         loop {
-            let msg = self.mqtt.as_mut().unwrap().poll_message().await?;
+            let msg = self.mqtt.as_mut().unwrap().poll_wire().await?;
             if let Some(result) = matcher(&msg) {
                 return Ok(result);
             }
-            self.pending_messages.push_back(msg);
+            self.mqtt.as_mut().unwrap().push_pending(msg);
             count += 1;
 
             if count >= POLL_UNTIL_MAX_MESSAGES {
@@ -459,11 +432,6 @@ where
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
     /// in-flight state — anything that [`PrinterClient`] doesn't expose directly.
-    ///
-    /// Calling [`poll_telemetry()`](BambuMqttClient::poll_telemetry) on the returned
-    /// client will log a warning — use [`PrinterClient::poll_telemetry()`](Self::poll_telemetry)
-    /// or [`poll_raw()`](Self::poll_raw) instead to keep the internal message buffer
-    /// consistent.
     pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<Conn::Stream>, BambuError> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())
