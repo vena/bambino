@@ -52,7 +52,7 @@ All commands produce a uniform ack response with the same shape:
 - Pause/resume/stop when no print is active — acked as success, no-op
 - Clear error when no error exists — acked as success, no-op
 
-The "home axes before moving" prompt described in the original problem statement is a **touchscreen UI behavior only** — it does not propagate over MQTT. The motion controller executes the gcode regardless of homed state.
+The firmware does not reject motion commands when unhomed — the motion controller executes the gcode regardless of homed state. However, homed state **is** available over MQTT via `home_flag` bits 0-2 (see below). OrcaSlicer reads these bits and blocks moves client-side; the touchscreen shows a similar prompt. The responsibility for checking homed state lies with the client, not the firmware.
 
 **Step 1 findings — Telemetry during long-running commands:**
 
@@ -64,13 +64,7 @@ Homing (`G28`) takes ~45 seconds on a P1S. The completion lifecycle is observabl
 
 `mc_print_sub_stage` is the reliable completion signal.
 
-**`home_flag` bitmask — per-axis homed state (confirmed via OrcaSlicer source):**
-- Bit 0: X axis homed
-- Bit 1: Y axis homed
-- Bit 2: Z axis homed
-- Bit 11: store-to-SD-card
-- Bit 18: wired/Ethernet connection
-- Bit 23: door open (X1 family only; other models use the `stat` field)
+**`home_flag` bitmask — per-axis homed state (bits 0–2):** Confirmed via OrcaSlicer source (`DeviceManager.cpp`). The full 30-bit bitmask is documented in [REF-HOMEFLAG] in `reference/03_mqtt_telemetry.md`, cross-verified against OrcaSlicer, pybambu, and bambu-printer-manager.
 
 Observed values from P1S probe runs:
 - `6374672` (`0x00614510`): unhomed — bits 0-2 all zero
@@ -98,13 +92,7 @@ The printer sends incremental `push_status` updates every ~1-2 seconds regardles
 - Command sending is fire-and-forget (`publish_gcode`) — no response parsing
 - Homing uses a bare `G28` (or `back_to_center` MQTT command on newer models via `m_support_mqtt_homing`)
 
-**Bambuddy** (`backend/app/services/bambu_mqtt.py`, `frontend/src/pages/PrintersPage.tsx`):
-- Parses `home_flag` for SD card (bit 11), door open (bit 23, X1 only), and wired network (bit 18) — but **not** for homed state
-- Motion commands (`move_axis`, `home_axes`) are fire-and-forget via `send_gcode()`
-- "Not homed" warning is a **blanket first-use prompt** per browser session (stored in `sessionStorage`), not based on actual printer state
-- Offers "move anyway" option that sends `M211 S0` (disable soft endstops) before the move, then re-enables with `M211 S1`
-
-**Conclusion:** No third-party client attempts firmware-level rejection detection. The universal pattern is:
+**Conclusion:** No third-party client attempts firmware-level rejection detection. The pattern is:
 1. Read `home_flag` bits 0-2 from telemetry to know if axes are homed
 2. Check client-side before sending motion commands
 3. Either block the move (OrcaSlicer) or warn and use `M211 S0` to bypass endstops (Bambuddy)

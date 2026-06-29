@@ -1,0 +1,174 @@
+{
+  "print": {
+    "ams": {
+      "ams": [
+        {
+          "ams_id": "REDACTED",
+          "check": 1,
+          "chip_id": "REDACTED",
+          "dry_time": 0,
+          "humidity": "5",
+          "humidity_raw": "12",
+          "id": "0",
+          "info": "2003",
+          "temp": "28.4",
+          "tray": [
+            {
+              "id": "0"
+            },
+            {
+              "id": "1"
+            },
+            {
+              "id": "2"
+            },
+            {
+              "id": "3"
+            }
+          ]
+        }
+      ],
+      "ams_exist_bits": "1",
+      "insert_flag": true,
+      "power_on_flag": false,
+      "tray_exist_bits": "0",
+      "tray_is_bbl_bits": "0",
+      "tray_now": "255",
+      "tray_pre": "255",
+      "tray_read_done_bits": "0",
+      "tray_reading_bits": "0",
+      "tray_tar": "255",
+      "version": 20
+    },
+    "ams_rfid_status": 0,
+    "ams_status": 0,
+    "bed_target_temper": 0,
+    "bed_temper": 27.625,
+    "big_fan1_speed": "0",
+    "big_fan2_speed": "0",
+    "cali_version": 0,
+    "chamber_temper": 5,
+    "command": "push_status",
+    "cooling_fan_speed": "0",
+    "fan_gear": 0,
+    "filam_bak": [],
+    "flag3": 90767,
+    "force_upgrade": false,
+    "gcode_file": "",
+    "gcode_file_prepare_percent": "100",
+    "gcode_state": "FINISH",
+    "heatbreak_fan_speed": "0",
+    "hms": [],
+    "home_flag": 6374672,
+    "hw_switch_state": 0,
+    "ipcam": {
+      "ipcam_dev": "1",
+      "ipcam_record": "disable",
+      "mode_bits": 3,
+      "resolution": "",
+      "timelapse": "disable",
+      "tutk_server": "disable"
+    },
+    "k": "0.0200",
+    "layer_num": 27,
+    "lifecycle": "product",
+    "lights_report": [
+      {
+        "mode": "off",
+        "node": "chamber_light"
+      }
+    ],
+    "mc_percent": 100,
+    "mc_print_line_number": "0",
+    "mc_print_stage": "1",
+    "mc_print_sub_stage": 0,
+    "mc_remaining_time": 0,
+    "mess_production_state": "active",
+    "msg": 0,
+    "net": {
+      "conf": 16,
+      "info": [
+        {
+          "ip": 0,
+          "mask": 16777215
+        },
+        {
+          "ip": 0,
+          "mask": 0
+        }
+      ]
+    },
+    "nozzle_diameter": "0.4",
+    "nozzle_target_temper": 0,
+    "nozzle_temper": 29.46875,
+    "nozzle_type": "hardened_steel",
+    "online": {
+      "ahb": false,
+      "rfid": false,
+      "version": 1671711098
+    },
+    "print_error": 0,
+    "print_type": "idle",
+    "profile_id": "0",
+    "project_id": "0",
+    "queue_est": 0,
+    "queue_number": 0,
+    "queue_sts": 0,
+    "queue_total": 0,
+    "s_obj": [],
+    "sdcard": true,
+    "sequence_id": "43671",
+    "spd_lvl": 2,
+    "spd_mag": 100,
+    "stg": [],
+    "stg_cur": 0,
+    "subtask_id": "0",
+    "subtask_name": "8_Minute_Print_Multi-Fit_Cardboard_Spool_Ring",
+    "task_id": "0",
+    "total_layer_num": 27,
+    "upgrade_state": {
+      "consistency_request": false,
+      "cur_state_code": 0,
+      "dis_state": 0,
+      "err_code": 0,
+      "force_upgrade": false,
+      "idx2": 496236887,
+      "message": "0%, 0B/s",
+      "module": "",
+      "new_ver_list": [],
+      "new_version_state": 0,
+      "progress": "",
+      "sequence_id": 0,
+      "status": "IDLE"
+    },
+    "upload": {
+      "message": "",
+      "progress": 0,
+      "status": "idle"
+    },
+    "vt_tray": {
+      "bed_temp": "0",
+      "bed_temp_type": "0",
+      "cali_idx": -1,
+      "id": "254",
+      "k": 0.019999999552965164,
+      "n": 1,
+      "nozzle_temp_max": "0",
+      "nozzle_temp_min": "0",
+      "remain": 0,
+      "tag_uid": "0000000000000000",
+      "tray_color": "FFFFFF00",
+      "tray_diameter": "0.00",
+      "tray_id_name": "",
+      "tray_info_idx": "",
+      "tray_sub_brands": "",
+      "tray_temp": "0",
+      "tray_time": "0",
+      "tray_type": "",
+      "tray_uuid": "00000000000000000000000000000000",
+      "tray_weight": "0",
+      "xcam_info": "000000000000000000000000"
+    },
+    "wifi_signal": "-41dBm"
+  }
+}

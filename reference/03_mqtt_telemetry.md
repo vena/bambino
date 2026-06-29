@@ -79,6 +79,41 @@ When generating identity fields for command payloads and print job submissions (
 
 Decoded parameters within the status stream vary conditionally based on the discovered hardware model profile and firmware version track.
 
+#### `home_flag` Bitmask Reference [REF-HOMEFLAG]
+
+The `home_flag` integer field is a packed bitmask encoding printer hardware state. It is transmitted as a signed 32-bit integer (negative values on the wire must be masked to unsigned via `flag & 0xFFFFFFFF`). Verification sources: OrcaSlicer (`DeviceManager.cpp`), pybambu (`const.py` `Home_Flag_Values`), wire captures from P1S probe runs.
+
+| Bit | Mask | Field | Description |
+| :--- | :--- | :--- | :--- |
+| 0 | `0x00000001` | X axis homed | Set when the X axis has been homed via `G28` |
+| 1 | `0x00000002` | Y axis homed | Set when the Y axis has been homed via `G28` |
+| 2 | `0x00000004` | Z axis homed | Set when the Z axis has been homed via `G28` |
+| 3 | `0x00000008` | 220V power | Printer is on a 220V power supply |
+| 4 | `0x00000010` | XCam auto-recovery step loss | XCam step-loss auto-recovery enabled |
+| 5 | `0x00000020` | Camera recording | Timelapse/recording is active |
+| 7 | `0x00000080` | AMS calibrate remaining | AMS remaining filament calibration enabled |
+| 8–9 | `0x00000300` | SD card state | 2-bit field: bit 8 = present, bit 9 = abnormal (unreliable — see §3.2 item 7) |
+| 10 | `0x00000400` | AMS auto-switch | AMS automatic filament switching enabled |
+| 15 | `0x00008000` | Supports flow calibration | Hardware supports flow calibration (false on H2D despite firmware reporting — OrcaSlicer overrides) |
+| 16 | `0x00010000` | Supports PA calibration | Hardware supports pressure advance calibration (false on P1 series despite firmware reporting — OrcaSlicer overrides) |
+| 17 | `0x00020000` | XCam prompt sound enabled | XCam prompt sound is currently enabled |
+| 18 | `0x00040000` | Supports prompt sound | Hardware supports prompt sound configuration. Note: pybambu incorrectly labels this as "wired network" |
+| 19 | `0x00080000` | Supports filament tangle detect | Hardware supports tangle detection (model-specific: requires XCam AI engine) |
+| 20 | `0x00100000` | Filament tangle detect enabled | Filament tangle detection is currently enabled |
+| 21 | `0x00200000` | Supports motor noise calibration | Hardware supports motor noise calibration |
+| 22 | `0x00400000` | Supports user presets | Hardware supports user-defined presets |
+| 23 | `0x00800000` | Door open | Enclosure door open — X1 family only (see §3.2.1 Door Sensor Routing) |
+| 24 | `0x01000000` | Nozzle blob detect enabled | Nozzle blob detection is currently enabled (model-specific: requires XCam AI engine) |
+| 25 | `0x02000000` | Supports nozzle blob detect | Hardware supports nozzle blob detection |
+| 26 | `0x04000000` | `installed_plus` | Purpose unknown — present in OrcaSlicer and pybambu (`INSTALLED_PLUS`) but not publicly documented. OrcaSlicer references it as `is_support_p1s_plus`, suggesting P1S-specific |
+| 27 | `0x08000000` | `supported_plus` | Purpose unknown — paired with bit 26 in OrcaSlicer and pybambu (`SUPPORTED_PLUS`) |
+| 28 | `0x10000000` | Air print (spaghetti) status | Air print / spaghetti detection is currently enabled (model-specific: requires XCam AI engine; disabled on AMS-HT firmware) |
+| 29 | `0x20000000` | Supports air print detect | Hardware supports air print / spaghetti detection |
+
+The "supports" vs "enabled" bit pairs (e.g., 19/20, 25/24, 29/28) follow a pattern where the higher bit indicates hardware capability and the lower bit indicates user-toggled state. Detection features (tangle, blob, air print) are model-specific — they require XCam AI hardware present on X1, P1S, and newer platforms. See `MODEL_MATRIX.md` for per-model capability availability.
+
+**Axis homing state (bits 0–2):** During a `G28` homing sequence, bits are set progressively as each axis completes. On a P1S the observed sequence is: all three bits clear (unhomed) → bits 0–1 set (X and Y homed, Z pending) → all three bits set (fully homed). The firmware does not reject motion gcode when axes are unhomed — the motion controller executes regardless. Clients must check bits 0–2 before dispatching motion commands and block or warn at the application layer (matching OrcaSlicer's behavior). See [REF-MOTO-GCODE] for homing safety constraints.
+
 #### Wired Ethernet Wi-Fi Signal Sentinel [REF-NET-PORTS]
 For Ethernet-equipped models (`X1E`, `X2D`, `P2S`, or `H2D Pro`), when the machine is connected via a physical Ethernet cable and Wi-Fi is disabled, the printer transmits a static sentinel value:
 
@@ -86,7 +121,7 @@ For Ethernet-equipped models (`X1E`, `X2D`, `P2S`, or `H2D Pro`), when the machi
 "wifi_signal": "-90dBm"
 ```
 
-This represents an active Wired Ethernet Mode rather than a degraded Wi-Fi link. This can be verified on the wire via `home_flag` bit 18 (`0x00040000`), which is set to `1` when an active Ethernet network interface is detected.
+This represents an active Wired Ethernet Mode rather than a degraded Wi-Fi link. Note: pybambu attributes this to `home_flag` bit 18 (`0x00040000`), but OrcaSlicer maps bit 18 to `is_support_prompt_sound`. The wired network sentinel detection should rely on the `-90dBm` wifi_signal value rather than `home_flag` bits. See [REF-HOMEFLAG] for the full bitmask reference.
 
 #### Enclosure Door Open Sensor Routing [REF-NET-DOOR]
 The active state of the front enclosure door is tracked via bit 23 (`0x00800000`) of a telemetry status field. This diagnostic function is physically restricted to enclosed models equipped with an electronic door sensor switch (`X1`, `X1C`, `X1E`, `X2D`, `P2S`, `H2C`, `H2D`, `H2D Pro`, `H2S`). Open-frame bed-slingers and non-sensor models (`P1P`, `P1S`, `A1`, `A1 Mini`) do not support physical door sensing on the hardware bus. For supported sensor-equipped models, routing is model-dependent:
@@ -485,6 +520,45 @@ Clears active error codes from the printer's active status state.
   }
 }
 ```
+
+#### Command Acknowledgment Envelope [REF-MQTT-ACK]
+
+All commands published to the request topic produce an acknowledgment response on the report topic. The ack echoes the command name and the client's `sequence_id`, enabling correlation. The envelope varies by command family:
+
+**Print commands** (gcode_line, pause, resume, stop, clean_print_error, calibration, print_speed, etc.):
+```json
+{
+  "print": {
+    "command": "<echoed_command_name>",
+    "param": "<echoed_param_if_present>",
+    "reason": "success",
+    "result": "success",
+    "sequence_id": "<echoed_sequence_id>"
+  }
+}
+```
+
+**System commands** (ledctrl):
+```json
+{
+  "system": {
+    "command": "ledctrl",
+    "led_node": "<echoed>",
+    "led_mode": "<echoed>",
+    "led_on_time": 0,
+    "led_off_time": 0,
+    "loop_times": 0,
+    "interval_time": 0,
+    "reason": "success",
+    "result": "success",
+    "sequence_id": "<echoed_sequence_id>"
+  }
+}
+```
+
+**Observed behavior (P1S, firmware 2025):** All tested commands return `result: "success"` regardless of whether the command had a meaningful effect. This includes motion commands when axes are unhomed, pause/resume/stop when no print is active, and clearing errors when none exist. The ack confirms command *receipt and dispatch*, not successful *execution*. Clients must not treat `result: "success"` as confirmation that the intended physical action occurred.
+
+The printer's own incremental `push_status` telemetry uses an independent `sequence_id` counter (starting from low values like `0` or `1`), separate from the client's command sequence IDs. This makes correlation unambiguous — command acks carry the client's high-value sequence IDs, while background telemetry carries the printer's own counter.
 
 ---
 

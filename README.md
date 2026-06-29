@@ -1,6 +1,6 @@
 # bambino
 
-Async Rust library for talking to Bambu Lab 3D printers over your local network. No cloud, no Bambu Studio — just direct MQTT, FTPS, and camera access from one codebase that compiles to desktop, ESP32 (ESP-IDF), and bare-metal (Embassy) targets.
+Async Rust library for talking to Bambu Lab 3D printers over your local network. No Bambu Cloud, just direct MQTT, FTPS, and camera access from one codebase that compiles to desktop, ESP32 (ESP-IDF), and bare-metal (Embassy) targets.
 
 ## What it does
 
@@ -79,7 +79,7 @@ let mut printer = PrinterClient::from_mqtt(mqtt_client, serial, model);
 
 ```rust
 printer.request_pushall().await?;              // request full state dump
-printer.home_axes(false).await?;               // safe homing (bare G28)
+printer.home_axes(false).await?;               // "safe" homing (bare G28)
 printer.set_bed_temperature(60).await?;        // clamped to model max
 printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
 printer.toggle_led("chamber_light", true).await?;
@@ -339,6 +339,12 @@ Built on the reverse-engineering work of:
 - [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
 - [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
 - [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
+
+## Safety Notice
+
+This software communicates with and controls physical hardware capable of high temperatures and motion. It is experimental, based on reverse engineering, not affiliated with Bambu Lab, and is provided solely under the terms of the AGPL-3.0 license.
+
+Use it entirely at your own risk. This software's API and Bambu Lab APIs are subject to change without notice. Always supervise printer operation. The authors and contributors assume no responsibility for hardware damage, personal injury, loss of data, or any other damages resulting from the use of this software. You are ultimately responsible for verifying commands before use.
 
 ## License
 

@@ -21,3 +21,6 @@ env/
 .lean-ctx/
 /reference/specs
 probe_report.json
+
+# libreoffice lock files
+.~lock.*.csv#

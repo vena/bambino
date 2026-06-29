@@ -65,6 +65,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **[REF-MQTT-ENV] Section 3.2: Over-the-Wire Telemetry Payload Schema (The Read Stream)**
     *   Status telemetry structures, dual-location device telemetry, speed profiles, light state arrays, string emission anomalies, task-ID overflow limits, and A1/P1 series "stg_cur = 0" idle bug state gating [REF-MQTT-IDLEBUG]
 *   **Section 3.2.1: Model-Specific Telemetry Polymorphism & Bitmasks**
+    *   `home_flag` Bitmask Reference [REF-HOMEFLAG] — per-axis homed state (bits 0–2), SD card, wired network, door open, filament tangle, and all known flag bits
     *   Wired Ethernet Wi-Fi Signal Sentinel & home_flag Bit 18 [REF-NET-PORTS]
     *   Enclosure Door Open Sensor Routing [REF-NET-DOOR]
     *   Divergent Nozzle Info Telemetry Keys [REF-NOZZLE-KEYS]
@@ -81,6 +82,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Physical Calibration Controls (calibration option bitmask calculation)
     *   AMS Controls (ams_control and ams_get_rfid commands)
     *   Feed Speed Level Configurations (print_speed command parameters)
+    *   Command Acknowledgment Envelope [REF-MQTT-ACK] — uniform ack/nack response structure and sequence ID correlation
 *   **Section 3.4: Mechanical & Firmware Quirks**
     *   Keep-alive socket zombie detection [REF-MQTT-ZOMBIE]
     *   Local QoS 1 Queue Replay Errors [REF-MQTT-REPLAY]
@@ -100,6 +102,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Raw chamber and auxiliary fan PWM speed control channels [REF-CLIM-FANS]
     *   Physical control envelopes for lights, climate dampers, buzzers, and external tool mount telemetry
 *   **Section 4.4: Mechanical & Firmware Quirks**
+    *   Axis Homing State Detection [REF-MOTO-HOME] — per-axis homed state via home_flag, firmware non-rejection behavior, mc_print_sub_stage completion signal
     *   Z-axis homing crash hazards (bare G28 constraints vs bed-slinger coordinates) and hotend fan safety control overrides
 
 ### Chapter 5: Physical Material Expansion (AMS, AMS-HT & Spools)

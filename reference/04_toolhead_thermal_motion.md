@@ -192,6 +192,9 @@ On models supporting laser engraving or cutting attachments, the `device.ext_too
 
 ### 4.4 Mechanical & Firmware Quirks
 
+#### Axis Homing State Detection [REF-MOTO-HOME]
+The per-axis homed state is reported via `home_flag` bits 0–2 in MQTT telemetry (see [REF-HOMEFLAG] for the full bitmask). The firmware does **not** reject motion gcode (`G0`, `G1`, `G91`) when axes are unhomed — the motion controller executes the command regardless, performing a small jog even without a valid coordinate frame. Clients must check homed state before dispatching motion commands and block or warn at the application layer. During a `G28` homing sequence, `mc_print_sub_stage` transitions `0 → 1` (homing in progress) and back to `0` (homing complete), providing a reliable completion signal for clients that need to await homing.
+
 #### Z-Axis Homing Crash Hazards (Bed-on-Z vs. Bed-Slinger)
 *   **Bed-on-Z Models (X1, P1, H2, P2S series)**: The build plate moves down on the Z-axis to increase nozzle clearance. Manual homing **must strictly be dispatched as a bare `G28` command**. This initiates the safe factory sequence: parking the XY toolhead prior to raising the Z bed. Transmitting restricted axis constraints (such as `G28 Z`) bypasses this safety check, causing the bed to drive immediately upward. If the toolhead is positioned over the build area, this results in a high-force nozzle collision with the plate.
 *   **Bed-Slingers (A1, A1 Mini)**: The Z-axis controls toolhead height, not build plate position. Movement vectors are inverted (e.g., `G1 Z-10` drives the hotend down toward the print surface). Travel macros must evaluate the active hardware model to adjust movement directions and prevent build plate gouging.

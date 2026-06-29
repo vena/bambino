@@ -11,6 +11,7 @@ use crate::connection::{Printer, create_printer};
 
 const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 3;
 const LONG_CAPTURE_WINDOW_SECS: u64 = 60;
+const PUSHALL_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeTest {
@@ -112,7 +113,35 @@ struct ProbeReport {
     model: String,
     serial: String,
     timestamp: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pushall: Option<serde_json::Value>,
     tests: Vec<ProbeEntry>,
+}
+
+async fn capture_pushall(
+    client: &mut Printer,
+    timeout: Duration,
+) -> Result<Option<serde_json::Value>, BambuError> {
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+
+        match tokio::time::timeout(remaining, client.poll_raw()).await {
+            Ok(Ok(msg)) => {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+                    && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
+                {
+                    return Ok(Some(v));
+                }
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Ok(None),
+        }
+    }
 }
 
 async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), BambuError> {
@@ -256,7 +285,22 @@ pub async fn run(
     eprintln!("Connecting to {}:8883...", ip);
     let mut client = create_printer(ip, serial, access_code)?;
     client.connect_mqtt().await?;
-    eprintln!("Connected. Running {} tests...\n", tests.len());
+    eprintln!("Connected.");
+
+    eprint!("Requesting pushall state dump... ");
+    io::stderr().flush().unwrap_or(());
+    client.request_pushall().await?;
+    let pushall = capture_pushall(&mut client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await?;
+    if pushall.is_some() {
+        eprintln!("captured.");
+    } else {
+        eprintln!(
+            "timed out ({}s). Continuing without pushall.",
+            PUSHALL_TIMEOUT_SECS
+        );
+    }
+
+    eprintln!("Running {} tests...\n", tests.len());
 
     let model = client.model();
     let serial_owned = client.serial().to_string();
@@ -324,6 +368,7 @@ pub async fn run(
         model: format!("{:?}", model),
         serial: serial_owned,
         timestamp,
+        pushall,
         tests: entries,
     };
 
