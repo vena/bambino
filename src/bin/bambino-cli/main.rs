@@ -17,6 +17,7 @@ mod connection;
 mod control;
 mod discover;
 mod monitor;
+mod probe;
 mod storage;
 mod table;
 
@@ -49,6 +50,7 @@ Commands:
   info    <ip> <serial> <access_code>              Query expansion bus module and firmware versions
   monitor <ip> <serial> <access_code>              Stream real-time status telemetry and HMS warnings
   dump    <ip> <serial> <access_code>              Dump the raw pushall JSON response and exit
+  probe   <ip> <serial> <access_code> [OPTIONS]    Run command response capture suite and write report
   control <ip> <serial> <access_code> <ACTION>     Dispatch a movement or hardware control command
   files   <ip> <serial> <access_code> <ACTION>     Traverse and transfer files on the printer's MicroSD card
   camera  <ip> <serial> <access_code> <ACTION>     Camera streaming operations
@@ -79,6 +81,13 @@ Files Actions:
 
 Camera Actions:
   snapshot [output.jpg]                            Capture a single JPEG frame (A1/P1 binary protocol only)
+
+Probe Options:
+  -o, --output <path>                              Output file (default: probe_report.json)
+  -t, --tests <list>                               Comma-separated test names to run (default: all)
+                                                   Tests: move_z_unhomed, pause_when_idle, resume_when_idle,
+                                                     stop_when_idle, clear_error, led_on, led_off,
+                                                     fan_part_zero, temp_nozzle_zero, temp_bed_zero, home_axes
 "#
     );
 }
@@ -140,6 +149,15 @@ async fn main() {
                 process::exit(1);
             }
             monitor::dump(&args[2], &args[3], &args[4]).await
+        }
+        "probe" => {
+            if args.len() < 5 {
+                eprintln!(
+                    "Error: Missing required parameters.\nUsage: bambino-cli probe <ip> <serial> <access_code> [OPTIONS]"
+                );
+                process::exit(1);
+            }
+            probe::run(&args[2], &args[3], &args[4], &args[5..]).await
         }
         "control" => {
             if args.len() < 6 {

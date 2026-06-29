@@ -20,3 +20,4 @@ env/
 /certs
 .lean-ctx/
 /reference/specs
+probe_report.json

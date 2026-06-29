@@ -26,40 +26,107 @@ Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS
 
 ### Problem
 
-Most `PrinterClient` command methods are fire-and-forget: they publish an MQTT payload and return the packet ID without checking the printer's response. The printer does respond to commands — with ack/nack results, error codes, and prompts (e.g. "home axes before moving"). We're ignoring all of that today.
-
-Real example: on a P1S, attempting to move the bed or print head when the printer hasn't been homed recently causes the firmware to reject the command and prompt for homing. Our library doesn't surface this — the command silently does nothing.
+Most `PrinterClient` command methods are fire-and-forget: they publish an MQTT payload and return the packet ID without checking the printer's response. We want to understand what the printer sends back and whether we can surface failures.
 
 ### Prerequisites
 
 Phase 6 (unified message buffer in `BambuMqttClient`) must be complete. Without a single read path, response checking would re-introduce the split-brain problem.
 
-### Investigation (requires real printer)
+### Investigation findings (P1S, tested 2026-06-28)
 
-This phase requires manual testing against real hardware to catalog what the printer actually sends back in response to commands. The firmware's response format is not fully documented in our reference docs.
+A `bambino-cli probe` command was added to send commands and capture all MQTT responses within a timed window. Three runs were performed against a P1S, all from an unhomed state (each run's `home_axes` test re-homes the printer; the printer was power-cycled between runs to return to unhomed). Raw captures are in `probe_report.json` at the project root.
 
-**Step 1 — Capture response patterns.** Use `bambino-cli` (or a test harness) with `RUST_LOG=debug` to observe what the printer sends back after common commands:
+**Step 1 findings — Command ack envelope:**
 
-- Motion commands when unhomed (G28, relative moves)
-- Temperature commands at/beyond limits
-- Print control when no print is active (pause/resume/stop)
-- AMS commands when no AMS is connected
-- Calibration commands during an active print
-- LED/fan commands (do these ack at all?)
+All commands produce a uniform ack response with the same shape:
+```json
+{"print": {"command": "<echoed>", "param": "<echoed>", "reason": "success", "result": "success", "sequence_id": "<echoed>"}}
+```
+- `command` echoes the command name (`gcode_line`, `pause`, `stop`, `clean_print_error`, etc.)
+- `sequence_id` is echoed back, confirming correlation works
+- LED commands use a `system` envelope instead of `print`, and echo all parameters (led_node, led_mode, timing fields)
+- Gcode commands echo the full gcode string in `param`
 
-Document the response payload structure for each case: which JSON fields indicate success vs rejection, how errors are keyed, whether the sequence ID is echoed back.
+**Key finding: the P1S firmware never sends a rejection/nack over MQTT.** Every command tested returned `result: "success"`, including:
+- Motion commands (Z and X relative moves) when unhomed — acked as success, motion executes partially (small jog visible, same as touchscreen behavior)
+- Pause/resume/stop when no print is active — acked as success, no-op
+- Clear error when no error exists — acked as success, no-op
 
-**Step 2 — Design the response model.** Based on captured data, determine:
+The "home axes before moving" prompt described in the original problem statement is a **touchscreen UI behavior only** — it does not propagate over MQTT. The motion controller executes the gcode regardless of homed state.
 
-- Is there a uniform ack/nack envelope, or does each command family have its own response shape?
-- Can we match responses to commands via sequence ID?
-- Should rejected commands return `Err`, or should we return a `CommandResult` enum that distinguishes "executed" from "rejected with reason"?
+**Step 1 findings — Telemetry during long-running commands:**
 
-**Step 3 — Implement selectively.** Start with commands where silent failure is most dangerous (motion, temperature), not every command at once.
+Homing (`G28`) takes ~45 seconds on a P1S. The completion lifecycle is observable via incremental `push_status` messages:
+1. Gcode ack arrives immediately (`result: "success"`)
+2. `mc_print_sub_stage` changes `0 → 1` (homing in progress)
+3. `home_flag` changes during homing (observed: `6374672` unhomed → `6374675` mid-homing → `6374679` homed)
+4. `mc_print_sub_stage` changes `1 → 0` (homing complete)
+
+`mc_print_sub_stage` is the reliable completion signal.
+
+**`home_flag` bitmask — per-axis homed state (confirmed via OrcaSlicer source):**
+- Bit 0: X axis homed
+- Bit 1: Y axis homed
+- Bit 2: Z axis homed
+- Bit 11: store-to-SD-card
+- Bit 18: wired/Ethernet connection
+- Bit 23: door open (X1 family only; other models use the `stat` field)
+
+Observed values from P1S probe runs:
+- `6374672` (`0x00614510`): unhomed — bits 0-2 all zero
+- `6374675` (`0x00614513`): mid-homing — X,Y homed (bits 0-1), Z not yet (bit 2 zero)
+- `6374679` (`0x00614517`): fully homed — bits 0-2 all set
+
+**Step 1 findings — Background telemetry noise:**
+
+The printer sends incremental `push_status` updates every ~1-2 seconds regardless of commands. These carry rotating subsets of telemetry (bed_temper, nozzle_temper, wifi_signal, AMS state, lights_report). They are interleaved with command acks and use their own independent sequence_id counter (starting from 0/1, separate from the 10000+ range used by our commands).
+
+**Step 2 — Design implications:**
+
+- **No ack/nack distinction exists** on the P1S for gcode commands. The ack means "received and dispatched," not "executed successfully." This may differ on other models (untested).
+- **Sequence ID correlation works.** Our command sequence IDs (10001+) are echoed back, and the printer's own telemetry uses a separate counter, so matching is unambiguous.
+- **A `CommandResult` enum is not useful** given that every response is `result: "success"`. The original design question is moot for the P1S.
+- **Completion detection for long-running commands** (homing, calibration) is feasible by watching `mc_print_sub_stage` transitions via `poll_until`.
+
+### External implementation review (2026-06-29)
+
+**OrcaSlicer** (`src/slic3r/GUI/DeviceManager.cpp`, `StatusPanel.cpp`, `RecenterDialog.cpp`):
+- Parses `home_flag` from MQTT telemetry via `parse_home_flag()`, stores as `m_home_flag`
+- `is_axis_at_home(axis)` checks bits 0/1/2 for X/Y/Z respectively
+- Before every jog button press, calls `is_axis_at_home()` — if not homed, shows a "Please home all axes" dialog (`RecenterDialog`) with "Go Home" / "Close" buttons
+- **Strict policy:** the move is blocked entirely until the user homes. No "move anyway" option
+- Command sending is fire-and-forget (`publish_gcode`) — no response parsing
+- Homing uses a bare `G28` (or `back_to_center` MQTT command on newer models via `m_support_mqtt_homing`)
+
+**Bambuddy** (`backend/app/services/bambu_mqtt.py`, `frontend/src/pages/PrintersPage.tsx`):
+- Parses `home_flag` for SD card (bit 11), door open (bit 23, X1 only), and wired network (bit 18) — but **not** for homed state
+- Motion commands (`move_axis`, `home_axes`) are fire-and-forget via `send_gcode()`
+- "Not homed" warning is a **blanket first-use prompt** per browser session (stored in `sessionStorage`), not based on actual printer state
+- Offers "move anyway" option that sends `M211 S0` (disable soft endstops) before the move, then re-enables with `M211 S1`
+
+**Conclusion:** No third-party client attempts firmware-level rejection detection. The universal pattern is:
+1. Read `home_flag` bits 0-2 from telemetry to know if axes are homed
+2. Check client-side before sending motion commands
+3. Either block the move (OrcaSlicer) or warn and use `M211 S0` to bypass endstops (Bambuddy)
+
+### Remaining investigation
+
+- **Other models.** The P1S may not be representative. H2D/X1C/A1 models may have different ack behavior. The `probe` CLI command can be run against any model.
+- **Error conditions not yet tested:** temperature commands beyond model limits, calibration during a print, AMS commands without AMS connected, gcode with syntax errors.
+
+### Implementation plan
+
+Based on probe data and external review, Phase 7 has three concrete deliverables:
+
+1. **Parse `home_flag` bits 0-2 into per-axis homed state.** Add `is_axis_homed(axis)` and `is_all_axes_homed()` methods to `PrinterClient` (or on the telemetry report). The `home_flag` field already exists in `TelemetryReport`; this just decodes the bits. Gate motion commands (`move_relative`, `extrude`) behind a homed check, returning a new `BambuError::NotHomed` variant. Callers who want to bypass (like Bambuddy's force mode) can use `send_gcode_raw()`.
+
+2. **Add completion detection for homing.** `home_axes()` currently returns immediately after publishing. Add a `home_axes_and_wait()` (or make `home_axes` await completion) that uses `poll_until` watching `mc_print_sub_stage` transition `0 → 1 → 0`. This gives callers a way to know when homing is actually done.
+
+3. **Parse the command ack envelope.** Even though the P1S always returns `result: "success"`, the ack structure is uniform and sequence-ID-correlated. Parsing it costs little and future-proofs against models or firmware versions that do send rejections. Add a `CommandAck` struct and optionally return it from `publish_request`.
 
 ### Verification
 
-Unit tests can cover the response parsing once the wire format is known. Integration testing against a real printer for the end-to-end flow.
+Unit tests can cover the response parsing once the wire format is known. The `bambino-cli probe` command handles integration testing against real hardware.
 
 ---
 
@@ -117,6 +184,6 @@ Answer the design questions based on the current codebase, then write a concrete
 | 4 | Lazy FTPS connection and API alignment | Complete |
 | 5 | Documentation | Complete |
 | 6 | Move message buffer to `BambuMqttClient` | Complete |
-| 7 | Command response validation | Not Started |
+| 7 | Command response validation | In Progress — P1S probe complete, external review pending |
 | 8 | CLI dependency leakage | Not Started |
 | 9 | Camera integration in `PrinterClient` | Not Started |
