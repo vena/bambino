@@ -143,7 +143,7 @@ where
     /// or any context where the caller manages the connection). The resulting
     /// client uses [`PreConnected`] as its connector — calling
     /// [`connect_mqtt()`](Self::connect_mqtt) on a disconnected `PreConnected`
-    /// client will return [`SocketError::NotConnected`].
+    /// client will return [`SocketError::NotConnected`](crate::io::SocketError::NotConnected).
     pub fn from_mqtt(
         mut mqtt_client: BambuMqttClient<IO>,
         serial: &str,

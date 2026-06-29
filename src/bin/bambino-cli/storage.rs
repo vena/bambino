@@ -2,7 +2,7 @@
 
 //! # MicroSD Storage Traversal and File Transfer Subcommand
 //!
-//! Routes storage filesystem commands through [`PrinterClient`] with lazy FTPS
+//! Routes storage filesystem commands through `PrinterClient` with lazy FTPS
 //! connection via `.with_ftps()`. The FTPS session is established on first use.
 
 use std::fs;

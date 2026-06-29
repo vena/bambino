@@ -21,28 +21,29 @@
 //!
 //! ```ignore
 //! use bambino::client::{PrinterClient, TelemetryEvent};
-//! use bambino::mqtt::BambuMqttClient;
-//! use bambino::models::BambuModel;
-//! use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config};
-//! use bambino::io::TokioIo;
+//! use bambino::models::resolve_model;
+//! use bambino::io::tokio::{
+//!     TokioSecureConnector, TokioTlsConnector, TokioTimer,
+//!     build_unsafe_client_config,
+//! };
+//! use std::time::Duration;
 //!
 //! async fn example() -> Result<(), bambino::BambuError> {
-//!     // Set up TLS (printers use self-signed certs, so we skip verification)
+//!     // Printers use self-signed certs, so we skip verification
 //!     let tls_config = build_unsafe_client_config();
-//!     let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
+//!     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
+//!     let connector = TokioSecureConnector::new(tls, Duration::from_secs(5));
 //!
-//!     // Connect to the printer's MQTT broker on port 8883
-//!     let tcp = tokio::net::TcpStream::connect("192.168.1.100:8883").await.unwrap();
-//!     let tls_stream = connector.connect("192.168.1.100", 8883, TokioIo(tcp)).await?;
+//!     // Create a lazy client — MQTT connects automatically on first use
+//!     let model = resolve_model("SERIAL123456", None);
+//!     let mut printer = PrinterClient::new(
+//!         connector, "192.168.1.100", "SERIAL123456", "12345678", model,
+//!     )
+//!     .with_timer(TokioTimer::new());
 //!
-//!     // Authenticate with the printer's serial number and LAN access code
-//!     let mqtt = BambuMqttClient::connect(tls_stream, "SERIAL123456", "12345678").await?;
-//!
-//!     // Wrap in a high-level client and request a full state dump
-//!     let mut printer = PrinterClient::new(mqtt, "SERIAL123456", BambuModel::P1S);
+//!     // First method call triggers the MQTT connection
 //!     printer.request_pushall().await?;
 //!
-//!     // Poll for telemetry
 //!     loop {
 //!         match printer.poll_telemetry().await? {
 //!             TelemetryEvent::Report(report, _raw) => {

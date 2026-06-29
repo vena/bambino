@@ -14,7 +14,7 @@ Async Rust library for talking to Bambu Lab 3D printers over your local network.
 
 `PrinterClient` is the high-level interface — it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits, Z-axis homing validation, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
-For advanced use cases, `PrinterClient::mqtt()` provides direct access to the underlying `BambuMqttClient` without giving up the high-level client. Use it to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks, and calling `poll_telemetry()` on the retrieved client will log a warning — it bypasses `PrinterClient`'s internal message buffer, so responses read directly from the MQTT client won't appear in `PrinterClient::poll_telemetry()` / `poll_raw()`. Always read responses through `PrinterClient`'s poll methods.
+For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `BambuMqttClient` and `BambuFtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks, and calling `poll_telemetry()` on the retrieved MQTT client will log a warning — it bypasses `PrinterClient`'s internal message buffer, so responses read directly from the MQTT client won't appear in `PrinterClient::poll_telemetry()` / `poll_raw()`. Always read responses through `PrinterClient`'s poll methods.
 
 The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access — useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
@@ -48,20 +48,31 @@ for p in &printers {
 ```rust
 use bambino::client::PrinterClient;
 use bambino::models::resolve_model;
-use bambino::mqtt::BambuMqttClient;
-use bambino::io::TokioIo;
-use bambino::io::tokio::{build_unsafe_client_config, TokioTlsConnector};
+use bambino::io::tokio::{
+    TokioSecureConnector, TokioTlsConnector, TokioTimer,
+    build_unsafe_client_config,
+};
+use std::time::Duration;
 
-// Printers use self-signed certs, so we skip verification for MQTT
+// Printers use self-signed certs, so we skip verification
 let config = build_unsafe_client_config();
-let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
-
-let tcp = tokio::net::TcpStream::connect("192.168.1.100:8883").await?;
-let tls = connector.connect("192.168.1.100", 8883, TokioIo(tcp)).await?;
-let mqtt = BambuMqttClient::connect(tls, serial, access_code).await?;
+let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+let connector = TokioSecureConnector::new(tls, Duration::from_secs(5));
 
 let model = resolve_model(serial, None);
-let mut printer = PrinterClient::new(mqtt, serial, model);
+let mut printer = PrinterClient::new(connector, ip, serial, access_code, model)
+    .with_timer(TokioTimer::new());
+
+// MQTT connects lazily on first use, or eagerly:
+printer.connect_mqtt().await?;
+```
+
+If you already have a connected `BambuMqttClient` (tests, Embassy), wrap it directly:
+
+```rust
+use bambino::client::PrinterClient;
+
+let mut printer = PrinterClient::from_mqtt(mqtt_client, serial, model);
 ```
 
 ### Send commands
@@ -143,23 +154,31 @@ printer.stop_drying(0).await?;
 
 ### File transfer
 
+Add FTPS to a `PrinterClient` with `.with_ftps()`. The FTPS TLS connector is independent from MQTT's — some models require different TLS settings (e.g. TLS 1.2 only for FTPS data channels).
+
 ```rust
-use bambino::ftps::BambuFtpsClient;
+use bambino::io::tokio::{
+    TokioTlsConnector, TokioFtpDataStreamFactory,
+    build_unsafe_client_config_with_options,
+};
 
-let mut ftp = BambuFtpsClient::connect(
-    raw_control, tls_connector, data_factory, model, ip, access_code,
-).await?;
+// Configure FTPS TLS (respecting model-specific requirements)
+let ftps_config = build_unsafe_client_config_with_options(
+    model.quirks().enforce_ftps_tls_1_2(),
+);
+let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
+let mut printer = printer.with_ftps(ftps_tls, TokioFtpDataStreamFactory);
+
+// storage() auto-connects on first call
+let ftp = printer.storage().await?;
 let files = ftp.list_directory("/", year, month, day, hour, min).await?;
 ftp.upload_file("/model/print.3mf", &file_bytes).await?;
 let data = ftp.download_file("/timelapse/video.mp4").await?;
 let free = ftp.get_available_space().await?;
-
-ftp.create_directory("/model/subfolder").await?;
-ftp.rename_file("/model/old.3mf", "/model/new.3mf").await?;
-ftp.delete_file("/model/old.3mf").await?;
-ftp.remove_directory("/model/subfolder").await?;
 ```
+
+> **Direct protocol access:** For cases where `PrinterClient` isn't needed, `BambuFtpsClient::connect()` provides standalone FTPS access — see the [`ftps`](src/ftps/) module.
 
 ### Camera
 
