@@ -11,40 +11,29 @@ use bambino::error::BambuError;
 use bambino::io::tokio::{TokioTlsConnector, build_unsafe_client_config, to_socket_error};
 use bambino::io::{SocketError, TlsConnector, TokioIo};
 use bambino::models::resolve_model;
+use clap::Subcommand;
 
 use crate::connection::validate_params;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
+#[derive(Subcommand, Debug)]
+pub enum CameraAction {
+    /// Capture a single JPEG frame (A1/P1 binary protocol only)
+    Snapshot { output: Option<String> },
+}
+
+/// Dispatches a typed camera action.
 pub async fn run(
     ip: &str,
     serial: &str,
     access_code: &str,
-    args: &[String],
+    action: CameraAction,
 ) -> Result<(), BambuError> {
-    if args.is_empty() {
-        eprintln!(
-            "Error: Missing camera action.\nUsage: bambino-cli camera <ip> <serial> <access_code> <ACTION> [ARGS]"
-        );
-        eprintln!("\nCamera Actions:");
-        eprintln!(
-            "  snapshot [output.jpg]   Capture a single JPEG frame from the binary camera stream (port 6000)"
-        );
-        return Err(BambuError::ProtocolViolation(
-            "Missing camera action".into(),
-        ));
-    }
-
-    match args[0].to_lowercase().as_str() {
-        "snapshot" => {
-            let output_path = args.get(1).map(|s| s.as_str()).unwrap_or("snapshot.jpg");
+    match action {
+        CameraAction::Snapshot { output } => {
+            let output_path = output.as_deref().unwrap_or("snapshot.jpg");
             run_snapshot(ip, serial, access_code, output_path).await
-        }
-        other => {
-            eprintln!("Error: Unrecognized camera action '{}'.", other);
-            Err(BambuError::ProtocolViolation(
-                format!("Unknown camera action: '{}'", other).into(),
-            ))
         }
     }
 }

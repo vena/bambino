@@ -12,8 +12,27 @@ use bambino::error::BambuError;
 use bambino::io::tokio::{
     TokioFtpDataStreamFactory, TokioTlsConnector, build_unsafe_client_config_with_options,
 };
+use clap::Subcommand;
 
-use crate::connection::{create_printer, validate_params};
+use crate::connection::create_printer;
+
+#[derive(Subcommand, Debug)]
+pub enum FilesAction {
+    /// Perform a UNIX directory listing traversal
+    List {
+        #[arg(default_value = "/")]
+        remote_path: String,
+    },
+    /// Upload a local file to the remote card path
+    Upload {
+        local_path: String,
+        remote_path: String,
+    },
+    /// Remove a file from the remote filesystem path
+    Delete { remote_path: String },
+    /// Query available MicroSD card capacity
+    Space,
+}
 
 /// Dynamic calendar epoch helper converting UNIX timestamps to calendar date parts.
 fn current_date_utc() -> (i32, u8, u8, u8, u8) {
@@ -63,23 +82,13 @@ fn current_date_utc() -> (i32, u8, u8, u8, u8) {
     (year, month as u8, day, hour, minute)
 }
 
-/// Parses and dispatches storage filesystem commands over FTPS.
+/// Dispatches a typed storage action over FTPS.
 pub async fn run(
     ip: &str,
     serial: &str,
     access_code: &str,
-    action_args: &[String],
+    action: FilesAction,
 ) -> Result<(), BambuError> {
-    if action_args.is_empty() {
-        return Err(BambuError::ProtocolViolation(
-            "Missing storage action identifier".into(),
-        ));
-    }
-
-    validate_params(ip, serial, access_code)?;
-
-    let action = action_args[0].to_lowercase();
-
     let printer = create_printer(ip, serial, access_code)?;
     let model = printer.model();
 
@@ -98,14 +107,13 @@ pub async fn run(
 
     println!("FTPS connection authenticated. Executing operational action...\n");
 
-    match action.as_str() {
-        "list" => {
-            let path = action_args.get(1).map(|s| s.as_str()).unwrap_or("/");
+    match action {
+        FilesAction::List { remote_path } => {
             let (year, month, day, hour, min) = current_date_utc();
 
-            println!("Traversing remote files on directory '{}'...", path);
+            println!("Traversing remote files on directory '{}'...", remote_path);
             let files = client
-                .list_directory(path, year, month, day, hour, min)
+                .list_directory(&remote_path, year, month, day, hour, min)
                 .await?;
 
             if files.is_empty() {
@@ -114,7 +122,7 @@ pub async fn run(
                 return Ok(());
             }
 
-            println!("\nDirectory listing: {}\n", path);
+            println!("\nDirectory listing: {}\n", remote_path);
             let mut table = crate::table::Table::new(vec!["Type", "Size", "Modified", "Name"]);
             for file in &files {
                 let type_str = if file.is_dir { "DIR" } else { "FILE" };
@@ -132,18 +140,12 @@ pub async fn run(
             table.print();
             println!();
         }
-        "upload" => {
-            if action_args.len() < 3 {
-                return Err(BambuError::ProtocolViolation(
-                    "Usage: files <ip> <serial> <access_code> upload <local_path> <remote_path>"
-                        .into(),
-                ));
-            }
-            let local_path_str = &action_args[1];
-            let remote_path_str = &action_args[2];
-
-            let local_path = Path::new(local_path_str);
-            let metadata = fs::metadata(local_path).map_err(|_| {
+        FilesAction::Upload {
+            local_path,
+            remote_path,
+        } => {
+            let local = Path::new(&local_path);
+            let metadata = fs::metadata(local).map_err(|_| {
                 BambuError::ProtocolViolation("Target local file does not exist".into())
             })?;
 
@@ -159,36 +161,29 @@ pub async fn run(
                 ));
             }
 
-            println!("Reading source file '{}' into buffer...", local_path_str);
-            let payload = fs::read(local_path).map_err(|_| {
+            println!("Reading source file '{}' into buffer...", local_path);
+            let payload = fs::read(local).map_err(|_| {
                 BambuError::ProtocolViolation("Failed to read local target file".into())
             })?;
 
             println!(
                 "Uploading file ({} bytes) to remote path '{}'...",
                 payload.len(),
-                remote_path_str
+                remote_path
             );
             println!(
                 "Note: Under heavy write latency, standard SD card flushing may require up to 300 seconds [REF-FTPS-FLUSH]."
             );
-            client.upload_file(remote_path_str, &payload).await?;
+            client.upload_file(&remote_path, &payload).await?;
 
             println!("Success: File uploaded and non-volatile write-buffers successfully flushed.");
         }
-        "delete" => {
-            if action_args.len() < 2 {
-                return Err(BambuError::ProtocolViolation(
-                    "Usage: files <ip> <serial> <access_code> delete <remote_path>".into(),
-                ));
-            }
-            let remote_path_str = &action_args[1];
-
-            println!("Deleting file from remote path '{}'...", remote_path_str);
-            client.delete_file(remote_path_str).await?;
+        FilesAction::Delete { remote_path } => {
+            println!("Deleting file from remote path '{}'...", remote_path);
+            client.delete_file(&remote_path).await?;
             println!("Success: Target file successfully removed.");
         }
-        "space" => {
+        FilesAction::Space => {
             println!("Querying hardware storage space evaluations...");
             let space_bytes = client.get_available_space().await?;
             let space_mb = space_bytes as f64 / (1024.0 * 1024.0);
@@ -198,11 +193,6 @@ pub async fn run(
             println!("  - Free Space (Bytes) : {}", space_bytes);
             println!("  - Free Space (MB)    : {:.2} MB", space_mb);
             println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
-        }
-        other => {
-            return Err(BambuError::ProtocolViolation(
-                format!("Unrecognized storage action identifier '{}'", other).into(),
-            ));
         }
     }
 

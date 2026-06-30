@@ -353,30 +353,12 @@ pub async fn run(
     ip: &str,
     serial: &str,
     access_code: &str,
-    args: &[String],
+    output: &str,
+    tests_arg: Option<&str>,
 ) -> Result<(), BambuError> {
-    let mut output_path = String::from("probe_report.json");
-    let mut test_filter: Option<Vec<String>> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--output" | "-o" => {
-                i += 1;
-                if i < args.len() {
-                    output_path.clone_from(&args[i]);
-                }
-            }
-            "--tests" | "-t" => {
-                i += 1;
-                if i < args.len() {
-                    test_filter = Some(args[i].split(',').map(|s| s.trim().to_string()).collect());
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
+    let output_path = output;
+    let test_filter: Option<Vec<String>> =
+        tests_arg.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
 
     let tests: Vec<ProbeTest> = if let Some(ref filter) = test_filter {
         let mut selected = Vec::new();
