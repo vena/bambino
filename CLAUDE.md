@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 cargo build                                          # Default host build (tokio + rustls)
+cargo build --bin bambino-cli --features cli         # Build the CLI binary
 cargo test                                           # Run all tests
 cargo test --lib                                     # Library tests only
 cargo test test_name                                 # Single test by name
@@ -13,6 +14,8 @@ cargo build --no-default-features --features alloc --lib  # no_std compatibility
 ```
 
 Every change must compile under both the default `tokio` feature set and the `no_std`+`alloc` library target. Run `cargo clippy` as part of the verification gate. The `--lib` flag scopes the no_std check to library code only — the CLI is host-only. Use `#[cfg(not(feature = "std"))]` imports from `alloc` (String, Vec, format!) for no_std paths.
+
+**CLI-only dependencies live behind the `cli` feature, not `tokio`.** `crossterm`, `env_logger`, and any future CLI-exclusive dep (e.g. `clap`) must be gated by `cli = ["dep:...", "tokio"]`, never added to the `tokio` feature directly — `tokio` is the default feature external library consumers pull in, and `cli` is not implied by default so they don't get terminal/log-sink deps they never asked for. `[[bin]] required-features = ["cli"]` in Cargo.toml enforces this at the target level — every file under `src/bin/bambino-cli/` starts with `#![cfg(feature = "cli")]`.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(feature = "cli")]
 
 //! # MicroSD Storage Traversal and File Transfer Subcommand
 //!

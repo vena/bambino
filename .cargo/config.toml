@@ -1,0 +1,6 @@
+[alias]
+# Runs bambino-cli with the `cli` feature already enabled — see CLAUDE.md
+# for why `cli` is gated out of `default` and `tokio`. Usage:
+#   cargo bambino-cli discover
+#   cargo bambino-cli control <ip> <serial> <access_code> home
+bambino-cli = "run --bin bambino-cli --features cli --"

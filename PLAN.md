@@ -8,9 +8,9 @@
 
 ---
 
-## Phases 1–9: Complete
+## Phases 1–10: Complete
 
-Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag. Phase 7 added advisory (non-blocking) homed-state tracking: `PrinterClient::last_home_flag` is cached opportunistically inside `poll_telemetry()` only, exposed via `is_axis_homed()`/`is_all_axes_homed()`, and consulted by `move_relative()`/`extrude()` to `log::warn!` (never error) on a known-unhomed axis. Phase 8 added `PrinterClient::wait_for_homing()` (`src/client/motion.rs`), built on `poll_telemetry()`'s `last_home_flag` cache — resolves only after observing a not-all-homed reading followed by an all-homed one, with `command_timeout_secs` temporarily overridden to 90s and bounded by both wall-clock elapsed time and `POLL_UNTIL_MAX_MESSAGES`. Phase 9 made the two existing `poll_until`-based query commands (`get_version()`, `get_k_profiles()`, both `src/client/ams.rs`) correlate responses by echoed `sequence_id`, not just `command` name, so a stray response from another MQTT client asking the same question can no longer be consumed in place of our own. `ensure_mqtt()` now reseeds `sequence_counter` from `TimerProvider::now_millis()` (via `mqtt::commands::clamp_task_id`) the moment a lazy MQTT connection is actually established, de-correlating independent sessions against the same printer; this only fires on the lazy-connect path, so `PrinterClient::from_mqtt()` (tests, Embassy) is unaffected and still starts at the fixed `INITIAL_SEQUENCE_ID`.
+Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag. Phase 7 added advisory (non-blocking) homed-state tracking: `PrinterClient::last_home_flag` is cached opportunistically inside `poll_telemetry()` only, exposed via `is_axis_homed()`/`is_all_axes_homed()`, and consulted by `move_relative()`/`extrude()` to `log::warn!` (never error) on a known-unhomed axis. Phase 8 added `PrinterClient::wait_for_homing()` (`src/client/motion.rs`), built on `poll_telemetry()`'s `last_home_flag` cache — resolves only after observing a not-all-homed reading followed by an all-homed one, with `command_timeout_secs` temporarily overridden to 90s and bounded by both wall-clock elapsed time and `POLL_UNTIL_MAX_MESSAGES`. Phase 9 made the two existing `poll_until`-based query commands (`get_version()`, `get_k_profiles()`, both `src/client/ams.rs`) correlate responses by echoed `sequence_id`, not just `command` name, so a stray response from another MQTT client asking the same question can no longer be consumed in place of our own. `ensure_mqtt()` now reseeds `sequence_counter` from `TimerProvider::now_millis()` (via `mqtt::commands::clamp_task_id`) the moment a lazy MQTT connection is actually established, de-correlating independent sessions against the same printer; this only fires on the lazy-connect path, so `PrinterClient::from_mqtt()` (tests, Embassy) is unaffected and still starts at the fixed `INITIAL_SEQUENCE_ID`. Phase 10 split `crossterm`/`env_logger` out of the `tokio` feature into a new `cli` feature (`cli = ["dep:env_logger", "dep:crossterm", "tokio"]`, not implied by `default`), added `[[bin]] required-features = ["cli"]` for `bambino-cli` in `Cargo.toml`, and changed every file under `src/bin/bambino-cli/` from `#![cfg(feature = "std")]` to `#![cfg(feature = "cli")]`. Building the CLI now requires `cargo build --bin bambino-cli --features cli`; plain `cargo build`/`cargo test` silently skip the bin target (no error, no warning observed) and no longer pull `crossterm`/`env_logger` into the dependency graph at all under default features (confirmed via `cargo tree`).
 
 **Decisions informing future phases:**
 
@@ -22,29 +22,11 @@ Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS
 
 ---
 
-## Phase 10: CLI dependencies leak into library `tokio` feature
-
-### Problem
-
-`crossterm` and `env_logger` are optional deps gated behind `tokio` in `Cargo.toml`, but neither is used in library code — only by `src/bin/bambino-cli/`. The CLI shipping in the same crate is intentional (README: "Ships as a binary in the same crate"), but the dep gating means any external consumer using `bambino` with default features pulls in a terminal manipulation library and a concrete log sink.
-
-### Investigation
-
-- Confirm no library code imports `crossterm` or `env_logger` (already verified).
-- Evaluate options: (a) gate both behind a dedicated `cli` feature not implied by `tokio`, or (b) accept the current state since external consumers are not the primary use case yet at 0.1.0.
-- If (a), verify that `cargo build --bin bambino-cli` still works when `cli` is enabled and that `cargo build --lib` no longer pulls in `crossterm`/`env_logger`.
-
-### Fix
-
-Apply if warranted. Verify `cargo build`, `cargo build --no-default-features --features alloc --lib`, and `cargo test` all pass.
-
----
-
 ## Phase 11: Migrate CLI argument parsing to `clap`
 
 ### Prerequisites
 
-Phase 10 must be complete first. If Phase 10 introduces a dedicated `cli` feature for gating CLI-only deps (`crossterm`, `env_logger`), `clap` must be gated the same way — it's exclusively a CLI dependency and must never affect `cargo build --lib` or the `no_std`/`alloc` target.
+`clap` must be gated behind the `cli` feature (`cli = ["dep:env_logger", "dep:crossterm", "tokio"]`, `Cargo.toml`) alongside `crossterm`/`env_logger` — it's exclusively a CLI dependency and must never affect `cargo build --lib` or the `no_std`/`alloc` target. Add `"dep:clap"` to the `cli` feature list, not to `tokio`.
 
 ### Problem
 
@@ -144,7 +126,7 @@ Answer the design questions based on the current codebase, then write a concrete
 | 7 | Advisory homed-state tracking from `home_flag` | Complete |
 | 8 | Homing completion detection | Complete |
 | 9 | Sequence ID correlation hygiene for query commands | Complete |
-| 10 | CLI dependency leakage | Not Started |
+| 10 | CLI dependency leakage | Complete |
 | 11 | Migrate CLI argument parsing to `clap` | Not Started |
 | 12 | Camera integration in `PrinterClient` | Not Started |
 | 13 | Door-open and active-fault telemetry accessors | Not Started |

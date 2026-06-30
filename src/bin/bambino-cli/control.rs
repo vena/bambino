@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(feature = "cli")]
 
 //! # Motion, Thermal, and Peripheral Control Subcommand
 //!

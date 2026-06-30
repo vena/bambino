@@ -18,10 +18,13 @@ tokio = [
     "dep:tokio",
     "dep:tokio-rustls",
     "dep:rustls-pki-types",
-    "dep:env_logger",
-    "dep:crossterm",
     "std",
 ]
+
+# bambino-cli only: terminal manipulation and a concrete log sink. Not implied by
+# `tokio` so library consumers depending on `bambino` with default features don't
+# pull in a terminal UI crate and a log sink they never asked for.
+cli = ["dep:env_logger", "dep:crossterm", "tokio"]
 
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
 esp-idf = ["dep:esp-idf-svc", "std"]
@@ -45,6 +48,11 @@ embassy = [
     "no_std",
     "alloc",
 ]
+
+[[bin]]
+name = "bambino-cli"
+path = "src/bin/bambino-cli/main.rs"
+required-features = ["cli"]
 
 [dependencies]
 # Structured logging facade (no_std compatible with default-features disabled)

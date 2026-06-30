@@ -264,11 +264,13 @@ All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerP
 
 ## bambino-cli
 
-A CLI using our own library client for testing against real printers. Ships as a binary in the same crate.
+A CLI using our own library client for testing against real printers. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal UI crate (`crossterm`) and a log sink (`env_logger`) they never asked for.
 
 ```sh
-cargo build --bin bambino-cli
+cargo build --bin bambino-cli --features cli
 ```
+
+A `cargo bambino-cli` alias (`.cargo/config.toml`) wraps `cargo run --bin bambino-cli --features cli --`, so you don't have to type `--features cli` on every invocation — e.g. `cargo bambino-cli discover` instead of `cargo run --bin bambino-cli --features cli -- discover`. The examples below use the plain binary name (`bambino-cli ...`); substitute `cargo bambino-cli ...` if running from source instead of a built binary.
 
 ### Usage
 

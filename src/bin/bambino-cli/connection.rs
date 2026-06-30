@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(feature = "cli")]
 
 use std::time::Duration;
 

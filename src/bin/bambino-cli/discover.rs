@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(feature = "cli")]
 
 //! # Network Discovery Subcommand Handler
 //!

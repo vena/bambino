@@ -1,4 +1,4 @@
-#![cfg(feature = "std")]
+#![cfg(feature = "cli")]
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
