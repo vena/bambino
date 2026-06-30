@@ -27,6 +27,7 @@ enum ProbeTest {
     TempNozzleZero,
     TempBedZero,
     HomeAxes,
+    HomeAxesRepeat,
 }
 
 impl ProbeTest {
@@ -44,6 +45,7 @@ impl ProbeTest {
             Self::TempNozzleZero => "temp_nozzle_zero",
             Self::TempBedZero => "temp_bed_zero",
             Self::HomeAxes => "home_axes",
+            Self::HomeAxesRepeat => "home_axes_repeat",
         }
     }
 
@@ -61,6 +63,9 @@ impl ProbeTest {
             Self::TempNozzleZero => "Set nozzle temperature to 0",
             Self::TempBedZero => "Set bed temperature to 0",
             Self::HomeAxes => "Home all axes (changes printer state)",
+            Self::HomeAxesRepeat => {
+                "Home all axes again immediately after home_axes (redundant re-home — printer is already homed going in)"
+            }
         }
     }
 
@@ -78,12 +83,13 @@ impl ProbeTest {
             Self::TempNozzleZero,
             Self::TempBedZero,
             Self::HomeAxes,
+            Self::HomeAxesRepeat,
         ]
     }
 
     fn capture_window_secs(&self) -> u64 {
         match self {
-            Self::HomeAxes => LONG_CAPTURE_WINDOW_SECS,
+            Self::HomeAxes | Self::HomeAxesRepeat => LONG_CAPTURE_WINDOW_SECS,
             _ => DEFAULT_CAPTURE_WINDOW_SECS,
         }
     }
@@ -97,13 +103,19 @@ impl ProbeTest {
 }
 
 #[derive(Serialize)]
+struct CapturedMessage {
+    elapsed_ms: u64,
+    payload: serde_json::Value,
+}
+
+#[derive(Serialize)]
 struct ProbeEntry {
     test: String,
     description: String,
     capture_window_secs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     publish_error: Option<String>,
-    responses: Vec<serde_json::Value>,
+    responses: Vec<CapturedMessage>,
     elapsed_ms: u64,
     response_count: usize,
 }
@@ -124,24 +136,16 @@ async fn capture_pushall(
 ) -> Result<Option<serde_json::Value>, BambuError> {
     let deadline = Instant::now() + timeout;
 
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-
-        match tokio::time::timeout(remaining, client.poll_raw()).await {
-            Ok(Ok(msg)) => {
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
-                    && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
-                {
-                    return Ok(Some(v));
-                }
-            }
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Ok(None),
+    while Instant::now() < deadline {
+        let msg = client.poll_raw().await?;
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+            && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
+        {
+            return Ok(Some(v));
         }
     }
+
+    Ok(None)
 }
 
 async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), BambuError> {
@@ -179,7 +183,7 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
         ProbeTest::TempBedZero => {
             client.set_bed_temperature(0).await?;
         }
-        ProbeTest::HomeAxes => {
+        ProbeTest::HomeAxes | ProbeTest::HomeAxesRepeat => {
             client.home_axes(false).await?;
         }
     }
@@ -189,24 +193,18 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
 async fn capture_responses(
     client: &mut Printer,
     window: Duration,
-) -> Result<Vec<serde_json::Value>, BambuError> {
+) -> Result<Vec<CapturedMessage>, BambuError> {
     let mut responses = Vec::new();
-    let deadline = Instant::now() + window;
+    let start = Instant::now();
+    let deadline = start + window;
 
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-
-        match tokio::time::timeout(remaining, client.poll_raw()).await {
-            Ok(Ok(msg)) => {
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
-                    responses.push(v);
-                }
-            }
-            Ok(Err(e)) => return Err(e),
-            Err(_) => break,
+    while Instant::now() < deadline {
+        let msg = client.poll_raw().await?;
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+            responses.push(CapturedMessage {
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                payload: v,
+            });
         }
     }
 
