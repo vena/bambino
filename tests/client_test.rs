@@ -954,6 +954,21 @@ async fn test_select_k_profile_wire_payload() {
 
 const K_PROFILE_RESPONSE: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10002","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
 
+// Second `get_k_profiles()` call on an already-primed client: sequence ID advances
+// past the first call's prime (10001) and real query (10002).
+const K_PROFILE_RESPONSE_SECOND_CALL: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10003","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+
+// Manual-prime-skip call: only the real query is sent, so it lands on the first
+// sequence ID issued (10001), not the second (10002) that auto-priming would consume.
+const K_PROFILE_RESPONSE_NO_PRIME: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10001","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+
+// Correct command but a sequence ID that belongs to nobody — simulates a stray
+// response from another MQTT client (Orca/Studio/a second instance of us) querying
+// the same printer concurrently. `poll_until` must not consume it. Filament content
+// deliberately differs from the real response so a test that wrongly accepts this
+// decoy fails on content, not just on a missed assertion.
+const K_PROFILE_RESPONSE_DECOY_SEQ: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"99999","nozzle_diameter":"0.4","filaments":[{"cali_idx":9,"filament_id":"DECOY01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Decoy PLA","k_value":"0.099000","setting_id":"PF99999999999999999"}]}}"#;
+
 const SERIAL: &str = "01P000000000000";
 
 #[tokio::test]
@@ -990,7 +1005,7 @@ async fn test_get_k_profiles_auto_priming() {
             &mut server_stream,
             &topic,
             1001,
-            K_PROFILE_RESPONSE.as_bytes(),
+            K_PROFILE_RESPONSE_SECOND_CALL.as_bytes(),
         )
         .await;
         read_puback(&mut server_stream).await;
@@ -1037,7 +1052,7 @@ async fn test_get_k_profiles_manual_prime_skip() {
             &mut server_stream,
             &topic,
             1000,
-            K_PROFILE_RESPONSE.as_bytes(),
+            K_PROFILE_RESPONSE_NO_PRIME.as_bytes(),
         )
         .await;
         read_puback(&mut server_stream).await;
@@ -1055,6 +1070,61 @@ async fn test_get_k_profiles_manual_prime_skip() {
         .await
         .expect("get_k_profiles failed");
     assert_eq!(resp.print.command, "extrusion_cali_get");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+// Phase 9: sequence ID correlation hygiene
+
+#[tokio::test]
+async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Manual priming, only one command should be sent
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "extrusion_cali_get");
+
+        // A decoy response with the right command but a sequence ID that doesn't
+        // belong to us (e.g. a second MQTT client querying the same printer).
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1000,
+            K_PROFILE_RESPONSE_DECOY_SEQ.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Then the real response, correctly sequenced.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1001,
+            K_PROFILE_RESPONSE_NO_PRIME.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+    client.set_k_profile_primed(true);
+
+    let resp = client
+        .get_k_profiles()
+        .await
+        .expect("get_k_profiles should skip the decoy and find the real response");
+
+    // Must be the real response's filament, not the decoy's.
+    assert_eq!(resp.print.filaments[0].filament_id, "GFA01");
+    assert_ne!(resp.print.filaments[0].filament_id, "DECOY01");
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1092,6 +1162,12 @@ async fn test_sequence_id_wrapping() {
 // ============================================================================
 
 const VERSION_RESPONSE: &str = r#"{"info":{"command":"get_version","sequence_id":"10001","module":[{"product_name":"Bambu Lab P1S","name":"ota","hw_ver":"OTA","sw_ver":"01.09.00.00","sn":"01P000000000001","visible":true},{"name":"esp32","sw_ver":"01.02.03.04","sn":"01P000000000002"}]}}"#;
+
+// Correct command but a sequence ID that doesn't belong to us — simulates a stray
+// response from another MQTT client querying the same printer concurrently.
+// Module content deliberately differs from `VERSION_RESPONSE` so a test that
+// wrongly accepts this decoy fails on content, not just on a missed assertion.
+const VERSION_RESPONSE_DECOY_SEQ: &str = r#"{"info":{"command":"get_version","sequence_id":"99999","module":[{"name":"decoy","sw_ver":"00.00.00.00","sn":"DECOY0000000000"}]}}"#;
 
 #[tokio::test]
 async fn test_get_version_round_trip() {
@@ -1145,6 +1221,98 @@ async fn test_get_version_round_trip() {
     assert_eq!(
         report.print.as_ref().unwrap().gcode_state,
         Some("IDLE".into())
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_get_version_ignores_mismatched_sequence_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Read the get_version request
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["info"]["command"], "get_version");
+
+        // A decoy response with the right command but a sequence ID that doesn't
+        // belong to us (e.g. a second MQTT client querying the same printer).
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1000,
+            VERSION_RESPONSE_DECOY_SEQ.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Then the real response, correctly sequenced.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1001,
+            VERSION_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    let info = client
+        .get_version()
+        .await
+        .expect("get_version should skip the decoy and find the real response");
+
+    // Must be the real response's modules, not the decoy's.
+    assert_eq!(info.module.len(), 2);
+    assert_eq!(info.module[0].name, "ota");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let _json = read_publish_payload(&mut server_stream).await;
+
+        // The correctly-sequenced response never arrives — only decoys with someone
+        // else's sequence ID — so get_version must exhaust the message-count safety
+        // valve and time out rather than ever accepting a mismatched response.
+        for i in 0..200u16 {
+            send_publish_payload(
+                &mut server_stream,
+                &topic,
+                5000 + i,
+                VERSION_RESPONSE_DECOY_SEQ.as_bytes(),
+            )
+            .await;
+            read_puback(&mut server_stream).await;
+        }
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    let result = client.get_version().await;
+    assert!(
+        matches!(result, Err(BambuError::Timeout)),
+        "expected timeout when only a mismatched-sequence decoy is ever sent, got {:?}",
+        result
     );
 
     broker_task.await.expect("Broker task panicked");

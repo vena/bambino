@@ -8,9 +8,9 @@
 
 ---
 
-## Phases 1–8: Complete
+## Phases 1–9: Complete
 
-Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag. Phase 7 added advisory (non-blocking) homed-state tracking: `PrinterClient::last_home_flag` is cached opportunistically inside `poll_telemetry()` only, exposed via `is_axis_homed()`/`is_all_axes_homed()`, and consulted by `move_relative()`/`extrude()` to `log::warn!` (never error) on a known-unhomed axis. Phase 8 added `PrinterClient::wait_for_homing()` (`src/client/motion.rs`), built on `poll_telemetry()`'s `last_home_flag` cache — resolves only after observing a not-all-homed reading followed by an all-homed one, with `command_timeout_secs` temporarily overridden to 90s and bounded by both wall-clock elapsed time and `POLL_UNTIL_MAX_MESSAGES`.
+Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag. Phase 7 added advisory (non-blocking) homed-state tracking: `PrinterClient::last_home_flag` is cached opportunistically inside `poll_telemetry()` only, exposed via `is_axis_homed()`/`is_all_axes_homed()`, and consulted by `move_relative()`/`extrude()` to `log::warn!` (never error) on a known-unhomed axis. Phase 8 added `PrinterClient::wait_for_homing()` (`src/client/motion.rs`), built on `poll_telemetry()`'s `last_home_flag` cache — resolves only after observing a not-all-homed reading followed by an all-homed one, with `command_timeout_secs` temporarily overridden to 90s and bounded by both wall-clock elapsed time and `POLL_UNTIL_MAX_MESSAGES`. Phase 9 made the two existing `poll_until`-based query commands (`get_version()`, `get_k_profiles()`, both `src/client/ams.rs`) correlate responses by echoed `sequence_id`, not just `command` name, so a stray response from another MQTT client asking the same question can no longer be consumed in place of our own. `ensure_mqtt()` now reseeds `sequence_counter` from `TimerProvider::now_millis()` (via `mqtt::commands::clamp_task_id`) the moment a lazy MQTT connection is actually established, de-correlating independent sessions against the same printer; this only fires on the lazy-connect path, so `PrinterClient::from_mqtt()` (tests, Embassy) is unaffected and still starts at the fixed `INITIAL_SEQUENCE_ID`.
 
 **Decisions informing future phases:**
 
@@ -19,29 +19,6 @@ Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS
 - **Each protocol's TLS config is independent.** FTPS may need `force_tls_1_2` (model quirk) while MQTT does not. Phase 12's camera TLS may also differ — don't assume a shared connector.
 - **CLI storage now routes through `PrinterClient`.** Phase 12's camera CLI command should follow the same pattern rather than constructing protocol clients directly.
 - **Message buffer is on `BambuMqttClient`.** `poll_telemetry()` drains buffered messages first, then reads the wire. `poll_wire()` bypasses the buffer (used by `PrinterClient::poll_until()`). `push_pending()` stashes non-matching messages. `PrinterClient` delegates all reads through these methods. `mqtt().await?` returns a client whose `poll_telemetry()` is safe to call directly — no split-brain, no warnings.
-
----
-
-## Phase 9: Sequence ID correlation hygiene for query commands
-
-### Problem
-
-`get_version()` and `get_k_profiles()` use `poll_until` matchers that check only `command == "get_version"` / `command == "extrusion_cali_get"` — neither compares the response's `sequence_id` against the one we sent. Discovered while investigating Phase 7's command-ack envelope. If a second MQTT client (OrcaSlicer, Bambu Studio, or a second instance of our own library) is connected to the same printer and issues the same query while we're waiting, our `poll_until` could consume *their* response instead of ours.
-
-### Why this is hygiene, not an active bug
-
-Both `get_version()` and `get_k_profiles()` return printer state that's invariant regardless of who asked — there's no request parameter that would make two different callers' valid answers differ. Consuming a stray response from another client asking the same question still returns factually correct, current printer state. The risk is latent: it only becomes a real correctness bug if a future query-style command's response is parameterized by something in the request (i.e., two different valid answers exist depending on what was asked). Do not frame this as fixing broken behavior — it's making the existing pattern correct by default before something is built on top of it that actually needs it.
-
-### Fix
-
-1. Update the `poll_until` matcher closures in `get_version()` and `get_k_profiles()` (`src/client/ams.rs`) to also compare the response's echoed `sequence_id` against the `seq` value generated for that call, not just the command name. Apply the same pattern to any other existing `poll_until`-based methods that don't already check it.
-2. Consider seeding `PrinterClient`'s sequence counter (`sequence_counter`, see `INITIAL_SEQUENCE_ID` in `src/client/mod.rs`) from `TimerProvider::now_millis()` at connect time instead of the fixed constant `10000`. This de-correlates independent sessions (e.g., two processes both running our library against the same printer) without needing a new RNG abstraction — `TimerProvider` already exists uniformly across host/ESP-IDF/embassy targets.
-3. **True random sequence ID generation was considered and rejected.** `no_std`/embassy targets have no portable entropy source without adding a new platform abstraction trait (mirroring `TimerProvider`/`TlsConnector`), which is disproportionate complexity for a marginal benefit once matchers actually check `sequence_id`. Don't revisit this without a concrete reason the timer-seeded approach is insufficient.
-4. For context: Bambuddy hardcodes fixed sequence IDs (e.g. `"20000"` for `project_file`) for a *different* reason — multi-client disambiguation ("is this command mine or did Orca/Studio send it"), not response validation. That's not a pattern to copy here; our fix is about correlating our own request to our own response, not detecting other clients' traffic.
-
-### Verification
-
-Extend the existing `get_version()`/`get_k_profiles()` unit tests to inject a decoy response with the correct `command` but a mismatched `sequence_id`, and confirm `poll_until` does not consume it (keeps waiting for the correctly-sequenced response, or times out if only the decoy is ever sent).
 
 ---
 
@@ -166,7 +143,7 @@ Answer the design questions based on the current codebase, then write a concrete
 | 6 | Move message buffer to `BambuMqttClient` | Complete |
 | 7 | Advisory homed-state tracking from `home_flag` | Complete |
 | 8 | Homing completion detection | Complete |
-| 9 | Sequence ID correlation hygiene for query commands | Not Started |
+| 9 | Sequence ID correlation hygiene for query commands | Complete |
 | 10 | CLI dependency leakage | Not Started |
 | 11 | Migrate CLI argument parsing to `clap` | Not Started |
 | 12 | Camera integration in `PrinterClient` | Not Started |

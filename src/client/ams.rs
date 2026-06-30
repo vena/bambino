@@ -1,3 +1,6 @@
+#[cfg(not(feature = "std"))]
+use alloc::string::ToString;
+
 use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::BambuError;
 use crate::ftps::FtpDataStreamFactory;
@@ -108,11 +111,17 @@ where
         let req = crate::mqtt::GetVersionRequest::new(seq);
         self.publish_request(&req).await?;
 
+        let expected_seq = seq.to_string();
         self.poll_until(|msg| {
             let v: serde_json::Value = serde_json::from_slice(&msg.payload).ok()?;
             let node = v.get("info").unwrap_or(&v);
             if node.get("command")?.as_str()? == "get_version" {
-                serde_json::from_value::<VersionInfo>(node.clone()).ok()
+                let info: VersionInfo = serde_json::from_value(node.clone()).ok()?;
+                if info.sequence_id == expected_seq {
+                    Some(info)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -137,9 +146,11 @@ where
         let req = crate::diagnostics::ExtrusionCaliGetRequest::new(seq);
         self.publish_request(&req).await?;
 
+        let expected_seq = seq.to_string();
         self.poll_until(|msg| {
             let resp: ExtrusionCaliGetResponse = serde_json::from_slice(&msg.payload).ok()?;
-            if resp.print.command == "extrusion_cali_get" {
+            if resp.print.command == "extrusion_cali_get" && resp.print.sequence_id == expected_seq
+            {
                 Some(resp)
             } else {
                 None

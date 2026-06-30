@@ -186,6 +186,11 @@ where
             .await?;
         let mqtt_client = BambuMqttClient::connect(stream, &self.serial, &self.access_code).await?;
         self.mqtt = Some(mqtt_client);
+        // Reseed from wall-clock time so two independent sessions connecting to the
+        // same printer don't start from the same fixed counter and risk colliding
+        // sequence IDs while both have in-flight requests.
+        self.sequence_counter =
+            crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
         Ok(())
     }
 
