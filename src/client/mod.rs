@@ -80,6 +80,7 @@ pub struct PrinterClient<
     pub(crate) model: BambuModel,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
+    pub(crate) last_home_flag: Option<u32>,
     pub(crate) command_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
@@ -119,6 +120,7 @@ where
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
+            last_home_flag: None,
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
@@ -150,6 +152,7 @@ where
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
+            last_home_flag: None,
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
@@ -215,6 +218,7 @@ where
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
+            last_home_flag: self.last_home_flag,
             command_timeout_secs: self.command_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
@@ -254,6 +258,7 @@ where
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
+            last_home_flag: self.last_home_flag,
             command_timeout_secs: self.command_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
@@ -350,7 +355,12 @@ where
         self.ensure_mqtt().await?;
         let msg = self.mqtt.as_mut().unwrap().poll_telemetry().await?;
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
-            Ok(report) => Ok(TelemetryEvent::Report(Box::new(report), msg)),
+            Ok(report) => {
+                if let Some(flag) = report.print.as_ref().and_then(|p| p.home_flag) {
+                    self.last_home_flag = Some(flag);
+                }
+                Ok(TelemetryEvent::Report(Box::new(report), msg))
+            }
             Err(_) => Ok(TelemetryEvent::Unknown(msg)),
         }
     }

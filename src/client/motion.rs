@@ -8,6 +8,12 @@ use crate::mqtt::GCodeRequest;
 
 use super::PrinterClient;
 
+// home_flag bits 0-2 [REF-HOMEFLAG]
+const HOME_FLAG_X_BIT: u32 = 0x01;
+const HOME_FLAG_Y_BIT: u32 = 0x02;
+const HOME_FLAG_Z_BIT: u32 = 0x04;
+const HOME_FLAG_XYZ_BITS: u32 = HOME_FLAG_X_BIT | HOME_FLAG_Y_BIT | HOME_FLAG_Z_BIT;
+
 impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
 where
     Conn: SecureConnect,
@@ -16,6 +22,27 @@ where
     Tls: TlsConnector<RawIO>,
     Factory: FtpDataStreamFactory<RawIO>,
 {
+    /// Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the
+    /// last-observed `home_flag` telemetry. `None` means no telemetry carrying `home_flag`
+    /// has been observed yet (via [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed".
+    /// Advisory only: the firmware does not reject motion on unhomed axes [REF-MOTO-HOME].
+    pub fn is_axis_homed(&self, axis: char) -> Option<bool> {
+        let bit = match axis.to_ascii_uppercase() {
+            'X' => HOME_FLAG_X_BIT,
+            'Y' => HOME_FLAG_Y_BIT,
+            'Z' => HOME_FLAG_Z_BIT,
+            _ => return None,
+        };
+        self.last_home_flag.map(|flag| flag & bit != 0)
+    }
+
+    /// Returns whether X, Y, and Z were all homed as of the last-observed `home_flag`
+    /// telemetry. `None` means no telemetry carrying `home_flag` has been observed yet.
+    pub fn is_all_axes_homed(&self) -> Option<bool> {
+        self.last_home_flag
+            .map(|flag| flag & HOME_FLAG_XYZ_BITS == HOME_FLAG_XYZ_BITS)
+    }
+
     /// Sends a G-code command with model-aware safety validation.
     ///
     /// Rejects commands that would be unsafe on the active model (e.g., partial-axis
@@ -89,6 +116,12 @@ where
         feedrate: u32,
     ) -> Result<u16, BambuError> {
         let axis_upper = axis.to_ascii_uppercase();
+        if self.is_axis_homed(axis_upper) == Some(false) {
+            log::warn!(
+                "{} axis is not homed (last-known state) — move_relative proceeding anyway",
+                axis_upper
+            );
+        }
         if axis_upper == 'Z' {
             let gcode = self
                 .model
@@ -111,6 +144,9 @@ where
     /// Configures the active extruder drive gear to relative mode (`M83`) and feeds
     /// the specified length of filament (in mm) at the designated feedrate (in mm/min).
     pub async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, BambuError> {
+        if self.is_all_axes_homed() == Some(false) {
+            log::warn!("not all axes are homed (last-known state) — extrude proceeding anyway");
+        }
         let gcode = format!("M83\nG0 E{:.2} F{}", length, feedrate);
         self.send_gcode_raw(&gcode).await
     }

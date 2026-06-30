@@ -1229,3 +1229,63 @@ async fn test_request_pushall() {
 
     broker_task.await.expect("Broker task panicked");
 }
+
+#[tokio::test]
+async fn test_home_flag_cache_and_advisory_warnings() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // X and Y homed (bits 0-1), Z not homed (bit 2 clear).
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            2000,
+            br#"{"print":{"home_flag":3}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Unhomed Z move and extrude must still be dispatched — advisory only, not a gate.
+        let json_z = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_z["print"]["command"], "gcode_line");
+
+        let json_e = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_e["print"]["param"], "M83\nG0 E5.00 F500\n");
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    // No telemetry observed yet — cache must read as unknown, not "unhomed".
+    assert_eq!(client.is_axis_homed('x'), None);
+    assert_eq!(client.is_all_axes_homed(), None);
+
+    let event = client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse home_flag report");
+    assert!(event.report().is_some());
+
+    assert_eq!(client.is_axis_homed('x'), Some(true));
+    assert_eq!(client.is_axis_homed('y'), Some(true));
+    assert_eq!(client.is_axis_homed('z'), Some(false));
+    assert_eq!(client.is_axis_homed('e'), None);
+    assert_eq!(client.is_all_axes_homed(), Some(false));
+
+    client
+        .move_relative('z', 5.0, 1000)
+        .await
+        .expect("move_relative should proceed despite unhomed Z");
+    client
+        .extrude(5.0, 500)
+        .await
+        .expect("extrude should proceed despite unhomed axes");
+
+    broker_task.await.expect("Broker task panicked");
+}
