@@ -102,7 +102,8 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Raw chamber and auxiliary fan PWM speed control channels [REF-CLIM-FANS]
     *   Physical control envelopes for lights, climate dampers, buzzers, and external tool mount telemetry
 *   **Section 4.4: Mechanical & Firmware Quirks**
-    *   Axis Homing State Detection [REF-MOTO-HOME] — per-axis homed state via home_flag, firmware non-rejection behavior, mc_print_sub_stage completion signal
+    *   Axis Homing State Detection [REF-MOTO-HOME] — per-axis homed state via home_flag, firmware non-rejection at any tested magnitude, UI/slicer-only enforcement, mc_print_sub_stage completion signal
+    *   No Soft-Limit Enforcement at Physical Travel End (P1S) — homed state doesn't imply safe travel range; motor grinds against physical stops with no firmware detection
     *   Z-axis homing crash hazards (bare G28 constraints vs bed-slinger coordinates) and hotend fan safety control overrides
 
 ### Chapter 5: Physical Material Expansion (AMS, AMS-HT & Spools)

@@ -88,7 +88,7 @@ pub async fn run(
             println!("Homing command published successfully.");
         }
         "move" => {
-            if action_args.len() < 4 {
+            if action_args.len() < 3 {
                 return Err(BambuError::ProtocolViolation(
                     "Usage: control <ip> <serial> <access_code> move <axis> <distance> [feedrate]"
                         .into(),
@@ -114,7 +114,7 @@ pub async fn run(
             println!("Motion command published successfully.");
         }
         "extrude" => {
-            if action_args.len() < 3 {
+            if action_args.len() < 2 {
                 return Err(BambuError::ProtocolViolation(
                     "Usage: control <ip> <serial> <access_code> extrude <length> [feedrate]".into(),
                 ));
