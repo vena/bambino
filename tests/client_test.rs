@@ -1289,3 +1289,140 @@ async fn test_home_flag_cache_and_advisory_warnings() {
 
     broker_task.await.expect("Broker task panicked");
 }
+
+// Phase 8: wait_for_homing
+
+#[tokio::test]
+async fn test_wait_for_homing_resolves_after_dip() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Already-homed reading must not resolve the call on its own.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4000,
+            br#"{"print":{"home_flag":7}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Dip: not all axes homed mid-cycle.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4001,
+            br#"{"print":{"home_flag":3}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Recovery: all axes homed again — this is the reading that should resolve.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4002,
+            br#"{"print":{"home_flag":7}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    client
+        .wait_for_homing()
+        .await
+        .expect("wait_for_homing should resolve after observing a dip followed by recovery");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_wait_for_homing_resolves_when_already_in_progress() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // First observed reading is already mid-home (e.g. touchscreen-triggered before
+        // this client started watching) — must still count as the dip.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4100,
+            br#"{"print":{"home_flag":1}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4101,
+            br#"{"print":{"home_flag":7}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    client
+        .wait_for_homing()
+        .await
+        .expect("wait_for_homing should resolve on a join-in-progress external home");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_wait_for_homing_times_out_without_dip() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Axes stay fully homed for the entire window — no dip is ever observed, so
+        // wait_for_homing must exhaust the message-count safety valve and time out
+        // rather than resolving on the first (or any) all-homed reading.
+        for i in 0..200u16 {
+            send_publish_payload(
+                &mut server_stream,
+                &topic,
+                4200 + i,
+                br#"{"print":{"home_flag":7}}"#,
+            )
+            .await;
+            read_puback(&mut server_stream).await;
+        }
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    let result = client.wait_for_homing().await;
+    assert!(
+        matches!(result, Err(BambuError::Timeout)),
+        "expected timeout when no dip is ever observed, got {:?}",
+        result
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}

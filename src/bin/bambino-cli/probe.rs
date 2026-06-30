@@ -12,6 +12,9 @@ use crate::connection::{Printer, create_printer};
 const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 3;
 const LONG_CAPTURE_WINDOW_SECS: u64 = 60;
 const PUSHALL_TIMEOUT_SECS: u64 = 10;
+// Mirrors PrinterClient::wait_for_homing()'s internal timeout override (src/client/motion.rs) —
+// display-only, since that method manages its own deadline rather than taking one.
+const HOMING_WAIT_DISPLAY_SECS: u64 = 90;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProbeTest {
@@ -28,6 +31,8 @@ enum ProbeTest {
     TempBedZero,
     HomeAxes,
     HomeAxesRepeat,
+    HomeAxesWait,
+    HomeAxesRepeatWait,
 }
 
 impl ProbeTest {
@@ -46,6 +51,8 @@ impl ProbeTest {
             Self::TempBedZero => "temp_bed_zero",
             Self::HomeAxes => "home_axes",
             Self::HomeAxesRepeat => "home_axes_repeat",
+            Self::HomeAxesWait => "home_axes_wait",
+            Self::HomeAxesRepeatWait => "home_axes_repeat_wait",
         }
     }
 
@@ -66,6 +73,12 @@ impl ProbeTest {
             Self::HomeAxesRepeat => {
                 "Home all axes again immediately after home_axes (redundant re-home — printer is already homed going in)"
             }
+            Self::HomeAxesWait => {
+                "Home all axes, then block on wait_for_homing() until firmware confirms completion"
+            }
+            Self::HomeAxesRepeatWait => {
+                "Home all axes again via wait_for_homing() (redundant re-home — validates wait_for_homing() does not false-resolve instantly on an already-homed printer)"
+            }
         }
     }
 
@@ -84,14 +97,24 @@ impl ProbeTest {
             Self::TempBedZero,
             Self::HomeAxes,
             Self::HomeAxesRepeat,
+            Self::HomeAxesWait,
+            Self::HomeAxesRepeatWait,
         ]
     }
 
     fn capture_window_secs(&self) -> u64 {
         match self {
             Self::HomeAxes | Self::HomeAxesRepeat => LONG_CAPTURE_WINDOW_SECS,
+            Self::HomeAxesWait | Self::HomeAxesRepeatWait => HOMING_WAIT_DISPLAY_SECS,
             _ => DEFAULT_CAPTURE_WINDOW_SECS,
         }
+    }
+
+    /// True for tests that block on [`PrinterClient::wait_for_homing()`] instead of
+    /// capturing raw telemetry for a fixed window — `wait_for_homing()` consumes every
+    /// message it polls internally, so there's nothing left to capture alongside it.
+    fn uses_wait_for_homing(&self) -> bool {
+        matches!(self, Self::HomeAxesWait | Self::HomeAxesRepeatWait)
     }
 
     fn from_name(name: &str) -> Option<ProbeTest> {
@@ -118,6 +141,8 @@ struct ProbeEntry {
     responses: Vec<CapturedMessage>,
     elapsed_ms: u64,
     response_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wait_outcome: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -183,7 +208,10 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
         ProbeTest::TempBedZero => {
             client.set_bed_temperature(0).await?;
         }
-        ProbeTest::HomeAxes | ProbeTest::HomeAxesRepeat => {
+        ProbeTest::HomeAxes
+        | ProbeTest::HomeAxesRepeat
+        | ProbeTest::HomeAxesWait
+        | ProbeTest::HomeAxesRepeatWait => {
             client.home_axes(false).await?;
         }
     }
@@ -312,14 +340,19 @@ pub async fn run(
     for (idx, test) in tests.iter().enumerate() {
         let window_secs = test.capture_window_secs();
         let capture_window = Duration::from_secs(window_secs);
+        let window_label = if test.uses_wait_for_homing() {
+            format!("up to {}s via wait_for_homing", window_secs)
+        } else {
+            format!("{}s window", window_secs)
+        };
 
         eprint!(
-            "[{}/{}] {} — {} ({}s window)... ",
+            "[{}/{}] {} — {} ({})... ",
             idx + 1,
             tests.len(),
             test.name(),
             test.description(),
-            window_secs
+            window_label
         );
         io::stderr().flush().unwrap_or(());
 
@@ -330,17 +363,25 @@ pub async fn run(
             Err(e) => Some(e.to_string()),
         };
 
-        let responses = if publish_error.is_none() {
-            capture_responses(&mut client, capture_window).await?
+        let (responses, wait_outcome) = if publish_error.is_none() {
+            if test.uses_wait_for_homing() {
+                let outcome = match client.wait_for_homing().await {
+                    Ok(()) => "resolved".to_string(),
+                    Err(e) => format!("error: {e}"),
+                };
+                (Vec::new(), Some(outcome))
+            } else {
+                (capture_responses(&mut client, capture_window).await?, None)
+            }
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let response_count = responses.len();
 
         eprintln!(
-            "{} response{} in {}ms{}",
+            "{} response{} in {}ms{}{}",
             response_count,
             if response_count == 1 { "" } else { "s" },
             elapsed_ms,
@@ -348,7 +389,11 @@ pub async fn run(
                 " (publish failed)"
             } else {
                 ""
-            }
+            },
+            wait_outcome
+                .as_deref()
+                .map(|o| format!(" [wait_for_homing: {o}]"))
+                .unwrap_or_default()
         );
 
         entries.push(ProbeEntry {
@@ -359,6 +404,7 @@ pub async fn run(
             responses,
             elapsed_ms,
             response_count,
+            wait_outcome,
         });
     }
 

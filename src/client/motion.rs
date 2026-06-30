@@ -6,13 +6,16 @@ use crate::ftps::FtpDataStreamFactory;
 use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
 use crate::mqtt::GCodeRequest;
 
-use super::PrinterClient;
+use super::{POLL_UNTIL_MAX_MESSAGES, PrinterClient};
 
 // home_flag bits 0-2 [REF-HOMEFLAG]
 const HOME_FLAG_X_BIT: u32 = 0x01;
 const HOME_FLAG_Y_BIT: u32 = 0x02;
 const HOME_FLAG_Z_BIT: u32 = 0x04;
 const HOME_FLAG_XYZ_BITS: u32 = HOME_FLAG_X_BIT | HOME_FLAG_Y_BIT | HOME_FLAG_Z_BIT;
+
+// Homing took up to ~46s across wire-confirmed P1S runs [REF-HOMEFLAG]; 90s leaves margin.
+const HOMING_WAIT_TIMEOUT_SECS: u64 = 90;
 
 impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
 where
@@ -149,5 +152,55 @@ where
         }
         let gcode = format!("M83\nG0 E{:.2} F{}", length, feedrate);
         self.send_gcode_raw(&gcode).await
+    }
+
+    /// Blocks until a `G28` homing cycle observed via telemetry has completed.
+    ///
+    /// Standalone — does not require this client to have issued [`home_axes()`](Self::home_axes).
+    /// Resolves correctly whether homing was triggered by this client, the touchscreen, slicer
+    /// software, or another `PrinterClient` instance, since it only relies on `home_flag`
+    /// telemetry observed via [`poll_telemetry()`](Self::poll_telemetry).
+    ///
+    /// Only resolves successfully after observing a not-all-homed `home_flag` reading
+    /// followed by an all-homed reading: an already-homed printer at call time does not
+    /// resolve instantly, and a call where nothing ever homes times out rather than
+    /// returning early.
+    pub async fn wait_for_homing(&mut self) -> Result<(), BambuError> {
+        let original_timeout = self.command_timeout_secs;
+        self.command_timeout_secs = HOMING_WAIT_TIMEOUT_SECS;
+
+        let result = self.wait_for_homing_inner().await;
+
+        self.command_timeout_secs = original_timeout;
+        result
+    }
+
+    async fn wait_for_homing_inner(&mut self) -> Result<(), BambuError> {
+        let start = self.timer.now_millis();
+        let timeout_ms = self.command_timeout_secs * 1000;
+        let mut count: usize = 0;
+        let mut saw_not_all_homed = false;
+
+        loop {
+            self.poll_telemetry().await?;
+
+            if let Some(all_homed) = self.is_all_axes_homed() {
+                if all_homed && saw_not_all_homed {
+                    return Ok(());
+                }
+                if !all_homed {
+                    saw_not_all_homed = true;
+                }
+            }
+
+            count += 1;
+            if count >= POLL_UNTIL_MAX_MESSAGES {
+                return Err(BambuError::Timeout);
+            }
+            let elapsed = self.timer.now_millis().wrapping_sub(start);
+            if timeout_ms > 0 && elapsed >= timeout_ms {
+                return Err(BambuError::Timeout);
+            }
+        }
     }
 }

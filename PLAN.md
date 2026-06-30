@@ -8,9 +8,9 @@
 
 ---
 
-## Phases 1–7: Complete
+## Phases 1–8: Complete
 
-Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag. Phase 7 added advisory (non-blocking) homed-state tracking: `PrinterClient::last_home_flag` is cached opportunistically inside `poll_telemetry()` only, exposed via `is_axis_homed()`/`is_all_axes_homed()`, and consulted by `move_relative()`/`extrude()` to `log::warn!` (never error) on a known-unhomed axis.
+Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS, with symmetric APIs for both protocols. Phase 5 updated all documentation. Phase 6 moved the MQTT message buffer from `PrinterClient` to `BambuMqttClient`, eliminating the split-brain read path and the `owned_by_printerclient` runtime flag. Phase 7 added advisory (non-blocking) homed-state tracking: `PrinterClient::last_home_flag` is cached opportunistically inside `poll_telemetry()` only, exposed via `is_axis_homed()`/`is_all_axes_homed()`, and consulted by `move_relative()`/`extrude()` to `log::warn!` (never error) on a known-unhomed axis. Phase 8 added `PrinterClient::wait_for_homing()` (`src/client/motion.rs`), built on `poll_telemetry()`'s `last_home_flag` cache — resolves only after observing a not-all-homed reading followed by an all-homed one, with `command_timeout_secs` temporarily overridden to 90s and bounded by both wall-clock elapsed time and `POLL_UNTIL_MAX_MESSAGES`.
 
 **Decisions informing future phases:**
 
@@ -19,33 +19,6 @@ Phases 1–4 migrated `PrinterClient` to lazy connections for both MQTT and FTPS
 - **Each protocol's TLS config is independent.** FTPS may need `force_tls_1_2` (model quirk) while MQTT does not. Phase 12's camera TLS may also differ — don't assume a shared connector.
 - **CLI storage now routes through `PrinterClient`.** Phase 12's camera CLI command should follow the same pattern rather than constructing protocol clients directly.
 - **Message buffer is on `BambuMqttClient`.** `poll_telemetry()` drains buffered messages first, then reads the wire. `poll_wire()` bypasses the buffer (used by `PrinterClient::poll_until()`). `push_pending()` stashes non-matching messages. `PrinterClient` delegates all reads through these methods. `mqtt().await?` returns a client whose `poll_telemetry()` is safe to call directly — no split-brain, no warnings.
-
----
-
-## Phase 8: Homing completion detection
-
-### Problem
-
-`home_axes()` returns immediately after publishing the `G28` gcode — the ack arrives almost instantly and only means "received," not "homing finished." Callers have no way to know when homing has actually completed.
-
-### Findings (P1S, n=6 wire-confirmed runs across 2 sessions via `bambino-cli probe -t home_axes,home_axes_repeat`)
-
-`home_flag` bits 0-2 ([REF-HOMEFLAG] in `reference/03_mqtt_telemetry.md`) reliably dip and recover on every `G28` — 6/6 runs, including redundant re-homes of an already-fully-homed printer. `mc_print_sub_stage` also cycled `0 → 1 → 0` every time, but isn't used here: it's confirmed shared with filament-change tracking ([REF-MOTO-HOME] in `reference/04_toolhead_thermal_motion.md`), unlike `home_flag` bits 0-2, which are homing-exclusive. Since `home_flag` alone is sufficient for both the fresh and redundant case, there's no reason to add an ambiguous field. A future filament-change-tracking phase should investigate `mc_print_sub_stage` fresh, not assume this transfers.
-
-### Design (resolved — implement as stated, don't re-derive)
-
-- **`home_axes()` is unchanged** — stays fire-and-forget. No bundled `home_axes_and_wait()`; composing the two calls is one line.
-- **One method: `wait_for_homing(&mut self) -> Result<(), BambuError>`.** Built entirely on Phase 7's existing `last_home_flag` cache and `is_all_axes_homed()` accessor — no new `PrinterClient` fields. Fully standalone — no dependency on `home_axes()` having been called by this client, since homing may be externally triggered (touchscreen, OrcaSlicer, another instance of this library).
-- **Add it to `src/client/motion.rs`**, alongside `home_axes()` and `is_all_axes_homed()`. Drive it through `poll_telemetry()` in a loop (not `poll_until()`/`poll_raw()`) — only `poll_telemetry()` refreshes the `last_home_flag` cache this depends on.
-- **Correctness requirements** (invariants the implementation must satisfy, not a prescribed code shape):
-  - Must **not** resolve successfully on a `home_flag`-all-set reading unless a not-all-set reading was observed earlier in the same call — otherwise calling this on an already-homed printer resolves instantly without confirming anything happened. This also makes it correct for an already-in-progress externally-triggered home (first reading is already not-all-set) and a no-op call where nothing ever homes (never sees not-all-set, times out).
-  - Must temporarily override `command_timeout_secs` to a generous value (homing took up to ~46s across all observed runs; 90s leaves margin) and restore the caller's original value on **every** exit path — success, timeout, and any transport error from `poll_telemetry()`. A bare `?` on that call would skip restoration on the error path.
-  - Must bound the loop on both elapsed wall-clock time (mirror `poll_until()`'s `wrapping_sub` pattern in `src/client/mod.rs`) **and** a message-count safety valve (reuse `POLL_UNTIL_MAX_MESSAGES`, don't invent a new constant) — the count valve exists because `DummyTimer::now_millis()` always returns `0`, so a wall-clock-only bound can hang forever under it.
-  - No persistent new fields on `PrinterClient` — loop state is local to the one call.
-
-### Verification
-
-Unit test with a mock MQTT stream feeding a synthetic `home_flag` sequence (all-set → not-all-set → all-set) confirming `wait_for_homing()` resolves only after the dip is observed, not immediately on an already-all-set reading. Add a case where the first observed reading is already `Some(false)` (simulating a join-in-progress externally-triggered home) to confirm it still resolves on the eventual `Some(true)`. Add a case with no dip ever observed (axes stay homed the whole window) confirming it times out rather than resolving early. Integration test using `bambino-cli probe -t home_axes,home_axes_repeat` (already exists) to confirm the design against real hardware.
 
 ---
 
@@ -155,7 +128,7 @@ Answer the design questions based on the current codebase, then write a concrete
 | 5 | Documentation | Complete |
 | 6 | Move message buffer to `BambuMqttClient` | Complete |
 | 7 | Advisory homed-state tracking from `home_flag` | Complete |
-| 8 | Homing completion detection | Not Started — investigation complete, ready to implement |
+| 8 | Homing completion detection | Complete |
 | 9 | Sequence ID correlation hygiene for query commands | Not Started |
 | 10 | CLI dependency leakage | Not Started |
 | 11 | Migrate CLI argument parsing to `clap` | Not Started |
