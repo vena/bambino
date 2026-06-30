@@ -26,7 +26,7 @@ pub mod types;
 
 pub use dummy::{DummyFactory, DummyRawIo, DummySecureConnect, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
-pub use types::{CalibrationOption, FanTarget, PrintSpeed, TelemetryEvent};
+pub use types::{CalibrationOption, FanTarget, PrintSpeed, PrintStatus, TelemetryEvent};
 
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
@@ -81,6 +81,7 @@ pub struct PrinterClient<
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
     pub(crate) last_home_flag: Option<u32>,
+    pub(crate) last_gcode_state: Option<String>,
     pub(crate) command_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
@@ -121,6 +122,7 @@ where
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
             last_home_flag: None,
+            last_gcode_state: None,
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
@@ -153,6 +155,7 @@ where
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
             last_home_flag: None,
+            last_gcode_state: None,
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
@@ -219,6 +222,7 @@ where
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
             last_home_flag: self.last_home_flag,
+            last_gcode_state: self.last_gcode_state,
             command_timeout_secs: self.command_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
@@ -259,6 +263,7 @@ where
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
             last_home_flag: self.last_home_flag,
+            last_gcode_state: self.last_gcode_state,
             command_timeout_secs: self.command_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
@@ -356,13 +361,28 @@ where
         let msg = self.mqtt.as_mut().unwrap().poll_telemetry().await?;
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
             Ok(report) => {
-                if let Some(flag) = report.print.as_ref().and_then(|p| p.home_flag) {
-                    self.last_home_flag = Some(flag);
+                if let Some(print) = report.print.as_ref() {
+                    if let Some(flag) = print.home_flag {
+                        self.last_home_flag = Some(flag);
+                    }
+                    if let Some(state) = &print.gcode_state {
+                        self.last_gcode_state = Some(state.clone());
+                    }
                 }
                 Ok(TelemetryEvent::Report(Box::new(report), msg))
             }
             Err(_) => Ok(TelemetryEvent::Unknown(msg)),
         }
+    }
+
+    /// Returns the printer's high-level activity classification as of the
+    /// last-observed `gcode_state` telemetry (via
+    /// [`poll_telemetry()`](Self::poll_telemetry)). `None` means no telemetry
+    /// carrying `gcode_state` has been observed yet.
+    pub fn print_status(&self) -> Option<PrintStatus> {
+        self.last_gcode_state
+            .as_deref()
+            .map(PrintStatus::from_gcode_state)
     }
 
     /// Pulls the next raw MQTT message without deserialization.

@@ -3,7 +3,7 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bambino::client::FanTarget;
+use bambino::client::{FanTarget, PrintStatus};
 use bambino::error::BambuError;
 use serde::Serialize;
 
@@ -33,6 +33,7 @@ enum ProbeTest {
     HomeAxesRepeat,
     HomeAxesWait,
     HomeAxesRepeatWait,
+    HomeAxesWithBusyCheck,
 }
 
 impl ProbeTest {
@@ -53,6 +54,7 @@ impl ProbeTest {
             Self::HomeAxesRepeat => "home_axes_repeat",
             Self::HomeAxesWait => "home_axes_wait",
             Self::HomeAxesRepeatWait => "home_axes_repeat_wait",
+            Self::HomeAxesWithBusyCheck => "home_axes_with_busy_check",
         }
     }
 
@@ -79,10 +81,16 @@ impl ProbeTest {
             Self::HomeAxesRepeatWait => {
                 "Home all axes again via wait_for_homing() (redundant re-home — validates wait_for_homing() does not false-resolve instantly on an already-homed printer)"
             }
+            Self::HomeAxesWithBusyCheck => {
+                "Holistic homing example: refuse if the printer is actively printing/paused (gcode_state), otherwise always try wait_for_homing() first to join any already-in-progress home, falling back to self-triggered home_axes() only on timeout. MANUAL: trigger homing from the printer's touchscreen/slicer during the confirmation pause to exercise the join path; not run by default."
+            }
         }
     }
 
-    fn all_ordered() -> &'static [ProbeTest] {
+    /// Full registry of every test, in stable order. Used for `-t` lookup and the
+    /// unknown-test help listing — includes manual-intervention tests, which are
+    /// otherwise excluded from the no-`-t` default run; see [`default_set()`](Self::default_set).
+    fn all_known() -> &'static [ProbeTest] {
         &[
             Self::MoveZUnhomed,
             Self::MoveXUnhomed,
@@ -99,7 +107,25 @@ impl ProbeTest {
             Self::HomeAxesRepeat,
             Self::HomeAxesWait,
             Self::HomeAxesRepeatWait,
+            Self::HomeAxesWithBusyCheck,
         ]
+    }
+
+    /// Tests run when `-t`/`--tests` is omitted — every known test except those
+    /// requiring manual intervention.
+    fn default_set() -> Vec<ProbeTest> {
+        Self::all_known()
+            .iter()
+            .copied()
+            .filter(|t| !t.requires_manual_intervention())
+            .collect()
+    }
+
+    /// True for tests that need the operator to do something outside this process
+    /// (e.g. trigger homing from the touchscreen) — excluded from the default set,
+    /// selectable only explicitly via `-t`.
+    fn requires_manual_intervention(&self) -> bool {
+        matches!(self, Self::HomeAxesWithBusyCheck)
     }
 
     fn capture_window_secs(&self) -> u64 {
@@ -118,10 +144,7 @@ impl ProbeTest {
     }
 
     fn from_name(name: &str) -> Option<ProbeTest> {
-        Self::all_ordered()
-            .iter()
-            .find(|t| t.name() == name)
-            .copied()
+        Self::all_known().iter().find(|t| t.name() == name).copied()
     }
 }
 
@@ -161,9 +184,11 @@ async fn capture_pushall(
 ) -> Result<Option<serde_json::Value>, BambuError> {
     let deadline = Instant::now() + timeout;
 
+    // Goes through poll_telemetry() (not poll_raw()) so this also warms
+    // PrinterClient's home_flag/gcode_state cache from the very first response.
     while Instant::now() < deadline {
-        let msg = client.poll_raw().await?;
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+        let event = client.poll_telemetry().await?;
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload)
             && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
         {
             return Ok(Some(v));
@@ -214,8 +239,91 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
         | ProbeTest::HomeAxesRepeatWait => {
             client.home_axes(false).await?;
         }
+        ProbeTest::HomeAxesWithBusyCheck => {
+            unreachable!("dispatched via run_holistic_homing(), not send_command()")
+        }
     }
     Ok(())
+}
+
+/// Returns whether the printer is actively printing or paused — the one verified
+/// busy signal ([REF-MQTT-IDLEBUG]: `gcode_state` is the only field this codebase
+/// treats as authoritative for busy/idle classification).
+fn printer_is_busy(client: &Printer) -> bool {
+    matches!(
+        client.print_status(),
+        Some(PrintStatus::Running) | Some(PrintStatus::Paused)
+    )
+}
+
+/// Demonstrates a consumer-style holistic homing routine for [`ProbeTest::HomeAxesWithBusyCheck`]:
+///
+/// 1. Refuse outright if the printer is actively printing/paused (hard safety gate).
+/// 2. Skip if already homed.
+/// 3. Otherwise always try `wait_for_homing()` first. It tracks `home_flag`, which
+///    stays in the "not all set" state for an active cycle's entire duration — unlike
+///    `mc_print_sub_stage`, which real-hardware testing showed pulses briefly near the
+///    *start* of `G28` and reverts well before the cycle finishes [REF-MOTO-HOME]. A
+///    probe run against a printer already several seconds into a UI-triggered home
+///    observed `mc_print_sub_stage` back at its rest value despite `home_flag` still
+///    showing unhomed axes — gating on the pulse missed it and self-triggered a
+///    redundant `home_axes()` on top of the still-active external cycle. Trying
+///    `wait_for_homing()` unconditionally has no such timing window: it joins an
+///    in-progress home no matter how long it's been running before we connected.
+/// 4. If the join times out (nothing ever resolved within ~90s), re-check the safety
+///    gate once more, then self-trigger `home_axes()` and wait.
+async fn run_holistic_homing(client: &mut Printer) -> Result<String, BambuError> {
+    // Warm up the home_flag/gcode_state cache (a single poll may land on a partial
+    // telemetry delta carrying neither). mc_print_sub_stage is recorded opportunistically
+    // for context only — it does not gate any branch below, see the doc comment.
+    let warmup_deadline = Instant::now() + Duration::from_secs(DEFAULT_CAPTURE_WINDOW_SECS);
+    let mut sub_stage_at_start = None;
+    while Instant::now() < warmup_deadline
+        && (client.print_status().is_none() || client.is_all_axes_homed().is_none())
+    {
+        let event = client.poll_telemetry().await?;
+        if sub_stage_at_start.is_none() {
+            sub_stage_at_start = event
+                .report()
+                .and_then(|r| r.print.as_ref())
+                .and_then(|p| p.mc_print_sub_stage);
+        }
+    }
+
+    if printer_is_busy(client) {
+        return Ok(format!(
+            "refused: printer busy (gcode_state={:?})",
+            client.print_status()
+        ));
+    }
+
+    if client.is_all_axes_homed() == Some(true) {
+        return Ok("already homed, no action".to_string());
+    }
+
+    match client.wait_for_homing().await {
+        Ok(()) => Ok(format!(
+            "joined in-progress home, resolved (mc_print_sub_stage was {:?} at start)",
+            sub_stage_at_start
+        )),
+        Err(BambuError::Timeout) => {
+            // Nothing resolved during the wait. Re-check the safety gate before
+            // self-triggering — printing state may have changed during the ~90s wait.
+            client.poll_telemetry().await?;
+            if printer_is_busy(client) {
+                return Ok(format!(
+                    "refused after wait: printer busy (gcode_state={:?})",
+                    client.print_status()
+                ));
+            }
+            client.home_axes(false).await?;
+            match client.wait_for_homing().await {
+                Ok(()) => Ok("self-triggered home, resolved".to_string()),
+                Err(e) => Ok(format!("self-triggered home, error: {e}")),
+            }
+        }
+        Err(e) => Ok(format!("error: {e}")),
+    }
 }
 
 async fn capture_responses(
@@ -226,9 +334,11 @@ async fn capture_responses(
     let start = Instant::now();
     let deadline = start + window;
 
+    // Goes through poll_telemetry() (not poll_raw()) so every test's capture window
+    // also warms PrinterClient's home_flag/gcode_state cache as a side effect.
     while Instant::now() < deadline {
-        let msg = client.poll_raw().await?;
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+        let event = client.poll_telemetry().await?;
+        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload) {
             responses.push(CapturedMessage {
                 elapsed_ms: start.elapsed().as_millis() as u64,
                 payload: v,
@@ -275,8 +385,13 @@ pub async fn run(
                 Some(t) => selected.push(t),
                 None => {
                     eprintln!("Unknown test: '{}'. Available tests:", name);
-                    for t in ProbeTest::all_ordered() {
-                        eprintln!("  {} — {}", t.name(), t.description());
+                    for t in ProbeTest::all_known() {
+                        let manual = if t.requires_manual_intervention() {
+                            " (manual — not run by default)"
+                        } else {
+                            ""
+                        };
+                        eprintln!("  {} — {}{}", t.name(), t.description(), manual);
                     }
                     return Err(BambuError::ProtocolViolation(
                         format!("Unknown test name: '{}'", name).into(),
@@ -286,7 +401,7 @@ pub async fn run(
         }
         selected
     } else {
-        ProbeTest::all_ordered().to_vec()
+        ProbeTest::default_set()
     };
 
     eprintln!(
@@ -338,6 +453,39 @@ pub async fn run(
     let mut entries = Vec::new();
 
     for (idx, test) in tests.iter().enumerate() {
+        if matches!(test, ProbeTest::HomeAxesWithBusyCheck) {
+            eprint!(
+                "[{}/{}] {} — {} (holistic check, up to ~{}s)... ",
+                idx + 1,
+                tests.len(),
+                test.name(),
+                test.description(),
+                HOMING_WAIT_DISPLAY_SECS
+            );
+            io::stderr().flush().unwrap_or(());
+
+            let start = Instant::now();
+            let outcome = match run_holistic_homing(&mut client).await {
+                Ok(outcome) => outcome,
+                Err(e) => format!("error: {e}"),
+            };
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+
+            eprintln!("{} in {}ms", outcome, elapsed_ms);
+
+            entries.push(ProbeEntry {
+                test: test.name().to_string(),
+                description: test.description().to_string(),
+                capture_window_secs: 0,
+                publish_error: None,
+                responses: Vec::new(),
+                elapsed_ms,
+                response_count: 0,
+                wait_outcome: Some(outcome),
+            });
+            continue;
+        }
+
         let window_secs = test.capture_window_secs();
         let capture_window = Duration::from_secs(window_secs);
         let window_label = if test.uses_wait_for_homing() {

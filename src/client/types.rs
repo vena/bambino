@@ -96,3 +96,57 @@ impl core::ops::BitOr for CalibrationOption {
         Self(self.0 | rhs.0)
     }
 }
+
+/// Decoded classification of the printer's high-level `gcode_state` telemetry field.
+///
+/// `Unknown` covers both an unrecognized wire value and a missing field — callers
+/// needing to tell those apart should inspect the raw `gcode_state` string directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PrintStatus {
+    Idle,
+    Running,
+    Paused,
+    Finished,
+    Failed,
+    Unknown,
+}
+
+impl PrintStatus {
+    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`,
+    /// `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
+    pub fn from_gcode_state(state: &str) -> Self {
+        match state {
+            "IDLE" => PrintStatus::Idle,
+            "RUNNING" => PrintStatus::Running,
+            "PAUSE" => PrintStatus::Paused,
+            "FINISH" => PrintStatus::Finished,
+            "FAILED" => PrintStatus::Failed,
+            _ => PrintStatus::Unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PrintStatus;
+
+    #[test]
+    fn test_print_status_from_gcode_state() {
+        assert_eq!(PrintStatus::from_gcode_state("IDLE"), PrintStatus::Idle);
+        assert_eq!(
+            PrintStatus::from_gcode_state("RUNNING"),
+            PrintStatus::Running
+        );
+        assert_eq!(PrintStatus::from_gcode_state("PAUSE"), PrintStatus::Paused);
+        assert_eq!(
+            PrintStatus::from_gcode_state("FINISH"),
+            PrintStatus::Finished
+        );
+        assert_eq!(PrintStatus::from_gcode_state("FAILED"), PrintStatus::Failed);
+        assert_eq!(
+            PrintStatus::from_gcode_state("PREPARE"),
+            PrintStatus::Unknown
+        );
+        assert_eq!(PrintStatus::from_gcode_state(""), PrintStatus::Unknown);
+    }
+}

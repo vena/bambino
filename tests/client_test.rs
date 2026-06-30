@@ -8,7 +8,7 @@
 
 mod common;
 
-use bambino::client::{CalibrationOption, FanTarget, PrintSpeed, PrinterClient};
+use bambino::client::{CalibrationOption, FanTarget, PrintSpeed, PrintStatus, PrinterClient};
 use bambino::error::BambuError;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
@@ -1423,6 +1423,57 @@ async fn test_wait_for_homing_times_out_without_dip() {
         "expected timeout when no dip is ever observed, got {:?}",
         result
     );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_print_status_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4300,
+            br#"{"print":{"gcode_state":"RUNNING"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4301,
+            br#"{"print":{"gcode_state":"BOGUS_STATE"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    // No telemetry observed yet — cache must read as unknown-state, not a stale guess.
+    assert_eq!(client.print_status(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse gcode_state report");
+    assert_eq!(client.print_status(), Some(PrintStatus::Running));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second report");
+    assert_eq!(client.print_status(), Some(PrintStatus::Unknown));
 
     broker_task.await.expect("Broker task panicked");
 }
