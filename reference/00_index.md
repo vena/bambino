@@ -103,6 +103,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
     *   Physical control envelopes for lights, climate dampers, buzzers, and external tool mount telemetry
 *   **Section 4.4: Mechanical & Firmware Quirks**
     *   Axis Homing State Detection [REF-MOTO-HOME] — per-axis homed state via home_flag, firmware non-rejection at any tested magnitude, UI/slicer-only enforcement, mc_print_sub_stage completion signal
+    *   MQTT-Native Motion Commands on Newer Models (Unverified) [REF-MOTO-MQTTCTRL] — `back_to_center`/`xyz_ctrl` JSON commands gated by `fun` capability bits, sourced from BambuStudio, unverified on hardware
     *   No Soft-Limit Enforcement at Physical Travel End (P1S) — homed state doesn't imply safe travel range; motor grinds against physical stops with no firmware detection
     *   Z-axis homing crash hazards (bare G28 constraints vs bed-slinger coordinates) and hotend fan safety control overrides
 

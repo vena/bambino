@@ -331,6 +331,10 @@ Use `-v` for protocol-level debug logging.
 
 The firmware silently ignores the first `extrusion_cali_get` command after connecting. `PrinterClient::get_k_profiles()` handles this automatically by sending a throwaway priming request first. If you manage priming yourself, call `set_k_profile_primed(true)` to skip it.
 
+## Not yet implemented
+
+- **MQTT-native homing/jogging on newer models.** Some models advertise support for `back_to_center` (homing) and `xyz_ctrl` (jogging) as structured JSON commands instead of raw G-code, gated by a `fun` capability bitmask. This library always uses G-code. Sourced from BambuStudio, unverified on real hardware — see [REF-MOTO-MQTTCTRL] in `reference/04_toolhead_thermal_motion.md`.
+
 ## Acknowledgements
 
 Built on the reverse-engineering work of:
