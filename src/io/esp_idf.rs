@@ -4,10 +4,7 @@
 //! our transport-agnostic client traits under Espressif's Rust standard library.
 
 #[cfg(feature = "esp-idf")]
-use crate::io::{
-    AsyncIo, AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerProvider,
-    TlsConnector,
-};
+use crate::io::{AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerProvider};
 
 #[cfg(feature = "esp-idf")]
 use std::string::String;
@@ -155,9 +152,8 @@ impl embedded_io_async::ErrorType for EspTlsStream {
 #[cfg(feature = "esp-idf")]
 impl embedded_io_async::Read for EspTlsStream {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let ret = unsafe {
-            ::esp_idf_svc::sys::read(self.fd, buf.as_mut_ptr() as *mut _, buf.len() as u32)
-        };
+        let ret =
+            unsafe { ::esp_idf_svc::sys::read(self.fd, buf.as_mut_ptr() as *mut _, buf.len()) };
         if ret < 0 {
             Err(embedded_io_async::ErrorKind::Other)
         } else {
@@ -169,9 +165,8 @@ impl embedded_io_async::Read for EspTlsStream {
 #[cfg(feature = "esp-idf")]
 impl embedded_io_async::Write for EspTlsStream {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let ret = unsafe {
-            ::esp_idf_svc::sys::write(self.fd, buf.as_ptr() as *const _, buf.len() as u32)
-        };
+        let ret =
+            unsafe { ::esp_idf_svc::sys::write(self.fd, buf.as_ptr() as *const _, buf.len()) };
         if ret < 0 {
             Err(embedded_io_async::ErrorKind::Other)
         } else {
@@ -194,17 +189,17 @@ impl SecureConnect for EspIdfSecureConnector {
         let mut cfg: ::esp_idf_svc::sys::esp_tls_cfg = unsafe { core::mem::zeroed() };
 
         if let Some(ca) = &self.ca_cert {
-            cfg.cacert_buf = ca.as_ptr();
-            cfg.cacert_bytes = ca.len() as u32;
+            cfg.__bindgen_anon_1.cacert_buf = ca.as_ptr();
+            cfg.__bindgen_anon_2.cacert_bytes = ca.len() as u32;
         } else {
             cfg.skip_common_name = true;
         }
 
         if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
-            cfg.clientcert_buf = cert.as_ptr();
-            cfg.clientcert_bytes = cert.len() as u32;
-            cfg.clientkey_buf = key.as_ptr();
-            cfg.clientkey_bytes = key.len() as u32;
+            cfg.__bindgen_anon_3.clientcert_buf = cert.as_ptr();
+            cfg.__bindgen_anon_4.clientcert_bytes = cert.len() as u32;
+            cfg.__bindgen_anon_5.clientkey_buf = key.as_ptr();
+            cfg.__bindgen_anon_6.clientkey_bytes = key.len() as u32;
         }
 
         let tls = unsafe { ::esp_idf_svc::sys::esp_tls_init() };
