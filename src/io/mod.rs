@@ -7,6 +7,7 @@
 //! - [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/embedded-tls).
 //! - [`SecureConnect`] — Creates its own TCP+TLS connection (used by ESP-IDF, where TLS manages transport).
 //! - [`AsyncUdpSocket`] — UDP send/recv for SSDP discovery.
+//! - [`BindableUdpSocket`] — construct-and-bind a new UDP socket by address (std/tokio, ESP-IDF only).
 //! - [`TimerProvider`] — Async sleep and monotonic clock for platform-agnostic timeouts.
 //!
 //! Platform implementations live in the `tokio`, `esp_idf`, and `embassy` submodules
@@ -51,6 +52,26 @@ pub enum SocketError {
     Other(&'static str),
 }
 
+/// Maps standard library IO error kinds to the runtime-agnostic `SocketError` enum.
+///
+/// Shared by every platform backend that surfaces `std::io::Error` (tokio, ESP-IDF).
+/// `other_msg` fills `SocketError::Other` for kinds with no direct mapping — pass a
+/// platform-specific message so the catch-all error stays attributable.
+#[cfg(feature = "std")]
+pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> SocketError {
+    match err.kind() {
+        std::io::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
+        std::io::ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
+        std::io::ErrorKind::ConnectionReset => SocketError::ConnectionReset,
+        std::io::ErrorKind::NotConnected => SocketError::NotConnected,
+        std::io::ErrorKind::TimedOut => SocketError::TimedOut,
+        std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
+        std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
+        std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
+        _ => SocketError::Other(other_msg),
+    }
+}
+
 /// TLS protocol version negotiated during a handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsVersion {
@@ -67,17 +88,31 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> AsyncIo for T {}
 
 /// Asynchronous UDP Socket trait for unicast and multicast printer discovery.
 ///
-/// Interlaces with Port 2021 SSDP traffic defined in [REF-NET-DISC].
+/// Interlaces with Port 2021 SSDP traffic defined in [REF-NET-DISC]. Implemented by every
+/// platform on an already-existing socket. For constructing a *new* socket bound to an
+/// address string, see [`BindableUdpSocket`] — kept separate because Embassy's network
+/// stack cannot support it (see that trait's doc comment).
 #[allow(async_fn_in_trait)]
-pub trait AsyncUdpSocket: Sized {
-    /// Binds to the designated local address.
-    async fn bind(addr: &str) -> Result<Self, SocketError>;
-
+pub trait AsyncUdpSocket {
     /// Dispatches a raw datagram payload to a specific IPv4 target.
     async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError>;
 
     /// Listens for incoming datagrams, populating the buffer and returning the source string.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError>;
+}
+
+/// Dynamically constructs a new UDP socket bound to an address string.
+///
+/// Only implementable on platforms with OS-level dynamic socket creation (std/tokio,
+/// ESP-IDF's BSD sockets). Embassy-net sockets must be constructed from pre-allocated
+/// buffer slices supplied by the caller and bound via a typed `IpListenEndpoint` on an
+/// already-existing socket, not a string — so `EmbassyUdpSocket` does not implement this
+/// trait. Mirrors the existing `TlsConnector`/`SecureConnect` split, which draws the same
+/// boundary for TLS connection setup.
+#[allow(async_fn_in_trait)]
+pub trait BindableUdpSocket: AsyncUdpSocket + Sized {
+    /// Binds to the designated local address, constructing a new socket.
+    async fn bind(addr: &str) -> Result<Self, SocketError>;
 }
 
 /// Abstract TLS secure stream connector trait.

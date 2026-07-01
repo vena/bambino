@@ -4,7 +4,13 @@
 //! our transport-agnostic client traits under Espressif's Rust standard library.
 
 #[cfg(feature = "esp-idf")]
-use crate::io::{AsyncIo, AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector};
+use crate::io::{
+    AsyncIo, AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerProvider,
+    TlsConnector,
+};
+
+#[cfg(feature = "esp-idf")]
+use std::string::String;
 
 /// Async timer utilizing the ESP-IDF high-resolution timer service.
 ///
@@ -49,7 +55,7 @@ pub struct EspIdfUdpSocket {
 }
 
 #[cfg(feature = "esp-idf")]
-impl AsyncUdpSocket for EspIdfUdpSocket {
+impl BindableUdpSocket for EspIdfUdpSocket {
     async fn bind(addr: &str) -> Result<Self, SocketError> {
         let inner = std::net::UdpSocket::bind(addr).map_err(|e| to_esp_socket_error(e))?;
 
@@ -64,17 +70,17 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
             .map_err(|e| to_esp_socket_error(e))?;
         Ok(Self { inner })
     }
+}
 
+#[cfg(feature = "esp-idf")]
+impl AsyncUdpSocket for EspIdfUdpSocket {
     async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError> {
         self.inner
             .send_to(buf, target)
             .map_err(|e| to_esp_socket_error(e))
     }
 
-    async fn recv_from(
-        &self,
-        buf: &mut [u8],
-    ) -> Result<(usize, alloc::string::String), SocketError> {
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError> {
         match self.inner.recv_from(buf) {
             Ok((len, addr)) => Ok((len, addr.to_string())),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(SocketError::TimedOut),
@@ -86,17 +92,7 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
 /// Helper mapping standard Rust IO errors to our ESP-IDF socket errors.
 #[cfg(feature = "esp-idf")]
 fn to_esp_socket_error(err: std::io::Error) -> SocketError {
-    match err.kind() {
-        std::io::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
-        std::io::ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
-        std::io::ErrorKind::ConnectionReset => SocketError::ConnectionReset,
-        std::io::ErrorKind::NotConnected => SocketError::NotConnected,
-        std::io::ErrorKind::TimedOut => SocketError::TimedOut,
-        std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
-        std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
-        std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
-        _ => SocketError::Other("ESP-IDF platform BSD network error"),
-    }
+    crate::io::map_std_io_error(err, "ESP-IDF platform BSD network error")
 }
 
 /// Secure connector for ESP-IDF using the platform's native `EspTls` stack.

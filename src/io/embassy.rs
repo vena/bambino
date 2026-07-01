@@ -25,7 +25,12 @@ impl TimerProvider for EmbassyTimer {
 
 /// UDP Socket implementation designed for the Embassy network stack.
 ///
-/// Under Embassy, binding and state registration are coordinated via the stack's SocketSet pool.
+/// Under Embassy, binding and state registration are coordinated via the stack's SocketSet
+/// pool at boot time, so this type only implements [`AsyncUdpSocket`] (send/recv on an
+/// already-existing socket) — it deliberately does not implement `BindableUdpSocket`,
+/// since embassy-net's `UdpSocket::new()` requires pre-allocated buffer slices and its
+/// `bind()` takes a typed `IpListenEndpoint`, not an address string. Construct one with
+/// [`EmbassyUdpSocket::new()`] from an already-bound `embassy_net::udp::UdpSocket`.
 #[cfg(feature = "embassy")]
 pub struct EmbassyUdpSocket<'a> {
     inner: ::embassy_net::udp::UdpSocket<'a>,
@@ -41,14 +46,6 @@ impl<'a> EmbassyUdpSocket<'a> {
 
 #[cfg(feature = "embassy")]
 impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
-    async fn bind(_addr: &str) -> Result<Self, SocketError> {
-        // Under Embassy, IP bindings are pre-allocated during network task initialization.
-        // Direct string binding is bypassed on physical bare-metal hardware.
-        Err(SocketError::Other(
-            "Embassy socket sets must be pre-bound during hardware stack initialization",
-        ))
-    }
-
     async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError> {
         let endpoint = parse_endpoint(target).ok_or(SocketError::InvalidInput)?;
         // Embassy-net UDP socket utilizes standard slice transmission
@@ -157,21 +154,24 @@ impl Drop for BufferGuard {
 ///
 /// Dropping this struct releases the static TLS buffers for reuse by a subsequent connection.
 #[cfg(feature = "embassy")]
-pub struct GuardedTlsConnection<'a, RawStream: AsyncIo, CipherSuite: ::embedded_tls::TlsCipherSuite>
-{
+pub struct GuardedTlsConnection<
+    'a,
+    RawStream: AsyncIo,
+    CipherSuite: ::embedded_tls::TlsCipherSuite + 'static,
+> {
     connection: ::embedded_tls::TlsConnection<'a, RawStream, CipherSuite>,
     _guard: BufferGuard,
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::ErrorType
+impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::ErrorType
     for GuardedTlsConnection<'a, S, C>
 {
     type Error = <::embedded_tls::TlsConnection<'a, S, C> as embedded_io_async::ErrorType>::Error;
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::Read
+impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::Read
     for GuardedTlsConnection<'a, S, C>
 {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
@@ -180,7 +180,7 @@ impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::Read
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite> embedded_io_async::Write
+impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::Write
     for GuardedTlsConnection<'a, S, C>
 {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {

@@ -11,9 +11,12 @@ cargo test                                           # Run all tests
 cargo test --lib                                     # Library tests only
 cargo test test_name                                 # Single test by name
 cargo build --no-default-features --features alloc --lib  # no_std compatibility check (must pass)
+cargo check --no-default-features --features embassy --lib  # embassy target check (must pass)
 ```
 
 Every change must compile under both the default `tokio` feature set and the `no_std`+`alloc` library target. Run `cargo clippy` as part of the verification gate. The `--lib` flag scopes the no_std check to library code only — the CLI is host-only. Use `#[cfg(not(feature = "std"))]` imports from `alloc` (String, Vec, format!) for no_std paths.
+
+The `embassy` feature is not implied by `alloc` alone (see `Cargo.toml`) — `io/embassy.rs` and any code gated on `#[cfg(feature = "embassy")]` are *not* exercised by the plain no_std/alloc check above, so both commands are required. There is currently no way to verify the `esp-idf` feature target in a normal dev environment or CI without the real Espressif toolchain (`esp-idf-sys`'s build script requires it) — treat changes to `src/io/esp_idf.rs` as unverified by the build gate until that toolchain is available somewhere in the loop.
 
 **CLI-only dependencies live behind the `cli` feature, not `tokio`.** `crossterm`, `env_logger`, and any future CLI-exclusive dep (e.g. `clap`) must be gated by `cli = ["dep:...", "tokio"]`, never added to the `tokio` feature directly — see the feature comments in `Cargo.toml` for why. `[[bin]] required-features = ["cli"]` in Cargo.toml enforces this at the target level — every file under `src/bin/bambino-cli/` starts with `#![cfg(feature = "cli")]`.
 
@@ -44,6 +47,7 @@ Every change must compile under both the default `tokio` feature set and the `no
 - **`AmsUnit.info`** is `Option<String>` — wire sends hex-encoded bitmask (e.g. `"11002103"`). Parse with `u64::from_str_radix(s, 16)`. Bits 0–3 = AMS type, bits 4–7 = dry_status, bits 8–11 = extruder assignment (0=right, 1=left, 0xE=uninitialized), bits 22–25 = dry_sub_status.
 - **`BedTelemetry`** (`device.bed`) uses the same composite packing as `chamber_temper` — `bed.info.temp` values > 500 encode `(target << 16) | actual`. Present on H2/P2/X2 models; old-gen models use `bed_temper` / `bed_target_temper` instead.
 - **`vir_slot`** is separate from `vt_tray` — IDEX models send `vir_slot: Vec<VirtualTray>` (one per extruder), while single-nozzle models send `vt_tray: VirtualTray`. Both use the same `VirtualTray` schema.
+- **`AsyncUdpSocket` vs `BindableUdpSocket`** (`src/io/mod.rs`): `AsyncUdpSocket` is `send_to`/`recv_from` on an already-existing socket — implemented by every platform, including Embassy. `BindableUdpSocket: AsyncUdpSocket` adds `bind(addr: &str) -> Result<Self, SocketError>` (construct-and-bind-in-one-step) — only implementable where the OS supports dynamic socket creation (tokio, ESP-IDF). `EmbassyUdpSocket` intentionally does **not** implement `BindableUdpSocket`: embassy-net's `UdpSocket::new()` requires pre-allocated buffer slices and its `bind()` takes a typed `IpListenEndpoint`, not a string, so there is no honest way to implement it. Mirrors the existing `TlsConnector`/`SecureConnect` split. Any function that needs to auto-bind its own sockets (like `discover_devices`) must bound its socket type parameter on `BindableUdpSocket`, not `AsyncUdpSocket` — this makes "call it with an Embassy socket type" a compile error instead of a runtime one.
 
 ## Key Conventions
 

@@ -6,7 +6,8 @@
 
 use crate::ftps::FtpDataStreamFactory;
 use crate::io::{
-    AsyncUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector, TlsVersion, TokioIo,
+    AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector,
+    TlsVersion, TokioIo,
 };
 
 pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
@@ -56,7 +57,7 @@ pub struct TokioUdpSocket {
     inner: ::tokio::net::UdpSocket,
 }
 
-impl AsyncUdpSocket for TokioUdpSocket {
+impl BindableUdpSocket for TokioUdpSocket {
     async fn bind(addr: &str) -> Result<Self, SocketError> {
         // We bind a standard library `std::net::UdpSocket` first and configure standard properties
         // before converting it cleanly into an asynchronous Tokio UdpSocket.
@@ -84,7 +85,9 @@ impl AsyncUdpSocket for TokioUdpSocket {
 
         Ok(Self { inner })
     }
+}
 
+impl AsyncUdpSocket for TokioUdpSocket {
     async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError> {
         self.inner
             .send_to(buf, target)
@@ -115,17 +118,7 @@ impl AsyncUdpSocket for TokioUdpSocket {
 
 /// Helper mapping standard standard Rust IO errors to our runtime-agnostic SocketError enum.
 pub fn to_socket_error(err: std::io::Error) -> SocketError {
-    match err.kind() {
-        std::io::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
-        std::io::ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
-        std::io::ErrorKind::ConnectionReset => SocketError::ConnectionReset,
-        std::io::ErrorKind::NotConnected => SocketError::NotConnected,
-        std::io::ErrorKind::TimedOut => SocketError::TimedOut,
-        std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
-        std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
-        std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
-        _ => SocketError::Other("Native OS platform IO error occurred"),
-    }
+    crate::io::map_std_io_error(err, "Native OS platform IO error occurred")
 }
 
 /// Custom certificate verifier that bypasses standard CA chain authority validation.

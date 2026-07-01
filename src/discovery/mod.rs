@@ -13,7 +13,7 @@ pub mod parser;
 use crate::error::BambuError;
 use crate::io::AsyncUdpSocket;
 #[cfg(feature = "std")]
-use crate::io::TimerProvider;
+use crate::io::{BindableUdpSocket, TimerProvider};
 pub use parser::{SsdpDevice, parse_ssdp_payload};
 
 #[cfg(not(feature = "std"))]
@@ -163,7 +163,7 @@ pub async fn discover_devices<U, T>(
     timer: &T,
 ) -> Result<Vec<SsdpDevice>, BambuError>
 where
-    U: AsyncUdpSocket,
+    U: BindableUdpSocket,
     T: TimerProvider,
 {
     // Bind sockets on both SSDP ports. Using the specific port is required because
@@ -240,7 +240,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::io::{AsyncUdpSocket, SocketError};
+    use crate::io::{AsyncUdpSocket, BindableUdpSocket, SocketError};
     use crate::models::BambuModel;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -251,14 +251,16 @@ mod tests {
         recv_counter: AtomicUsize,
     }
 
-    impl AsyncUdpSocket for MockDiscoverySocket {
+    impl BindableUdpSocket for MockDiscoverySocket {
         async fn bind(_addr: &str) -> Result<Self, SocketError> {
             Ok(Self {
                 sent_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
                 recv_counter: AtomicUsize::new(0),
             })
         }
+    }
 
+    impl AsyncUdpSocket for MockDiscoverySocket {
         async fn send_to(&self, buf: &[u8], _target: &str) -> Result<usize, SocketError> {
             self.sent_payloads.lock().unwrap().push(buf.to_vec());
             Ok(buf.len())
@@ -307,10 +309,13 @@ mod tests {
 
     struct FailSocket;
 
-    impl AsyncUdpSocket for FailSocket {
+    impl BindableUdpSocket for FailSocket {
         async fn bind(_addr: &str) -> Result<Self, SocketError> {
             Ok(Self)
         }
+    }
+
+    impl AsyncUdpSocket for FailSocket {
         async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
             Err(SocketError::ConnectionRefused)
         }
@@ -336,12 +341,15 @@ mod tests {
             first_call: AtomicBool,
         }
 
-        impl AsyncUdpSocket for HalfFailSocket {
+        impl BindableUdpSocket for HalfFailSocket {
             async fn bind(_addr: &str) -> Result<Self, SocketError> {
                 Ok(Self {
                     first_call: AtomicBool::new(true),
                 })
             }
+        }
+
+        impl AsyncUdpSocket for HalfFailSocket {
             async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
                 if self.first_call.swap(false, Ordering::SeqCst) {
                     Err(SocketError::ConnectionRefused)
@@ -412,10 +420,13 @@ mod tests {
 
         struct QuickExitSocket;
 
-        impl AsyncUdpSocket for QuickExitSocket {
+        impl BindableUdpSocket for QuickExitSocket {
             async fn bind(_addr: &str) -> Result<Self, SocketError> {
                 Ok(Self)
             }
+        }
+
+        impl AsyncUdpSocket for QuickExitSocket {
             async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
                 Ok(100)
             }
