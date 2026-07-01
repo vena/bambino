@@ -7,7 +7,7 @@
 use core::marker::PhantomData;
 
 use crate::ftps::FtpDataStreamFactory;
-use crate::io::{AsyncIo, SecureConnect, SocketError, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, SecureConnect, SocketError, TimerError, TimerProvider, TlsConnector};
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
@@ -65,7 +65,9 @@ impl FtpDataStreamFactory<DummyRawIo> for DummyFactory {
 pub struct DummyTimer;
 
 impl TimerProvider for DummyTimer {
-    async fn sleep(&self, _duration: core::time::Duration) {}
+    async fn sleep(&self, _duration: core::time::Duration) -> Result<(), TimerError> {
+        Ok(())
+    }
     fn now_millis(&self) -> u64 {
         0
     }

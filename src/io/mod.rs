@@ -72,6 +72,17 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
     }
 }
 
+/// Unified timer/sleep errors, agnostic of runtime implementations.
+///
+/// Mirrors [`SocketError`]'s shape. Tokio and Embassy sleeps are infallible, so only
+/// ESP-IDF's `EspAsyncTimer` (which can fail on FreeRTOS timer/task resource exhaustion)
+/// ever constructs this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimerError {
+    /// Catch-all for platform-specific timer scheduling failures.
+    Other(&'static str),
+}
+
 /// TLS protocol version negotiated during a handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsVersion {
@@ -148,7 +159,11 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 #[allow(async_fn_in_trait)]
 pub trait TimerProvider {
     /// Suspends execution of the calling task for the specified duration.
-    async fn sleep(&self, duration: core::time::Duration);
+    ///
+    /// Returns an error on platforms where sleep scheduling can genuinely fail
+    /// (e.g. ESP-IDF's FreeRTOS timer/task resources). Infallible platforms
+    /// (tokio, embassy) always return `Ok(())`.
+    async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError>;
 
     /// Returns the current monotonic clock value in milliseconds.
     ///

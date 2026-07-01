@@ -191,7 +191,7 @@ where
         for (engine, _) in &engines {
             engine.broadcast_search().await?;
         }
-        timer.sleep(core::time::Duration::from_millis(50)).await;
+        timer.sleep(core::time::Duration::from_millis(50)).await?;
     }
 
     let mut devices: Vec<SsdpDevice> = Vec::new();
@@ -386,7 +386,12 @@ mod tests {
     }
 
     impl TimerProvider for MockTimer {
-        async fn sleep(&self, _duration: core::time::Duration) {}
+        async fn sleep(
+            &self,
+            _duration: core::time::Duration,
+        ) -> Result<(), crate::io::TimerError> {
+            Ok(())
+        }
 
         fn now_millis(&self) -> u64 {
             *self.clock.lock().unwrap()
@@ -399,7 +404,10 @@ mod tests {
 
         let timer = TokioTimer::new();
         let t0 = timer.now_millis();
-        timer.sleep(core::time::Duration::from_millis(10)).await;
+        timer
+            .sleep(core::time::Duration::from_millis(10))
+            .await
+            .unwrap();
         let t1 = timer.now_millis();
         assert!(t1 > t0, "now_millis must advance with real time");
     }

@@ -4,7 +4,9 @@
 //! our transport-agnostic client traits under Espressif's Rust standard library.
 
 #[cfg(feature = "esp-idf")]
-use crate::io::{AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerProvider};
+use crate::io::{
+    AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerError, TimerProvider,
+};
 
 #[cfg(feature = "esp-idf")]
 use std::string::String;
@@ -31,12 +33,12 @@ impl EspIdfTimer {
 
 #[cfg(feature = "esp-idf")]
 impl TimerProvider for EspIdfTimer {
-    async fn sleep(&self, duration: core::time::Duration) {
+    async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
         self.timer
             .borrow_mut()
             .after(duration)
             .await
-            .expect("ESP-IDF hardware timer scheduling failed");
+            .map_err(|_| TimerError::Other("ESP-IDF hardware timer scheduling failed"))
     }
 
     fn now_millis(&self) -> u64 {

@@ -28,6 +28,11 @@ pub enum BambuError {
     #[cfg_attr(feature = "std", error("Network transport failure: {0:?}"))]
     NetworkError(crate::io::SocketError),
 
+    /// Encapsulates platform timer/sleep scheduling failures (e.g. ESP-IDF FreeRTOS
+    /// timer resource exhaustion).
+    #[cfg_attr(feature = "std", error("Timer scheduling failure: {0:?}"))]
+    TimerFailure(crate::io::TimerError),
+
     /// Emitted when local MQTTS, FTPS, or RTSPS TLS negotiations fail.
     /// This frequently occurs during self-signed certificate verification or SNI mismatches.
     #[cfg_attr(feature = "std", error("TLS secure channel handshake failed"))]
@@ -84,11 +89,18 @@ impl From<crate::io::SocketError> for BambuError {
     }
 }
 
+impl From<crate::io::TimerError> for BambuError {
+    fn from(e: crate::io::TimerError) -> Self {
+        BambuError::TimerFailure(e)
+    }
+}
+
 #[cfg(not(feature = "std"))]
 impl core::fmt::Display for BambuError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             BambuError::NetworkError(e) => write!(f, "Network transport failure: {:?}", e),
+            BambuError::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),
             BambuError::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
             BambuError::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
             BambuError::SerializationError => {
@@ -119,6 +131,10 @@ mod tests {
             (
                 BambuError::NetworkError(crate::io::SocketError::TimedOut),
                 "Network transport failure: TimedOut",
+            ),
+            (
+                BambuError::TimerFailure(crate::io::TimerError::Other("scheduling failed")),
+                "Timer scheduling failure: Other(\"scheduling failed\")",
             ),
             (
                 BambuError::TlsHandshakeFailed,
@@ -164,6 +180,16 @@ mod tests {
         assert!(matches!(
             bambu_err,
             BambuError::NetworkError(crate::io::SocketError::ConnectionReset)
+        ));
+    }
+
+    #[test]
+    fn test_from_timer_error() {
+        let timer_err = crate::io::TimerError::Other("timer failed");
+        let bambu_err: BambuError = timer_err.into();
+        assert!(matches!(
+            bambu_err,
+            BambuError::TimerFailure(crate::io::TimerError::Other("timer failed"))
         ));
     }
 

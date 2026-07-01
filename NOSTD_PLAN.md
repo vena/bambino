@@ -21,7 +21,7 @@ raw_data_socket)` for the data channel. Keep the parameter as-is.
 
 ---
 
-## Phase 0 — `TimerProvider::sleep` must be fallible
+## Phase 0 — `TimerProvider::sleep` must be fallible [COMPLETE — 2026-07-01]
 
 **Problem.** `TimerProvider::sleep()` returns `()`. On tokio this is honest — `tokio::time::sleep`
 cannot fail. On ESP-IDF it is not: `esp-idf-svc`'s `EspAsyncTimer::after()` returns
@@ -52,6 +52,34 @@ should follow the same convention instead of being the one place that panics.
 **Ordering:** fully independent. Do this first — it's small, low-risk, and touches a trait every
 other phase's platform code also uses, so landing it early avoids rebasing later phases on top of
 a signature change.
+
+**Done (2026-07-01):** all 5 tasks landed as specified — `TimerError` (single `Other(&'static str)`
+variant) added to `src/io/mod.rs`; `TimerProvider::sleep` now returns `Result<(), TimerError>`;
+`TokioTimer`/`EmbassyTimer`/`DummyTimer` (`client/dummy.rs`) wrap in `Ok(())`; `EspIdfTimer::sleep`
+maps the real `EspError` via `.map_err(...)` instead of `.expect()`-panicking. Also added
+`BambuError::TimerFailure(TimerError)` + `From<TimerError> for BambuError` (mirroring the existing
+`SocketError`/`NetworkError` pattern) so call sites can just `?` — this wasn't explicitly listed as
+a task but was required to make task 5 work, since `discover_devices` (`discovery.rs`) returns
+`Result<_, BambuError>`, not `Result<_, TimerError>`. Both `.sleep(` call sites (`discovery.rs`'s
+active-scan loop and a test) updated; `MockTimer` (discovery test module) updated to match the new
+signature. Verified: `cargo build`, `cargo build --no-default-features --features alloc --lib`,
+`cargo check --no-default-features --features embassy --lib`, `cargo test` (all 244 lib tests +
+integration tests pass), `cargo clippy` (no new warnings — pre-existing warnings in `ftps_test.rs`/
+`client_test.rs`/`io/embassy.rs`'s `connect()` are unrelated to this change), and
+`scripts/check-esp-idf.sh esp32c6` (Docker) — CONFIRMED passing, 2026-07-01.
+
+**Bonus fix, discovered while verifying:** `scripts/check-esp-idf.sh`'s caching claim in this file's
+intro ("only the first run per chip pays the full cost") had never actually been exercised —
+the named volumes (`bambino-esp-idf-*`) didn't exist on this machine before this session, so this
+was the true first-ever run of the caching path, not just the first run for this chip. It failed
+with `Permission denied` creating cargo registry cache dirs: Docker auto-creates named volumes
+root-owned on first use, but the image's build user is non-root (`esp`, uid 1000), so a brand-new
+volume was unwritable. Fixed by adding a one-time `--user root` prep `docker run` that `chown -R
+esp:esp`s all four volume mount points before the real build runs (idempotent — no-op on
+already-owned volumes). Re-ran clean after the fix (~1m22s once crates were fetched — this was the
+actual full cold build-std run the intro's "~5.5 min cold" estimate describes, since the volumes
+were empty). If you hit this same `Permission denied` on a *different* machine, it's this same bug;
+the fix is already in the script, just re-run.
 
 ---
 

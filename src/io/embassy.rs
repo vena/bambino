@@ -5,7 +5,7 @@
 //! stack and `embedded-tls`.
 
 #[cfg(feature = "embassy")]
-use crate::io::{AsyncIo, AsyncUdpSocket, SocketError, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, AsyncUdpSocket, SocketError, TimerError, TimerProvider, TlsConnector};
 
 /// Timer implementation designed for the hardware microsecond clock in Embassy.
 #[cfg(feature = "embassy")]
@@ -13,9 +13,10 @@ pub struct EmbassyTimer;
 
 #[cfg(feature = "embassy")]
 impl TimerProvider for EmbassyTimer {
-    async fn sleep(&self, duration: core::time::Duration) {
+    async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
         let micros = duration.as_micros() as u64;
         ::embassy_time::Timer::after(::embassy_time::Duration::from_micros(micros)).await;
+        Ok(())
     }
 
     fn now_millis(&self) -> u64 {

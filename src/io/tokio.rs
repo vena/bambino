@@ -6,8 +6,8 @@
 
 use crate::ftps::FtpDataStreamFactory;
 use crate::io::{
-    AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerProvider, TlsConnector,
-    TlsVersion, TokioIo,
+    AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerError, TimerProvider,
+    TlsConnector, TlsVersion, TokioIo,
 };
 
 pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
@@ -43,8 +43,9 @@ impl Default for TokioTimer {
 }
 
 impl TimerProvider for TokioTimer {
-    async fn sleep(&self, duration: core::time::Duration) {
+    async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
         ::tokio::time::sleep(duration).await;
+        Ok(())
     }
 
     fn now_millis(&self) -> u64 {

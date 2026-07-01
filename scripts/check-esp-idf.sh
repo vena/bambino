@@ -50,6 +50,18 @@ CARGO_GIT_VOLUME="bambino-esp-idf-cargo-git"
 RUSTUP_VOLUME="bambino-esp-idf-rustup"
 TARGET_VOLUME="bambino-esp-idf-target-${CHIP}"
 
+# Docker auto-creates named volumes as root-owned on first use, but the image runs
+# as non-root `esp` (uid 1000) — so a brand-new volume is unwritable by the build
+# until it's chowned once. Safe to run every time: a no-op on already-owned volumes.
+docker run --rm \
+  -v "${CARGO_REGISTRY_VOLUME}:/home/esp/.cargo/registry" \
+  -v "${CARGO_GIT_VOLUME}:/home/esp/.cargo/git" \
+  -v "${RUSTUP_VOLUME}:/home/esp/.rustup" \
+  -v "${TARGET_VOLUME}:/workspace/target" \
+  --user root \
+  "${IMAGE}" \
+  chown -R esp:esp /home/esp/.cargo /home/esp/.rustup /workspace/target
+
 echo "== cargo check --target ${TARGET} --no-default-features --features esp-idf --lib (chip=${CHIP}) =="
 docker run --rm \
   -v "$(pwd):/workspace" \
