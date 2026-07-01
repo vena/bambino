@@ -47,20 +47,6 @@ const M_SEARCH_QUERY_1990: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
                                      MX: 3\r\n\
                                      ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
 
-/// Detects the active physical interface IP used to route external traffic.
-///
-/// **Why this is critical on macOS (and uses local multicast connect):**
-/// macOS routing tables prioritize loopback (`lo0`) and virtual bridge interfaces (such as
-/// Docker, VPN, or WSL networks) for wildcard (`0.0.0.0`) multicast requests. Connecting a dummy
-/// socket to the standard multicast address forces the host OS to select and return the active
-/// physical adapter IP without transmitting a single byte on the wire.
-#[cfg(feature = "std")]
-fn get_local_routing_ip() -> Option<std::net::IpAddr> {
-    let dummy = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    dummy.connect("239.255.255.250:2021").ok()?;
-    Some(dummy.local_addr().ok()?.ip())
-}
-
 /// Asynchronous Discovery Engine providing search orchestration and passive monitoring.
 pub struct DiscoveryEngine<U: AsyncUdpSocket> {
     socket: U,
@@ -184,11 +170,6 @@ where
     // printers send NOTIFY advertisements to 239.255.255.250:<port>, and the OS only
     // delivers multicast packets when the socket's bound port matches the destination port.
     let ports: &[u16] = &[SSDP_PORT, SSDP_PORT_ALT];
-
-    #[cfg(feature = "std")]
-    if let Some(local_ip) = get_local_routing_ip() {
-        log::debug!("Detected active routing interface IP: {}", local_ip);
-    }
 
     let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
     for &port in ports {
