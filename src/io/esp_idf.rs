@@ -6,6 +6,7 @@
 #[cfg(feature = "esp-idf")]
 use crate::io::{
     AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerError, TimerProvider,
+    TlsVersion,
 };
 
 #[cfg(feature = "esp-idf")]
@@ -272,5 +273,45 @@ impl SecureConnect for EspIdfSecureConnector {
         }
 
         Ok(EspTlsStream { tls, timer })
+    }
+
+    /// Reads the negotiated TLS version via `esp_tls_get_ssl_context()` +
+    /// mbedTLS's `mbedtls_ssl_get_version()` — both confirmed present in
+    /// `esp-idf-svc` 0.52.1's bindgen output (`esp_tls_get_ssl_context` is a public,
+    /// stable ESP-TLS API already used the same way by `esp-idf-svc` itself, in
+    /// `EspTls`'s internal ALPN accessor — this isn't new unsafe surface, it's the
+    /// same accessor pattern applied to a different mbedTLS query).
+    ///
+    /// **Assumes the default mbedTLS backend** (`CONFIG_ESP_TLS_USING_MBEDTLS=y`,
+    /// ESP-IDF's default — the rest of this file makes the same assumption
+    /// implicitly, e.g. `build_config`'s use of `X509::der`). A wolfSSL-configured
+    /// build (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) would need a different accessor and
+    /// a compile-time way to detect which backend is active; this crate has no
+    /// `build.rs` forwarding `esp_idf_esp_tls_using_wolfssl`-style cfgs the way
+    /// `esp-idf-svc`'s own build script does for itself, so that detection isn't
+    /// possible here today — out of scope until one is added.
+    fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
+        let ssl_ctx =
+            unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(stream.tls.context_handle()) }
+                .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
+
+        if ssl_ctx.is_null() {
+            return None;
+        }
+
+        let version_ptr = unsafe { ::esp_idf_svc::sys::mbedtls_ssl_get_version(ssl_ctx) };
+        if version_ptr.is_null() {
+            return None;
+        }
+
+        let version_str = unsafe { core::ffi::CStr::from_ptr(version_ptr) }
+            .to_str()
+            .ok()?;
+
+        match version_str {
+            "TLSv1.2" => Some(TlsVersion::Tls12),
+            "TLSv1.3" => Some(TlsVersion::Tls13),
+            _ => None,
+        }
     }
 }

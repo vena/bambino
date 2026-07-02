@@ -329,6 +329,10 @@ impl SecureConnect for TokioSecureConnector {
             .connect(host, port, TokioIo(tcp_stream))
             .await
     }
+
+    fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
+        self.tls_connector.negotiated_version(stream)
+    }
 }
 
 /// Passive data connection factory for the Tokio runtime.

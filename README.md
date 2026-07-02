@@ -246,6 +246,8 @@ let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config))
 
 Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — use `model.quirks().enforce_ftps_tls_1_2()` to query this. If a misconfigured `TlsConnector` negotiates TLS 1.3 on a model that requires 1.2, `BambuFtpsClient::connect()` will return a `ProtocolViolation` error immediately.
 
+This guarantee is platform-general, not tokio-only: `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfSecureConnector` all implement `negotiated_version` for real (see the "ESP-IDF TLS timeouts" caveat below for the one narrow case ESP-IDF can't cover). `EmbassyTlsConnector` always reports TLS 1.3 — `embedded-tls` 0.19 is a TLS 1.3-only client, so a P2S/X2D connection over Embassy is unconditionally rejected rather than silently downgraded to "unchecked."
+
 ## Platform targets
 
 The default feature set (`tokio`) targets desktop/server. For embedded, swap the feature flag:
@@ -278,6 +280,8 @@ let connector: EmbassyTlsConnector<'_, Aes128GcmSha256, _> =
 A second concurrent connection (e.g. FTPS's data channel) needs its own connector with its own buffer pair — construct another `EmbassyTlsConnector` rather than reusing this one; calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection.
 
 **ESP-IDF TLS timeouts:** `EspIdfSecureConnector` runs the TLS handshake and all reads/writes with the underlying socket in non-blocking mode, so a `TimerProvider`-based timeout wrapped around ESP-IDF network I/O (e.g. `poll_until`) can now actually preempt a stuck handshake or read/write — this previously could not happen, since the handshake and I/O were blocking FFI calls a timeout has no way to interrupt. The mechanism is a fixed-interval poll (retry every 20ms via `EspIdfTimer::sleep` on `ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`/`EWOULDBLOCK`), not true readiness notification — `esp-idf-svc`/`esp-idf-hal` expose no async socket-readiness primitive for an arbitrary fd today. Real wake-on-ready is possible via `esp_idf_svc::tls::EspAsyncTls` plus the `async-io` crate and `MountedEventfs`, but that requires a new dependency and real app-side setup (a correctly-sized eventfd mount, a dedicated thread with a bumped stack, and working around an ESP-IDF main-task/async-io-thread priority inversion) — not something this crate can hide, and not necessary to fix the timeout-preemption problem, so it's left as a possible future upgrade rather than done now.
+
+**ESP-IDF TLS version query:** `EspIdfSecureConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. This assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — a wolfSSL-configured build (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) isn't supported today, since this crate has no `build.rs` forwarding the `esp_idf_esp_tls_using_wolfssl`-style cfg flags needed to detect the backend at compile time the way `esp-idf-svc` does for itself.
 
 ## bambino-cli
 

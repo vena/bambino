@@ -447,7 +447,75 @@ later) affects how Phase 5's ESP-IDF leg is designed — do this phase before Ph
 
 ---
 
-## Phase 4 — Make the TLS-version safety guarantee platform-general
+## Phase 4 — Make the TLS-version safety guarantee platform-general [COMPLETE — 2026-07-01]
+
+**Done:** all 4 tasks landed as specified.
+
+- Added `SecureConnect::negotiated_version` (`src/io/mod.rs`), mirroring `TlsConnector`'s
+  method exactly (default `None`, same doc-comment shape). Only real implementors
+  (`DummySecureConnect`, `PreConnected`, `EspIdfSecureConnector`, `TokioSecureConnector`)
+  are affected; the first two get the default `None`.
+- **Bonus fix, discovered while landing task 1:** `TokioSecureConnector` (the MQTT-path
+  connector, `io/tokio.rs`) wraps a `TokioTlsConnector` internally, which already had a
+  real `negotiated_version` impl since before this phase — but `TokioSecureConnector`
+  itself never forwarded it, so any future caller going through `SecureConnect` on tokio
+  would have silently gotten `None` despite the real answer being one call away. Wired
+  `TokioSecureConnector::negotiated_version` to delegate to
+  `self.tls_connector.negotiated_version(stream)`. Not explicitly listed as a task, but
+  free and closes the same capability gap task 1 was about.
+- `EmbassyTlsConnector::negotiated_version` (task 2) returns `Some(TlsVersion::Tls13)`
+  unconditionally — not a runtime query. Verified against `embedded-tls` 0.19's docs
+  (docs.rs, not assumed from memory): it is a **TLS 1.3-only** client with no TLS 1.2
+  handshake support and no version-query method at all (there's only ever one possible
+  answer, so it doesn't expose one). Practical effect: a model with
+  `model.quirks().enforce_ftps_tls_1_2()` true (P2S, X2D) is now correctly rejected with
+  `ProtocolViolation` on Embassy instead of silently connecting unchecked — the
+  guarantee wasn't just unimplemented before, it's genuinely incompatible with that
+  connector, and now says so.
+- `EspIdfSecureConnector::negotiated_version` (task 3) resolved the "not yet inspected"
+  gap from Phase 3's spike: `EspTls::context_handle()` → `*mut sys::esp_tls` →
+  `esp_tls_get_ssl_context()` (confirmed public, stable ESP-TLS API — `esp-idf-svc`
+  0.52.1 already calls it the same way internally, in `EspTls`'s ALPN accessor, so this
+  isn't new unsafe surface) → cast to `*mut sys::mbedtls_ssl_context` → mbedTLS's
+  `mbedtls_ssl_get_version()`, which returns a `*const c_char` string parsed against
+  `"TLSv1.2"`/`"TLSv1.3"` (any other value, including future/unknown mbedTLS strings,
+  maps to `None` — best-effort, not a hard failure). Confirmed by spiking inside
+  `scripts/check-esp-idf.sh`'s Docker image against the actual cached bindgen output
+  (`target/riscv32imac-esp-espidf/debug/build/esp-idf-sys-*/out/bindings.rs`) rather than
+  guessing from headers — the public `esp_tls` struct is fully opaque
+  (`_unused: [u8; 0]`), so `esp_tls_get_ssl_context()` is the only sanctioned way in;
+  there is no direct field path from `*mut esp_tls` to the ssl context.
+  **Scope decision, not previously flagged:** this assumes the default mbedTLS backend
+  (`CONFIG_ESP_TLS_USING_MBEDTLS=y`). A wolfSSL-configured build
+  (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) can't be detected at compile time today — doing so
+  would need this crate to gain its own `build.rs` that forwards
+  `esp_idf_esp_tls_using_wolfssl`-style cfgs the way `esp-idf-svc`'s own build script
+  does for itself (`bambino` has no `build.rs` at all currently). Documented in code and
+  the README rather than blocked on; the rest of `io/esp_idf.rs` already makes the same
+  mbedTLS-default assumption implicitly (e.g. `build_config`'s `X509::der` usage), so
+  this isn't a new category of limitation.
+- README (task 4): the TLS-1.2-enforcement paragraph now states the guarantee is
+  platform-general and names which connector does what (`TokioTlsConnector` real query,
+  `EmbassyTlsConnector` constant-TLS-1.3, `EspIdfSecureConnector` real mbedTLS query);
+  added an "ESP-IDF TLS version query" subsection (mirroring Phase 2/3's per-platform
+  subsections) documenting the wolfSSL gap honestly instead of leaving it unstated.
+
+**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
+`cargo check --no-default-features --features embassy --lib` (all three force-recompiled
+via `cargo clean -p bambino` between runs, per Phase 3's stale-cache warning), `cargo
+test` (all 36 lib + 13 FTPS integration + 1 MQTT integration + 8 doctests pass — including
+the existing `test_ftps_tls13_rejected_for_p2s`/`_x2d` tests, unaffected since they use
+`VersionReportingTlsConnector`, not a real platform connector), `cargo clippy
+--all-targets` (only the two pre-existing warnings noted since Phase 0), `cargo clippy
+--no-default-features --features embassy --lib` (only the one pre-existing `rng` RefCell
+warning noted in Phase 2), and `scripts/check-esp-idf.sh esp32c6` (Docker, clean compile)
+plus `cargo clippy` inside the same Docker image against `--no-default-features --features
+esp-idf --lib` (only the four pre-existing warnings Phase 3 already confirmed predate its
+changes — none new from this phase's `negotiated_version` addition).
+
+---
+
+**Original phase text below, for context on the problem and the options considered.**
 
 **Problem.** The README claims: if a misconfigured `TlsConnector` negotiates TLS 1.3 on a model
 that requires 1.2 (P2S, X2D), `BambuFtpsClient::connect()` returns `ProtocolViolation`

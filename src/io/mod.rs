@@ -185,6 +185,18 @@ pub trait SecureConnect {
 
     /// Establishes a new secure connection to the specified host and port.
     async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError>;
+
+    /// Returns the TLS protocol version negotiated on the given stream.
+    ///
+    /// Mirrors [`TlsConnector::negotiated_version`] so callers built on `SecureConnect`
+    /// have the same capability to enforce a minimum TLS version (e.g. the TLS 1.2
+    /// requirement `BambuFtpsClient::connect()` enforces on P2S/X2D via `TlsConnector`)
+    /// once a `SecureConnect`-based caller needs it. Platforms that cannot inspect the
+    /// negotiated version return `None`, causing such a check to be skipped
+    /// (best-effort) rather than failing to compile against this trait at all.
+    fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        None
+    }
 }
 
 /// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation

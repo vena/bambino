@@ -5,7 +5,9 @@
 //! stack and `embedded-tls`.
 
 #[cfg(feature = "embassy")]
-use crate::io::{AsyncIo, AsyncUdpSocket, SocketError, TimerError, TimerProvider, TlsConnector};
+use crate::io::{
+    AsyncIo, AsyncUdpSocket, SocketError, TimerError, TimerProvider, TlsConnector, TlsVersion,
+};
 
 /// Timer implementation designed for the hardware microsecond clock in Embassy.
 #[cfg(feature = "embassy")]
@@ -224,5 +226,16 @@ where
             .map_err(|_| SocketError::ConnectionAborted)?;
 
         Ok(EmbassyTlsStream { connection })
+    }
+
+    /// `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it
+    /// has no TLS 1.2 handshake support and exposes no version-query method, since
+    /// there is only ever one possible answer). This is therefore a constant, not a
+    /// runtime query: any successful `connect()` on this connector negotiated TLS 1.3.
+    /// A model whose `model.quirks().enforce_ftps_tls_1_2()` is true (P2S, X2D) is
+    /// consequently incompatible with `EmbassyTlsConnector` — `BambuFtpsClient::connect()`
+    /// will correctly reject it with `ProtocolViolation` rather than silently proceeding.
+    fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        Some(TlsVersion::Tls13)
     }
 }
