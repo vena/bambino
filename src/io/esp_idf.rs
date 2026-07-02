@@ -50,10 +50,23 @@ impl TimerProvider for EspIdfTimer {
     }
 }
 
+/// Pacing sleep for `EspIdfUdpSocket::recv_from`'s WouldBlock path.
+///
+/// `EspIdfUdpSocket::recv_from` wraps a synchronous, non-blocking socket read with no
+/// `.await` yield point of its own — without this sleep, a caller polling in a tight loop
+/// (e.g. `discover_devices`, `src/discovery/mod.rs`) turns into a genuine busy-spin for the
+/// full discovery window, burning 100% of whatever core/task runs it and risking FreeRTOS
+/// idle-task watchdog trips on affected configs. SSDP discovery is not latency-sensitive,
+/// so 10-20ms of added per-empty-read latency is a good trade; mirrors `TLS_POLL_INTERVAL`'s
+/// pacing pattern.
+#[cfg(feature = "esp-idf")]
+const UDP_RECV_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(15);
+
 /// UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfUdpSocket {
     inner: std::net::UdpSocket,
+    timer: EspIdfTimer,
 }
 
 #[cfg(feature = "esp-idf")]
@@ -61,16 +74,25 @@ impl BindableUdpSocket for EspIdfUdpSocket {
     async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
         let inner = std::net::UdpSocket::bind(addr).map_err(|e| to_esp_socket_error(e))?;
 
-        let _ = inner.set_broadcast(true);
+        if let Err(e) = inner.set_broadcast(true) {
+            log::debug!("EspIdfUdpSocket::bind: set_broadcast failed: {e}");
+        }
 
         let multiaddr = std::net::Ipv4Addr::new(239, 255, 255, 250);
         let interface = std::net::Ipv4Addr::new(0, 0, 0, 0);
-        let _ = inner.join_multicast_v4(&multiaddr, &interface);
+        if let Err(e) = inner.join_multicast_v4(&multiaddr, &interface) {
+            log::debug!("EspIdfUdpSocket::bind: join_multicast_v4 failed: {e}");
+        }
 
         inner
             .set_nonblocking(true)
             .map_err(|e| to_esp_socket_error(e))?;
-        Ok(Self { inner })
+
+        let timer = EspIdfTimer::new().map_err(|_| {
+            SocketError::Other("failed to create ESP-IDF async timer for UDP recv pacing".into())
+        })?;
+
+        Ok(Self { inner, timer })
     }
 }
 
@@ -82,10 +104,21 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
             .map_err(|e| to_esp_socket_error(e))
     }
 
+    /// Non-blocking read paced with a short sleep on the WouldBlock path so this never
+    /// busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc
+    /// comment. `TokioUdpSocket::recv_from` achieves the same pacing via a 100ms timeout
+    /// wrapping a genuinely-blocking OS call; this platform has no async socket-readiness
+    /// primitive for an arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment for why), so
+    /// pacing is applied explicitly here instead.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
         match self.inner.recv_from(buf) {
             Ok((len, addr)) => Ok((len, addr)),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(SocketError::TimedOut),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if let Err(e) = self.timer.sleep(UDP_RECV_POLL_INTERVAL).await {
+                    log::debug!("EspIdfUdpSocket::recv_from: pacing sleep failed: {e:?}");
+                }
+                Err(SocketError::TimedOut)
+            }
             Err(e) => Err(to_esp_socket_error(e)),
         }
     }
@@ -113,6 +146,14 @@ fn to_esp_socket_error(err: std::io::Error) -> SocketError {
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
+/// Default upper bound on the connect loop (TCP dial + TLS handshake, combined) in
+/// `EspIdfSecureConnector::secure_connect` and `EspIdfTlsConnector::connect`, used when the
+/// caller doesn't supply one via `.with_connect_timeout(d)`. Chosen generously — printers on
+/// a healthy LAN handshake in well under a second, but a 10s budget avoids false timeouts on
+/// congested Wi-Fi. Mirrors `TokioSecureConnector::connect_timeout`'s field shape/ergonomics.
+#[cfg(feature = "esp-idf")]
+const DEFAULT_CONNECT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
+
 /// True if `err` indicates the non-blocking TLS operation would have blocked and should
 /// be retried, rather than a real failure. `EWOULDBLOCK` is included alongside the two
 /// `esp_tls`-specific codes because `EspTls::connect`/`read`/`write` can surface it
@@ -124,6 +165,49 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
     code == ::esp_idf_svc::sys::EWOULDBLOCK as i32
         || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_READ
         || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_WRITE
+}
+
+/// Maps a non-WouldBlock `EspError` from a failed TLS connect/negotiate attempt to a
+/// `SocketError`, distinguishing DNS/address failures and genuine connection refusals from
+/// opaque/other failures instead of collapsing everything to `ConnectionRefused` (the
+/// previous behavior — actively misleading for e.g. a bad CA cert or an out-of-memory
+/// condition inside mbedTLS, both of which used to read as "refused"). Shared by
+/// `EspIdfSecureConnector::secure_connect` and `EspIdfTlsConnector::connect`, mirroring
+/// `query_negotiated_tls_version`'s "written once, used by both connect loops" shape.
+///
+/// Checks two families of codes, both surfaced by `EspTls::connect`/`negotiate` in practice:
+/// `esp_tls`'s own `ESP_ERR_ESP_TLS_*` codes (returned when `esp_tls` fails before or during
+/// the TCP dial itself, e.g. DNS resolution) and raw BSD errno codes (`ECONNREFUSED` etc.,
+/// the same family `is_would_block` above already inspects for `EWOULDBLOCK`) that can also
+/// surface directly. Anything not recognized falls back to `SocketError::Other`, with the
+/// real code preserved at `log::debug!` — still an improvement over silently mapping to
+/// `ConnectionRefused`, since `Other` doesn't claim a specific (and possibly wrong) cause.
+#[cfg(feature = "esp-idf")]
+fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError {
+    let code = err.code();
+
+    if code == ::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME
+        || code == ::esp_idf_svc::sys::EHOSTUNREACH as i32
+        || code == ::esp_idf_svc::sys::ENETUNREACH as i32
+        || code == ::esp_idf_svc::sys::EADDRNOTAVAIL as i32
+    {
+        return SocketError::AddressNotAvailable;
+    }
+
+    if code == ::esp_idf_svc::sys::ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST
+        || code == ::esp_idf_svc::sys::ECONNREFUSED as i32
+    {
+        return SocketError::ConnectionRefused;
+    }
+
+    if code == ::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT
+        || code == ::esp_idf_svc::sys::ETIMEDOUT as i32
+    {
+        return SocketError::TimedOut;
+    }
+
+    log::debug!("ESP-IDF TLS handshake failed: {err}");
+    SocketError::Other(std::format!("ESP-IDF TLS handshake failed: {err}").into())
 }
 
 /// Secure connector for ESP-IDF using the platform's native `EspTls` stack.
@@ -141,19 +225,19 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
 /// retried.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfSecureConnector {
-    ca_cert: Option<Vec<u8>>,
-    client_cert: Option<Vec<u8>>,
-    client_key: Option<Vec<u8>>,
+    certs: EspIdfTlsCerts,
+    connect_timeout: core::time::Duration,
 }
 
 #[cfg(feature = "esp-idf")]
 impl EspIdfSecureConnector {
-    /// Creates a connector that skips server certificate verification.
+    /// Creates a connector that skips server certificate verification. Connect operations
+    /// (TCP dial + TLS handshake, combined) default to `DEFAULT_CONNECT_TIMEOUT`; override
+    /// via `.with_connect_timeout(d)`.
     pub fn new() -> Self {
         Self {
-            ca_cert: None,
-            client_cert: None,
-            client_key: None,
+            certs: EspIdfTlsCerts::new(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
 
@@ -162,6 +246,47 @@ impl EspIdfSecureConnector {
     /// `ca_cert_pem`: PEM or DER-encoded CA certificate bytes.
     /// `client_auth`: Optional (cert_pem, key_pem) for mutual TLS.
     pub fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
+        Self {
+            certs: EspIdfTlsCerts::with_certs(ca_cert, client_auth),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+        }
+    }
+
+    /// Overrides the default connect-phase deadline (TCP dial + TLS handshake, combined).
+    /// Non-consuming — chain onto `new()`/`with_certs()`.
+    pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
+        self.connect_timeout = connect_timeout;
+        self
+    }
+
+    fn build_config(&self) -> ::esp_idf_svc::tls::Config<'_> {
+        self.certs.build_config()
+    }
+}
+
+/// Cert bundle shared by `EspIdfSecureConnector` and `EspIdfTlsConnector` — both structs
+/// otherwise carried identical `ca_cert`/`client_cert`/`client_key` fields and identical
+/// `new()`/`with_certs()` constructors. Factored out once so a future cert-related option
+/// (e.g. ALPN config) only needs to be added in one place instead of two structs silently
+/// drifting apart.
+#[cfg(feature = "esp-idf")]
+struct EspIdfTlsCerts {
+    ca_cert: Option<Vec<u8>>,
+    client_cert: Option<Vec<u8>>,
+    client_key: Option<Vec<u8>>,
+}
+
+#[cfg(feature = "esp-idf")]
+impl EspIdfTlsCerts {
+    fn new() -> Self {
+        Self {
+            ca_cert: None,
+            client_cert: None,
+            client_key: None,
+        }
+    }
+
+    fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
         let (client_cert, client_key) = match client_auth {
             Some((cert, key)) => (Some(cert), Some(key)),
             None => (None, None),
@@ -280,27 +405,38 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S>
 impl SecureConnect for EspIdfSecureConnector {
     type Stream = EspTlsStream;
 
+    /// Bounds the connect loop (TCP dial + TLS handshake, combined — `EspTls::connect`
+    /// does both internally) by `self.connect_timeout`, tracked the same way `poll_until`
+    /// does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare
+    /// `saturating_sub` against a budget each iteration). Previously this loop had no
+    /// upper bound at all — a printer that never responded during the handshake (wrong
+    /// port, firewalled host, printer rebooting mid-handshake) looped forever (see
+    /// `review/io.md` Phase 1).
     async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
         let cfg = self.build_config();
 
         let timer = EspIdfTimer::new()
-            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS"))?;
+            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS".into()))?;
 
         let mut tls = ::esp_idf_svc::tls::EspTls::new()
-            .map_err(|_| SocketError::Other("ESP-TLS initialization failed"))?;
+            .map_err(|_| SocketError::Other("ESP-TLS initialization failed".into()))?;
+
+        let start = timer.now_millis();
 
         loop {
             match tls.connect(host, port, &cfg) {
                 Ok(_) => break,
                 Err(e) if is_would_block(&e) => {
+                    if timer.now_millis().saturating_sub(start)
+                        >= self.connect_timeout.as_millis() as u64
+                    {
+                        return Err(SocketError::TimedOut);
+                    }
                     timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake")
+                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake".into())
                     })?;
                 }
-                Err(e) => {
-                    log::debug!("ESP-IDF TLS handshake failed: {e}");
-                    return Err(SocketError::ConnectionRefused);
-                }
+                Err(e) => return Err(map_esp_tls_connect_error(&e)),
             }
         }
 
@@ -497,19 +633,20 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// existing fd) instead of `EspTls::new()` + `connect()`.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfTlsConnector {
-    ca_cert: Option<Vec<u8>>,
-    client_cert: Option<Vec<u8>>,
-    client_key: Option<Vec<u8>>,
+    certs: EspIdfTlsCerts,
+    connect_timeout: core::time::Duration,
 }
 
 #[cfg(feature = "esp-idf")]
 impl EspIdfTlsConnector {
-    /// Creates a connector that skips server certificate verification.
+    /// Creates a connector that skips server certificate verification. The handshake
+    /// (this connector wraps an already-connected raw stream, so there's no TCP dial to
+    /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override
+    /// via `.with_connect_timeout(d)`.
     pub fn new() -> Self {
         Self {
-            ca_cert: None,
-            client_cert: None,
-            client_key: None,
+            certs: EspIdfTlsCerts::new(),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
 
@@ -518,15 +655,17 @@ impl EspIdfTlsConnector {
     /// `ca_cert_pem`: PEM or DER-encoded CA certificate bytes.
     /// `client_auth`: Optional (cert_pem, key_pem) for mutual TLS.
     pub fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
-        let (client_cert, client_key) = match client_auth {
-            Some((cert, key)) => (Some(cert), Some(key)),
-            None => (None, None),
-        };
         Self {
-            ca_cert: Some(ca_cert),
-            client_cert,
-            client_key,
+            certs: EspIdfTlsCerts::with_certs(ca_cert, client_auth),
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
+    }
+
+    /// Overrides the default handshake deadline. Non-consuming — chain onto
+    /// `new()`/`with_certs()`.
+    pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
+        self.connect_timeout = connect_timeout;
+        self
     }
 }
 
@@ -541,6 +680,9 @@ impl Default for EspIdfTlsConnector {
 impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     type Stream = EspTlsStream<EspIdfTcpStream>;
 
+    /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way
+    /// `poll_until` does (`src/client/mod.rs`) — see `EspIdfSecureConnector::secure_connect`'s
+    /// doc comment for the full rationale; previously this loop had no upper bound at all.
     async fn connect(
         &self,
         host: &str,
@@ -557,26 +699,30 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             .set_nonblocking(true)
             .map_err(to_esp_socket_error)?;
 
-        let cfg = build_tls_config(&self.ca_cert, &self.client_cert, &self.client_key);
+        let cfg = self.certs.build_config();
 
         let timer = EspIdfTimer::new()
-            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS"))?;
+            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS".into()))?;
 
         let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream)
-            .map_err(|_| SocketError::Other("ESP-TLS adopt of raw socket failed"))?;
+            .map_err(|_| SocketError::Other("ESP-TLS adopt of raw socket failed".into()))?;
+
+        let start = timer.now_millis();
 
         loop {
             match tls.negotiate(host, &cfg) {
                 Ok(_) => break,
                 Err(e) if is_would_block(&e) => {
+                    if timer.now_millis().saturating_sub(start)
+                        >= self.connect_timeout.as_millis() as u64
+                    {
+                        return Err(SocketError::TimedOut);
+                    }
                     timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake")
+                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake".into())
                     })?;
                 }
-                Err(e) => {
-                    log::debug!("ESP-IDF TLS handshake failed: {e}");
-                    return Err(SocketError::ConnectionRefused);
-                }
+                Err(e) => return Err(map_esp_tls_connect_error(&e)),
             }
         }
 

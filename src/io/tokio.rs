@@ -60,7 +60,9 @@ impl BindableUdpSocket for TokioUdpSocket {
         let std_socket = std::net::UdpSocket::bind(addr).map_err(to_socket_error)?;
 
         // Enable local broadcast capabilities safely.
-        let _ = std_socket.set_broadcast(true);
+        if let Err(e) = std_socket.set_broadcast(true) {
+            log::debug!("TokioUdpSocket::bind: set_broadcast failed: {e}");
+        }
 
         // Join the standard Bambu multicast group (239.255.255.250) to register an active IGMP membership.
         // On macOS and Windows, local firewalls and kernel routing stacks frequently drop incoming UDP
@@ -68,7 +70,9 @@ impl BindableUdpSocket for TokioUdpSocket {
         // multicast group membership first.
         let multiaddr = std::net::Ipv4Addr::new(239, 255, 255, 250);
         let interface = std::net::Ipv4Addr::new(0, 0, 0, 0);
-        let _ = std_socket.join_multicast_v4(&multiaddr, &interface);
+        if let Err(e) = std_socket.join_multicast_v4(&multiaddr, &interface) {
+            log::debug!("TokioUdpSocket::bind: join_multicast_v4 failed: {e}");
+        }
 
         // **Non-blocking Mode Requirement [REF-NET-DISC]:**
         // Putting the standard library socket in non-blocking mode is strictly required before wrapping
@@ -315,19 +319,24 @@ impl TokioSecureConnector {
 impl SecureConnect for TokioSecureConnector {
     type Stream = TokioIo<tokio_rustls::client::TlsStream<::tokio::net::TcpStream>>;
 
+    /// Bounds the *entire* connect operation — TCP dial through TLS handshake — in one
+    /// `connect_timeout` deadline. Previously only the TCP-connect step was wrapped in a
+    /// timeout; the TLS handshake that followed was unbounded, so a printer that accepted
+    /// the TCP SYN but stalled the handshake could hang this call forever despite the
+    /// caller having supplied `connect_timeout` (see `review/io.md` Phase 1).
     async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
-        let addr = format!("{}:{}", host, port);
-        let tcp_stream = ::tokio::time::timeout(
-            self.connect_timeout,
-            ::tokio::net::TcpStream::connect(&addr),
-        )
+        ::tokio::time::timeout(self.connect_timeout, async {
+            let addr = format!("{}:{}", host, port);
+            let tcp_stream = ::tokio::net::TcpStream::connect(&addr)
+                .await
+                .map_err(to_socket_error)?;
+
+            self.tls_connector
+                .connect(host, port, TokioIo(tcp_stream))
+                .await
+        })
         .await
         .map_err(|_| SocketError::TimedOut)?
-        .map_err(to_socket_error)?;
-
-        self.tls_connector
-            .connect(host, port, TokioIo(tcp_stream))
-            .await
     }
 
     fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {

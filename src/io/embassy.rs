@@ -148,6 +148,15 @@ impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_as
 /// many can exist at once. `connect()` takes the buffers out of the connector on first use
 /// (`Option::take`) — calling `connect()` again on the same connector without a fresh one
 /// returns `SocketError::Other` instead of a second, aliased borrow.
+///
+/// **No built-in connect timeout.** Unlike `TokioSecureConnector`/`EspIdfSecureConnector`
+/// (both of which bound their entire connect operation — TCP dial through TLS handshake —
+/// behind a `connect_timeout`), `connect()` here has no retry/poll loop of its own to bound:
+/// it calls `TlsConnection::open(context).await` once, and the hang risk lives entirely
+/// inside `embedded-tls`'s handshake await, which this crate doesn't control. Callers that
+/// need a bounded connect must race `EmbassyTlsConnector::connect` against
+/// `embassy_time::with_timeout` themselves — `embassy-time` (already a dependency of the
+/// `embassy` feature) provides exactly that combinator. See `review/io.md` Phase 1.
 #[cfg(feature = "embassy")]
 pub struct EmbassyTlsConnector<'a, CipherSuite, Rng>
 where
@@ -197,6 +206,16 @@ where
 {
     type Stream = EmbassyTlsStream<'a, RawStream, CipherSuite>;
 
+    // Safe because `read_buf`/`write_buf`'s `Option::take()` below already rejects any
+    // call after the first (with `SocketError::Other`), before the `self.rng.borrow_mut()`
+    // later in this function is ever reached — a concurrent second `connect()` call on the
+    // same connector never reaches that borrow, so the `RefCell` guard can never actually be
+    // double-borrowed even though it's held across the `.open().await`. If a future refactor
+    // reorders these lines (e.g. moves the rng borrow earlier, before the buffer takes),
+    // re-verify that invariant still holds before relying on this `allow` — clippy's
+    // `await_holding_refcell_ref` lint only accepts a function-level (not statement-level)
+    // `#[allow]`, so it can't be scoped tighter than this.
+    #[allow(clippy::await_holding_refcell_ref)]
     async fn connect(
         &self,
         _host: &str,
@@ -204,14 +223,14 @@ where
         raw_stream: RawStream,
     ) -> Result<Self::Stream, SocketError> {
         let read_buf = self.read_buf.borrow_mut().take().ok_or(SocketError::Other(
-            "EmbassyTlsConnector buffers already consumed by a previous connect() call",
+            "EmbassyTlsConnector buffers already consumed by a previous connect() call".into(),
         ))?;
         let write_buf = self
             .write_buf
             .borrow_mut()
             .take()
             .ok_or(SocketError::Other(
-                "EmbassyTlsConnector buffers already consumed by a previous connect() call",
+                "EmbassyTlsConnector buffers already consumed by a previous connect() call".into(),
             ))?;
 
         let mut connection = ::embedded_tls::TlsConnection::new(raw_stream, read_buf, write_buf);

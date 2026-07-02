@@ -25,8 +25,21 @@ pub mod embassy;
 
 use core::net::SocketAddr;
 
+#[cfg(feature = "std")]
+use std::borrow::Cow;
+
+#[cfg(all(not(feature = "std"), feature = "alloc"))]
+use alloc::borrow::Cow;
+
 /// Unified transport-level Socket Errors, agnostic of runtime implementations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Other` carries `Cow<'static, str>` (not `Copy`, hence the enum overall isn't either)
+/// rather than a fixed `&'static str` so platform backends can attach dynamic content —
+/// e.g. ESP-IDF's error mapping (`src/io/esp_idf.rs::map_esp_tls_connect_error`) formats
+/// the actual numeric `EspError` code into the message instead of a fixed compile-time
+/// string. Mirrors `BambuError::ProtocolViolation`'s existing use of the same type for the
+/// same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketError {
     /// Remote socket explicitly refused connection.
     ConnectionRefused,
@@ -45,7 +58,7 @@ pub enum SocketError {
     /// Supplied connection or routing parameters are malformed.
     InvalidInput,
     /// Catch-all variant for atypical OS-specific networking errors.
-    Other(&'static str),
+    Other(Cow<'static, str>),
 }
 
 /// Maps standard library IO error kinds to the runtime-agnostic `SocketError` enum.
@@ -66,7 +79,7 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
         std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
         _ => {
             log::debug!("{other_msg}: {err}");
-            SocketError::Other(other_msg)
+            SocketError::Other(Cow::Borrowed(other_msg))
         }
     }
 }
@@ -108,6 +121,15 @@ pub trait AsyncUdpSocket {
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError>;
 
     /// Listens for incoming datagrams, populating the buffer and returning the source address.
+    ///
+    /// Implementations must not busy-spin: on a "no data yet" outcome, either genuinely
+    /// block/wait for data, or internally yield for a bounded duration (e.g. via
+    /// [`TimerProvider::sleep`]) before reporting `Err`. A synchronous non-blocking read
+    /// that returns instantly on every "would block" call defeats the caller's own pacing
+    /// — `discover_devices` (`src/discovery/mod.rs`) polls this in a tight loop relying on
+    /// each call to provide some wait/yield, and an implementation that returns immediately
+    /// turns that loop into a genuine busy-spin, burning 100% CPU and potentially starving
+    /// other tasks on single-core/cooperative-scheduler platforms.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError>;
 }
 
