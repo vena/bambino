@@ -184,6 +184,23 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
     Ok(port as u16)
 }
 
+/// Validates a caller-supplied FTP path argument before it is interpolated into a command line.
+///
+/// Every path-taking method on `BambuFtpsClient` sends `format!("CMD {}", path)` followed by a
+/// single trailing CRLF (`write_command`). If `path` itself contains `\r` or `\n`, the bytes
+/// written to the control channel contain an embedded line break that the FTP server parses as a
+/// *second*, caller/attacker-controlled command — invisible to whoever called the original
+/// method (review/ftps.md Phase 4). Also rejects NUL (`\0`), which some FTP daemons treat as a
+/// string terminator, for the same class of confusion.
+pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
+    if path.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+        return Err(BambuError::ProtocolViolation(
+            "FTP path contains an illegal control character (CR, LF, or NUL)".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Utility capturing passive stream data up to socket EOF bounds.
 pub(crate) async fn read_to_eof<IO: AsyncIo>(
     stream: &mut IO,

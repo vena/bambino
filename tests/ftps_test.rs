@@ -18,7 +18,9 @@ use bambino::models::BambuModel;
 
 use bambino::io::TlsVersion;
 
-use common::io::{DummyTlsConnector, MockDataStreamFactory, VersionReportingTlsConnector};
+use common::io::{
+    DummyTlsConnector, FailingDataTlsConnector, MockDataStreamFactory, VersionReportingTlsConnector,
+};
 use common::mock_ftps;
 
 /// Helper: creates the standard test infrastructure (duplex control stream, data container, factory).
@@ -188,6 +190,79 @@ async fn test_ftps_stat_fallback_for_available_space() {
         .await
         .expect("STAT fallback space query failed");
     assert_eq!(space, 14_820_352_000);
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Regression test for review/ftps.md Phase 5: the STAT fallback must pick the *first*
+/// qualifying number in the response body, not the last. Before the fix this returned
+/// 999_999_999 (the last qualifying token); the fix must return 200_000_000 (the first).
+#[tokio::test]
+async fn test_ftps_stat_fallback_picks_first_qualifying_number() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_stat_first_wins(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+
+    let space = client
+        .get_available_space()
+        .await
+        .expect("STAT fallback space query failed");
+    assert_eq!(
+        space, 200_000_000,
+        "Expected the FIRST qualifying STAT token (200000000) to win, not the last (999999999)"
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Regression test for review/ftps.md Phase 2: a data-channel TLS connect failure after the
+/// server has already sent its `150` reply must poison the client, so the *next* command on the
+/// same instance fails immediately and cleanly instead of hanging, panicking, or silently
+/// misreading a stale trailing reply as its own response.
+#[tokio::test]
+async fn test_ftps_data_channel_failure_poisons_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_data_channel_failure(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        FailingDataTlsConnector,
+        factory,
+        BambuModel::P1S,
+        "127.0.0.1",
+        "12345678",
+    )
+    .await
+    .expect("FTPS handshake failed");
+
+    let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
+    assert!(
+        matches!(result, Err(bambino::error::BambuError::NetworkError(_))),
+        "Expected the data-channel TLS connect failure to surface as NetworkError, got {:?}",
+        result
+    );
+
+    // The control channel now has an unread 150 reply pending with no matching final reply ever
+    // coming — the client must be poisoned, not left in a state where the next command could
+    // hang waiting for that reply or misread it as its own response.
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(
+            next_result,
+            Err(bambino::error::BambuError::ProtocolViolation(_))
+        ),
+        "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
+        next_result
+    );
 
     server_handle.await.expect("Mock server panicked");
 }

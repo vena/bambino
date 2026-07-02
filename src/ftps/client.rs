@@ -32,6 +32,16 @@ pub trait FtpDataStreamFactory<RawIO: AsyncIo> {
 }
 
 /// Lightweight, high-reliability implicit FTPS client running on top of abstract I/O traits.
+///
+/// **Poisoning invariant:** if a data-channel transfer (`list_directory`/`upload_file`/
+/// `download_file`) fails after the server has sent its `150`/`125` "opening data connection"
+/// reply but before the matching final reply (`226`/etc.) has been read off the control channel,
+/// the control channel is left mid-response. Reusing the client at that point risks a later,
+/// unrelated command silently reading the stale trailing reply instead of its own. To make this
+/// safe, the client sets `poisoned = true` on every such error path (and unconditionally in
+/// `disconnect()`); every public method checks the flag first and returns
+/// [`BambuError::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
+/// reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.
 pub struct BambuFtpsClient<RawIO, Tls, Factory>
 where
     RawIO: AsyncIo,
@@ -43,6 +53,9 @@ where
     data_factory: Factory,
     model: BambuModel,
     ip: String,
+    /// Set once a control-channel desync is possible (see struct doc comment). Checked by every
+    /// public method; once `true` the client must be discarded and reconnected.
+    poisoned: bool,
 }
 
 impl<RawIO, Tls, Factory> BambuFtpsClient<RawIO, Tls, Factory>
@@ -69,16 +82,7 @@ where
             .connect(ip, FTPS_IMPLICIT_PORT, raw_control)
             .await?;
 
-        if model.quirks().enforce_ftps_tls_1_2()
-            && tls_connector.negotiated_version(&control_stream) != Some(TlsVersion::Tls12)
-        {
-            return Err(BambuError::ProtocolViolation(
-                "This model requires TLS 1.2 for FTPS but either a different version was \
-                 negotiated or the negotiated version could not be determined \
-                 — configure the TlsConnector with force_tls_1_2 enabled"
-                    .into(),
-            ));
-        }
+        Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model)?;
 
         let mut buf = Vec::new();
 
@@ -144,7 +148,48 @@ where
             data_factory,
             model,
             ip: String::from(ip),
+            poisoned: false,
         })
+    }
+
+    /// Returns an error if this client has been poisoned by a prior control-channel desync.
+    ///
+    /// See the struct-level doc comment for the invariant this enforces. Called first by every
+    /// public method on this client.
+    fn check_poisoned(&self) -> Result<(), BambuError> {
+        if self.poisoned {
+            return Err(BambuError::ProtocolViolation(
+                "FTPS client is poisoned after a previous control-channel desync — this \
+                 instance must be discarded; reconnect with a new BambuFtpsClient::connect() \
+                 call instead of reusing it"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fail-closed TLS-1.2 guard, shared by the control-channel check in `connect()` and the
+    /// per-data-channel re-check in `list_directory`/`upload_file`/`download_file` (defense in
+    /// depth — see `review/ftps.md` Phase 3: session resumption is expected to carry the
+    /// control channel's negotiated version onto each data channel, but this isn't verified by
+    /// this code, so the guard is re-run per connection rather than assumed to hold
+    /// transitively).
+    fn require_tls_1_2_if_enforced(
+        tls_connector: &Tls,
+        stream: &Tls::Stream,
+        model: BambuModel,
+    ) -> Result<(), BambuError> {
+        if model.quirks().enforce_ftps_tls_1_2()
+            && tls_connector.negotiated_version(stream) != Some(TlsVersion::Tls12)
+        {
+            return Err(BambuError::ProtocolViolation(
+                "This model requires TLS 1.2 for FTPS but either a different version was \
+                 negotiated or the negotiated version could not be determined \
+                 — configure the TlsConnector with force_tls_1_2 enabled"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Queries the storage server for raw directory listings and parses their structures.
@@ -157,6 +202,9 @@ where
         current_hour: u8,
         current_minute: u8,
     ) -> Result<Vec<FtpFile>, BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(remote_path)?;
+
         let port = self.negotiate_passive_port().await?;
         let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
 
@@ -171,22 +219,53 @@ where
             ));
         }
 
-        // Wrap passive data socket if secure channel is required [REF-FTPS-CONN]
+        // From here on, the server has committed to sending a final reply once the data
+        // transfer concludes. Any error before that reply is read off the control channel
+        // leaves it desynced for the next command — poison the client on every such path
+        // (Phase 2) so a caller gets an immediate, clear error instead of a later command
+        // silently misreading this stale reply.
         let mut listing_payload = Vec::new();
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket = self
+            let mut secure_data_socket = match self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
-                .await?;
-            read_to_eof(&mut secure_data_socket, &mut listing_payload).await?;
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e.into());
+                }
+            };
+            if let Err(e) = Self::require_tls_1_2_if_enforced(
+                &self.tls_connector,
+                &secure_data_socket,
+                self.model,
+            ) {
+                self.poisoned = true;
+                return Err(e);
+            }
+            if let Err(e) = read_to_eof(&mut secure_data_socket, &mut listing_payload).await {
+                self.poisoned = true;
+                return Err(e);
+            }
             drop(secure_data_socket);
         } else {
             let mut plain_data_socket = raw_data_socket;
-            read_to_eof(&mut plain_data_socket, &mut listing_payload).await?;
+            if let Err(e) = read_to_eof(&mut plain_data_socket, &mut listing_payload).await {
+                self.poisoned = true;
+                return Err(e);
+            }
             drop(plain_data_socket);
         }
 
-        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        let (code, _) = match read_response(&mut self.control_stream, &mut ctrl_buf).await {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
                 "LIST transfer confirmation aborted".into(),
@@ -209,6 +288,9 @@ where
 
     /// Queries the exact size of a file stored on the printer's MicroSD card.
     pub async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(remote_path)?;
+
         let size_cmd = format!("SIZE {}", remote_path);
         write_command(&mut self.control_stream, &size_cmd).await?;
 
@@ -227,6 +309,9 @@ where
 
     /// Removes a targeted file from non-volatile storage.
     pub async fn delete_file(&mut self, remote_path: &str) -> Result<(), BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(remote_path)?;
+
         let dele_cmd = format!("DELE {}", remote_path);
         write_command(&mut self.control_stream, &dele_cmd).await?;
 
@@ -252,6 +337,9 @@ where
     /// 3. If a TLS 1.3 session close race triggers a transient 426 on P2S/X2D models, verify the uploaded size
     ///    via the `SIZE` command to ensure data integrity [REF-FTPS-CONN].
     pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(remote_path)?;
+
         let port = self.negotiate_passive_port().await?;
         let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
 
@@ -266,25 +354,48 @@ where
             ));
         }
 
+        // From here on, the server has committed to sending a final reply once the data
+        // transfer concludes. Any error before that reply is read off the control channel
+        // leaves it desynced for the next command — poison the client on every such path
+        // (Phase 2) so a caller gets an immediate, clear error instead of a later command
+        // silently misreading this stale reply.
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket = self
+            let mut secure_data_socket = match self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
-                .await?;
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e.into());
+                }
+            };
+            if let Err(e) = Self::require_tls_1_2_if_enforced(
+                &self.tls_connector,
+                &secure_data_socket,
+                self.model,
+            ) {
+                self.poisoned = true;
+                return Err(e);
+            }
 
             let mut offset = 0;
             while offset < data.len() {
                 let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
-                secure_data_socket
+                if let Err(_e) = secure_data_socket
                     .write_all(&data[offset..offset + chunk_size])
                     .await
-                    .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+                {
+                    self.poisoned = true;
+                    return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+                }
                 offset += chunk_size;
             }
-            secure_data_socket
-                .flush()
-                .await
-                .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+            if let Err(_e) = secure_data_socket.flush().await {
+                self.poisoned = true;
+                return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+            }
 
             drop(secure_data_socket);
         } else {
@@ -292,16 +403,19 @@ where
             let mut offset = 0;
             while offset < data.len() {
                 let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
-                plain_data_socket
+                if let Err(_e) = plain_data_socket
                     .write_all(&data[offset..offset + chunk_size])
                     .await
-                    .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+                {
+                    self.poisoned = true;
+                    return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+                }
                 offset += chunk_size;
             }
-            plain_data_socket
-                .flush()
-                .await
-                .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+            if let Err(_e) = plain_data_socket.flush().await {
+                self.poisoned = true;
+                return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+            }
             drop(plain_data_socket);
         }
 
@@ -316,7 +430,10 @@ where
                 }
             }
             Ok((_, _)) => Err(BambuError::DiskWriteFailure),
-            Err(e) => Err(e),
+            Err(e) => {
+                self.poisoned = true;
+                Err(e)
+            }
         }
     }
 
@@ -324,6 +441,9 @@ where
     ///
     /// Negotiates a passive data channel, retrieves the binary payload, and returns the raw bytes.
     pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(remote_path)?;
+
         let port = self.negotiate_passive_port().await?;
         let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
 
@@ -338,21 +458,53 @@ where
             ));
         }
 
+        // From here on, the server has committed to sending a final reply once the data
+        // transfer concludes. Any error before that reply is read off the control channel
+        // leaves it desynced for the next command — poison the client on every such path
+        // (Phase 2) so a caller gets an immediate, clear error instead of a later command
+        // silently misreading this stale reply.
         let mut file_payload = Vec::new();
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket = self
+            let mut secure_data_socket = match self
                 .tls_connector
                 .connect(&self.ip, port, raw_data_socket)
-                .await?;
-            read_to_eof(&mut secure_data_socket, &mut file_payload).await?;
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    self.poisoned = true;
+                    return Err(e.into());
+                }
+            };
+            if let Err(e) = Self::require_tls_1_2_if_enforced(
+                &self.tls_connector,
+                &secure_data_socket,
+                self.model,
+            ) {
+                self.poisoned = true;
+                return Err(e);
+            }
+            if let Err(e) = read_to_eof(&mut secure_data_socket, &mut file_payload).await {
+                self.poisoned = true;
+                return Err(e);
+            }
             drop(secure_data_socket);
         } else {
             let mut plain_data_socket = raw_data_socket;
-            read_to_eof(&mut plain_data_socket, &mut file_payload).await?;
+            if let Err(e) = read_to_eof(&mut plain_data_socket, &mut file_payload).await {
+                self.poisoned = true;
+                return Err(e);
+            }
             drop(plain_data_socket);
         }
 
-        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        let (code, _) = match read_response(&mut self.control_stream, &mut ctrl_buf).await {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer confirmation aborted".into(),
@@ -364,6 +516,9 @@ where
 
     /// Creates a directory on the printer's MicroSD storage.
     pub async fn create_directory(&mut self, path: &str) -> Result<(), BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(path)?;
+
         let mkd_cmd = format!("MKD {}", path);
         write_command(&mut self.control_stream, &mkd_cmd).await?;
 
@@ -382,6 +537,9 @@ where
     /// Returns success for both `250` (deleted) and `550` (already absent),
     /// matching the idempotent cleanup semantics of `delete_file`.
     pub async fn remove_directory(&mut self, path: &str) -> Result<(), BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(path)?;
+
         let rmd_cmd = format!("RMD {}", path);
         write_command(&mut self.control_stream, &rmd_cmd).await?;
 
@@ -401,6 +559,10 @@ where
     /// Executes the standard FTP two-step rename sequence: `RNFR` (rename from)
     /// followed by `RNTO` (rename to).
     pub async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), BambuError> {
+        self.check_poisoned()?;
+        validate_ftp_path(from)?;
+        validate_ftp_path(to)?;
+
         let rnfr_cmd = format!("RNFR {}", from);
         write_command(&mut self.control_stream, &rnfr_cmd).await?;
 
@@ -432,6 +594,8 @@ where
     /// documented across firmware versions. Not intended for production capacity queries — use
     /// `get_available_space` for that.
     pub async fn debug_raw_stat(&mut self) -> Result<(u16, String), BambuError> {
+        self.check_poisoned()?;
+
         write_command(&mut self.control_stream, "STAT").await?;
         let mut buf = Vec::new();
         read_response(&mut self.control_stream, &mut buf).await
@@ -439,6 +603,8 @@ where
 
     /// Queries the available capacity of the MicroSD card, in bytes.
     pub async fn get_available_space(&mut self) -> Result<u64, BambuError> {
+        self.check_poisoned()?;
+
         write_command(&mut self.control_stream, "AVBL").await?;
 
         let mut buf = Vec::new();
@@ -453,11 +619,22 @@ where
             let (code, stat_text) = read_response(&mut self.control_stream, &mut buf).await?;
             if code == FTP_STAT_OK {
                 let mut size_found = None;
+                // UNVERIFIED HEURISTIC (review/ftps.md Phase 5): vsFTPd's STAT output isn't a
+                // structured format, so there's no reliable label/position to anchor on. A real
+                // capture attempt against a P1S found STAT isn't even wired up on that firmware
+                // (`502 Command not implemented` — see reference/02_ftps.md §2.2), so the
+                // ambiguity this heuristic exists for is still open pending a capture from
+                // firmware that does implement STAT. Until then: take the FIRST whitespace token
+                // that parses as a u64 over the threshold, on the assumption that "total, then
+                // free" is a more common STAT/df-style ordering than the reverse — not the last,
+                // which silently preferred whichever qualifying number happened to appear latest
+                // in the response body.
                 for word in stat_text.split_whitespace() {
                     if let Ok(val) = word.parse::<u64>()
                         && val > FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD
                     {
                         size_found = Some(val);
+                        break;
                     }
                 }
                 size_found.ok_or(BambuError::ProtocolViolation(
@@ -489,10 +666,22 @@ where
     /// Sends a QUIT command and cleanly terminates the FTP session.
     ///
     /// Best-effort: errors during QUIT are silently ignored since the
-    /// connection is being torn down regardless.
+    /// connection is being torn down regardless. Non-consuming (`&mut self`, not `self`) by
+    /// design (review/ftps.md Phase 7): `PrinterClient::storage()` only exposes
+    /// `&mut BambuFtpsClient`, and direct-module consumers may want to disconnect and
+    /// reconnect the same variable via a fresh `connect()` call without re-declaring it.
+    ///
+    /// Always poisons the client on the way out (extends the Phase 2 mechanism — see the
+    /// struct doc comment) so every subsequent method call on this instance fails cleanly with
+    /// the same "must reconnect" error, instead of a caller mistaking a disconnected client for
+    /// a live one. Idempotent: calling this more than once is a no-op after the first call.
     pub async fn disconnect(&mut self) {
+        if self.poisoned {
+            return;
+        }
         let _ = write_command(&mut self.control_stream, "QUIT").await;
         let mut buf = Vec::new();
         let _ = read_response(&mut self.control_stream, &mut buf).await;
+        self.poisoned = true;
     }
 }
