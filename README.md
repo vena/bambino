@@ -244,9 +244,9 @@ let config = build_verified_client_config(
 let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 ```
 
-Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — use `model.quirks().enforce_ftps_tls_1_2()` to query this. If a misconfigured `TlsConnector` negotiates TLS 1.3 on a model that requires 1.2, `BambuFtpsClient::connect()` will return a `ProtocolViolation` error immediately.
+Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — use `model.quirks().enforce_ftps_tls_1_2()` to query this. `BambuFtpsClient::connect()` fails closed: on a model requiring TLS 1.2, it returns a `ProtocolViolation` immediately unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` — a wrong version *and* an undetermined version (`None`) both reject the connection. `None` is not treated as "platform can't check, allow it through" — a version-query failure on a TLS-1.2-required model is a hard connection failure, not a silent pass-through.
 
-This guarantee is platform-general, not tokio-only: `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfSecureConnector` all implement `negotiated_version` for real (see the "ESP-IDF TLS timeouts" caveat below for the one narrow case ESP-IDF can't cover). `EmbassyTlsConnector` always reports TLS 1.3 — `embedded-tls` 0.19 is a TLS 1.3-only client, so a P2S/X2D connection over Embassy is unconditionally rejected rather than silently downgraded to "unchecked."
+This guarantee is platform-general, not tokio-only: `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfSecureConnector` all implement `negotiated_version` for real (see the "ESP-IDF TLS version query" note below for the real post-handshake failure conditions ESP-IDF's query can hit — those now reject the connection too instead of skipping the check). `EmbassyTlsConnector` always reports TLS 1.3 — `embedded-tls` 0.19 is a TLS 1.3-only client, so a P2S/X2D connection over Embassy is unconditionally rejected rather than silently downgraded to "unchecked."
 
 ## Platform targets
 
@@ -311,7 +311,7 @@ let mut printer = printer.with_ftps(ftps_tls, EspIdfFtpDataStreamFactory);
 
 ## bambino-cli
 
-A CLI using our own library client for testing against real printers as proof-of-concept. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal UI crate (`crossterm`) and a log sink (`env_logger`) they never asked for.
+A CLI using our own library client for testing against real printers as `std` branch proof-of-concept. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal dependencies.
 
 ```sh
 cargo build --bin bambino-cli --features cli

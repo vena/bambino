@@ -242,7 +242,10 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspTlsStream<S> 
                         .await
                         .map_err(|_| embedded_io_async::ErrorKind::Other)?;
                 }
-                Err(_) => return Err(embedded_io_async::ErrorKind::Other),
+                Err(e) => {
+                    log::debug!("ESP-IDF TLS read failed: {e}");
+                    return Err(embedded_io_async::ErrorKind::Other);
+                }
             }
         }
     }
@@ -260,7 +263,10 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S>
                         .await
                         .map_err(|_| embedded_io_async::ErrorKind::Other)?;
                 }
-                Err(_) => return Err(embedded_io_async::ErrorKind::Other),
+                Err(e) => {
+                    log::debug!("ESP-IDF TLS write failed: {e}");
+                    return Err(embedded_io_async::ErrorKind::Other);
+                }
             }
         }
     }
@@ -291,7 +297,10 @@ impl SecureConnect for EspIdfSecureConnector {
                         SocketError::Other("ESP-IDF timer failed while polling TLS handshake")
                     })?;
                 }
-                Err(_) => return Err(SocketError::ConnectionRefused),
+                Err(e) => {
+                    log::debug!("ESP-IDF TLS handshake failed: {e}");
+                    return Err(SocketError::ConnectionRefused);
+                }
             }
         }
 
@@ -564,7 +573,10 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         SocketError::Other("ESP-IDF timer failed while polling TLS handshake")
                     })?;
                 }
-                Err(_) => return Err(SocketError::ConnectionRefused),
+                Err(e) => {
+                    log::debug!("ESP-IDF TLS handshake failed: {e}");
+                    return Err(SocketError::ConnectionRefused);
+                }
             }
         }
 

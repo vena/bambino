@@ -201,7 +201,7 @@ async fn test_ftps_upload_426_recovery_via_size() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P2S).await;
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
 
     client
         .upload_file("/model/job.3mf", b"TEST_DATA")
@@ -220,7 +220,7 @@ async fn test_ftps_upload_size_mismatch_returns_disk_failure() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P2S).await;
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
 
     let result = client.upload_file("/model/job.3mf", b"TEST_DATA").await;
     assert!(
@@ -339,15 +339,10 @@ async fn test_ftps_tls13_accepted_for_p1s() {
 }
 
 #[tokio::test]
-async fn test_ftps_version_none_skips_check_for_p2s() {
-    let (client_control, server_control, _data_container, factory) = setup();
+async fn test_ftps_version_none_rejected_for_p2s() {
+    let (client_control, _server_control, _data_container, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
-        server_control,
-        Arc::new(Mutex::new(None)),
-    ));
-
-    let mut client = BambuFtpsClient::connect(
+    let result = BambuFtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,
@@ -355,9 +350,16 @@ async fn test_ftps_version_none_skips_check_for_p2s() {
         "127.0.0.1",
         "12345678",
     )
-    .await
-    .expect("None version should skip check even for P2S");
+    .await;
 
-    client.disconnect().await;
-    server_handle.await.expect("Mock server panicked");
+    match result {
+        Err(bambino::error::BambuError::ProtocolViolation(_)) => {}
+        Err(e) => panic!(
+            "Expected ProtocolViolation for undetermined TLS version on P2S, got {:?}",
+            e
+        ),
+        Ok(_) => {
+            panic!("Expected error for undetermined TLS version on P2S, but connect succeeded")
+        }
+    }
 }

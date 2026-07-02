@@ -70,11 +70,11 @@ where
             .await?;
 
         if model.quirks().enforce_ftps_tls_1_2()
-            && let Some(version) = tls_connector.negotiated_version(&control_stream)
-            && version != TlsVersion::Tls12
+            && tls_connector.negotiated_version(&control_stream) != Some(TlsVersion::Tls12)
         {
             return Err(BambuError::ProtocolViolation(
-                "This model requires TLS 1.2 for FTPS but TLS 1.3 was negotiated \
+                "This model requires TLS 1.2 for FTPS but either a different version was \
+                 negotiated or the negotiated version could not be determined \
                  — configure the TlsConnector with force_tls_1_2 enabled"
                     .into(),
             ));
