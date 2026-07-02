@@ -199,6 +199,17 @@ loop {
 }
 ```
 
+`authenticate()` returning `Ok(())` only means the 80-byte handshake packet was written and
+flushed — the protocol has no ack byte, so it does not mean the printer accepted the access
+code. A bad code surfaces later, on the *next* `read_next_frame()` call, as the same
+`ConnectionReset` error a plain network blip would produce; there's no way to distinguish the
+two from this API alone.
+
+`read_next_frame` rejects frames above a configurable cap (default 10MB) to guard against
+unbounded allocation. Constrained (`no_std`/Embassy) targets should lower it with
+`BambuBinaryCameraStream::new(stream).with_max_frame_size(64 * 1024)` to match their actual
+buffer budget — the 10MB default can exceed an embedded target's entire SRAM.
+
 **RTSPS (X1, X2, H2, P2S series) — port 322.** RTSP behind implicit TLS with Digest auth. This library provides helpers for integrating with external media players — it does not include an RTSP client.
 
 ```rust
