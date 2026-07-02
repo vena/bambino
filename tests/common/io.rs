@@ -55,6 +55,31 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
     }
 }
 
+/// A TLS connector that succeeds on the FTPS implicit control-channel port (990) but fails on
+/// any other port — i.e. it always fails a PASV data-channel connect attempt.
+///
+/// Used to exercise the `poisoned` flag regression (review/ftps.md Phase 2): simulates a
+/// data-channel TLS handshake failure after the server has already sent its `150`/`125`
+/// "opening data connection" reply, to verify the control channel doesn't get left desynced.
+pub struct FailingDataTlsConnector;
+
+impl<RawIO: AsyncIo> TlsConnector<RawIO> for FailingDataTlsConnector {
+    type Stream = RawIO;
+
+    async fn connect(
+        &self,
+        _host: &str,
+        port: u16,
+        raw_stream: RawIO,
+    ) -> Result<Self::Stream, SocketError> {
+        if port == 990 {
+            Ok(raw_stream)
+        } else {
+            Err(SocketError::ConnectionAborted)
+        }
+    }
+}
+
 /// A dynamic, in-memory stream factory for passive FTP data channels.
 ///
 /// **Why this is used:**

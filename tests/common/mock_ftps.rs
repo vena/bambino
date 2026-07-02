@@ -348,6 +348,66 @@ pub async fn run_mock_server_upload_size_mismatch(
     respond(&mut server_control, b"213 0\r\n").await;
 }
 
+/// Mock server for the Phase 2 desync regression test.
+///
+/// Sends the `150` reply for a `LIST` command and then stops — it deliberately never sends the
+/// matching `226`. The test pairs this with a `TlsConnector` that fails the data-channel
+/// connect, so the client is expected to poison itself and return before ever trying to read a
+/// final reply that will never arrive; if it instead ignored the failure and tried to read the
+/// control channel again, that read would hang forever against this mock.
+pub async fn run_mock_server_data_channel_failure(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let _server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "LIST /model\r\n");
+    respond(
+        &mut server_control,
+        b"150 Here comes directory listing.\r\n",
+    )
+    .await;
+    // Intentionally no matching 226 — the client's TLS connector fails the data-channel connect
+    // before it would ever consume this reply.
+}
+
+/// Mock server for the Phase 5 STAT-ambiguity regression test.
+///
+/// The `STAT` body contains two whitespace-delimited numbers over the size heuristic threshold.
+/// The client is expected to select the FIRST one (200000000), not the last (999999999).
+pub async fn run_mock_server_stat_first_wins(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    // AVBL — unsupported, forces the STAT fallback path.
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "AVBL\r\n");
+    respond(
+        &mut server_control,
+        b"500 Syntax error, command unrecognized.\r\n",
+    )
+    .await;
+
+    // STAT — two qualifying numbers in one body.
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "STAT\r\n");
+    respond(&mut server_control, b"211-FTP server status:\r\n").await;
+    respond(
+        &mut server_control,
+        b"211-Total: 200000000 bytes, Free: 999999999 bytes\r\n",
+    )
+    .await;
+    respond(&mut server_control, b"211 End of status.\r\n").await;
+}
+
 /// Mock server for disconnect (QUIT) test.
 pub async fn run_mock_server_disconnect(
     mut server_control: tokio::io::DuplexStream,
