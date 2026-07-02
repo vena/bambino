@@ -12,6 +12,24 @@ use bambino::models::resolve_model;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
+/// Environment variable consulted as a fallback source for the access code when the
+/// positional `access_code` CLI argument is omitted or empty. Lets scripted/CI usage
+/// avoid putting the access code in shell history; the positional arg still takes
+/// precedence when non-empty.
+const ACCESS_CODE_ENV_VAR: &str = "BAMBINO_ACCESS_CODE";
+
+/// Resolves the access code to actually use: the positional CLI argument if
+/// non-empty, otherwise the `BAMBINO_ACCESS_CODE` environment variable (empty
+/// string if unset), letting `validate_params`'s existing empty-check produce a
+/// consistent error either way.
+pub(crate) fn resolve_access_code(access_code: String) -> String {
+    if access_code.is_empty() {
+        std::env::var(ACCESS_CODE_ENV_VAR).unwrap_or_default()
+    } else {
+        access_code
+    }
+}
+
 pub type Printer =
     PrinterClient<TokioSecureConnector, TokioTimer, DummyRawIo, DummyTls, DummyFactory>;
 

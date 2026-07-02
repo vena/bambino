@@ -396,7 +396,7 @@ pub async fn run(
 ║                                                            ║
 ║  Ensure the bed is at least 50mm from the nozzle.          ║
 ║                                                            ║
-║  Press Enter to continue or Ctrl+C to abort.               ║
+║  Type 'yes' to continue.                                   ║
 ╚══════════════════════════════════════════════════════════════╝"
     );
 
@@ -404,6 +404,10 @@ pub async fn run(
     io::stdin()
         .read_line(&mut confirmation)
         .map_err(|_| BambuError::ProtocolViolation("Failed to read user confirmation".into()))?;
+    if confirmation.trim().to_lowercase() != "yes" {
+        eprintln!("Aborted (expected 'yes').");
+        return Ok(());
+    }
 
     eprintln!("Connecting to {}:8883...", ip);
     let mut client = create_printer(ip, serial, access_code)?;
