@@ -309,6 +309,13 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
     {
         use ::embedded_nal_async::TcpConnect;
 
+        // IPv4-only is deliberate, not a missing case: `host` here is always
+        // `BambuFtpsClient`'s printer IP, which traces back to either a caller-supplied
+        // literal IP or SSDP discovery (`discovery/parser.rs::parse_location`), which only
+        // ever extracts a dotted-decimal IPv4 address from the LOCATION header — Bambu
+        // printers don't advertise IPv6 or hostnames. `embassy-net`'s IPv6 stack
+        // (`proto-ipv6`) also isn't enabled in this crate's `Cargo.toml`, so a hostname or
+        // IPv6 literal here is a genuine caller error, not an unsupported-but-valid input.
         let ip: core::net::Ipv4Addr = host.parse().map_err(|_| SocketError::InvalidInput)?;
         let addr = core::net::SocketAddr::V4(core::net::SocketAddrV4::new(ip, port));
 

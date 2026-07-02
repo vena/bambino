@@ -2,724 +2,187 @@
 
 ## Origin
 
-This plan came out of a full `src/io/` architecture review (2026-07-01, pre-1.0, all API
-changes in scope). Core conclusion: **the `tokio` target has moved ahead of `embassy` and
-`esp-idf` in ways that are no longer just "not implemented yet" — some of the gaps are
-structural** (a global buffer singleton that can't support two concurrent TLS sessions, a
-sync-only ESP-IDF TLS path, a safety guarantee that's silently tokio-only). This file lays
-out phases to close those gaps. Each phase is written to be picked up cold — no prior
-conversation needed, just this file and the current code.
+The previous cycle of this plan (Phases 0-5, closed 2026-07-01) took `src/io/` from
+"tokio-only in practice" to genuinely multi-platform: fallible timers, typed addresses,
+Embassy TLS buffers owned per-connection instead of a panicking global, real async TLS on
+ESP-IDF, a platform-general TLS-version safety guarantee, and FTPS working on Embassy and
+ESP-IDF. That history is preserved in git (see `no_std phase 0` through `no_std phase 5`
+commits) — this file starts a fresh cycle rather than carrying the old phase writeups
+forward.
 
-**Closed question, no phase needed:** whether `TlsConnector::connect`'s unused `port: u16`
-parameter is dead weight that should be dropped. It isn't — `reference/01_network_discovery.md`
-confirms every *fixed* protocol port (8883 MQTT, 990 FTPS, 322 RTSPS, 6000 camera, 2021/1990
-SSDP) is constant across all models, so Bambu changing a fixed port isn't the risk this
-parameter guards against. The real per-connection port variability already exists and already
-uses this parameter: `ftps/client.rs`'s `negotiate_passive_port()` gets a fresh ephemeral port
-per `PASV` command, and that port is what's passed into `tls_connector.connect(&self.ip, port,
-raw_data_socket)` for the data channel. Keep the parameter as-is.
+A follow-up deep review of `src/io/`'s current state (2026-07-02, post-Phase-5) found two
+real gaps the previous cycle didn't close, both isolated to ESP-IDF's TLS code. Both are
+scoped below as independent, self-contained phases. A third candidate finding — whether
+`EmbassyFtpDataStreamFactory::create_data_stream`'s IPv4-only address parsing
+(`src/io/embassy.rs`) needed hardening — was resolved as **not a bug**: every real call
+site traces back to either a caller-supplied literal IP or SSDP discovery
+(`discovery/parser.rs::parse_location`, which only ever extracts a dotted-decimal IPv4
+address — Bambu printers don't advertise IPv6 or hostnames), so a hostname/IPv6 input at
+that call site is a genuine caller error, not a missing case. Landed directly as a doc
+comment (`io/embassy.rs`) plus a README callout in the "Embassy FTPS" section — no phase
+needed, already done.
 
 ---
 
-## Phase 0 — `TimerProvider::sleep` must be fallible [COMPLETE — 2026-07-01]
+## Phase 6 — ESP-IDF TLS-1.2 enforcement: fail closed instead of silently skipping [NOT STARTED]
 
-**Problem.** `TimerProvider::sleep()` returns `()`. On tokio this is honest — `tokio::time::sleep`
-cannot fail. On ESP-IDF it is not: `esp-idf-svc`'s `EspAsyncTimer::after()` returns
-`Result<(), EspError>` (confirmed against esp-idf-svc docs), and `io/esp_idf.rs`'s current
-`TimerProvider` impl papers over that with `.expect("ESP-IDF hardware timer scheduling failed")`
-— a panic on what is very plausibly a transient, recoverable condition (e.g. FreeRTOS timer/task
-resource exhaustion) on a physical device controlling a heated nozzle and bed. A panic here likely
-means a full firmware reset while a print may be running.
+**Problem.** `BambuFtpsClient::connect()` (`src/ftps/client.rs:72-81`) enforces the
+TLS-1.2 requirement on P2S/X2D models like this:
 
-**Design decision (already made, not open):** change the trait to return a `Result`, matching how
-every other fallible platform operation in this crate is modeled (`SocketError`-style). Tokio and
-Embassy impls stay trivially `Ok(())`; only ESP-IDF's impl has a real error to propagate. std-target
-code paths already propagate `Result` instead of panicking on recoverable errors — ESP-IDF's timer
-should follow the same convention instead of being the one place that panics.
+```rust
+if model.quirks().enforce_ftps_tls_1_2()
+    && let Some(version) = tls_connector.negotiated_version(&control_stream)
+    && version != TlsVersion::Tls12
+{
+    return Err(BambuError::ProtocolViolation(...));
+}
+```
+
+A `None` from `negotiated_version` skips the whole check — the connection proceeds
+unchecked. This is intentional and documented for the case of "platform genuinely cannot
+inspect the negotiated version" (the trait doc comment on both `TlsConnector` and
+`SecureConnect` calls this out as best-effort-by-design). The bug: ESP-IDF's
+`query_negotiated_tls_version` (`src/io/esp_idf.rs:326-351`, used by both
+`EspIdfSecureConnector::negotiated_version` and `EspIdfTlsConnector::negotiated_version`)
+*can* genuinely query the version — it has a real, working implementation — but also
+returns `None` on states that are query *failures*, not platform limitations:
+
+- `ssl_ctx` null (`esp_idf.rs:333-335`)
+- `version_ptr` null (`esp_idf.rs:338-340`)
+- version string isn't valid UTF-8 (`esp_idf.rs:344`)
+- version string doesn't match `"TLSv1.2"`/`"TLSv1.3"` (`esp_idf.rs:349`)
+
+All four are real post-handshake mbedTLS conditions. `ftps/client.rs` has no way to tell
+"this platform doesn't support version queries" apart from "this platform's query just
+failed" — both collapse to the same `None`, and both currently mean "skip the safety
+check" on a P2S/X2D printer with a heated bed and nozzle. That's a fail-open safety net on
+exactly the models it exists to protect.
+
+**Design decision (already made — resolved 2026-07-02, do not re-litigate):** fail closed.
+Change `ftps/client.rs`'s check so that when `enforce_ftps_tls_1_2()` is true, *any*
+non-`Some(Tls12)` result — including `None` — rejects the connection. Chosen over the
+alternative (a richer `Result<Option<TlsVersion>, QueryError>` return type threaded through
+`TlsConnector`/`SecureConnect` and all three platform impls, to distinguish "unsupported"
+from "failed") because that alternative is real API surface for a distinction only
+ESP-IDF's implementation can currently produce — no platform today has a legitimate
+"cannot query at all" case (Tokio and Embassy both always return `Some`). If a future
+platform genuinely can't query the version, revisit then; don't pre-build the distinction
+for a case that doesn't exist yet.
+
+**Consequence to accept, not a defect:** this changes semantics for *any* future
+`TlsConnector`/`SecureConnect` impl that intentionally returns `None` (there are none
+today) — such a platform would now hard-reject TLS-1.2-required models instead of
+connecting unchecked. That's the correct trade-off for a firmware controlling a heated
+nozzle and bed: refusing to connect beats connecting without the safety check silently
+holding.
 
 **Tasks:**
-1. Add a `TimerError` type to `src/io/mod.rs` (small enum, no_std/alloc-safe, mirrors the shape
-   of `SocketError` — start with a single `Other(&'static str)` variant or similar; do not
-   over-design this, it exists to replace one panic).
-2. Change `TimerProvider::sleep` signature to `async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError>`.
-3. Update `TokioTimer::sleep` and `EmbassyTimer::sleep` to wrap their (infallible) calls in `Ok(...)`.
-4. Update `EspIdfTimer::sleep` to map the real `EspError` into `TimerError` instead of `.expect()`-panicking.
-5. Update every call site (search for `.sleep(` across `src/`) to propagate the new `Result`
-   — most will just need a `?` inserted; check `client/mod.rs`'s `poll_until` and any retry/backoff
-   loops in `discovery.rs` specifically, since those are the most likely to call `sleep` in a loop
-   where an error needs to actually stop the loop rather than be silently ignored.
+1. In `src/ftps/client.rs`'s `connect()` (`:72-81`), replace the `if ... && let Some(...) &&
+   ...` chain with a `match` (or equivalent) that rejects on both `Some(v) if v !=
+   TlsVersion::Tls12` and on `None`, when `enforce_ftps_tls_1_2()` is true. Keep the
+   existing `Some(TlsVersion::Tls12)` pass-through unchanged.
+2. Update the rejection's `ProtocolViolation` message — it currently assumes TLS 1.3 was
+   the negotiated version (`"...but TLS 1.3 was negotiated..."`, `:77`). Word it to cover
+   both cases (wrong version negotiated, or version could not be determined) rather than
+   asserting a specific wrong version that may not be what actually happened.
+3. Update the README's TLS-1.2-enforcement paragraph (`README.md`, the paragraph
+   referencing "ESP-IDF TLS timeouts" near the "TLS configuration" section) to state the
+   fail-closed behavior explicitly: a version-query failure on a TLS-1.2-required model is
+   now a hard connection failure, not a silent pass-through.
+4. Add or update a test in `tests/ftps_test.rs` covering the `None`-from-`negotiated_version`
+   case on a TLS-1.2-required model quirk — the existing
+   `test_ftps_tls13_rejected_for_p2s`/`_x2d` tests (per Phase 4's verification notes) use
+   `VersionReportingTlsConnector`, which can presumably be configured to return `None`;
+   confirm it rejects rather than passes.
 
-**Ordering:** fully independent. Do this first — it's small, low-risk, and touches a trait every
-other phase's platform code also uses, so landing it early avoids rebasing later phases on top of
-a signature change.
+**Left out of scope, noted for awareness (not this phase's job):** `list_directory`/
+`upload_file`/`download_file` (`ftps/client.rs:145-181` and similar) open a *second* TLS
+connection per call for the data channel, and never call `negotiated_version` on it — only
+the control channel connection is checked, once, in `connect()`. In practice the data
+channel goes through the same `tls_connector`/`Config` as the control channel, so it should
+always negotiate the same version, but this hasn't been verified against real ESP-IDF
+hardware and isn't checked defensively. If a future review finds the data channel can
+diverge from the control channel's negotiated version, that's a separate phase — don't fold
+it into this one.
 
-**Done (2026-07-01):** all 5 tasks landed as specified — `TimerError` (single `Other(&'static str)`
-variant) added to `src/io/mod.rs`; `TimerProvider::sleep` now returns `Result<(), TimerError>`;
-`TokioTimer`/`EmbassyTimer`/`DummyTimer` (`client/dummy.rs`) wrap in `Ok(())`; `EspIdfTimer::sleep`
-maps the real `EspError` via `.map_err(...)` instead of `.expect()`-panicking. Also added
-`BambuError::TimerFailure(TimerError)` + `From<TimerError> for BambuError` (mirroring the existing
-`SocketError`/`NetworkError` pattern) so call sites can just `?` — this wasn't explicitly listed as
-a task but was required to make task 5 work, since `discover_devices` (`discovery.rs`) returns
-`Result<_, BambuError>`, not `Result<_, TimerError>`. Both `.sleep(` call sites (`discovery.rs`'s
-active-scan loop and a test) updated; `MockTimer` (discovery test module) updated to match the new
-signature. Verified: `cargo build`, `cargo build --no-default-features --features alloc --lib`,
-`cargo check --no-default-features --features embassy --lib`, `cargo test` (all 244 lib tests +
-integration tests pass), `cargo clippy` (no new warnings — pre-existing warnings in `ftps_test.rs`/
-`client_test.rs`/`io/embassy.rs`'s `connect()` are unrelated to this change), and
-`scripts/check-esp-idf.sh esp32c6` (Docker) — CONFIRMED passing, 2026-07-01.
-
-**Bonus fix, discovered while verifying:** `scripts/check-esp-idf.sh`'s caching claim in this file's
-intro ("only the first run per chip pays the full cost") had never actually been exercised —
-the named volumes (`bambino-esp-idf-*`) didn't exist on this machine before this session, so this
-was the true first-ever run of the caching path, not just the first run for this chip. It failed
-with `Permission denied` creating cargo registry cache dirs: Docker auto-creates named volumes
-root-owned on first use, but the image's build user is non-root (`esp`, uid 1000), so a brand-new
-volume was unwritable. Fixed by adding a one-time `--user root` prep `docker run` that `chown -R
-esp:esp`s all four volume mount points before the real build runs (idempotent — no-op on
-already-owned volumes). Re-ran clean after the fix (~1m22s once crates were fetched — this was the
-actual full cold build-std run the intro's "~5.5 min cold" estimate describes, since the volumes
-were empty). If you hit this same `Permission denied` on a *different* machine, it's this same bug;
-the fix is already in the script, just re-run.
+**Ordering:** independent of Phase 7. Small, single-file-plus-tests change — safe to do
+first or in either order.
 
 ---
 
-## Phase 1 — `no_std` address handling and error fidelity [COMPLETE — 2026-07-01]
+## Phase 7 — ESP-IDF TLS: log discarded errors instead of dropping them silently [NOT STARTED]
 
-**Done:** all 5 tasks landed as specified, plus the Option A error-fidelity fix (recommended
-option, not Option B).
+**Problem.** Four sites in `src/io/esp_idf.rs` discard a real `esp_idf_svc::sys::EspError`
+with no logging at all:
 
-- `AsyncUdpSocket::send_to`/`recv_from` and `BindableUdpSocket::bind` (`src/io/mod.rs`) now use
-  `core::net::SocketAddr` instead of `&str`/`String` — no `alloc`/`std` needed for the type itself.
-  `TokioUdpSocket`, `EspIdfUdpSocket` updated to pass `SocketAddr` straight through to
-  `std::net::UdpSocket` (which already accepts it via `ToSocketAddrs`) instead of formatting/parsing.
-- `EmbassyUdpSocket`: `parse_endpoint` deleted entirely. `recv_from` converts
-  `smoltcp::wire::IpEndpoint -> core::net::SocketAddr` via `Endpoint`'s built-in `From` impl
-  (unconditional, no feature gate). `send_to` converts the other direction via `SocketAddrV4`,
-  **not** a direct `SocketAddr -> IpEndpoint` `.into()` — smoltcp 0.13.1 only provides
-  `From<SocketAddr> for Endpoint` when **both** `proto-ipv4` and `proto-ipv6` are enabled
-  (`smoltcp/src/wire/ip.rs`), and this crate's `Cargo.toml` only turns on `proto-ipv4` (SSDP is
-  IPv4-only — 239.255.255.250 multicast and 255.255.255.255 broadcast have no IPv6 equivalent).
-  Fixed by matching on `SocketAddr::V4`/`::V6` and converting the V4 case via `SocketAddrV4`'s
-  always-available `From` impl, rejecting V6 with `SocketError::InvalidInput`. **Relevant to Phase
-  5's Embassy FTPS leg**: the same conversion pattern (match-on-V4, reject V6) will be needed
-  wherever `EmbassyFtpDataStreamFactory` dials the PASV-negotiated data port, since it'll take the
-  same typed-address route now that `parse_endpoint`/string addresses are gone.
-- `discovery/mod.rs`: `broadcast_search` and `discover_devices` build `SocketAddr` directly from
-  `const Ipv4Addr` values (`MULTICAST_ADDR`, `BROADCAST_ADDR`, `UNSPECIFIED_ADDR`) instead of
-  `format!`-ing strings; all test mocks (`MockDiscoverySocket`, `FailSocket`, `HalfFailSocket`,
-  `QuickExitSocket`) updated to the new trait signature. `MULTICAST_IP: &str` constant kept as-is
-  (public API, doc/display use) alongside the new typed `MULTICAST_ADDR` — not a duplication to
-  clean up, they serve different purposes (human-readable constant vs. socket-op value).
-- Option A (log-at-the-boundary) landed in `map_std_io_error` (`src/io/mod.rs`) — the catch-all
-  match arm now does `log::debug!("{other_msg}: {err}")` before constructing `SocketError::Other`.
-  Single change point: `to_socket_error` (tokio) and `to_esp_socket_error` (ESP-IDF) both delegate
-  to this shared function, so both platforms get real-error logging from the one edit. Did not
-  touch the handful of `SocketError::Other("...")` sites in `esp_idf.rs::secure_connect` that
-  aren't wrapping a `std::io::Error` (e.g. "ESP-TLS initialization failed") — those already carry
-  a specific static message and there's no discarded errno to surface.
+- `EspTlsStream::read`'s non-would-block error arm: `Err(_) => return
+  Err(embedded_io_async::ErrorKind::Other)` (`esp_idf.rs:245`)
+- `EspTlsStream::write`'s equivalent arm (`esp_idf.rs:263`)
+- `EspIdfSecureConnector::secure_connect`'s handshake retry loop: `Err(_) => return
+  Err(SocketError::ConnectionRefused)` (`esp_idf.rs:294`)
+- `EspIdfTlsConnector::connect`'s handshake retry loop, same pattern (`esp_idf.rs:567`)
 
-**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
-`cargo check --no-default-features --features embassy --lib`, `cargo test` (244 lib tests + all
-integration tests pass, mocks updated), `cargo clippy --all-targets` (no new warnings — the two
-pre-existing ones in `ftps_test.rs`/`client_test.rs` are unrelated, per Phase 0's note), and
-`scripts/check-esp-idf.sh esp32c6` (Docker, CONFIRMED passing).
+This directly undercuts the principle the previous plan cycle established in Phase 1
+("Option A: log-at-the-boundary before discarding into a generic error" — see
+`map_std_io_error` in `src/io/mod.rs`, which does `log::debug!("{other_msg}: {err}")`
+before constructing `SocketError::Other`). Phase 1's task list scoped that fix narrowly to
+`SocketError::Other` construction sites reached through `map_std_io_error`/
+`to_esp_socket_error`/`to_socket_error` — none of these four sites route through those
+functions (two produce a different error type, `embedded_io_async::ErrorKind`, entirely;
+two produce `SocketError::ConnectionRefused`, a different variant that was never in scope).
+Phase 1's own retrospective excused the *static-message* `SocketError::Other("...")` sites
+in `secure_connect` ("no discarded errno to surface") — but that reasoning doesn't apply
+here, since these four sites do have a real, discarded `EspError` each time.
 
-**Left untouched (intentionally, out of scope):** `SsdpDevice.ip` (`discovery/parser.rs`) stays
-`String` — it's parsed out of the SSDP payload's `LOCATION:` header text, not the UDP source
-address, so it's a text-parsing concern rather than a typed-socket-API concern. Embassy's
-`BufferGuard`/static TLS buffers in `io/embassy.rs` are untouched — that's Phase 2's problem, not
-this phase's.
+Practical impact: on ESP-IDF specifically — the platform where physical-device debugging
+access is hardest — a TLS handshake or read/write failure surfaces as an opaque
+`ConnectionRefused`/`ErrorKind::Other` with no way to tell whether it was a cert mismatch,
+a network reset, a timeout, or something else, without attaching a debugger or adding
+temporary instrumentation.
 
----
-
-**Problem A — heap allocation and hand-rolled parsing on the hot discovery path.**
-`AsyncUdpSocket::send_to`/`recv_from` (`src/io/mod.rs`) take/return `&str`/`String` for addresses.
-Concretely:
-- `EmbassyUdpSocket::recv_from` (`io/embassy.rs`) heap-allocates a fresh `alloc::string::String`
-  via `write!` for *every received datagram* — on a no_std/alloc target, in what is meant to be a
-  low-resource-footprint discovery loop.
-- `EmbassyUdpSocket`'s `parse_endpoint` hand-rolls an IPv4-only, octet-by-octet string parser to
-  turn a `send_to` target string back into a typed `IpEndpoint`. It's IPv6-blind and its only job
-  is undoing string formatting that shouldn't have happened in the first place.
-- Every implementor (`TokioUdpSocket`, `EmbassyUdpSocket`, `EspIdfUdpSocket`) round-trips through
-  a string representation of an address that the underlying platform socket API already hands you
-  as a typed value (`std::net::SocketAddr`, `embassy_net::IpEndpoint`).
-
-`core::net::{IpAddr, SocketAddr}` has been stable since Rust 1.77 and requires neither `std` nor
-`alloc`. There is no reason left to route through `String` here.
-
-**Problem B — `SocketError::Other(&'static str)` discards real error detail.**
-Every unmapped `std::io::Error` collapses to one of a handful of fixed compile-time strings
-(`map_std_io_error`'s `other_msg` parameter). The actual OS errno/message is gone by the time
-`log::debug!`/`log::trace!` could report it. Contrast this with `TokioIoError` (used one layer up,
-at the `embedded_io_async`/`AsyncIo` boundary), which keeps the real `std::io::Error` via
-`source()`. Same failure domain, two different fidelity levels depending which trait boundary the
-error crossed.
-
-**Design decision — mark decide-first:**
-- **Option A (log-at-the-boundary, no API change):** at each `map_std_io_error`/`to_esp_socket_error`
-  call site, `log::debug!("{err}")` the real error immediately before discarding it into
-  `SocketError::Other`. Zero API surface change, loses nothing that matters for a `Result`-returning
-  caller (they only ever match on the `SocketError` variant), keeps the enum `Copy`.
-- **Option B (carry detail in the type):** add an alloc-gated variant, e.g.
-  `#[cfg(feature = "alloc")] OtherDetailed(alloc::string::String)`, used only where `alloc` is
-  available; `Other(&'static str)` remains the no-alloc fallback. More invasive — `SocketError`
-  loses its uniform shape across std/no_std, and every match arm gains an alloc-conditional case.
-
-Recommendation: start with Option A. It's a one-line-per-call-site fix that solves the actual
-complaint (you can't see what went wrong when debugging) without touching the public error type.
-Only revisit Option B if there's a concrete case where callers need to inspect the detail
-programmatically, not just log it.
+**Design decision:** none needed — this is the same "log at the boundary, don't change the
+public error type" approach Phase 1 already established and the codebase already uses
+elsewhere. No API surface change.
 
 **Tasks:**
-1. Change `AsyncUdpSocket::send_to`'s `target: &str` to `target: core::net::SocketAddr` (or
-   `&core::net::SocketAddr`) and `recv_from`'s return type from `(usize, String)` to
-   `(usize, core::net::SocketAddr)`, in `src/io/mod.rs`.
-2. Update `BindableUdpSocket::bind`'s `addr: &str` — decide whether to also switch this to
-   `SocketAddr` (cleaner) or leave as `&str` since it's a one-time setup call, not a hot path (low
-   stakes either way — pick `SocketAddr` for consistency unless it complicates the `"0.0.0.0:2021"`
-   style call sites more than it's worth).
-3. Update `TokioUdpSocket`, `EspIdfUdpSocket`, `EmbassyUdpSocket` impls accordingly. Delete
-   `parse_endpoint` entirely — `embassy_net::IpEndpoint` should be constructible directly from
-   `core::net::SocketAddr`'s octets, or from a small typed conversion, no string round-trip needed.
-4. Update `discovery.rs` and any other caller that currently formats/parses these addresses as
-   strings.
-5. Apply the Option A logging fix at each `SocketError::Other` construction site
-   (`io/tokio.rs::to_socket_error`, `io/esp_idf.rs::to_esp_socket_error`, and the shared
-   `map_std_io_error` in `io/mod.rs`).
+1. At `esp_idf.rs:245` (`EspTlsStream::read`'s discard arm), log the real error before
+   converting: `Err(e) => { log::debug!("ESP-IDF TLS read failed: {e:?}"); return
+   Err(embedded_io_async::ErrorKind::Other); }` (adjust format to whatever `EspError`'s
+   `Debug`/`Display` actually renders as useful — check which is more informative; `EspError`
+   implements both `Debug` and `Display` via `esp-idf-svc`, prefer `Display` if it includes
+   the human-readable ESP-IDF error string, not just the numeric code).
+2. Same fix at `esp_idf.rs:263` (`EspTlsStream::write`).
+3. Same fix at `esp_idf.rs:294` (`EspIdfSecureConnector::secure_connect`'s non-would-block
+   handshake error).
+4. Same fix at `esp_idf.rs:567` (`EspIdfTlsConnector::connect`'s non-would-block handshake
+   error).
+5. Compile-check with `scripts/check-esp-idf.sh esp32c6` (Docker) — this only touches
+   logging calls, no new unsafe surface or API change, but confirm it still builds clean
+   per this repo's convention of not trusting a stale cache (force with `cargo clean -p
+   bambino --target riscv32imac-esp-espidf` inside the container first if re-running on a
+   machine where a prior clean run's volumes are still warm).
+6. No README change needed — this is an internal debuggability fix, not a behavior or API
+   change worth documenting for consumers.
 
-**Ordering:** independent of Phase 0. Independent of Phases 2–5, but do it before Phase 5 (FTPS on
-embedded) since Phase 5 adds new Embassy/ESP-IDF network code that should be written against the
-typed-address API, not the string one — no sense writing new code against an API you're about to
-delete.
-
----
-
-## Phase 2 — Embassy TLS buffer ownership (remove the global singleton) [COMPLETE — 2026-07-01]
-
-**Done:** Option A (caller-supplied buffers per connector, the recommended option) landed as
-specified.
-
-- Removed `SyncUnsafeCell`, `TLS_READ_BUFFER`, `TLS_WRITE_BUFFER`, `TLS_BUFFERS_IN_USE`,
-  `BufferGuard`, and the `unsafe impl Sync` block entirely from `io/embassy.rs` — no more
-  process-wide statics, no more panic-as-concurrency-control.
-- `EmbassyTlsConnector::new()` now takes `read_buf: &'a mut [u8]` and `write_buf: &'a mut [u8]`
-  in addition to `config`/`rng`. Buffers are stored as `RefCell<Option<&'a mut [u8]>>` — `connect()`
-  only takes `&self` (matches the `TlsConnector` trait signature, shared across all platforms, which
-  can't be changed to `&mut self` for this one impl), so interior mutability was required to hand out
-  the buffers. `connect()` does `.borrow_mut().take()` to move the `&'a mut [u8]` out into the
-  `TlsConnection` with the connector's own lifetime `'a` (not the temporary `RefMut`'s) — this is
-  what lets `Self::Stream` still borrow with lifetime `'a` like before. Calling `connect()` a second
-  time on the same connector (buffers already taken) returns `SocketError::Other` instead of a second
-  aliased borrow or a panic — one connector now means "good for one connection," and a second
-  concurrent connection means constructing a second connector with its own buffer pair, exactly as
-  Option A's design called for.
-- `GuardedTlsConnection` renamed to `EmbassyTlsStream` (task 3) — it no longer guards anything, just
-  owns the `TlsConnection` directly, no guard field.
-- README's Embassy section gained a "Embassy TLS buffers" subsection under Platform targets showing
-  how to size and pass buffers into `EmbassyTlsConnector::new()`, and stating explicitly that a second
-  concurrent connection needs its own connector/buffer pair (task 4).
-- Task 5 (test or doc-comment establishing "2x buffer RAM, not a panic"): went with the doc-comment
-  route, not a runtime test — writing a real test would need a working async executor plus a fake
-  TLS-speaking peer, and no such harness exists anywhere in this crate for the `embassy` feature today
-  (consistent with the rest of this plan: `embassy` is compile-checked, never `cargo test`-run, and
-  there's no CI to catch a flaky/hanging embassy test if one were added). The `EmbassyTlsConnector`
-  doc comment states the buffer-per-connector/no-panic guarantee directly; `connect()`'s
-  buffer-already-consumed error path is exercised implicitly by the type system (a second `connect()`
-  call physically cannot get a live `&'a mut [u8]` out of an already-`None` `RefCell`), not by a test.
-  If a future phase adds an embassy test harness (e.g. for Phase 5's Embassy FTPS integration test),
-  revisit adding a real two-connector concurrency test then.
-
-**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
-`cargo check --no-default-features --features embassy --lib` (forced recompilation, not a stale
-cache hit), `cargo test` (all lib + integration + doctests pass, unaffected — nothing outside
-`io/embassy.rs` referenced the removed types), `cargo clippy --all-targets` (only the two
-pre-existing warnings noted in Phase 0/1), and `cargo clippy --no-default-features --features
-embassy --lib` (one pre-existing `await_holding_refcell_ref` warning on the *rng* RefCell, confirmed
-via `git stash` to predate this change — not introduced by this phase, not touched by it). Did not
-run `scripts/check-esp-idf.sh` — this phase only touched `io/embassy.rs`, no ESP-IDF code.
-
-**Problem.** `io/embassy.rs` backs every `EmbassyTlsConnector` connection with two **process-wide
-static** 16KB buffers (`TLS_READ_BUFFER`, `TLS_WRITE_BUFFER`) guarded by a single `AtomicBool`.
-`BufferGuard::acquire()` **panics** if a second `GuardedTlsConnection` is requested while one is
-already live — "only one concurrent TLS connection is supported" is enforced at runtime, by
-crashing the firmware, not at compile time and not gracefully.
-
-This is not just an efficiency nitpick — it is the direct blocker for Phase 5's Embassy leg. FTPS
-(`ftps/client.rs`) holds the control channel's `Tls::Stream` open in `self.control_stream` for the
-lifetime of the client, and separately opens a *second* TLS-wrapped data channel per
-`list_directory`/`upload_file`/`download_file` call (for every model except the ones where
-`model.quirks().uses_plaintext_ftps_data_channel()` is true). That's two live
-`GuardedTlsConnection`s at once, structurally, for the common case. With the current design, the
-second `connect()` call panics immediately.
-
-**Design constraint.** Embedded RAM is scarce and the whole point of the static-buffer approach was
-predictability (fixed allocation, no fragmentation) — a legitimate concern, not to be thrown away
-carelessly. The fix is to stop hiding the allocation *decision* inside the crate as a hardcoded
-singleton, and instead let the caller (who knows their board's RAM budget) supply the buffer
-storage.
-
-**Options — decide first:**
-- **Option A: caller-supplied buffers per connector.** `EmbassyTlsConnector::new()` takes
-  `&'a mut [u8]` read/write buffer slices as constructor arguments (in addition to `config`/`rng`),
-  sized by the caller. Opening N concurrent connections means constructing N connectors, each with
-  its own buffer pair — the caller decides N and pays for it explicitly. No statics, no panic, no
-  hidden global.
-- **Option B: const-generic buffer size, still per-connector-instance (not static).** Same as A but
-  `EmbassyTlsConnector<'a, const BUF_SIZE: usize, CipherSuite, Rng>` owns its buffers as
-  `[u8; BUF_SIZE]` fields (stack or caller-controlled placement) rather than taking slices. Slightly
-  less flexible (size fixed at the type level) but avoids the caller having to manage lifetimes of
-  external buffer storage.
-
-Recommendation: Option A. It matches how `embedded-tls`'s own `TlsConnection::new(stream, read_buf,
-write_buf)` already wants its buffers passed in — the crate is currently *fighting* that API by
-stuffing static buffers behind it instead of threading caller-supplied ones through. Option A is
-also strictly more flexible for the FTPS case (control channel and data channel buffers can be
-sized differently if useful — e.g. directory listings are small, file transfers are large).
-
-**Tasks:**
-1. Remove `SyncUnsafeCell`, `TLS_READ_BUFFER`, `TLS_WRITE_BUFFER`, `TLS_BUFFERS_IN_USE`,
-   `BufferGuard`, and the `unsafe impl Sync` block entirely from `io/embassy.rs`.
-2. Change `EmbassyTlsConnector::new()` to accept read/write buffer slices (chosen option above).
-3. Change `GuardedTlsConnection` (rename it — it no longer guards anything) to just own/borrow the
-   `TlsConnection` directly, no guard field.
-4. Update the README's Embassy quick-start section (it currently doesn't mention buffer sizing at
-   all) to show how to size and pass buffers when constructing `EmbassyTlsConnector`.
-5. Add a test or doc-comment making explicit that opening two connectors concurrently is now just
-   "costs 2x buffer RAM," not "panics."
-
-**Ordering:** independent of Phase 0/1. Must land before Phase 5's Embassy FTPS work.
+**Ordering:** independent of Phase 6. Small, single-file change, four near-identical edits
+— low risk.
 
 ---
 
-## Phase 3 — ESP-IDF: real async TLS (decide-first on scope) [COMPLETE — 2026-07-01]
+## Verification (both phases)
 
-**Done:** landed the poll-based non-blocking design (path (ii) below), scoped to this
-phase's original task list (`SecureConnect`/`EspIdfSecureConnector`/`EspTlsStream` only).
+Standard gate, same as every phase in the previous cycle:
 
-**Correction to this phase's original framing:** the "decide first" Option A/B split
-below assumed ESP-IDF's only route to wrap-an-existing-stream (`TlsConnector`) was raw
-mbedTLS FFI. That's false. A spike — grepping the actual cached bindgen output and
-`esp-idf-svc` 0.52.1's source inside `scripts/check-esp-idf.sh`'s docker image, not just
-reading docs — found `esp_idf_svc::tls` already ships a **safe** wrapper:
-`EspTls<S: Socket>::adopt(socket)` wraps an *already-connected* socket (confirmed: no raw
-mbedTLS FFI needed for wrap-existing-stream), and `EspAsyncTls<S: PollableSocket>` gives
-genuine waker-based non-blocking read/write (not polling) if paired with the `async-io`
-crate + `MountedEventfs` + a dedicated background thread. Three concrete paths were
-presented to the user rather than picked unilaterally (per explicit instruction not to
-resolve "decide first" sections without asking): (i) dial-only + poll (closest to the
-original narrow Option A, just built on the safe wrapper instead of raw FFI), (ii)
-wrap-existing-stream via `adopt()` + poll (no new deps, unblocks Phase 5's ESP-IDF
-`TlsConnector` need), (iii) full `EspAsyncTls` + `async-io` (new dependency, real app-side
-setup: sized eventfd mount, dedicated thread w/ bumped stack, ESP-IDF
-main-task/async-io-thread priority-inversion workaround — unverified to even compile,
-`async-io` was never resolved in this project's lockfile before). User picked path (ii)'s
-underlying mechanism (safe wrapper + poll), but scoped *this phase's actual code change*
-to `SecureConnect`/`EspIdfSecureConnector`/`EspTlsStream` — adding a brand-new
-`TlsConnector` impl stays Phase 5's job, per PLAN.md's phase-boundary rule (see below for
-what Phase 5 needs to know).
+```sh
+cargo build
+cargo build --no-default-features --features alloc --lib
+cargo check --no-default-features --features embassy --lib
+cargo test
+cargo clippy --all-targets
+scripts/check-esp-idf.sh esp32c6   # required for Phase 7 (esp-idf-gated code); recommended for Phase 6 too since ftps/client.rs isn't esp-idf-gated but its behavior change is ESP-IDF-motivated
+```
 
-**Landed:**
-- `EspIdfSecureConnector::build_config()` builds `esp_idf_svc::tls::Config` (cert fields
-  via `X509::der(...)`, `non_block = true`) instead of hand-rolling `esp_tls_cfg`'s
-  bindgen-union fields (`cfg.__bindgen_anon_N.field`) — deletes that unsafe surface
-  entirely, delegates to code `esp-idf-svc` maintains.
-- `secure_connect()` calls `EspTls::new()`, then polls `.connect(host, port, &cfg)` via
-  `is_would_block()` (checks `EWOULDBLOCK`/`ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`) and a
-  fresh `EspIdfTimer::sleep(TLS_POLL_INTERVAL)` (20ms) between attempts. No manual
-  `esp_tls_conn_destroy` cleanup needed anymore — `EspTls`'s own `Drop` impl handles it
-  (RAII; one fewer error-path footgun than the raw-FFI version had, which needed a manual
-  destroy call on every failure branch).
-- `EspTlsStream` now wraps `EspTls<InternalSocket>` plus an owned `EspIdfTimer`; its
-  `embedded_io_async::Read`/`Write` impls poll the same way for actual I/O, not just the
-  handshake — this is what actually fixes the "timeout can't preempt a blocked call"
-  problem, since `read`/`write` no longer block inside the FFI call either.
-- `EspIdfSecureConnector::new()`/`with_certs()`'s public API is **unchanged** — the timer
-  is constructed fresh inside `secure_connect()` and moved into the resulting
-  `EspTlsStream`, so no constructor signature broke.
-- README gained an "ESP-IDF TLS timeouts" subsection (mirrors Phase 2's Embassy-buffers
-  one) stating honestly that this is poll-based, not true readiness notification, and why.
-
-**Left for Phase 5 — do not rediscover this:** `esp_idf_svc::tls::EspTls::adopt(socket)`
-(`socket: S: Socket`, where `Socket` just needs `handle() -> i32` and `release()`) is what
-Phase 5's ESP-IDF `TlsConnector` impl should build on — no raw mbedTLS FFI required, and
-it can reuse this phase's `is_would_block`/poll pattern for read/write too. Needs a small
-`EspIdfTcpStream(std::net::TcpStream)` type implementing `embedded_io_async`'s traits
-(blocking is fine — it's only used to seed `adopt()` via its raw fd) plus a `Socket` impl
-exposing that fd. This unblocks Phase 5's ESP-IDF FTPS leg **now** — Phase 3's original
-"decide-first" Option B (raw mbedTLS FFI, big unsafe surface) is moot, don't revisit it.
-The heavier `EspAsyncTls` + `async-io` path is a legitimate but separate future upgrade
-(real new dependency + app-side setup cost, detailed in the README) — it is not required
-for FTPS to work correctly, only for it to avoid a fixed poll interval, so don't fold it
-into Phase 5 without a fresh, explicit decision.
-
-**Verified:** `scripts/check-esp-idf.sh esp32c6` (docker) — compiles clean on first try.
-`cargo clippy` inside the same docker image against `--no-default-features --features
-esp-idf --lib` — **first time this project has run clippy against the esp-idf feature at
-all** (previous phases' "cargo clippy" gate only ran on the host/tokio target, which never
-compiles esp-idf-gated code, since esp-idf-sys needs the SDK toolchain this host doesn't
-have) — 0 new warnings; the 4 that surfaced (`await_holding_refcell_ref` on
-`EspIdfTimer::sleep`'s `RefCell`, `redundant_closure` x3 in `EspIdfUdpSocket`,
-`new_without_default` on `EspIdfSecureConnector::new`) all predate this change (confirmed
-by inspecting the surrounding code — all untouched by this phase's diff), just never
-surfaced before because clippy had never run against this feature combination. Also ran
-the standard host gates, each force-recompiled via `cargo clean -p bambino` between runs
-to rule out a stale-cache false pass (`io/esp_idf.rs` is unconditionally `mod`-declared in
-`io/mod.rs` even though its contents are `#[cfg(feature = "esp-idf")]`-gated, so a
-same-file no-op recompile could otherwise look identical to a real one): `cargo build`,
-`cargo build --no-default-features --features alloc --lib`, `cargo check
---no-default-features --features embassy --lib` (all pass), `cargo test` (all lib +
-integration + doctests pass, untouched by this phase), `cargo clippy --all-targets` on
-host (only the pre-existing `ftps_test.rs`/`client_test.rs` warnings noted since Phase 0).
-
----
-
-**Original phase text below, for context on the problem and the options considered.**
-
-**Problem.** `io/esp_idf.rs`'s `EspTlsStream::read`/`write` call raw blocking POSIX `read()`/`write()`
-on a socket fd, and `EspIdfSecureConnector::secure_connect` calls `esp_tls_conn_new_sync` — a
-blocking handshake. The doc comment already admits this ("adapted to embedded-io-async via
-blocking-mode reads/writes... full async integration requires esp-idf-svc socket-async support
-which is not yet stable"), but that claim is now out of date: ESP-IDF's own docs confirm
-`esp_tls_conn_new_async` exists as the non-blocking counterpart to `esp_tls_conn_new_sync`
-(`esp-idf` `protocols/esp_tls.rst`). The building block for a real async connect exists; it's just
-not used.
-
-The practical impact: any `TimerProvider`-based timeout wrapped around ESP-IDF network I/O
-(exactly the pattern `client/mod.rs`'s `poll_until` and the "chain `.with_timer()` for real
-timeouts" guidance in the README describe) cannot preempt a blocked FFI call — the timeout can't
-fire mid-handshake or mid-read on this platform, silently, with no warning anywhere in the docs.
-
-**Decide first — how far to take this, two options:**
-- **Option A (narrower): make the existing dial-owned model actually async.** Swap
-  `esp_tls_conn_new_sync` for `esp_tls_conn_new_async`, and replace the blocking fd `read`/`write`
-  in `EspTlsStream` with a non-blocking read/write + a real async wait (e.g. integrate with
-  esp-idf-svc's async socket/eventfd primitives, or poll via `EspAsyncTimer` on `EWOULDBLOCK`).
-  `SecureConnect` stays as the ESP-IDF abstraction — it's still a "dial your own connection"
-  model, just genuinely non-blocking now. Lower risk, keeps `SecureConnect` as a permanent
-  third connection pattern alongside `TlsConnector`.
-- **Option B (broader): investigate whether ESP-IDF can support wrap-an-existing-stream TLS at
-  all**, which would let ESP-IDF implement `TlsConnector` directly instead of `SecureConnect` —
-  and would remove `SecureConnect` from the crate's trait surface entirely (tokio and embassy
-  don't need it; it exists solely because of this platform's constraint). ESP-IDF's high-level
-  `esp_tls_conn_new_sync`/`_async` are dial-style (they establish their own TCP connection as part
-  of the call) per the docs pulled for this review — no confirmed high-level API for wrapping an
-  already-connected fd was found. This would require dropping to lower-level `mbedtls` FFI
-  (ESP-IDF ships the underlying mbedTLS component directly, which historically *can* wrap an
-  arbitrary fd/BIO) — meaning more raw unsafe surface in exchange for collapsing three connection
-  abstractions down to two. **This needs a spike before committing** — confirm whether
-  `esp-idf-svc`/`esp-idf-sys` expose enough of raw mbedTLS to do this safely, and whether it's
-  worth the unsafe-code trade for the abstraction simplification, before writing the real
-  implementation. Prototype inside `scripts/check-esp-idf.sh`'s Docker image rather than against
-  bare `esp-idf-sys` docs — it has the SDK and headers already in place to actually try calls
-  against raw mbedTLS instead of guessing at the FFI surface from documentation alone.
-
-Recommendation: do Option A now (concrete, bounded, fixes the "async is a lie" problem this phase
-is named for). Treat Option B as a separate, explicitly-scoped spike — do not block Option A on it.
-
-**Tasks (Option A):**
-1. Replace `esp_tls_conn_new_sync` with `esp_tls_conn_new_async` in
-   `EspIdfSecureConnector::secure_connect`.
-2. Replace the raw blocking `read`/`write` syscalls in `EspTlsStream` with non-blocking calls plus
-   a genuine async wait on `EWOULDBLOCK`/`EAGAIN` (check what esp-idf-svc offers for async socket
-   readiness). Compile-check with `scripts/check-esp-idf.sh esp32c6` (or the relevant chip) — this
-   resolves the old "no way to verify without the toolchain" gap by running the check inside the
-   matching `espressif/idf-rust` Docker image. That confirms it *builds*; it does not confirm
-   correct runtime behavior against real hardware, and the script isn't wired into CI (there is
-   none in this repo), so still run it manually and don't treat a clean compile as proof the async
-   wait logic is actually correct on-device.
-
-   **Already done (2026-07-01):** the script was run for the first time against `esp32c6`, and
-   `io/esp_idf.rs` did not compile as originally written — fixed two pre-existing bugs unrelated
-   to this phase's actual scope: `esp_idf_svc::sys::read`/`write` take `usize` for the length arg,
-   not `u32`; and `esp_tls_cfg`'s cert fields (`cacert_buf`, `clientcert_buf`, etc.) live behind
-   bindgen-generated anonymous unions (`cfg.__bindgen_anon_N.field`), not flat on the struct. Both
-   fixed and reconfirmed passing. Don't rediscover these as "new" findings when this phase's actual
-   async-I/O work begins — the baseline now compiles clean, so any future compile error in this
-   file is from the async rewrite itself, not leftover cruft.
-3. Document in the README's platform-targets section that ESP-IDF network I/O did not previously
-   respect `TimerProvider`-based timeouts mid-operation, and that this phase fixes it (or, if
-   Option A can't fully deliver preemptible I/O, document the remaining limitation honestly instead
-   of leaving it unstated).
-
-**Ordering:** independent of Phases 0–2. Its outcome (specifically, whether Option B gets picked up
-later) affects how Phase 5's ESP-IDF leg is designed — do this phase before Phase 5.
-
----
-
-## Phase 4 — Make the TLS-version safety guarantee platform-general [COMPLETE — 2026-07-01]
-
-**Done:** all 4 tasks landed as specified.
-
-- Added `SecureConnect::negotiated_version` (`src/io/mod.rs`), mirroring `TlsConnector`'s
-  method exactly (default `None`, same doc-comment shape). Only real implementors
-  (`DummySecureConnect`, `PreConnected`, `EspIdfSecureConnector`, `TokioSecureConnector`)
-  are affected; the first two get the default `None`.
-- **Bonus fix, discovered while landing task 1:** `TokioSecureConnector` (the MQTT-path
-  connector, `io/tokio.rs`) wraps a `TokioTlsConnector` internally, which already had a
-  real `negotiated_version` impl since before this phase — but `TokioSecureConnector`
-  itself never forwarded it, so any future caller going through `SecureConnect` on tokio
-  would have silently gotten `None` despite the real answer being one call away. Wired
-  `TokioSecureConnector::negotiated_version` to delegate to
-  `self.tls_connector.negotiated_version(stream)`. Not explicitly listed as a task, but
-  free and closes the same capability gap task 1 was about.
-- `EmbassyTlsConnector::negotiated_version` (task 2) returns `Some(TlsVersion::Tls13)`
-  unconditionally — not a runtime query. Verified against `embedded-tls` 0.19's docs
-  (docs.rs, not assumed from memory): it is a **TLS 1.3-only** client with no TLS 1.2
-  handshake support and no version-query method at all (there's only ever one possible
-  answer, so it doesn't expose one). Practical effect: a model with
-  `model.quirks().enforce_ftps_tls_1_2()` true (P2S, X2D) is now correctly rejected with
-  `ProtocolViolation` on Embassy instead of silently connecting unchecked — the
-  guarantee wasn't just unimplemented before, it's genuinely incompatible with that
-  connector, and now says so.
-- `EspIdfSecureConnector::negotiated_version` (task 3) resolved the "not yet inspected"
-  gap from Phase 3's spike: `EspTls::context_handle()` → `*mut sys::esp_tls` →
-  `esp_tls_get_ssl_context()` (confirmed public, stable ESP-TLS API — `esp-idf-svc`
-  0.52.1 already calls it the same way internally, in `EspTls`'s ALPN accessor, so this
-  isn't new unsafe surface) → cast to `*mut sys::mbedtls_ssl_context` → mbedTLS's
-  `mbedtls_ssl_get_version()`, which returns a `*const c_char` string parsed against
-  `"TLSv1.2"`/`"TLSv1.3"` (any other value, including future/unknown mbedTLS strings,
-  maps to `None` — best-effort, not a hard failure). Confirmed by spiking inside
-  `scripts/check-esp-idf.sh`'s Docker image against the actual cached bindgen output
-  (`target/riscv32imac-esp-espidf/debug/build/esp-idf-sys-*/out/bindings.rs`) rather than
-  guessing from headers — the public `esp_tls` struct is fully opaque
-  (`_unused: [u8; 0]`), so `esp_tls_get_ssl_context()` is the only sanctioned way in;
-  there is no direct field path from `*mut esp_tls` to the ssl context.
-  **Scope decision, not previously flagged:** this assumes the default mbedTLS backend
-  (`CONFIG_ESP_TLS_USING_MBEDTLS=y`). A wolfSSL-configured build
-  (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) can't be detected at compile time today — doing so
-  would need this crate to gain its own `build.rs` that forwards
-  `esp_idf_esp_tls_using_wolfssl`-style cfgs the way `esp-idf-svc`'s own build script
-  does for itself (`bambino` has no `build.rs` at all currently). Documented in code and
-  the README rather than blocked on; the rest of `io/esp_idf.rs` already makes the same
-  mbedTLS-default assumption implicitly (e.g. `build_config`'s `X509::der` usage), so
-  this isn't a new category of limitation.
-- README (task 4): the TLS-1.2-enforcement paragraph now states the guarantee is
-  platform-general and names which connector does what (`TokioTlsConnector` real query,
-  `EmbassyTlsConnector` constant-TLS-1.3, `EspIdfSecureConnector` real mbedTLS query);
-  added an "ESP-IDF TLS version query" subsection (mirroring Phase 2/3's per-platform
-  subsections) documenting the wolfSSL gap honestly instead of leaving it unstated.
-
-**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
-`cargo check --no-default-features --features embassy --lib` (all three force-recompiled
-via `cargo clean -p bambino` between runs, per Phase 3's stale-cache warning), `cargo
-test` (all 36 lib + 13 FTPS integration + 1 MQTT integration + 8 doctests pass — including
-the existing `test_ftps_tls13_rejected_for_p2s`/`_x2d` tests, unaffected since they use
-`VersionReportingTlsConnector`, not a real platform connector), `cargo clippy
---all-targets` (only the two pre-existing warnings noted since Phase 0), `cargo clippy
---no-default-features --features embassy --lib` (only the one pre-existing `rng` RefCell
-warning noted in Phase 2), and `scripts/check-esp-idf.sh esp32c6` (Docker, clean compile)
-plus `cargo clippy` inside the same Docker image against `--no-default-features --features
-esp-idf --lib` (only the four pre-existing warnings Phase 3 already confirmed predate its
-changes — none new from this phase's `negotiated_version` addition).
-
----
-
-**Original phase text below, for context on the problem and the options considered.**
-
-**Problem.** The README claims: if a misconfigured `TlsConnector` negotiates TLS 1.3 on a model
-that requires 1.2 (P2S, X2D), `BambuFtpsClient::connect()` returns `ProtocolViolation`
-immediately. In reality this only works on tokio:
-- `TokioTlsConnector::negotiated_version` overrides the default and reports the real negotiated
-  version.
-- `EmbassyTlsConnector` never overrides `TlsConnector::negotiated_version` — it silently falls back
-  to the trait's default `None`, and `ftps/client.rs::connect()`'s check
-  (`if let Some(version) = tls_connector.negotiated_version(...)`) is a no-op when it's `None` — the
-  doc comment calls this "best-effort," but the effect is the advertised protection doesn't exist
-  on Embassy at all.
-- `SecureConnect` (ESP-IDF's trait) has **no version-query method whatsoever** — there's no hook
-  to add a check even in principle without extending the trait.
-
-**Tasks:**
-1. Add a `negotiated_version` method to `SecureConnect`, mirroring `TlsConnector`'s (default
-   `None`, same as the existing trait), so both connection-establishment traits expose the same
-   capability. `BambuFtpsClient`'s enforcement check only needs to work for whichever trait its
-   `Tls`/`Conn` type parameter actually is at the call site (it's `Tls: TlsConnector<RawIO>` today
-   in `ftps/client.rs` specifically — this task is about closing the *capability* gap so it's
-   available if/when Phase 5's ESP-IDF FTPS work needs it; note the actual wiring depends on how
-   Phase 3's Option A/B decision shapes the ESP-IDF connection story).
-2. Implement a real `negotiated_version` for `EmbassyTlsConnector` — investigate `embedded-tls`
-   0.19's `TlsConnection`/handshake state for whatever it exposes about the negotiated protocol
-   version (it may only ever speak TLS 1.2, in which case the impl is a trivial constant — verify
-   this against the crate rather than assuming).
-3. Implement `negotiated_version` for whatever ESP-IDF's connector looks like post-Phase-3 —
-   investigate whether `esp_tls`/mbedTLS exposes a queryable negotiated protocol version through
-   `esp-idf-svc`'s bindings (e.g. via `mbedtls_ssl_get_version`-equivalent) or whether it requires
-   raw FFI. **Partial answer from Phase 3's spike (2026-07-01):** `esp_idf_svc::tls`'s safe wrapper
-   does *not* expose a version query — grepped its full public API, nothing version-related.
-   `EspTls::context_handle()` does return the raw `*mut sys::esp_tls`, and raw `mbedtls_ssl_get_version`
-   is confirmed present in the bindgen output (`fn mbedtls_ssl_get_version(ssl: *const mbedtls_ssl_context)
-   -> *const c_char`) — but reaching from `*mut esp_tls` to the underlying `mbedtls_ssl_context` needs
-   `esp_tls`'s internal (likely backend-specific, possibly union'd for the mbedtls-vs-wolfssl backend
-   choice) fields, not yet inspected. Start there instead of re-deriving the FFI surface from scratch.
-4. Update the README to either (a) confirm the guarantee is now genuinely platform-general, or
-   (b) if some platform still can't report the version, say so explicitly instead of stating the
-   guarantee unconditionally.
-
-**Ordering:** depends on Phase 3 (ESP-IDF's connection story needs to be settled first, since this
-phase's ESP-IDF task is shaped by that decision). Independent of Phases 0–2, but do it before
-Phase 5 so FTPS-on-embedded ships with the safety net actually working, not silently degraded like
-it is on tokio-adjacent platforms today.
-
----
-
-## Phase 5 — FTPS on embedded targets (Embassy + ESP-IDF) [COMPLETE — 2026-07-01]
-
-**Done:** both legs landed — ESP-IDF's per Phase 3's resolved path (build task, no
-further decide-first), Embassy's per Phase 2's caller-supplied-buffer philosophy.
-
-**ESP-IDF leg:**
-- `EspIdfTcpStream` (`io/esp_idf.rs`) wraps `Option<std::net::TcpStream>` — `Option`
-  rather than a bare `TcpStream` so `Socket::release()` can `.take()` it and hand the fd
-  to `IntoRawFd::into_raw_fd()`, abandoning Rust-side ownership without closing it (
-  `esp_tls_conn_destroy` closes an adopted fd itself once `release()` returns; without
-  the `.take()`, the fd would be double-closed). Its `embedded_io_async::Read`/`Write`
-  impls call blocking `std::net::TcpStream` methods directly — deliberate, matching how
-  `EspIdfUdpSocket` already uses `std::net::*` directly rather than inventing async
-  polling for every raw transport; the socket only actually needs non-blocking behavior
-  once handed to TLS, at which point `EspIdfTlsConnector::connect()` flips it to
-  non-blocking right before `adopt()` (so plaintext-data-channel callers, which never
-  reach that function, keep ordinary blocking semantics — no polling loop needed there).
-- `EspTlsStream` (Phase 3's stream type) generalized from a fixed
-  `EspTls<InternalSocket>` to `EspTlsStream<S = InternalSocket>`, so it now serves both
-  `EspIdfSecureConnector` (`S = InternalSocket`, dial-own-connection, unchanged public
-  behavior) and the new `EspIdfTlsConnector` (`S = EspIdfTcpStream`, wrap-existing-stream).
-  The cert-field `Config` construction (`build_tls_config`) and the mbedTLS
-  version-query accessor chain (`query_negotiated_tls_version`) were each extracted into
-  a shared free function so `EspIdfTlsConnector` reuses them instead of duplicating the
-  bindgen-adjacent wiring — per this phase's explicit instruction not to duplicate it.
-- `EspIdfTlsConnector::connect()` calls `EspTls::adopt(raw_stream)` (confirmed by Phase
-  3's spike: safe, no raw mbedTLS FFI) then polls `.negotiate(host, &cfg)` with the same
-  `is_would_block`/`TLS_POLL_INTERVAL` retry loop `EspIdfSecureConnector::secure_connect`
-  already established — no new polling mechanism invented.
-- `EspIdfFtpDataStreamFactory` dials `EspIdfTcpStream::connect()` — the ESP-IDF
-  counterpart to `TokioFtpDataStreamFactory`, same shape.
-- `EspIdfIoError` (wrapping `std::io::Error`) added because `embedded-io-async` has no
-  blanket `Error` impl for `std::io::Error` itself — mirrors `TokioIoError` (`io/mod.rs`).
-
-**Embassy leg — the harder design problem, resolved without unsafe:**
-FTPS's `data_factory.create_data_stream(&self, host, port)` is called repeatedly (once
-for the control channel, once per data-channel transfer), but `FtpDataStreamFactory`'s
-`RawIO` is a single fixed type across all calls — it can't be reparameterized per call
-the way a GAT could be. That rules out both a fresh `embassy_net::tcp::TcpSocket`
-per call (its buffers need a lifetime baked into `RawIO`'s type, which a `&self`-scoped
-borrow can't supply) and Phase 2's one-shot `Option::take()` buffer pattern (which only
-supports being called *once*, not N times). The resolution: reuse embassy-net's own
-built-in connection pool, `embassy_net::tcp::client::{TcpClient, TcpClientState,
-TcpConnection}` — `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates N buffer pairs,
-`TcpConnection` returns its slot to the pool on `Drop`, and the pool's own internals
-(not this crate's) contain the small amount of unsafe needed to make that safe. This
-crate's own code (`EmbassyFtpDataStreamFactory`, `io/embassy.rs`) stores a
-`&'static TcpClient<'static, N, TX_SZ, RX_SZ>` — a `&'static` *reference*, not an owned
-`TcpClient` — specifically because copying a `&'static` reference out from behind an
-arbitrarily short `&self` borrow yields an independent value still valid for `'static`,
-which is what lets `TcpConnection<'static, N, TX_SZ, RX_SZ>` come out of a `&self`-only
-method at all; an *owned* `TcpClient` field couldn't do this (see the type's doc comment
-for the full chain of reasoning — worth reading in full before touching this code, since
-the constraint is easy to reintroduce accidentally by "simplifying" the reference away).
-Verified empirically, not just reasoned through: `cargo check --features embassy` passed
-clean on the first attempt.
-- `embedded-nal-async` added as an explicit optional dependency (gated under the
-  `embassy` feature) purely to name its `TcpConnect` trait in our code — it was already
-  an unconditional transitive dependency of `embassy-net` at the same version, so this
-  added no new crate to the dependency graph, just made an existing one nameable.
-- `EmbassyFtpDataStreamFactory::new()` takes the `'static` reference directly; how the
-  caller obtains `'static` storage (a `static` item, `static_cell::StaticCell`, etc.) is
-  pushed to application setup code, matching Phase 2's philosophy — README shows a
-  `static_cell`-based example. `static_cell` is not a bambino dependency.
-- `N = 1` is sufficient for FTPS's real usage pattern: data-channel connections
-  (`list_directory`/`upload_file`/`download_file`) are always sequential, never
-  concurrent with each other; the control channel goes through `EmbassyTlsConnector`
-  (a separate TCP dial, not this pool) and stays open for the client's whole lifetime.
-  Exhausting the pool (all N slots checked out) surfaces as `SocketError::ConnectionRefused`
-  from `TcpConnect::connect`'s `Error::ConnectionReset`, not a panic — no reintroduction
-  of Phase 2's removed panic-based concurrency control.
-
-**Left for a future phase, not needed here:** the "heavier `EspAsyncTls` + `async-io`"
-upgrade path Phase 3 flagged (true readiness notification instead of fixed-interval
-polling) — still not required for correctness, only to avoid the poll interval; no fresh
-decision to revisit this was made or needed by this phase.
-
-**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
-`cargo check --no-default-features --features embassy --lib` (force-recompiled via
-`cargo clean -p bambino`, clean both times — first pass wasn't a fluke), `cargo test`
-(244 lib + 36 FTPS integration + 13 more integration + 8 doctests, all pass, untouched by
-this phase), `cargo clippy --all-targets` (only the two pre-existing warnings noted since
-Phase 0), `cargo clippy --no-default-features --features embassy --lib` (only the one
-pre-existing `rng` RefCell warning noted in Phase 2 — nothing new from
-`EmbassyFtpDataStreamFactory`), and `scripts/check-esp-idf.sh esp32c6` (Docker) — re-run
-with an explicit `cargo clean -p bambino --target riscv32imac-esp-espidf` first (the
-script's own default run looked suspiciously fast at first, 1.25s; that turned out to be
-correct — no new deps needed for the `esp-idf` feature, since `embedded-nal-async` is
-`embassy`-only — but re-running forced-clean confirmed it wasn't a stale-cache false
-pass: 33 files removed, then a real ~1s recompile, clean). `cargo clippy` inside the same
-Docker image against `--no-default-features --features esp-idf --lib` — only the same 5
-pre-existing warnings (3 lint kinds) Phase 3 already confirmed predate its changes;
-nothing new from `EspIdfTcpStream`/`EspIdfTlsConnector`/`EspIdfFtpDataStreamFactory`.
-
-README updated: new "Embassy FTPS" subsection (after "Embassy TLS buffers") and "ESP-IDF
-FTPS" subsection (after "ESP-IDF TLS version query"), each with a worked construction
-example, mirroring the existing per-platform subsection style from Phases 2–4.
-
-This was the plan's capstone phase — all five phases are now complete.
-
----
-
-**Original phase text below, for context on the problem and the options considered.**
-
-**Problem this closes.** FTPS is currently tokio-only in practice: `FtpDataStreamFactory` has
-exactly one real implementation, `TokioFtpDataStreamFactory` (plus test/dummy impls) — grep
-confirms no Embassy or ESP-IDF factory exists anywhere in the crate, despite `PrinterClient` and
-`BambuFtpsClient` being fully generic over `RawIO`/`Tls`/`Factory` as if portability were already
-there. It wasn't a simple oversight — the two real platform-specific blockers are:
-- **Embassy:** fixed by Phase 2. Before that phase, two concurrent TLS connections (control +
-  data channel, which most models need — see Phase 2's problem statement) panic the firmware.
-- **ESP-IDF:** `BambuFtpsClient<RawIO, Tls, Factory>` requires `Tls: TlsConnector<RawIO>` — a
-  "wrap an existing raw stream" trait. ESP-IDF currently only implements `SecureConnect` ("dial your
-  own connection"), used for the MQTT path. **Resolved by Phase 3's spike (2026-07-01), not blocked
-  on a further decision:** `esp_idf_svc::tls::EspTls<S: Socket>::adopt(socket)` wraps an
-  *already-connected* socket via a safe API `esp-idf-svc` already ships (confirmed by reading its
-  0.52.1 source directly, inside `scripts/check-esp-idf.sh`'s docker image) — no raw mbedTLS FFI
-  needed. This phase's ESP-IDF leg is a build task now, not a design spike.
-
-**ESP-IDF `TlsConnector` — build this (no further "decide first" needed, per Phase 3):**
-- Add `EspIdfTcpStream(std::net::TcpStream)` implementing `embedded_io_async`'s `Read`/`Write`/
-  `ErrorType` (blocking is fine — it's only used to seed `adopt()` via its raw fd, matching how
-  `EspIdfUdpSocket` already uses `std::net::UdpSocket` directly) plus a `Socket` impl
-  (`esp_idf_svc::tls::Socket`: `handle() -> i32`, `release() -> Result<(), EspError>`) wrapping it.
-- Add `EspIdfTlsConnector` implementing `TlsConnector<EspIdfTcpStream>`: build
-  `esp_idf_svc::tls::Config` the same way `EspIdfSecureConnector::build_config()` does (Phase 3
-  landed this — reuse it or extract a shared helper rather than duplicating the cert-field wiring),
-  call `EspTls::adopt(socket)` then poll `.negotiate(host, &cfg)` the same way Phase 3's
-  `secure_connect()` polls `.connect(...)` (same `is_would_block`/`TLS_POLL_INTERVAL` pattern — reuse
-  it, don't reinvent). The resulting stream type mirrors Phase 3's `EspTlsStream` (wraps
-  `EspTls<S>` + an owned `EspIdfTimer`, same poll-based `Read`/`Write` impls).
-- ESP-IDF FTPS then needs only a `FtpDataStreamFactory` impl (raw `std::net::TcpStream`-based, same
-  shape as `TokioFtpDataStreamFactory`) plus wiring `Tls` to the new `EspIdfTlsConnector`.
-- The heavier `EspAsyncTls` + `async-io` path (true readiness notification instead of polling) is a
-  legitimate but separate future upgrade — new dependency, real app-side setup cost (see README's
-  "ESP-IDF TLS timeouts" section). Do not fold it into this phase without an explicit fresh decision;
-  it is not required for FTPS to work correctly, only for it to avoid a fixed poll interval.
-
-**Tasks (Embassy leg — do this regardless of the ESP-IDF decision above):**
-1. Implement an Embassy `FtpDataStreamFactory`: dial a raw TCP connection to the PASV-negotiated
-   port using `embassy-net`'s TCP socket. Note `embassy-net::tcp::TcpSocket` needs pre-allocated
-   rx/tx buffer slices at construction (same pattern as `EmbassyUdpSocket` already handles for UDP)
-   — size these per the same caller-supplied-buffer philosophy landed in Phase 2, not another
-   static singleton.
-2. Wire an `EmbassyFtpDataStreamFactory` + the (post-Phase-2) `EmbassyTlsConnector` into a
-   `PrinterClient::with_ftps(...)` call, and add an integration test or example showing FTPS working
-   end-to-end on Embassy (as close to real hardware as the test setup allows — likely against a
-   loopback or mock TLS-terminating server, matching however the crate's existing Embassy tests, if
-   any, are structured).
-3. Update the README's Embassy section to show FTPS usage (currently silent on it), and update the
-   "Not yet implemented" / platform-targets sections to reflect the new capability.
-
-**Tasks (ESP-IDF leg — only if Phase 3 delivered Option B, or once it does):**
-4. Implement `EspIdfFtpDataStreamFactory` using `std::net::TcpStream`.
-5. Wire it with ESP-IDF's `TlsConnector` impl into `PrinterClient::with_ftps(...)`.
-6. Same README updates as task 3, for ESP-IDF.
-
-**Ordering:** depends on Phase 2 (Embassy leg) and Phase 3 + Phase 4 (ESP-IDF leg, and Phase 4 for
-the TLS-1.2-enforcement quirk to actually mean something on both new platforms). This is the
-capstone phase — do it last.
+Only the two pre-existing warnings in `tests/ftps_test.rs`/`tests/client_test.rs`
+(`type_complexity`, `while_let_loop` — unrelated to `io/`, confirmed pre-existing as of the
+2026-07-01 cycle) are expected from `cargo clippy --all-targets`. Any other new warning is
+a regression from these phases' changes.
