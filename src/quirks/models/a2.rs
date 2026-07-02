@@ -65,7 +65,7 @@ impl ModelQuirks for A2LQuirks {
         A2L_NOZZLE_TEMP_MAX
     }
 
-    fn bed_temp_max(&self) -> u16 {
+    fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
         A2L_BED_TEMP_MAX
     }
 

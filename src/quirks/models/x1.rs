@@ -10,7 +10,12 @@ use crate::types::PrinterTelemetry;
 pub const X1_Z_MAX: f32 = 256.0;
 
 pub const X1C_NOZZLE_TEMP_MAX: u16 = 300;
-pub const X1C_BED_TEMP_MAX: u16 = 120;
+/// Bed temperature ceiling on a 220V-region unit — confirmed, per the official spec sheet,
+/// non-obviously *lower* than the 110V ceiling. Also the conservative default when the mains
+/// region is unknown (no `home_flag` telemetry received yet).
+pub const X1C_BED_TEMP_MAX_220V: u16 = 110;
+/// Bed temperature ceiling on a 110V-region unit.
+pub const X1C_BED_TEMP_MAX_110V: u16 = 120;
 
 pub const X1E_NOZZLE_TEMP_MAX: u16 = 320;
 pub const X1E_BED_TEMP_MAX: u16 = 110;
@@ -76,8 +81,14 @@ impl ModelQuirks for X1CQuirks {
         X1C_NOZZLE_TEMP_MAX
     }
 
-    fn bed_temp_max(&self) -> u16 {
-        X1C_BED_TEMP_MAX
+    fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16 {
+        match mains_220v {
+            Some(true) => X1C_BED_TEMP_MAX_220V,
+            Some(false) => X1C_BED_TEMP_MAX_110V,
+            // Unknown mains region (no home_flag telemetry yet) — fail toward the safer,
+            // more conservative ceiling.
+            None => X1C_BED_TEMP_MAX_220V,
+        }
     }
 }
 
@@ -134,7 +145,7 @@ impl ModelQuirks for X1EQuirks {
         X1E_NOZZLE_TEMP_MAX
     }
 
-    fn bed_temp_max(&self) -> u16 {
+    fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
         X1E_BED_TEMP_MAX
     }
 

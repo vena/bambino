@@ -158,7 +158,14 @@ pub trait ModelQuirks {
     fn nozzle_temp_max(&self) -> u16;
 
     /// Returns the maximum safe heated bed temperature in °C for this model.
-    fn bed_temp_max(&self) -> u16;
+    ///
+    /// `mains_220v` is `Some(true)`/`Some(false)` when the printer's mains voltage region is
+    /// known (from `PrinterTelemetry::is_220v_power()`, derived from `home_flag` bit 3), or
+    /// `None` before any `home_flag` telemetry has been received. Every model except X1C ignores
+    /// this parameter and returns a flat constant — see `X1CQuirks::bed_temp_max` for the one
+    /// model where the ceiling is genuinely voltage-dependent per the official spec sheet
+    /// ("Max Build Plate Temperature: 110°C @220V, 120°C @110V").
+    fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16;
 
     /// Returns the maximum active chamber heater temperature in °C for this model.
     ///
@@ -383,7 +390,7 @@ mod tests {
         assert!(!q.auxiliary_fan_uses_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.bed_temp_max(), 100);
+        assert_eq!(q.bed_temp_max(None), 100);
         assert_eq!(q.chamber_temp_max(), 0);
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
@@ -407,7 +414,7 @@ mod tests {
         assert!(q.relative_z_move_gcode(330.0, 3000).is_empty());
         assert!(!q.relative_z_move_gcode(300.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.bed_temp_max(), 80);
+        assert_eq!(q.bed_temp_max(None), 80);
         assert!(!q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
@@ -432,7 +439,7 @@ mod tests {
         assert!(q.relative_z_move_gcode(200.0, 3000).is_empty());
         assert!(!q.relative_z_move_gcode(150.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.bed_temp_max(), 80);
+        assert_eq!(q.bed_temp_max(None), 80);
         assert!(!q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
@@ -460,7 +467,7 @@ mod tests {
             assert!(!q.has_chamber_exhaust_fan());
             assert_eq!(q.z_max(), 256.0);
             assert_eq!(q.nozzle_temp_max(), 300);
-            assert_eq!(q.bed_temp_max(), 100);
+            assert_eq!(q.bed_temp_max(None), 100);
             assert!(!q.supports_airduct_mode());
             assert!(!q.supports_prompt_sound());
             assert!(!q.supports_buzzer());
@@ -487,7 +494,7 @@ mod tests {
         assert!(q.auxiliary_fan_uses_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.bed_temp_max(), 110);
+        assert_eq!(q.bed_temp_max(None), 110);
         assert_eq!(q.chamber_temp_max(), 0);
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
@@ -513,7 +520,9 @@ mod tests {
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.bed_temp_max(Some(true)), 110);
+        assert_eq!(q.bed_temp_max(Some(false)), 120);
+        assert_eq!(q.bed_temp_max(None), 110);
         assert_eq!(q.chamber_temp_max(), 0);
         assert!(!q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
@@ -535,7 +544,7 @@ mod tests {
         assert!(q.is_bed_on_z());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 320);
-        assert_eq!(q.bed_temp_max(), 110);
+        assert_eq!(q.bed_temp_max(None), 110);
         assert_eq!(q.chamber_temp_max(), 60);
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
@@ -563,7 +572,7 @@ mod tests {
         assert!(q.auxiliary_fan_uses_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
@@ -585,7 +594,7 @@ mod tests {
         assert!(q.is_bed_on_z());
         assert_eq!(q.z_max(), 340.0);
         assert_eq!(q.nozzle_temp_max(), 350);
-        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
@@ -604,7 +613,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert_eq!(q.z_max(), 320.0);
         assert_eq!(q.nozzle_temp_max(), 350);
-        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
@@ -622,7 +631,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert_eq!(q.z_max(), 320.0);
         assert_eq!(q.nozzle_temp_max(), 350);
-        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
@@ -641,7 +650,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert_eq!(q.z_max(), 320.0);
         assert_eq!(q.nozzle_temp_max(), 350);
-        assert_eq!(q.bed_temp_max(), 120);
+        assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());

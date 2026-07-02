@@ -74,7 +74,7 @@ macro_rules! impl_a1_shared {
                 A1_NOZZLE_TEMP_MAX
             }
 
-            fn bed_temp_max(&self) -> u16 {
+            fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
                 $bed_max
             }
 
