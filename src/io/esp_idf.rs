@@ -94,16 +94,48 @@ fn to_esp_socket_error(err: std::io::Error) -> SocketError {
     crate::io::map_std_io_error(err, "ESP-IDF platform BSD network error")
 }
 
+/// Poll interval between non-blocking TLS retry attempts (handshake and read/write).
+///
+/// `esp-idf-svc`/`esp-idf-hal` expose no async socket-readiness primitive for an
+/// arbitrary fd (confirmed by inspecting `esp-idf-svc` 0.52.1's source, not just its
+/// docs — the only async wait building block available is `EspAsyncTimer`). Real
+/// wake-on-ready is possible via `esp_idf_svc::tls::EspAsyncTls` combined with the
+/// `async-io` crate and `MountedEventfs`, but that needs a new dependency and real
+/// app-side setup (a sized eventfd mount, a dedicated thread with a bumped stack, and
+/// working around an ESP-IDF main-task/async-io-thread priority inversion) — left as a
+/// future upgrade. This fixed-interval poll already fixes the actual problem this phase
+/// targets: since `Config::non_block = true` makes every `EspTls` call return immediately
+/// instead of blocking inside the FFI call, an outer `TimerProvider`-based timeout can
+/// preempt the operation between poll attempts, which it could not do before.
+#[cfg(feature = "esp-idf")]
+const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
+
+/// True if `err` indicates the non-blocking TLS operation would have blocked and should
+/// be retried, rather than a real failure. `EWOULDBLOCK` is included alongside the two
+/// `esp_tls`-specific codes because `EspTls::connect`/`read`/`write` can surface it
+/// directly in non-blocking mode — documented upstream as "a peculiarity/bug of the
+/// esp-tls C module".
+#[cfg(feature = "esp-idf")]
+fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
+    let code = err.code();
+    code == ::esp_idf_svc::sys::EWOULDBLOCK as i32
+        || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_READ
+        || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_WRITE
+}
+
 /// Secure connector for ESP-IDF using the platform's native `EspTls` stack.
 ///
 /// Unlike tokio/embassy where TLS wraps a caller-supplied TCP stream, ESP-IDF's
 /// `EspTls` manages TCP connection establishment internally. This implements
 /// `SecureConnect` directly — callers provide host+port and receive a ready stream.
 ///
-/// The resulting stream wraps a raw POSIX file descriptor obtained from `EspTls`,
-/// adapted to `embedded-io-async` via blocking-mode reads/writes on the FreeRTOS
-/// task thread. Full async integration requires `esp-idf-svc` socket-async support
-/// which is not yet stable.
+/// Built on `esp_idf_svc::tls::{EspTls, Config}` — the safe wrapper `esp-idf-svc` ships
+/// around `esp_tls` — rather than raw `esp-idf-sys` FFI, so the bindgen-union cert-field
+/// wiring (`cfg.__bindgen_anon_N.field`) is delegated to code `esp-idf-svc` maintains
+/// instead of reimplemented here. The handshake runs with `Config::non_block = true`,
+/// so `EspTls::connect` never blocks inside the FFI call — see `TLS_POLL_INTERVAL` for
+/// how the resulting `ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`/`EWOULDBLOCK` outcomes are
+/// retried.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfSecureConnector {
     ca_cert: Option<Vec<u8>>,
@@ -137,13 +169,36 @@ impl EspIdfSecureConnector {
             client_key,
         }
     }
+
+    fn build_config(&self) -> ::esp_idf_svc::tls::Config<'_> {
+        let mut cfg = ::esp_idf_svc::tls::Config::new();
+        cfg.non_block = true;
+
+        if let Some(ca) = &self.ca_cert {
+            cfg.ca_cert = Some(::esp_idf_svc::tls::X509::der(ca));
+        } else {
+            cfg.skip_common_name = true;
+        }
+
+        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
+            cfg.client_cert = Some(::esp_idf_svc::tls::X509::der(cert));
+            cfg.client_key = Some(::esp_idf_svc::tls::X509::der(key));
+        }
+
+        cfg
+    }
 }
 
-/// Wrapper adapting an ESP-IDF TLS socket fd to `embedded-io-async` traits.
+/// Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
+///
+/// `EspTls`'s own `read`/`write` are synchronous calls, but the underlying socket runs
+/// in non-blocking mode (`Config::non_block = true`, set by `EspIdfSecureConnector`), so
+/// each call returns immediately instead of blocking the FreeRTOS task. Retries happen
+/// by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
 #[cfg(feature = "esp-idf")]
 pub struct EspTlsStream {
-    // Raw POSIX fd from EspTls — reads/writes use lwIP BSD socket calls.
-    fd: i32,
+    tls: ::esp_idf_svc::tls::EspTls<::esp_idf_svc::tls::InternalSocket>,
+    timer: EspIdfTimer,
 }
 
 #[cfg(feature = "esp-idf")]
@@ -154,12 +209,17 @@ impl embedded_io_async::ErrorType for EspTlsStream {
 #[cfg(feature = "esp-idf")]
 impl embedded_io_async::Read for EspTlsStream {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let ret =
-            unsafe { ::esp_idf_svc::sys::read(self.fd, buf.as_mut_ptr() as *mut _, buf.len()) };
-        if ret < 0 {
-            Err(embedded_io_async::ErrorKind::Other)
-        } else {
-            Ok(ret as usize)
+        loop {
+            match self.tls.read(buf) {
+                Ok(n) => return Ok(n),
+                Err(e) if is_would_block(&e) => {
+                    self.timer
+                        .sleep(TLS_POLL_INTERVAL)
+                        .await
+                        .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+                }
+                Err(_) => return Err(embedded_io_async::ErrorKind::Other),
+            }
         }
     }
 }
@@ -167,12 +227,17 @@ impl embedded_io_async::Read for EspTlsStream {
 #[cfg(feature = "esp-idf")]
 impl embedded_io_async::Write for EspTlsStream {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let ret =
-            unsafe { ::esp_idf_svc::sys::write(self.fd, buf.as_ptr() as *const _, buf.len()) };
-        if ret < 0 {
-            Err(embedded_io_async::ErrorKind::Other)
-        } else {
-            Ok(ret as usize)
+        loop {
+            match self.tls.write(buf) {
+                Ok(n) => return Ok(n),
+                Err(e) if is_would_block(&e) => {
+                    self.timer
+                        .sleep(TLS_POLL_INTERVAL)
+                        .await
+                        .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+                }
+                Err(_) => return Err(embedded_io_async::ErrorKind::Other),
+            }
         }
     }
 
@@ -186,53 +251,26 @@ impl SecureConnect for EspIdfSecureConnector {
     type Stream = EspTlsStream;
 
     async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
-        let host_cstr = std::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
+        let cfg = self.build_config();
 
-        let mut cfg: ::esp_idf_svc::sys::esp_tls_cfg = unsafe { core::mem::zeroed() };
+        let timer = EspIdfTimer::new()
+            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS"))?;
 
-        if let Some(ca) = &self.ca_cert {
-            cfg.__bindgen_anon_1.cacert_buf = ca.as_ptr();
-            cfg.__bindgen_anon_2.cacert_bytes = ca.len() as u32;
-        } else {
-            cfg.skip_common_name = true;
+        let mut tls = ::esp_idf_svc::tls::EspTls::new()
+            .map_err(|_| SocketError::Other("ESP-TLS initialization failed"))?;
+
+        loop {
+            match tls.connect(host, port, &cfg) {
+                Ok(_) => break,
+                Err(e) if is_would_block(&e) => {
+                    timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
+                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake")
+                    })?;
+                }
+                Err(_) => return Err(SocketError::ConnectionRefused),
+            }
         }
 
-        if let (Some(cert), Some(key)) = (&self.client_cert, &self.client_key) {
-            cfg.__bindgen_anon_3.clientcert_buf = cert.as_ptr();
-            cfg.__bindgen_anon_4.clientcert_bytes = cert.len() as u32;
-            cfg.__bindgen_anon_5.clientkey_buf = key.as_ptr();
-            cfg.__bindgen_anon_6.clientkey_bytes = key.len() as u32;
-        }
-
-        let tls = unsafe { ::esp_idf_svc::sys::esp_tls_init() };
-        if tls.is_null() {
-            return Err(SocketError::Other("ESP-TLS initialization failed"));
-        }
-
-        let ret = unsafe {
-            ::esp_idf_svc::sys::esp_tls_conn_new_sync(
-                host_cstr.as_ptr(),
-                host_cstr.as_bytes().len() as i32,
-                port as i32,
-                &cfg,
-                tls,
-            )
-        };
-        if ret != 0 {
-            unsafe { ::esp_idf_svc::sys::esp_tls_conn_destroy(tls) };
-            return Err(SocketError::ConnectionRefused);
-        }
-
-        let mut fd: i32 = -1;
-        let get_ret =
-            unsafe { ::esp_idf_svc::sys::esp_tls_get_conn_sockfd(tls, &mut fd as *mut i32) };
-        if get_ret != 0 || fd < 0 {
-            unsafe { ::esp_idf_svc::sys::esp_tls_conn_destroy(tls) };
-            return Err(SocketError::Other(
-                "Failed to extract socket fd from ESP-TLS",
-            ));
-        }
-
-        Ok(EspTlsStream { fd })
+        Ok(EspTlsStream { tls, timer })
     }
 }

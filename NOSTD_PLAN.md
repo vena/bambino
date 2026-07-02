@@ -292,7 +292,89 @@ sized differently if useful — e.g. directory listings are small, file transfer
 
 ---
 
-## Phase 3 — ESP-IDF: real async TLS (decide-first on scope)
+## Phase 3 — ESP-IDF: real async TLS (decide-first on scope) [COMPLETE — 2026-07-01]
+
+**Done:** landed the poll-based non-blocking design (path (ii) below), scoped to this
+phase's original task list (`SecureConnect`/`EspIdfSecureConnector`/`EspTlsStream` only).
+
+**Correction to this phase's original framing:** the "decide first" Option A/B split
+below assumed ESP-IDF's only route to wrap-an-existing-stream (`TlsConnector`) was raw
+mbedTLS FFI. That's false. A spike — grepping the actual cached bindgen output and
+`esp-idf-svc` 0.52.1's source inside `scripts/check-esp-idf.sh`'s docker image, not just
+reading docs — found `esp_idf_svc::tls` already ships a **safe** wrapper:
+`EspTls<S: Socket>::adopt(socket)` wraps an *already-connected* socket (confirmed: no raw
+mbedTLS FFI needed for wrap-existing-stream), and `EspAsyncTls<S: PollableSocket>` gives
+genuine waker-based non-blocking read/write (not polling) if paired with the `async-io`
+crate + `MountedEventfs` + a dedicated background thread. Three concrete paths were
+presented to the user rather than picked unilaterally (per explicit instruction not to
+resolve "decide first" sections without asking): (i) dial-only + poll (closest to the
+original narrow Option A, just built on the safe wrapper instead of raw FFI), (ii)
+wrap-existing-stream via `adopt()` + poll (no new deps, unblocks Phase 5's ESP-IDF
+`TlsConnector` need), (iii) full `EspAsyncTls` + `async-io` (new dependency, real app-side
+setup: sized eventfd mount, dedicated thread w/ bumped stack, ESP-IDF
+main-task/async-io-thread priority-inversion workaround — unverified to even compile,
+`async-io` was never resolved in this project's lockfile before). User picked path (ii)'s
+underlying mechanism (safe wrapper + poll), but scoped *this phase's actual code change*
+to `SecureConnect`/`EspIdfSecureConnector`/`EspTlsStream` — adding a brand-new
+`TlsConnector` impl stays Phase 5's job, per PLAN.md's phase-boundary rule (see below for
+what Phase 5 needs to know).
+
+**Landed:**
+- `EspIdfSecureConnector::build_config()` builds `esp_idf_svc::tls::Config` (cert fields
+  via `X509::der(...)`, `non_block = true`) instead of hand-rolling `esp_tls_cfg`'s
+  bindgen-union fields (`cfg.__bindgen_anon_N.field`) — deletes that unsafe surface
+  entirely, delegates to code `esp-idf-svc` maintains.
+- `secure_connect()` calls `EspTls::new()`, then polls `.connect(host, port, &cfg)` via
+  `is_would_block()` (checks `EWOULDBLOCK`/`ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`) and a
+  fresh `EspIdfTimer::sleep(TLS_POLL_INTERVAL)` (20ms) between attempts. No manual
+  `esp_tls_conn_destroy` cleanup needed anymore — `EspTls`'s own `Drop` impl handles it
+  (RAII; one fewer error-path footgun than the raw-FFI version had, which needed a manual
+  destroy call on every failure branch).
+- `EspTlsStream` now wraps `EspTls<InternalSocket>` plus an owned `EspIdfTimer`; its
+  `embedded_io_async::Read`/`Write` impls poll the same way for actual I/O, not just the
+  handshake — this is what actually fixes the "timeout can't preempt a blocked call"
+  problem, since `read`/`write` no longer block inside the FFI call either.
+- `EspIdfSecureConnector::new()`/`with_certs()`'s public API is **unchanged** — the timer
+  is constructed fresh inside `secure_connect()` and moved into the resulting
+  `EspTlsStream`, so no constructor signature broke.
+- README gained an "ESP-IDF TLS timeouts" subsection (mirrors Phase 2's Embassy-buffers
+  one) stating honestly that this is poll-based, not true readiness notification, and why.
+
+**Left for Phase 5 — do not rediscover this:** `esp_idf_svc::tls::EspTls::adopt(socket)`
+(`socket: S: Socket`, where `Socket` just needs `handle() -> i32` and `release()`) is what
+Phase 5's ESP-IDF `TlsConnector` impl should build on — no raw mbedTLS FFI required, and
+it can reuse this phase's `is_would_block`/poll pattern for read/write too. Needs a small
+`EspIdfTcpStream(std::net::TcpStream)` type implementing `embedded_io_async`'s traits
+(blocking is fine — it's only used to seed `adopt()` via its raw fd) plus a `Socket` impl
+exposing that fd. This unblocks Phase 5's ESP-IDF FTPS leg **now** — Phase 3's original
+"decide-first" Option B (raw mbedTLS FFI, big unsafe surface) is moot, don't revisit it.
+The heavier `EspAsyncTls` + `async-io` path is a legitimate but separate future upgrade
+(real new dependency + app-side setup cost, detailed in the README) — it is not required
+for FTPS to work correctly, only for it to avoid a fixed poll interval, so don't fold it
+into Phase 5 without a fresh, explicit decision.
+
+**Verified:** `scripts/check-esp-idf.sh esp32c6` (docker) — compiles clean on first try.
+`cargo clippy` inside the same docker image against `--no-default-features --features
+esp-idf --lib` — **first time this project has run clippy against the esp-idf feature at
+all** (previous phases' "cargo clippy" gate only ran on the host/tokio target, which never
+compiles esp-idf-gated code, since esp-idf-sys needs the SDK toolchain this host doesn't
+have) — 0 new warnings; the 4 that surfaced (`await_holding_refcell_ref` on
+`EspIdfTimer::sleep`'s `RefCell`, `redundant_closure` x3 in `EspIdfUdpSocket`,
+`new_without_default` on `EspIdfSecureConnector::new`) all predate this change (confirmed
+by inspecting the surrounding code — all untouched by this phase's diff), just never
+surfaced before because clippy had never run against this feature combination. Also ran
+the standard host gates, each force-recompiled via `cargo clean -p bambino` between runs
+to rule out a stale-cache false pass (`io/esp_idf.rs` is unconditionally `mod`-declared in
+`io/mod.rs` even though its contents are `#[cfg(feature = "esp-idf")]`-gated, so a
+same-file no-op recompile could otherwise look identical to a real one): `cargo build`,
+`cargo build --no-default-features --features alloc --lib`, `cargo check
+--no-default-features --features embassy --lib` (all pass), `cargo test` (all lib +
+integration + doctests pass, untouched by this phase), `cargo clippy --all-targets` on
+host (only the pre-existing `ftps_test.rs`/`client_test.rs` warnings noted since Phase 0).
+
+---
+
+**Original phase text below, for context on the problem and the options considered.**
 
 **Problem.** `io/esp_idf.rs`'s `EspTlsStream::read`/`write` call raw blocking POSIX `read()`/`write()`
 on a socket fd, and `EspIdfSecureConnector::secure_connect` calls `esp_tls_conn_new_sync` — a
@@ -395,7 +477,13 @@ immediately. In reality this only works on tokio:
 3. Implement `negotiated_version` for whatever ESP-IDF's connector looks like post-Phase-3 —
    investigate whether `esp_tls`/mbedTLS exposes a queryable negotiated protocol version through
    `esp-idf-svc`'s bindings (e.g. via `mbedtls_ssl_get_version`-equivalent) or whether it requires
-   raw FFI.
+   raw FFI. **Partial answer from Phase 3's spike (2026-07-01):** `esp_idf_svc::tls`'s safe wrapper
+   does *not* expose a version query — grepped its full public API, nothing version-related.
+   `EspTls::context_handle()` does return the raw `*mut sys::esp_tls`, and raw `mbedtls_ssl_get_version`
+   is confirmed present in the bindgen output (`fn mbedtls_ssl_get_version(ssl: *const mbedtls_ssl_context)
+   -> *const c_char`) — but reaching from `*mut esp_tls` to the underlying `mbedtls_ssl_context` needs
+   `esp_tls`'s internal (likely backend-specific, possibly union'd for the mbedtls-vs-wolfssl backend
+   choice) fields, not yet inspected. Start there instead of re-deriving the FFI surface from scratch.
 4. Update the README to either (a) confirm the guarantee is now genuinely platform-general, or
    (b) if some platform still can't report the version, say so explicitly instead of stating the
    guarantee unconditionally.
@@ -417,25 +505,31 @@ there. It wasn't a simple oversight — the two real platform-specific blockers 
 - **Embassy:** fixed by Phase 2. Before that phase, two concurrent TLS connections (control +
   data channel, which most models need — see Phase 2's problem statement) panic the firmware.
 - **ESP-IDF:** `BambuFtpsClient<RawIO, Tls, Factory>` requires `Tls: TlsConnector<RawIO>` — a
-  "wrap an existing raw stream" trait. ESP-IDF has never implemented `TlsConnector`, only
-  `SecureConnect` ("dial your own connection"). Depending on how Phase 3 resolved (Option A vs B),
-  ESP-IDF either still can't satisfy `TlsConnector` at all (Option A world) or gained the ability to
-  (Option B world, if the mbedTLS-wrap spike succeeded).
+  "wrap an existing raw stream" trait. ESP-IDF currently only implements `SecureConnect` ("dial your
+  own connection"), used for the MQTT path. **Resolved by Phase 3's spike (2026-07-01), not blocked
+  on a further decision:** `esp_idf_svc::tls::EspTls<S: Socket>::adopt(socket)` wraps an
+  *already-connected* socket via a safe API `esp-idf-svc` already ships (confirmed by reading its
+  0.52.1 source directly, inside `scripts/check-esp-idf.sh`'s docker image) — no raw mbedTLS FFI
+  needed. This phase's ESP-IDF leg is a build task now, not a design spike.
 
-**Decide first, informed by Phase 3's outcome:**
-- If Phase 3 stayed on **Option A** (SecureConnect made async, but still dial-only): ESP-IDF cannot
-  satisfy `BambuFtpsClient`'s `Tls: TlsConnector<RawIO>` bound as written. Either (a) accept ESP-IDF
-  FTPS is not implementable until Phase 3's Option B lands, and scope this phase to Embassy only, or
-  (b) redesign `BambuFtpsClient` to be generic over *either* connection-establishment trait (more
-  invasive — likely needs an internal enum/adapter so the data-channel connect step can go through
-  `SecureConnect::secure_connect(host, port)` instead of `Tls::connect(host, port, raw_stream)` when
-  running on ESP-IDF). Recommendation: (a) — ship Embassy FTPS now, treat ESP-IDF FTPS as blocked on
-  the Phase 3 spike rather than forcing a `BambuFtpsClient` redesign to route around it.
-- If Phase 3 went **Option B** and ESP-IDF gained a real `TlsConnector` impl: ESP-IDF FTPS needs
-  only a `FtpDataStreamFactory` impl (raw `std::net::TcpStream`-based, same shape as
-  `TokioFtpDataStreamFactory` — ESP-IDF already uses `std::net::UdpSocket` elsewhere in
-  `io/esp_idf.rs`, so `std::net::TcpStream` is equally available) plus wiring `Tls` to the new
-  ESP-IDF `TlsConnector` impl.
+**ESP-IDF `TlsConnector` — build this (no further "decide first" needed, per Phase 3):**
+- Add `EspIdfTcpStream(std::net::TcpStream)` implementing `embedded_io_async`'s `Read`/`Write`/
+  `ErrorType` (blocking is fine — it's only used to seed `adopt()` via its raw fd, matching how
+  `EspIdfUdpSocket` already uses `std::net::UdpSocket` directly) plus a `Socket` impl
+  (`esp_idf_svc::tls::Socket`: `handle() -> i32`, `release() -> Result<(), EspError>`) wrapping it.
+- Add `EspIdfTlsConnector` implementing `TlsConnector<EspIdfTcpStream>`: build
+  `esp_idf_svc::tls::Config` the same way `EspIdfSecureConnector::build_config()` does (Phase 3
+  landed this — reuse it or extract a shared helper rather than duplicating the cert-field wiring),
+  call `EspTls::adopt(socket)` then poll `.negotiate(host, &cfg)` the same way Phase 3's
+  `secure_connect()` polls `.connect(...)` (same `is_would_block`/`TLS_POLL_INTERVAL` pattern — reuse
+  it, don't reinvent). The resulting stream type mirrors Phase 3's `EspTlsStream` (wraps
+  `EspTls<S>` + an owned `EspIdfTimer`, same poll-based `Read`/`Write` impls).
+- ESP-IDF FTPS then needs only a `FtpDataStreamFactory` impl (raw `std::net::TcpStream`-based, same
+  shape as `TokioFtpDataStreamFactory`) plus wiring `Tls` to the new `EspIdfTlsConnector`.
+- The heavier `EspAsyncTls` + `async-io` path (true readiness notification instead of polling) is a
+  legitimate but separate future upgrade — new dependency, real app-side setup cost (see README's
+  "ESP-IDF TLS timeouts" section). Do not fold it into this phase without an explicit fresh decision;
+  it is not required for FTPS to work correctly, only for it to avoid a fixed poll interval.
 
 **Tasks (Embassy leg — do this regardless of the ESP-IDF decision above):**
 1. Implement an Embassy `FtpDataStreamFactory`: dial a raw TCP connection to the PASV-negotiated
