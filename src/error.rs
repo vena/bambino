@@ -125,6 +125,26 @@ impl core::fmt::Display for BambuError {
 mod tests {
     use super::*;
 
+    /// Compile-time exhaustiveness guard, never called at runtime. A `match` with no wildcard
+    /// arm over every `BambuError` variant: if a future variant is added without adding an arm
+    /// here, this fails to *compile* rather than silently passing — a reminder to also add the
+    /// new variant to `test_display_consistency`'s `variants` vec below, which only guards
+    /// variants it's told about and won't catch a forgotten one on its own.
+    #[allow(dead_code)]
+    fn assert_all_variants_covered(e: &BambuError) {
+        match e {
+            BambuError::NetworkError(_) => {}
+            BambuError::TimerFailure(_) => {}
+            BambuError::TlsHandshakeFailed => {}
+            BambuError::ProtocolViolation(_) => {}
+            BambuError::SerializationError => {}
+            BambuError::AccessDenied => {}
+            BambuError::Timeout => {}
+            BambuError::DiskWriteFailure => {}
+            BambuError::ModelMismatch(_) => {}
+        }
+    }
+
     #[test]
     fn test_display_consistency() {
         let variants: Vec<(BambuError, &str)> = vec![
