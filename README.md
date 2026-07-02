@@ -244,9 +244,9 @@ let config = build_verified_client_config(
 let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 ```
 
-Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — use `model.quirks().enforce_ftps_tls_1_2()` to query this. `BambuFtpsClient::connect()` fails closed: on a model requiring TLS 1.2, it returns a `ProtocolViolation` immediately unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` — a wrong version *and* an undetermined version (`None`) both reject the connection. `None` is not treated as "platform can't check, allow it through" — a version-query failure on a TLS-1.2-required model is a hard connection failure, not a silent pass-through.
+Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — check with `model.quirks().enforce_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
 
-This guarantee is platform-general, not tokio-only: `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfSecureConnector` all implement `negotiated_version` for real (see the "ESP-IDF TLS version query" note below for the real post-handshake failure conditions ESP-IDF's query can hit — those now reject the connection too instead of skipping the check). `EmbassyTlsConnector` always reports TLS 1.3 — `embedded-tls` 0.19 is a TLS 1.3-only client, so a P2S/X2D connection over Embassy is unconditionally rejected rather than silently downgraded to "unchecked."
+This is platform-general — `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfSecureConnector` all implement `negotiated_version` for real. `EmbassyTlsConnector` always reports TLS 1.3 (`embedded-tls` 0.19 is TLS-1.3-only), so Embassy + P2S/X2D is unconditionally rejected rather than downgraded.
 
 ## Platform targets
 
@@ -264,7 +264,7 @@ All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerP
 
 **Embassy note:** `discover_devices()` is not available on Embassy — the convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
-**Embassy TLS buffers:** `EmbassyTlsConnector` has no hidden static buffers — you supply the `embedded-tls` read/write scratch buffers yourself, sized for your board's RAM budget. Each connector owns one buffer pair and hands it to exactly one `connect()` call, so opening N concurrent TLS connections (e.g. FTPS's control and data channels at once) means constructing N connectors:
+**Embassy TLS buffers:** `EmbassyTlsConnector` has no hidden static buffers — you supply the `embedded-tls` read/write scratch buffers yourself. Each connector owns one buffer pair for exactly one `connect()` call; concurrent connections (e.g. FTPS's control and data channels) need separate connectors:
 
 ```rust
 use bambino::io::embassy::EmbassyTlsConnector;
@@ -277,9 +277,9 @@ let connector: EmbassyTlsConnector<'_, Aes128GcmSha256, _> =
     EmbassyTlsConnector::new(&config, rng, &mut read_buf, &mut write_buf);
 ```
 
-A second concurrent connection (e.g. FTPS's data channel) needs its own connector with its own buffer pair — construct another `EmbassyTlsConnector` rather than reusing this one; calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection.
+Calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection — construct another `EmbassyTlsConnector` for a second concurrent connection.
 
-**Embassy FTPS:** `EmbassyFtpDataStreamFactory` supplies the raw TCP connections FTPS needs (one per `list_directory`/`upload_file`/`download_file` call, plus one to dial the control channel) — built on `embassy_net::tcp::client::TcpClient`, embassy-net's own connection pool, rather than a hand-rolled buffer scheme. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs; each connection checks one out and returns it to the pool on drop, so running out of pool slots is a `ConnectionRefused`-style error, not a panic — `N = 1` covers FTPS's actual usage pattern (data-channel connections are always sequential, never concurrent with each other). Both `TcpClientState` and the `TcpClient` built from it need `'static` storage, since `create_data_stream` is called repeatedly from `&self` and the returned connection's type can't carry a lifetime shorter than `'static` (see `EmbassyFtpDataStreamFactory`'s doc comment for why). `static_cell::StaticCell` is the standard way to get that in an Embassy app — add it as your own dependency, bambino doesn't require it. Note: the host passed to `create_data_stream` must be a literal IPv4 address — Bambu Lab printers are addressed by LAN IPv4 only (SSDP discovery never resolves a hostname, and the printers don't advertise IPv6), so this isn't a limitation in practice, but a hostname or IPv6 literal here will fail with `SocketError::InvalidInput`:
+**Embassy FTPS:** `EmbassyFtpDataStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs — `N = 1` covers FTPS's usage, since data-channel connections are always sequential. Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `create_data_stream`'s host must be a literal IPv4 address — Bambu printers are always addressed that way, so this isn't a limitation in practice:
 
 ```rust
 use bambino::io::embassy::EmbassyFtpDataStreamFactory;
@@ -296,11 +296,11 @@ let factory = EmbassyFtpDataStreamFactory::new(client);
 let mut printer = printer.with_ftps(ftps_tls, factory);
 ```
 
-**ESP-IDF TLS timeouts:** `EspIdfSecureConnector` runs the TLS handshake and all reads/writes with the underlying socket in non-blocking mode, so a `TimerProvider`-based timeout wrapped around ESP-IDF network I/O (e.g. `poll_until`) can now actually preempt a stuck handshake or read/write — this previously could not happen, since the handshake and I/O were blocking FFI calls a timeout has no way to interrupt. The mechanism is a fixed-interval poll (retry every 20ms via `EspIdfTimer::sleep` on `ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`/`EWOULDBLOCK`), not true readiness notification — `esp-idf-svc`/`esp-idf-hal` expose no async socket-readiness primitive for an arbitrary fd today. Real wake-on-ready is possible via `esp_idf_svc::tls::EspAsyncTls` plus the `async-io` crate and `MountedEventfs`, but that requires a new dependency and real app-side setup (a correctly-sized eventfd mount, a dedicated thread with a bumped stack, and working around an ESP-IDF main-task/async-io-thread priority inversion) — not something this crate can hide, and not necessary to fix the timeout-preemption problem, so it's left as a possible future upgrade rather than done now.
+**ESP-IDF TLS timeouts:** `EspIdfSecureConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK` — so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI.
 
-**ESP-IDF TLS version query:** `EspIdfSecureConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. This assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — a wolfSSL-configured build (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) isn't supported today, since this crate has no `build.rs` forwarding the `esp_idf_esp_tls_using_wolfssl`-style cfg flags needed to detect the backend at compile time the way `esp-idf-svc` does for itself.
+**ESP-IDF TLS version query:** `EspIdfSecureConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — wolfSSL builds aren't supported yet.
 
-**ESP-IDF FTPS:** ESP-IDF's `EspTls` normally only dials its own TCP connection (`SecureConnect`, used for MQTT above) — FTPS needs `TlsConnector` instead (wrap an *already-connected* raw stream, since the control channel and each data channel start life as a plain `std::net::TcpStream`). `EspIdfTlsConnector` provides that via `esp_idf_svc::tls::EspTls::adopt()`, a safe wrapper `esp-idf-svc` ships for exactly this case — no raw mbedTLS FFI required. `EspIdfTcpStream` (the `RawIO` type) dials a blocking `std::net::TcpStream`; `EspIdfTlsConnector::connect()` flips it to non-blocking right before adopting it, so the handshake polls the same way `EspIdfSecureConnector`'s does (see "ESP-IDF TLS timeouts" above) — models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS entirely and read/write the blocking stream directly, which is fine since that path never goes through the connector:
+**ESP-IDF FTPS:** FTPS needs `TlsConnector` (wrap an already-connected stream), not `SecureConnect` (used for MQTT above), since the control and data channels start life as a plain `std::net::TcpStream`. `EspIdfTlsConnector` provides that via `esp_idf_svc::tls::EspTls::adopt()`. Models where `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS on the data channel entirely:
 
 ```rust
 use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfFtpDataStreamFactory};
@@ -311,7 +311,7 @@ let mut printer = printer.with_ftps(ftps_tls, EspIdfFtpDataStreamFactory);
 
 ## bambino-cli
 
-A CLI using our own library client for testing against real printers as `std` branch proof-of-concept. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal dependencies.
+A CLI built on our own library client, for testing against real printers and proving out the `std` build. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in terminal dependencies.
 
 ```sh
 cargo build --bin bambino-cli --features cli
