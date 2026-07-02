@@ -49,9 +49,11 @@ RTSPS connection URLs are formatted as:
 rtsps://bblp:<access_code>@<printer_ip>:322/streaming/live/1
 ```
 
-Because the printer's embedded RTSP server utilizes implicit TLS (RTSPS) with custom certificate parameters, plain TCP decrypting proxies may be constructed locally to interface with standard stream parsers. Under this proxy architecture, RTSP request-line URLs must be rewritten in transit to maintain cryptographic validity:
+Because the printer's embedded RTSP server utilizes implicit TLS (RTSPS) with custom certificate parameters, plain TCP decrypting proxies may be constructed locally to interface with standard stream parsers. Under this proxy architecture, RTSP request-line URLs must be rewritten in transit:
 1.  Plain RTSP requests directed to the proxy (`rtsp://127.0.0.1:<local_port>`) are wrapped in SSL/TLS and forwarded to Port 322.
-2.  RTSP request-line URLs must be rewritten in transit from `rtsp://127.0.0.1:<local_port>` to `rtsps://<printer_ip>:322` before reaching the printer. This ensures Digest authentication hash calculations are preserved, while other headers remain unchanged.
+2.  RTSP request-line URLs must be rewritten in transit from `rtsp://127.0.0.1:<local_port>` to `rtsps://<printer_ip>:322` before reaching the printer, so a proxy that acts as its own independent RTSP client toward the printer sends its outbound request against the correct URI.
+
+**This URI rewrite alone does not repair an already-computed Digest `Authorization` header.** The `response=` value in a Digest `Authorization` header is a hash computed by the client (the media player) against the URI *it* used, before the proxy sees the request. Rewriting only the request-line URI does not change that already-computed hash. A proxy that merely relays the player's original `Authorization` header verbatim (rather than independently authenticating to the printer itself, using the access code, as its own RTSP client) will still receive a 401 from the printer, because the printer computes its own expected hash against the rewritten URI and the two will disagree. `bambino`'s `rewrite_rtsp_request_uri` implements only the request-line text rewrite described above — it has no access to the Digest nonce/realm/access code and cannot recompute the `response=` hash.
 
 ---
 
