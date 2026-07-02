@@ -26,10 +26,14 @@ use std::collections::BTreeSet;
 #[cfg(feature = "std")]
 use std::collections::VecDeque;
 
+use core::future::{Future, poll_fn};
+use core::pin::pin;
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+use core::task::Poll;
 
+use crate::client::dummy::DummyTimer;
 use crate::error::BambuError;
-use crate::io::{AsyncIo, SocketError};
+use crate::io::{AsyncIo, SocketError, TimerProvider};
 
 /// Monotonic counter for generating unique MQTT client IDs across connections.
 /// Each `connect()` call increments this to avoid stale QoS 1 queue conflicts
@@ -60,6 +64,20 @@ pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 /// Once exceeded, `push_pending()` evicts from the front (oldest first) until the new
 /// message fits, logging a `log::warn!` for each eviction.
 pub(crate) const MQTT_PENDING_BUFFER_MAX_BYTES: usize = 2_097_152; // 2 MiB
+
+/// Per-call deadline for `read_exact_packet` when a genuine wall-clock
+/// [`TimerProvider`] is available (see [`TimerProvider::has_real_clock`]).
+///
+/// Bounds a single `poll_wire()` invocation's total wait for *new* bytes to arrive —
+/// independent of, and strictly lower-level than, `PrinterClient::poll_until`'s
+/// `command_timeout_secs`/`POLL_UNTIL_MAX_MESSAGES` valves (`src/client/mod.rs`), which
+/// only ever run *after* a full frame has already been received and therefore cannot
+/// catch a stall that happens mid-read [REF-MQTT-STALL]. A connection that stalls with
+/// zero incoming bytes may take up to this long to surface as
+/// `BambuError::NetworkError(SocketError::TimedOut)`, even if the caller configured a
+/// shorter `command_timeout_secs` — the two timeouts are independent layers, not summed
+/// or coordinated.
+pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
 
 // ============================================================================
 // MQTT Packet Serialization Helpers
@@ -167,53 +185,228 @@ fn encode_pingreq() -> Vec<u8> {
     vec![HEADER_PINGREQ, 0x00]
 }
 
-/// Reads exactly one standard MQTT frame asynchronously from our abstract socket.
-async fn read_exact_packet<IO: AsyncIo>(
+/// Byte-level progress of an in-flight MQTT frame read, preserved across a timed-out
+/// `read_exact_packet` call so a subsequent call resumes exactly where the previous one
+/// left off instead of misinterpreting still-arriving bytes of the *same* frame as a new
+/// frame's header — see `read_exact_packet`'s doc comment for why losing this state
+/// would permanently desync the stream parser.
+#[derive(Default)]
+enum FrameReadState {
+    /// No partial frame in progress — the next read starts a fresh header byte.
+    #[default]
+    Idle,
+    /// Header byte read; the MQTT variable-length "remaining length" field is not yet
+    /// fully decoded.
+    ReadingRemainingLength {
+        header: u8,
+        value: usize,
+        multiplier: usize,
+    },
+    /// Remaining length fully decoded; `buf` is pre-sized to the full payload length and
+    /// accumulates bytes as they arrive, `filled` tracks how many are valid so far.
+    ReadingPayload {
+        header: u8,
+        buf: Vec<u8>,
+        filled: usize,
+    },
+}
+
+/// Outcome of [`race`] — which of the two raced futures completed first.
+enum Raced<A, B> {
+    Left(A),
+    Right(B),
+}
+
+/// Polls two futures concurrently, resolving to whichever completes first.
+///
+/// Built entirely on `core::future`/`core::task` primitives (`poll_fn` + `pin!`) rather
+/// than a runtime-specific macro (`tokio::select!`) or an external crate
+/// (`embassy_futures::select`), so the exact same code compiles and behaves identically
+/// on tokio (host), ESP-IDF (std), and bare-metal Embassy (no_std) — no per-platform
+/// `#[cfg]` branching needed. If both futures happen to be ready on the same poll, `a`
+/// wins arbitrarily (checked first).
+async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
+where
+    A: Future,
+    B: Future,
+{
+    let mut a = pin!(a);
+    let mut b = pin!(b);
+    poll_fn(move |cx| {
+        if let Poll::Ready(v) = a.as_mut().poll(cx) {
+            return Poll::Ready(Raced::Left(v));
+        }
+        if let Poll::Ready(v) = b.as_mut().poll(cx) {
+            return Poll::Ready(Raced::Right(v));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+/// Reads up to `buf.len()` bytes via a single underlying `read()` call, optionally raced
+/// against a wall-clock deadline.
+///
+/// **Why a single `read()` step (not `read_exact`, and not the whole multi-byte target
+/// in one shot):** `embedded_io_async::Read::read_exact`'s default implementation writes
+/// directly into the caller's buffer across a loop of multiple internal `read()` calls.
+/// If a future built on it is dropped mid-loop — exactly what happens when the timeout
+/// side of a race wins — there is no way to learn how many of those internal calls had
+/// already landed bytes, so the caller can't know how much of the buffer is valid.
+/// Racing one `read()` step at a time instead means a "timeout wins" outcome only ever
+/// discards *zero-progress* state: either this step's `read()` had not yet returned
+/// (nothing written to `buf`, safe to retry) or it already returned and we recorded
+/// exactly how many bytes landed via its `Ok(n)` before the timeout was even considered.
+/// The residual risk of the underlying transport silently consuming bytes during a
+/// cancelled `read()` without reporting them back is inherent to any cancellable I/O
+/// primitive (platform-dependent, unavoidable at this layer) — a single small `read`
+/// step minimizes that exposure relative to racing one large atomic multi-byte read.
+///
+/// `deadline_ms` is `None` when `timer` has no real wall-clock (see
+/// [`TimerProvider::has_real_clock`] — notably the default `DummyTimer`), in which case
+/// this degrades to a plain unbounded `read()`, identical to this crate's behavior
+/// before per-read deadlines existed.
+async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
-    payload_buf: &mut Vec<u8>,
-) -> Result<(u8, usize), SocketError> {
-    // Read the fixed header packet type byte
-    let mut header = [0u8; 1];
-    stream.read_exact(&mut header).await.map_err(|e| {
-        log::trace!("MQTT header read failed: {:?}", e);
-        SocketError::ConnectionReset
-    })?;
-
-    // Read variable-length remaining length
-    let mut rem_len: usize = 0;
-    let mut multiplier: usize = 1;
-    loop {
-        let mut single_byte = [0u8; 1];
-        stream.read_exact(&mut single_byte).await.map_err(|e| {
-            log::trace!("MQTT remaining-length read failed: {:?}", e);
+    buf: &mut [u8],
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<usize, SocketError> {
+    let Some(deadline_ms) = deadline_ms else {
+        return stream.read(buf).await.map_err(|e| {
+            log::trace!("MQTT read failed: {:?}", e);
             SocketError::ConnectionReset
-        })?;
-        let b = single_byte[0];
-        rem_len += ((b & 127) as usize) * multiplier;
-        if (b & 128) == 0 {
-            break;
+        });
+    };
+
+    let remaining_ms = deadline_ms.saturating_sub(timer.now_millis());
+    if remaining_ms == 0 {
+        return Err(SocketError::TimedOut);
+    }
+
+    let read_fut = stream.read(buf);
+    let sleep_fut = timer.sleep(core::time::Duration::from_millis(remaining_ms));
+
+    match race(read_fut, sleep_fut).await {
+        Raced::Left(Ok(0)) => Err(SocketError::ConnectionReset), // peer closed the stream
+        Raced::Left(Ok(n)) => Ok(n),
+        Raced::Left(Err(e)) => {
+            log::trace!("MQTT read failed: {:?}", e);
+            Err(SocketError::ConnectionReset)
         }
-        multiplier *= 128;
-        if multiplier > 128 * 128 * 128 {
-            return Err(SocketError::InvalidInput); // Protocol violation
+        Raced::Right(_) => Err(SocketError::TimedOut),
+    }
+}
+
+/// Reads exactly one standard MQTT frame asynchronously from our abstract socket,
+/// resuming from `state` if a prior call on this same stream timed out partway through.
+///
+/// **Correctness invariant — never violate this:** on a `SocketError::TimedOut` return,
+/// `state` must retain every byte already read for the in-progress frame. The MQTT wire
+/// format has no resynchronization marker — if bytes already consumed from `stream` were
+/// ever discarded here, the *next* call would start reading from the middle of whatever
+/// the peer sends next, permanently desyncing the frame parser until the connection is
+/// dropped and re-established (the same failure class as the `write_command` regression
+/// documented in `CLAUDE.md`). This is why the payload is read via a loop of small
+/// `read_chunk()` steps (each individually resumable) instead of one atomic multi-byte
+/// read — see `read_chunk`'s doc comment for the cancellation-safety reasoning. A
+/// `SocketError::ConnectionReset`/`InvalidInput` return means the connection itself is no
+/// longer usable regardless of `state` — the caller must reconnect (constructing a new
+/// `BambuMqttClient`, and thus a fresh `FrameReadState`) rather than keep polling the
+/// same stream.
+///
+/// Computes a fresh deadline every call from `budget_ms` (not once per logical frame) —
+/// each call to this function gets its own bounded window to make progress, regardless
+/// of how many prior calls already timed out waiting on this same in-progress frame.
+/// Callers outside tests should pass `MQTT_READ_TIMEOUT_SECS * 1000`; tests use a small
+/// `budget_ms` directly so stalled-read regression tests don't need to wait out the real
+/// production timeout.
+async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    state: &mut FrameReadState,
+    timer: &T,
+    budget_ms: u64,
+) -> Result<(u8, Vec<u8>), SocketError> {
+    let deadline_ms = if timer.has_real_clock() {
+        Some(timer.now_millis().saturating_add(budget_ms))
+    } else {
+        None
+    };
+
+    // Fixed header packet type byte (only if not already read by a prior, timed-out call).
+    if matches!(state, FrameReadState::Idle) {
+        let mut header = [0u8; 1];
+        let mut filled = 0;
+        while filled < header.len() {
+            let n = read_chunk(stream, &mut header[filled..], timer, deadline_ms).await?;
+            filled += n;
         }
+        *state = FrameReadState::ReadingRemainingLength {
+            header: header[0],
+            value: 0,
+            multiplier: 1,
+        };
     }
 
-    if rem_len > MQTT_MAX_PAYLOAD_BYTES {
-        log::warn!("MQTT payload length {} exceeds maximum", rem_len);
-        return Err(SocketError::InvalidInput);
+    // Variable-length remaining length (resumes mid-varint if a prior call stalled here).
+    if let FrameReadState::ReadingRemainingLength {
+        header,
+        value,
+        multiplier,
+    } = state
+    {
+        loop {
+            let mut b = [0u8; 1];
+            let mut filled = 0;
+            while filled < b.len() {
+                let n = read_chunk(stream, &mut b[filled..], timer, deadline_ms).await?;
+                filled += n;
+            }
+            *value += ((b[0] & 127) as usize) * *multiplier;
+            if (b[0] & 128) == 0 {
+                break;
+            }
+            *multiplier *= 128;
+            if *multiplier > 128 * 128 * 128 {
+                *state = FrameReadState::Idle;
+                return Err(SocketError::InvalidInput); // Protocol violation
+            }
+        }
+
+        let rem_len = *value;
+        let hdr = *header;
+
+        if rem_len > MQTT_MAX_PAYLOAD_BYTES {
+            *state = FrameReadState::Idle;
+            log::warn!("MQTT payload length {} exceeds maximum", rem_len);
+            return Err(SocketError::InvalidInput);
+        }
+
+        *state = FrameReadState::ReadingPayload {
+            header: hdr,
+            buf: vec![0u8; rem_len],
+            filled: 0,
+        };
     }
 
-    // Resize our buffer and read exactly the remaining length bytes
-    payload_buf.resize(rem_len, 0);
-    if rem_len > 0 {
-        stream.read_exact(payload_buf).await.map_err(|e| {
-            log::trace!("MQTT payload read failed: {:?}", e);
-            SocketError::ConnectionReset
-        })?;
+    // Payload bytes (resumes from `filled` if a prior call stalled mid-payload).
+    if let FrameReadState::ReadingPayload {
+        header,
+        buf,
+        filled,
+    } = state
+    {
+        while *filled < buf.len() {
+            let n = read_chunk(stream, &mut buf[*filled..], timer, deadline_ms).await?;
+            *filled += n;
+        }
+        let hdr = *header;
+        let payload = core::mem::take(buf);
+        *state = FrameReadState::Idle;
+        return Ok((hdr, payload));
     }
 
-    Ok((header[0], rem_len))
+    unreachable!("FrameReadState must be ReadingPayload after remaining-length decode")
 }
 
 // ============================================================================
@@ -248,6 +441,10 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
     secs_since_last_message: u32,
+    /// Byte-level progress of an in-flight frame read, preserved across a timed-out
+    /// `read_exact_packet` call so `poll_wire()` resumes correctly instead of desyncing
+    /// the stream — see `FrameReadState`'s doc comment.
+    read_state: FrameReadState,
 }
 
 impl<IO: AsyncIo> BambuMqttClient<IO> {
@@ -278,19 +475,32 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             .await
             .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
 
-        // Read CONNACK packet
-        let mut payload_buf = Vec::new();
+        // Read CONNACK packet. `DummyTimer` (`has_real_clock() == false`) makes
+        // `read_exact_packet` fall back to a plain unbounded read here — identical to
+        // this crate's pre-existing connect-time behavior. Deliberately not wired to
+        // `PrinterClient`'s configurable `Timer`: `connect()` runs before a
+        // `BambuMqttClient` (and thus a persistent `FrameReadState`) exists, and the
+        // connect-phase handshake is `io.md` Phase 1 / IO-Agent's territory (TCP+TLS
+        // dial timeout), not this fix's target (a stall on an already-established
+        // connection, mid-`poll_wire()`).
+        let mut read_state = FrameReadState::default();
 
         log::debug!("Awaiting broker CONNACK response packet");
 
-        let (header, rem_len) = read_exact_packet(&mut stream, &mut payload_buf).await?;
+        let (header, payload_buf) = read_exact_packet(
+            &mut stream,
+            &mut read_state,
+            &DummyTimer,
+            MQTT_READ_TIMEOUT_SECS * 1000,
+        )
+        .await?;
 
         let packet_type = header >> 4;
 
         log::debug!(
             "Received raw packet header type: {}, remaining size: {} bytes",
             packet_type,
-            rem_len
+            payload_buf.len()
         );
 
         if packet_type != PACKET_TYPE_CONNACK {
@@ -334,10 +544,17 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             .await
             .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
 
-        // Read SUBACK packet
+        // Read SUBACK packet. `read_state` was reset to `Idle` on the successful CONNACK
+        // read above, so reusing it here starts a fresh frame read.
         log::debug!("Awaiting broker SUBACK verification packet");
 
-        let (sub_header, _sub_rem_len) = read_exact_packet(&mut stream, &mut payload_buf).await?;
+        let (sub_header, payload_buf) = read_exact_packet(
+            &mut stream,
+            &mut read_state,
+            &DummyTimer,
+            MQTT_READ_TIMEOUT_SECS * 1000,
+        )
+        .await?;
         let sub_type = sub_header >> 4;
 
         log::debug!("Received raw packet header type: {}", sub_type);
@@ -370,6 +587,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             write_pending_secs: None,
             ping_outstanding: false,
             secs_since_last_message: 0,
+            read_state: FrameReadState::default(),
         })
     }
 
@@ -431,23 +649,59 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// and acknowledges `PINGRESP` — only application-level `PUBLISH` payloads are
     /// returned.
     pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
+        // `DummyTimer` has no real wall-clock (`has_real_clock() == false`), so
+        // `poll_wire()` falls back to its pre-existing unbounded read here — this public,
+        // timer-less entry point (used directly by e.g. `tests/mqtt_test.rs` and any
+        // caller holding a raw `BambuMqttClient` without a `PrinterClient`) keeps its
+        // exact prior behavior. `PrinterClient` callers get the new bounded-read
+        // protection via `poll_telemetry_with_timer()` instead, since they have a real
+        // `Timer` available.
+        self.poll_telemetry_with_timer(&DummyTimer).await
+    }
+
+    /// Same as [`poll_telemetry()`](Self::poll_telemetry), but honors `timer` for the
+    /// underlying wire read's per-read deadline (see [`poll_wire`](Self::poll_wire)).
+    ///
+    /// Used by `PrinterClient`, which owns its own configurable `Timer` and wants the
+    /// stalled-read protection that requires a genuine wall-clock to be meaningful.
+    pub(crate) async fn poll_telemetry_with_timer<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+    ) -> Result<MqttMessage, BambuError> {
         if let Some(buffered) = self.pending_messages.pop_front() {
             self.pending_bytes = self
                 .pending_bytes
                 .saturating_sub(Self::message_size(&buffered));
             return Ok(buffered);
         }
-        self.poll_wire().await
+        self.poll_wire(timer).await
     }
 
     /// Reads the next message directly from the wire, bypassing the pending buffer.
     ///
     /// Used by `PrinterClient::poll_until()` which manages its own buffer stashing
     /// and must not re-read messages it just pushed.
-    pub(crate) async fn poll_wire(&mut self) -> Result<MqttMessage, BambuError> {
-        let mut payload_buf = Vec::new();
+    ///
+    /// Bounds each individual low-level read step to
+    /// [`MQTT_READ_TIMEOUT_SECS`] when `timer` has a real wall-clock (see
+    /// [`TimerProvider::has_real_clock`]) — closes the "connection stalls with zero
+    /// incoming bytes" hang that neither `PrinterClient::poll_until`'s wall-clock
+    /// timeout nor its message-count valve can catch, since both only run *after* a full
+    /// frame has already been received (see `read_exact_packet`'s doc comment for the
+    /// mechanism, and the resumability invariant that makes retrying after a timeout
+    /// safe rather than stream-corrupting).
+    pub(crate) async fn poll_wire<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+    ) -> Result<MqttMessage, BambuError> {
         loop {
-            let (header, rem_len) = read_exact_packet(&mut self.stream, &mut payload_buf).await?;
+            let (header, payload_buf) = read_exact_packet(
+                &mut self.stream,
+                &mut self.read_state,
+                timer,
+                MQTT_READ_TIMEOUT_SECS * 1000,
+            )
+            .await?;
 
             self.secs_since_last_message = 0;
 
@@ -456,7 +710,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             log::trace!(
                 "Parsed wire packet type: {}, size: {} bytes",
                 packet_type,
-                rem_len
+                payload_buf.len()
             );
 
             match packet_type {
@@ -804,8 +1058,14 @@ mod tests {
 
             let cursor = std::io::Cursor::new(data);
             let mut stream = TokioIo(cursor);
-            let mut buf = Vec::new();
-            let result = read_exact_packet(&mut stream, &mut buf).await;
+            let mut state = FrameReadState::default();
+            let result = read_exact_packet(
+                &mut stream,
+                &mut state,
+                &DummyTimer,
+                MQTT_READ_TIMEOUT_SECS * 1000,
+            )
+            .await;
             assert!(
                 matches!(result, Err(crate::io::SocketError::InvalidInput)),
                 "Expected InvalidInput for oversized payload, got {:?}",
@@ -819,8 +1079,14 @@ mod tests {
             let data = vec![0x30, 0x80, 0x80, 0x80, 0x80, 0x01];
             let cursor = std::io::Cursor::new(data);
             let mut stream = TokioIo(cursor);
-            let mut buf = Vec::new();
-            let result = read_exact_packet(&mut stream, &mut buf).await;
+            let mut state = FrameReadState::default();
+            let result = read_exact_packet(
+                &mut stream,
+                &mut state,
+                &DummyTimer,
+                MQTT_READ_TIMEOUT_SECS * 1000,
+            )
+            .await;
             assert!(
                 matches!(result, Err(crate::io::SocketError::InvalidInput)),
                 "Expected InvalidInput for malformed remaining length, got {:?}",
@@ -842,6 +1108,7 @@ mod tests {
                 write_pending_secs: None,
                 ping_outstanding: false,
                 secs_since_last_message: 0,
+                read_state: FrameReadState::default(),
             }
         }
 
@@ -963,6 +1230,146 @@ mod tests {
             assert_eq!(found, None);
             assert_eq!(client.pending_messages.len(), 1);
             assert_eq!(client.pending_bytes, bytes_before);
+        }
+
+        /// Regression test for client.md Phase 4: a connection that stalls with zero
+        /// incoming bytes must not hang `read_exact_packet`/`poll_wire` forever. Uses a
+        /// `tokio::io::duplex` whose server side never writes anything, so the client's
+        /// low-level `read()` call is genuinely pending (not merely slow) — exactly the
+        /// "dead TCP, printer powered off mid-session" scenario the fix targets. Passes
+        /// a small `budget_ms` directly (bypassing the real `MQTT_READ_TIMEOUT_SECS`
+        /// constant) so this test doesn't need to wait out the production timeout. The
+        /// outer `tokio::time::timeout` is a meta-safety net: if the implementation
+        /// regresses to hanging forever, this test fails promptly instead of wedging the
+        /// whole suite.
+        #[tokio::test]
+        async fn test_read_exact_packet_stalled_connection_times_out() {
+            let (client_stream, _server_stream) = tokio::io::duplex(64);
+            // Server side is kept alive (bound to `_server_stream`) but never writes —
+            // dropping it would deliver `Ok(0)`/EOF instead of a genuine stall.
+
+            let mut stream = TokioIo(client_stream);
+            let mut state = FrameReadState::default();
+            let timer = crate::io::tokio::TokioTimer::new();
+            let budget_ms = 50;
+
+            let started = std::time::Instant::now();
+            let result = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                read_exact_packet(&mut stream, &mut state, &timer, budget_ms),
+            )
+            .await
+            .expect(
+                "read_exact_packet hung past the 5s meta-safety timeout instead of \
+                 honoring its own budget — this is the exact regression this test guards \
+                 against",
+            );
+            let elapsed = started.elapsed();
+
+            assert!(
+                matches!(result, Err(crate::io::SocketError::TimedOut)),
+                "Expected TimedOut for a stalled connection, got {:?}",
+                result
+            );
+            assert!(
+                elapsed < core::time::Duration::from_secs(2),
+                "read_exact_packet took {:?} to time out against a {}ms budget — too slow",
+                elapsed,
+                budget_ms
+            );
+        }
+
+        /// Regression test for client.md Phase 4's correctness hinge: bytes already read
+        /// into a partial-packet buffer before a timeout must never be lost. Simulates a
+        /// connection that delivers *part* of a frame, stalls long enough to time out,
+        /// then delivers the rest — and asserts the second `read_exact_packet` call
+        /// reconstructs the exact original frame (not corrupted, not desynced, not
+        /// duplicated), proving `FrameReadState` correctly carried the partial payload
+        /// across the timed-out attempt.
+        #[tokio::test]
+        async fn test_read_exact_packet_resumes_after_timeout_without_losing_bytes() {
+            let (client_stream, mut server_stream) = tokio::io::duplex(64);
+            let mut stream = TokioIo(client_stream);
+            let mut state = FrameReadState::default();
+            let timer = crate::io::tokio::TokioTimer::new();
+
+            // Full intended frame: header 0x99, remaining-length 4, payload [AA BB CC DD].
+            // Server sends the header, remaining-length, and only the first 2 payload
+            // bytes, then stops — the client will read header+remlen+2 payload bytes
+            // successfully, then stall waiting for the last 2 payload bytes.
+            server_stream
+                .write_all(&[0x99, 0x04, 0xAA, 0xBB])
+                .await
+                .unwrap();
+            server_stream.flush().await.unwrap();
+
+            let first_attempt = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                read_exact_packet(&mut stream, &mut state, &timer, 50),
+            )
+            .await
+            .expect("first read_exact_packet attempt hung past the meta-safety timeout");
+
+            assert!(
+                matches!(first_attempt, Err(crate::io::SocketError::TimedOut)),
+                "Expected the first attempt to time out waiting on the missing payload \
+                 bytes, got {:?}",
+                first_attempt
+            );
+
+            // The partial frame must be preserved exactly: header captured, 2 of 4
+            // payload bytes already landed correctly, nothing corrupted or lost.
+            match &state {
+                FrameReadState::ReadingPayload {
+                    header,
+                    buf,
+                    filled,
+                } => {
+                    assert_eq!(*header, 0x99, "header byte must survive the timeout");
+                    assert_eq!(
+                        *filled, 2,
+                        "exactly the 2 bytes that arrived must be recorded"
+                    );
+                    assert_eq!(
+                        &buf[..2],
+                        &[0xAA, 0xBB],
+                        "already-read payload bytes must not be corrupted"
+                    );
+                }
+                other => panic!(
+                    "expected FrameReadState::ReadingPayload with 2 bytes filled after a \
+                     mid-payload timeout, got a different state variant (state debug \
+                     unavailable, matched arm: {})",
+                    match other {
+                        FrameReadState::Idle => "Idle",
+                        FrameReadState::ReadingRemainingLength { .. } => "ReadingRemainingLength",
+                        FrameReadState::ReadingPayload { .. } => unreachable!(),
+                    }
+                ),
+            }
+
+            // Now the rest of the frame arrives.
+            server_stream.write_all(&[0xCC, 0xDD]).await.unwrap();
+            server_stream.flush().await.unwrap();
+
+            let second_attempt = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                read_exact_packet(&mut stream, &mut state, &timer, 2000),
+            )
+            .await
+            .expect("second read_exact_packet attempt hung past the meta-safety timeout")
+            .expect("second attempt should succeed now that the rest of the frame arrived");
+
+            assert_eq!(
+                second_attempt,
+                (0x99u8, vec![0xAA, 0xBB, 0xCC, 0xDD]),
+                "resumed read must reconstruct the exact original frame with no lost, \
+                 duplicated, or reordered bytes"
+            );
+            assert!(
+                matches!(state, FrameReadState::Idle),
+                "state must reset to Idle after a fully-assembled frame is returned"
+            );
         }
     }
 }

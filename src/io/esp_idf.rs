@@ -415,8 +415,9 @@ impl SecureConnect for EspIdfSecureConnector {
     async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
         let cfg = self.build_config();
 
-        let timer = EspIdfTimer::new()
-            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS".into()))?;
+        let timer = EspIdfTimer::new().map_err(|_| {
+            SocketError::Other("failed to create ESP-IDF async timer for TLS".into())
+        })?;
 
         let mut tls = ::esp_idf_svc::tls::EspTls::new()
             .map_err(|_| SocketError::Other("ESP-TLS initialization failed".into()))?;
@@ -433,7 +434,9 @@ impl SecureConnect for EspIdfSecureConnector {
                         return Err(SocketError::TimedOut);
                     }
                     timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake".into())
+                        SocketError::Other(
+                            "ESP-IDF timer failed while polling TLS handshake".into(),
+                        )
                     })?;
                 }
                 Err(e) => return Err(map_esp_tls_connect_error(&e)),
@@ -701,8 +704,9 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
 
         let cfg = self.certs.build_config();
 
-        let timer = EspIdfTimer::new()
-            .map_err(|_| SocketError::Other("failed to create ESP-IDF async timer for TLS".into()))?;
+        let timer = EspIdfTimer::new().map_err(|_| {
+            SocketError::Other("failed to create ESP-IDF async timer for TLS".into())
+        })?;
 
         let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream)
             .map_err(|_| SocketError::Other("ESP-TLS adopt of raw socket failed".into()))?;
@@ -719,7 +723,9 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         return Err(SocketError::TimedOut);
                     }
                     timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-                        SocketError::Other("ESP-IDF timer failed while polling TLS handshake".into())
+                        SocketError::Other(
+                            "ESP-IDF timer failed while polling TLS handshake".into(),
+                        )
                     })?;
                 }
                 Err(e) => return Err(map_esp_tls_connect_error(&e)),

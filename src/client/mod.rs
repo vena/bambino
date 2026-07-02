@@ -363,7 +363,12 @@ where
     /// ```
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
         self.ensure_mqtt().await?;
-        let msg = self.mqtt.as_mut().unwrap().poll_telemetry().await?;
+        let msg = self
+            .mqtt
+            .as_mut()
+            .unwrap()
+            .poll_telemetry_with_timer(&self.timer)
+            .await?;
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
             Ok(report) => {
                 if let Some(print) = report.print.as_ref() {
@@ -393,7 +398,11 @@ where
     /// Pulls the next raw MQTT message without deserialization.
     pub async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError> {
         self.ensure_mqtt().await?;
-        self.mqtt.as_mut().unwrap().poll_telemetry().await
+        self.mqtt
+            .as_mut()
+            .unwrap()
+            .poll_telemetry_with_timer(&self.timer)
+            .await
     }
 
     /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching
@@ -405,7 +414,16 @@ where
     ///
     /// Returns `BambuError::Timeout` if the wall-clock timeout (`command_timeout_secs`)
     /// or message-count safety valve (`POLL_UNTIL_MAX_MESSAGES`) is exceeded. Neither of
-    /// these protects against a fully-stalled read on the wire itself.
+    /// these protects against a fully-stalled read on the wire itself: both only run
+    /// *after* `poll_wire().await` below has already returned, so a connection that
+    /// stalls with zero incoming bytes mid-`await` bypasses them entirely — a real
+    /// `Timer` does not help either, since the elapsed-time check is simply never
+    /// reached. That protection is a distinct, lower layer: `poll_wire()`
+    /// (`src/mqtt/client.rs`) races each low-level read step against `self.timer`
+    /// internally, bounding how long a single call below can hang regardless of what
+    /// this function's own loop does. See `read_exact_packet`'s doc comment for the
+    /// mechanism and the resumability invariant that keeps a timed-out read from
+    /// desyncing the stream for the next attempt.
     pub(crate) async fn poll_until<F, T>(&mut self, mut matcher: F) -> Result<T, BambuError>
     where
         F: FnMut(&MqttMessage) -> Option<T>,
@@ -426,7 +444,7 @@ where
         let mut count: usize = 0;
 
         loop {
-            let msg = self.mqtt.as_mut().unwrap().poll_wire().await?;
+            let msg = self.mqtt.as_mut().unwrap().poll_wire(&self.timer).await?;
             if let Some(result) = matcher(&msg) {
                 return Ok(result);
             }

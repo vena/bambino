@@ -71,6 +71,14 @@ impl TimerProvider for DummyTimer {
     fn now_millis(&self) -> u64 {
         0
     }
+    /// `false` — `sleep()` above completes instantly regardless of the requested
+    /// duration, so racing an I/O read against it (as `src/mqtt/client.rs`'s
+    /// `poll_wire` does for the stalled-read fix) would resolve to "timed out" on
+    /// virtually every call instead of providing real protection. See
+    /// [`TimerProvider::has_real_clock`]'s doc comment for the full reasoning.
+    fn has_real_clock(&self) -> bool {
+        false
+    }
 }
 
 #[doc(hidden)]

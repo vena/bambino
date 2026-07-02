@@ -179,6 +179,16 @@ where
     /// followed by an all-homed reading: an already-homed printer at call time does not
     /// resolve instantly, and a call where nothing ever homes times out rather than
     /// returning early.
+    ///
+    /// Like `poll_until` (`src/client/mod.rs`), `wait_for_homing_inner`'s own
+    /// wall-clock timeout (`HOMING_WAIT_TIMEOUT_SECS`) and message-count valve
+    /// (`POLL_UNTIL_MAX_MESSAGES`) only run *after* each `poll_telemetry().await` below
+    /// has already returned — neither protects against that single call stalling
+    /// forever on a connection that stops delivering bytes mid-homing (printer powered
+    /// off, network drop). That protection is a distinct, lower layer: the underlying
+    /// `BambuMqttClient::poll_wire()` (`src/mqtt/client.rs`) races each low-level read
+    /// step against `self.timer` internally, bounding a single call regardless of what
+    /// this loop does above it.
     pub async fn wait_for_homing(&mut self) -> Result<(), BambuError> {
         let original_timeout = self.command_timeout_secs;
         self.command_timeout_secs = HOMING_WAIT_TIMEOUT_SECS;

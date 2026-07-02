@@ -191,6 +191,27 @@ pub trait TimerProvider {
     /// The epoch is platform-specific (process start, system boot, etc.) — only
     /// *differences* between two calls are meaningful.
     fn now_millis(&self) -> u64;
+
+    /// Whether this timer provides genuine wall-clock timing. `true` (the default) for
+    /// every real platform implementation (`TokioTimer`, `EmbassyTimer`, `EspIdfTimer`).
+    /// Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.
+    ///
+    /// Exists so code that races an I/O operation against
+    /// [`sleep()`](Self::sleep) — e.g. `src/mqtt/client.rs`'s `poll_wire`/
+    /// `read_exact_packet` per-read deadline — can tell whether doing so will actually
+    /// bound anything. `DummyTimer::sleep()` intentionally completes instantly
+    /// regardless of the requested duration (so it never blocks retry/backoff loops
+    /// that happen to be generic over `TimerProvider`); racing against it would make
+    /// such a race resolve to "timed out" on essentially every call that doesn't also
+    /// complete synchronously, silently turning "no wall-clock timeout configured" into
+    /// "everything times out immediately" instead of the intended "no wall-clock
+    /// protection here, fall back to other safety valves" (the same tradeoff
+    /// `PrinterClient::poll_until`'s elapsed-time check already documents for
+    /// `DummyTimer`). Callers should check this before racing against `sleep()` and
+    /// skip the race entirely (plain unbounded await) when it's `false`.
+    fn has_real_clock(&self) -> bool {
+        true
+    }
 }
 
 /// Higher-level secure connection trait for platforms where TLS manages its own transport.
