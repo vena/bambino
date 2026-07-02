@@ -23,11 +23,7 @@ pub mod esp_idf;
 #[cfg(feature = "embassy")]
 pub mod embassy;
 
-#[cfg(feature = "std")]
-use std::string::String;
-
-#[cfg(all(not(feature = "std"), feature = "alloc"))]
-use alloc::string::String;
+use core::net::SocketAddr;
 
 /// Unified transport-level Socket Errors, agnostic of runtime implementations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +64,10 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
         std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
         std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
         std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
-        _ => SocketError::Other(other_msg),
+        _ => {
+            log::debug!("{other_msg}: {err}");
+            SocketError::Other(other_msg)
+        }
     }
 }
 
@@ -105,25 +104,25 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> AsyncIo for T {}
 /// stack cannot support it (see that trait's doc comment).
 #[allow(async_fn_in_trait)]
 pub trait AsyncUdpSocket {
-    /// Dispatches a raw datagram payload to a specific IPv4 target.
-    async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError>;
+    /// Dispatches a raw datagram payload to the given target address.
+    async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError>;
 
-    /// Listens for incoming datagrams, populating the buffer and returning the source string.
-    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError>;
+    /// Listens for incoming datagrams, populating the buffer and returning the source address.
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError>;
 }
 
-/// Dynamically constructs a new UDP socket bound to an address string.
+/// Dynamically constructs a new UDP socket bound to a local address.
 ///
 /// Only implementable on platforms with OS-level dynamic socket creation (std/tokio,
 /// ESP-IDF's BSD sockets). Embassy-net sockets must be constructed from pre-allocated
 /// buffer slices supplied by the caller and bound via a typed `IpListenEndpoint` on an
-/// already-existing socket, not a string — so `EmbassyUdpSocket` does not implement this
-/// trait. Mirrors the existing `TlsConnector`/`SecureConnect` split, which draws the same
-/// boundary for TLS connection setup.
+/// already-existing socket, not a `SocketAddr` — so `EmbassyUdpSocket` does not implement
+/// this trait. Mirrors the existing `TlsConnector`/`SecureConnect` split, which draws the
+/// same boundary for TLS connection setup.
 #[allow(async_fn_in_trait)]
 pub trait BindableUdpSocket: AsyncUdpSocket + Sized {
     /// Binds to the designated local address, constructing a new socket.
-    async fn bind(addr: &str) -> Result<Self, SocketError>;
+    async fn bind(addr: SocketAddr) -> Result<Self, SocketError>;
 }
 
 /// Abstract TLS secure stream connector trait.

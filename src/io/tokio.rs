@@ -11,17 +11,12 @@ use crate::io::{
 };
 
 pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
+use core::net::SocketAddr;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerifier};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use std::sync::Arc;
 use tokio_rustls::rustls;
-
-#[cfg(feature = "std")]
-use std::string::String;
-
-#[cfg(all(not(feature = "std"), feature = "alloc"))]
-use alloc::string::String;
 
 /// Timer implementation utilizing Tokio's non-blocking system clock registry.
 pub struct TokioTimer {
@@ -59,7 +54,7 @@ pub struct TokioUdpSocket {
 }
 
 impl BindableUdpSocket for TokioUdpSocket {
-    async fn bind(addr: &str) -> Result<Self, SocketError> {
+    async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
         // We bind a standard library `std::net::UdpSocket` first and configure standard properties
         // before converting it cleanly into an asynchronous Tokio UdpSocket.
         let std_socket = std::net::UdpSocket::bind(addr).map_err(to_socket_error)?;
@@ -89,7 +84,7 @@ impl BindableUdpSocket for TokioUdpSocket {
 }
 
 impl AsyncUdpSocket for TokioUdpSocket {
-    async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError> {
+    async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError> {
         self.inner
             .send_to(buf, target)
             .await
@@ -103,14 +98,14 @@ impl AsyncUdpSocket for TokioUdpSocket {
     /// During sweeps where some network environments drop unicast discovery replies, this blocks
     /// execution threads forever. Wrapping the call in a 100ms timeout enables standard polling
     /// loops to proceed and exit gracefully.
-    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
         match ::tokio::time::timeout(
             core::time::Duration::from_millis(UDP_RECV_TIMEOUT_MS),
             self.inner.recv_from(buf),
         )
         .await
         {
-            Ok(Ok((len, addr))) => Ok((len, addr.to_string())),
+            Ok(Ok((len, addr))) => Ok((len, addr)),
             Ok(Err(e)) => Err(to_socket_error(e)),
             Err(_) => Err(SocketError::TimedOut),
         }

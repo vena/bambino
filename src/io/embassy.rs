@@ -30,7 +30,7 @@ impl TimerProvider for EmbassyTimer {
 /// pool at boot time, so this type only implements [`AsyncUdpSocket`] (send/recv on an
 /// already-existing socket) — it deliberately does not implement `BindableUdpSocket`,
 /// since embassy-net's `UdpSocket::new()` requires pre-allocated buffer slices and its
-/// `bind()` takes a typed `IpListenEndpoint`, not an address string. Construct one with
+/// `bind()` takes a typed `IpListenEndpoint`, not a `SocketAddr`. Construct one with
 /// [`EmbassyUdpSocket::new()`] from an already-bound `embassy_net::udp::UdpSocket`.
 #[cfg(feature = "embassy")]
 pub struct EmbassyUdpSocket<'a> {
@@ -47,8 +47,19 @@ impl<'a> EmbassyUdpSocket<'a> {
 
 #[cfg(feature = "embassy")]
 impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
-    async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError> {
-        let endpoint = parse_endpoint(target).ok_or(SocketError::InvalidInput)?;
+    async fn send_to(
+        &self,
+        buf: &[u8],
+        target: core::net::SocketAddr,
+    ) -> Result<usize, SocketError> {
+        // smoltcp's `From<SocketAddr> for IpEndpoint` requires both "proto-ipv4" and
+        // "proto-ipv6"; this crate only enables "proto-ipv4" (SSDP is IPv4-only — multicast
+        // 239.255.255.250 and broadcast 255.255.255.255 have no IPv6 equivalent), so convert
+        // via `SocketAddrV4` explicitly and reject V6 targets.
+        let endpoint: ::embassy_net::IpEndpoint = match target {
+            core::net::SocketAddr::V4(v4) => v4.into(),
+            core::net::SocketAddr::V6(_) => return Err(SocketError::InvalidInput),
+        };
         // Embassy-net UDP socket utilizes standard slice transmission
         self.inner
             .send_to(buf, endpoint)
@@ -60,47 +71,18 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
     async fn recv_from(
         &self,
         buf: &mut [u8],
-    ) -> Result<(usize, alloc::string::String), SocketError> {
+    ) -> Result<(usize, core::net::SocketAddr), SocketError> {
         let (len, from_endpoint) = self
             .inner
             .recv_from(buf)
             .await
             .map_err(|_| SocketError::ConnectionReset)?;
 
-        // Reconstruct IP target string for standard interface consumption.
-        // Under embassy-net 0.9.1, UdpMetadata wraps its IpEndpoint target inside the `endpoint` field.
-        let mut addr_str = alloc::string::String::new();
-        use core::fmt::Write;
-        write!(
-            &mut addr_str,
-            "{}:{}",
-            from_endpoint.endpoint.addr, from_endpoint.endpoint.port
-        )
-        .map_err(|_| SocketError::InvalidInput)?;
-
-        Ok((len, addr_str))
+        // Under embassy-net 0.9.1, UdpMetadata wraps its IpEndpoint target inside the
+        // `endpoint` field. `smoltcp::wire::IpEndpoint` converts directly to
+        // `core::net::SocketAddr` — no string round-trip needed.
+        Ok((len, from_endpoint.endpoint.into()))
     }
-}
-
-/// Dynamic IP Endpoint parser for bare-metal targets.
-///
-/// Converts a standard target string (e.g., "192.168.1.150:2021") into an
-/// Embassy-compatible `IpEndpoint` socket target.
-#[cfg(feature = "embassy")]
-fn parse_endpoint(addr: &str) -> Option<::embassy_net::IpEndpoint> {
-    let mut parts = addr.split(':');
-    let ip_str = parts.next()?;
-    let port_str = parts.next()?;
-    let port: u16 = port_str.parse().ok()?;
-
-    let mut ip_parts = ip_str.split('.');
-    let b0: u8 = ip_parts.next()?.parse().ok()?;
-    let b1: u8 = ip_parts.next()?.parse().ok()?;
-    let b2: u8 = ip_parts.next()?.parse().ok()?;
-    let b3: u8 = ip_parts.next()?.parse().ok()?;
-
-    let ip = ::embassy_net::IpAddress::v4(b0, b1, b2, b3);
-    Some(::embassy_net::IpEndpoint::new(ip, port))
 }
 
 /// A wrapper around `UnsafeCell` that implements `Sync` to satisfy raw static storage bounds.

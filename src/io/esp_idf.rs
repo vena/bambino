@@ -9,7 +9,7 @@ use crate::io::{
 };
 
 #[cfg(feature = "esp-idf")]
-use std::string::String;
+use core::net::SocketAddr;
 
 /// Async timer utilizing the ESP-IDF high-resolution timer service.
 ///
@@ -55,7 +55,7 @@ pub struct EspIdfUdpSocket {
 
 #[cfg(feature = "esp-idf")]
 impl BindableUdpSocket for EspIdfUdpSocket {
-    async fn bind(addr: &str) -> Result<Self, SocketError> {
+    async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
         let inner = std::net::UdpSocket::bind(addr).map_err(|e| to_esp_socket_error(e))?;
 
         let _ = inner.set_broadcast(true);
@@ -73,15 +73,15 @@ impl BindableUdpSocket for EspIdfUdpSocket {
 
 #[cfg(feature = "esp-idf")]
 impl AsyncUdpSocket for EspIdfUdpSocket {
-    async fn send_to(&self, buf: &[u8], target: &str) -> Result<usize, SocketError> {
+    async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError> {
         self.inner
             .send_to(buf, target)
             .map_err(|e| to_esp_socket_error(e))
     }
 
-    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+    async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
         match self.inner.recv_from(buf) {
-            Ok((len, addr)) => Ok((len, addr.to_string())),
+            Ok((len, addr)) => Ok((len, addr)),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Err(SocketError::TimedOut),
             Err(e) => Err(to_esp_socket_error(e)),
         }

@@ -14,16 +14,24 @@ use crate::error::BambuError;
 use crate::io::AsyncUdpSocket;
 #[cfg(feature = "std")]
 use crate::io::{BindableUdpSocket, TimerProvider};
+use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 pub use parser::{SsdpDevice, parse_ssdp_payload};
-
-#[cfg(not(feature = "std"))]
-use alloc::format;
 
 #[cfg(feature = "std")]
 use std::collections::BTreeSet;
 
 /// Standard Bambu Lab multicast group target for SSDP operations.
 pub const MULTICAST_IP: &str = "239.255.255.250";
+
+/// Typed form of [`MULTICAST_IP`], used for socket operations.
+const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
+
+/// IPv4 limited broadcast address, used as a fallback when multicast is filtered locally.
+const BROADCAST_ADDR: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);
+
+/// Unspecified bind address ("all interfaces"), used when binding the discovery sockets.
+#[cfg(feature = "std")]
+const UNSPECIFIED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
 /// Primary UDP port allocated to physical Bambu Lab printer local services [REF-NET-PORTS].
 pub const SSDP_PORT: u16 = 2021;
@@ -77,19 +85,19 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     pub async fn broadcast_search(&self) -> Result<(), BambuError> {
         let query = self.m_search_query();
 
-        let multicast_target = format!("{}:{}", MULTICAST_IP, self.port);
+        let multicast_target = SocketAddr::from((IpAddr::V4(MULTICAST_ADDR), self.port));
         log::debug!(
             "Transmitting multicast M-SEARCH request to: {}",
             multicast_target
         );
-        let mcast_result = self.socket.send_to(query, &multicast_target).await;
+        let mcast_result = self.socket.send_to(query, multicast_target).await;
 
-        let broadcast_target = format!("255.255.255.255:{}", self.port);
+        let broadcast_target = SocketAddr::from((IpAddr::V4(BROADCAST_ADDR), self.port));
         log::debug!(
             "Transmitting fallback broadcast M-SEARCH request to: {}",
             broadcast_target
         );
-        let bcast_result = self.socket.send_to(query, &broadcast_target).await;
+        let bcast_result = self.socket.send_to(query, broadcast_target).await;
 
         match (mcast_result, bcast_result) {
             (Err(_), Err(e)) => Err(BambuError::NetworkError(e)),
@@ -173,9 +181,9 @@ where
 
     let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
     for &port in ports {
-        let bind_addr = format!("0.0.0.0:{}", port);
+        let bind_addr = SocketAddr::from((IpAddr::V4(UNSPECIFIED_ADDR), port));
         log::debug!("Binding UDP socket on '{}'", bind_addr);
-        match U::bind(&bind_addr).await {
+        match U::bind(bind_addr).await {
             Ok(socket) => engines.push((DiscoveryEngine::new(socket, port), port)),
             Err(e) => {
                 log::debug!("Failed to bind port {}: {:?} (skipping)", port, e);
@@ -252,7 +260,7 @@ mod tests {
     }
 
     impl BindableUdpSocket for MockDiscoverySocket {
-        async fn bind(_addr: &str) -> Result<Self, SocketError> {
+        async fn bind(_addr: SocketAddr) -> Result<Self, SocketError> {
             Ok(Self {
                 sent_payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
                 recv_counter: AtomicUsize::new(0),
@@ -261,12 +269,12 @@ mod tests {
     }
 
     impl AsyncUdpSocket for MockDiscoverySocket {
-        async fn send_to(&self, buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+        async fn send_to(&self, buf: &[u8], _target: SocketAddr) -> Result<usize, SocketError> {
             self.sent_payloads.lock().unwrap().push(buf.to_vec());
             Ok(buf.len())
         }
 
-        async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+        async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
             let count = self.recv_counter.fetch_add(1, Ordering::SeqCst);
             if count == 0 {
                 let response = b"HTTP/1.1 200 OK\r\n\
@@ -275,7 +283,7 @@ mod tests {
                                  DevModel.bambu.com: C12\r\n\r\n";
                 let len = response.len();
                 buf[..len].copy_from_slice(response);
-                Ok((len, "192.168.1.150:2021".to_string()))
+                Ok((len, SocketAddr::from((IpAddr::V4(Ipv4Addr::new(192, 168, 1, 150)), 2021))))
             } else {
                 Err(SocketError::TimedOut)
             }
@@ -284,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_engine_broadcast_and_poll() {
-        let socket = MockDiscoverySocket::bind("0.0.0.0:0").await.unwrap();
+        let socket = MockDiscoverySocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))).await.unwrap();
         let sent_ref = socket.sent_payloads.clone();
         let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
@@ -310,23 +318,23 @@ mod tests {
     struct FailSocket;
 
     impl BindableUdpSocket for FailSocket {
-        async fn bind(_addr: &str) -> Result<Self, SocketError> {
+        async fn bind(_addr: SocketAddr) -> Result<Self, SocketError> {
             Ok(Self)
         }
     }
 
     impl AsyncUdpSocket for FailSocket {
-        async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+        async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> Result<usize, SocketError> {
             Err(SocketError::ConnectionRefused)
         }
-        async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+        async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
             Err(SocketError::TimedOut)
         }
     }
 
     #[tokio::test]
     async fn test_broadcast_search_returns_error_when_both_sends_fail() {
-        let socket = FailSocket::bind("0.0.0.0:0").await.unwrap();
+        let socket = FailSocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))).await.unwrap();
         let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
         let result = engine.broadcast_search().await;
@@ -342,7 +350,7 @@ mod tests {
         }
 
         impl BindableUdpSocket for HalfFailSocket {
-            async fn bind(_addr: &str) -> Result<Self, SocketError> {
+            async fn bind(_addr: SocketAddr) -> Result<Self, SocketError> {
                 Ok(Self {
                     first_call: AtomicBool::new(true),
                 })
@@ -350,19 +358,19 @@ mod tests {
         }
 
         impl AsyncUdpSocket for HalfFailSocket {
-            async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+            async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> Result<usize, SocketError> {
                 if self.first_call.swap(false, Ordering::SeqCst) {
                     Err(SocketError::ConnectionRefused)
                 } else {
                     Ok(100)
                 }
             }
-            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
                 Err(SocketError::TimedOut)
             }
         }
 
-        let socket = HalfFailSocket::bind("0.0.0.0:0").await.unwrap();
+        let socket = HalfFailSocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))).await.unwrap();
         let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
         let result = engine.broadcast_search().await;
@@ -429,16 +437,16 @@ mod tests {
         struct QuickExitSocket;
 
         impl BindableUdpSocket for QuickExitSocket {
-            async fn bind(_addr: &str) -> Result<Self, SocketError> {
+            async fn bind(_addr: SocketAddr) -> Result<Self, SocketError> {
                 Ok(Self)
             }
         }
 
         impl AsyncUdpSocket for QuickExitSocket {
-            async fn send_to(&self, _buf: &[u8], _target: &str) -> Result<usize, SocketError> {
+            async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> Result<usize, SocketError> {
                 Ok(100)
             }
-            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, String), SocketError> {
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
                 Err(SocketError::TimedOut)
             }
         }

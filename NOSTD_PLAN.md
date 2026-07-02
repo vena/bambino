@@ -83,7 +83,54 @@ the fix is already in the script, just re-run.
 
 ---
 
-## Phase 1 — `no_std` address handling and error fidelity
+## Phase 1 — `no_std` address handling and error fidelity [COMPLETE — 2026-07-01]
+
+**Done:** all 5 tasks landed as specified, plus the Option A error-fidelity fix (recommended
+option, not Option B).
+
+- `AsyncUdpSocket::send_to`/`recv_from` and `BindableUdpSocket::bind` (`src/io/mod.rs`) now use
+  `core::net::SocketAddr` instead of `&str`/`String` — no `alloc`/`std` needed for the type itself.
+  `TokioUdpSocket`, `EspIdfUdpSocket` updated to pass `SocketAddr` straight through to
+  `std::net::UdpSocket` (which already accepts it via `ToSocketAddrs`) instead of formatting/parsing.
+- `EmbassyUdpSocket`: `parse_endpoint` deleted entirely. `recv_from` converts
+  `smoltcp::wire::IpEndpoint -> core::net::SocketAddr` via `Endpoint`'s built-in `From` impl
+  (unconditional, no feature gate). `send_to` converts the other direction via `SocketAddrV4`,
+  **not** a direct `SocketAddr -> IpEndpoint` `.into()` — smoltcp 0.13.1 only provides
+  `From<SocketAddr> for Endpoint` when **both** `proto-ipv4` and `proto-ipv6` are enabled
+  (`smoltcp/src/wire/ip.rs`), and this crate's `Cargo.toml` only turns on `proto-ipv4` (SSDP is
+  IPv4-only — 239.255.255.250 multicast and 255.255.255.255 broadcast have no IPv6 equivalent).
+  Fixed by matching on `SocketAddr::V4`/`::V6` and converting the V4 case via `SocketAddrV4`'s
+  always-available `From` impl, rejecting V6 with `SocketError::InvalidInput`. **Relevant to Phase
+  5's Embassy FTPS leg**: the same conversion pattern (match-on-V4, reject V6) will be needed
+  wherever `EmbassyFtpDataStreamFactory` dials the PASV-negotiated data port, since it'll take the
+  same typed-address route now that `parse_endpoint`/string addresses are gone.
+- `discovery/mod.rs`: `broadcast_search` and `discover_devices` build `SocketAddr` directly from
+  `const Ipv4Addr` values (`MULTICAST_ADDR`, `BROADCAST_ADDR`, `UNSPECIFIED_ADDR`) instead of
+  `format!`-ing strings; all test mocks (`MockDiscoverySocket`, `FailSocket`, `HalfFailSocket`,
+  `QuickExitSocket`) updated to the new trait signature. `MULTICAST_IP: &str` constant kept as-is
+  (public API, doc/display use) alongside the new typed `MULTICAST_ADDR` — not a duplication to
+  clean up, they serve different purposes (human-readable constant vs. socket-op value).
+- Option A (log-at-the-boundary) landed in `map_std_io_error` (`src/io/mod.rs`) — the catch-all
+  match arm now does `log::debug!("{other_msg}: {err}")` before constructing `SocketError::Other`.
+  Single change point: `to_socket_error` (tokio) and `to_esp_socket_error` (ESP-IDF) both delegate
+  to this shared function, so both platforms get real-error logging from the one edit. Did not
+  touch the handful of `SocketError::Other("...")` sites in `esp_idf.rs::secure_connect` that
+  aren't wrapping a `std::io::Error` (e.g. "ESP-TLS initialization failed") — those already carry
+  a specific static message and there's no discarded errno to surface.
+
+**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
+`cargo check --no-default-features --features embassy --lib`, `cargo test` (244 lib tests + all
+integration tests pass, mocks updated), `cargo clippy --all-targets` (no new warnings — the two
+pre-existing ones in `ftps_test.rs`/`client_test.rs` are unrelated, per Phase 0's note), and
+`scripts/check-esp-idf.sh esp32c6` (Docker, CONFIRMED passing).
+
+**Left untouched (intentionally, out of scope):** `SsdpDevice.ip` (`discovery/parser.rs`) stays
+`String` — it's parsed out of the SSDP payload's `LOCATION:` header text, not the UDP source
+address, so it's a text-parsing concern rather than a typed-socket-API concern. Embassy's
+`BufferGuard`/static TLS buffers in `io/embassy.rs` are untouched — that's Phase 2's problem, not
+this phase's.
+
+---
 
 **Problem A — heap allocation and hand-rolled parsing on the hot discovery path.**
 `AsyncUdpSocket::send_to`/`recv_from` (`src/io/mod.rs`) take/return `&str`/`String` for addresses.
