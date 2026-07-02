@@ -88,4 +88,8 @@ impl ModelQuirks for X2Quirks {
     fn supports_airduct_mode(&self) -> bool {
         true
     }
+
+    fn has_chamber_exhaust_fan(&self) -> bool {
+        true
+    }
 }

@@ -6,12 +6,6 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
-/// Standard post-boot socket preparation delay, in seconds
-pub const POST_BOOT_CONNECT_DELAY: u64 = 25;
-
-/// Connection handshake timeout limits specifically configured for low-resource ESP32 platforms
-pub const CRYPTO_HANDSHAKE_TIMEOUT_MS: u64 = 5000;
-
 pub const P1_Z_MAX: f32 = 256.0;
 pub const P1_NOZZLE_TEMP_MAX: u16 = 300;
 pub const P1_BED_TEMP_MAX: u16 = 100;
