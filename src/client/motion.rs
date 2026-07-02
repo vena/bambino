@@ -112,6 +112,11 @@ where
     /// For relative movements on the Z-axis, this method automatically wraps the move
     /// in software travel limits (`M211 S1`) and safe reference-mode push/pop blocks
     /// (`M1002 push_ref_mode` / `M1002 pop_ref_mode`) to prevent frame shifting and endstop crashes.
+    ///
+    /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
+    /// returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a
+    /// real publish, so it unambiguously signals "nothing was sent"). This avoids surfacing
+    /// the Z-axis travel-limit error for a request that isn't actually out of range.
     pub async fn move_relative(
         &mut self,
         axis: char,
@@ -124,6 +129,15 @@ where
                 "{} axis is not homed (last-known state) — move_relative proceeding anyway",
                 axis_upper
             );
+        }
+        if distance == 0.0 {
+            // Zero-distance move is a legitimate no-op (e.g. a UI slider at rest), not a
+            // travel-limit violation — short-circuit before `relative_z_move_gcode` collapses
+            // it to the same empty-string signal it uses for an out-of-range distance. No MQTT
+            // packet is published, so there's no real packet identifier to return; `0` signals
+            // "no-op, nothing sent" (`next_sequence_id()` never yields 0, so it can't collide
+            // with a genuine in-flight packet id).
+            return Ok(0);
         }
         if axis_upper == 'Z' {
             let gcode = self

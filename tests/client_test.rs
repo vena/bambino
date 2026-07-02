@@ -128,6 +128,80 @@ async fn test_kinematic_and_extrusion_moves() {
 }
 
 #[tokio::test]
+async fn test_move_relative_zero_distance_is_noop() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Only the non-zero X move below should reach the wire — the zero-distance Z and X
+        // calls must short-circuit before publishing anything. If either zero-distance call
+        // incorrectly published, this would be the first packet read instead, and the
+        // assertion below would fail on mismatched params.
+        let json_x = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_x["print"]["param"], "G91\nG0 X5.00 F1000\nG90\n");
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // Zero-distance Z move: must be a no-op (Ok(0), no travel-limit error, no wire traffic) —
+    // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
+    // otherwise collapse it into (it returns the same empty string for zero and out-of-range).
+    let z_result = client
+        .move_relative('z', 0.0, 3000)
+        .await
+        .expect("zero-distance Z move should succeed as a no-op");
+    assert_eq!(z_result, 0, "no-op move should return sentinel packet id 0");
+
+    // Zero-distance X move: same no-op contract, off the Z-only travel-limit code path.
+    let x_zero_result = client
+        .move_relative('x', 0.0, 1000)
+        .await
+        .expect("zero-distance X move should succeed as a no-op");
+    assert_eq!(
+        x_zero_result, 0,
+        "no-op move should return sentinel packet id 0"
+    );
+
+    // Non-zero move on the same client still publishes normally.
+    client
+        .move_relative('x', 5.0, 1000)
+        .await
+        .expect("non-zero X move failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_move_relative_z_still_rejects_out_of_range_distance() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
+    // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
+    let result = client.move_relative('z', 300.0, 3000).await;
+    assert!(matches!(result, Err(BambuError::ModelMismatch(_))));
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_thermal_guards_and_temperatures() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
