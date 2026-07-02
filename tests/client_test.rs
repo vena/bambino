@@ -8,12 +8,19 @@
 
 mod common;
 
-use bambino::client::{CalibrationOption, FanTarget, PrintSpeed, PrintStatus, PrinterClient};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+use bambino::client::{
+    CalibrationOption, DummySecureConnect, FanTarget, PrintSpeed, PrintStatus, PrinterClient,
+};
 use bambino::error::BambuError;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 use bambino::mqtt::{BambuMqttClient, PrintJobConfig};
 
+use common::io::{DummyTlsConnector, MockDataStreamFactory};
+use common::mock_ftps;
 use common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
 };
@@ -1718,4 +1725,60 @@ async fn test_print_status_cache_from_telemetry() {
     assert_eq!(client.print_status(), Some(PrintStatus::Unknown));
 
     broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
+    // `disconnect_storage()` (review/client.md Phase 5) must leave `self.ftps` as `None`
+    // afterward, so a later `storage()` call falls through to `ensure_ftps()`'s existing
+    // "FTPS not configured" error instead of ever handing back the now-poisoned client that
+    // `BambuFtpsClient::disconnect()` leaves behind (review/ftps.md Phase 2/7).
+    let (client_control, server_control) = tokio::io::duplex(8192);
+
+    // `ensure_ftps()` fetches its raw control stream via the factory, so the mock data
+    // stream is preloaded with the client side of the duplex pair up front.
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_control))));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container.clone(),
+    };
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = PrinterClient::new(
+        DummySecureConnect,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    )
+    .with_ftps(DummyTlsConnector, factory);
+
+    client
+        .storage()
+        .await
+        .expect("first storage() call should connect via the mock FTPS handshake");
+    assert!(client.ftps_connected());
+
+    client
+        .disconnect_storage()
+        .await
+        .expect("disconnect_storage should succeed");
+    assert!(
+        !client.ftps_connected(),
+        "disconnect_storage must clear self.ftps"
+    );
+
+    // ftps_config was already consumed by the first storage() call, so this must surface
+    // the clear "not configured" error, not a stale/poisoned reconnect.
+    let result = client.storage().await;
+    assert!(
+        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        "expected ProtocolViolation (\"FTPS not configured\") after disconnect_storage, got {:?}",
+        result.map(|_| ())
+    );
+
+    server_handle.await.expect("Mock server panicked");
 }
