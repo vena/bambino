@@ -21,9 +21,14 @@
 //! 3. The proxy wraps traffic in TLS and forwards to `rtsps://<printer_ip>:322/...`
 //!
 //! RTSP Digest authentication hashes include the request-line URI. The printer expects
-//! `rtsps://<printer_ip>:322/...` but the player sends `rtsp://127.0.0.1:...`. If the
-//! proxy forwards the URI verbatim, the hash mismatches and the printer returns 401.
-//! [`rewrite_rtsp_request_uri`] performs the in-flight rewrite to fix this.
+//! `rtsps://<printer_ip>:322/...` but the player sends `rtsp://127.0.0.1:...`.
+//! [`rewrite_rtsp_request_uri`] rewrites the request-line/URI text so a proxy that acts as
+//! its own independent RTSP client toward the printer (computing its own Digest response
+//! against the rewritten URI) sends the correct URI. **It does not recompute or repair an
+//! already-computed Digest `Authorization` header** — a transparent relay that forwards the
+//! player's original `Authorization` header verbatim will still get a 401, because that
+//! header's `response=` hash was computed by the player against its own local URI and this
+//! function has no way to update it (see the function's own doc comment for detail).
 //!
 //! # P2S RTP timestamp freeze
 //!
@@ -39,6 +44,8 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use crate::error::BambuError;
+
 pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 
 /// Builds the authenticated RTSPS URL for a Bambu Lab printer's video stream.
@@ -46,8 +53,25 @@ pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 /// The returned URL can be passed directly to media frameworks that support RTSPS with
 /// Digest authentication, or used as the target endpoint for a local decryption proxy
 /// (see module-level docs for the proxy pattern).
-pub fn build_rtsps_url(ip: &str, access_code: &str) -> String {
-    format!("rtsps://bblp:{}@{}:322/streaming/live/1", access_code, ip)
+///
+/// # Errors
+///
+/// Returns [`BambuError::ProtocolViolation`] if `access_code` is empty or contains any
+/// character outside ASCII letters/digits. Genuine printer-issued LAN access codes are
+/// always 8 uppercase ASCII alphanumeric characters, so a rejection here almost always
+/// means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
+/// valid-but-unusual code — surfacing it as an error catches that mistake instead of
+/// silently building a malformed URL.
+pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError> {
+    if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(BambuError::ProtocolViolation(
+            "access_code must be a non-empty ASCII alphanumeric string".into(),
+        ));
+    }
+    Ok(format!(
+        "rtsps://bblp:{}@{}:322/streaming/live/1",
+        access_code, ip
+    ))
 }
 
 /// Rewrites a plain `rtsp://` proxy URI to the printer's `rtsps://` endpoint.
@@ -55,17 +79,25 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> String {
 /// When running a local decryption proxy (see module-level docs), media players send
 /// requests to `rtsp://127.0.0.1:<local_port>/...`. RTSP Digest authentication includes
 /// the request-line URI in its hash, so the printer expects `rtsps://<ip>:322/...`. This
-/// function performs the in-flight rewrite, replacing the scheme and host while preserving
-/// the path and query string.
+/// function performs pure text surgery on the request-line/URI: it replaces the scheme and
+/// host while preserving the path and query string, nothing else.
 ///
-/// If the input does not contain `rtsp://` (e.g. it's already `rtsps://`), it is returned
+/// **This function does not repair an already-computed Digest `Authorization` header.** It
+/// never sees an `Authorization` header, a nonce, a realm, or the access code, so it cannot
+/// compute or correct an HA1/HA2/`response=` MD5 value. It is only useful to a proxy that
+/// acts as its own independent RTSP client toward the printer — i.e. one that computes its
+/// own Digest response against the rewritten URI returned here. A transparent-relay proxy
+/// that forwards the player's original `Authorization` header verbatim will still receive a
+/// 401: that header's `response=` value was computed by the player against its own local
+/// (`rtsp://127.0.0.1:...`) URI, and nothing here updates it to match the rewritten one.
+///
+/// If the input does not start with `rtsp://` (e.g. it's already `rtsps://`), it is returned
 /// unchanged.
 ///
 /// This function expects proxy-generated URIs with a simple `rtsp://host:port/path` structure.
 /// It is not a general-purpose URI parser.
 pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> String {
-    if let Some(start_idx) = request_uri.find("rtsp://") {
-        let remainder = &request_uri[start_idx + 7..];
+    if let Some(remainder) = request_uri.strip_prefix("rtsp://") {
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
@@ -110,11 +142,23 @@ mod tests {
 
     #[test]
     fn test_build_rtsps_url() {
-        let url = build_rtsps_url("192.168.1.150", "12345678");
+        let url = build_rtsps_url("192.168.1.150", "12345678").unwrap();
         assert_eq!(
             url,
             "rtsps://bblp:12345678@192.168.1.150:322/streaming/live/1"
         );
+    }
+
+    #[test]
+    fn test_build_rtsps_url_rejects_empty_access_code() {
+        assert!(build_rtsps_url("192.168.1.150", "").is_err());
+    }
+
+    #[test]
+    fn test_build_rtsps_url_rejects_non_alphanumeric_access_code() {
+        assert!(build_rtsps_url("192.168.1.150", "1234@678").is_err());
+        assert!(build_rtsps_url("192.168.1.150", "1234 678").is_err());
+        assert!(build_rtsps_url("192.168.1.150", "1234\n678").is_err());
     }
 
     #[test]
@@ -167,10 +211,22 @@ mod tests {
         let corrector = RtpTimestampCorrector::init(0);
 
         // 50000 seconds (~13.9 hours) at 90kHz = 4,500,000,000 which exceeds u32::MAX
-        // Should wrap correctly, not saturate
+        // (4,294,967,296) and must wrap modulo 2^32, not saturate at u32::MAX.
+        // Independently hand-computed (not via the implementation's own formula):
+        // 4,500,000,000 - 4,294,967,296 = 205,032,704.
         let ts = corrector.correct(50000.0);
-        let expected = (50000.0 * 90000.0 + 0.5) as u64 as u32;
-        assert_eq!(ts, expected);
+        assert_eq!(ts, 205_032_704u32);
         assert_ne!(ts, u32::MAX, "must wrap, not saturate");
+    }
+
+    #[test]
+    fn test_rewrite_uri_does_not_match_embedded_rtsp_substring() {
+        // Regression for Phase 4.2: a `find`-based prefix check would match "rtsp://"
+        // wherever it appears in the string, not just at the start. `strip_prefix` only
+        // matches at position 0, so a redirect-style URL that merely contains the
+        // substring later on must be returned unchanged.
+        let uri = "https://example.com/redirect?to=rtsp://192.168.1.150/streaming/live/1";
+        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150");
+        assert_eq!(rewritten, uri);
     }
 }

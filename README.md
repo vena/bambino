@@ -215,11 +215,15 @@ buffer budget — the 10MB default can exceed an embedded target's entire SRAM.
 ```rust
 use bambino::camera::rtsps::build_rtsps_url;
 
-let url = build_rtsps_url(ip, access_code);
+let url = build_rtsps_url(ip, access_code)?;
 // → rtsps://bblp:<code>@<ip>:322/streaming/live/1
 ```
 
-Since the printer uses self-signed TLS, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to fix Digest auth hashes when proxying:
+`build_rtsps_url` validates that `access_code` is a non-empty ASCII alphanumeric string
+(matching the documented 8-character LAN access code format) and returns
+`Result<String, BambuError>`.
+
+Since the printer uses self-signed TLS, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to rewrite the request-line URI in transit:
 
 ```rust
 use bambino::camera::rtsps::rewrite_rtsp_request_uri;
@@ -228,6 +232,13 @@ use bambino::camera::rtsps::rewrite_rtsp_request_uri;
 // Printer needs: rtsps://192.168.1.150:322/streaming/live/1
 let rewritten = rewrite_rtsp_request_uri(player_uri, printer_ip);
 ```
+
+`rewrite_rtsp_request_uri` only rewrites the URI text in the request line — it does **not**
+recompute or repair an already-computed Digest `Authorization` header. It's only useful to a
+proxy that acts as its own independent RTSP client toward the printer (computing its own
+Digest response against the rewritten URI). A transparent relay that forwards the player's
+original `Authorization` header verbatim will still get a 401, since that header's
+`response=` hash was computed by the player against its own local URI.
 
 P2S models on certain firmware versions have a bug where RTP timestamps don't advance, causing video freezes. Use `RtpTimestampCorrector` to synthesize correct timestamps when `model.quirks().requires_wallclock_rtsp_timestamps()` is true.
 
