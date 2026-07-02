@@ -58,7 +58,7 @@ If `parts[7]` contains a time pattern (`HH:MM`), the modification year is omitte
 To query available storage capacity on the MicroSD card without performing expensive recursive directory traversals, the client must execute a direct hardware-level space query over the active control channel:
 1.  **AVBL Command**: The client transmits `AVBL\r\n` to the control socket.
     *   **Successful Response**: `213 <bytes_available>\r\n` (e.g., `213 14820352000`).
-2.  **STAT Command (Fallback)**: If `AVBL` returns a `500 Syntax error, command unrecognized` response (depending on older firmware lines), the client must transmit `STAT\r\n` and parse the returned status output for storage size descriptors.
+2.  **STAT Command (Fallback)**: If `AVBL` returns a `500 Syntax error, command unrecognized` response (depending on older firmware lines), the client must transmit `STAT\r\n` and parse the returned status output for storage size descriptors. Confirmed on a P1S: `AVBL` is implemented and used normally; `STAT` itself returns `502 Command not implemented` on this firmware rather than a parseable status body — the fallback path is unreachable in practice on this unit, though it may still be needed on older firmware lines per the note above.
 
 ---
 
@@ -78,6 +78,8 @@ AVBL\r\n                 <- Queries available storage space on MicroSD card
 ```
 
 **Note:** The `TYPE I` command is mandatory. RFC 959 defaults to ASCII mode, which applies line-ending transformations that corrupt binary payloads (`.3mf`, `.gcode`, timelapse videos). On A1 series models where `PROT P` is omitted (see §2.1), `TYPE I` must still be transmitted.
+
+**Note — single-write requirement:** each command line (`<CMD> <args>\r\n`) must be sent as one contiguous write to the control-channel socket, not as separate writes for the command body and the trailing `\r\n`. Confirmed on a P1S: splitting a command across two writes (even with an immediate flush after both) causes the printer's embedded FTP daemon to desync its line parser — observed as `PASS` returning `332` instead of `230`, followed by every subsequent command returning `502`, even though the same command sequence sent as a single write logs in cleanly. This isn't RFC-mandated (TLS/TCP give no guarantee that record or segment boundaries preserve write-call boundaries anyway), but this firmware's parser is apparently sensitive to it in practice — bambino was bitten by exactly this in commit `6385019` (see `src/ftps/protocol.rs`'s `write_command`).
 
 #### Directory Mutator Commands
 ```text

@@ -36,12 +36,13 @@ pub(crate) async fn write_command<IO: AsyncIo>(
     stream: &mut IO,
     cmd: &str,
 ) -> Result<(), BambuError> {
+    // Single write_all call for "cmd\r\n" together — some embedded FTP servers (confirmed live
+    // against a P1S) don't correctly reassemble a command line split across two separate writes.
+    let mut payload = String::from(cmd);
+    payload.push_str("\r\n");
+
     stream
-        .write_all(cmd.as_bytes())
-        .await
-        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-    stream
-        .write_all(b"\r\n")
+        .write_all(payload.as_bytes())
         .await
         .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
     stream
@@ -202,6 +203,63 @@ pub(crate) async fn read_to_eof<IO: AsyncIo>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::TokioIo;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll};
+
+    /// Records each individual `poll_write` call as its own chunk — lets a test assert
+    /// how many separate writes a function issued, not just the concatenated bytes.
+    #[derive(Clone, Default)]
+    struct WriteRecorder(Arc<Mutex<Vec<Vec<u8>>>>);
+
+    impl tokio::io::AsyncRead for WriteRecorder {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl tokio::io::AsyncWrite for WriteRecorder {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            self.0.lock().unwrap().push(buf.to_vec());
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_write_command_sends_single_write_call() {
+        // Regression test: write_command must send "cmd\r\n" as one write_all call, not two
+        // separate ones. Some embedded FTP servers (confirmed live against a Bambu P1S) don't
+        // reliably reassemble a command line split across two writes/TLS records — a bug
+        // introduced in commit 6385019 and fixed by combining back into a single write.
+        let recorder = WriteRecorder::default();
+        let mut stream = TokioIo(recorder.clone());
+
+        write_command(&mut stream, "USER bblp").await.unwrap();
+
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            1,
+            "write_command must issue exactly one write call, got {}: {calls:?}",
+            calls.len()
+        );
+        assert_eq!(calls[0], b"USER bblp\r\n");
+    }
 
     #[test]
     fn test_valid_pasv_response() {
