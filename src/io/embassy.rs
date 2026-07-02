@@ -85,77 +85,29 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
     }
 }
 
-/// A wrapper around `UnsafeCell` that implements `Sync` to satisfy raw static storage bounds.
+/// Wrapper around an `embedded-tls` connection over an Embassy-supplied buffer pair.
 ///
-/// The blanket `Sync` impl is restricted to the concrete buffer type used below.
-/// On single-threaded Embassy executors, concurrent access is structurally prevented
-/// by the `TLS_BUFFERS_IN_USE` atomic guard (see `BufferGuard`).
+/// No longer guards a process-wide static — the read/write buffers are owned by the
+/// [`EmbassyTlsConnector`] that produced this stream (see that type's doc comment).
 #[cfg(feature = "embassy")]
-struct SyncUnsafeCell<T>(core::cell::UnsafeCell<T>);
-
-// SAFETY: Only safe when exclusive access is enforced externally.
-// The `BufferGuard` atomic flag guarantees at most one live borrow at a time.
-#[cfg(feature = "embassy")]
-unsafe impl Sync for SyncUnsafeCell<[u8; 16384]> {}
-
-#[cfg(feature = "embassy")]
-static TLS_READ_BUFFER: SyncUnsafeCell<[u8; 16384]> =
-    SyncUnsafeCell(core::cell::UnsafeCell::new([0u8; 16384]));
-#[cfg(feature = "embassy")]
-static TLS_WRITE_BUFFER: SyncUnsafeCell<[u8; 16384]> =
-    SyncUnsafeCell(core::cell::UnsafeCell::new([0u8; 16384]));
-
-#[cfg(feature = "embassy")]
-static TLS_BUFFERS_IN_USE: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-/// RAII guard ensuring exclusive access to the static TLS buffers.
-///
-/// Panics on construction if buffers are already held by another `TlsConnection`.
-/// Automatically releases the buffers when the owning `GuardedTlsConnection` is dropped.
-#[cfg(feature = "embassy")]
-struct BufferGuard;
-
-#[cfg(feature = "embassy")]
-impl BufferGuard {
-    fn acquire() -> Self {
-        if TLS_BUFFERS_IN_USE.swap(true, core::sync::atomic::Ordering::SeqCst) {
-            panic!("TLS buffers already in use — only one concurrent TLS connection is supported");
-        }
-        BufferGuard
-    }
-}
-
-#[cfg(feature = "embassy")]
-impl Drop for BufferGuard {
-    fn drop(&mut self) {
-        TLS_BUFFERS_IN_USE.store(false, core::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-/// Wrapper coupling a `TlsConnection` with its `BufferGuard` lifetime.
-///
-/// Dropping this struct releases the static TLS buffers for reuse by a subsequent connection.
-#[cfg(feature = "embassy")]
-pub struct GuardedTlsConnection<
+pub struct EmbassyTlsStream<
     'a,
     RawStream: AsyncIo,
     CipherSuite: ::embedded_tls::TlsCipherSuite + 'static,
 > {
     connection: ::embedded_tls::TlsConnection<'a, RawStream, CipherSuite>,
-    _guard: BufferGuard,
 }
 
 #[cfg(feature = "embassy")]
 impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::ErrorType
-    for GuardedTlsConnection<'a, S, C>
+    for EmbassyTlsStream<'a, S, C>
 {
     type Error = <::embedded_tls::TlsConnection<'a, S, C> as embedded_io_async::ErrorType>::Error;
 }
 
 #[cfg(feature = "embassy")]
 impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::Read
-    for GuardedTlsConnection<'a, S, C>
+    for EmbassyTlsStream<'a, S, C>
 {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         self.connection.read(buf).await
@@ -164,7 +116,7 @@ impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_as
 
 #[cfg(feature = "embassy")]
 impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::Write
-    for GuardedTlsConnection<'a, S, C>
+    for EmbassyTlsStream<'a, S, C>
 {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         self.connection.write(buf).await
@@ -175,11 +127,23 @@ impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_as
     }
 }
 
-/// TLS Secure connector wrapping the static, stack-friendly `embedded-tls` engine.
+/// TLS Secure connector wrapping the `embedded-tls` engine over caller-supplied buffers.
 ///
 /// Generic over `Rng`: callers must provide a platform-appropriate RNG implementation
 /// (e.g., hardware TRNG peripheral). The RNG must implement the legacy `rand_core` v0.6
 /// traits expected by `embedded-tls` v0.19.
+///
+/// **Buffer ownership.** `embedded-tls` needs a read and write scratch buffer for the
+/// lifetime of a TLS session (16KB apiece is a reasonable default, matching TLS's max
+/// record size). Earlier versions of this connector hid two such buffers behind
+/// process-wide statics, which meant a second concurrent connection (e.g. FTPS's control
+/// and data channels, opened at the same time) would panic. There is no such thing as a
+/// concurrency-safe *global* buffer pair, so this connector takes its buffers from the
+/// caller instead: construct one `EmbassyTlsConnector` per concurrent connection you need,
+/// each with its own `&'a mut [u8]` pair, and the caller's board-RAM budget decides how
+/// many can exist at once. `connect()` takes the buffers out of the connector on first use
+/// (`Option::take`) — calling `connect()` again on the same connector without a fresh one
+/// returns `SocketError::Other` instead of a second, aliased borrow.
 #[cfg(feature = "embassy")]
 pub struct EmbassyTlsConnector<'a, CipherSuite, Rng>
 where
@@ -188,6 +152,8 @@ where
 {
     config: &'a ::embedded_tls::TlsConfig<'a>,
     rng: core::cell::RefCell<Rng>,
+    read_buf: core::cell::RefCell<Option<&'a mut [u8]>>,
+    write_buf: core::cell::RefCell<Option<&'a mut [u8]>>,
     _phantom: core::marker::PhantomData<CipherSuite>,
 }
 
@@ -197,11 +163,21 @@ where
     CipherSuite: ::embedded_tls::TlsCipherSuite,
     Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
 {
-    /// Creates a new Embassy secure connector with a caller-provided RNG.
-    pub fn new(config: &'a ::embedded_tls::TlsConfig<'a>, rng: Rng) -> Self {
+    /// Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch
+    /// buffers. `read_buf`/`write_buf` are consumed by the first `connect()` call — size
+    /// them for one TLS session (16KB is a safe default) and construct a separate connector
+    /// per concurrent connection.
+    pub fn new(
+        config: &'a ::embedded_tls::TlsConfig<'a>,
+        rng: Rng,
+        read_buf: &'a mut [u8],
+        write_buf: &'a mut [u8],
+    ) -> Self {
         Self {
             config,
             rng: core::cell::RefCell::new(rng),
+            read_buf: core::cell::RefCell::new(Some(read_buf)),
+            write_buf: core::cell::RefCell::new(Some(write_buf)),
             _phantom: core::marker::PhantomData,
         }
     }
@@ -215,7 +191,7 @@ where
     CipherSuite: ::embedded_tls::TlsCipherSuite + 'static,
     Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
 {
-    type Stream = GuardedTlsConnection<'a, RawStream, CipherSuite>;
+    type Stream = EmbassyTlsStream<'a, RawStream, CipherSuite>;
 
     async fn connect(
         &self,
@@ -223,12 +199,16 @@ where
         _port: u16,
         raw_stream: RawStream,
     ) -> Result<Self::Stream, SocketError> {
-        let guard = BufferGuard::acquire();
-
-        // SAFETY: Exclusive access is enforced by BufferGuard — only one borrow
-        // can exist at a time, and the guard lives as long as the returned connection.
-        let read_buf = unsafe { &mut *TLS_READ_BUFFER.0.get() };
-        let write_buf = unsafe { &mut *TLS_WRITE_BUFFER.0.get() };
+        let read_buf = self.read_buf.borrow_mut().take().ok_or(SocketError::Other(
+            "EmbassyTlsConnector buffers already consumed by a previous connect() call",
+        ))?;
+        let write_buf = self
+            .write_buf
+            .borrow_mut()
+            .take()
+            .ok_or(SocketError::Other(
+                "EmbassyTlsConnector buffers already consumed by a previous connect() call",
+            ))?;
 
         let mut connection = ::embedded_tls::TlsConnection::new(raw_stream, read_buf, write_buf);
 
@@ -243,9 +223,6 @@ where
             .await
             .map_err(|_| SocketError::ConnectionAborted)?;
 
-        Ok(GuardedTlsConnection {
-            connection,
-            _guard: guard,
-        })
+        Ok(EmbassyTlsStream { connection })
     }
 }

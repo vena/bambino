@@ -195,7 +195,49 @@ delete.
 
 ---
 
-## Phase 2 — Embassy TLS buffer ownership (remove the global singleton)
+## Phase 2 — Embassy TLS buffer ownership (remove the global singleton) [COMPLETE — 2026-07-01]
+
+**Done:** Option A (caller-supplied buffers per connector, the recommended option) landed as
+specified.
+
+- Removed `SyncUnsafeCell`, `TLS_READ_BUFFER`, `TLS_WRITE_BUFFER`, `TLS_BUFFERS_IN_USE`,
+  `BufferGuard`, and the `unsafe impl Sync` block entirely from `io/embassy.rs` — no more
+  process-wide statics, no more panic-as-concurrency-control.
+- `EmbassyTlsConnector::new()` now takes `read_buf: &'a mut [u8]` and `write_buf: &'a mut [u8]`
+  in addition to `config`/`rng`. Buffers are stored as `RefCell<Option<&'a mut [u8]>>` — `connect()`
+  only takes `&self` (matches the `TlsConnector` trait signature, shared across all platforms, which
+  can't be changed to `&mut self` for this one impl), so interior mutability was required to hand out
+  the buffers. `connect()` does `.borrow_mut().take()` to move the `&'a mut [u8]` out into the
+  `TlsConnection` with the connector's own lifetime `'a` (not the temporary `RefMut`'s) — this is
+  what lets `Self::Stream` still borrow with lifetime `'a` like before. Calling `connect()` a second
+  time on the same connector (buffers already taken) returns `SocketError::Other` instead of a second
+  aliased borrow or a panic — one connector now means "good for one connection," and a second
+  concurrent connection means constructing a second connector with its own buffer pair, exactly as
+  Option A's design called for.
+- `GuardedTlsConnection` renamed to `EmbassyTlsStream` (task 3) — it no longer guards anything, just
+  owns the `TlsConnection` directly, no guard field.
+- README's Embassy section gained a "Embassy TLS buffers" subsection under Platform targets showing
+  how to size and pass buffers into `EmbassyTlsConnector::new()`, and stating explicitly that a second
+  concurrent connection needs its own connector/buffer pair (task 4).
+- Task 5 (test or doc-comment establishing "2x buffer RAM, not a panic"): went with the doc-comment
+  route, not a runtime test — writing a real test would need a working async executor plus a fake
+  TLS-speaking peer, and no such harness exists anywhere in this crate for the `embassy` feature today
+  (consistent with the rest of this plan: `embassy` is compile-checked, never `cargo test`-run, and
+  there's no CI to catch a flaky/hanging embassy test if one were added). The `EmbassyTlsConnector`
+  doc comment states the buffer-per-connector/no-panic guarantee directly; `connect()`'s
+  buffer-already-consumed error path is exercised implicitly by the type system (a second `connect()`
+  call physically cannot get a live `&'a mut [u8]` out of an already-`None` `RefCell`), not by a test.
+  If a future phase adds an embassy test harness (e.g. for Phase 5's Embassy FTPS integration test),
+  revisit adding a real two-connector concurrency test then.
+
+**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
+`cargo check --no-default-features --features embassy --lib` (forced recompilation, not a stale
+cache hit), `cargo test` (all lib + integration + doctests pass, unaffected — nothing outside
+`io/embassy.rs` referenced the removed types), `cargo clippy --all-targets` (only the two
+pre-existing warnings noted in Phase 0/1), and `cargo clippy --no-default-features --features
+embassy --lib` (one pre-existing `await_holding_refcell_ref` warning on the *rng* RefCell, confirmed
+via `git stash` to predate this change — not introduced by this phase, not touched by it). Did not
+run `scripts/check-esp-idf.sh` — this phase only touched `io/embassy.rs`, no ESP-IDF code.
 
 **Problem.** `io/embassy.rs` backs every `EmbassyTlsConnector` connection with two **process-wide
 static** 16KB buffers (`TLS_READ_BUFFER`, `TLS_WRITE_BUFFER`) guarded by a single `AtomicBool`.

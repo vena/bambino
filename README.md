@@ -262,6 +262,21 @@ All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerP
 
 **Embassy note:** `discover_devices()` is not available on Embassy — the convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
+**Embassy TLS buffers:** `EmbassyTlsConnector` has no hidden static buffers — you supply the `embedded-tls` read/write scratch buffers yourself, sized for your board's RAM budget. Each connector owns one buffer pair and hands it to exactly one `connect()` call, so opening N concurrent TLS connections (e.g. FTPS's control and data channels at once) means constructing N connectors:
+
+```rust
+use bambino::io::embassy::EmbassyTlsConnector;
+use embedded_tls::{Aes128GcmSha256, TlsConfig};
+
+let config = TlsConfig::new().with_server_name("printer-serial");
+let mut read_buf = [0u8; 16384];
+let mut write_buf = [0u8; 16384];
+let connector: EmbassyTlsConnector<'_, Aes128GcmSha256, _> =
+    EmbassyTlsConnector::new(&config, rng, &mut read_buf, &mut write_buf);
+```
+
+A second concurrent connection (e.g. FTPS's data channel) needs its own connector with its own buffer pair — construct another `EmbassyTlsConnector` rather than reusing this one; calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection.
+
 ## bambino-cli
 
 A CLI using our own library client for testing against real printers. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal UI crate (`crossterm`) and a log sink (`env_logger`) they never asked for.
