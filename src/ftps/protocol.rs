@@ -149,8 +149,9 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
     let start = text
         .find('(')
         .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
-    let end = text
+    let end = text[start + 1..]
         .find(')')
+        .map(|e| e + start + 1)
         .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
     let inner = &text[start + 1..end];
     let mut parts = inner.split(',');
@@ -301,6 +302,14 @@ mod tests {
     #[test]
     fn test_pasv_port_overflow() {
         let result = parse_pasv_port("(127,0,0,1,256,0)");
+        assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    }
+
+    #[test]
+    fn test_pasv_reversed_parentheses_does_not_panic() {
+        // Regression test: a ')' appearing before a '(' used to make `start + 1..end` a
+        // reversed range, which panics. Must return a clean error instead of crashing.
+        let result = parse_pasv_port("227 Response ) some text ( more");
         assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
     }
 }
