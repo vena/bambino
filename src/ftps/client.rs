@@ -90,7 +90,8 @@ where
         }
 
         write_command(&mut control_stream, "USER bblp").await?;
-        let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        log::debug!("FTPS USER response: code={code} text={text:?}");
         if code != FTP_PASSWORD_NEEDED {
             return Err(BambuError::ProtocolViolation(
                 "USER authentication phase rejected".into(),
@@ -99,13 +100,16 @@ where
 
         let pass_cmd = format!("PASS {}", access_code);
         write_command(&mut control_stream, &pass_cmd).await?;
-        let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        log::debug!("FTPS PASS response: code={code} text={text:?}");
+
         if code != FTP_LOGIN_OK {
             return Err(BambuError::AccessDenied);
         }
 
         write_command(&mut control_stream, "PBSZ 0").await?;
-        let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        log::debug!("FTPS PBSZ response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
                 "PBSZ protection sizing configuration failed".into(),
@@ -115,7 +119,8 @@ where
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !model.quirks().uses_plaintext_ftps_data_channel() {
             write_command(&mut control_stream, "PROT P").await?;
-            let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+            let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+            log::debug!("FTPS PROT P response: code={code} text={text:?}");
             if code != FTP_COMMAND_OK {
                 return Err(BambuError::ProtocolViolation(
                     "Failed to enable TLS data channel protection".into(),
@@ -125,7 +130,8 @@ where
 
         // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
         write_command(&mut control_stream, "TYPE I").await?;
-        let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        log::debug!("FTPS TYPE I response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
                 "TYPE I binary mode configuration failed".into(),
@@ -416,6 +422,19 @@ where
             ));
         }
         Ok(())
+    }
+
+    /// Issues a raw `STAT` command and returns the unparsed response code and body text.
+    ///
+    /// Diagnostic-only escape hatch — bypasses `get_available_space`'s `AVBL`-first, `STAT`-fallback
+    /// parsing entirely so real firmware `STAT` output can be captured verbatim (e.g. via
+    /// `bambino-cli files ... stat-raw`) for review, since `STAT`'s field layout isn't uniformly
+    /// documented across firmware versions. Not intended for production capacity queries — use
+    /// `get_available_space` for that.
+    pub async fn debug_raw_stat(&mut self) -> Result<(u16, String), BambuError> {
+        write_command(&mut self.control_stream, "STAT").await?;
+        let mut buf = Vec::new();
+        read_response(&mut self.control_stream, &mut buf).await
     }
 
     /// Queries the available capacity of the MicroSD card, in bytes.

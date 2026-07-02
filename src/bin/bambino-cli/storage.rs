@@ -32,6 +32,8 @@ pub enum FilesAction {
     Delete { remote_path: String },
     /// Query available MicroSD card capacity
     Space,
+    /// Diagnostic: dump the raw, unparsed FTP STAT response (for capturing real firmware output)
+    StatRaw,
 }
 
 /// Dynamic calendar epoch helper converting UNIX timestamps to calendar date parts.
@@ -193,6 +195,16 @@ pub async fn run(
             println!("  - Free Space (Bytes) : {}", space_bytes);
             println!("  - Free Space (MB)    : {:.2} MB", space_mb);
             println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
+        }
+        FilesAction::StatRaw => {
+            println!("Issuing raw STAT command...");
+            let (code, text) = client.debug_raw_stat().await?;
+            println!("\nRaw STAT response:");
+            println!("  code: {}", code);
+            println!("  body:\n{}\n", text);
+            println!(
+                "Paste this output (code + body, unedited) back for get_available_space's STAT-fallback review."
+            );
         }
     }
 

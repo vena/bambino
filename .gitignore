@@ -20,6 +20,8 @@ env/
 /certs
 .lean-ctx/
 /reference/specs
+/reference/probes
+/review
 probe_report.json
 
 # libreoffice lock files
