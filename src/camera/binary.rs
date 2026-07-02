@@ -13,9 +13,10 @@
 //! 1. Verifies that incoming payloads conform strictly to JPEG magic start (`FF D8`) and
 //!    end (`FF D9`) markers before returning buffers to upstream applications to insulate
 //!    against decoding crashes.
-//! 2. Clamps incoming frame sizes to a reasonable upper boundary (10MB) to protect against
-//!    unbounded memory allocation crashes on low-resource environments if transport stream
-//!    corruption occurs.
+//! 2. Clamps incoming frame sizes to a reasonable upper boundary (10MB by default) to protect
+//!    against unbounded memory allocation crashes on low-resource environments if transport
+//!    stream corruption occurs. Use [`BambuBinaryCameraStream::with_max_frame_size`] to lower
+//!    this cap on constrained (`no_std`/Embassy) targets.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -71,15 +72,45 @@ pub fn build_handshake_packet(
 /// Abstract state controller parsing incoming frame buffers from raw Port 6000 streams.
 pub struct BambuBinaryCameraStream<IO: AsyncIo> {
     stream: IO,
+    max_frame_size: usize,
 }
 
 impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// Instantiates a camera parser wrapper surrounding an active secure stream socket.
+    ///
+    /// The accepted frame size defaults to [`CAMERA_FRAME_MAX_SIZE`] (10MB). Use
+    /// [`Self::with_max_frame_size`] to lower it — useful on `no_std`/Embassy targets, where a
+    /// 10MB transient allocation (see [`Self::read_next_frame`]) can exceed the entire SRAM
+    /// budget and trigger an uncatchable `alloc_error_handler` abort rather than a recoverable
+    /// `Result`.
     pub fn new(stream: IO) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            max_frame_size: CAMERA_FRAME_MAX_SIZE,
+        }
+    }
+
+    /// Overrides the maximum accepted frame size (default: [`CAMERA_FRAME_MAX_SIZE`], 10MB).
+    ///
+    /// Non-consuming builder, matching the `PrinterClient::with_mqtt_port`/`with_ftps_port`
+    /// convention (`src/client/mod.rs`). Embedded callers should clamp this to a value that
+    /// fits their actual JPEG resolution and buffer budget (e.g. 64-256KB) rather than relying
+    /// on the desktop-sized default.
+    pub fn with_max_frame_size(mut self, max: usize) -> Self {
+        self.max_frame_size = max;
+        self
     }
 
     /// Transmits the 80-byte authentication handshake to activate the continuous frame-push process.
+    ///
+    /// Per [REF-CAM-BINARY], this handshake protocol has no ack byte: a successful return only
+    /// means the packet was written and flushed to the socket, **not** that the printer accepted
+    /// the access code. If the code is wrong, the printer's real-world response (closing the
+    /// socket, or simply never sending a frame) only surfaces later, on the *next*
+    /// [`Self::read_next_frame`] call, as `BambuError::NetworkError(SocketError::ConnectionReset)`
+    /// — the same error variant a mid-stream network blip would produce. Callers that need to
+    /// distinguish "wrong access code" from "transient network hiccup" cannot do so from this
+    /// API alone.
     pub async fn authenticate(&mut self, access_code: &str) -> Result<(), BambuError> {
         let handshake = build_handshake_packet(access_code)?;
         self.stream
@@ -105,13 +136,21 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             .await
             .map_err(|_| BambuError::NetworkError(SocketError::ConnectionReset))?;
 
-        // Extract little-endian payload size N from first 4 bytes
-        let size = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        // Extract little-endian payload size N from first 4 bytes. Use a fallible conversion
+        // rather than `as usize` — on a hypothetical <32-bit `usize` target an `as` cast would
+        // silently truncate the length field instead of erroring, before the frame-size sanity
+        // check below even runs.
+        let raw_size = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+        let size = usize::try_from(raw_size).map_err(|_| {
+            BambuError::ProtocolViolation(
+                "Frame size descriptor does not fit in this platform's usize".into(),
+            )
+        })?;
 
         // Bounded allocation check to guard against memory allocation overflow attacks
-        if size > CAMERA_FRAME_MAX_SIZE {
+        if size > self.max_frame_size {
             return Err(BambuError::ProtocolViolation(
-                "Extracted JPEG frame size exceeds safety allocation limit (10MB)".into(),
+                "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
             ));
         }
 
@@ -193,6 +232,18 @@ mod tests {
             let data = make_frame_header((CAMERA_FRAME_MAX_SIZE + 1) as u32);
             let cursor = std::io::Cursor::new(data);
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut buf = Vec::new();
+            let result = camera.read_next_frame(&mut buf).await;
+            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_read_frame_respects_custom_max_frame_size() {
+            // A frame well under the default 10MB cap but over a custom, smaller cap must be
+            // rejected — this is the behavior embedded callers rely on via `with_max_frame_size`.
+            let data = make_frame_header(1024);
+            let cursor = std::io::Cursor::new(data);
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
