@@ -272,14 +272,17 @@ pub async fn run(
         ControlAction::Pause => {
             println!("Suspending print queue execution...");
             client.pause_print().await?;
+            println!("Pause command published successfully.");
         }
         ControlAction::Resume => {
             println!("Resuming print queue execution...");
             client.resume_print().await?;
+            println!("Resume command published successfully.");
         }
         ControlAction::Stop => {
             println!("Aborting active print job pipeline...");
             client.stop_print().await?;
+            println!("Stop command published successfully.");
         }
         ControlAction::Gcode { gcode_line } => {
             println!("Dispatching G-code (with safety checks)...");

@@ -22,7 +22,7 @@ env/
 /reference/specs
 /reference/probes
 /review
-probe_report.json
+probe_report*.json
 
 # libreoffice lock files
 .~lock.*.csv#

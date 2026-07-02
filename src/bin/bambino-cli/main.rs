@@ -19,6 +19,8 @@ mod probe;
 mod storage;
 mod table;
 
+use connection::resolve_access_code;
+
 /// Global static indicating whether verbose debug logging is requested.
 ///
 /// **Why this is an AtomicBool:**
@@ -37,6 +39,8 @@ pub fn is_verbose() -> bool {
     about = "Bambu Lab Local LAN Protocol Developer CLI Tool",
     after_help = "\
 Most commands require positional args: <IP> <SERIAL> <ACCESS_CODE>
+ACCESS_CODE may be omitted (or passed as \"\") to fall back to the
+BAMBINO_ACCESS_CODE environment variable.
 Run 'bambino-cli <COMMAND> --help' for full argument details.
 
 Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
@@ -64,6 +68,8 @@ enum Command {
     Info {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
     },
 
@@ -71,6 +77,8 @@ enum Command {
     Monitor {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
     },
 
@@ -78,6 +86,8 @@ enum Command {
     Dump {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
     },
 
@@ -85,6 +95,8 @@ enum Command {
     Probe {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
         /// Output file path
         #[arg(short = 'o', long, default_value = "probe_report.json")]
@@ -99,6 +111,8 @@ enum Command {
     Control {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
         #[command(subcommand)]
         action: control::ControlAction,
@@ -109,6 +123,8 @@ enum Command {
     Files {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
         #[command(subcommand)]
         action: storage::FilesAction,
@@ -119,6 +135,8 @@ enum Command {
     Camera {
         ip: String,
         serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
         access_code: String,
         #[command(subcommand)]
         action: camera::CameraAction,
@@ -141,42 +159,51 @@ async fn main() {
             ip,
             serial,
             access_code,
-        } => control::run_info(&ip, &serial, &access_code).await,
+        } => control::run_info(&ip, &serial, &resolve_access_code(access_code)).await,
         Command::Monitor {
             ip,
             serial,
             access_code,
-        } => monitor::run(&ip, &serial, &access_code).await,
+        } => monitor::run(&ip, &serial, &resolve_access_code(access_code)).await,
         Command::Dump {
             ip,
             serial,
             access_code,
-        } => monitor::dump(&ip, &serial, &access_code).await,
+        } => monitor::dump(&ip, &serial, &resolve_access_code(access_code)).await,
         Command::Probe {
             ip,
             serial,
             access_code,
             output,
             tests,
-        } => probe::run(&ip, &serial, &access_code, &output, tests.as_deref()).await,
+        } => {
+            probe::run(
+                &ip,
+                &serial,
+                &resolve_access_code(access_code),
+                &output,
+                tests.as_deref(),
+            )
+            .await
+        }
         Command::Control {
             ip,
             serial,
             access_code,
             action,
-        } => control::run(&ip, &serial, &access_code, action).await,
+        } => control::run(&ip, &serial, &resolve_access_code(access_code), action).await,
         Command::Files {
             ip,
             serial,
             access_code,
             action,
-        } => storage::run(&ip, &serial, &access_code, action).await,
+        } => storage::run(&ip, &serial, &resolve_access_code(access_code), action).await,
         Command::Camera {
             ip,
             serial,
             access_code,
             action,
-        } => camera::run(&ip, &serial, &access_code, action).await,
+        } => camera::run(&ip, &serial, &resolve_access_code(access_code), action).await,
     };
 
     if let Err(e) = result {

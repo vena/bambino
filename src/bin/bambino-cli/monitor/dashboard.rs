@@ -1,3 +1,5 @@
+#![cfg(feature = "cli")]
+
 use std::io::{self, Write};
 
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
