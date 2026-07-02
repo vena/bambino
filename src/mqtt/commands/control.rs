@@ -128,7 +128,7 @@ pub struct PrintSpeedRequest {
 }
 
 impl PrintSpeedRequest {
-    pub(crate) fn new(speed_index_str: &str, sequence_id: u64) -> Self {
+    pub fn new(speed_index_str: &str, sequence_id: u64) -> Self {
         Self {
             print: PrintSpeedPayload {
                 command: "print_speed",

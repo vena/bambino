@@ -81,6 +81,19 @@ where
     }
 
     /// Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
+    ///
+    /// **IDEX External-Spool Addressing Cheat-Sheet:** this command (`extrusion_cali_sel`)
+    /// uses different `ams_id`/`tray_id` external-spool addressing than
+    /// `ams_filament_setting` (filament configuration) — do not reuse one rule for both:
+    /// * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
+    ///   `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
+    ///   Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong
+    ///   address for Ext-R on IDEX machines mis-routes the pressure advance profile to
+    ///   the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    ///   uncalibrated.
+    /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
+    ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`; Ext-R requires
+    ///   `ams_id: 255` / `tray_id: 0`.
     pub async fn select_k_profile(
         &mut self,
         ams_id: i32,
