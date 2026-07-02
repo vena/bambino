@@ -266,7 +266,7 @@ pub async fn run(
                 LedStateArg::Off => false,
             };
             println!("Dispatching ledctrl command register block...");
-            client.toggle_led(led_node, turn_on).await?;
+            client.set_led(led_node, turn_on).await?;
             println!("LED command published successfully.");
         }
         ControlAction::Pause => {

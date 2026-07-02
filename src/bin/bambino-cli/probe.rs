@@ -219,10 +219,10 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
             client.clear_print_error().await?;
         }
         ProbeTest::LedOn => {
-            client.toggle_led("chamber_light", true).await?;
+            client.set_led("chamber_light", true).await?;
         }
         ProbeTest::LedOff => {
-            client.toggle_led("chamber_light", false).await?;
+            client.set_led("chamber_light", false).await?;
         }
         ProbeTest::FanPartZero => {
             client.set_fan_speed(FanTarget::PartCooling, 0).await?;

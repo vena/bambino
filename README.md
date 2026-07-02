@@ -82,7 +82,7 @@ printer.request_pushall().await?;              // request full state dump
 printer.home_axes(false).await?;               // "safe" homing (bare G28)
 printer.set_bed_temperature(60).await?;        // clamped to model max
 printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
-printer.toggle_led("chamber_light", true).await?;
+printer.set_led("chamber_light", true).await?;
 printer.send_gcode("M106 P1 S255").await?;     // validated against model quirks
 ```
 

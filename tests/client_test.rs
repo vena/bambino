@@ -867,7 +867,7 @@ async fn test_clear_print_error_wire_payload() {
 }
 
 #[tokio::test]
-async fn test_toggle_led_wire_payload() {
+async fn test_set_led_wire_payload() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
     let broker_task = tokio::spawn(async move {
@@ -890,13 +890,13 @@ async fn test_toggle_led_wire_payload() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
-        .toggle_led("chamber_light", true)
+        .set_led("chamber_light", true)
         .await
-        .expect("toggle_led on failed");
+        .expect("set_led on failed");
     client
-        .toggle_led("chamber_light", false)
+        .set_led("chamber_light", false)
         .await
-        .expect("toggle_led off failed");
+        .expect("set_led off failed");
 
     broker_task.await.expect("Broker task panicked");
 }
