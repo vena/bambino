@@ -559,6 +559,30 @@ fn test_ethernet_active_bitmask() {
 }
 
 #[test]
+fn test_ethernet_active_via_wifi_signal() {
+    let json = r#"{ "print": { "wifi_signal": "-90dBm" } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json)
+        .unwrap()
+        .print
+        .unwrap();
+    assert!(print.is_ethernet_active_via_wifi_signal());
+
+    let json_off = r#"{ "print": { "wifi_signal": "-52dBm" } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json_off)
+        .unwrap()
+        .print
+        .unwrap();
+    assert!(!print.is_ethernet_active_via_wifi_signal());
+
+    let json_missing = r#"{ "print": {} }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json_missing)
+        .unwrap()
+        .print
+        .unwrap();
+    assert!(!print.is_ethernet_active_via_wifi_signal());
+}
+
+#[test]
 fn test_power_on_flag_deserialization() {
     let json_true = r#"{ "print": { "power_on_flag": true } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json_true)
@@ -1760,4 +1784,61 @@ fn test_bed_temperatures_empty_report() {
     let json = r#"{}"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     assert_eq!(report.bed_temperatures(), (0, 0));
+}
+
+// --- device() accessor tests (mirrors bed_temperatures()'s fallback pattern) ---
+
+#[test]
+fn test_device_top_level() {
+    let json = r#"{
+            "device": {
+                "bed": { "info": { "temp": 4587590 }, "state": 2 }
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert!(report.device().is_some());
+}
+
+#[test]
+fn test_device_nested_in_print() {
+    let json = r#"{
+            "print": {
+                "device": {
+                    "bed": { "info": { "temp": 4587590 }, "state": 2 }
+                }
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert!(report.device().is_some());
+}
+
+#[test]
+fn test_device_both_present_top_level_wins() {
+    let json = r#"{
+            "device": {
+                "airduct": { "parts": [{ "id": 1, "state": 1 }] }
+            },
+            "print": {
+                "device": {
+                    "airduct": { "parts": [{ "id": 2, "state": 2 }] }
+                }
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let device = report.device().unwrap();
+    assert_eq!(device.airduct.as_ref().unwrap().parts[0].id, 1);
+}
+
+#[test]
+fn test_device_neither_present() {
+    let json = r#"{ "print": {} }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert!(report.device().is_none());
+}
+
+#[test]
+fn test_device_empty_report() {
+    let json = r#"{}"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert!(report.device().is_none());
 }

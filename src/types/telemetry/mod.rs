@@ -86,6 +86,18 @@ impl TelemetryReport {
         let temp = device.bed.as_ref()?.info.as_ref()?.temp?;
         Some(PrinterTelemetry::unpack_temperature(temp as f64))
     }
+
+    /// Returns the `DeviceTelemetry` sub-object, checking both wire locations it can arrive at.
+    ///
+    /// Mirrors `bed_temperatures()`'s first-found-wins fallback: top-level `device` (incremental
+    /// updates) is checked first, falling back to pushall-nested `print.device` (H2/P2/X2
+    /// models). Returns `None` if neither location is present. Use this instead of manually
+    /// checking both locations for nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
+    pub fn device(&self) -> Option<&DeviceTelemetry> {
+        self.device
+            .as_ref()
+            .or_else(|| self.print.as_ref().and_then(|print| print.device.as_ref()))
+    }
 }
 
 /// Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].

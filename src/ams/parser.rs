@@ -53,6 +53,14 @@ pub fn evaluate_spool_presence(
         return Some(true);
     }
 
+    // Reject ams_id values outside the standard AMS range before computing the shift
+    // amount below (mirrors resolve_global_tray_id's bounds check in this same file) —
+    // otherwise an out-of-range ams_id produces a shift amount >= 32, which panics in
+    // debug builds and silently returns a wrong result in release builds.
+    if ams_id > AMS_MAX_STANDARD_ID {
+        return None;
+    }
+
     let shift_standard = (ams_id as u32 * AMS_SLOTS_PER_UNIT as u32) + tray_id as u32;
     let slot_exists = ((parsed_mask >> shift_standard) & 1) == 1;
 
@@ -292,6 +300,16 @@ mod tests {
             resolve_printing_global_id(0, Some(5), &ams_extruder_map),
             None
         );
+    }
+
+    #[test]
+    fn test_evaluate_spool_presence_ams_id_out_of_range() {
+        // ams_id outside both the standard (0-3) and AMS-HT (128-135) ranges must not
+        // panic or wrap into a bogus shift amount — it should cleanly report None.
+        assert_eq!(evaluate_spool_presence("f", 200, 0, true), None);
+        assert_eq!(evaluate_spool_presence("f", 4, 0, true), None);
+        assert_eq!(evaluate_spool_presence("f", 127, 0, true), None);
+        assert_eq!(evaluate_spool_presence("f", 255, 0, true), None);
     }
 
     #[test]

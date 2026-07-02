@@ -288,11 +288,28 @@ impl PrinterTelemetry {
 
     /// Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
     ///
-    /// Inspects bit 18 (`0x00040000`) of the `home_flag` register.
+    /// Inspects bit 18 (`0x00040000`) of the `home_flag` register. **This is the disputed
+    /// pybambu-sourced heuristic** — OrcaSlicer maps the same bit to `is_support_prompt_sound`
+    /// rather than Ethernet status, and the two reverse-engineering sources disagree on what bit
+    /// 18 means. Not confirmed authoritative. See `reference/03_mqtt_telemetry.md`
+    /// `[REF-NET-PORTS]`, which recommends `is_ethernet_active_via_wifi_signal()` instead. Both
+    /// methods are kept since neither source is proven correct — consider cross-checking both on
+    /// unfamiliar firmware.
     pub fn is_ethernet_active(&self) -> bool {
         self.home_flag
             .map(|flag| (flag & ETHERNET_ACTIVE_BITMASK) != 0)
             .unwrap_or(false)
+    }
+
+    /// Evaluates whether the physical printer is connected via wired Ethernet using the
+    /// doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the
+    /// disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
+    ///
+    /// A printer with no wifi signal to report (i.e. running wired-only) sends a fixed
+    /// `wifi_signal` of `"-90dBm"`. Not confirmed authoritative either — consider cross-checking
+    /// both methods on unfamiliar firmware.
+    pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
+        self.wifi_signal.as_deref() == Some("-90dBm")
     }
 
     /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
