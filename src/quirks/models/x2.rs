@@ -77,7 +77,7 @@ impl ModelQuirks for X2Quirks {
         X2D_NOZZLE_TEMP_MAX
     }
 
-    fn bed_temp_max(&self) -> u16 {
+    fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
         X2D_BED_TEMP_MAX
     }
 

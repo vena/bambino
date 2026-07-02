@@ -268,6 +268,7 @@ pub struct PrinterTelemetry {
 pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
 pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
 pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
+pub(crate) const POWER_220V_BITMASK: u32 = 0x0000_0008;
 
 impl PrinterTelemetry {
     /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
@@ -310,6 +311,19 @@ impl PrinterTelemetry {
     /// both methods on unfamiliar firmware.
     pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
         self.wifi_signal.as_deref() == Some("-90dBm")
+    }
+
+    /// Evaluates whether the printer's mains power supply is wired for the 220V region,
+    /// based on bit 3 (`0x00000008`) of the `home_flag` register.
+    ///
+    /// Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
+    /// temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
+    /// official spec sheet — confirmed, not disputed, unlike the bit-18 ethernet heuristic in
+    /// `is_ethernet_active()`).
+    pub fn is_220v_power(&self) -> bool {
+        self.home_flag
+            .map(|flag| (flag & POWER_220V_BITMASK) != 0)
+            .unwrap_or(false)
     }
 
     /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].

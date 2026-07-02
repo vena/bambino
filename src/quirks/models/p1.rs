@@ -65,7 +65,7 @@ impl ModelQuirks for P1Quirks {
         P1_NOZZLE_TEMP_MAX
     }
 
-    fn bed_temp_max(&self) -> u16 {
+    fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
         P1_BED_TEMP_MAX
     }
 }

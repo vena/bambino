@@ -87,7 +87,7 @@ macro_rules! impl_h2_shared {
                 H2_NOZZLE_TEMP_MAX
             }
 
-            fn bed_temp_max(&self) -> u16 {
+            fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
                 H2_BED_TEMP_MAX
             }
 
