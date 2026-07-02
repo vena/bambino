@@ -399,13 +399,28 @@ where
     /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching
     /// messages for later retrieval via `poll_telemetry()` / `poll_raw()`.
     ///
+    /// Checks previously-buffered messages (stashed by an earlier `poll_until()` call)
+    /// for a match before reading from the wire — a leftover message from a prior
+    /// request-response round-trip may already satisfy this call's `matcher`.
+    ///
     /// Returns `BambuError::Timeout` if the wall-clock timeout (`command_timeout_secs`)
-    /// or message-count safety valve (`POLL_UNTIL_MAX_MESSAGES`) is exceeded.
+    /// or message-count safety valve (`POLL_UNTIL_MAX_MESSAGES`) is exceeded. Neither of
+    /// these protects against a fully-stalled read on the wire itself.
     pub(crate) async fn poll_until<F, T>(&mut self, mut matcher: F) -> Result<T, BambuError>
     where
         F: FnMut(&MqttMessage) -> Option<T>,
     {
         self.ensure_mqtt().await?;
+
+        if let Some(result) = self
+            .mqtt
+            .as_mut()
+            .unwrap()
+            .take_pending_matching(&mut matcher)
+        {
+            return Ok(result);
+        }
+
         let start = self.timer.now_millis();
         let timeout_ms = self.command_timeout_secs * 1000;
         let mut count: usize = 0;

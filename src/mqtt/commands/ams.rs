@@ -37,6 +37,20 @@ impl AmsFilamentSettingRequest {
     /// For standard physical slots, `ams_id` matches the expansion unit index (0-3).
     /// For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
     /// and `tray_id` must strictly be set to `254` to prevent command rejection.
+    ///
+    /// **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
+    /// addressing differs by command family — this rule is *not* the same one used by
+    /// `extrusion_cali_sel` (K-profile binding, see
+    /// [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+    /// * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
+    ///   `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`;
+    ///   Ext-R requires `ams_id: 255` / `tray_id: 0`.
+    /// * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
+    ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
+    ///   `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
+    ///   Ext-R on IDEX machines mis-routes the pressure advance profile to the left
+    ///   carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    ///   uncalibrated.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ams_id: i32,

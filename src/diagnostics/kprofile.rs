@@ -202,6 +202,22 @@ pub struct ExtrusionCaliSelRequest {
 }
 
 impl ExtrusionCaliSelRequest {
+    /// Creates a request payload to bind a stored K-profile calibration entry to an AMS
+    /// material slot.
+    ///
+    /// **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
+    /// addressing differs by command family — this rule is *not* the same one used by
+    /// `ams_filament_setting` (filament configuration, see
+    /// [`crate::mqtt::AmsFilamentSettingRequest::new`]):
+    /// * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
+    ///   `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
+    ///   Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong
+    ///   address for Ext-R on IDEX machines mis-routes the pressure advance profile to
+    ///   the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    ///   uncalibrated.
+    /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
+    ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`; Ext-R requires
+    ///   `ams_id: 255` / `tray_id: 0`.
     pub fn new(
         ams_id: i32,
         tray_id: i32,
