@@ -81,6 +81,10 @@ macro_rules! impl_a1_shared {
             fn supports_prompt_sound(&self) -> bool {
                 true
             }
+
+            fn supports_auxiliary_left_fan(&self) -> bool {
+                false
+            }
         }
     };
 }

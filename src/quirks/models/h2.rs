@@ -102,6 +102,10 @@ macro_rules! impl_h2_shared {
             fn supports_buzzer(&self) -> bool {
                 true
             }
+
+            fn has_chamber_exhaust_fan(&self) -> bool {
+                true
+            }
         }
     };
 }

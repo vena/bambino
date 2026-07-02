@@ -74,22 +74,17 @@ pub trait ModelQuirks {
     ///
     /// Default: bed-on-Z models reject G28 with axis constraints (Z, X, or Y) to prevent
     /// nozzle-to-plate collisions. Bed-slingers allow all homing variants.
+    ///
+    /// Scans every line of `gcode` independently — multi-statement `\n`-joined payloads are a
+    /// documented, supported wire shape (see `GCodeRequest`) — and recognizes `G28` as a
+    /// case-insensitive prefix match on a line rather than requiring it to be the entire leading
+    /// whitespace-split token, so glued forms like `G28X` (no space before the axis letter) are
+    /// caught too, alongside the already-handled space-separated form (`G28 X`).
     fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
         if !self.is_bed_on_z() {
             return false;
         }
-        let mut tokens = gcode.split_whitespace();
-        let Some(cmd) = tokens.next() else {
-            return false;
-        };
-        if !cmd.eq_ignore_ascii_case("G28") {
-            return false;
-        }
-        tokens.any(|t| {
-            t.eq_ignore_ascii_case("X")
-                || t.eq_ignore_ascii_case("Y")
-                || t.eq_ignore_ascii_case("Z")
-        })
+        gcode.lines().any(line_has_unsafe_homing)
     }
 
     /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
@@ -105,11 +100,6 @@ pub trait ModelQuirks {
         format_z_move_gcode(distance, feedrate, self.z_max())
     }
 
-    /// Evaluates if the specified command string is unsupported or ignored on the target model.
-    fn is_unsupported_command(&self, _command: &str) -> bool {
-        false
-    }
-
     /// Returns true if the model's RTSP camera stream requires wallclock timestamps
     /// instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
     fn requires_wallclock_rtsp_timestamps(&self) -> bool {
@@ -118,6 +108,21 @@ pub trait ModelQuirks {
 
     /// Returns true if the model has a secondary right-side auxiliary fan (port 10) [REF-CLIM-FANS].
     fn supports_auxiliary_right_fan(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
+    ///
+    /// Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan)
+    /// override this to `false`.
+    fn supports_auxiliary_left_fan(&self) -> bool {
+        true
+    }
+
+    /// Returns true if the model has a chamber exhaust/filtration fan (port 3) [REF-CLIM-FANS].
+    ///
+    /// Supported on: H2S, H2D, H2D Pro, H2C, X2D.
+    fn has_chamber_exhaust_fan(&self) -> bool {
         false
     }
 
@@ -182,7 +187,12 @@ impl BambuModel {
             BambuModel::H2D => &models::h2::H2DQuirks,
             BambuModel::H2DPro => &models::h2::H2DProQuirks,
             BambuModel::H2C => &models::h2::H2CQuirks,
-            _ => &models::x1::X1CQuirks,
+            BambuModel::Unknown => {
+                log::warn!(
+                    "Unrecognized printer model — applying X1C quirks as a conservative default"
+                );
+                &models::x1::X1CQuirks
+            }
         }
     }
 }
@@ -190,6 +200,46 @@ impl BambuModel {
 // ============================================================================
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
+
+/// Returns true if `line` contains an axis-constrained `G28` homing command.
+///
+/// Recognizes `G28` as a case-insensitive prefix match rather than requiring the whole token to
+/// equal `G28` — this catches axis letters glued directly to the command (`G28X`) in addition to
+/// the space-separated form (`G28 X`). Rejects numeric extensions of the command number (e.g.
+/// `G280`, `G281`), which are distinct G-codes, not `G28` with a trailing digit. `no_std` rules
+/// out `regex`, hence the manual byte/char scan.
+fn line_has_unsafe_homing(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if is_g28_prefix(bytes, i) {
+            let rest = &line[i + 3..];
+            let next_is_digit = rest
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false);
+            if !next_is_digit
+                && rest
+                    .chars()
+                    .any(|c| matches!(c.to_ascii_uppercase(), 'X' | 'Y' | 'Z'))
+            {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Returns true if `bytes[i..]` starts with `G28` (case-insensitive on the `G`; `2`/`8` are digits
+/// with no case to normalize).
+fn is_g28_prefix(bytes: &[u8], i: usize) -> bool {
+    bytes.len() >= i + 3
+        && bytes[i].eq_ignore_ascii_case(&b'G')
+        && bytes[i + 1] == b'2'
+        && bytes[i + 2] == b'8'
+}
 
 /// Generates a safe relative Z-axis movement G-code block with travel limit guards.
 ///
@@ -328,6 +378,8 @@ mod tests {
         assert!(!q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
         assert!(!q.supports_auxiliary_right_fan());
+        assert!(!q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.auxiliary_fan_uses_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -356,6 +408,8 @@ mod tests {
         assert!(!q.relative_z_move_gcode(300.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 80);
+        assert!(!q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -379,6 +433,8 @@ mod tests {
         assert!(!q.relative_z_move_gcode(150.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 80);
+        assert!(!q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -400,6 +456,8 @@ mod tests {
             assert!(q.is_bed_on_z());
             assert!(!q.requires_wallclock_rtsp_timestamps());
             assert!(!q.supports_auxiliary_right_fan());
+            assert!(q.supports_auxiliary_left_fan());
+            assert!(!q.has_chamber_exhaust_fan());
             assert_eq!(q.z_max(), 256.0);
             assert_eq!(q.nozzle_temp_max(), 300);
             assert_eq!(q.bed_temp_max(), 100);
@@ -424,6 +482,8 @@ mod tests {
         assert!(q.is_bed_on_z());
         assert!(q.requires_wallclock_rtsp_timestamps());
         assert!(q.supports_auxiliary_right_fan());
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
         assert!(q.auxiliary_fan_uses_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -449,6 +509,8 @@ mod tests {
         assert!(q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
         assert!(!q.supports_auxiliary_right_fan());
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(), 120);
@@ -475,6 +537,8 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 320);
         assert_eq!(q.bed_temp_max(), 110);
         assert_eq!(q.chamber_temp_max(), 60);
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -494,6 +558,8 @@ mod tests {
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(q.supports_auxiliary_right_fan());
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_chamber_exhaust_fan());
         assert!(q.auxiliary_fan_uses_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
@@ -521,6 +587,8 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(q.supports_buzzer());
@@ -538,6 +606,8 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(q.supports_buzzer());
@@ -554,6 +624,8 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(q.supports_buzzer());
@@ -571,6 +643,8 @@ mod tests {
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(), 120);
         assert_eq!(q.chamber_temp_max(), 65);
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(q.supports_buzzer());
@@ -582,6 +656,8 @@ mod tests {
         assert!(!q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 1);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
+        assert!(q.supports_auxiliary_left_fan());
+        assert!(!q.has_chamber_exhaust_fan());
     }
 
     // Z-move gcode parameterization tests
@@ -641,6 +717,23 @@ mod tests {
         assert!(!q.is_unsafe_homing_command(""));
         assert!(!q.is_unsafe_homing_command("G28"));
         assert!(q.is_unsafe_homing_command("G28 z"));
+    }
+
+    #[test]
+    fn test_unsafe_homing_hidden_on_later_line() {
+        // Regression: is_unsafe_homing_command used to inspect only the first
+        // whitespace-split token of the whole string, so an unsafe G28 buried on a
+        // later line of a multi-statement payload passed through unchecked.
+        let q = BambuModel::P1P.quirks();
+        assert!(q.is_unsafe_homing_command("M104 S200\nG28 Z"));
+    }
+
+    #[test]
+    fn test_unsafe_homing_glued_axis() {
+        // Regression: "G28X" (no whitespace between the command and the axis
+        // letter) used to fail the exact "G28" token match and pass through unchecked.
+        let q = BambuModel::P1P.quirks();
+        assert!(q.is_unsafe_homing_command("G28X"));
     }
 
     #[test]

@@ -72,4 +72,8 @@ impl ModelQuirks for A2LQuirks {
     fn supports_prompt_sound(&self) -> bool {
         true
     }
+
+    fn supports_auxiliary_left_fan(&self) -> bool {
+        false
+    }
 }
