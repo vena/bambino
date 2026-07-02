@@ -172,6 +172,7 @@ dependencies = [
  "embassy-net",
  "embassy-time",
  "embedded-io-async 0.7.0",
+ "embedded-nal-async",
  "embedded-tls",
  "env_logger",
  "esp-idf-svc",

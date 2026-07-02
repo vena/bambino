@@ -5,6 +5,8 @@
 //! stack and `embedded-tls`.
 
 #[cfg(feature = "embassy")]
+use crate::ftps::FtpDataStreamFactory;
+#[cfg(feature = "embassy")]
 use crate::io::{
     AsyncIo, AsyncUdpSocket, SocketError, TimerError, TimerProvider, TlsConnector, TlsVersion,
 };
@@ -237,5 +239,82 @@ where
     /// will correctly reject it with `ProtocolViolation` rather than silently proceeding.
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
         Some(TlsVersion::Tls13)
+    }
+}
+
+/// Passive/data-channel connection factory for the Embassy network stack.
+///
+/// Unlike Tokio's `TokioFtpDataStreamFactory` (which dials a fresh `TcpStream` per call),
+/// `embassy_net::tcp::TcpSocket` needs pre-allocated rx/tx buffer slices at construction —
+/// there's no way to dial a raw connection without them. `FtpDataStreamFactory::create_data_stream`
+/// is called repeatedly from `&self` (once for FTPS's control channel, once per data-channel
+/// transfer — `list_directory`, `upload_file`, `download_file` each open and close their own),
+/// so a single buffer pair handed out once (Phase 2's `EmbassyTlsConnector` pattern) isn't
+/// enough here.
+///
+/// Instead of hand-rolling a buffer pool, this wraps `embassy_net::tcp::client::TcpClient` —
+/// embassy-net's own built-in connection pool (`embassy_net::tcp::client` module), which
+/// solves exactly this problem: `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates N buffer
+/// pairs, `TcpClient::connect()` checks one out and returns a `TcpConnection` that
+/// automatically returns its slot to the pool on `Drop` — no unsafe code needed on our side,
+/// and no risk of the panic-based mutual exclusion Phase 2 removed from `EmbassyTlsConnector`
+/// (a pool with `N` slots simply fails a `connect()` call with `Error::ConnectionReset` if
+/// all `N` are checked out, rather than panicking or aliasing memory).
+///
+/// **Why `&'static TcpClient`, not an owned one:** `FtpDataStreamFactory<RawIO>`'s `RawIO`
+/// is a fixed type for the whole trait impl, not parameterized per call — so the returned
+/// `TcpConnection<'x, ...>`'s lifetime `'x` must be a *constant*, chosen once, not tied to
+/// however long any individual `create_data_stream` call happens to borrow `&self` for.
+/// Storing an *owned* `TcpClient<'d, ...>` field can't satisfy that: borrowing a field out of
+/// `&self` can never outlive that particular call's borrow of `self`. Storing a `&'static`
+/// *reference* sidesteps the problem entirely — copying a `&'static` reference out from
+/// behind an arbitrarily short `&self` borrow yields an independent value that is itself
+/// still valid for `'static`, so `TcpConnection<'static, ...>` comes out clean regardless of
+/// how briefly any given call borrowed the factory. This pushes the actual `'static` storage
+/// question (a `static` item, `static_cell::StaticCell`, or similar) to application setup
+/// code, matching Phase 2's "caller supplies the buffer storage" philosophy — see the
+/// README's Embassy section for a worked example.
+#[cfg(feature = "embassy")]
+pub struct EmbassyFtpDataStreamFactory<
+    const N: usize,
+    const TX_SZ: usize = 2048,
+    const RX_SZ: usize = 2048,
+> {
+    client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>,
+}
+
+#[cfg(feature = "embassy")]
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
+    EmbassyFtpDataStreamFactory<N, TX_SZ, RX_SZ>
+{
+    /// `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held
+    /// `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
+    pub fn new(
+        client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>,
+    ) -> Self {
+        Self { client }
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
+    FtpDataStreamFactory<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>>
+    for EmbassyFtpDataStreamFactory<N, TX_SZ, RX_SZ>
+{
+    async fn create_data_stream(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>, SocketError>
+    {
+        use ::embedded_nal_async::TcpConnect;
+
+        let ip: core::net::Ipv4Addr = host.parse().map_err(|_| SocketError::InvalidInput)?;
+        let addr = core::net::SocketAddr::V4(core::net::SocketAddrV4::new(ip, port));
+
+        self.client
+            .connect(addr)
+            .await
+            .map_err(|_| SocketError::ConnectionRefused)
     }
 }

@@ -279,13 +279,39 @@ let connector: EmbassyTlsConnector<'_, Aes128GcmSha256, _> =
 
 A second concurrent connection (e.g. FTPS's data channel) needs its own connector with its own buffer pair — construct another `EmbassyTlsConnector` rather than reusing this one; calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection.
 
+**Embassy FTPS:** `EmbassyFtpDataStreamFactory` supplies the raw TCP connections FTPS needs (one per `list_directory`/`upload_file`/`download_file` call, plus one to dial the control channel) — built on `embassy_net::tcp::client::TcpClient`, embassy-net's own connection pool, rather than a hand-rolled buffer scheme. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs; each connection checks one out and returns it to the pool on drop, so running out of pool slots is a `ConnectionRefused`-style error, not a panic — `N = 1` covers FTPS's actual usage pattern (data-channel connections are always sequential, never concurrent with each other). Both `TcpClientState` and the `TcpClient` built from it need `'static` storage, since `create_data_stream` is called repeatedly from `&self` and the returned connection's type can't carry a lifetime shorter than `'static` (see `EmbassyFtpDataStreamFactory`'s doc comment for why). `static_cell::StaticCell` is the standard way to get that in an Embassy app — add it as your own dependency, bambino doesn't require it:
+
+```rust
+use bambino::io::embassy::EmbassyFtpDataStreamFactory;
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use static_cell::StaticCell;
+
+static TCP_CLIENT_STATE: StaticCell<TcpClientState<1, 2048, 2048>> = StaticCell::new();
+static TCP_CLIENT: StaticCell<TcpClient<'static, 1, 2048, 2048>> = StaticCell::new();
+
+let state = TCP_CLIENT_STATE.init(TcpClientState::new());
+let client = TCP_CLIENT.init(TcpClient::new(stack, state));
+let factory = EmbassyFtpDataStreamFactory::new(client);
+
+let mut printer = printer.with_ftps(ftps_tls, factory);
+```
+
 **ESP-IDF TLS timeouts:** `EspIdfSecureConnector` runs the TLS handshake and all reads/writes with the underlying socket in non-blocking mode, so a `TimerProvider`-based timeout wrapped around ESP-IDF network I/O (e.g. `poll_until`) can now actually preempt a stuck handshake or read/write — this previously could not happen, since the handshake and I/O were blocking FFI calls a timeout has no way to interrupt. The mechanism is a fixed-interval poll (retry every 20ms via `EspIdfTimer::sleep` on `ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`/`EWOULDBLOCK`), not true readiness notification — `esp-idf-svc`/`esp-idf-hal` expose no async socket-readiness primitive for an arbitrary fd today. Real wake-on-ready is possible via `esp_idf_svc::tls::EspAsyncTls` plus the `async-io` crate and `MountedEventfs`, but that requires a new dependency and real app-side setup (a correctly-sized eventfd mount, a dedicated thread with a bumped stack, and working around an ESP-IDF main-task/async-io-thread priority inversion) — not something this crate can hide, and not necessary to fix the timeout-preemption problem, so it's left as a possible future upgrade rather than done now.
 
 **ESP-IDF TLS version query:** `EspIdfSecureConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. This assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — a wolfSSL-configured build (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) isn't supported today, since this crate has no `build.rs` forwarding the `esp_idf_esp_tls_using_wolfssl`-style cfg flags needed to detect the backend at compile time the way `esp-idf-svc` does for itself.
 
+**ESP-IDF FTPS:** ESP-IDF's `EspTls` normally only dials its own TCP connection (`SecureConnect`, used for MQTT above) — FTPS needs `TlsConnector` instead (wrap an *already-connected* raw stream, since the control channel and each data channel start life as a plain `std::net::TcpStream`). `EspIdfTlsConnector` provides that via `esp_idf_svc::tls::EspTls::adopt()`, a safe wrapper `esp-idf-svc` ships for exactly this case — no raw mbedTLS FFI required. `EspIdfTcpStream` (the `RawIO` type) dials a blocking `std::net::TcpStream`; `EspIdfTlsConnector::connect()` flips it to non-blocking right before adopting it, so the handshake polls the same way `EspIdfSecureConnector`'s does (see "ESP-IDF TLS timeouts" above) — models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS entirely and read/write the blocking stream directly, which is fine since that path never goes through the connector:
+
+```rust
+use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfFtpDataStreamFactory};
+
+let ftps_tls = EspIdfTlsConnector::new(); // or ::with_certs(ca_cert, client_auth) to verify
+let mut printer = printer.with_ftps(ftps_tls, EspIdfFtpDataStreamFactory);
+```
+
 ## bambino-cli
 
-A CLI using our own library client for testing against real printers. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal UI crate (`crossterm`) and a log sink (`env_logger`) they never asked for.
+A CLI using our own library client for testing against real printers as proof-of-concept. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in a terminal UI crate (`crossterm`) and a log sink (`env_logger`) they never asked for.
 
 ```sh
 cargo build --bin bambino-cli --features cli

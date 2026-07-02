@@ -563,7 +563,109 @@ it is on tokio-adjacent platforms today.
 
 ---
 
-## Phase 5 — FTPS on embedded targets (Embassy + ESP-IDF)
+## Phase 5 — FTPS on embedded targets (Embassy + ESP-IDF) [COMPLETE — 2026-07-01]
+
+**Done:** both legs landed — ESP-IDF's per Phase 3's resolved path (build task, no
+further decide-first), Embassy's per Phase 2's caller-supplied-buffer philosophy.
+
+**ESP-IDF leg:**
+- `EspIdfTcpStream` (`io/esp_idf.rs`) wraps `Option<std::net::TcpStream>` — `Option`
+  rather than a bare `TcpStream` so `Socket::release()` can `.take()` it and hand the fd
+  to `IntoRawFd::into_raw_fd()`, abandoning Rust-side ownership without closing it (
+  `esp_tls_conn_destroy` closes an adopted fd itself once `release()` returns; without
+  the `.take()`, the fd would be double-closed). Its `embedded_io_async::Read`/`Write`
+  impls call blocking `std::net::TcpStream` methods directly — deliberate, matching how
+  `EspIdfUdpSocket` already uses `std::net::*` directly rather than inventing async
+  polling for every raw transport; the socket only actually needs non-blocking behavior
+  once handed to TLS, at which point `EspIdfTlsConnector::connect()` flips it to
+  non-blocking right before `adopt()` (so plaintext-data-channel callers, which never
+  reach that function, keep ordinary blocking semantics — no polling loop needed there).
+- `EspTlsStream` (Phase 3's stream type) generalized from a fixed
+  `EspTls<InternalSocket>` to `EspTlsStream<S = InternalSocket>`, so it now serves both
+  `EspIdfSecureConnector` (`S = InternalSocket`, dial-own-connection, unchanged public
+  behavior) and the new `EspIdfTlsConnector` (`S = EspIdfTcpStream`, wrap-existing-stream).
+  The cert-field `Config` construction (`build_tls_config`) and the mbedTLS
+  version-query accessor chain (`query_negotiated_tls_version`) were each extracted into
+  a shared free function so `EspIdfTlsConnector` reuses them instead of duplicating the
+  bindgen-adjacent wiring — per this phase's explicit instruction not to duplicate it.
+- `EspIdfTlsConnector::connect()` calls `EspTls::adopt(raw_stream)` (confirmed by Phase
+  3's spike: safe, no raw mbedTLS FFI) then polls `.negotiate(host, &cfg)` with the same
+  `is_would_block`/`TLS_POLL_INTERVAL` retry loop `EspIdfSecureConnector::secure_connect`
+  already established — no new polling mechanism invented.
+- `EspIdfFtpDataStreamFactory` dials `EspIdfTcpStream::connect()` — the ESP-IDF
+  counterpart to `TokioFtpDataStreamFactory`, same shape.
+- `EspIdfIoError` (wrapping `std::io::Error`) added because `embedded-io-async` has no
+  blanket `Error` impl for `std::io::Error` itself — mirrors `TokioIoError` (`io/mod.rs`).
+
+**Embassy leg — the harder design problem, resolved without unsafe:**
+FTPS's `data_factory.create_data_stream(&self, host, port)` is called repeatedly (once
+for the control channel, once per data-channel transfer), but `FtpDataStreamFactory`'s
+`RawIO` is a single fixed type across all calls — it can't be reparameterized per call
+the way a GAT could be. That rules out both a fresh `embassy_net::tcp::TcpSocket`
+per call (its buffers need a lifetime baked into `RawIO`'s type, which a `&self`-scoped
+borrow can't supply) and Phase 2's one-shot `Option::take()` buffer pattern (which only
+supports being called *once*, not N times). The resolution: reuse embassy-net's own
+built-in connection pool, `embassy_net::tcp::client::{TcpClient, TcpClientState,
+TcpConnection}` — `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates N buffer pairs,
+`TcpConnection` returns its slot to the pool on `Drop`, and the pool's own internals
+(not this crate's) contain the small amount of unsafe needed to make that safe. This
+crate's own code (`EmbassyFtpDataStreamFactory`, `io/embassy.rs`) stores a
+`&'static TcpClient<'static, N, TX_SZ, RX_SZ>` — a `&'static` *reference*, not an owned
+`TcpClient` — specifically because copying a `&'static` reference out from behind an
+arbitrarily short `&self` borrow yields an independent value still valid for `'static`,
+which is what lets `TcpConnection<'static, N, TX_SZ, RX_SZ>` come out of a `&self`-only
+method at all; an *owned* `TcpClient` field couldn't do this (see the type's doc comment
+for the full chain of reasoning — worth reading in full before touching this code, since
+the constraint is easy to reintroduce accidentally by "simplifying" the reference away).
+Verified empirically, not just reasoned through: `cargo check --features embassy` passed
+clean on the first attempt.
+- `embedded-nal-async` added as an explicit optional dependency (gated under the
+  `embassy` feature) purely to name its `TcpConnect` trait in our code — it was already
+  an unconditional transitive dependency of `embassy-net` at the same version, so this
+  added no new crate to the dependency graph, just made an existing one nameable.
+- `EmbassyFtpDataStreamFactory::new()` takes the `'static` reference directly; how the
+  caller obtains `'static` storage (a `static` item, `static_cell::StaticCell`, etc.) is
+  pushed to application setup code, matching Phase 2's philosophy — README shows a
+  `static_cell`-based example. `static_cell` is not a bambino dependency.
+- `N = 1` is sufficient for FTPS's real usage pattern: data-channel connections
+  (`list_directory`/`upload_file`/`download_file`) are always sequential, never
+  concurrent with each other; the control channel goes through `EmbassyTlsConnector`
+  (a separate TCP dial, not this pool) and stays open for the client's whole lifetime.
+  Exhausting the pool (all N slots checked out) surfaces as `SocketError::ConnectionRefused`
+  from `TcpConnect::connect`'s `Error::ConnectionReset`, not a panic — no reintroduction
+  of Phase 2's removed panic-based concurrency control.
+
+**Left for a future phase, not needed here:** the "heavier `EspAsyncTls` + `async-io`"
+upgrade path Phase 3 flagged (true readiness notification instead of fixed-interval
+polling) — still not required for correctness, only to avoid the poll interval; no fresh
+decision to revisit this was made or needed by this phase.
+
+**Verified:** `cargo build`, `cargo build --no-default-features --features alloc --lib`,
+`cargo check --no-default-features --features embassy --lib` (force-recompiled via
+`cargo clean -p bambino`, clean both times — first pass wasn't a fluke), `cargo test`
+(244 lib + 36 FTPS integration + 13 more integration + 8 doctests, all pass, untouched by
+this phase), `cargo clippy --all-targets` (only the two pre-existing warnings noted since
+Phase 0), `cargo clippy --no-default-features --features embassy --lib` (only the one
+pre-existing `rng` RefCell warning noted in Phase 2 — nothing new from
+`EmbassyFtpDataStreamFactory`), and `scripts/check-esp-idf.sh esp32c6` (Docker) — re-run
+with an explicit `cargo clean -p bambino --target riscv32imac-esp-espidf` first (the
+script's own default run looked suspiciously fast at first, 1.25s; that turned out to be
+correct — no new deps needed for the `esp-idf` feature, since `embedded-nal-async` is
+`embassy`-only — but re-running forced-clean confirmed it wasn't a stale-cache false
+pass: 33 files removed, then a real ~1s recompile, clean). `cargo clippy` inside the same
+Docker image against `--no-default-features --features esp-idf --lib` — only the same 5
+pre-existing warnings (3 lint kinds) Phase 3 already confirmed predate its changes;
+nothing new from `EspIdfTcpStream`/`EspIdfTlsConnector`/`EspIdfFtpDataStreamFactory`.
+
+README updated: new "Embassy FTPS" subsection (after "Embassy TLS buffers") and "ESP-IDF
+FTPS" subsection (after "ESP-IDF TLS version query"), each with a worked construction
+example, mirroring the existing per-platform subsection style from Phases 2–4.
+
+This was the plan's capstone phase — all five phases are now complete.
+
+---
+
+**Original phase text below, for context on the problem and the options considered.**
 
 **Problem this closes.** FTPS is currently tokio-only in practice: `FtpDataStreamFactory` has
 exactly one real implementation, `TokioFtpDataStreamFactory` (plus test/dummy impls) — grep
