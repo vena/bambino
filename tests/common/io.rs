@@ -25,12 +25,7 @@ pub struct DummyTlsConnector;
 impl<RawIO: AsyncIo> TlsConnector<RawIO> for DummyTlsConnector {
     type Stream = RawIO;
 
-    async fn connect(
-        &self,
-        _host: &str,
-        _port: u16,
-        raw_stream: RawIO,
-    ) -> Result<Self::Stream, SocketError> {
+    async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
         Ok(raw_stream)
     }
 }
@@ -41,12 +36,7 @@ pub struct VersionReportingTlsConnector(pub Option<TlsVersion>);
 impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
     type Stream = RawIO;
 
-    async fn connect(
-        &self,
-        _host: &str,
-        _port: u16,
-        raw_stream: RawIO,
-    ) -> Result<Self::Stream, SocketError> {
+    async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
         Ok(raw_stream)
     }
 
@@ -55,27 +45,43 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
     }
 }
 
-/// A TLS connector that succeeds on the FTPS implicit control-channel port (990) but fails on
-/// any other port — i.e. it always fails a PASV data-channel connect attempt.
+/// A TLS connector that succeeds on the first `connect()` call (the FTPS implicit
+/// control channel) but fails on every subsequent call — i.e. it always fails a PASV
+/// data-channel connect attempt.
 ///
 /// Used to exercise the `poisoned` flag regression (review/ftps.md Phase 2): simulates a
 /// data-channel TLS handshake failure after the server has already sent its `150`/`125`
 /// "opening data connection" reply, to verify the control channel doesn't get left desynced.
-pub struct FailingDataTlsConnector;
+///
+/// Tracks connection order via an `AtomicBool` rather than the target port — `TlsConnector`'s
+/// `connect()` no longer takes a `port` parameter (`review/io.md` Phase 5.4: the raw stream is
+/// already connected to its target port by the time `connect()` is called, so no implementer
+/// needs it) — control-vs-data-channel is instead exactly "was this the first `connect()` call
+/// on this instance," matching how `BambuFtpsClient` actually sequences connects (control
+/// channel once in `connect()`, then one data-channel connect per transfer).
+pub struct FailingDataTlsConnector {
+    control_channel_connected: std::sync::atomic::AtomicBool,
+}
+
+impl FailingDataTlsConnector {
+    pub fn new() -> Self {
+        Self {
+            control_channel_connected: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
 
 impl<RawIO: AsyncIo> TlsConnector<RawIO> for FailingDataTlsConnector {
     type Stream = RawIO;
 
-    async fn connect(
-        &self,
-        _host: &str,
-        port: u16,
-        raw_stream: RawIO,
-    ) -> Result<Self::Stream, SocketError> {
-        if port == 990 {
-            Ok(raw_stream)
-        } else {
+    async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
+        let was_already_connected = self
+            .control_channel_connected
+            .swap(true, std::sync::atomic::Ordering::SeqCst);
+        if was_already_connected {
             Err(SocketError::ConnectionAborted)
+        } else {
+            Ok(raw_stream)
         }
     }
 }

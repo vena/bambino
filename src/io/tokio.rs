@@ -276,7 +276,6 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
     async fn connect(
         &self,
         host: &str,
-        _port: u16,
         raw_stream: TokioIo<::tokio::net::TcpStream>,
     ) -> Result<Self::Stream, SocketError> {
         let server_name = ServerName::try_from(host.to_string())
@@ -331,9 +330,7 @@ impl SecureConnect for TokioSecureConnector {
                 .await
                 .map_err(to_socket_error)?;
 
-            self.tls_connector
-                .connect(host, port, TokioIo(tcp_stream))
-                .await
+            self.tls_connector.connect(host, TokioIo(tcp_stream)).await
         })
         .await
         .map_err(|_| SocketError::TimedOut)?

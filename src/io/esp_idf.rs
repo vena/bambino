@@ -689,7 +689,6 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     async fn connect(
         &self,
         host: &str,
-        _port: u16,
         raw_stream: EspIdfTcpStream,
     ) -> Result<Self::Stream, SocketError> {
         // The adopted fd must be non-blocking for `Config::non_block = true` (set by

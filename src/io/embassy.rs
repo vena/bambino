@@ -219,7 +219,6 @@ where
     async fn connect(
         &self,
         _host: &str,
-        _port: u16,
         raw_stream: RawStream,
     ) -> Result<Self::Stream, SocketError> {
         let read_buf = self.read_buf.borrow_mut().take().ok_or(SocketError::Other(

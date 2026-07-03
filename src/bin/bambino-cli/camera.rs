@@ -76,7 +76,7 @@ async fn run_snapshot(
     .map_err(|_| BambuError::NetworkError(SocketError::TimedOut))?
     .map_err(to_socket_error)?;
 
-    let tls = tls_connector.connect(ip, port, TokioIo(tcp)).await?;
+    let tls = tls_connector.connect(ip, TokioIo(tcp)).await?;
 
     let mut camera = BambuBinaryCameraStream::new(tls);
 

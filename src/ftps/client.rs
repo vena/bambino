@@ -89,9 +89,7 @@ where
         ip: &str,
         access_code: &str,
     ) -> Result<Self, BambuError> {
-        let mut control_stream = tls_connector
-            .connect(ip, FTPS_IMPLICIT_PORT, raw_control)
-            .await?;
+        let mut control_stream = tls_connector.connect(ip, raw_control).await?;
 
         Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model)?;
 
@@ -246,17 +244,14 @@ where
         // silently misreading this stale reply.
         let mut listing_payload = Vec::new();
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket = match self
-                .tls_connector
-                .connect(&self.ip, port, raw_data_socket)
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    self.poisoned = true;
-                    return Err(e.into());
-                }
-            };
+            let mut secure_data_socket =
+                match self.tls_connector.connect(&self.ip, raw_data_socket).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e.into());
+                    }
+                };
             if let Err(e) = Self::require_tls_1_2_if_enforced(
                 &self.tls_connector,
                 &secure_data_socket,
@@ -401,17 +396,14 @@ where
         // (Phase 2) so a caller gets an immediate, clear error instead of a later command
         // silently misreading this stale reply.
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket = match self
-                .tls_connector
-                .connect(&self.ip, port, raw_data_socket)
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    self.poisoned = true;
-                    return Err(e.into());
-                }
-            };
+            let mut secure_data_socket =
+                match self.tls_connector.connect(&self.ip, raw_data_socket).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e.into());
+                    }
+                };
             if let Err(e) = Self::require_tls_1_2_if_enforced(
                 &self.tls_connector,
                 &secure_data_socket,
@@ -516,17 +508,14 @@ where
         // silently misreading this stale reply.
         let mut file_payload = Vec::new();
         if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket = match self
-                .tls_connector
-                .connect(&self.ip, port, raw_data_socket)
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    self.poisoned = true;
-                    return Err(e.into());
-                }
-            };
+            let mut secure_data_socket =
+                match self.tls_connector.connect(&self.ip, raw_data_socket).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.poisoned = true;
+                        return Err(e.into());
+                    }
+                };
             if let Err(e) = Self::require_tls_1_2_if_enforced(
                 &self.tls_connector,
                 &secure_data_socket,

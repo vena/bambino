@@ -157,12 +157,8 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     type Stream: AsyncIo;
 
     /// Negotiates a secure TLS handshake with the targeted printer.
-    async fn connect(
-        &self,
-        host: &str,
-        port: u16,
-        raw_stream: RawStream,
-    ) -> Result<Self::Stream, SocketError>;
+    async fn connect(&self, host: &str, raw_stream: RawStream)
+    -> Result<Self::Stream, SocketError>;
 
     /// Returns the TLS protocol version negotiated on the given stream.
     ///

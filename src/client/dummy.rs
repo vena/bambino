@@ -40,7 +40,6 @@ impl TlsConnector<DummyRawIo> for DummyTls {
     async fn connect(
         &self,
         _host: &str,
-        _port: u16,
         _raw_stream: DummyRawIo,
     ) -> Result<Self::Stream, crate::io::SocketError> {
         Ok(DummyRawIo)

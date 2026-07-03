@@ -235,7 +235,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
 
     let mut client = BambuFtpsClient::connect(
         TokioIo(client_control),
-        FailingDataTlsConnector,
+        FailingDataTlsConnector::new(),
         factory,
         BambuModel::P1S,
         "127.0.0.1",

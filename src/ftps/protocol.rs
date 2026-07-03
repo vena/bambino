@@ -23,7 +23,6 @@ pub(crate) const FTP_TRANSFER_ABORTED: u16 = 426;
 pub(crate) const FTP_FILE_NOT_FOUND: u16 = 550;
 pub(crate) const FTP_COMMAND_OK: u16 = 200;
 
-pub(crate) const FTPS_IMPLICIT_PORT: u16 = 990;
 pub(crate) const FTPS_UPLOAD_CHUNK_SIZE: usize = 65536;
 pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
 pub(crate) const FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD: u64 = 100_000_000;
