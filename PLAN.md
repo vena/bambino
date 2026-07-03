@@ -24,6 +24,8 @@ Non-obvious decisions a future session cannot derive from the code alone:
 - **Each protocol's TLS config is independent.** FTPS may need `force_tls_1_2` (model quirk) while MQTT does not. Phase 12's camera TLS may also differ — don't assume a shared connector.
 - **CLI storage now routes through `PrinterClient`.** Phase 12's camera CLI command should follow the same pattern rather than constructing protocol clients directly.
 - **Message buffer is on `BambuMqttClient`.** `poll_telemetry()` drains buffered messages first, then reads the wire. `poll_wire()` bypasses the buffer (used by `PrinterClient::poll_until()`). `push_pending()` stashes non-matching messages. `PrinterClient` delegates all reads through these methods. `mqtt().await?` returns a client whose `poll_telemetry()` is safe to call directly — no split-brain, no warnings.
+- **`TlsConnector::connect` no longer takes a `port` parameter** — signature is `connect(&self, host: &str, raw_stream: RawStream) -> Result<Self::Stream, SocketError>`. Phase 12's camera TLS design should assume this shape if it reuses `Tls`/`TlsConnector`.
+- **A stalled-read timeout precedent now exists for persistent connections.** `BambuMqttClient::poll_wire`/`read_exact_packet` (`src/mqtt/client.rs`) race each low-level read against `TimerProvider::sleep()` via a hand-rolled `race()` combinator (`core::future::poll_fn`/`core::pin::pin!`, no `tokio::select!`/`embassy_futures::select`), persisting partial-frame progress across a timeout so a retry resumes mid-frame instead of desyncing the parser. `BambuBinaryCameraStream::read_next_frame` (`src/camera/binary.rs`) is a comparably persistent stream read with **no** such protection today (unbounded read, same hang class `poll_wire` just closed for MQTT). Phase 12 should decide whether camera integration needs the same treatment, and can reuse the `race()` pattern rather than re-deriving it.
 
 ---
 
@@ -46,6 +48,7 @@ Bambu printers use two camera protocols (determined by `model.quirks().camera_pr
 - **Two protocols, one slot?** A printer uses either binary JPEG or RTSPS, never both. Single `camera()` accessor returning an enum, or separate methods? RTSPS has no connection state.
 - **Type parameter impact** — Can camera reuse the existing `Conn: SecureConnect` connector, or does camera TLS differ from MQTT's?
 - **Lazy connection** - like MQTT and FTPS, camera connection should be lazy and not required to instantiate a PrinterClient.
+- **Stalled-read protection** — `BambuBinaryCameraStream::read_next_frame` currently has no timeout; a persistent connection that stalls with zero incoming bytes hangs forever, the same failure class `poll_wire` was just fixed for on the MQTT side (see completed-phases summary above). Decide whether Phase 12 should wire frame reads through the same `TimerProvider`-raced `race()` pattern, or defer it.
 
 ### Scope
 
