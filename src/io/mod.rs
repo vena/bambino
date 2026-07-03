@@ -24,7 +24,10 @@ pub mod esp_idf;
 #[cfg(feature = "embassy")]
 pub mod embassy;
 
+use core::future::{Future, poll_fn};
 use core::net::SocketAddr;
+use core::pin::pin;
+use core::task::Poll;
 
 #[cfg(feature = "std")]
 use std::borrow::Cow;
@@ -223,6 +226,103 @@ pub trait TimerProvider {
     /// skip the race entirely (plain unbounded await) when it's `false`.
     fn has_real_clock(&self) -> bool {
         true
+    }
+}
+
+/// Outcome of [`race`] — which of the two raced futures completed first.
+pub(crate) enum Raced<A, B> {
+    Left(A),
+    Right(B),
+}
+
+/// Polls two futures concurrently, resolving to whichever completes first.
+///
+/// Built entirely on `core::future`/`core::task` primitives (`poll_fn` + `pin!`) rather
+/// than a runtime-specific macro (`tokio::select!`) or an external crate
+/// (`embassy_futures::select`), so the exact same code compiles and behaves identically
+/// on tokio (host), ESP-IDF (std), and bare-metal Embassy (no_std) — no per-platform
+/// `#[cfg]` branching needed. If both futures happen to be ready on the same poll, `a`
+/// wins arbitrarily (checked first).
+///
+/// `pub(crate)` — reused by `PrinterClient::ensure_mqtt`/`ensure_ftps` (`src/client/mod.rs`)
+/// to race their two-step dial+connect sequences against a connect-timeout deadline
+/// (`PLAN.md` Phase 12, decision 6), and by `BambuBinaryCameraStream::read_next_frame_with_timer`
+/// (`src/camera/binary.rs`, `PLAN.md` Phase 13) for the same per-read deadline purpose
+/// `mqtt::client`'s own `read_chunk`/`read_exact_packet` is built on.
+pub(crate) async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
+where
+    A: Future,
+    B: Future,
+{
+    let mut a = pin!(a);
+    let mut b = pin!(b);
+    poll_fn(move |cx| {
+        if let Poll::Ready(v) = a.as_mut().poll(cx) {
+            return Poll::Ready(Raced::Left(v));
+        }
+        if let Poll::Ready(v) = b.as_mut().poll(cx) {
+            return Poll::Ready(Raced::Right(v));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+/// Reads up to `buf.len()` bytes via a single underlying `read()` call, optionally raced
+/// against a wall-clock deadline.
+///
+/// **Why a single `read()` step (not `read_exact`, and not the whole multi-byte target
+/// in one shot):** `embedded_io_async::Read::read_exact`'s default implementation writes
+/// directly into the caller's buffer across a loop of multiple internal `read()` calls.
+/// If a future built on it is dropped mid-loop — exactly what happens when the timeout
+/// side of a race wins — there is no way to learn how many of those internal calls had
+/// already landed bytes, so the caller can't know how much of the buffer is valid.
+/// Racing one `read()` step at a time instead means a "timeout wins" outcome only ever
+/// discards *zero-progress* state: either this step's `read()` had not yet returned
+/// (nothing written to `buf`, safe to retry) or it already returned and we recorded
+/// exactly how many bytes landed via its `Ok(n)` before the timeout was even considered.
+/// The residual risk of the underlying transport silently consuming bytes during a
+/// cancelled `read()` without reporting them back is inherent to any cancellable I/O
+/// primitive (platform-dependent, unavoidable at this layer) — a single small `read`
+/// step minimizes that exposure relative to racing one large atomic multi-byte read.
+///
+/// `deadline_ms` is `None` when `timer` has no real wall-clock (see
+/// [`TimerProvider::has_real_clock`] — notably the default `DummyTimer`), in which case
+/// this degrades to a plain unbounded `read()`, identical to this crate's behavior
+/// before per-read deadlines existed.
+pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    buf: &mut [u8],
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<usize, SocketError> {
+    let Some(deadline_ms) = deadline_ms else {
+        return match stream.read(buf).await {
+            Ok(0) => Err(SocketError::ConnectionReset), // peer closed the stream
+            Ok(n) => Ok(n),
+            Err(e) => {
+                log::trace!("read failed: {:?}", e);
+                Err(SocketError::ConnectionReset)
+            }
+        };
+    };
+
+    let remaining_ms = deadline_ms.saturating_sub(timer.now_millis());
+    if remaining_ms == 0 {
+        return Err(SocketError::TimedOut);
+    }
+
+    let read_fut = stream.read(buf);
+    let sleep_fut = timer.sleep(core::time::Duration::from_millis(remaining_ms));
+
+    match race(read_fut, sleep_fut).await {
+        Raced::Left(Ok(0)) => Err(SocketError::ConnectionReset), // peer closed the stream
+        Raced::Left(Ok(n)) => Ok(n),
+        Raced::Left(Err(e)) => {
+            log::trace!("read failed: {:?}", e);
+            Err(SocketError::ConnectionReset)
+        }
+        Raced::Right(_) => Err(SocketError::TimedOut),
     }
 }
 

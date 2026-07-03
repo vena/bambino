@@ -16,8 +16,30 @@ const HOME_FLAG_XYZ_BITS: u32 = HOME_FLAG_X_BIT | HOME_FLAG_Y_BIT | HOME_FLAG_Z_
 // Homing took up to ~46s across wire-confirmed P1S runs [REF-HOMEFLAG]; 90s leaves margin.
 const HOMING_WAIT_TIMEOUT_SECS: u64 = 90;
 
-impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
-    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
 where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -26,6 +48,9 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     /// Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the
     /// last-observed `home_flag` telemetry. `None` means no telemetry carrying `home_flag`

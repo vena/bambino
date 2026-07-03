@@ -16,6 +16,7 @@
 //!   the secondary right-side auxiliary fan on models that have one (P2S, X2D, etc.).
 
 mod ams;
+mod camera;
 pub mod dummy;
 mod hardware;
 mod motion;
@@ -39,11 +40,12 @@ use core::marker::PhantomData;
 
 use core::future::Future;
 
+use crate::camera::CameraProtocol;
+use crate::camera::binary::BambuBinaryCameraStream;
 use crate::error::BambuError;
 use crate::ftps::BambuFtpsClient;
-use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, race};
 use crate::models::BambuModel;
-use crate::mqtt::client::{Raced, race};
 use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{BambuMqttClient, MqttMessage};
 use crate::types::TelemetryReport;
@@ -101,6 +103,9 @@ pub struct PrinterClient<
     FtpsRawIO = DummyRawIo,
     FtpsTls = DummyTls,
     FtpsFactory = DummyFactory,
+    CameraRawIO = DummyRawIo,
+    CameraTls = DummyTls,
+    CameraFactory = DummyFactory,
 > where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -109,10 +114,15 @@ pub struct PrinterClient<
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     pub(crate) mqtt: Option<BambuMqttClient<MqttTls::Stream>>,
     pub(crate) ftps: Option<BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory>>,
     pub(crate) ftps_config: Option<(FtpsTls, FtpsFactory)>,
+    pub(crate) camera: Option<BambuBinaryCameraStream<CameraTls::Stream>>,
+    pub(crate) camera_config: Option<(CameraTls, CameraFactory)>,
     pub(crate) mqtt_tls: MqttTls,
     pub(crate) mqtt_factory: MqttFactory,
     pub(crate) timer: Timer,
@@ -128,11 +138,25 @@ pub struct PrinterClient<
     pub(crate) connect_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
+    pub(crate) camera_port: u16,
+    pub(crate) camera_max_frame_size: Option<usize>,
     pub(crate) _mqtt_raw_io: PhantomData<MqttRawIO>,
+    pub(crate) _camera_raw_io: PhantomData<CameraRawIO>,
 }
 
 impl<MqttRawIO, MqttTls, MqttFactory>
-    PrinterClient<MqttRawIO, MqttTls, MqttFactory, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        DummyTimer,
+        DummyRawIo,
+        DummyTls,
+        DummyFactory,
+        DummyRawIo,
+        DummyTls,
+        DummyFactory,
+    >
 where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -163,6 +187,8 @@ where
             mqtt: None,
             ftps: None,
             ftps_config: None,
+            camera: None,
+            camera_config: None,
             mqtt_tls: tls,
             mqtt_factory: factory,
             timer: DummyTimer,
@@ -178,7 +204,10 @@ where
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
+            camera_port: CameraProtocol::BinaryJpeg.default_port(),
+            camera_max_frame_size: None,
             _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
         }
     }
 }
@@ -189,6 +218,9 @@ impl<IO>
         PreConnected<IO>,
         PreConnected<IO>,
         DummyTimer,
+        DummyRawIo,
+        DummyTls,
+        DummyFactory,
         DummyRawIo,
         DummyTls,
         DummyFactory,
@@ -210,6 +242,8 @@ where
             mqtt: Some(mqtt_client),
             ftps: None,
             ftps_config: None,
+            camera: None,
+            camera_config: None,
             mqtt_tls: PreConnected(PhantomData),
             mqtt_factory: PreConnected(PhantomData),
             timer: DummyTimer,
@@ -225,13 +259,38 @@ where
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
+            camera_port: CameraProtocol::BinaryJpeg.default_port(),
+            camera_max_frame_size: None,
             _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
         }
     }
 }
 
-impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
-    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
 where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -240,6 +299,9 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     /// Establishes the MQTT connection if not already connected.
     ///
@@ -285,12 +347,24 @@ where
     pub fn with_timer<NewTimer: TimerProvider>(
         self,
         timer: NewTimer,
-    ) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, NewTimer, FtpsRawIO, FtpsTls, FtpsFactory>
-    {
+    ) -> PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        NewTimer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    > {
         PrinterClient {
             mqtt: self.mqtt,
             ftps: self.ftps,
             ftps_config: self.ftps_config,
+            camera: self.camera,
+            camera_config: self.camera_config,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer,
@@ -306,7 +380,10 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            camera_port: self.camera_port,
+            camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
         }
     }
 
@@ -341,6 +418,9 @@ where
         NewFtpsRawIO,
         NewFtpsTls,
         NewFtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
     >
     where
         NewFtpsRawIO: AsyncIo,
@@ -351,6 +431,8 @@ where
             mqtt: self.mqtt,
             ftps: None,
             ftps_config: Some((tls, factory)),
+            camera: self.camera,
+            camera_config: self.camera_config,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
@@ -366,7 +448,10 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            camera_port: self.camera_port,
+            camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
         }
     }
 
@@ -599,5 +684,125 @@ where
     pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<MqttTls::Stream>, BambuError> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())
+    }
+
+    /// Establishes the camera connection if not already connected.
+    ///
+    /// Returns `BambuError::ProtocolViolation` immediately for RTSPS models — those use
+    /// `camera::rtsps::build_rtsps_url()` instead and have no `PrinterClient`-managed
+    /// connection state. Otherwise dials a raw stream via the camera factory, wraps it in
+    /// TLS, constructs a `BambuBinaryCameraStream`, and authenticates — the whole sequence is
+    /// raced against `self.connect_timeout_secs`, mirroring `ensure_ftps()`.
+    async fn ensure_camera(&mut self) -> Result<(), BambuError> {
+        if self.model.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
+            return Err(BambuError::ProtocolViolation(
+                "This model uses RTSPS for its camera feed — use camera::rtsps::build_rtsps_url() instead"
+                    .into(),
+            ));
+        }
+        if self.camera.is_some() {
+            return Ok(());
+        }
+        let (tls, factory) = self.camera_config.take().ok_or_else(|| {
+            BambuError::ProtocolViolation(
+                "Camera not configured — call .with_camera() or .attach_camera()".into(),
+            )
+        })?;
+        let ip = &self.ip;
+        let access_code = &self.access_code;
+        let camera_port = self.camera_port;
+        let max_frame_size = self.camera_max_frame_size;
+        let camera_stream =
+            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
+                let raw = factory.dial(ip, camera_port).await?;
+                let stream = tls.connect(ip, raw).await?;
+                let mut cam = BambuBinaryCameraStream::new(stream);
+                if let Some(max) = max_frame_size {
+                    cam = cam.with_max_frame_size(max);
+                }
+                cam.authenticate(access_code).await?;
+                Ok::<_, BambuError>(cam)
+            })
+            .await?;
+        self.camera = Some(camera_stream);
+        Ok(())
+    }
+
+    /// Eagerly establishes the camera connection.
+    ///
+    /// Idempotent — returns `Ok(())` if already connected.
+    pub async fn connect_camera(&mut self) -> Result<(), BambuError> {
+        self.ensure_camera().await
+    }
+
+    /// Returns whether the camera session is currently established.
+    pub fn camera_connected(&self) -> bool {
+        self.camera.is_some()
+    }
+
+    /// Configures the binary-JPEG camera for lazy connection on first camera method call.
+    ///
+    /// Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
+    /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
+    pub fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(
+        self,
+        tls: NewCameraTls,
+        factory: NewCameraFactory,
+    ) -> PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        NewCameraRawIO,
+        NewCameraTls,
+        NewCameraFactory,
+    >
+    where
+        NewCameraRawIO: AsyncIo,
+        NewCameraTls: TlsConnector<NewCameraRawIO>,
+        NewCameraFactory: RawStreamFactory<NewCameraRawIO>,
+    {
+        PrinterClient {
+            mqtt: self.mqtt,
+            ftps: self.ftps,
+            ftps_config: self.ftps_config,
+            camera: None,
+            camera_config: Some((tls, factory)),
+            mqtt_tls: self.mqtt_tls,
+            mqtt_factory: self.mqtt_factory,
+            timer: self.timer,
+            serial: self.serial,
+            ip: self.ip,
+            access_code: self.access_code,
+            model: self.model,
+            sequence_counter: self.sequence_counter,
+            k_profile_primed: self.k_profile_primed,
+            last_home_flag: self.last_home_flag,
+            last_gcode_state: self.last_gcode_state,
+            command_timeout_secs: self.command_timeout_secs,
+            connect_timeout_secs: self.connect_timeout_secs,
+            mqtt_port: self.mqtt_port,
+            ftps_port: self.ftps_port,
+            camera_port: self.camera_port,
+            camera_max_frame_size: self.camera_max_frame_size,
+            _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
+        }
+    }
+
+    /// Overrides the default camera port (6000, binary-JPEG only).
+    pub fn with_camera_port(mut self, port: u16) -> Self {
+        self.camera_port = port;
+        self
+    }
+
+    /// Overrides the default maximum accepted camera frame size (see
+    /// `BambuBinaryCameraStream::with_max_frame_size`).
+    pub fn with_camera_max_frame_size(mut self, bytes: usize) -> Self {
+        self.camera_max_frame_size = Some(bytes);
+        self
     }
 }

@@ -4,8 +4,30 @@ use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
 
-impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
-    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
 where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -14,6 +36,9 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     /// Injects a pre-connected [`BambuFtpsClient`] directly.
     ///

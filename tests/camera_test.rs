@@ -9,12 +9,20 @@
 
 mod common;
 
+use std::sync::Arc;
 use tokio::io::DuplexStream;
+use tokio::sync::Mutex;
 
 use bambino::camera::binary::BambuBinaryCameraStream;
+use bambino::client::{DummyFactory, DummyTls, PrinterClient};
+use bambino::error::BambuError;
 use bambino::io::TokioIo;
+use bambino::models::BambuModel;
 
+use common::io::{DummyTlsConnector, MockDataStreamFactory};
 use common::mock_camera::run_mock_camera_server;
+
+const SERIAL: &str = "01P000000000000";
 
 #[tokio::test]
 async fn test_binary_camera_handshake_and_streaming() {
@@ -89,4 +97,76 @@ async fn test_binary_camera_handshake_and_streaming() {
     server_handle
         .await
         .expect("Background mock camera server panicked");
+}
+
+/// Exercises the full `PrinterClient` camera path (`PLAN.md` Phase 13): `.with_camera()`
+/// lazy-connects on first `read_camera_frame()` call, dialing via the mock factory,
+/// passing through the (pass-through) mock TLS connector, authenticating, and reading a
+/// frame — analogous to `tests/client_test.rs::test_disconnect_storage_clears_ftps_for_clean_reconnect`'s
+/// FTPS-through-`PrinterClient` pattern.
+#[tokio::test]
+async fn test_printer_client_camera_end_to_end() {
+    let access_code = "12345678";
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container.clone(),
+    };
+
+    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
+
+    let mut printer = PrinterClient::new(
+        DummyTls,
+        DummyFactory,
+        "127.0.0.1",
+        SERIAL,
+        access_code,
+        BambuModel::P1S,
+    )
+    .with_camera(DummyTlsConnector, factory);
+
+    assert!(!printer.camera_connected());
+
+    let mut frame_buf = Vec::new();
+    printer
+        .read_camera_frame(&mut frame_buf)
+        .await
+        .expect("read_camera_frame should connect, authenticate, and read the mock frame");
+
+    assert!(printer.camera_connected());
+    assert_eq!(frame_buf[0..2], [0xFF, 0xD8], "Missing JPEG start marker");
+    assert_eq!(
+        frame_buf[frame_buf.len() - 2..],
+        [0xFF, 0xD9],
+        "Missing JPEG end marker"
+    );
+
+    server_handle.await.expect("Mock camera server panicked");
+}
+
+/// `ensure_camera()` must reject an RTSPS model immediately — before any dial, and even
+/// without `.with_camera()` ever being called — per `PLAN.md` Phase 13's design: the
+/// protocol check runs first, so an RTSPS model gets "this model doesn't support this
+/// connection type," not "you forgot to configure it."
+#[tokio::test]
+async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
+    let mut printer = PrinterClient::new(
+        DummyTls,
+        DummyFactory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::X1C,
+    );
+
+    let mut frame_buf = Vec::new();
+    let result = printer.read_camera_frame(&mut frame_buf).await;
+
+    assert!(
+        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        "expected ProtocolViolation for an RTSPS model, got {:?}",
+        result.map(|_| ())
+    );
+    assert!(!printer.camera_connected());
 }

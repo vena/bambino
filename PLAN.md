@@ -8,7 +8,7 @@
 
 ---
 
-## Phases 1–12: Complete
+## Phases 1–13: Complete
 
 Non-obvious decisions a future session cannot derive from the code alone:
 
@@ -19,47 +19,10 @@ Non-obvious decisions a future session cannot derive from the code alone:
 - **`SecureConnect` is gone; MQTT and FTPS now share one connection shape.** `PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>` has two symmetric `TlsConnector`+`RawStreamFactory` trios — MQTT's mandatory (no defaults), FTPS's defaulted to dummy types. `RawStreamFactory<RawIO>` (`src/io/mod.rs`, next to `TlsConnector`) replaces the old FTPS-only `FtpDataStreamFactory`; its method is `dial(&self, host, port)`, not `create_data_stream`. Platform impls: `Tokio/EspIdf/EmbassyRawStreamFactory` (dropped the `Ftp` prefix — they're protocol-neutral). `PrinterClient::new(tls, factory, ip, serial, access_code, model)` takes MQTT's pair directly, mirroring `.with_ftps(tls, factory)`'s shape.
 - **`MqttRawIO` needs a `PhantomData` field on `PrinterClient`.** It only appears in where-clause bounds (`MqttTls: TlsConnector<MqttRawIO>`, `MqttFactory: RawStreamFactory<MqttRawIO>`), never directly in a field type (unlike `FtpsRawIO`, which appears directly in the `ftps: Option<BambuFtpsClient<FtpsRawIO, ...>>` field) — Rust's E0392 unused-type-parameter check doesn't count where-clause appearances, so `pub(crate) _mqtt_raw_io: PhantomData<MqttRawIO>` is required and must be threaded through every constructor/builder (`new`, `from_mqtt`, `with_timer`, `with_ftps`).
 - **`from_mqtt()` uses `PreConnected` for both the MQTT `Tls` and `Factory` slots.** `PreConnected<IO>` implements `TlsConnector<IO>` as an identity passthrough (`connect` returns `Ok(raw_stream)` unchanged — never actually exercised, since `from_mqtt()` never calls `ensure_mqtt()`'s connect path) and `RawStreamFactory<IO>` as `Err(SocketError::NotConnected)` (genuinely unreachable — `ensure_mqtt()` short-circuits on `self.mqtt.is_some()` before either is called). `DummySecureConnect` is deleted outright (no replacement needed — `PreConnected` covers the same role for both new slots).
-- **Connect-timeout is now centralized on `PrinterClient`, not per-connector.** `connect_timeout_secs` (default 10s, `.with_connect_timeout(secs)`) bounds `ensure_mqtt()`/`ensure_ftps()`'s *entire* dial+connect sequence via `race_against_connect_timeout()` (`src/client/mod.rs`), which reuses `race()`/`Raced` from `src/mqtt/client.rs` (now `pub(crate)`) and its `has_real_clock()` guard (skips the race under `DummyTimer`). This replaced the old per-platform `TokioSecureConnector`/`EspIdfSecureConnector::connect_timeout` (both deleted) and closed a pre-existing gap: FTPS's raw dial had no timeout at all before this. `EspIdfTlsConnector::connect_timeout` (handshake-only, for direct non-`PrinterClient` callers) is untouched and still exists as a separate, lower layer.
-- **`ensure_ftps()` races the raw dial *and* `BambuFtpsClient::connect()`'s full login handshake together**, not just the dial — `race_against_connect_timeout` wraps `factory.dial(...).await?; BambuFtpsClient::connect(...).await` as one future, since decision 6 always meant "bound the whole connect operation," not just the TCP step.
-
-**Decisions informing future phases:**
-
-- **Consuming builders change type params; non-consuming builders return `Self`.** `.with_timer()` and `.with_ftps()` consume `self` because they change type parameters. `.with_mqtt_port()`, `.with_ftps_port()`, and `.with_connect_timeout()` return `Self`. Phase 13's camera builder must follow the same convention.
-- **`ensure_*()` is the lazy connection pattern.** `ensure_mqtt()` and `ensure_ftps()` short-circuit on `Some`, otherwise connect lazily (both now racing against `connect_timeout_secs` — see above). `ensure_ftps()` uses `.take()` to consume `ftps_config`, so reconnection requires a new `PrinterClient`. Phase 13 should consider whether camera's persistent streaming nature needs a different reconnection story.
-- **Each protocol's TLS config is independent.** FTPS may need `force_tls_1_2` (model quirk) while MQTT does not. Phase 13's camera TLS may also differ — don't assume a shared connector.
-- **CLI storage now routes through `PrinterClient`.** Phase 13's camera CLI command should follow the same pattern rather than constructing protocol clients directly.
-- **Message buffer is on `BambuMqttClient`.** `poll_telemetry()` drains buffered messages first, then reads the wire. `poll_wire()` bypasses the buffer (used by `PrinterClient::poll_until()`). `push_pending()` stashes non-matching messages. `PrinterClient` delegates all reads through these methods. `mqtt().await?` returns a client whose `poll_telemetry()` is safe to call directly — no split-brain, no warnings.
-- **`TlsConnector::connect` no longer takes a `port` parameter** — signature is `connect(&self, host: &str, raw_stream: RawStream) -> Result<Self::Stream, SocketError>`. Phase 13's camera TLS design should assume this shape if it reuses `Tls`/`TlsConnector`. `RawStreamFactory::dial(&self, host: &str, port: u16)` is the raw-dial counterpart — a third `Camera{RawIO,Tls,Factory}` trio (or reuse of the MQTT trio) would follow the exact same two-trait shape MQTT and FTPS both use now.
-- **A stalled-read timeout precedent now exists for persistent connections.** `BambuMqttClient::poll_wire`/`read_exact_packet` (`src/mqtt/client.rs`) race each low-level read against `TimerProvider::sleep()` via a hand-rolled `race()` combinator (`pub(crate)`, `core::future::poll_fn`/`core::pin::pin!`, no `tokio::select!`/`embassy_futures::select`), persisting partial-frame progress across a timeout so a retry resumes mid-frame instead of desyncing the parser. `PrinterClient::ensure_mqtt`/`ensure_ftps` already reuse this same `race()` for connect-timeout bounding (Phase 12) — importable via `crate::mqtt::client::{race, Raced}`. `BambuBinaryCameraStream::read_next_frame` (`src/camera/binary.rs`) is a comparably persistent stream read with **no** such protection today (unbounded read, same hang class `poll_wire` closed for MQTT). Phase 13 should decide whether camera integration needs the same treatment, and can reuse the `race()` pattern rather than re-deriving it.
-
----
-
-## Phase 13: Camera integration in `PrinterClient`
-
-### Problem
-
-`PrinterClient` has no camera awareness. The CLI's camera command bypasses `PrinterClient` and uses `BambuBinaryCameraStream` directly, duplicating connection logic that `PrinterClient` already owns.
-
-### Background
-
-Bambu printers use two camera protocols (determined by `model.quirks().camera_protocol()`):
-
-- **Binary JPEG (port 6000, A1/P1 series)** — `src/camera/binary.rs` provides `BambuBinaryCameraStream`, a complete client that authenticates and streams JPEG frames over TLS. Persistent streaming connection.
-- **RTSPS (port 322, X1/X2/H2/P2S series)** — `src/camera/rtsps.rs` provides helper utilities only (URL generation, proxy URI rewriting, timestamp correction). No RTSP client — consumers integrate with external media frameworks.
-
-### Design questions to answer first
-
-- **Phase 12 (`SecureConnect` removal / `TlsConnector`+`RawStreamFactory` alignment) has landed** — MQTT and FTPS both now use the same `TlsConnector`+`RawStreamFactory` shape (see completed-phases summary above). Camera's connection need (one stream, no control/data channel split) is structurally identical to MQTT's — target that same shape directly rather than inventing a third pattern.
-- **Streaming vs request/response** — Binary JPEG is a persistent stream, unlike FTPS's connect-operate-disconnect pattern. Does the `.with_ftps()` + lazy `storage()` pattern work for a long-lived stream?
-- **Two protocols, one slot?** A printer uses either binary JPEG or RTSPS, never both. Single `camera()` accessor returning an enum, or separate methods? RTSPS has no connection state.
-- **Type parameter impact** — Post-Phase-12, `PrinterClient` has `MqttRawIO/MqttTls/MqttFactory` and `FtpsRawIO/FtpsTls/FtpsFactory` trios, both `TlsConnector`+`RawStreamFactory`-shaped. Camera is also a single persistent stream like MQTT — decide whether it shares the MQTT trio (if a printer's camera and MQTT connections are never needed independently) or gets its own `CameraRawIO/CameraTls/CameraFactory` trio (if they can be configured/connected independently, which is likely given camera TLS may differ from MQTT's — see next point).
-- **Lazy connection** - like MQTT and FTPS, camera connection should be lazy and not required to instantiate a PrinterClient.
-- **Stalled-read protection** — `BambuBinaryCameraStream::read_next_frame` currently has no timeout; a persistent connection that stalls with zero incoming bytes hangs forever, the same failure class `poll_wire` was just fixed for on the MQTT side (see completed-phases summary above). Decide whether this phase should wire frame reads through the same `TimerProvider`-raced `race()` pattern, or defer it.
-
-### Scope
-
-Answer the design questions based on the current codebase, then write a concrete implementation plan. Do not start implementation without a plan.
-
+- **Connect-timeout is now centralized on `PrinterClient`, not per-connector.** `connect_timeout_secs` (default 10s, `.with_connect_timeout(secs)`) bounds `ensure_mqtt()`/`ensure_ftps()`'s *entire* dial+connect sequence via `race_against_connect_timeout()` (`src/client/mod.rs`), which reuses `race()`/`Raced` (now `pub(crate)` in `src/io/mod.rs`, not `src/mqtt/client.rs`) and its `has_real_clock()` guard (skips the race under `DummyTimer`). For `ensure_ftps()` specifically, "entire sequence" means the raw dial *and* `BambuFtpsClient::connect()`'s full login handshake raced together as one future, not just the TCP dial. This replaced the old per-platform `TokioSecureConnector`/`EspIdfSecureConnector::connect_timeout` (both deleted) and closed a pre-existing gap: FTPS's raw dial had no timeout at all before this. `EspIdfTlsConnector::connect_timeout` (handshake-only, for direct non-`PrinterClient` callers) is untouched and still exists as a separate, lower layer.
+- **Camera integration follows the same lazy-connect shape as MQTT/FTPS** (`PLAN.md` former Phase 13) — a third `CameraRawIO`/`CameraTls`/`CameraFactory` trio (type params 8–10, defaulted to `DummyRawIo`/`DummyTls`/`DummyFactory`) plus `ensure_camera()`/`connect_camera()`/`camera_connected()`/`with_camera()`/`with_camera_port()`/`with_camera_max_frame_size()` in `src/client/mod.rs`, and `camera()`/`read_camera_frame()`/`disconnect_camera()`/`attach_camera()` in the new `src/client/camera.rs` (mirrors `storage.rs`'s shape). `ensure_camera()` checks `model.quirks().camera_protocol() == CameraProtocol::BinaryJpeg` **before** checking whether `.with_camera()` was ever called, so an RTSPS model (X1/X2/H2/P2S) gets a clear "wrong protocol" error immediately, never a dial attempt or a "not configured" error.
+- **`race`, `Raced`, and `read_chunk` now live in `src/io/mod.rs`** (`pub(crate)`), not `src/mqtt/client.rs` — relocated so `camera/binary.rs` didn't have to reach into a sibling protocol module for transport-agnostic utilities built on `AsyncIo`/`TimerProvider`. `mqtt/client.rs` imports them from `crate::io`; `read_exact_packet`/`FrameReadState` stayed put (genuinely MQTT-specific). `BambuBinaryCameraStream::read_next_frame_with_timer()` (`src/camera/binary.rs`) reuses them via its own resumable `CameraFrameReadState`; the public `read_next_frame()` delegates to it under `DummyTimer` — never give it an independent implementation, since two implementations sharing one `read_state` field is a desync hazard.
+- **`read_chunk`'s no-deadline branch (`DummyTimer`) now maps a `0`-byte read to `SocketError::ConnectionReset`**, matching the with-deadline branch — previously it forwarded `stream.read()`'s result unchanged, so a legitimate EOF looked identical to "no bytes yet," and callers' fill-loops (`while *filled < buf.len() { ... }`) would spin forever instead of erroring. Caught by a camera regression test expecting a clean disconnect error; benefits any `DummyTimer`-based caller, including `BambuMqttClient::connect()`'s CONNACK/SUBACK read (not independently re-verified against real hardware for this specific edge case).
 ---
 
 ## Phase 14: Door-open and active-fault telemetry accessors
@@ -115,6 +78,6 @@ Answer the design questions based on the current codebase, then write a concrete
 | 10 | CLI dependency leakage | Complete |
 | 11 | Migrate CLI argument parsing to `clap` | Complete |
 | 12 | Replace `SecureConnect` with `TlsConnector`+`RawStreamFactory` for MQTT | Complete |
-| 13 | Camera integration in `PrinterClient` | Not Started |
+| 13 | Camera integration in `PrinterClient` | Complete |
 | 14 | Door-open and active-fault telemetry accessors | Not Started |
 | 15 | AMS/tray and progress/temperature telemetry accessors (investigation) | Not Started |

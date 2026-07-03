@@ -7,8 +7,30 @@ use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use super::PrinterClient;
 use super::types::FanTarget;
 
-impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
-    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
 where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -17,6 +39,9 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     /// Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
     ///

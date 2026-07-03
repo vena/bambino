@@ -19,10 +19,13 @@
 //!    this cap on constrained (`no_std`/Embassy) targets.
 
 #[cfg(not(feature = "std"))]
+use alloc::vec;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::client::dummy::DummyTimer;
 use crate::error::BambuError;
-use crate::io::{AsyncIo, SocketError};
+use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 
 pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
 pub(crate) const CAMERA_HANDSHAKE_MAGIC: u32 = 64;
@@ -36,6 +39,12 @@ pub(crate) const JPEG_MARKER_SOI_HIGH: u8 = 0xFF;
 pub(crate) const JPEG_MARKER_SOI_LOW: u8 = 0xD8;
 pub(crate) const JPEG_MARKER_EOI_HIGH: u8 = 0xFF;
 pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
+
+/// Per-read wall-clock deadline for [`BambuBinaryCameraStream::read_next_frame_with_timer`]
+/// when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and
+/// rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client.rs`): a 30s gap between frames on
+/// an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
+pub(crate) const CAMERA_READ_TIMEOUT_SECS: u64 = 30;
 
 /// Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY].
 ///
@@ -69,10 +78,39 @@ pub fn build_handshake_packet(
     Ok(packet)
 }
 
+/// Byte-level progress of an in-flight camera frame read, preserved across a timed-out
+/// [`BambuBinaryCameraStream::read_next_frame_with_timer`] call so a subsequent call resumes
+/// exactly where the previous one left off — losing this state would permanently desync the
+/// stream, the same failure class `FrameReadState` guards against for MQTT
+/// (`src/mqtt/client.rs`). Not a straight copy of that shape: MQTT's 1-byte header can't
+/// partially complete a single `read()` step, so its `Idle` variant never needs
+/// header-partial-progress tracking — camera's 16-byte header can, so `ReadingHeader` carries
+/// its own `filled` counter (closer in shape to `ReadingPayload` below).
+#[derive(Default)]
+enum CameraFrameReadState {
+    /// No partial frame in progress — the next read starts a fresh header.
+    #[default]
+    Idle,
+    /// Header bytes read so far; `filled` may be less than `CAMERA_FRAME_HEADER_SIZE` if a
+    /// prior call timed out mid-header.
+    ReadingHeader {
+        buf: [u8; CAMERA_FRAME_HEADER_SIZE],
+        filled: usize,
+    },
+    /// Header fully decoded; `size` is the expected payload length, `buf` accumulates bytes
+    /// as they arrive, `filled` tracks how many are valid so far.
+    ReadingPayload {
+        size: usize,
+        buf: Vec<u8>,
+        filled: usize,
+    },
+}
+
 /// Abstract state controller parsing incoming frame buffers from raw Port 6000 streams.
 pub struct BambuBinaryCameraStream<IO: AsyncIo> {
     stream: IO,
     max_frame_size: usize,
+    read_state: CameraFrameReadState,
 }
 
 impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
@@ -87,6 +125,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         Self {
             stream,
             max_frame_size: CAMERA_FRAME_MAX_SIZE,
+            read_state: CameraFrameReadState::default(),
         }
     }
 
@@ -124,62 +163,123 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         Ok(())
     }
 
+    /// Asynchronously extracts the next complete frame from the stream, bounding each
+    /// low-level read step against `timer` when a real wall-clock is available (see
+    /// [`TimerProvider::has_real_clock`]). Resumable: if a prior call on this stream timed
+    /// out partway through a frame, the next call picks up from `self.read_state` instead of
+    /// re-reading a fresh header — losing already-read bytes here would permanently desync
+    /// the stream, the same failure class documented for MQTT's `read_exact_packet`
+    /// (`src/mqtt/client.rs`).
+    ///
+    /// `budget_ms` is an explicit parameter (not a hardcoded constant) so tests can pass a
+    /// small budget instead of waiting out [`CAMERA_READ_TIMEOUT_SECS`] for real; production
+    /// callers should pass `CAMERA_READ_TIMEOUT_SECS * 1000`. A fresh deadline is computed
+    /// every call from `budget_ms`, mirroring `read_exact_packet`'s behavior (not once per
+    /// logical frame).
+    pub(crate) async fn read_next_frame_with_timer<T: TimerProvider>(
+        &mut self,
+        frame_buf: &mut Vec<u8>,
+        timer: &T,
+        budget_ms: u64,
+    ) -> Result<(), BambuError> {
+        let deadline_ms = if timer.has_real_clock() {
+            Some(timer.now_millis().saturating_add(budget_ms))
+        } else {
+            None
+        };
+
+        // Header bytes (only start a fresh header if not already mid-header from a prior,
+        // timed-out call).
+        if matches!(self.read_state, CameraFrameReadState::Idle) {
+            self.read_state = CameraFrameReadState::ReadingHeader {
+                buf: [0u8; CAMERA_FRAME_HEADER_SIZE],
+                filled: 0,
+            };
+        }
+
+        if let CameraFrameReadState::ReadingHeader { buf, filled } = &mut self.read_state {
+            while *filled < buf.len() {
+                let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
+                    .await
+                    .map_err(BambuError::NetworkError)?;
+                *filled += n;
+            }
+
+            // Extract little-endian payload size N from first 4 bytes. Use a fallible
+            // conversion rather than `as usize` — on a hypothetical <32-bit `usize` target an
+            // `as` cast would silently truncate the length field instead of erroring, before
+            // the frame-size sanity check below even runs.
+            let raw_size = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            let size = usize::try_from(raw_size).map_err(|_| {
+                BambuError::ProtocolViolation(
+                    "Frame size descriptor does not fit in this platform's usize".into(),
+                )
+            })?;
+
+            // Bounded allocation check to guard against memory allocation overflow attacks
+            if size > self.max_frame_size {
+                self.read_state = CameraFrameReadState::Idle;
+                return Err(BambuError::ProtocolViolation(
+                    "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
+                ));
+            }
+            if size == 0 {
+                self.read_state = CameraFrameReadState::Idle;
+                return Err(BambuError::ProtocolViolation(
+                    "Acquired empty frame payload descriptor".into(),
+                ));
+            }
+
+            self.read_state = CameraFrameReadState::ReadingPayload {
+                size,
+                buf: vec![0u8; size],
+                filled: 0,
+            };
+        }
+
+        // Payload bytes (resumes from `filled` if a prior call stalled mid-payload).
+        if let CameraFrameReadState::ReadingPayload { size, buf, filled } = &mut self.read_state {
+            while *filled < buf.len() {
+                let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
+                    .await
+                    .map_err(BambuError::NetworkError)?;
+                *filled += n;
+            }
+
+            let size = *size;
+            let payload = core::mem::take(buf);
+            self.read_state = CameraFrameReadState::Idle;
+
+            // Validate frame bounds to protect downstream graphic engines against decoding
+            // crashes (validation only runs after `read_state` has already collapsed back to
+            // `Idle` — pure buffer post-processing, no I/O, doesn't interact with resumability).
+            if size < 4
+                || payload[0] != JPEG_MARKER_SOI_HIGH
+                || payload[1] != JPEG_MARKER_SOI_LOW
+                || payload[size - 2] != JPEG_MARKER_EOI_HIGH
+                || payload[size - 1] != JPEG_MARKER_EOI_LOW
+            {
+                return Err(BambuError::ProtocolViolation(
+                    "Acquired stream packet lacks valid JPEG magic marker boundaries".into(),
+                ));
+            }
+
+            *frame_buf = payload;
+            return Ok(());
+        }
+
+        unreachable!("CameraFrameReadState must be ReadingPayload after header decode")
+    }
+
     /// Asynchronously extracts the next complete frame from the stream.
     ///
     /// Refills the user-supplied `Vec<u8>` to minimize memory churn during high-frequency
-    /// image extraction operations.
+    /// image extraction operations. Delegates to [`Self::read_next_frame_with_timer`] under
+    /// [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
+    /// every existing caller not going through `PrinterClient`.
     pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError> {
-        // Read 16-byte frame metadata descriptor
-        let mut header = [0u8; CAMERA_FRAME_HEADER_SIZE];
-        self.stream
-            .read_exact(&mut header)
+        self.read_next_frame_with_timer(frame_buf, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
             .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionReset))?;
-
-        // Extract little-endian payload size N from first 4 bytes. Use a fallible conversion
-        // rather than `as usize` — on a hypothetical <32-bit `usize` target an `as` cast would
-        // silently truncate the length field instead of erroring, before the frame-size sanity
-        // check below even runs.
-        let raw_size = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-        let size = usize::try_from(raw_size).map_err(|_| {
-            BambuError::ProtocolViolation(
-                "Frame size descriptor does not fit in this platform's usize".into(),
-            )
-        })?;
-
-        // Bounded allocation check to guard against memory allocation overflow attacks
-        if size > self.max_frame_size {
-            return Err(BambuError::ProtocolViolation(
-                "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
-            ));
-        }
-
-        if size == 0 {
-            return Err(BambuError::ProtocolViolation(
-                "Acquired empty frame payload descriptor".into(),
-            ));
-        }
-
-        // Fetch exactly N payload bytes representing raw image data
-        frame_buf.resize(size, 0);
-        self.stream
-            .read_exact(frame_buf)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionReset))?;
-
-        // Validate frame bounds to protect downstream graphic engines against decoding crashes
-        if size < 4
-            || frame_buf[0] != JPEG_MARKER_SOI_HIGH
-            || frame_buf[1] != JPEG_MARKER_SOI_LOW
-            || frame_buf[size - 2] != JPEG_MARKER_EOI_HIGH
-            || frame_buf[size - 1] != JPEG_MARKER_EOI_LOW
-        {
-            return Err(BambuError::ProtocolViolation(
-                "Acquired stream packet lacks valid JPEG magic marker boundaries".into(),
-            ));
-        }
-
-        Ok(())
     }
 }
 
@@ -220,6 +320,7 @@ mod tests {
     mod async_tests {
         use super::*;
         use crate::io::TokioIo;
+        use tokio::io::AsyncWriteExt;
 
         fn make_frame_header(size: u32) -> Vec<u8> {
             let mut header = vec![0u8; CAMERA_FRAME_HEADER_SIZE];
@@ -268,6 +369,117 @@ mod tests {
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        }
+
+        /// Regression test mirroring `test_read_exact_packet_stalled_connection_times_out`
+        /// (`src/mqtt/client.rs`): a connection that stalls with zero incoming bytes must not
+        /// hang `read_next_frame_with_timer` forever. Uses a `tokio::io::duplex` whose server
+        /// side never writes, so the client's low-level `read()` call is genuinely pending.
+        /// The outer `tokio::time::timeout` is a meta-safety net.
+        #[tokio::test]
+        async fn test_read_next_frame_with_timer_stalled_connection_times_out() {
+            let (client_stream, _server_stream) = tokio::io::duplex(64);
+            // Server side is kept alive (bound to `_server_stream`) but never writes —
+            // dropping it would deliver `Ok(0)`/EOF instead of a genuine stall.
+
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(client_stream));
+            let timer = crate::io::tokio::TokioTimer::new();
+            let budget_ms = 50;
+            let mut buf = Vec::new();
+
+            let started = std::time::Instant::now();
+            let result = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                camera.read_next_frame_with_timer(&mut buf, &timer, budget_ms),
+            )
+            .await
+            .expect(
+                "read_next_frame_with_timer hung past the 5s meta-safety timeout instead of \
+                 honoring its own budget",
+            );
+            let elapsed = started.elapsed();
+
+            assert!(
+                matches!(
+                    result,
+                    Err(BambuError::NetworkError(crate::io::SocketError::TimedOut))
+                ),
+                "Expected TimedOut for a stalled connection, got {:?}",
+                result
+            );
+            assert!(
+                elapsed < core::time::Duration::from_secs(2),
+                "read_next_frame_with_timer took {:?} to time out against a {}ms budget — too slow",
+                elapsed,
+                budget_ms
+            );
+        }
+
+        /// Regression test mirroring
+        /// `test_read_exact_packet_resumes_after_timeout_without_losing_bytes`
+        /// (`src/mqtt/client.rs`): bytes already read into a partial-frame buffer before a
+        /// timeout must never be lost. Server delivers the full 16-byte header plus 2 of 4
+        /// expected payload bytes, then stalls; the first call times out mid-payload; the
+        /// second call (after the rest arrives) must reconstruct the exact original frame.
+        #[tokio::test]
+        async fn test_read_next_frame_with_timer_resumes_after_timeout_without_losing_bytes() {
+            let (client_stream, mut server_stream) = tokio::io::duplex(64);
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(client_stream));
+            let timer = crate::io::tokio::TokioTimer::new();
+            let mut buf = Vec::new();
+
+            // Header declares a 4-byte payload; server sends header + first 2 payload bytes,
+            // then stops.
+            let mut sent = make_frame_header(4);
+            sent.extend_from_slice(&[JPEG_MARKER_SOI_HIGH, JPEG_MARKER_SOI_LOW]);
+            server_stream.write_all(&sent).await.unwrap();
+            server_stream.flush().await.unwrap();
+
+            let first_attempt = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                camera.read_next_frame_with_timer(&mut buf, &timer, 50),
+            )
+            .await
+            .expect("first attempt hung past the meta-safety timeout");
+
+            assert!(
+                matches!(
+                    first_attempt,
+                    Err(BambuError::NetworkError(crate::io::SocketError::TimedOut))
+                ),
+                "Expected the first attempt to time out waiting on the missing payload bytes, \
+                 got {:?}",
+                first_attempt
+            );
+
+            // Send the remaining 2 payload bytes to complete a valid JPEG frame.
+            server_stream
+                .write_all(&[JPEG_MARKER_EOI_HIGH, JPEG_MARKER_EOI_LOW])
+                .await
+                .unwrap();
+            server_stream.flush().await.unwrap();
+
+            let second_attempt = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                camera.read_next_frame_with_timer(&mut buf, &timer, 50),
+            )
+            .await
+            .expect("second attempt hung past the meta-safety timeout");
+
+            assert!(
+                second_attempt.is_ok(),
+                "expected the resumed read to succeed, got {:?}",
+                second_attempt
+            );
+            assert_eq!(
+                buf,
+                vec![
+                    JPEG_MARKER_SOI_HIGH,
+                    JPEG_MARKER_SOI_LOW,
+                    JPEG_MARKER_EOI_HIGH,
+                    JPEG_MARKER_EOI_LOW
+                ]
+            );
         }
     }
 }

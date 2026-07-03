@@ -8,8 +8,30 @@ use crate::mqtt::{PrintJobConfig, StandardControlRequest};
 use super::PrinterClient;
 use super::types::{CalibrationOption, PrintSpeed};
 
-impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
-    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
 where
     MqttRawIO: AsyncIo,
     MqttTls: TlsConnector<MqttRawIO>,
@@ -18,6 +40,9 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     /// Pauses the currently active print job [REF-MQTT-LIFECYCLE].
     pub async fn pause_print(&mut self) -> Result<u16, BambuError> {
