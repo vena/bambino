@@ -4,9 +4,8 @@
 //! and Timer interfaces for standard operating systems using the Tokio runtime
 //! and the Rustls TLS stack.
 
-use crate::ftps::FtpDataStreamFactory;
 use crate::io::{
-    AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerError, TimerProvider,
+    AsyncUdpSocket, BindableUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
     TlsConnector, TlsVersion, TokioIo,
 };
 
@@ -300,55 +299,15 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
     }
 }
 
-/// Adapter implementing `SecureConnect` by combining Tokio TCP with Rustls TLS.
-pub struct TokioSecureConnector {
-    tls_connector: TokioTlsConnector,
-    connect_timeout: core::time::Duration,
-}
-
-impl TokioSecureConnector {
-    pub fn new(tls_connector: TokioTlsConnector, connect_timeout: core::time::Duration) -> Self {
-        Self {
-            tls_connector,
-            connect_timeout,
-        }
-    }
-}
-
-impl SecureConnect for TokioSecureConnector {
-    type Stream = TokioIo<tokio_rustls::client::TlsStream<::tokio::net::TcpStream>>;
-
-    /// Bounds the *entire* connect operation — TCP dial through TLS handshake — in one
-    /// `connect_timeout` deadline. Previously only the TCP-connect step was wrapped in a
-    /// timeout; the TLS handshake that followed was unbounded, so a printer that accepted
-    /// the TCP SYN but stalled the handshake could hang this call forever despite the
-    /// caller having supplied `connect_timeout` (see `review/io.md` Phase 1).
-    async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
-        ::tokio::time::timeout(self.connect_timeout, async {
-            let addr = format!("{}:{}", host, port);
-            let tcp_stream = ::tokio::net::TcpStream::connect(&addr)
-                .await
-                .map_err(to_socket_error)?;
-
-            self.tls_connector.connect(host, TokioIo(tcp_stream)).await
-        })
-        .await
-        .map_err(|_| SocketError::TimedOut)?
-    }
-
-    fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
-        self.tls_connector.negotiated_version(stream)
-    }
-}
-
-/// Passive data connection factory for the Tokio runtime.
+/// Raw (pre-TLS) connection factory for the Tokio runtime.
 ///
-/// Creates raw TCP connections wrapped in [`TokioIo`] for FTPS passive-mode
-/// data transfers — the Tokio counterpart to [`DummyFactory`](crate::client::dummy::DummyFactory).
-pub struct TokioFtpDataStreamFactory;
+/// Creates raw TCP connections wrapped in [`TokioIo`] — used for MQTT's lazy connect and
+/// FTPS passive-mode data transfers alike (the Tokio counterpart to
+/// [`DummyFactory`](crate::client::dummy::DummyFactory)).
+pub struct TokioRawStreamFactory;
 
-impl FtpDataStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioFtpDataStreamFactory {
-    async fn create_data_stream(
+impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactory {
+    async fn dial(
         &self,
         host: &str,
         port: u16,

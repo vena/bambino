@@ -4,10 +4,8 @@
 //! our transport-agnostic client traits under Espressif's Rust standard library.
 
 #[cfg(feature = "esp-idf")]
-use crate::ftps::FtpDataStreamFactory;
-#[cfg(feature = "esp-idf")]
 use crate::io::{
-    AsyncUdpSocket, BindableUdpSocket, SecureConnect, SocketError, TimerError, TimerProvider,
+    AsyncUdpSocket, BindableUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
     TlsConnector, TlsVersion,
 };
 
@@ -146,11 +144,10 @@ fn to_esp_socket_error(err: std::io::Error) -> SocketError {
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
-/// Default upper bound on the connect loop (TCP dial + TLS handshake, combined) in
-/// `EspIdfSecureConnector::secure_connect` and `EspIdfTlsConnector::connect`, used when the
+/// Default upper bound on the handshake loop in `EspIdfTlsConnector::connect`, used when the
 /// caller doesn't supply one via `.with_connect_timeout(d)`. Chosen generously — printers on
 /// a healthy LAN handshake in well under a second, but a 10s budget avoids false timeouts on
-/// congested Wi-Fi. Mirrors `TokioSecureConnector::connect_timeout`'s field shape/ergonomics.
+/// congested Wi-Fi.
 #[cfg(feature = "esp-idf")]
 const DEFAULT_CONNECT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
 
@@ -171,9 +168,8 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
 /// `SocketError`, distinguishing DNS/address failures and genuine connection refusals from
 /// opaque/other failures instead of collapsing everything to `ConnectionRefused` (the
 /// previous behavior — actively misleading for e.g. a bad CA cert or an out-of-memory
-/// condition inside mbedTLS, both of which used to read as "refused"). Shared by
-/// `EspIdfSecureConnector::secure_connect` and `EspIdfTlsConnector::connect`, mirroring
-/// `query_negotiated_tls_version`'s "written once, used by both connect loops" shape.
+/// condition inside mbedTLS, both of which used to read as "refused"). Used by
+/// `EspIdfTlsConnector::connect`.
 ///
 /// Checks two families of codes, both surfaced by `EspTls::connect`/`negotiate` in practice:
 /// `esp_tls`'s own `ESP_ERR_ESP_TLS_*` codes (returned when `esp_tls` fails before or during
@@ -210,65 +206,11 @@ fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError 
     SocketError::Other(std::format!("ESP-IDF TLS handshake failed: {err}").into())
 }
 
-/// Secure connector for ESP-IDF using the platform's native `EspTls` stack.
-///
-/// Unlike tokio/embassy where TLS wraps a caller-supplied TCP stream, ESP-IDF's
-/// `EspTls` manages TCP connection establishment internally. This implements
-/// `SecureConnect` directly — callers provide host+port and receive a ready stream.
-///
-/// Built on `esp_idf_svc::tls::{EspTls, Config}` — the safe wrapper `esp-idf-svc` ships
-/// around `esp_tls` — rather than raw `esp-idf-sys` FFI, so the bindgen-union cert-field
-/// wiring (`cfg.__bindgen_anon_N.field`) is delegated to code `esp-idf-svc` maintains
-/// instead of reimplemented here. The handshake runs with `Config::non_block = true`,
-/// so `EspTls::connect` never blocks inside the FFI call — see `TLS_POLL_INTERVAL` for
-/// how the resulting `ESP_TLS_ERR_SSL_WANT_READ`/`_WRITE`/`EWOULDBLOCK` outcomes are
-/// retried.
-#[cfg(feature = "esp-idf")]
-pub struct EspIdfSecureConnector {
-    certs: EspIdfTlsCerts,
-    connect_timeout: core::time::Duration,
-}
-
-#[cfg(feature = "esp-idf")]
-impl EspIdfSecureConnector {
-    /// Creates a connector that skips server certificate verification. Connect operations
-    /// (TCP dial + TLS handshake, combined) default to `DEFAULT_CONNECT_TIMEOUT`; override
-    /// via `.with_connect_timeout(d)`.
-    pub fn new() -> Self {
-        Self {
-            certs: EspIdfTlsCerts::new(),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
-    }
-
-    /// Creates a connector that verifies the server certificate against a CA cert.
-    ///
-    /// `ca_cert_pem`: PEM or DER-encoded CA certificate bytes.
-    /// `client_auth`: Optional (cert_pem, key_pem) for mutual TLS.
-    pub fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
-        Self {
-            certs: EspIdfTlsCerts::with_certs(ca_cert, client_auth),
-            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
-    }
-
-    /// Overrides the default connect-phase deadline (TCP dial + TLS handshake, combined).
-    /// Non-consuming — chain onto `new()`/`with_certs()`.
-    pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
-        self.connect_timeout = connect_timeout;
-        self
-    }
-
-    fn build_config(&self) -> ::esp_idf_svc::tls::Config<'_> {
-        self.certs.build_config()
-    }
-}
-
-/// Cert bundle shared by `EspIdfSecureConnector` and `EspIdfTlsConnector` — both structs
-/// otherwise carried identical `ca_cert`/`client_cert`/`client_key` fields and identical
-/// `new()`/`with_certs()` constructors. Factored out once so a future cert-related option
-/// (e.g. ALPN config) only needs to be added in one place instead of two structs silently
-/// drifting apart.
+/// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields
+/// and `new()`/`with_certs()` constructors. Factored out (originally shared with the now-
+/// deleted `EspIdfSecureConnector` — `SecureConnect` was removed crate-wide in favor of
+/// `TlsConnector`+`RawStreamFactory`, `PLAN.md` Phase 12) so a future cert-related option
+/// (e.g. ALPN config) only needs to be added in one place.
 #[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
     ca_cert: Option<Vec<u8>>,
@@ -303,10 +245,8 @@ impl EspIdfTlsCerts {
     }
 }
 
-/// Builds an `esp_idf_svc::tls::Config` from cert bytes, shared by every ESP-IDF TLS
-/// connection path (`EspIdfSecureConnector`'s dial-own-connection `SecureConnect` impl,
-/// and `EspIdfTlsConnector`'s wrap-existing-stream `TlsConnector` impl below) so the
-/// cert-field wiring is written once rather than duplicated per connector type.
+/// Builds an `esp_idf_svc::tls::Config` from cert bytes, used by `EspIdfTlsConnector`'s
+/// wrap-existing-stream `TlsConnector` impl below.
 #[cfg(feature = "esp-idf")]
 fn build_tls_config<'a>(
     ca_cert: &'a Option<Vec<u8>>,
@@ -333,16 +273,14 @@ fn build_tls_config<'a>(
 /// Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
 ///
 /// `EspTls`'s own `read`/`write` are synchronous calls, but the underlying socket runs
-/// in non-blocking mode (`Config::non_block = true`, set by both `EspIdfSecureConnector`
-/// and `EspIdfTlsConnector`), so each call returns immediately instead of blocking the
-/// FreeRTOS task. Retries happen by yielding to the async executor via
-/// `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
+/// in non-blocking mode (`Config::non_block = true`, set by `EspIdfTlsConnector`), so
+/// each call returns immediately instead of blocking the FreeRTOS task. Retries happen
+/// by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
 ///
-/// Generic over the adopted socket type `S`: `EspIdfSecureConnector` (dial-own-connection)
-/// produces `EspTlsStream<InternalSocket>` (the default), while `EspIdfTlsConnector`
-/// (wrap-an-existing-stream, below) produces `EspTlsStream<EspIdfTcpStream>`.
+/// Generic over the adopted socket type `S`: `EspIdfTlsConnector` (wrap-an-existing-stream,
+/// below) produces `EspTlsStream<EspIdfTcpStream>`.
 #[cfg(feature = "esp-idf")]
-pub struct EspTlsStream<S = ::esp_idf_svc::tls::InternalSocket>
+pub struct EspTlsStream<S>
 where
     S: ::esp_idf_svc::tls::Socket,
 {
@@ -401,76 +339,8 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S>
     }
 }
 
-#[cfg(feature = "esp-idf")]
-impl SecureConnect for EspIdfSecureConnector {
-    type Stream = EspTlsStream;
-
-    /// Bounds the connect loop (TCP dial + TLS handshake, combined — `EspTls::connect`
-    /// does both internally) by `self.connect_timeout`, tracked the same way `poll_until`
-    /// does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare
-    /// `saturating_sub` against a budget each iteration). Previously this loop had no
-    /// upper bound at all — a printer that never responded during the handshake (wrong
-    /// port, firewalled host, printer rebooting mid-handshake) looped forever (see
-    /// `review/io.md` Phase 1).
-    async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError> {
-        let cfg = self.build_config();
-
-        let timer = EspIdfTimer::new().map_err(|_| {
-            SocketError::Other("failed to create ESP-IDF async timer for TLS".into())
-        })?;
-
-        let mut tls = ::esp_idf_svc::tls::EspTls::new()
-            .map_err(|_| SocketError::Other("ESP-TLS initialization failed".into()))?;
-
-        let start = timer.now_millis();
-
-        loop {
-            match tls.connect(host, port, &cfg) {
-                Ok(_) => break,
-                Err(e) if is_would_block(&e) => {
-                    if timer.now_millis().saturating_sub(start)
-                        >= self.connect_timeout.as_millis() as u64
-                    {
-                        return Err(SocketError::TimedOut);
-                    }
-                    timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-                        SocketError::Other(
-                            "ESP-IDF timer failed while polling TLS handshake".into(),
-                        )
-                    })?;
-                }
-                Err(e) => return Err(map_esp_tls_connect_error(&e)),
-            }
-        }
-
-        Ok(EspTlsStream { tls, timer })
-    }
-
-    /// Reads the negotiated TLS version via `esp_tls_get_ssl_context()` +
-    /// mbedTLS's `mbedtls_ssl_get_version()` — both confirmed present in
-    /// `esp-idf-svc` 0.52.1's bindgen output (`esp_tls_get_ssl_context` is a public,
-    /// stable ESP-TLS API already used the same way by `esp-idf-svc` itself, in
-    /// `EspTls`'s internal ALPN accessor — this isn't new unsafe surface, it's the
-    /// same accessor pattern applied to a different mbedTLS query).
-    ///
-    /// **Assumes the default mbedTLS backend** (`CONFIG_ESP_TLS_USING_MBEDTLS=y`,
-    /// ESP-IDF's default — the rest of this file makes the same assumption
-    /// implicitly, e.g. `build_config`'s use of `X509::der`). A wolfSSL-configured
-    /// build (`CONFIG_ESP_TLS_USING_WOLFSSL=y`) would need a different accessor and
-    /// a compile-time way to detect which backend is active; this crate has no
-    /// `build.rs` forwarding `esp_idf_esp_tls_using_wolfssl`-style cfgs the way
-    /// `esp-idf-svc`'s own build script does for itself, so that detection isn't
-    /// possible here today — out of scope until one is added.
-    fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
-        query_negotiated_tls_version(&stream.tls)
-    }
-}
-
-/// Shared mbedTLS version query, used by both `EspIdfSecureConnector::negotiated_version`
-/// (above) and `EspIdfTlsConnector::negotiated_version` (below) — the accessor chain from
-/// `*mut esp_tls` down to a parsed `TlsVersion` doesn't depend on which `Socket` impl the
-/// `EspTls` was constructed with (`InternalSocket` for dial-own-connection,
-/// `EspIdfTcpStream` for wrap-existing-stream), so it's written once here.
+/// Shared mbedTLS version query, used by `EspIdfTlsConnector::negotiated_version` (below).
+/// Generic over the adopted `Socket` impl so it isn't tied to one connector shape.
 #[cfg(feature = "esp-idf")]
 fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
@@ -628,12 +498,10 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
     }
 }
 
-/// TLS connector for ESP-IDF that wraps an already-connected raw stream, for platforms
-/// (FTPS's data and control channels) that need `TlsConnector` rather than
-/// `SecureConnect`'s dial-your-own-connection model. Built on the same
-/// `esp_idf_svc::tls::EspTls` safe wrapper as `EspIdfSecureConnector`, via
-/// `EspTls::adopt()` (confirmed by Phase 3's spike: no raw mbedTLS FFI needed to wrap an
-/// existing fd) instead of `EspTls::new()` + `connect()`.
+/// TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and
+/// control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`). Built
+/// on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
+/// mbedTLS FFI needed to wrap an existing fd) instead of `EspTls::new()` + `connect()`.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfTlsConnector {
     certs: EspIdfTlsCerts,
@@ -684,8 +552,9 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     type Stream = EspTlsStream<EspIdfTcpStream>;
 
     /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way
-    /// `poll_until` does (`src/client/mod.rs`) — see `EspIdfSecureConnector::secure_connect`'s
-    /// doc comment for the full rationale; previously this loop had no upper bound at all.
+    /// `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop,
+    /// compare `saturating_sub` against a budget each iteration); previously this loop had
+    /// no upper bound at all.
     async fn connect(
         &self,
         host: &str,
@@ -739,21 +608,17 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     }
 }
 
-/// Passive/data-channel connection factory for ESP-IDF FTPS, using raw
-/// `std::net::TcpStream` — the ESP-IDF counterpart to `TokioFtpDataStreamFactory`
-/// (`io/tokio.rs`). Whether the returned stream ends up TLS-wrapped (via
-/// `EspIdfTlsConnector`) or used directly (plaintext data-channel models) is decided by
-/// `BambuFtpsClient`, not this factory.
+/// Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the
+/// ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's
+/// lazy connect and FTPS's passive data channel. Whether the returned stream ends up
+/// TLS-wrapped (via `EspIdfTlsConnector`) or used directly (plaintext FTPS data-channel
+/// models) is decided by the caller, not this factory.
 #[cfg(feature = "esp-idf")]
-pub struct EspIdfFtpDataStreamFactory;
+pub struct EspIdfRawStreamFactory;
 
 #[cfg(feature = "esp-idf")]
-impl FtpDataStreamFactory<EspIdfTcpStream> for EspIdfFtpDataStreamFactory {
-    async fn create_data_stream(
-        &self,
-        host: &str,
-        port: u16,
-    ) -> Result<EspIdfTcpStream, SocketError> {
+impl RawStreamFactory<EspIdfTcpStream> for EspIdfRawStreamFactory {
+    async fn dial(&self, host: &str, port: u16) -> Result<EspIdfTcpStream, SocketError> {
         EspIdfTcpStream::connect(host, port)
     }
 }

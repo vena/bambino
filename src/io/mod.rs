@@ -5,7 +5,8 @@
 //!
 //! - [`AsyncIo`] — Read + Write (blanket-implemented for anything satisfying `embedded-io-async`).
 //! - [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/embedded-tls).
-//! - [`SecureConnect`] — Creates its own TCP+TLS connection (used by ESP-IDF, where TLS manages transport).
+//! - [`RawStreamFactory`] — Dials a fresh raw (pre-TLS) stream to a host:port. Used for MQTT's
+//!   lazy connect and FTPS's per-transfer data channel.
 //! - [`AsyncUdpSocket`] — UDP send/recv for SSDP discovery.
 //! - [`BindableUdpSocket`] — construct-and-bind a new UDP socket by address (std/tokio, ESP-IDF only).
 //! - [`TimerProvider`] — Async sleep and monotonic clock for platform-agnostic timeouts.
@@ -139,7 +140,7 @@ pub trait AsyncUdpSocket {
 /// ESP-IDF's BSD sockets). Embassy-net sockets must be constructed from pre-allocated
 /// buffer slices supplied by the caller and bound via a typed `IpListenEndpoint` on an
 /// already-existing socket, not a `SocketAddr` — so `EmbassyUdpSocket` does not implement
-/// this trait. Mirrors the existing `TlsConnector`/`SecureConnect` split, which draws the
+/// this trait. Mirrors the existing `TlsConnector`/`RawStreamFactory` split, which draws the
 /// same boundary for TLS connection setup.
 #[allow(async_fn_in_trait)]
 pub trait BindableUdpSocket: AsyncUdpSocket + Sized {
@@ -167,6 +168,21 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
         None
     }
+}
+
+/// Dials a fresh, un-encrypted (pre-TLS) raw stream to a host:port.
+///
+/// Protocol-neutral by design: MQTT's lazy connect (`PrinterClient::ensure_mqtt`) and FTPS's
+/// per-transfer passive data channel (`BambuFtpsClient::list_directory`/`upload_file`/
+/// `download_file`) both just need "give me a raw stream to host:port" with no
+/// protocol-specific semantics in the trait itself — confirmed by every implementor
+/// (`TokioRawStreamFactory`, `EspIdfRawStreamFactory`, `EmbassyRawStreamFactory`) having zero
+/// FTP- or MQTT-specific logic. Non-consuming (`&self`) so a `PrinterClient` can hold one
+/// persistently and call it on every lazy (re)connect, mirroring `TlsConnector::connect`.
+#[allow(async_fn_in_trait)]
+pub trait RawStreamFactory<RawIO: AsyncIo> {
+    /// Connects a raw, un-encrypted socket to the designated host and port.
+    async fn dial(&self, host: &str, port: u16) -> Result<RawIO, SocketError>;
 }
 
 /// Platform-neutral asynchronous sleep controller.
@@ -207,34 +223,6 @@ pub trait TimerProvider {
     /// skip the race entirely (plain unbounded await) when it's `false`.
     fn has_real_clock(&self) -> bool {
         true
-    }
-}
-
-/// Higher-level secure connection trait for platforms where TLS manages its own transport.
-///
-/// `TlsConnector` requires callers to supply a pre-established raw stream, which works
-/// for rustls (tokio) and embedded-tls (embassy) where TLS wraps an existing socket.
-/// ESP-IDF's `EspTls` creates its own TCP connection internally, so it cannot implement
-/// `TlsConnector`. This trait abstracts over both models: callers provide host+port and
-/// receive a ready-to-use secure stream.
-#[allow(async_fn_in_trait)]
-pub trait SecureConnect {
-    /// The resulting encrypted stream type.
-    type Stream: AsyncIo;
-
-    /// Establishes a new secure connection to the specified host and port.
-    async fn secure_connect(&self, host: &str, port: u16) -> Result<Self::Stream, SocketError>;
-
-    /// Returns the TLS protocol version negotiated on the given stream.
-    ///
-    /// Mirrors [`TlsConnector::negotiated_version`] so callers built on `SecureConnect`
-    /// have the same capability to enforce a minimum TLS version (e.g. the TLS 1.2
-    /// requirement `BambuFtpsClient::connect()` enforces on P2S/X2D via `TlsConnector`)
-    /// once a `SecureConnect`-based caller needs it. Platforms that cannot inspect the
-    /// negotiated version return `None`, causing such a check to be skipped
-    /// (best-effort) rather than failing to compile against this trait at all.
-    fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
-        None
     }
 }
 

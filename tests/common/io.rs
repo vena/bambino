@@ -12,8 +12,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use bambino::ftps::FtpDataStreamFactory;
-use bambino::io::{AsyncIo, SocketError, TlsConnector, TlsVersion, TokioIo};
+use bambino::io::{AsyncIo, RawStreamFactory, SocketError, TlsConnector, TlsVersion, TokioIo};
 
 /// A pass-through TLS connector for testing.
 ///
@@ -98,8 +97,8 @@ pub struct MockDataStreamFactory {
     pub active_stream: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
 }
 
-impl FtpDataStreamFactory<TokioIo<tokio::io::DuplexStream>> for MockDataStreamFactory {
-    async fn create_data_stream(
+impl RawStreamFactory<TokioIo<tokio::io::DuplexStream>> for MockDataStreamFactory {
+    async fn dial(
         &self,
         _host: &str,
         _port: u16,

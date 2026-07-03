@@ -3,19 +3,21 @@ use alloc::string::ToString;
 
 use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::BambuError;
-use crate::ftps::FtpDataStreamFactory;
-use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::VersionInfo;
 
 use super::PrinterClient;
 
-impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
+impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
 where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
     Timer: TimerProvider,
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
 {
     /// Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
     ///

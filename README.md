@@ -49,19 +49,18 @@ for p in &printers {
 use bambino::client::PrinterClient;
 use bambino::models::resolve_model;
 use bambino::io::tokio::{
-    TokioSecureConnector, TokioTlsConnector, TokioTimer,
+    TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
     build_unsafe_client_config,
 };
-use std::time::Duration;
 
 // Printers use self-signed certs, so we skip verification
 let config = build_unsafe_client_config();
 let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
-let connector = TokioSecureConnector::new(tls, Duration::from_secs(5));
 
 let model = resolve_model(serial, None);
-let mut printer = PrinterClient::new(connector, ip, serial, access_code, model)
-    .with_timer(TokioTimer::new());
+let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, ip, serial, access_code, model)
+    .with_timer(TokioTimer::new())
+    .with_connect_timeout(5);
 
 // MQTT connects lazily on first use, or eagerly:
 printer.connect_mqtt().await?;
@@ -158,7 +157,7 @@ Add FTPS to a `PrinterClient` with `.with_ftps()`. The FTPS TLS connector is ind
 
 ```rust
 use bambino::io::tokio::{
-    TokioTlsConnector, TokioFtpDataStreamFactory,
+    TokioTlsConnector, TokioRawStreamFactory,
     build_unsafe_client_config_with_options,
 };
 
@@ -168,7 +167,7 @@ let ftps_config = build_unsafe_client_config_with_options(
 );
 let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
-let mut printer = printer.with_ftps(ftps_tls, TokioFtpDataStreamFactory);
+let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory);
 
 // storage() auto-connects on first call
 let ftp = printer.storage().await?;
@@ -268,7 +267,7 @@ let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config))
 
 Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Some models (P2S, X2D) require TLS 1.2 only for FTPS data channels — check with `model.quirks().enforce_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
 
-This is platform-general — `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfSecureConnector` all implement `negotiated_version` for real. `EmbassyTlsConnector` always reports TLS 1.3 (`embedded-tls` 0.19 is TLS-1.3-only), so Embassy + P2S/X2D is unconditionally rejected rather than downgraded.
+This is platform-general — `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfTlsConnector` all implement `negotiated_version` for real. `EmbassyTlsConnector` always reports TLS 1.3 (`embedded-tls` 0.19 is TLS-1.3-only), so Embassy + P2S/X2D is unconditionally rejected rather than downgraded.
 
 ## Platform targets
 
@@ -301,10 +300,10 @@ let connector: EmbassyTlsConnector<'_, Aes128GcmSha256, _> =
 
 Calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection — construct another `EmbassyTlsConnector` for a second concurrent connection.
 
-**Embassy FTPS:** `EmbassyFtpDataStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs — `N = 1` covers FTPS's usage, since data-channel connections are always sequential. Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `create_data_stream`'s host must be a literal IPv4 address — Bambu printers are always addressed that way, so this isn't a limitation in practice:
+**Embassy raw streams:** `EmbassyRawStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool — used for both MQTT's lazy connect and FTPS's data channel. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs — `N = 1` covers FTPS's usage, since data-channel connections are always sequential (MQTT needs its own factory instance since it's a separate, concurrent connection). Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `dial`'s host must be a literal IPv4 address — Bambu printers are always addressed that way, so this isn't a limitation in practice:
 
 ```rust
-use bambino::io::embassy::EmbassyFtpDataStreamFactory;
+use bambino::io::embassy::EmbassyRawStreamFactory;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use static_cell::StaticCell;
 
@@ -313,22 +312,22 @@ static TCP_CLIENT: StaticCell<TcpClient<'static, 1, 2048, 2048>> = StaticCell::n
 
 let state = TCP_CLIENT_STATE.init(TcpClientState::new());
 let client = TCP_CLIENT.init(TcpClient::new(stack, state));
-let factory = EmbassyFtpDataStreamFactory::new(client);
+let factory = EmbassyRawStreamFactory::new(client);
 
 let mut printer = printer.with_ftps(ftps_tls, factory);
 ```
 
-**ESP-IDF TLS timeouts:** `EspIdfSecureConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK` — so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI.
+**ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK` — so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI.
 
-**ESP-IDF TLS version query:** `EspIdfSecureConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — wolfSSL builds aren't supported yet.
+**ESP-IDF TLS version query:** `EspIdfTlsConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — wolfSSL builds aren't supported yet.
 
-**ESP-IDF FTPS:** FTPS needs `TlsConnector` (wrap an already-connected stream), not `SecureConnect` (used for MQTT above), since the control and data channels start life as a plain `std::net::TcpStream`. `EspIdfTlsConnector` provides that via `esp_idf_svc::tls::EspTls::adopt()`. Models where `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS on the data channel entirely:
+**ESP-IDF FTPS/MQTT:** `EspIdfTlsConnector` wraps an already-connected raw stream (via `esp_idf_svc::tls::EspTls::adopt()`) — used for FTPS's control/data channels and MQTT's lazy connect alike, paired with `EspIdfRawStreamFactory` for the raw dial. Models where `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS on the FTPS data channel entirely:
 
 ```rust
-use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfFtpDataStreamFactory};
+use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory};
 
 let ftps_tls = EspIdfTlsConnector::new(); // or ::with_certs(ca_cert, client_auth) to verify
-let mut printer = printer.with_ftps(ftps_tls, EspIdfFtpDataStreamFactory);
+let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory);
 ```
 
 ## bambino-cli

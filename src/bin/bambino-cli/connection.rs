@@ -1,12 +1,11 @@
 #![cfg(feature = "cli")]
 
-use std::time::Duration;
-
 use bambino::client::PrinterClient;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
 use bambino::error::BambuError;
+use bambino::io::TokioIo;
 use bambino::io::tokio::{
-    TokioSecureConnector, TokioTimer, TokioTlsConnector, build_unsafe_client_config,
+    TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config,
 };
 use bambino::models::resolve_model;
 
@@ -30,20 +29,34 @@ pub(crate) fn resolve_access_code(access_code: String) -> String {
     }
 }
 
-pub type Printer =
-    PrinterClient<TokioSecureConnector, TokioTimer, DummyRawIo, DummyTls, DummyFactory>;
+pub type Printer = PrinterClient<
+    TokioIo<::tokio::net::TcpStream>,
+    TokioTlsConnector,
+    TokioRawStreamFactory,
+    TokioTimer,
+    DummyRawIo,
+    DummyTls,
+    DummyFactory,
+>;
 
 pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, BambuError> {
     validate_params(ip, serial, access_code)?;
 
     let config = build_unsafe_client_config();
     let tls_connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
-    let connector =
-        TokioSecureConnector::new(tls_connector, Duration::from_secs(CONNECT_TIMEOUT_SECS));
 
     let model = resolve_model(serial, None);
 
-    Ok(PrinterClient::new(connector, ip, serial, access_code, model).with_timer(TokioTimer::new()))
+    Ok(PrinterClient::new(
+        tls_connector,
+        TokioRawStreamFactory,
+        ip,
+        serial,
+        access_code,
+        model,
+    )
+    .with_timer(TokioTimer::new())
+    .with_connect_timeout(CONNECT_TIMEOUT_SECS))
 }
 
 pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {

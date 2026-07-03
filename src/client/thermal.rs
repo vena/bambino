@@ -2,19 +2,21 @@
 use alloc::format;
 
 use crate::error::BambuError;
-use crate::ftps::FtpDataStreamFactory;
-use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::telemetry::report::POWER_220V_BITMASK;
 
 use super::PrinterClient;
 
-impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
+impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
 where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
     Timer: TimerProvider,
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
 {
     /// Sets the heated bed target temperature.
     ///

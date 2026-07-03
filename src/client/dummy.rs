@@ -6,8 +6,7 @@
 
 use core::marker::PhantomData;
 
-use crate::ftps::FtpDataStreamFactory;
-use crate::io::{AsyncIo, SecureConnect, SocketError, TimerError, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerError, TimerProvider, TlsConnector};
 
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy)]
@@ -49,12 +48,8 @@ impl TlsConnector<DummyRawIo> for DummyTls {
 #[doc(hidden)]
 pub struct DummyFactory;
 
-impl FtpDataStreamFactory<DummyRawIo> for DummyFactory {
-    async fn create_data_stream(
-        &self,
-        _host: &str,
-        _port: u16,
-    ) -> Result<DummyRawIo, crate::io::SocketError> {
+impl RawStreamFactory<DummyRawIo> for DummyFactory {
+    async fn dial(&self, _host: &str, _port: u16) -> Result<DummyRawIo, crate::io::SocketError> {
         Ok(DummyRawIo)
     }
 }
@@ -80,24 +75,24 @@ impl TimerProvider for DummyTimer {
     }
 }
 
-#[doc(hidden)]
-pub struct DummySecureConnect;
-
-impl SecureConnect for DummySecureConnect {
-    type Stream = DummyRawIo;
-
-    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<DummyRawIo, SocketError> {
-        Err(SocketError::NotConnected)
-    }
-}
-
+/// Marker type used as both the `Tls` and `Factory` slot for a `PrinterClient` wrapping an
+/// already-connected [`BambuMqttClient`](crate::mqtt::BambuMqttClient) (`from_mqtt()`, used by
+/// tests and Embassy). `ensure_mqtt()` short-circuits on `self.mqtt.is_some()` before either
+/// impl below is ever called, so `TlsConnector::connect`'s identity passthrough is never
+/// exercised for real, and `RawStreamFactory::dial` is genuinely unreachable.
 #[doc(hidden)]
 pub struct PreConnected<IO: AsyncIo>(pub(crate) PhantomData<IO>);
 
-impl<IO: AsyncIo> SecureConnect for PreConnected<IO> {
+impl<IO: AsyncIo> TlsConnector<IO> for PreConnected<IO> {
     type Stream = IO;
 
-    async fn secure_connect(&self, _host: &str, _port: u16) -> Result<IO, SocketError> {
+    async fn connect(&self, _host: &str, raw_stream: IO) -> Result<IO, SocketError> {
+        Ok(raw_stream)
+    }
+}
+
+impl<IO: AsyncIo> RawStreamFactory<IO> for PreConnected<IO> {
+    async fn dial(&self, _host: &str, _port: u16) -> Result<IO, SocketError> {
         Err(SocketError::NotConnected)
     }
 }

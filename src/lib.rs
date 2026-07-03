@@ -23,21 +23,19 @@
 //! use bambino::client::{PrinterClient, TelemetryEvent};
 //! use bambino::models::resolve_model;
 //! use bambino::io::tokio::{
-//!     TokioSecureConnector, TokioTlsConnector, TokioTimer,
+//!     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
 //!     build_unsafe_client_config,
 //! };
-//! use std::time::Duration;
 //!
 //! async fn example() -> Result<(), bambino::BambuError> {
 //!     // Printers use self-signed certs, so we skip verification
 //!     let tls_config = build_unsafe_client_config();
 //!     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
-//!     let connector = TokioSecureConnector::new(tls, Duration::from_secs(5));
 //!
 //!     // Create a lazy client — MQTT connects automatically on first use
 //!     let model = resolve_model("SERIAL123456", None);
 //!     let mut printer = PrinterClient::new(
-//!         connector, "192.168.1.100", "SERIAL123456", "12345678", model,
+//!         tls, TokioRawStreamFactory, "192.168.1.100", "SERIAL123456", "12345678", model,
 //!     )
 //!     .with_timer(TokioTimer::new());
 //!

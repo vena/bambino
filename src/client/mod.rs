@@ -24,7 +24,7 @@ mod storage;
 mod thermal;
 pub mod types;
 
-pub use dummy::{DummyFactory, DummyRawIo, DummySecureConnect, DummyTimer, DummyTls, PreConnected};
+pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
 pub use types::{CalibrationOption, FanTarget, PrintSpeed, PrintStatus, TelemetryEvent};
 
@@ -37,10 +37,13 @@ use serde::Serialize;
 
 use core::marker::PhantomData;
 
+use core::future::Future;
+
 use crate::error::BambuError;
-use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
+use crate::ftps::BambuFtpsClient;
+use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector};
 use crate::models::BambuModel;
+use crate::mqtt::client::{Raced, race};
 use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{BambuMqttClient, MqttMessage};
 use crate::types::TelemetryReport;
@@ -48,31 +51,70 @@ use crate::types::TelemetryReport;
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
+/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`'s combined dial+connect sequence
+/// (`PLAN.md` Phase 12, decision 6) — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT`
+/// (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
+pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+/// Races `fut` against a `connect_timeout_secs`-second deadline on `timer`, used by
+/// `ensure_mqtt()`/`ensure_ftps()` to bound their two-step dial+connect sequences. Reuses the
+/// `race()` combinator `src/mqtt/client.rs`'s `poll_wire`/`read_exact_packet` per-read deadline
+/// is built on, including its `has_real_clock()` guard: under `DummyTimer` (`has_real_clock()
+/// == false`), `sleep()` completes instantly regardless of duration, so racing against it
+/// unconditionally would make every connect attempt look timed out instead of providing real
+/// protection — see `TimerProvider::has_real_clock`'s doc comment.
+async fn race_against_connect_timeout<TP, F, T, E>(
+    timer: &TP,
+    connect_timeout_secs: u64,
+    fut: F,
+) -> Result<T, E>
+where
+    TP: TimerProvider,
+    F: Future<Output = Result<T, E>>,
+    E: From<SocketError>,
+{
+    if !timer.has_real_clock() {
+        return fut.await;
+    }
+    let sleep_fut = timer.sleep(core::time::Duration::from_secs(connect_timeout_secs));
+    match race(fut, sleep_fut).await {
+        Raced::Left(result) => result,
+        Raced::Right(_) => Err(E::from(SocketError::TimedOut)),
+    }
+}
 
 /// High-level client for controlling a Bambu Lab printer.
 ///
 /// Wraps an MQTT session (connected or lazy) and optionally a [`BambuFtpsClient`] for
-/// SD card access. The first type parameter is a [`SecureConnect`] connector that
-/// determines the MQTT stream type. Use [`PreConnected`] when wrapping an already-connected
-/// [`BambuMqttClient`], or a platform connector (e.g. `TokioSecureConnector`) for lazy
-/// connection.
+/// SD card access. `MqttRawIO`/`MqttTls`/`MqttFactory` are MQTT's [`TlsConnector`]+
+/// [`RawStreamFactory`] pair (mandatory — every `PrinterClient` needs MQTT);
+/// `FtpsRawIO`/`FtpsTls`/`FtpsFactory` are FTPS's independent pair (defaulted, configured via
+/// [`.with_ftps()`](Self::with_ftps)). Use [`PreConnected`] for both MQTT slots when wrapping
+/// an already-connected [`BambuMqttClient`] (see [`from_mqtt()`](Self::from_mqtt)), or a
+/// platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
+/// `TokioRawStreamFactory`) for lazy connection via [`new()`](Self::new).
 pub struct PrinterClient<
-    Conn,
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
     Timer = DummyTimer,
-    RawIO = DummyRawIo,
-    Tls = DummyTls,
-    Factory = DummyFactory,
+    FtpsRawIO = DummyRawIo,
+    FtpsTls = DummyTls,
+    FtpsFactory = DummyFactory,
 > where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
     Timer: TimerProvider,
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
 {
-    pub(crate) mqtt: Option<BambuMqttClient<Conn::Stream>>,
-    pub(crate) ftps: Option<BambuFtpsClient<RawIO, Tls, Factory>>,
-    pub(crate) ftps_config: Option<(Tls, Factory)>,
-    pub(crate) connector: Conn,
+    pub(crate) mqtt: Option<BambuMqttClient<MqttTls::Stream>>,
+    pub(crate) ftps: Option<BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory>>,
+    pub(crate) ftps_config: Option<(FtpsTls, FtpsFactory)>,
+    pub(crate) mqtt_tls: MqttTls,
+    pub(crate) mqtt_factory: MqttFactory,
     pub(crate) timer: Timer,
     pub(crate) serial: String,
     pub(crate) ip: String,
@@ -83,27 +125,35 @@ pub struct PrinterClient<
     pub(crate) last_home_flag: Option<u32>,
     pub(crate) last_gcode_state: Option<String>,
     pub(crate) command_timeout_secs: u64,
+    pub(crate) connect_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
+    pub(crate) _mqtt_raw_io: PhantomData<MqttRawIO>,
 }
 
-impl<Conn> PrinterClient<Conn, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
+impl<MqttRawIO, MqttTls, MqttFactory>
+    PrinterClient<MqttRawIO, MqttTls, MqttFactory, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
 where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
 {
     /// Creates a lazy client that defers MQTT connection until first use.
     ///
     /// The MQTT session is established automatically on the first method call that
     /// requires it (e.g. [`poll_telemetry()`](Self::poll_telemetry),
     /// [`request_pushall()`](Self::request_pushall)), or eagerly via
-    /// [`connect_mqtt()`](Self::connect_mqtt).
+    /// [`connect_mqtt()`](Self::connect_mqtt). `tls`/`factory` mirror
+    /// [`.with_ftps(tls, factory)`](Self::with_ftps)'s call shape — `factory.dial()` opens the
+    /// raw TCP socket, then `tls.connect()` wraps it in TLS.
     ///
     /// Without a [`TimerProvider`], command-response methods like
     /// [`get_version()`](Self::get_version) rely on a message-count safety valve
     /// instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
     /// for real timeouts.
     pub fn new(
-        connector: Conn,
+        tls: MqttTls,
+        factory: MqttFactory,
         ip: &str,
         serial: &str,
         access_code: &str,
@@ -113,7 +163,8 @@ where
             mqtt: None,
             ftps: None,
             ftps_config: None,
-            connector,
+            mqtt_tls: tls,
+            mqtt_factory: factory,
             timer: DummyTimer,
             serial: String::from(serial),
             ip: String::from(ip),
@@ -124,29 +175,43 @@ where
             last_home_flag: None,
             last_gcode_state: None,
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
+            _mqtt_raw_io: PhantomData,
         }
     }
 }
 
-impl<IO> PrinterClient<PreConnected<IO>, DummyTimer, DummyRawIo, DummyTls, DummyFactory>
+impl<IO>
+    PrinterClient<
+        IO,
+        PreConnected<IO>,
+        PreConnected<IO>,
+        DummyTimer,
+        DummyRawIo,
+        DummyTls,
+        DummyFactory,
+    >
 where
     IO: AsyncIo,
 {
     /// Wraps an already-connected [`BambuMqttClient`] in a `PrinterClient`.
     ///
     /// Use this when you have a pre-established MQTT session (tests, Embassy,
-    /// or any context where the caller manages the connection). The resulting
-    /// client uses [`PreConnected`] as its connector — calling
-    /// [`connect_mqtt()`](Self::connect_mqtt) on a disconnected `PreConnected`
-    /// client will return [`SocketError::NotConnected`](crate::io::SocketError::NotConnected).
+    /// or any context where the caller manages the connection). The resulting client uses
+    /// [`PreConnected`] for both the MQTT `Tls` and `Factory` slots — `ensure_mqtt()`
+    /// short-circuits on `self.mqtt.is_some()` before either is ever called, so
+    /// `PreConnected`'s `RawStreamFactory::dial` (which returns
+    /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
+    /// practice.
     pub fn from_mqtt(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
             ftps_config: None,
-            connector: PreConnected(PhantomData),
+            mqtt_tls: PreConnected(PhantomData),
+            mqtt_factory: PreConnected(PhantomData),
             timer: DummyTimer,
             serial: String::from(serial),
             ip: String::new(),
@@ -157,33 +222,40 @@ where
             last_home_flag: None,
             last_gcode_state: None,
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
+            _mqtt_raw_io: PhantomData,
         }
     }
 }
 
-impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
+impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
 where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
     Timer: TimerProvider,
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
 {
     /// Establishes the MQTT connection if not already connected.
     ///
-    /// Short-circuits when `self.mqtt` is already `Some`. Otherwise, calls
-    /// `self.connector.secure_connect()` followed by `BambuMqttClient::connect()`
-    /// to create the session lazily.
+    /// Short-circuits when `self.mqtt` is already `Some`. Otherwise, dials a raw stream via
+    /// `self.mqtt_factory.dial()`, wraps it in TLS via `self.mqtt_tls.connect()`, then calls
+    /// `BambuMqttClient::connect()` — the whole dial+TLS sequence is raced against
+    /// `self.connect_timeout_secs`.
     async fn ensure_mqtt(&mut self) -> Result<(), BambuError> {
         if self.mqtt.is_some() {
             return Ok(());
         }
-        let stream = self
-            .connector
-            .secure_connect(&self.ip, self.mqtt_port)
-            .await?;
+        let stream = race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
+            let raw = self.mqtt_factory.dial(&self.ip, self.mqtt_port).await?;
+            self.mqtt_tls.connect(&self.ip, raw).await
+        })
+        .await?;
         let mqtt_client = BambuMqttClient::connect(stream, &self.serial, &self.access_code).await?;
         self.mqtt = Some(mqtt_client);
         // Reseed from wall-clock time so two independent sessions connecting to the
@@ -213,12 +285,14 @@ where
     pub fn with_timer<NewTimer: TimerProvider>(
         self,
         timer: NewTimer,
-    ) -> PrinterClient<Conn, NewTimer, RawIO, Tls, Factory> {
+    ) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, NewTimer, FtpsRawIO, FtpsTls, FtpsFactory>
+    {
         PrinterClient {
             mqtt: self.mqtt,
             ftps: self.ftps,
             ftps_config: self.ftps_config,
-            connector: self.connector,
+            mqtt_tls: self.mqtt_tls,
+            mqtt_factory: self.mqtt_factory,
             timer,
             serial: self.serial,
             ip: self.ip,
@@ -229,8 +303,10 @@ where
             last_home_flag: self.last_home_flag,
             last_gcode_state: self.last_gcode_state,
             command_timeout_secs: self.command_timeout_secs,
+            connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            _mqtt_raw_io: PhantomData,
         }
     }
 
@@ -240,26 +316,43 @@ where
         self
     }
 
+    /// Overrides the default connect-timeout deadline (10s) that bounds
+    /// `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
+    /// Non-consuming — chain onto any construction path.
+    pub fn with_connect_timeout(mut self, secs: u64) -> Self {
+        self.connect_timeout_secs = secs;
+        self
+    }
+
     /// Configures FTPS for lazy connection on first storage method call.
     ///
-    /// Consuming builder — changes the `RawIO`, `Tls`, and `Factory` type parameters.
-    /// The FTPS [`TlsConnector`] is independent from MQTT's (some models require
+    /// Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, and `FtpsFactory` type
+    /// parameters. The FTPS [`TlsConnector`] is independent from MQTT's (some models require
     /// different TLS settings for FTPS, e.g. `force_tls_1_2`).
-    pub fn with_ftps<NewRawIO, NewTls, NewFactory>(
+    pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory>(
         self,
-        tls: NewTls,
-        factory: NewFactory,
-    ) -> PrinterClient<Conn, Timer, NewRawIO, NewTls, NewFactory>
+        tls: NewFtpsTls,
+        factory: NewFtpsFactory,
+    ) -> PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        NewFtpsRawIO,
+        NewFtpsTls,
+        NewFtpsFactory,
+    >
     where
-        NewRawIO: AsyncIo,
-        NewTls: TlsConnector<NewRawIO>,
-        NewFactory: FtpDataStreamFactory<NewRawIO>,
+        NewFtpsRawIO: AsyncIo,
+        NewFtpsTls: TlsConnector<NewFtpsRawIO>,
+        NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
     {
         PrinterClient {
             mqtt: self.mqtt,
             ftps: None,
             ftps_config: Some((tls, factory)),
-            connector: self.connector,
+            mqtt_tls: self.mqtt_tls,
+            mqtt_factory: self.mqtt_factory,
             timer: self.timer,
             serial: self.serial,
             ip: self.ip,
@@ -270,8 +363,10 @@ where
             last_home_flag: self.last_home_flag,
             last_gcode_state: self.last_gcode_state,
             command_timeout_secs: self.command_timeout_secs,
+            connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            _mqtt_raw_io: PhantomData,
         }
     }
 
@@ -283,10 +378,11 @@ where
 
     /// Establishes the FTPS connection if not already connected.
     ///
-    /// Short-circuits when `self.ftps` is already `Some`. Otherwise, takes the
-    /// TLS connector and data factory from `ftps_config`, creates a raw TCP
-    /// connection, and calls `BambuFtpsClient::connect()`. The config is consumed
-    /// on first connection — reconnecting requires a new `PrinterClient`.
+    /// Short-circuits when `self.ftps` is already `Some`. Otherwise, takes the TLS connector
+    /// and data factory from `ftps_config`, dials a raw connection, and calls
+    /// `BambuFtpsClient::connect()` — the whole dial+connect sequence is raced against
+    /// `self.connect_timeout_secs`. The config is consumed on first connection —
+    /// reconnecting requires a new `PrinterClient`.
     async fn ensure_ftps(&mut self) -> Result<(), BambuError> {
         if self.ftps.is_some() {
             return Ok(());
@@ -296,16 +392,16 @@ where
                 "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
             )
         })?;
-        let raw_stream = factory.create_data_stream(&self.ip, self.ftps_port).await?;
-        let ftps_client = BambuFtpsClient::connect(
-            raw_stream,
-            tls,
-            factory,
-            self.model,
-            &self.ip,
-            &self.access_code,
-        )
-        .await?;
+        let ip = &self.ip;
+        let access_code = &self.access_code;
+        let model = self.model;
+        let ftps_port = self.ftps_port;
+        let ftps_client =
+            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
+                let raw_stream = factory.dial(ip, ftps_port).await?;
+                BambuFtpsClient::connect(raw_stream, tls, factory, model, ip, access_code).await
+            })
+            .await?;
         self.ftps = Some(ftps_client);
         Ok(())
     }
@@ -500,7 +596,7 @@ where
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
     /// in-flight state — anything that [`PrinterClient`] doesn't expose directly.
-    pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<Conn::Stream>, BambuError> {
+    pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<MqttTls::Stream>, BambuError> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())
     }

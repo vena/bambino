@@ -16,20 +16,10 @@ use embedded_io_async::Write;
 
 use crate::error::BambuError;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
-use crate::io::{AsyncIo, SocketError, TlsConnector, TlsVersion};
+use crate::io::{AsyncIo, RawStreamFactory, SocketError, TlsConnector, TlsVersion};
 use crate::models::BambuModel;
 
 use super::protocol::*;
-
-/// Factory trait used to establish standard TCP socket connections to passive ports.
-///
-/// Under FTPS, passive transfers open fresh data socket connections back to the printer.
-/// This abstract boundary permits safe standard, ESP-IDF, and bare-metal Embassy bindings.
-#[allow(async_fn_in_trait)]
-pub trait FtpDataStreamFactory<RawIO: AsyncIo> {
-    /// Connects a raw, un-encrypted socket to the designated host and port.
-    async fn create_data_stream(&self, host: &str, port: u16) -> Result<RawIO, SocketError>;
-}
 
 /// Lightweight, high-reliability implicit FTPS client running on top of abstract I/O traits.
 ///
@@ -46,7 +36,7 @@ pub struct BambuFtpsClient<RawIO, Tls, Factory>
 where
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
 {
     control_stream: Tls::Stream,
     tls_connector: Tls,
@@ -73,7 +63,7 @@ impl<RawIO, Tls, Factory> BambuFtpsClient<RawIO, Tls, Factory>
 where
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
 {
     /// Establishes the secure control channel, performs login handshakes, and configures security properties.
     ///
@@ -219,7 +209,7 @@ where
         validate_ftp_path(remote_path)?;
 
         let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
+        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let list_cmd = format!("LIST {}", remote_path);
         write_command(&mut self.control_stream, &list_cmd).await?;
@@ -372,7 +362,7 @@ where
         validate_ftp_path(remote_path)?;
 
         let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
+        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let stor_cmd = format!("STOR {}", remote_path);
         write_command(&mut self.control_stream, &stor_cmd).await?;
@@ -483,7 +473,7 @@ where
         validate_ftp_path(remote_path)?;
 
         let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self.data_factory.create_data_stream(&self.ip, port).await?;
+        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let retr_cmd = format!("RETR {}", remote_path);
         write_command(&mut self.control_stream, &retr_cmd).await?;

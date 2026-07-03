@@ -13,5 +13,5 @@ pub(crate) mod protocol;
 
 pub(crate) const FTPS_PORT: u16 = 990;
 
-pub use client::{BambuFtpsClient, FtpDataStreamFactory};
+pub use client::BambuFtpsClient;
 pub use parser::{FtpFile, parse_unix_listing};

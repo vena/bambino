@@ -283,7 +283,10 @@ mod tests {
                                  DevModel.bambu.com: C12\r\n\r\n";
                 let len = response.len();
                 buf[..len].copy_from_slice(response);
-                Ok((len, SocketAddr::from((IpAddr::V4(Ipv4Addr::new(192, 168, 1, 150)), 2021))))
+                Ok((
+                    len,
+                    SocketAddr::from((IpAddr::V4(Ipv4Addr::new(192, 168, 1, 150)), 2021)),
+                ))
             } else {
                 Err(SocketError::TimedOut)
             }
@@ -292,7 +295,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_engine_broadcast_and_poll() {
-        let socket = MockDiscoverySocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))).await.unwrap();
+        let socket =
+            MockDiscoverySocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)))
+                .await
+                .unwrap();
         let sent_ref = socket.sent_payloads.clone();
         let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
@@ -334,7 +340,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcast_search_returns_error_when_both_sends_fail() {
-        let socket = FailSocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))).await.unwrap();
+        let socket = FailSocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)))
+            .await
+            .unwrap();
         let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
         let result = engine.broadcast_search().await;
@@ -358,7 +366,11 @@ mod tests {
         }
 
         impl AsyncUdpSocket for HalfFailSocket {
-            async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> Result<usize, SocketError> {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
                 if self.first_call.swap(false, Ordering::SeqCst) {
                     Err(SocketError::ConnectionRefused)
                 } else {
@@ -370,7 +382,9 @@ mod tests {
             }
         }
 
-        let socket = HalfFailSocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0))).await.unwrap();
+        let socket = HalfFailSocket::bind(SocketAddr::from((IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)))
+            .await
+            .unwrap();
         let engine = DiscoveryEngine::new(socket, SSDP_PORT);
 
         let result = engine.broadcast_search().await;
@@ -443,7 +457,11 @@ mod tests {
         }
 
         impl AsyncUdpSocket for QuickExitSocket {
-            async fn send_to(&self, _buf: &[u8], _target: SocketAddr) -> Result<usize, SocketError> {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
                 Ok(100)
             }
             async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {

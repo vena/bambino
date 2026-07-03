@@ -1,22 +1,28 @@
 use crate::error::BambuError;
-use crate::ftps::{BambuFtpsClient, FtpDataStreamFactory};
-use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
+use crate::ftps::BambuFtpsClient;
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
 
-impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
+impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
 where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
     Timer: TimerProvider,
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
 {
     /// Injects a pre-connected [`BambuFtpsClient`] directly.
     ///
     /// Use this for test mocks or Embassy where the caller manages the FTPS
     /// connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps).
-    pub fn attach_storage(&mut self, ftps_client: BambuFtpsClient<RawIO, Tls, Factory>) {
+    pub fn attach_storage(
+        &mut self,
+        ftps_client: BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory>,
+    ) {
         self.ftps = Some(ftps_client);
     }
 
@@ -27,7 +33,7 @@ where
     /// [`.attach_storage()`](Self::attach_storage).
     pub async fn storage(
         &mut self,
-    ) -> Result<&mut BambuFtpsClient<RawIO, Tls, Factory>, BambuError> {
+    ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory>, BambuError> {
         self.ensure_ftps().await?;
         Ok(self.ftps.as_mut().unwrap())
     }

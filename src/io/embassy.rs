@@ -5,10 +5,9 @@
 //! stack and `embedded-tls`.
 
 #[cfg(feature = "embassy")]
-use crate::ftps::FtpDataStreamFactory;
-#[cfg(feature = "embassy")]
 use crate::io::{
-    AsyncIo, AsyncUdpSocket, SocketError, TimerError, TimerProvider, TlsConnector, TlsVersion,
+    AsyncIo, AsyncUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
+    TlsConnector, TlsVersion,
 };
 
 /// Timer implementation designed for the hardware microsecond clock in Embassy.
@@ -149,9 +148,8 @@ impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_as
 /// (`Option::take`) — calling `connect()` again on the same connector without a fresh one
 /// returns `SocketError::Other` instead of a second, aliased borrow.
 ///
-/// **No built-in connect timeout.** Unlike `TokioSecureConnector`/`EspIdfSecureConnector`
-/// (both of which bound their entire connect operation — TCP dial through TLS handshake —
-/// behind a `connect_timeout`), `connect()` here has no retry/poll loop of its own to bound:
+/// **No built-in connect timeout.** Unlike `EspIdfTlsConnector` (which bounds its handshake
+/// loop behind a `connect_timeout`), `connect()` here has no retry/poll loop of its own to bound:
 /// it calls `TlsConnection::open(context).await` once, and the hang risk lives entirely
 /// inside `embedded-tls`'s handshake await, which this crate doesn't control. Callers that
 /// need a bounded connect must race `EmbassyTlsConnector::connect` against
@@ -260,15 +258,15 @@ where
     }
 }
 
-/// Passive/data-channel connection factory for the Embassy network stack.
+/// Raw (pre-TLS) connection factory for the Embassy network stack.
 ///
-/// Unlike Tokio's `TokioFtpDataStreamFactory` (which dials a fresh `TcpStream` per call),
+/// Unlike Tokio's `TokioRawStreamFactory` (which dials a fresh `TcpStream` per call),
 /// `embassy_net::tcp::TcpSocket` needs pre-allocated rx/tx buffer slices at construction —
-/// there's no way to dial a raw connection without them. `FtpDataStreamFactory::create_data_stream`
-/// is called repeatedly from `&self` (once for FTPS's control channel, once per data-channel
-/// transfer — `list_directory`, `upload_file`, `download_file` each open and close their own),
-/// so a single buffer pair handed out once (Phase 2's `EmbassyTlsConnector` pattern) isn't
-/// enough here.
+/// there's no way to dial a raw connection without them. `RawStreamFactory::dial` is called
+/// repeatedly from `&self` (MQTT's lazy reconnect, and FTPS's control channel once plus one
+/// data-channel connect per transfer — `list_directory`, `upload_file`, `download_file` each
+/// open and close their own), so a single buffer pair handed out once (Phase 2's
+/// `EmbassyTlsConnector` pattern) isn't enough here.
 ///
 /// Instead of hand-rolling a buffer pool, this wraps `embassy_net::tcp::client::TcpClient` —
 /// embassy-net's own built-in connection pool (`embassy_net::tcp::client` module), which
@@ -279,10 +277,10 @@ where
 /// (a pool with `N` slots simply fails a `connect()` call with `Error::ConnectionReset` if
 /// all `N` are checked out, rather than panicking or aliasing memory).
 ///
-/// **Why `&'static TcpClient`, not an owned one:** `FtpDataStreamFactory<RawIO>`'s `RawIO`
+/// **Why `&'static TcpClient`, not an owned one:** `RawStreamFactory<RawIO>`'s `RawIO`
 /// is a fixed type for the whole trait impl, not parameterized per call — so the returned
 /// `TcpConnection<'x, ...>`'s lifetime `'x` must be a *constant*, chosen once, not tied to
-/// however long any individual `create_data_stream` call happens to borrow `&self` for.
+/// however long any individual `dial` call happens to borrow `&self` for.
 /// Storing an *owned* `TcpClient<'d, ...>` field can't satisfy that: borrowing a field out of
 /// `&self` can never outlive that particular call's borrow of `self`. Storing a `&'static`
 /// *reference* sidesteps the problem entirely — copying a `&'static` reference out from
@@ -293,7 +291,7 @@ where
 /// code, matching Phase 2's "caller supplies the buffer storage" philosophy — see the
 /// README's Embassy section for a worked example.
 #[cfg(feature = "embassy")]
-pub struct EmbassyFtpDataStreamFactory<
+pub struct EmbassyRawStreamFactory<
     const N: usize,
     const TX_SZ: usize = 2048,
     const RX_SZ: usize = 2048,
@@ -303,7 +301,7 @@ pub struct EmbassyFtpDataStreamFactory<
 
 #[cfg(feature = "embassy")]
 impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
-    EmbassyFtpDataStreamFactory<N, TX_SZ, RX_SZ>
+    EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>
 {
     /// `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held
     /// `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
@@ -316,10 +314,10 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
 
 #[cfg(feature = "embassy")]
 impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
-    FtpDataStreamFactory<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>>
-    for EmbassyFtpDataStreamFactory<N, TX_SZ, RX_SZ>
+    RawStreamFactory<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>>
+    for EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>
 {
-    async fn create_data_stream(
+    async fn dial(
         &self,
         host: &str,
         port: u16,

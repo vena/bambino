@@ -2,20 +2,22 @@
 use alloc::vec::Vec;
 
 use crate::error::BambuError;
-use crate::ftps::FtpDataStreamFactory;
-use crate::io::{AsyncIo, SecureConnect, TimerProvider, TlsConnector};
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::{PrintJobConfig, StandardControlRequest};
 
 use super::PrinterClient;
 use super::types::{CalibrationOption, PrintSpeed};
 
-impl<Conn, Timer, RawIO, Tls, Factory> PrinterClient<Conn, Timer, RawIO, Tls, Factory>
+impl<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
+    PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory>
 where
-    Conn: SecureConnect,
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
     Timer: TimerProvider,
-    RawIO: AsyncIo,
-    Tls: TlsConnector<RawIO>,
-    Factory: FtpDataStreamFactory<RawIO>,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
 {
     /// Pauses the currently active print job [REF-MQTT-LIFECYCLE].
     pub async fn pause_print(&mut self) -> Result<u16, BambuError> {

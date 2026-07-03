@@ -212,7 +212,7 @@ enum FrameReadState {
 }
 
 /// Outcome of [`race`] — which of the two raced futures completed first.
-enum Raced<A, B> {
+pub(crate) enum Raced<A, B> {
     Left(A),
     Right(B),
 }
@@ -225,7 +225,12 @@ enum Raced<A, B> {
 /// on tokio (host), ESP-IDF (std), and bare-metal Embassy (no_std) — no per-platform
 /// `#[cfg]` branching needed. If both futures happen to be ready on the same poll, `a`
 /// wins arbitrarily (checked first).
-async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
+///
+/// `pub(crate)` — reused by `PrinterClient::ensure_mqtt`/`ensure_ftps` (`src/client/mod.rs`)
+/// to race their two-step dial+connect sequences against a connect-timeout deadline
+/// (`PLAN.md` Phase 12, decision 6), the same combinator this module's own
+/// `read_chunk`/`read_exact_packet` per-read deadline is built on.
+pub(crate) async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
 where
     A: Future,
     B: Future,

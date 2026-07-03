@@ -10,7 +10,7 @@ use std::path::Path;
 
 use bambino::error::BambuError;
 use bambino::io::tokio::{
-    TokioFtpDataStreamFactory, TokioTlsConnector, build_unsafe_client_config_with_options,
+    TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config_with_options,
 };
 use clap::Subcommand;
 
@@ -98,7 +98,7 @@ pub async fn run(
         build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2());
     let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
-    let mut printer = printer.with_ftps(ftps_tls, TokioFtpDataStreamFactory);
+    let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory);
 
     println!(
         "Connecting to implicitly secure FTPS server at {}:990...",

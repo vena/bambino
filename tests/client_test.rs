@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bambino::client::{
-    CalibrationOption, DummySecureConnect, FanTarget, PrintSpeed, PrintStatus, PrinterClient,
+    CalibrationOption, DummyFactory, DummyTls, FanTarget, PrintSpeed, PrintStatus, PrinterClient,
 };
 use bambino::error::BambuError;
 use bambino::io::TokioIo;
@@ -1748,7 +1748,8 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     ));
 
     let mut client = PrinterClient::new(
-        DummySecureConnect,
+        DummyTls,
+        DummyFactory,
         "127.0.0.1",
         SERIAL,
         "12345678",
