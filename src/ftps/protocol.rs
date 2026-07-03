@@ -30,6 +30,10 @@ pub(crate) const FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD: u64 = 100_000_000;
 pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
 pub(crate) const FTP_MAX_RESPONSE_LINE_BYTES: usize = 4096;
 pub(crate) const FTP_MAX_RESPONSE_LINES: usize = 100;
+/// Size of each buffered socket read `read_line_raw` issues while scanning for `\n`. Control
+/// responses are short ASCII text, so this comfortably holds several lines per read while
+/// staying well under `FTP_MAX_RESPONSE_LINE_BYTES`.
+pub(crate) const FTP_LINE_READ_CHUNK_SIZE: usize = 512;
 
 /// Sends a formatted ASCII FTP command string cleanly terminated with CRLF boundaries.
 pub(crate) async fn write_command<IO: AsyncIo>(
@@ -55,30 +59,62 @@ pub(crate) async fn write_command<IO: AsyncIo>(
 
 /// Reads a line-by-line buffer stream incrementally up to the terminating LF character.
 ///
+/// Buffers socket reads into `fill_buf` and scans in memory for `\n`, only issuing another
+/// socket read once the buffered bytes are exhausted (review/ftps.md Phase 6 — replaces a
+/// previous byte-at-a-time `read_exact` loop, which cost one `AsyncIo::read_exact` call, and
+/// for TLS-wrapped streams one record-layer round trip, per byte).
+///
+/// **Leftover-byte carry-over (the correctness hinge for this function):** `fill_buf` holds
+/// bytes already pulled off the socket but not yet consumed into a returned line. FTP servers
+/// routinely flush multiple lines back-to-back without waiting for the client — both within
+/// one multi-line reply (e.g. `LIST`, `STAT`) and across logically separate replies to the
+/// same command (e.g. `150` immediately followed by `226`, since nothing requires the server
+/// to wait for the client to finish reading `150` first) — so a single socket read can
+/// legitimately contain more than one line's worth of bytes, from more than one reply. Any
+/// bytes past the first `\n` found in a given fill are left in `fill_buf` untouched rather
+/// than discarded — the *next* call to `read_line_raw` consumes them first, before issuing
+/// any further socket read. **Callers must pass the same `fill_buf` across every call against
+/// a given stream for the life of that stream, not just within one `read_response` call** —
+/// see `read_response`'s doc comment for a concrete failure this caused when that scoping was
+/// too narrow, and `BambuFtpsClient::control_fill_buf` for how the sole caller now satisfies
+/// this (a struct field threaded through every method, not a local per-response variable).
+///
 /// Enforces a maximum line length to prevent OOM from malformed server output.
 async fn read_line_raw<IO: AsyncIo>(
     stream: &mut IO,
     line_buf: &mut Vec<u8>,
+    fill_buf: &mut Vec<u8>,
 ) -> Result<(), BambuError> {
     line_buf.clear();
-    let mut byte = [0u8; 1];
     loop {
-        stream
-            .read_exact(&mut byte)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionReset))?;
-        let b = byte[0];
-        line_buf.push(b);
-        if b == b'\n' {
-            break;
+        if let Some(pos) = fill_buf.iter().position(|&b| b == b'\n') {
+            // Found a full line already sitting in the leftover buffer from a prior read —
+            // consume only up through the newline; anything after stays in `fill_buf` for the
+            // next call.
+            line_buf.extend(fill_buf.drain(..=pos));
+            return Ok(());
         }
+
+        // No newline buffered yet: everything currently in `fill_buf` belongs to this line.
+        line_buf.append(fill_buf);
+
         if line_buf.len() >= FTP_MAX_RESPONSE_LINE_BYTES {
             return Err(BambuError::ProtocolViolation(
                 "FTP response line exceeds maximum length".into(),
             ));
         }
+
+        let mut chunk = [0u8; FTP_LINE_READ_CHUNK_SIZE];
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionReset))?;
+        if n == 0 {
+            // EOF mid-line: the server closed the connection before terminating its response.
+            return Err(BambuError::NetworkError(SocketError::ConnectionReset));
+        }
+        fill_buf.extend_from_slice(&chunk[..n]);
     }
-    Ok(())
 }
 
 /// Parses multi-line and single-line command channel response arrays returned by FTP servers.
@@ -93,15 +129,30 @@ async fn read_line_raw<IO: AsyncIo>(
 ///   ```
 /// Accumulates all response text across lines so multi-line body content (e.g., from STAT)
 /// is preserved in the returned string.
+///
+/// `fill_buf` is `read_line_raw`'s leftover-byte carry buffer (see that function's doc
+/// comment). **Callers must pass the same `fill_buf` across every `read_response` call made
+/// against a given control-channel stream, for the life of that stream** — not just within
+/// one call. A single socket read can pull in bytes belonging to a *later*, logically
+/// separate response: FTP servers are not required to wait for the client to finish reading
+/// one reply before writing the next (e.g. a server may write `150 ...` and then, without any
+/// further input from the client, go on to write the eventual `226 ...` for the same command
+/// soon after) — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing when an
+/// earlier version of this function scoped `fill_buf` to a single call: the `150`/`226` pair
+/// for one `RETR` arrived in one control-channel read, and scoping the leftover buffer to one
+/// `read_response` call silently dropped the buffered `226` bytes, desyncing the next read.
+/// `BambuFtpsClient` (`src/ftps/client.rs`) holds its `fill_buf` as a field for exactly this
+/// reason, threading it through every method's `read_response` call.
 pub(crate) async fn read_response<IO: AsyncIo>(
     stream: &mut IO,
     line_buf: &mut Vec<u8>,
+    fill_buf: &mut Vec<u8>,
 ) -> Result<(u16, String), BambuError> {
     let mut accumulated = String::new();
     let mut lines_read: usize = 0;
 
     loop {
-        read_line_raw(stream, line_buf).await?;
+        read_line_raw(stream, line_buf, fill_buf).await?;
         lines_read += 1;
         if lines_read > FTP_MAX_RESPONSE_LINES {
             return Err(BambuError::ProtocolViolation(
@@ -256,6 +307,137 @@ mod tests {
         fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+    }
+
+    /// Returns one queued chunk per `poll_read` call — lets a test control exactly how many
+    /// bytes a single underlying socket read returns, to exercise `read_line_raw`'s buffered
+    /// leftover-carry behavior (review/ftps.md Phase 6) deterministically. Once the queue is
+    /// drained, further reads report EOF (0 bytes), which is fine since these tests only ever
+    /// issue as many reads as chunks provided.
+    #[derive(Clone, Default)]
+    struct ChunkedReader(Arc<Mutex<std::collections::VecDeque<Vec<u8>>>>);
+
+    impl ChunkedReader {
+        fn with_chunks(chunks: &[&[u8]]) -> Self {
+            let queue = chunks.iter().map(|c| c.to_vec()).collect();
+            Self(Arc::new(Mutex::new(queue)))
+        }
+    }
+
+    impl tokio::io::AsyncRead for ChunkedReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            if let Some(chunk) = self.0.lock().unwrap().pop_front() {
+                buf.put_slice(&chunk);
+            }
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl tokio::io::AsyncWrite for ChunkedReader {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_line_raw_carries_leftover_bytes_across_calls() {
+        // Regression test (review/ftps.md Phase 6): a single socket read delivering two full
+        // FTP response lines back-to-back must not lose the second line. The first call to
+        // `read_line_raw` must return only the first line; the second call must return the
+        // second line using the bytes already buffered from the first read, without issuing
+        // any further socket read (the mock's queue only has one chunk).
+        let reader = ChunkedReader::with_chunks(&[
+            b"150 Opening data connection\r\n226 Transfer complete\r\n",
+        ]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf)
+            .await
+            .expect("first line");
+        assert_eq!(line_buf, b"150 Opening data connection\r\n");
+
+        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf)
+            .await
+            .expect("second line");
+        assert_eq!(line_buf, b"226 Transfer complete\r\n");
+    }
+
+    #[tokio::test]
+    async fn test_read_line_raw_assembles_line_split_across_reads() {
+        // A line with no '\n' in the first socket read (partial line) must still be assembled
+        // correctly once the rest arrives in a second read.
+        let reader = ChunkedReader::with_chunks(&[b"220 Wel", b"come\r\n"]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf)
+            .await
+            .expect("assembled line");
+        assert_eq!(line_buf, b"220 Welcome\r\n");
+    }
+
+    #[tokio::test]
+    async fn test_read_response_multiline_in_single_socket_read() {
+        // End-to-end through `read_response`: a multi-line response (code-prefixed
+        // continuation lines, per this parser's supported format) delivered in a *single*
+        // socket read must still parse into the correct accumulated text across all three
+        // lines — exercising the leftover-carry path via the public entry point rather than
+        // calling `read_line_raw` directly.
+        let reader = ChunkedReader::with_chunks(&[
+            b"213-First line\r\n213-Second line\r\n213 Final line\r\n",
+        ]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf)
+            .await
+            .expect("multi-line response");
+        assert_eq!(code, 213);
+        assert_eq!(text, "First line\nSecond line\nFinal line");
+    }
+
+    #[tokio::test]
+    async fn test_read_response_leftover_bytes_carry_to_next_call() {
+        // Regression test for the bug this design change fixes: FTP servers may write two
+        // logically separate replies to the same command (e.g. `150` then `226`) without
+        // waiting for the client to finish reading the first — both can land in one socket
+        // read. `fill_buf` must be threaded across *both* `read_response` calls (as
+        // `BambuFtpsClient` does via its `control_fill_buf` field) so the second call sees the
+        // already-buffered `226` line instead of blocking on a socket read that never comes.
+        let reader = ChunkedReader::with_chunks(&[
+            b"150 Opening data connection.\r\n226 Transfer complete.\r\n",
+        ]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        let (code, _) = read_response(&mut stream, &mut line_buf, &mut fill_buf)
+            .await
+            .expect("first reply");
+        assert_eq!(code, 150);
+
+        let (code, _) = read_response(&mut stream, &mut line_buf, &mut fill_buf)
+            .await
+            .expect("second reply, from carried-over leftover bytes only");
+        assert_eq!(code, 226);
     }
 
     #[tokio::test]
