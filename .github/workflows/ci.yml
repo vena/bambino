@@ -1,0 +1,19 @@
+name: CI
+
+# Dormant until this repo has a GitHub remote to push to — kept in the tree
+# ahead of that so the gate exists the moment it's needed. See make check-fast.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: make check-fast

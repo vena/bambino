@@ -1,0 +1,34 @@
+name: ESP-IDF check
+
+# Dormant until this repo has a GitHub remote to push to.
+#
+# Path-filtered rather than run on every push: scripts/check-esp-idf.sh only
+# needs to run when esp-idf-gated code actually changes (CLAUDE.md's existing
+# manual-run rule). Note this job pays the full ~5.5min cold cost on every
+# run, not just the first — GitHub-hosted runners are ephemeral VMs, so the
+# named Docker volumes the script uses for caching (cargo registry, rustup,
+# target/) don't persist between separate workflow runs the way they do on a
+# long-lived dev machine. Making repeat runs fast here would mean teaching
+# the script to cache into a host bind-mount instead of/alongside named
+# volumes so actions/cache has something to save — not done speculatively;
+# revisit if this job's cadence and the 5.5min cost start to actually hurt.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/io/esp_idf.rs"
+      - "scripts/check-esp-idf.sh"
+      - "Cargo.toml"
+  pull_request:
+    paths:
+      - "src/io/esp_idf.rs"
+      - "scripts/check-esp-idf.sh"
+      - "Cargo.toml"
+
+jobs:
+  check-esp-idf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check-esp-idf
