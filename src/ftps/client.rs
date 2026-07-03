@@ -56,6 +56,17 @@ where
     /// Set once a control-channel desync is possible (see struct doc comment). Checked by every
     /// public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
+    /// `read_line_raw`'s leftover-byte carry buffer (review/ftps.md Phase 6), threaded through
+    /// every `read_response` call made against `control_stream` for the life of this client —
+    /// not reset per method call. This must live at least as long as `control_stream` itself:
+    /// FTP servers may write two logically separate replies to one command (e.g. `150`
+    /// immediately followed by `226`) without waiting for the client to finish reading the
+    /// first, so a single socket read can contain bytes belonging to a reply a *later* method
+    /// call is expecting. Scoping this buffer to a single `read_response` call instead (an
+    /// earlier version of this fix did) silently dropped those bytes and desynced the next
+    /// read — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing with a
+    /// spurious `ConnectionReset` when scoped too narrowly.
+    control_fill_buf: Vec<u8>,
 }
 
 impl<RawIO, Tls, Factory> BambuFtpsClient<RawIO, Tls, Factory>
@@ -85,8 +96,11 @@ where
         Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model)?;
 
         let mut buf = Vec::new();
+        // Persists across every read_response call in this login sequence, and is carried
+        // forward into `Self` below — see `control_fill_buf`'s doc comment on the struct.
+        let mut fill_buf = Vec::new();
 
-        let (code, _) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, _) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
         if code != FTP_GREETING {
             return Err(BambuError::ProtocolViolation(
                 "Unexpected greeting from FTP server".into(),
@@ -94,7 +108,7 @@ where
         }
 
         write_command(&mut control_stream, "USER bblp").await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
         log::debug!("FTPS USER response: code={code} text={text:?}");
         if code != FTP_PASSWORD_NEEDED {
             return Err(BambuError::ProtocolViolation(
@@ -104,7 +118,7 @@ where
 
         let pass_cmd = format!("PASS {}", access_code);
         write_command(&mut control_stream, &pass_cmd).await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
         log::debug!("FTPS PASS response: code={code} text={text:?}");
 
         if code != FTP_LOGIN_OK {
@@ -112,7 +126,7 @@ where
         }
 
         write_command(&mut control_stream, "PBSZ 0").await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
         log::debug!("FTPS PBSZ response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
@@ -123,7 +137,7 @@ where
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !model.quirks().uses_plaintext_ftps_data_channel() {
             write_command(&mut control_stream, "PROT P").await?;
-            let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+            let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
             log::debug!("FTPS PROT P response: code={code} text={text:?}");
             if code != FTP_COMMAND_OK {
                 return Err(BambuError::ProtocolViolation(
@@ -134,7 +148,7 @@ where
 
         // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
         write_command(&mut control_stream, "TYPE I").await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf).await?;
+        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
         log::debug!("FTPS TYPE I response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
@@ -149,6 +163,7 @@ where
             model,
             ip: String::from(ip),
             poisoned: false,
+            control_fill_buf: fill_buf,
         })
     }
 
@@ -212,7 +227,12 @@ where
         write_command(&mut self.control_stream, &list_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut ctrl_buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "LIST transfer initialization failed".into(),
@@ -259,7 +279,13 @@ where
             drop(plain_data_socket);
         }
 
-        let (code, _) = match read_response(&mut self.control_stream, &mut ctrl_buf).await {
+        let (code, _) = match read_response(
+            &mut self.control_stream,
+            &mut ctrl_buf,
+            &mut self.control_fill_buf,
+        )
+        .await
+        {
             Ok(v) => v,
             Err(e) => {
                 self.poisoned = true;
@@ -295,7 +321,12 @@ where
         write_command(&mut self.control_stream, &size_cmd).await?;
 
         let mut buf = Vec::new();
-        let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, text) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_SIZE_OK {
             return Err(BambuError::ProtocolViolation(
                 "SIZE query rejected by storage server".into(),
@@ -316,7 +347,12 @@ where
         write_command(&mut self.control_stream, &dele_cmd).await?;
 
         let mut buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
 
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
@@ -347,7 +383,12 @@ where
         write_command(&mut self.control_stream, &stor_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut ctrl_buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "STOR upload negotiation rejected".into(),
@@ -419,7 +460,12 @@ where
             drop(plain_data_socket);
         }
 
-        let res = read_response(&mut self.control_stream, &mut ctrl_buf).await;
+        let res = read_response(
+            &mut self.control_stream,
+            &mut ctrl_buf,
+            &mut self.control_fill_buf,
+        )
+        .await;
         match res {
             Ok((FTP_TRANSFER_COMPLETE, _)) | Ok((FTP_TRANSFER_ABORTED, _)) => {
                 let remote_size = self.get_file_size(remote_path).await?;
@@ -451,7 +497,12 @@ where
         write_command(&mut self.control_stream, &retr_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut ctrl_buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut ctrl_buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer initialization failed".into(),
@@ -498,7 +549,13 @@ where
             drop(plain_data_socket);
         }
 
-        let (code, _) = match read_response(&mut self.control_stream, &mut ctrl_buf).await {
+        let (code, _) = match read_response(
+            &mut self.control_stream,
+            &mut ctrl_buf,
+            &mut self.control_fill_buf,
+        )
+        .await
+        {
             Ok(v) => v,
             Err(e) => {
                 self.poisoned = true;
@@ -523,7 +580,12 @@ where
         write_command(&mut self.control_stream, &mkd_cmd).await?;
 
         let mut buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_PATHNAME_CREATED {
             return Err(BambuError::ProtocolViolation(
                 "MKD directory creation failed".into(),
@@ -544,7 +606,12 @@ where
         write_command(&mut self.control_stream, &rmd_cmd).await?;
 
         let mut buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
@@ -567,7 +634,12 @@ where
         write_command(&mut self.control_stream, &rnfr_cmd).await?;
 
         let mut buf = Vec::new();
-        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_RENAME_PENDING {
             return Err(BambuError::ProtocolViolation(
                 "RNFR rename source path rejected".into(),
@@ -577,7 +649,12 @@ where
         let rnto_cmd = format!("RNTO {}", to);
         write_command(&mut self.control_stream, &rnto_cmd).await?;
 
-        let (code, _) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, _) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_FILE_ACTION_OK {
             return Err(BambuError::ProtocolViolation(
                 "RNTO rename destination path rejected".into(),
@@ -598,7 +675,12 @@ where
 
         write_command(&mut self.control_stream, "STAT").await?;
         let mut buf = Vec::new();
-        read_response(&mut self.control_stream, &mut buf).await
+        read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await
     }
 
     /// Queries the available capacity of the MicroSD card, in bytes.
@@ -608,7 +690,12 @@ where
         write_command(&mut self.control_stream, "AVBL").await?;
 
         let mut buf = Vec::new();
-        let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, text) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
 
         if code == FTP_SIZE_OK {
             text.parse::<u64>().map_err(|_| {
@@ -616,7 +703,12 @@ where
             })
         } else {
             write_command(&mut self.control_stream, "STAT").await?;
-            let (code, stat_text) = read_response(&mut self.control_stream, &mut buf).await?;
+            let (code, stat_text) = read_response(
+                &mut self.control_stream,
+                &mut buf,
+                &mut self.control_fill_buf,
+            )
+            .await?;
             if code == FTP_STAT_OK {
                 let mut size_found = None;
                 // UNVERIFIED HEURISTIC (review/ftps.md Phase 5): vsFTPd's STAT output isn't a
@@ -653,7 +745,12 @@ where
         write_command(&mut self.control_stream, "PASV").await?;
 
         let mut buf = Vec::new();
-        let (code, text) = read_response(&mut self.control_stream, &mut buf).await?;
+        let (code, text) = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await?;
         if code != FTP_PASSIVE_MODE {
             return Err(BambuError::ProtocolViolation(
                 "PASV port negotiation rejected".into(),
@@ -681,7 +778,12 @@ where
         }
         let _ = write_command(&mut self.control_stream, "QUIT").await;
         let mut buf = Vec::new();
-        let _ = read_response(&mut self.control_stream, &mut buf).await;
+        let _ = read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+        )
+        .await;
         self.poisoned = true;
     }
 }
