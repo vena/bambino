@@ -194,6 +194,14 @@ where
         }
     }
 
+    if engines.len() < ports.len() {
+        log::warn!(
+            "SSDP discovery running in degraded mode: only {} of {} ports bound",
+            engines.len(),
+            ports.len()
+        );
+    }
+
     for i in 0..2 {
         log::debug!("Initializing active query scan block #{}", i + 1);
         for (engine, _) in &engines {
@@ -488,5 +496,48 @@ mod tests {
             elapsed.as_millis() >= 200,
             "discovery should run for approximately the timeout duration"
         );
+    }
+
+    #[tokio::test]
+    async fn test_discover_devices_succeeds_in_degraded_mode_when_one_port_fails_to_bind() {
+        use crate::io::tokio::TokioTimer;
+
+        // review/discovery.md Phase 9: if only one of SSDP_PORT/SSDP_PORT_ALT can be bound
+        // (e.g. another process already holds it), discovery must still proceed on the one
+        // bound port rather than failing outright — only both ports failing is fatal.
+        struct SinglePortBindFailSocket;
+
+        impl BindableUdpSocket for SinglePortBindFailSocket {
+            async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
+                if addr.port() == SSDP_PORT_ALT {
+                    Err(SocketError::AddressInUse)
+                } else {
+                    Ok(Self)
+                }
+            }
+        }
+
+        impl AsyncUdpSocket for SinglePortBindFailSocket {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
+                Ok(100)
+            }
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
+                Err(SocketError::TimedOut)
+            }
+        }
+
+        let timer = TokioTimer::new();
+        let devices = discover_devices::<SinglePortBindFailSocket, TokioTimer>(
+            core::time::Duration::from_millis(100),
+            &timer,
+        )
+        .await
+        .expect("discovery should succeed in degraded single-port mode");
+
+        assert!(devices.is_empty());
     }
 }
