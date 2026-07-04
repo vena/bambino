@@ -17,6 +17,8 @@
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
+#[cfg(feature = "tokio")]
+pub use tokio::{TokioIo, TokioIoError};
 
 #[cfg(feature = "esp-idf")]
 pub mod esp_idf;
@@ -323,81 +325,5 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
             Err(SocketError::ConnectionReset)
         }
         Raced::Right(_) => Err(SocketError::TimedOut),
-    }
-}
-
-/// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation
-/// to satisfy `embedded-io-async` bounds.
-#[cfg(feature = "tokio")]
-pub struct TokioIo<T>(pub T);
-
-/// Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
-#[cfg(feature = "tokio")]
-#[derive(Debug)]
-pub struct TokioIoError(pub std::io::Error);
-
-// In embedded-io version 0.7+, the `embedded_io::Error` trait has a supertrait bound on `core::error::Error`.
-// Therefore, we must implement both `core::fmt::Display` and `std::error::Error` for `TokioIoError`.
-
-#[cfg(feature = "tokio")]
-impl core::fmt::Display for TokioIoError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Tokio IO Error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "tokio")]
-impl std::error::Error for TokioIoError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-#[cfg(feature = "tokio")]
-impl embedded_io_async::Error for TokioIoError {
-    fn kind(&self) -> embedded_io_async::ErrorKind {
-        match self.0.kind() {
-            std::io::ErrorKind::ConnectionRefused => {
-                embedded_io_async::ErrorKind::ConnectionRefused
-            }
-            std::io::ErrorKind::ConnectionAborted => {
-                embedded_io_async::ErrorKind::ConnectionAborted
-            }
-            std::io::ErrorKind::ConnectionReset => embedded_io_async::ErrorKind::ConnectionReset,
-            std::io::ErrorKind::NotConnected => embedded_io_async::ErrorKind::NotConnected,
-            std::io::ErrorKind::TimedOut => embedded_io_async::ErrorKind::TimedOut,
-            std::io::ErrorKind::AddrInUse => embedded_io_async::ErrorKind::AddrInUse,
-            std::io::ErrorKind::AddrNotAvailable => embedded_io_async::ErrorKind::AddrNotAvailable,
-            _ => embedded_io_async::ErrorKind::Other,
-        }
-    }
-}
-
-/// Implement ErrorType for TokioIo as specified by the embedded-io-async 0.7 spec.
-///
-/// This separates error declaration from read/write trait implementations.
-#[cfg(feature = "tokio")]
-impl<T> embedded_io_async::ErrorType for TokioIo<T> {
-    type Error = TokioIoError;
-}
-
-#[cfg(feature = "tokio")]
-impl<T: ::tokio::io::AsyncRead + Unpin> embedded_io_async::Read for TokioIo<T> {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        use ::tokio::io::AsyncReadExt;
-        self.0.read(buf).await.map_err(TokioIoError)
-    }
-}
-
-#[cfg(feature = "tokio")]
-impl<T: ::tokio::io::AsyncWrite + Unpin> embedded_io_async::Write for TokioIo<T> {
-    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        use ::tokio::io::AsyncWriteExt;
-        self.0.write(buf).await.map_err(TokioIoError)
-    }
-
-    async fn flush(&mut self) -> Result<(), Self::Error> {
-        use ::tokio::io::AsyncWriteExt;
-        self.0.flush().await.map_err(TokioIoError)
     }
 }

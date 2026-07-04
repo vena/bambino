@@ -369,7 +369,7 @@ fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
 }
 
 /// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring
-/// `TokioIoError` (`io/mod.rs`) — needed because `embedded-io-async` has no blanket impl
+/// `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl
 /// for `std::io::Error` itself, only for types that opt in explicitly.
 #[cfg(feature = "esp-idf")]
 #[derive(Debug)]
