@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn test_ams_mapping_all_external_spool_overrides_use_ams_false_single_nozzle() {
-        // review/ams.md Phase 3 [REF-AMS-USEAMS]: on single-nozzle printers, dispatching
+        // reference/05_materials_ams.md [REF-AMS-USEAMS]: on single-nozzle printers, dispatching
         // `use_ams: true` when every mapped filament is actually on the external spool
         // (no real physical AMS channel) makes real firmware reject the job with
         // `07FF_8012`. `from_config` must override `use_ams` to `false` in that case.

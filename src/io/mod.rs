@@ -246,11 +246,10 @@ pub(crate) enum Raced<A, B> {
 /// `#[cfg]` branching needed. If both futures happen to be ready on the same poll, `a`
 /// wins arbitrarily (checked first).
 ///
-/// `pub(crate)` — reused by `PrinterClient::ensure_mqtt`/`ensure_ftps` (`src/client/mod.rs`)
-/// to race their two-step dial+connect sequences against a connect-timeout deadline
-/// (`PLAN.md` Phase 12, decision 6), and by `BambuBinaryCameraStream::read_next_frame_with_timer`
-/// (`src/camera/binary.rs`, `PLAN.md` Phase 13) for the same per-read deadline purpose
-/// `mqtt::client`'s own `read_chunk`/`read_exact_packet` is built on.
+/// `pub(crate)` — reused by `PrinterClient::ensure_mqtt`/`ensure_ftps` (`src/client/mod.rs`) to
+/// race their two-step dial+connect sequences against a connect-timeout deadline, and by
+/// `BambuBinaryCameraStream::read_next_frame_with_timer` (`src/camera/binary.rs`) for the same
+/// per-read deadline purpose `mqtt::client`'s own `read_chunk`/`read_exact_packet` is built on.
 pub(crate) async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
 where
     A: Future,

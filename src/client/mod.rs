@@ -52,8 +52,8 @@ pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
 /// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined
-/// dial+connect sequence (`PLAN.md` Phase 12, decision 6) — matches ESP-IDF's pre-existing
-/// `DEFAULT_CONNECT_TIMEOUT` (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
+/// dial+connect sequence — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT`
+/// (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
 pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// High-level client for controlling a Bambu Lab printer.

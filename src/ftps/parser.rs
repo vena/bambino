@@ -118,9 +118,9 @@ pub fn parse_unix_listing(
         }
         let name = name_tokens.join(" ");
 
-        // Defense in depth (review/ftps.md Phase 4): reject filenames containing the same
-        // command-injection-capable control characters `validate_ftp_path` rejects on the way
-        // out. A caller might round-trip a name returned here into another FTP command
+        // Defense in depth: reject filenames containing the same command-injection-capable
+        // control characters `validate_ftp_path` rejects on the way out. A caller might
+        // round-trip a name returned here into another FTP command
         // (`delete_file`/`rename_file`/`download_file`) — this client can't control what
         // characters the printer's own filesystem (or a MITM'd `LIST` response) contains, so
         // skip any entry that couldn't be safely reused as a path argument.

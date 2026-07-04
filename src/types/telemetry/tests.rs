@@ -517,9 +517,9 @@ fn test_deserialize_permissive_bool_variants() {
 
 #[test]
 fn test_deserialize_permissive_bool_malformed_shape_is_error() {
-    // review/types.md Phase 6: a malformed `sdcard` value (an object, not a
-    // bool/int/string) must be a hard parse error, not silently coerced to `false` —
-    // that would be indistinguishable from a legitimately absent/false field.
+    // A malformed `sdcard` value (an object, not a bool/int/string) must be a hard parse error,
+    // not silently coerced to `false` — that would be indistinguishable from a legitimately
+    // absent/false field.
     let result: Result<TelemetryReport, _> =
         serde_json::from_str(r#"{ "print": { "sdcard": {} } }"#);
     assert!(

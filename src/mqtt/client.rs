@@ -388,11 +388,11 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // Read CONNACK packet. `DummyTimer` (`has_real_clock() == false`) makes
         // `read_exact_packet` fall back to a plain unbounded read here — identical to
         // this crate's pre-existing connect-time behavior. Deliberately not wired to
-        // `PrinterClient`'s configurable `Timer`: `connect()` runs before a
-        // `BambuMqttClient` (and thus a persistent `FrameReadState`) exists, and the
-        // connect-phase handshake is `io.md` Phase 1 / IO-Agent's territory (TCP+TLS
-        // dial timeout), not this fix's target (a stall on an already-established
-        // connection, mid-`poll_wire()`).
+        // `PrinterClient`'s configurable `Timer`: `connect()` runs before a `BambuMqttClient`
+        // (and thus a persistent `FrameReadState`) exists, and the connect-phase handshake
+        // (TCP+TLS dial timeout, `PrinterClient::connect_timeout_secs`) is a separate concern
+        // from this fix's target (a stall on an already-established connection,
+        // mid-`poll_wire()`).
         let mut read_state = FrameReadState::default();
 
         log::debug!("Awaiting broker CONNACK response packet");
@@ -1022,13 +1022,12 @@ mod tests {
             }
         }
 
-        /// Regression test for mqtt.md Phase 1: a caller that keeps issuing request-response
-        /// calls whose responses never arrive (firmware bug, wrong echoed sequence_id, or a
-        /// malicious/compromised device on the LAN) must not be able to grow
-        /// `pending_messages` without bound — unacceptable on ESP-IDF/Embassy targets where
-        /// RAM is measured in KB. Pushes 320 never-matching messages (well past the review's
-        /// "300+" bar) and asserts the buffer stays within `MQTT_PENDING_BUFFER_MAX_BYTES`
-        /// with the oldest entries evicted first (FIFO).
+        /// Regression test: a caller that keeps issuing request-response calls whose responses
+        /// never arrive (firmware bug, wrong echoed sequence_id, or a malicious/compromised
+        /// device on the LAN) must not be able to grow `pending_messages` without bound —
+        /// unacceptable on ESP-IDF/Embassy targets where RAM is measured in KB. Pushes 320
+        /// never-matching messages (well past a generous margin) and asserts the buffer stays
+        /// within `MQTT_PENDING_BUFFER_MAX_BYTES` with the oldest entries evicted first (FIFO).
         #[test]
         fn test_push_pending_evicts_oldest_beyond_max_bytes() {
             let mut client = test_client();
@@ -1142,7 +1141,7 @@ mod tests {
             assert_eq!(client.pending_bytes, bytes_before);
         }
 
-        /// Regression test for client.md Phase 4: a connection that stalls with zero
+        /// Regression test: a connection that stalls with zero
         /// incoming bytes must not hang `read_exact_packet`/`poll_wire` forever. Uses a
         /// `tokio::io::duplex` whose server side never writes anything, so the client's
         /// low-level `read()` call is genuinely pending (not merely slow) — exactly the
@@ -1189,7 +1188,7 @@ mod tests {
             );
         }
 
-        /// Regression test for client.md Phase 4's correctness hinge: bytes already read
+        /// Regression test for the correctness hinge above: bytes already read
         /// into a partial-packet buffer before a timeout must never be lost. Simulates a
         /// connection that delivers *part* of a frame, stalls long enough to time out,
         /// then delivers the rest — and asserts the second `read_exact_packet` call

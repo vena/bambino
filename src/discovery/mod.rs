@@ -502,9 +502,9 @@ mod tests {
     async fn test_discover_devices_succeeds_in_degraded_mode_when_one_port_fails_to_bind() {
         use crate::io::tokio::TokioTimer;
 
-        // review/discovery.md Phase 9: if only one of SSDP_PORT/SSDP_PORT_ALT can be bound
-        // (e.g. another process already holds it), discovery must still proceed on the one
-        // bound port rather than failing outright — only both ports failing is fatal.
+        // If only one of SSDP_PORT/SSDP_PORT_ALT can be bound (e.g. another process already
+        // holds it), discovery must still proceed on the one bound port rather than failing
+        // outright — only both ports failing is fatal.
         struct SinglePortBindFailSocket;
 
         impl BindableUdpSocket for SinglePortBindFailSocket {

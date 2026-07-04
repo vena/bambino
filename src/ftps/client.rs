@@ -46,8 +46,8 @@ where
     /// Set once a control-channel desync is possible (see struct doc comment). Checked by every
     /// public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
-    /// `read_line_raw`'s leftover-byte carry buffer (review/ftps.md Phase 6), threaded through
-    /// every `read_response` call made against `control_stream` for the life of this client —
+    /// `read_line_raw`'s leftover-byte carry buffer, threaded through every `read_response`
+    /// call made against `control_stream` for the life of this client —
     /// not reset per method call. This must live at least as long as `control_stream` itself:
     /// FTP servers may write two logically separate replies to one command (e.g. `150`
     /// immediately followed by `226`) without waiting for the client to finish reading the
@@ -173,10 +173,9 @@ where
 
     /// Fail-closed TLS-1.2 guard, shared by the control-channel check in `connect()` and the
     /// per-data-channel re-check in `list_directory`/`upload_file`/`download_file` (defense in
-    /// depth — see `review/ftps.md` Phase 3: session resumption is expected to carry the
-    /// control channel's negotiated version onto each data channel, but this isn't verified by
-    /// this code, so the guard is re-run per connection rather than assumed to hold
-    /// transitively).
+    /// depth: session resumption is expected to carry the control channel's negotiated version
+    /// onto each data channel, but this isn't verified by this code, so the guard is re-run per
+    /// connection rather than assumed to hold transitively).
     fn require_tls_1_2_if_enforced(
         tls_connector: &Tls,
         stream: &Tls::Stream,
@@ -689,13 +688,13 @@ where
 
     /// Sends a QUIT command and cleanly terminates the FTP session.
     ///
-    /// Best-effort: errors during QUIT are silently ignored since the
-    /// connection is being torn down regardless. Non-consuming (`&mut self`, not `self`) by
-    /// design (review/ftps.md Phase 7): `PrinterClient::storage()` only exposes
-    /// `&mut BambuFtpsClient`, and direct-module consumers may want to disconnect and
-    /// reconnect the same variable via a fresh `connect()` call without re-declaring it.
+    /// Best-effort: errors during QUIT are silently ignored since the connection is being torn
+    /// down regardless. Non-consuming (`&mut self`, not `self`) by design:
+    /// `PrinterClient::storage()` only exposes `&mut BambuFtpsClient`, and direct-module
+    /// consumers may want to disconnect and reconnect the same variable via a fresh `connect()`
+    /// call without re-declaring it.
     ///
-    /// Always poisons the client on the way out (extends the Phase 2 mechanism — see the
+    /// Always poisons the client on the way out (extends the poisoning mechanism — see the
     /// struct doc comment) so every subsequent method call on this instance fails cleanly with
     /// the same "must reconnect" error, instead of a caller mistaking a disconnected client for
     /// a live one. Idempotent: calling this more than once is a no-op after the first call.

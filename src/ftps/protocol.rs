@@ -57,9 +57,9 @@ pub(crate) async fn write_command<IO: AsyncIo>(
 /// Reads a line-by-line buffer stream incrementally up to the terminating LF character.
 ///
 /// Buffers socket reads into `fill_buf` and scans in memory for `\n`, only issuing another
-/// socket read once the buffered bytes are exhausted (review/ftps.md Phase 6 — replaces a
-/// previous byte-at-a-time `read_exact` loop, which cost one `AsyncIo::read_exact` call, and
-/// for TLS-wrapped streams one record-layer round trip, per byte).
+/// socket read once the buffered bytes are exhausted (replaces a previous byte-at-a-time
+/// `read_exact` loop, which cost one `AsyncIo::read_exact` call, and for TLS-wrapped streams
+/// one record-layer round trip, per byte).
 ///
 /// **Leftover-byte carry-over (the correctness hinge for this function):** `fill_buf` holds
 /// bytes already pulled off the socket but not yet consumed into a returned line. FTP servers
@@ -242,9 +242,10 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
 /// Every path-taking method on `BambuFtpsClient` sends `format!("CMD {}", path)` followed by a
 /// single trailing CRLF (`write_command`). If `path` itself contains `\r` or `\n`, the bytes
 /// written to the control channel contain an embedded line break that the FTP server parses as a
-/// *second*, caller/attacker-controlled command — invisible to whoever called the original
-/// method (review/ftps.md Phase 4). Also rejects NUL (`\0`), which some FTP daemons treat as a
-/// string terminator, for the same class of confusion.
+/// written to the control channel contain an embedded line break that the FTP server parses as
+/// a *second*, caller/attacker-controlled command — invisible to whoever called the original
+/// method. Also rejects NUL (`\0`), which some FTP daemons treat as a string terminator, for
+/// the same class of confusion.
 pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
     if path.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
         return Err(BambuError::ProtocolViolation(
@@ -312,9 +313,9 @@ mod tests {
 
     /// Returns one queued chunk per `poll_read` call — lets a test control exactly how many
     /// bytes a single underlying socket read returns, to exercise `read_line_raw`'s buffered
-    /// leftover-carry behavior (review/ftps.md Phase 6) deterministically. Once the queue is
-    /// drained, further reads report EOF (0 bytes), which is fine since these tests only ever
-    /// issue as many reads as chunks provided.
+    /// leftover-carry behavior deterministically. Once the queue is drained, further reads
+    /// report EOF (0 bytes), which is fine since these tests only ever issue as many reads as
+    /// chunks provided.
     #[derive(Clone, Default)]
     struct ChunkedReader(Arc<Mutex<std::collections::VecDeque<Vec<u8>>>>);
 
@@ -356,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_line_raw_carries_leftover_bytes_across_calls() {
-        // Regression test (review/ftps.md Phase 6): a single socket read delivering two full
+        // Regression test: a single socket read delivering two full
         // FTP response lines back-to-back must not lose the second line. The first call to
         // `read_line_raw` must return only the first line; the second call must return the
         // second line using the bytes already buffered from the first read, without issuing

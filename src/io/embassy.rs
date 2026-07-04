@@ -154,7 +154,7 @@ impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_as
 /// inside `embedded-tls`'s handshake await, which this crate doesn't control. Callers that
 /// need a bounded connect must race `EmbassyTlsConnector::connect` against
 /// `embassy_time::with_timeout` themselves — `embassy-time` (already a dependency of the
-/// `embassy` feature) provides exactly that combinator. See `review/io.md` Phase 1.
+/// `embassy` feature) provides exactly that combinator.
 #[cfg(feature = "embassy")]
 pub struct EmbassyTlsConnector<'a, CipherSuite, Rng>
 where

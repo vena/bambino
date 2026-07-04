@@ -206,11 +206,11 @@ fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError 
     SocketError::Other(std::format!("ESP-IDF TLS handshake failed: {err}").into())
 }
 
-/// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields
-/// and `new()`/`with_certs()` constructors. Factored out (originally shared with the now-
-/// deleted `EspIdfSecureConnector` — `SecureConnect` was removed crate-wide in favor of
-/// `TlsConnector`+`RawStreamFactory`, `PLAN.md` Phase 12) so a future cert-related option
-/// (e.g. ALPN config) only needs to be added in one place.
+/// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields and
+/// `new()`/`with_certs()` constructors. Factored out (originally shared with the now-deleted
+/// `EspIdfSecureConnector` — `SecureConnect` was removed crate-wide in favor of
+/// `TlsConnector`+`RawStreamFactory`) so a future cert-related option (e.g. ALPN config) only
+/// needs to be added in one place.
 #[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
     ca_cert: Option<Vec<u8>>,
