@@ -189,7 +189,7 @@ where
             let s_upper = s.to_uppercase();
             Ok(s_upper == "HAS_SDCARD_NORMAL" || s_upper == "TRUE" || s_upper == "1")
         }
-        Err(_) => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
