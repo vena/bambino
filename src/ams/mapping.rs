@@ -169,6 +169,15 @@ pub fn validate_external_spool_safety(
     has_physical_ams
 }
 
+/// Flat-array equivalent of `validate_external_spool_safety`, for callers using
+/// `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
+pub fn validate_external_spool_safety_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool {
+    if !is_single_nozzle {
+        return true;
+    }
+    ams_mapping.iter().any(|&v| v >= 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,6 +299,21 @@ mod tests {
             slot_id: 0,
         }];
         assert!(validate_external_spool_safety(false, &mapping_all_external));
+    }
+
+    #[test]
+    fn test_validate_external_spool_safety_flat_single_nozzle() {
+        // All slots unmapped/external (`-1` sentinel) -> use_ams must override to false
+        assert!(!validate_external_spool_safety_flat(true, &[-1, -1]));
+
+        // At least one real physical AMS channel -> use_ams stays true
+        assert!(validate_external_spool_safety_flat(true, &[0, -1, 1]));
+    }
+
+    #[test]
+    fn test_validate_external_spool_safety_flat_dual_nozzle_bypasses() {
+        // Dual-nozzle always returns true regardless of mapping contents
+        assert!(validate_external_spool_safety_flat(false, &[-1, -1]));
     }
 
     #[test]

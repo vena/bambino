@@ -9,6 +9,8 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
+use crate::ams::mapping::AmsMapping2Entry;
+use crate::ams::{validate_external_spool_safety, validate_external_spool_safety_flat};
 use crate::models::BambuModel;
 
 use super::clamp_task_id;
@@ -33,7 +35,7 @@ pub struct PrintJobConfig {
     pub nozzle_offset_cali: Option<bool>,
     pub use_ams: bool,
     pub ams_mapping: Vec<i32>,
-    pub ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
+    pub ams_mapping2: Option<Vec<AmsMapping2Entry>>,
 }
 
 impl PrintJobConfig {
@@ -68,7 +70,7 @@ impl PrintJobConfig {
         self
     }
 
-    pub fn with_ams_mapping2(mut self, mapping2: Vec<ProjectAmsMapping2Entry>) -> Self {
+    pub fn with_ams_mapping2(mut self, mapping2: Vec<AmsMapping2Entry>) -> Self {
         self.ams_mapping2 = Some(mapping2);
         self
     }
@@ -118,13 +120,6 @@ pub enum AmsMappingTable {
     Active(Vec<i32>),
 }
 
-/// Represents the detailed material and nozzle path pairing entries used inside the structured `ams_mapping2` array.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ProjectAmsMapping2Entry {
-    pub ams_id: u8,
-    pub slot_id: u8,
-}
-
 /// Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectFilePayload {
@@ -155,7 +150,7 @@ pub struct ProjectFilePayload {
     pub ams_mapping: AmsMappingTable,
     /// Structured sub-mappings for advanced material and multi-AMS routing.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ams_mapping2: Option<Vec<ProjectAmsMapping2Entry>>,
+    pub ams_mapping2: Option<Vec<AmsMapping2Entry>>,
 }
 
 /// Submits a `.3mf` print job from the SD card for execution.
@@ -179,7 +174,13 @@ impl ProjectFileRequest {
     pub fn from_config(config: &PrintJobConfig, sequence_id: u64, model: BambuModel) -> Self {
         let url = format!("ftp://{}", config.job_filename);
 
-        let mapping = if config.use_ams {
+        let is_single_nozzle = model.quirks().physical_nozzle_count() == 1;
+        let use_ams = config.use_ams
+            && match &config.ams_mapping2 {
+                Some(mapping2) => validate_external_spool_safety(is_single_nozzle, mapping2),
+                None => validate_external_spool_safety_flat(is_single_nozzle, &config.ams_mapping),
+            };
+        let mapping = if use_ams {
             AmsMappingTable::Active(config.ams_mapping.clone())
         } else {
             AmsMappingTable::Inactive(String::new())
@@ -205,7 +206,7 @@ impl ProjectFileRequest {
                 nozzle_offset_cali: if nozzle_offset { 1 } else { 0 },
                 vibration_cali: config.run_vibration_compensation,
                 layer_inspect: config.layer_inspect,
-                use_ams: config.use_ams,
+                use_ams,
                 ams_mapping: mapping,
                 ams_mapping2: config.ams_mapping2.clone(),
             },

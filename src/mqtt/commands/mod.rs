@@ -32,7 +32,7 @@ pub use gcode::GCodeRequest;
 pub use hardware::{
     AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
 };
-pub use print_job::{AmsMappingTable, PrintJobConfig, ProjectAmsMapping2Entry, ProjectFileRequest};
+pub use print_job::{AmsMappingTable, PrintJobConfig, ProjectFileRequest};
 pub use status::{GetVersionRequest, PushAllRequest};
 
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
@@ -90,6 +90,27 @@ mod tests {
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_mapping":[0,-1,1]"#));
+    }
+
+    #[test]
+    fn test_ams_mapping_all_external_spool_overrides_use_ams_false_single_nozzle() {
+        // review/ams.md Phase 3 [REF-AMS-USEAMS]: on single-nozzle printers, dispatching
+        // `use_ams: true` when every mapped filament is actually on the external spool
+        // (no real physical AMS channel) makes real firmware reject the job with
+        // `07FF_8012`. `from_config` must override `use_ams` to `false` in that case.
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        )
+        .with_ams(vec![-1, -1]);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""use_ams":false"#));
+        assert!(json.contains(r#""ams_mapping":"""#));
     }
 
     #[test]
