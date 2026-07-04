@@ -89,6 +89,20 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     read_state: FrameReadState,
 }
 
+/// Writes and flushes a complete packet to `stream`, mapping any I/O failure to
+/// `BambuError::NetworkError(SocketError::ConnectionAborted)`. A free function (not a
+/// method) so `connect()` can call it before `Self` exists.
+async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), BambuError> {
+    stream
+        .write_all(packet)
+        .await
+        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+    stream
+        .flush()
+        .await
+        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))
+}
+
 impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// Executes a secure local network connection handshake and subscription loop with the printer.
     ///
@@ -108,14 +122,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
             client_id
         );
 
-        stream
-            .write_all(&connect_pkt)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-        stream
-            .flush()
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        write_frame(&mut stream, &connect_pkt).await?;
 
         // Read CONNACK packet. `DummyTimer` (`has_real_clock() == false`) makes
         // `read_exact_packet` fall back to a plain unbounded read here — identical to
@@ -177,14 +184,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         let subscribe_pkt = encode_subscribe(1, &report_topic, 1);
 
-        stream
-            .write_all(&subscribe_pkt)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-        stream
-            .flush()
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        write_frame(&mut stream, &subscribe_pkt).await?;
 
         // Read SUBACK packet. `read_state` was reset to `Idle` on the successful CONNACK
         // read above, so reusing it here starts a fresh frame read.
@@ -262,14 +262,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         let packet = encode_publish_qos1(packet_id, &self.request_topic, payload);
 
-        self.stream
-            .write_all(&packet)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-        self.stream
-            .flush()
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        write_frame(&mut self.stream, &packet).await?;
 
         self.in_flight.insert(packet_id);
 
@@ -407,12 +400,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         let ack = encode_puback(id);
-                        self.stream.write_all(&ack).await.map_err(|_| {
-                            BambuError::NetworkError(SocketError::ConnectionAborted)
-                        })?;
-                        self.stream.flush().await.map_err(|_| {
-                            BambuError::NetworkError(SocketError::ConnectionAborted)
-                        })?;
+                        write_frame(&mut self.stream, &ack).await?;
                     }
 
                     // Reset write channel zombie tracking since a telemetry update was received
@@ -451,14 +439,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
-        self.stream
-            .write_all(&ping)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-        self.stream
-            .flush()
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        write_frame(&mut self.stream, &ping).await?;
         self.ping_outstanding = true;
         Ok(())
     }
