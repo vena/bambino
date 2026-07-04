@@ -53,7 +53,6 @@ use crate::error::BambuError;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, race};
 use crate::models::BambuModel;
-use crate::mqtt::commands::TASK_ID_MAX;
 use crate::mqtt::{BambuMqttClient, MqttMessage};
 use crate::quirks::decode_fan_percentage;
 use crate::types::telemetry::{decode_bed_temperatures, decode_nozzle_temperatures};
@@ -617,13 +616,13 @@ where
 
     /// Increments and returns the next transaction/sequence identifier tracking commands.
     ///
-    /// Wraps at `TASK_ID_MAX` (32-bit signed integer limit) to stay within firmware
-    /// parsing constraints [REF-MQTT-ENV].
+    /// Wraps via `clamp_task_id()` (32-bit signed integer limit) to stay within firmware
+    /// parsing constraints [REF-MQTT-ENV] — on overflow this continues as
+    /// `(sequence_counter + 1) % TASK_ID_MAX` rather than resetting to
+    /// `INITIAL_SEQUENCE_ID`, so a session never revisits the same starting value mid-flight.
     pub fn next_sequence_id(&mut self) -> u64 {
-        self.sequence_counter = self.sequence_counter.wrapping_add(1);
-        if self.sequence_counter > TASK_ID_MAX {
-            self.sequence_counter = INITIAL_SEQUENCE_ID;
-        }
+        self.sequence_counter =
+            crate::mqtt::commands::clamp_task_id(self.sequence_counter + 1) as u64;
         self.sequence_counter
     }
 
