@@ -3,8 +3,8 @@
 use std::io::{self, Write};
 
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
-use bambino::quirks::{ModelQuirks, fan_step_to_percentage};
-use bambino::types::PrinterTelemetry;
+use bambino::quirks::{ModelQuirks, decode_fan_percentage};
+use bambino::types::{DeviceTelemetry, PrinterTelemetry, decode_nozzle_temperatures};
 
 /// Write adapter that translates `\n` to `\r\n` for raw-mode terminal output.
 pub(super) struct RawWriter<W: Write>(pub W);
@@ -62,7 +62,7 @@ pub(super) fn render_dashboard(
     write!(w, "\x1B[1;1H\x1B[2J").unwrap_or(());
 
     render_print_status(state, &mut w);
-    render_nozzles(state, quirks, &mut w);
+    render_nozzles(state, &mut w);
     render_thermal(state, quirks, &mut w);
     render_fans_and_system(state, quirks, &mut w);
     render_ams(state, &mut w);
@@ -148,11 +148,7 @@ struct NozzleEntry {
     temp: String,
 }
 
-fn render_nozzles(
-    state: &serde_json::Map<String, serde_json::Value>,
-    quirks: &dyn ModelQuirks,
-    w: &mut impl Write,
-) {
+fn render_nozzles(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
     let mut nozzles: Vec<NozzleEntry> = Vec::new();
 
     if let Some(device_nozzles) = state
@@ -206,7 +202,7 @@ fn render_nozzles(
     }
 
     // Populate temperatures from extruder.info (IDEX) or top-level fields
-    populate_nozzle_temps(state, quirks, &mut nozzles);
+    populate_nozzle_temps(state, &mut nozzles);
 
     writeln!(
         w,
@@ -235,53 +231,21 @@ fn render_nozzles(
 
 fn populate_nozzle_temps(
     state: &serde_json::Map<String, serde_json::Value>,
-    _quirks: &dyn ModelQuirks,
     nozzles: &mut [NozzleEntry],
 ) {
-    // Try device.extruder.info first (IDEX: provides both actual and target per-nozzle)
-    if let Some(extruder_info) = state
+    // Cross-model decode (device.extruder.info, or the flat nozzle_temper/nozzle_target_temper
+    // fields including the undocumented IDEX routing quirk) now lives in the library — see
+    // `bambino::types::decode_nozzle_temperatures`.
+    let device: Option<DeviceTelemetry> = state
         .get("_device")
-        .and_then(|d| d.get("extruder"))
-        .and_then(|e| e.get("info"))
-        .and_then(|i| i.as_array())
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let nozzle_act = state.get("nozzle_temper").and_then(|t| t.as_f64());
+    let nozzle_tgt = state.get("nozzle_target_temper").and_then(|t| t.as_f64());
+
+    for (id, actual, target) in decode_nozzle_temperatures(device.as_ref(), nozzle_act, nozzle_tgt)
     {
-        let mut found_any = false;
-        for entry in extruder_info {
-            let id = entry.get("id").and_then(|i| i.as_u64()).unwrap_or(u64::MAX);
-            if let Some(temp_val) = entry.get("temp").and_then(|t| t.as_u64()) {
-                let (actual, target) = PrinterTelemetry::unpack_temperature(temp_val as f64);
-                if let Some(nozzle) = nozzles.iter_mut().find(|n| n.id == id) {
-                    nozzle.temp = format!("{}°C / T: {}°C", actual, target);
-                    found_any = true;
-                }
-            }
-        }
-        if found_any {
-            return;
-        }
-    }
-
-    // Fallback: top-level nozzle_temper / nozzle_target_temper
-    let nozzle_act = state
-        .get("nozzle_temper")
-        .and_then(|t| t.as_f64())
-        .unwrap_or(0.0) as u16;
-    let nozzle_tgt = state
-        .get("nozzle_target_temper")
-        .and_then(|t| t.as_f64())
-        .unwrap_or(0.0) as u16;
-
-    if nozzles.len() == 1 {
-        nozzles[0].temp = format!("{}°C / T: {}°C", nozzle_act, nozzle_tgt);
-    } else if nozzles.len() >= 2 {
-        // IDEX routing [REF-THER-DECODE §Dual-Extruder]:
-        //   nozzle_temper     = left nozzle (id 1) actual
-        //   nozzle_target_temper = right nozzle (id 0) target
-        if let Some(right) = nozzles.iter_mut().find(|n| n.id == 0) {
-            right.temp = format!("T: {}°C", nozzle_tgt);
-        }
-        if let Some(left) = nozzles.iter_mut().find(|n| n.id == 1) {
-            left.temp = format!("{}°C", nozzle_act);
+        if let Some(nozzle) = nozzles.iter_mut().find(|n| n.id == id as u64) {
+            nozzle.temp = format!("{}°C / T: {}°C", actual, target);
         }
     }
 }
@@ -531,17 +495,9 @@ fn get_fan_pct(
     key: &str,
     quirks: &dyn ModelQuirks,
 ) -> String {
-    state
-        .get(key)
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<u8>().ok())
-        .map(|raw| {
-            if quirks.auxiliary_fan_uses_percentage() {
-                format!("{}%", raw.min(100))
-            } else {
-                format!("{}%", fan_step_to_percentage(raw))
-            }
-        })
+    let raw = state.get(key).and_then(|v| v.as_str());
+    decode_fan_percentage(raw, quirks.auxiliary_fan_uses_percentage())
+        .map(|pct| format!("{}%", pct))
         .unwrap_or_else(|| "--".to_string())
 }
 

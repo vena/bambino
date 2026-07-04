@@ -342,53 +342,36 @@ A `cargo bambino-cli` alias (`.cargo/config.toml`) wraps `cargo run --bin bambin
 
 ### Usage
 
-```sh
-# Discovery
-bambino-cli discover
-
-# Printer info and firmware versions
-bambino-cli info <ip> <serial> <access_code>
-
-# Live telemetry dashboard
-bambino-cli monitor <ip> <serial> <access_code>
-
-# Commands
-bambino-cli control <ip> <serial> <access_code> home
-bambino-cli control <ip> <serial> <access_code> temp nozzle 220
-bambino-cli control <ip> <serial> <access_code> temp bed 60
-bambino-cli control <ip> <serial> <access_code> fan part 80
-bambino-cli control <ip> <serial> <access_code> led chamber on
-bambino-cli control <ip> <serial> <access_code> pause
-bambino-cli control <ip> <serial> <access_code> resume
-bambino-cli control <ip> <serial> <access_code> stop
-bambino-cli control <ip> <serial> <access_code> speed sport
-bambino-cli control <ip> <serial> <access_code> clear-error
-bambino-cli control <ip> <serial> <access_code> airduct cooling
-bambino-cli control <ip> <serial> <access_code> calibrate bed-leveling vibration
-
-# AMS
-bambino-cli control <ip> <serial> <access_code> ams dry 0 55 480 true PA-CF
-bambino-cli control <ip> <serial> <access_code> ams dry-stop 0
-
-# G-code (validated against model quirks)
-bambino-cli control <ip> <serial> <access_code> gcode "G28"
-
-# G-code (no safety checks — prompts for confirmation)
-bambino-cli control <ip> <serial> <access_code> gcode-raw "M106 P1 S255"
-bambino-cli control <ip> <serial> <access_code> gcode-raw --unsafe "M106 P1 S255"
-
-# File management
-bambino-cli files <ip> <serial> <access_code> list /
-bambino-cli files <ip> <serial> <access_code> upload ./print.3mf /model/print.3mf
-bambino-cli files <ip> <serial> <access_code> download /timelapse/video.mp4 ./video.mp4
-bambino-cli files <ip> <serial> <access_code> space
-
-# Camera snapshot (A1/P1 binary JPEG only)
-bambino-cli camera <ip> <serial> <access_code> snapshot
-bambino-cli camera <ip> <serial> <access_code> snapshot frame.jpg
 ```
+Usage: bambino-cli [OPTIONS] <COMMAND>
 
-Use `-v` for protocol-level debug logging.
+Commands:
+  discover  Scan the local subnet for nearby active printers
+  info      Query expansion bus module and firmware versions
+  monitor   Stream real-time status telemetry and HMS warnings
+  dump      Dump the raw pushall JSON response and exit
+  probe     Run command response capture suite and write report
+  control   Dispatch a movement or hardware control command
+  files     Traverse and transfer files on the printer's MicroSD card
+  camera    Camera streaming operations
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose  Enable verbose connection and packet debugging output
+  -h, --help     Print help
+
+Most commands require positional args: <IP> <SERIAL> <ACCESS_CODE>
+ACCESS_CODE may be omitted (or passed as "") to fall back to the
+BAMBINO_ACCESS_CODE environment variable.
+Run 'bambino-cli <COMMAND> --help' for full argument details.
+
+Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
+                  airduct  calibrate  gcode  gcode-raw  pause  resume  stop
+                  ams (dry | dry-stop)
+Files actions:    list  upload  delete  space
+Camera actions:   snapshot
+Probe options:    -o/--output  -t/--tests
+```
 
 ### Credentials
 

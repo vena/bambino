@@ -12,8 +12,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bambino::client::{
-    CalibrationOption, DummyFactory, DummyTls, FanTarget, PrintSpeed, PrintStatus, PrinterClient,
+    CalibrationOption, DummyFactory, DummyTls, FanTarget, PrintProgress, PrintSpeed, PrintStatus,
+    PrinterClient,
 };
+use bambino::diagnostics::DecodedPrintError;
 use bambino::error::BambuError;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
@@ -593,12 +595,10 @@ async fn test_in_flight_saturation() {
         handle_mqtt_handshake(&mut server_stream).await;
 
         // Read and discard all incoming PUBLISH packets without sending PUBACKs
-        loop {
-            match common::mock_mqtt::read_packet(&mut server_stream).await {
-                Ok(_) => {}
-                Err(_) => break,
-            }
-        }
+        while common::mock_mqtt::read_packet(&mut server_stream)
+            .await
+            .is_ok()
+        {}
     });
 
     let mqtt_client =
@@ -1723,6 +1723,672 @@ async fn test_print_status_cache_from_telemetry() {
         .await
         .expect("poll_telemetry should parse second report");
     assert_eq!(client.print_status(), Some(PrintStatus::Unknown));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+// Phase 14: door_open / active_fault telemetry accessors
+
+#[tokio::test]
+async fn test_door_open_none_on_sensorless_model() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Bit 23 set — would read as "open" on a sensor-equipped model.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5000,
+            br#"{"print":{"home_flag":8388608}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    // P1S has no door sensor.
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.door_open(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse home_flag report");
+
+    // Sensorless model must stay None regardless of the observed register.
+    assert_eq!(client.door_open(), None);
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", "00M000000000000");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Bit 23 set: door open.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5100,
+            br#"{"print":{"home_flag":8388608}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Bit 23 clear: door closed.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5101,
+            br#"{"print":{"home_flag":0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    // X1C has a door sensor, read from home_flag bit 23.
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1C);
+
+    // No telemetry observed yet — cache must read as unknown, not "closed".
+    assert_eq!(client.door_open(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first home_flag report");
+    assert_eq!(client.door_open(), Some(true));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second home_flag report");
+    assert_eq!(client.door_open(), Some(false));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_active_fault_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // print_error = 83902476 decimal -> 0x0500400C, a genuine fault.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5200,
+            br#"{"print":{"print_error":83902476}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Register reads back to 0 — no fault.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5201,
+            br#"{"print":{"print_error":0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    // No telemetry observed yet.
+    assert_eq!(client.active_fault(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first print_error report");
+    assert_eq!(
+        client.active_fault(),
+        Some(DecodedPrintError {
+            short_code: "0500_400C".to_string(),
+            module_id: 0x05,
+            is_genuine_fault: true,
+        })
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second print_error report");
+    // 0 collapses to None — same as "never observed" from the caller's perspective.
+    assert_eq!(client.active_fault(), None);
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_print_progress_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5300,
+            br#"{"print":{"mc_percent":42,"mc_remaining_time":30,"layer_num":5,"total_layer_num":100}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Only `mc_percent` present this time — the other three fields must stay cached.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5301,
+            br#"{"print":{"mc_percent":50}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.print_progress(), PrintProgress::default());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first progress report");
+    assert_eq!(
+        client.print_progress(),
+        PrintProgress {
+            percent: Some(42),
+            remaining_secs: Some(30),
+            layer_num: Some(5),
+            total_layers: Some(100),
+        }
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second progress report");
+    assert_eq!(
+        client.print_progress(),
+        PrintProgress {
+            percent: Some(50),
+            remaining_secs: Some(30),
+            layer_num: Some(5),
+            total_layers: Some(100),
+        }
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_bed_temperatures_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5400,
+            br#"{"print":{"bed_temper":60.0,"bed_target_temper":65.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Only `bed_temper` present this time — target must stay cached at 65.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5401,
+            br#"{"print":{"bed_temper":61.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.bed_temperatures(), (0, 0));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first bed temperature report");
+    assert_eq!(client.bed_temperatures(), (60, 65));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second bed temperature report");
+    assert_eq!(client.bed_temperatures(), (61, 65));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_ams_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5500,
+            br#"{"print":{"ams":{"ams_exist_bits":"1","tray_exist_bits":"3"}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // A report with no `ams` key at all must leave the cache untouched.
+        send_publish_payload(&mut server_stream, &topic, 5501, br#"{"print":{}}"#).await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert!(client.ams().is_none());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first AMS report");
+    assert_eq!(
+        client.ams().and_then(|ams| ams.ams_exist_bits.as_deref()),
+        Some("1")
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second (ams-less) report");
+    assert_eq!(
+        client.ams().and_then(|ams| ams.ams_exist_bits.as_deref()),
+        Some("1")
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5600,
+            br#"{"print":{"vt_tray":{"id":"254"},"vir_slot":[{"id":"0"},{"id":"1"}]}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert!(client.vt_tray().is_none());
+    assert!(client.vir_slot().is_none());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse vt_tray/vir_slot report");
+    assert_eq!(client.vt_tray().and_then(|t| t.id.as_deref()), Some("254"));
+    assert_eq!(
+        client
+            .vir_slot()
+            .map(|slots| slots.iter().map(|s| s.id.as_deref()).collect::<Vec<_>>()),
+        Some(vec![Some("0"), Some("1")])
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_nozzle_temperatures_cache_single_nozzle_model() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5700,
+            br#"{"print":{"nozzle_temper":200.0,"nozzle_target_temper":210.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.nozzle_temperatures(), vec![(0, 0, 0)]);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse nozzle temperature report");
+    assert_eq!(client.nozzle_temperatures(), vec![(0, 200, 210)]);
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // IDEX hardware present (`device.nozzle.info` has 2 entries) but no live
+        // `device.extruder.info` temps yet — the flat-field routing quirk applies:
+        // nozzle_temper (100) is nozzle 1 (left) actual, nozzle_target_temper (220) is
+        // nozzle 0 (right) target.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5701,
+            br#"{"print":{"device":{"nozzle":{"info":[{"id":0},{"id":1}]}},"nozzle_temper":100.0,"nozzle_target_temper":220.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::H2D);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse IDEX nozzle report");
+    assert_eq!(client.nozzle_temperatures(), vec![(0, 0, 220), (1, 100, 0)]);
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_chamber_temperature_cache() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Composite-packed: (60 << 16) | 50 = actual 50, target 60.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5702,
+            br#"{"print":{"chamber_temper":3932210.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+
+    // P1S has no chamber heater/sensor — always None regardless of telemetry.
+    let mut sensorless_client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+    assert_eq!(sensorless_client.chamber_temperature(), None);
+    sensorless_client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse chamber temperature report");
+    assert_eq!(sensorless_client.chamber_temperature(), None);
+
+    let (client_stream2, mut server_stream2) = tokio::io::duplex(8192);
+    let topic2 = format!("device/{SERIAL}/report");
+    let broker_task2 = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream2).await;
+        send_publish_payload(
+            &mut server_stream2,
+            &topic2,
+            5703,
+            br#"{"print":{"chamber_temper":3932210.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream2).await;
+    });
+    let mqtt_client2 = BambuMqttClient::connect(TokioIo(client_stream2), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut heated_client = PrinterClient::from_mqtt(mqtt_client2, SERIAL, BambuModel::H2D);
+
+    assert_eq!(heated_client.chamber_temperature(), Some((0, 0)));
+    heated_client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse chamber temperature report");
+    assert_eq!(heated_client.chamber_temperature(), Some((50, 60)));
+
+    broker_task.await.expect("Broker task panicked");
+    broker_task2.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_hms_cache_and_active_alerts() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // One genuine fault (attr 0x05000100 / code 0x0001400C) and one cancellation
+        // echo (attr 0x05000100 / code 0x0001400E) that must be filtered out.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5704,
+            br#"{"print":{"hms":[{"attr":83886336,"code":81932},{"attr":83886336,"code":81934}]}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert!(client.hms().is_none());
+    assert!(client.active_hms_alerts().is_empty());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse HMS report");
+    assert_eq!(client.hms().map(|h| h.len()), Some(2));
+
+    let active = client.active_hms_alerts();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].short_code, "0500_400C");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_fan_speed_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5705,
+            br#"{"print":{"cooling_fan_speed":"15","big_fan1_speed":"8","big_fan2_speed":"0","heatbreak_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":75}]}}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    // H2D uses step-encoded (not percentage) fan telemetry for the primary four fans,
+    // unlike X2D (which reports percentages directly — see `X2Quirks::auxiliary_fan_uses_percentage`).
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::H2D);
+
+    assert_eq!(client.part_cooling_fan_speed(), None);
+    assert_eq!(client.auxiliary_right_fan_speed(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse fan speed report");
+
+    assert_eq!(client.part_cooling_fan_speed(), Some(100));
+    assert_eq!(client.auxiliary_left_fan_speed(), Some(53));
+    assert_eq!(client.chamber_exhaust_fan_speed(), Some(0));
+    assert_eq!(client.heatbreak_fan_speed(), Some(100));
+    assert_eq!(client.auxiliary_right_fan_speed(), Some(75));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_print_speed_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5706,
+            br#"{"print":{"spd_lvl":3,"spd_mag":124}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.print_speed(), None);
+    assert_eq!(client.print_speed_magnitude(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse print speed report");
+    assert_eq!(client.print_speed(), Some(PrintSpeed::Sport));
+    assert_eq!(client.print_speed_magnitude(), Some(124));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_wifi_signal_cache_from_telemetry() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5707,
+            br#"{"print":{"wifi_signal":"-52dBm"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5708,
+            br#"{"print":{"wifi_signal":"-90dBm"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.wifi_signal(), None);
+    assert!(!client.is_ethernet_active_via_wifi_signal());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first wifi_signal report");
+    assert_eq!(client.wifi_signal(), Some("-52dBm"));
+    assert!(!client.is_ethernet_active_via_wifi_signal());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second wifi_signal report");
+    assert_eq!(client.wifi_signal(), Some("-90dBm"));
+    assert!(client.is_ethernet_active_via_wifi_signal());
 
     broker_task.await.expect("Broker task panicked");
 }

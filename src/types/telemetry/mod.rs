@@ -19,6 +19,8 @@ pub mod report;
 
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use alloc::{vec, vec::Vec};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -65,26 +67,12 @@ impl TelemetryReport {
     /// println!("Bed: {}°C (target {}°C)", actual, target);
     /// ```
     pub fn bed_temperatures(&self) -> (u16, u16) {
-        if let Some(temps) = self.device.as_ref().and_then(Self::unpack_bed_telemetry) {
-            return temps;
-        }
-
-        if let Some(print) = &self.print {
-            if let Some(temps) = print.device.as_ref().and_then(Self::unpack_bed_telemetry) {
-                return temps;
-            }
-
-            let actual = print.bed_temper.unwrap_or(0.0) as u16;
-            let target = print.bed_target_temper.unwrap_or(0.0) as u16;
-            return (actual, target);
-        }
-
-        (0, 0)
-    }
-
-    fn unpack_bed_telemetry(device: &DeviceTelemetry) -> Option<(u16, u16)> {
-        let temp = device.bed.as_ref()?.info.as_ref()?.temp?;
-        Some(PrinterTelemetry::unpack_temperature(temp as f64))
+        let (bed_temper, bed_target_temper) = self
+            .print
+            .as_ref()
+            .map(|print| (print.bed_temper, print.bed_target_temper))
+            .unwrap_or((None, None));
+        decode_bed_temperatures(self.device(), bed_temper, bed_target_temper)
     }
 
     /// Returns the `DeviceTelemetry` sub-object, checking both wire locations it can arrive at.
@@ -97,6 +85,73 @@ impl TelemetryReport {
         self.device
             .as_ref()
             .or_else(|| self.print.as_ref().and_then(|print| print.device.as_ref()))
+    }
+}
+
+/// Shared bed-temperature decode logic behind [`TelemetryReport::bed_temperatures()`] and
+/// [`crate::client::PrinterClient::bed_temperatures()`] — both need the same cross-model
+/// unpack (composite-packed new-gen `device.bed` vs. flat old-gen `bed_temper`/
+/// `bed_target_temper`), one sourced from a fresh report, the other from cached scalars.
+pub(crate) fn decode_bed_temperatures(
+    device: Option<&DeviceTelemetry>,
+    bed_temper: Option<f64>,
+    bed_target_temper: Option<f64>,
+) -> (u16, u16) {
+    if let Some(temps) = device.and_then(unpack_bed_telemetry) {
+        return temps;
+    }
+    let actual = bed_temper.unwrap_or(0.0) as u16;
+    let target = bed_target_temper.unwrap_or(0.0) as u16;
+    (actual, target)
+}
+
+fn unpack_bed_telemetry(device: &DeviceTelemetry) -> Option<(u16, u16)> {
+    let temp = device.bed.as_ref()?.info.as_ref()?.temp?;
+    Some(PrinterTelemetry::unpack_temperature(temp as f64))
+}
+
+/// Shared nozzle-temperature decode logic behind
+/// [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's
+/// `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place
+/// this IDEX routing quirk lived.
+///
+/// Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
+/// (composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`]).
+/// Falls back to the flat `nozzle_temper`/`nozzle_target_temper` fields when absent: a single
+/// entry `(0, actual, target)` for a single-nozzle model, or — for a dual-nozzle (IDEX) model
+/// with no live extruder temps yet — the wire's undocumented routing quirk: `nozzle_temper` is
+/// nozzle 1 (left)'s actual reading and `nozzle_target_temper` is nozzle 0 (right)'s target,
+/// each nozzle only getting half of its own reading from the flat fields.
+pub fn decode_nozzle_temperatures(
+    device: Option<&DeviceTelemetry>,
+    nozzle_temper: Option<f64>,
+    nozzle_target_temper: Option<f64>,
+) -> Vec<(u8, u16, u16)> {
+    if let Some(extruder) = device.and_then(|d| d.extruder.as_ref())
+        && !extruder.info.is_empty()
+    {
+        return extruder
+            .info
+            .iter()
+            .map(|entry| {
+                let (actual, target) = entry.temperatures();
+                (entry.id, actual, target)
+            })
+            .collect();
+    }
+
+    let is_idex = device
+        .and_then(|d| d.nozzle.as_ref())
+        .map(|n| n.info.len() >= 2)
+        .unwrap_or(false);
+
+    let actual = nozzle_temper.unwrap_or(0.0) as u16;
+    let target = nozzle_target_temper.unwrap_or(0.0) as u16;
+
+    if is_idex {
+        vec![(0, 0, target), (1, actual, 0)]
+    } else {
+        vec![(0, actual, target)]
     }
 }
 

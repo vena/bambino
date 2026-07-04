@@ -70,6 +70,21 @@ pub enum PrintSpeed {
     Ludicrous = 4,
 }
 
+impl PrintSpeed {
+    /// Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values
+    /// [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
+    /// Returns `None` for an out-of-range level.
+    pub fn from_level(level: u8) -> Option<Self> {
+        match level {
+            1 => Some(PrintSpeed::Silent),
+            2 => Some(PrintSpeed::Standard),
+            3 => Some(PrintSpeed::Sport),
+            4 => Some(PrintSpeed::Ludicrous),
+            _ => None,
+        }
+    }
+}
+
 /// Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE].
 ///
 /// Combine flags with bitwise OR to trigger multiple calibration routines simultaneously
@@ -95,6 +110,27 @@ impl core::ops::BitOr for CalibrationOption {
     fn bitor(self, rhs: Self) -> Self {
         Self(self.0 | rhs.0)
     }
+}
+
+/// Cached print-progress snapshot as of the last-observed telemetry carrying any of these
+/// fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
+///
+/// Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
+/// `gcode_state`/`door_open`/`print_error`, which answer four independent questions) because
+/// `mc_percent`, `mc_remaining_time`, `layer_num`, and `total_layers` are always consumed
+/// together as one "how's the print going" question. Each field updates independently and
+/// keeps its last-observed value across a telemetry message that omits it — a `None` field
+/// means "never observed," not "printer reports zero/none."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrintProgress {
+    /// Motion controller progress percentage (0-100).
+    pub percent: Option<i32>,
+    /// Estimated remaining duration of the active layer sequence, in seconds.
+    pub remaining_secs: Option<i32>,
+    /// Active layer progress tracker.
+    pub layer_num: Option<i32>,
+    /// Total layers within the sliced print pipeline.
+    pub total_layers: Option<i32>,
 }
 
 /// Decoded classification of the printer's high-level `gcode_state` telemetry field.

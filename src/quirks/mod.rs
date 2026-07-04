@@ -275,6 +275,21 @@ pub fn fan_step_to_percentage(step: u8) -> u8 {
     }
 }
 
+/// Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/
+/// `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
+///
+/// `uses_percentage` should come from [`ModelQuirks::auxiliary_fan_uses_percentage()`] — most
+/// models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an
+/// already-clamped percentage directly. Returns `None` if `raw` is absent or not a valid `u8`.
+pub fn decode_fan_percentage(raw: Option<&str>, uses_percentage: bool) -> Option<u8> {
+    let step: u8 = raw?.parse().ok()?;
+    Some(if uses_percentage {
+        step.min(100)
+    } else {
+        fan_step_to_percentage(step)
+    })
+}
+
 /// Filters out transient quantization oscillation artifacts emitted by physical fan controllers.
 ///
 /// **Why this is required [REF-CLIM-FANS]:**

@@ -23,13 +23,16 @@ use common::io::{
 };
 use common::mock_ftps;
 
-/// Helper: creates the standard test infrastructure (duplex control stream, data container, factory).
-fn setup() -> (
+/// Return type of [`setup()`]: control-stream pair, shared data-stream container, and factory.
+type SetupResult = (
     tokio::io::DuplexStream,
     tokio::io::DuplexStream,
     Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
     MockDataStreamFactory,
-) {
+);
+
+/// Helper: creates the standard test infrastructure (duplex control stream, data container, factory).
+fn setup() -> SetupResult {
     let (client_control, server_control) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(None));
     let factory = MockDataStreamFactory {
