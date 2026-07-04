@@ -89,6 +89,12 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     read_state: FrameReadState,
 }
 
+/// Advances an MQTT packet identifier, skipping 0 (reserved) on wraparound.
+fn advance_packet_id(current: u16) -> u16 {
+    let next = current.wrapping_add(1);
+    if next == 0 { 1 } else { next }
+}
+
 /// Writes and flushes a complete packet to `stream`, mapping any I/O failure to
 /// `BambuError::NetworkError(SocketError::ConnectionAborted)`. A free function (not a
 /// method) so `connect()` can call it before `Self` exists.
@@ -248,10 +254,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         }
 
         let packet_id = self.next_packet_id;
-        self.next_packet_id = self.next_packet_id.wrapping_add(1);
-        if self.next_packet_id == 0 {
-            self.next_packet_id = 1; // 0 is reserved in MQTT specifications
-        }
+        self.next_packet_id = advance_packet_id(self.next_packet_id);
 
         log::debug!(
             "Publishing QoS 1 command (packet_id: {}) to topic: '{}' (payload length: {} bytes)",
@@ -482,43 +485,26 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_packet_id_skips_zero_on_wraparound() {
-        let mut next_packet_id: u16 = u16::MAX;
-
-        let issued_id = next_packet_id;
-        next_packet_id = next_packet_id.wrapping_add(1);
-        if next_packet_id == 0 {
-            next_packet_id = 1;
-        }
-
-        assert_eq!(issued_id, u16::MAX);
-        assert_eq!(next_packet_id, 1, "Packet ID must skip 0 after wraparound");
+        assert_eq!(
+            advance_packet_id(u16::MAX),
+            1,
+            "Packet ID must skip 0 after wraparound"
+        );
     }
 
     #[test]
     fn test_packet_id_normal_increment() {
-        let mut next_packet_id: u16 = 100;
-
-        next_packet_id = next_packet_id.wrapping_add(1);
-        if next_packet_id == 0 {
-            next_packet_id = 1;
-        }
-
-        assert_eq!(next_packet_id, 101);
+        assert_eq!(advance_packet_id(100), 101);
     }
 
     #[test]
     fn test_packet_id_one_before_max() {
-        let mut next_packet_id: u16 = u16::MAX - 1;
-
-        next_packet_id = next_packet_id.wrapping_add(1);
-        if next_packet_id == 0 {
-            next_packet_id = 1;
-        }
-
         assert_eq!(
-            next_packet_id,
+            advance_packet_id(u16::MAX - 1),
             u16::MAX,
             "ID before MAX should increment normally"
         );
