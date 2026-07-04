@@ -12,7 +12,7 @@ use super::PrinterClient;
 
 /// Races `fut` against a `connect_timeout_secs`-second deadline on `timer`, used by
 /// `ensure_mqtt()`/`ensure_ftps()` to bound their two-step dial+connect sequences. Reuses the
-/// `race()` combinator `src/mqtt/client.rs`'s `poll_wire`/`read_exact_packet` per-read deadline
+/// `race()` combinator `src/mqtt/client/{mod,frame}.rs`'s `poll_wire`/`read_exact_packet` per-read deadline
 /// is built on, including its `has_real_clock()` guard: under `DummyTimer` (`has_real_clock()
 /// == false`), `sleep()` completes instantly regardless of duration, so racing against it
 /// unconditionally would make every connect attempt look timed out instead of providing real

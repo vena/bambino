@@ -42,7 +42,7 @@ pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
 
 /// Per-read wall-clock deadline for [`BambuBinaryCameraStream::read_next_frame_with_timer`]
 /// when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and
-/// rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client.rs`): a 30s gap between frames on
+/// rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on
 /// an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
 pub(crate) const CAMERA_READ_TIMEOUT_SECS: u64 = 30;
 
@@ -82,7 +82,7 @@ pub fn build_handshake_packet(
 /// [`BambuBinaryCameraStream::read_next_frame_with_timer`] call so a subsequent call resumes
 /// exactly where the previous one left off — losing this state would permanently desync the
 /// stream, the same failure class `FrameReadState` guards against for MQTT
-/// (`src/mqtt/client.rs`). Not a straight copy of that shape: MQTT's 1-byte header can't
+/// (`src/mqtt/client/frame.rs`). Not a straight copy of that shape: MQTT's 1-byte header can't
 /// partially complete a single `read()` step, so its `Idle` variant never needs
 /// header-partial-progress tracking — camera's 16-byte header can, so `ReadingHeader` carries
 /// its own `filled` counter (closer in shape to `ReadingPayload` below).
@@ -169,7 +169,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// out partway through a frame, the next call picks up from `self.read_state` instead of
     /// re-reading a fresh header — losing already-read bytes here would permanently desync
     /// the stream, the same failure class documented for MQTT's `read_exact_packet`
-    /// (`src/mqtt/client.rs`).
+    /// (`src/mqtt/client/frame.rs`).
     ///
     /// `budget_ms` is an explicit parameter (not a hardcoded constant) so tests can pass a
     /// small budget instead of waiting out [`CAMERA_READ_TIMEOUT_SECS`] for real; production
@@ -372,7 +372,7 @@ mod tests {
         }
 
         /// Regression test mirroring `test_read_exact_packet_stalled_connection_times_out`
-        /// (`src/mqtt/client.rs`): a connection that stalls with zero incoming bytes must not
+        /// (`src/mqtt/client/frame.rs`): a connection that stalls with zero incoming bytes must not
         /// hang `read_next_frame_with_timer` forever. Uses a `tokio::io::duplex` whose server
         /// side never writes, so the client's low-level `read()` call is genuinely pending.
         /// The outer `tokio::time::timeout` is a meta-safety net.
@@ -417,7 +417,7 @@ mod tests {
 
         /// Regression test mirroring
         /// `test_read_exact_packet_resumes_after_timeout_without_losing_bytes`
-        /// (`src/mqtt/client.rs`): bytes already read into a partial-frame buffer before a
+        /// (`src/mqtt/client/frame.rs`): bytes already read into a partial-frame buffer before a
         /// timeout must never be lost. Server delivers the full 16-byte header plus 2 of 4
         /// expected payload bytes, then stalls; the first call times out mid-payload; the
         /// second call (after the rest arrives) must reconstruct the exact original frame.
