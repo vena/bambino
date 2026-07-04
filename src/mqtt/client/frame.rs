@@ -72,6 +72,25 @@ pub(crate) enum FrameReadState {
 /// Callers outside tests should pass `MQTT_READ_TIMEOUT_SECS * 1000`; tests use a small
 /// `budget_ms` directly so stalled-read regression tests don't need to wait out the real
 /// production timeout.
+/// Reads exactly one byte from `stream`, retrying partial reads via `read_chunk`.
+///
+/// Either fully succeeds (one byte consumed and returned) or fails before any byte is
+/// consumed — there's no partial-byte state for a caller to lose across a timeout, unlike
+/// the multi-byte payload read in [`read_exact_packet`], which must stay a manual loop.
+async fn read_one_byte<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<u8, SocketError> {
+    let mut b = [0u8; 1];
+    let mut filled = 0;
+    while filled < b.len() {
+        let n = read_chunk(stream, &mut b[filled..], timer, deadline_ms).await?;
+        filled += n;
+    }
+    Ok(b[0])
+}
+
 pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     state: &mut FrameReadState,
@@ -86,14 +105,9 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
 
     // Fixed header packet type byte (only if not already read by a prior, timed-out call).
     if matches!(state, FrameReadState::Idle) {
-        let mut header = [0u8; 1];
-        let mut filled = 0;
-        while filled < header.len() {
-            let n = read_chunk(stream, &mut header[filled..], timer, deadline_ms).await?;
-            filled += n;
-        }
+        let header = read_one_byte(stream, timer, deadline_ms).await?;
         *state = FrameReadState::ReadingRemainingLength {
-            header: header[0],
+            header,
             value: 0,
             multiplier: 1,
         };
@@ -107,14 +121,9 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
     } = state
     {
         loop {
-            let mut b = [0u8; 1];
-            let mut filled = 0;
-            while filled < b.len() {
-                let n = read_chunk(stream, &mut b[filled..], timer, deadline_ms).await?;
-                filled += n;
-            }
-            *value += ((b[0] & 127) as usize) * *multiplier;
-            if (b[0] & 128) == 0 {
+            let b = read_one_byte(stream, timer, deadline_ms).await?;
+            *value += ((b & 127) as usize) * *multiplier;
+            if (b & 128) == 0 {
                 break;
             }
             *multiplier *= 128;
