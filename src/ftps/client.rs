@@ -642,26 +642,6 @@ where
         Ok(())
     }
 
-    /// Issues a raw `STAT` command and returns the unparsed response code and body text.
-    ///
-    /// Diagnostic-only escape hatch — bypasses `get_available_space`'s `AVBL`-first, `STAT`-fallback
-    /// parsing entirely so real firmware `STAT` output can be captured verbatim (e.g. via
-    /// `bambino-cli files ... stat-raw`) for review, since `STAT`'s field layout isn't uniformly
-    /// documented across firmware versions. Not intended for production capacity queries — use
-    /// `get_available_space` for that.
-    pub async fn debug_raw_stat(&mut self) -> Result<(u16, String), BambuError> {
-        self.check_poisoned()?;
-
-        write_command(&mut self.control_stream, "STAT").await?;
-        let mut buf = Vec::new();
-        read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-        )
-        .await
-    }
-
     /// Queries the available capacity of the MicroSD card, in bytes.
     pub async fn get_available_space(&mut self) -> Result<u64, BambuError> {
         self.check_poisoned()?;

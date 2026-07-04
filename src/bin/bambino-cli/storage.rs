@@ -32,56 +32,18 @@ pub enum FilesAction {
     Delete { remote_path: String },
     /// Query available MicroSD card capacity
     Space,
-    /// Diagnostic: dump the raw, unparsed FTP STAT response (for capturing real firmware output)
-    StatRaw,
 }
 
-/// Dynamic calendar epoch helper converting UNIX timestamps to calendar date parts.
+/// Dynamic calendar epoch helper converting the current wall-clock time to calendar date parts.
 fn current_date_utc() -> (i32, u8, u8, u8, u8) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let secs_per_day = 86400;
-    let days = now / secs_per_day;
-    let seconds_of_day = now % secs_per_day;
-    let hour = (seconds_of_day / 3600) as u8;
-    let minute = ((seconds_of_day % 3600) / 60) as u8;
-
-    let mut year = 1970;
-    let mut remaining_days = days as i32;
-
-    loop {
-        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-        let days_in_year = if is_leap { 366 } else { 365 };
-        if remaining_days >= days_in_year {
-            remaining_days -= days_in_year;
-            year += 1;
-        } else {
-            break;
-        }
-    }
-
-    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let days_in_months = if is_leap {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for days_in_m in days_in_months {
-        if remaining_days >= days_in_m {
-            remaining_days -= days_in_m;
-            month += 1;
-        } else {
-            break;
-        }
-    }
-
-    let day = (remaining_days + 1) as u8;
-    (year, month as u8, day, hour, minute)
+    let now = time::OffsetDateTime::now_utc();
+    (
+        now.year(),
+        now.month() as u8,
+        now.day(),
+        now.hour(),
+        now.minute(),
+    )
 }
 
 /// Dispatches a typed storage action over FTPS.
@@ -195,16 +157,6 @@ pub async fn run(
             println!("  - Free Space (Bytes) : {}", space_bytes);
             println!("  - Free Space (MB)    : {:.2} MB", space_mb);
             println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
-        }
-        FilesAction::StatRaw => {
-            println!("Issuing raw STAT command...");
-            let (code, text) = client.debug_raw_stat().await?;
-            println!("\nRaw STAT response:");
-            println!("  code: {}", code);
-            println!("  body:\n{}\n", text);
-            println!(
-                "Paste this output (code + body, unedited) back for get_available_space's STAT-fallback review."
-            );
         }
     }
 
