@@ -63,13 +63,14 @@ where
             'Z' => HOME_FLAG_Z_BIT,
             _ => return None,
         };
-        self.last_home_flag.map(|flag| flag & bit != 0)
+        self.cache.last_home_flag.map(|flag| flag & bit != 0)
     }
 
     /// Returns whether X, Y, and Z were all homed as of the last-observed `home_flag`
     /// telemetry. `None` means no telemetry carrying `home_flag` has been observed yet.
     pub fn is_all_axes_homed(&self) -> Option<bool> {
-        self.last_home_flag
+        self.cache
+            .last_home_flag
             .map(|flag| flag & HOME_FLAG_XYZ_BITS == HOME_FLAG_XYZ_BITS)
     }
 

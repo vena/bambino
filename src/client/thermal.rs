@@ -49,7 +49,7 @@ where
     /// per-model ceiling (e.g. 80°C for A1 Mini), but X1C's ceiling is voltage-dependent — 110°C
     /// on a 220V-region unit, 120°C on a 110V-region unit, per the official spec sheet. This is
     /// derived from the most recently observed `home_flag` telemetry
-    /// (`self.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
+    /// (`self.cache.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
     /// before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
     /// region is unknown and X1C conservatively clamps to 110°C.
     ///
@@ -60,6 +60,7 @@ where
     /// ```
     pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
         let mains_220v = self
+            .cache
             .last_home_flag
             .map(|flag| flag & POWER_220V_BITMASK != 0);
         let max = self.model.quirks().bed_temp_max(mains_220v);
