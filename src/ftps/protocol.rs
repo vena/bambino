@@ -11,7 +11,6 @@ pub(crate) const FTP_GREETING: u16 = 220;
 pub(crate) const FTP_TRANSFER_STARTING: u16 = 125;
 pub(crate) const FTP_TRANSFER_OPENING: u16 = 150;
 pub(crate) const FTP_SIZE_OK: u16 = 213;
-pub(crate) const FTP_STAT_OK: u16 = 211;
 pub(crate) const FTP_TRANSFER_COMPLETE: u16 = 226;
 pub(crate) const FTP_PASSIVE_MODE: u16 = 227;
 pub(crate) const FTP_LOGIN_OK: u16 = 230;
@@ -25,7 +24,6 @@ pub(crate) const FTP_COMMAND_OK: u16 = 200;
 
 pub(crate) const FTPS_UPLOAD_CHUNK_SIZE: usize = 65536;
 pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
-pub(crate) const FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD: u64 = 100_000_000;
 pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
 pub(crate) const FTP_MAX_RESPONSE_LINE_BYTES: usize = 4096;
 pub(crate) const FTP_MAX_RESPONSE_LINES: usize = 100;
@@ -159,6 +157,10 @@ pub(crate) async fn read_response<IO: AsyncIo>(
             ));
         }
         if line_buf.len() < 4 {
+            log::debug!(
+                "skipping malformed FTP response line ({} bytes)",
+                line_buf.len()
+            );
             continue;
         }
         let code_str = match core::str::from_utf8(&line_buf[0..3]) {

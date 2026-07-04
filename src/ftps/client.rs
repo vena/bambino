@@ -681,41 +681,9 @@ where
                 BambuError::ProtocolViolation("Malformed AVBL numeric response".into())
             })
         } else {
-            write_command(&mut self.control_stream, "STAT").await?;
-            let (code, stat_text) = read_response(
-                &mut self.control_stream,
-                &mut buf,
-                &mut self.control_fill_buf,
-            )
-            .await?;
-            if code == FTP_STAT_OK {
-                let mut size_found = None;
-                // UNVERIFIED HEURISTIC (review/ftps.md Phase 5): vsFTPd's STAT output isn't a
-                // structured format, so there's no reliable label/position to anchor on. A real
-                // capture attempt against a P1S found STAT isn't even wired up on that firmware
-                // (`502 Command not implemented` — see reference/02_ftps.md §2.2), so the
-                // ambiguity this heuristic exists for is still open pending a capture from
-                // firmware that does implement STAT. Until then: take the FIRST whitespace token
-                // that parses as a u64 over the threshold, on the assumption that "total, then
-                // free" is a more common STAT/df-style ordering than the reverse — not the last,
-                // which silently preferred whichever qualifying number happened to appear latest
-                // in the response body.
-                for word in stat_text.split_whitespace() {
-                    if let Ok(val) = word.parse::<u64>()
-                        && val > FTPS_AVBL_SIZE_HEURISTIC_THRESHOLD
-                    {
-                        size_found = Some(val);
-                        break;
-                    }
-                }
-                size_found.ok_or(BambuError::ProtocolViolation(
-                    "No valid sizing fields parsed in STAT".into(),
-                ))
-            } else {
-                Err(BambuError::ProtocolViolation(
-                    "Hardware capacity queries rejected".into(),
-                ))
-            }
+            Err(BambuError::ProtocolViolation(
+                "Hardware capacity queries rejected".into(),
+            ))
         }
     }
 
@@ -752,7 +720,7 @@ where
     /// the same "must reconnect" error, instead of a caller mistaking a disconnected client for
     /// a live one. Idempotent: calling this more than once is a no-op after the first call.
     pub async fn disconnect(&mut self) {
-        if self.poisoned {
+        if self.check_poisoned().is_err() {
             return;
         }
         let _ = write_command(&mut self.control_stream, "QUIT").await;

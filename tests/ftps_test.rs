@@ -12,6 +12,7 @@ mod common;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use bambino::error::BambuError;
 use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
@@ -177,47 +178,26 @@ async fn test_ftps_directory_operations() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// review/ftps.md Phase 7c: the STAT fallback was removed (confirmed dead against real
+/// firmware — a P1S capture found `STAT` unimplemented, `502 Command not implemented`).
+/// `get_available_space()` must now surface `Err(ProtocolViolation)` directly off a failed
+/// `AVBL` reply, without ever attempting a STAT round-trip.
 #[tokio::test]
-async fn test_ftps_stat_fallback_for_available_space() {
+async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
     let (client_control, server_control, data_container, factory) = setup();
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_stat_fallback(
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_avbl_unsupported(
         server_control,
         data_container.clone(),
     ));
 
     let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
 
-    let space = client
-        .get_available_space()
-        .await
-        .expect("STAT fallback space query failed");
-    assert_eq!(space, 14_820_352_000);
-
-    server_handle.await.expect("Mock server panicked");
-}
-
-/// Regression test for review/ftps.md Phase 5: the STAT fallback must pick the *first*
-/// qualifying number in the response body, not the last. Before the fix this returned
-/// 999_999_999 (the last qualifying token); the fix must return 200_000_000 (the first).
-#[tokio::test]
-async fn test_ftps_stat_fallback_picks_first_qualifying_number() {
-    let (client_control, server_control, data_container, factory) = setup();
-
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_stat_first_wins(
-        server_control,
-        data_container.clone(),
-    ));
-
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
-
-    let space = client
-        .get_available_space()
-        .await
-        .expect("STAT fallback space query failed");
-    assert_eq!(
-        space, 200_000_000,
-        "Expected the FIRST qualifying STAT token (200000000) to win, not the last (999999999)"
+    let result = client.get_available_space().await;
+    assert!(
+        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        "expected ProtocolViolation on a non-success AVBL reply, got {:?}",
+        result.map(|_| ())
     );
 
     server_handle.await.expect("Mock server panicked");

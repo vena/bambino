@@ -244,8 +244,13 @@ pub async fn run_mock_server_dir_ops(
     respond(&mut server_control, b"550 No such file or directory.\r\n").await;
 }
 
-/// Mock server for STAT fallback when AVBL is unsupported.
-pub async fn run_mock_server_stat_fallback(
+/// Mock server for `get_available_space()` when AVBL is unsupported.
+///
+/// review/ftps.md Phase 7c: the STAT fallback was removed — real Bambu firmware (P1S capture)
+/// responds to `STAT` with `502 Command not implemented`, so the fallback was dead code. The
+/// client must now surface `Err(ProtocolViolation)` directly off the failed `AVBL` reply,
+/// without ever sending `STAT`.
+pub async fn run_mock_server_avbl_unsupported(
     mut server_control: tokio::io::DuplexStream,
     _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
 ) {
@@ -253,7 +258,7 @@ pub async fn run_mock_server_stat_fallback(
 
     run_standard_handshake(&mut server_control, &mut buf, true).await;
 
-    // AVBL — unsupported
+    // AVBL — unsupported, no STAT fallback follows.
     let cmd = read_cmd(&mut server_control, &mut buf).await;
     assert_eq!(cmd, "AVBL\r\n");
     respond(
@@ -261,17 +266,6 @@ pub async fn run_mock_server_stat_fallback(
         b"500 Syntax error, command unrecognized.\r\n",
     )
     .await;
-
-    // STAT fallback — multi-line response
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STAT\r\n");
-    respond(&mut server_control, b"211-FTP server status:\r\n").await;
-    respond(
-        &mut server_control,
-        b"211-Storage: 14820352000 bytes free\r\n",
-    )
-    .await;
-    respond(&mut server_control, b"211 End of status.\r\n").await;
 }
 
 /// Mock server for upload with 426 (TLS 1.3 close race) + SIZE recovery.
@@ -373,39 +367,6 @@ pub async fn run_mock_server_data_channel_failure(
     .await;
     // Intentionally no matching 226 — the client's TLS connector fails the data-channel connect
     // before it would ever consume this reply.
-}
-
-/// Mock server for the Phase 5 STAT-ambiguity regression test.
-///
-/// The `STAT` body contains two whitespace-delimited numbers over the size heuristic threshold.
-/// The client is expected to select the FIRST one (200000000), not the last (999999999).
-pub async fn run_mock_server_stat_first_wins(
-    mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
-) {
-    let mut buf = vec![0u8; 1024];
-
-    run_standard_handshake(&mut server_control, &mut buf, true).await;
-
-    // AVBL — unsupported, forces the STAT fallback path.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "AVBL\r\n");
-    respond(
-        &mut server_control,
-        b"500 Syntax error, command unrecognized.\r\n",
-    )
-    .await;
-
-    // STAT — two qualifying numbers in one body.
-    let cmd = read_cmd(&mut server_control, &mut buf).await;
-    assert_eq!(cmd, "STAT\r\n");
-    respond(&mut server_control, b"211-FTP server status:\r\n").await;
-    respond(
-        &mut server_control,
-        b"211-Total: 200000000 bytes, Free: 999999999 bytes\r\n",
-    )
-    .await;
-    respond(&mut server_control, b"211 End of status.\r\n").await;
 }
 
 /// Mock server for disconnect (QUIT) test.
