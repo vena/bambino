@@ -183,6 +183,11 @@ pub struct VirtualTray {
     pub cali_idx: Option<i32>,
 }
 
+/// Native state code meaning "slot empty" [REF-AMS-DECODE]. Lives here (not in
+/// `ams::parser`) since `AmsTray::get_state()` is a pure data accessor and `types/`
+/// must not depend on business-logic modules.
+pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
+
 /// Material spool state descriptor representing a single physical tray slot.
 ///
 /// On the wire, AMS trays and virtual/external trays (`vt_tray`, `vir_slot`)
@@ -328,7 +333,6 @@ impl AmsTray {
     ///
     /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
     pub fn get_state(&self) -> u8 {
-        self.state
-            .unwrap_or(crate::ams::parser::AMS_TRAY_STATE_EMPTY)
+        self.state.unwrap_or(AMS_TRAY_STATE_EMPTY)
     }
 }

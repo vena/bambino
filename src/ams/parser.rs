@@ -6,6 +6,7 @@
 //! tray data, and calculating global indexes.
 
 use crate::types::AmsTray;
+use crate::types::telemetry::ams::AMS_TRAY_STATE_EMPTY;
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
 pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
@@ -13,7 +14,6 @@ pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
 pub(crate) const AMS_EXTERNAL_SPOOL_ID: u8 = 254;
 pub(crate) const AMS_EXTERNAL_SPOOL_ALT_ID: u8 = 255;
-pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
 pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
 
 /// Evaluates if a physical spool is present in a specific standard AMS slot.
