@@ -64,9 +64,9 @@ use crate::types::{
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
-/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`'s combined dial+connect sequence
-/// (`PLAN.md` Phase 12, decision 6) — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT`
-/// (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
+/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined
+/// dial+connect sequence (`PLAN.md` Phase 12, decision 6) — matches ESP-IDF's pre-existing
+/// `DEFAULT_CONNECT_TIMEOUT` (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
 pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 /// Races `fut` against a `connect_timeout_secs`-second deadline on `timer`, used by
@@ -378,18 +378,19 @@ where
     ///
     /// Short-circuits when `self.mqtt` is already `Some`. Otherwise, dials a raw stream via
     /// `self.mqtt_factory.dial()`, wraps it in TLS via `self.mqtt_tls.connect()`, then calls
-    /// `BambuMqttClient::connect()` — the whole dial+TLS sequence is raced against
+    /// `BambuMqttClient::connect()` — the whole dial+TLS+handshake sequence is raced against
     /// `self.connect_timeout_secs`.
     async fn ensure_mqtt(&mut self) -> Result<(), BambuError> {
         if self.mqtt.is_some() {
             return Ok(());
         }
-        let stream = race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-            let raw = self.mqtt_factory.dial(&self.ip, self.mqtt_port).await?;
-            self.mqtt_tls.connect(&self.ip, raw).await
-        })
-        .await?;
-        let mqtt_client = BambuMqttClient::connect(stream, &self.serial, &self.access_code).await?;
+        let mqtt_client =
+            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
+                let raw = self.mqtt_factory.dial(&self.ip, self.mqtt_port).await?;
+                let stream = self.mqtt_tls.connect(&self.ip, raw).await?;
+                BambuMqttClient::connect(stream, &self.serial, &self.access_code).await
+            })
+            .await?;
         self.mqtt = Some(mqtt_client);
         // Reseed from wall-clock time so two independent sessions connecting to the
         // same printer don't start from the same fixed counter and risk colliding

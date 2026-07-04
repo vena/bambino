@@ -2449,3 +2449,39 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
 
     server_handle.await.expect("Mock server panicked");
 }
+
+#[tokio::test]
+async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
+    // review/client.md Phase 1: `ensure_mqtt()`'s race must cover the full
+    // dial+TLS+`BambuMqttClient::connect()` handshake, not just dial+TLS. Simulate a peer
+    // that completes TCP/TLS but never sends CONNACK — the duplex's server side is left
+    // idle forever, so any read from the client side blocks indefinitely unless the
+    // handshake itself is inside the timeout race.
+    let (client_stream, _server_stream) = tokio::io::duplex(8192);
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container,
+    };
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        factory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    )
+    .with_timer(bambino::io::tokio::TokioTimer::new())
+    .with_connect_timeout(1);
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), client.connect_mqtt())
+        .await
+        .expect("connect_mqtt() must return within the 5s test safety margin, not hang forever");
+
+    assert!(
+        matches!(result, Err(BambuError::NetworkError(_))),
+        "expected a bounded NetworkError(TimedOut) once connect_timeout_secs elapses \
+         mid-CONNACK-handshake, got {:?}",
+        result.map(|_| ())
+    );
+}
