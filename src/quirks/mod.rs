@@ -626,7 +626,7 @@ mod tests {
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert_eq!(q.z_max(), 320.0);
+        assert_eq!(q.z_max(), 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
@@ -644,7 +644,7 @@ mod tests {
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert_eq!(q.z_max(), 320.0);
+        assert_eq!(q.z_max(), 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);
@@ -663,7 +663,7 @@ mod tests {
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert_eq!(q.z_max(), 320.0);
+        assert_eq!(q.z_max(), 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
         assert_eq!(q.chamber_temp_max(), 65);

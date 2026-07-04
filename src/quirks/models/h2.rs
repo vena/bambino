@@ -3,12 +3,11 @@
 //! Manages the properties and kinematic characteristics of the single-nozzle,
 //! IDEX, and tool-changer platforms [REF-MOTO-GCODE].
 //!
-//! Z-axis limits vary by model and current print — multi-nozzle models use the
-//! conservative (dual-nozzle) Z limit since the quirks engine doesn't know
-//! which nozzle is active at runtime:
+//! Z-axis limits vary by model — per `MODEL_MATRIX.csv`'s Build Volume row, Z max does
+//! not vary by active nozzle for these three models:
 //! - H2S: 340mm (single nozzle only)
-//! - H2D/H2D Pro: 320mm (conservative; 325mm in single-nozzle mode)
-//! - H2C: 320mm (conservative; 325mm with right nozzle only)
+//! - H2D/H2D Pro: 325mm
+//! - H2C: 325mm
 //!
 //! H2C has 6 Vortek tool-changer hotends + 1 fixed hotend = 7 nozzles.
 //! O1C and O1C2 are hardware revisions with identical quirks.
@@ -18,7 +17,7 @@ use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
 pub const H2S_Z_MAX: f32 = 340.0;
-pub const H2_DUAL_Z_MAX: f32 = 320.0;
+pub const H2_DUAL_Z_MAX: f32 = 325.0;
 pub const H2_NOZZLE_TEMP_MAX: u16 = 350;
 pub const H2_BED_TEMP_MAX: u16 = 120;
 pub const H2_CHAMBER_TEMP_MAX: u16 = 65;
