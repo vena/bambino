@@ -12,7 +12,7 @@ use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use embedded_io_async::Write;
+use embedded_io_async::{Error as _, Write};
 
 use crate::error::BambuError;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
@@ -20,6 +20,55 @@ use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnec
 use crate::models::BambuModel;
 
 use super::protocol::*;
+
+/// Unifies a data-channel socket that may or may not be TLS-wrapped behind one concrete type,
+/// so `list_directory`/`upload_file`/`download_file` can share a single transfer code path
+/// instead of duplicating it once per branch. `RawIO` and `Tls::Stream` are different
+/// concrete types (one wrapped in TLS, one not), so returning "either" from
+/// `open_data_channel` requires this enum wrapper rather than plain `impl AsyncIo`.
+///
+/// `CLAUDE.md` calls out this exact shape of branch duplication as the root cause of the
+/// `write_command` regression (commit `6385019`) — a fix applied to one branch and missed in
+/// its sibling silently reintroduces that failure class, and mocks can't distinguish
+/// branch-level duplication bugs from correct code. Both variants are always reachable
+/// (selected by `model.quirks().uses_plaintext_ftps_data_channel()`), so neither is dead code.
+enum DataChannel<RawIO, TlsStream> {
+    Plain(RawIO),
+    Secure(TlsStream),
+}
+
+impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::ErrorType
+    for DataChannel<RawIO, TlsStream>
+{
+    type Error = embedded_io_async::ErrorKind;
+}
+
+impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Read for DataChannel<RawIO, TlsStream> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        match self {
+            DataChannel::Plain(io) => io.read(buf).await.map_err(|e| e.kind()),
+            DataChannel::Secure(io) => io.read(buf).await.map_err(|e| e.kind()),
+        }
+    }
+}
+
+impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
+    for DataChannel<RawIO, TlsStream>
+{
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        match self {
+            DataChannel::Plain(io) => io.write(buf).await.map_err(|e| e.kind()),
+            DataChannel::Secure(io) => io.write(buf).await.map_err(|e| e.kind()),
+        }
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        match self {
+            DataChannel::Plain(io) => io.flush().await.map_err(|e| e.kind()),
+            DataChannel::Secure(io) => io.flush().await.map_err(|e| e.kind()),
+        }
+    }
+}
 
 /// Lightweight, high-reliability implicit FTPS client running on top of abstract I/O traits.
 ///
@@ -258,6 +307,34 @@ where
         Ok(())
     }
 
+    /// Wraps a raw data-channel socket in TLS (or not, per
+    /// `model.quirks().uses_plaintext_ftps_data_channel()`), re-checking TLS-1.2 enforcement
+    /// on the resulting stream, and returns it behind the unified `DataChannel` type. Poisons
+    /// the client on either failure path — see the struct doc comment's poisoning invariant —
+    /// so `list_directory`/`upload_file`/`download_file` can all share this one path instead
+    /// of duplicating it.
+    async fn open_data_channel(
+        &mut self,
+        raw_data_socket: RawIO,
+    ) -> Result<DataChannel<RawIO, Tls::Stream>, BambuError> {
+        if self.model.quirks().uses_plaintext_ftps_data_channel() {
+            return Ok(DataChannel::Plain(raw_data_socket));
+        }
+        let secure = match self.tls_connector.connect(&self.ip, raw_data_socket).await {
+            Ok(s) => s,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e.into());
+            }
+        };
+        if let Err(e) = Self::require_tls_1_2_if_enforced(&self.tls_connector, &secure, self.model)
+        {
+            self.poisoned = true;
+            return Err(e);
+        }
+        Ok(DataChannel::Secure(secure))
+    }
+
     /// Queries the storage server for raw directory listings and parses their structures.
     pub async fn list_directory(
         &mut self,
@@ -299,50 +376,19 @@ where
         // (Phase 2) so a caller gets an immediate, clear error instead of a later command
         // silently misreading this stale reply.
         let mut listing_payload = Vec::new();
-        if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket =
-                match self.tls_connector.connect(&self.ip, raw_data_socket).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        self.poisoned = true;
-                        return Err(e.into());
-                    }
-                };
-            if let Err(e) = Self::require_tls_1_2_if_enforced(
-                &self.tls_connector,
-                &secure_data_socket,
-                self.model,
-            ) {
-                self.poisoned = true;
-                return Err(e);
-            }
-            if let Err(e) = read_to_eof(
-                &mut secure_data_socket,
-                &mut listing_payload,
-                &self.timer,
-                FTPS_READ_TIMEOUT_SECS * 1000,
-            )
-            .await
-            {
-                self.poisoned = true;
-                return Err(e);
-            }
-            drop(secure_data_socket);
-        } else {
-            let mut plain_data_socket = raw_data_socket;
-            if let Err(e) = read_to_eof(
-                &mut plain_data_socket,
-                &mut listing_payload,
-                &self.timer,
-                FTPS_READ_TIMEOUT_SECS * 1000,
-            )
-            .await
-            {
-                self.poisoned = true;
-                return Err(e);
-            }
-            drop(plain_data_socket);
+        let mut data_channel = self.open_data_channel(raw_data_socket).await?;
+        if let Err(e) = read_to_eof(
+            &mut data_channel,
+            &mut listing_payload,
+            &self.timer,
+            FTPS_READ_TIMEOUT_SECS * 1000,
+        )
+        .await
+        {
+            self.poisoned = true;
+            return Err(e);
         }
+        drop(data_channel);
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = match read_response(
@@ -477,62 +523,25 @@ where
         // leaves it desynced for the next command — poison the client on every such path
         // (Phase 2) so a caller gets an immediate, clear error instead of a later command
         // silently misreading this stale reply.
-        if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket =
-                match self.tls_connector.connect(&self.ip, raw_data_socket).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        self.poisoned = true;
-                        return Err(e.into());
-                    }
-                };
-            if let Err(e) = Self::require_tls_1_2_if_enforced(
-                &self.tls_connector,
-                &secure_data_socket,
-                self.model,
-            ) {
-                self.poisoned = true;
-                return Err(e);
-            }
+        let mut data_channel = self.open_data_channel(raw_data_socket).await?;
 
-            let mut offset = 0;
-            while offset < data.len() {
-                let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
-                if let Err(_e) = secure_data_socket
-                    .write_all(&data[offset..offset + chunk_size])
-                    .await
-                {
-                    self.poisoned = true;
-                    return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
-                }
-                offset += chunk_size;
-            }
-            if let Err(_e) = secure_data_socket.flush().await {
+        let mut offset = 0;
+        while offset < data.len() {
+            let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
+            if let Err(_e) = data_channel
+                .write_all(&data[offset..offset + chunk_size])
+                .await
+            {
                 self.poisoned = true;
                 return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
             }
-
-            drop(secure_data_socket);
-        } else {
-            let mut plain_data_socket = raw_data_socket;
-            let mut offset = 0;
-            while offset < data.len() {
-                let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
-                if let Err(_e) = plain_data_socket
-                    .write_all(&data[offset..offset + chunk_size])
-                    .await
-                {
-                    self.poisoned = true;
-                    return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
-                }
-                offset += chunk_size;
-            }
-            if let Err(_e) = plain_data_socket.flush().await {
-                self.poisoned = true;
-                return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
-            }
-            drop(plain_data_socket);
+            offset += chunk_size;
         }
+        if let Err(_e) = data_channel.flush().await {
+            self.poisoned = true;
+            return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+        }
+        drop(data_channel);
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let res = read_response(
@@ -595,50 +604,19 @@ where
         // (Phase 2) so a caller gets an immediate, clear error instead of a later command
         // silently misreading this stale reply.
         let mut file_payload = Vec::new();
-        if !self.model.quirks().uses_plaintext_ftps_data_channel() {
-            let mut secure_data_socket =
-                match self.tls_connector.connect(&self.ip, raw_data_socket).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        self.poisoned = true;
-                        return Err(e.into());
-                    }
-                };
-            if let Err(e) = Self::require_tls_1_2_if_enforced(
-                &self.tls_connector,
-                &secure_data_socket,
-                self.model,
-            ) {
-                self.poisoned = true;
-                return Err(e);
-            }
-            if let Err(e) = read_to_eof(
-                &mut secure_data_socket,
-                &mut file_payload,
-                &self.timer,
-                FTPS_READ_TIMEOUT_SECS * 1000,
-            )
-            .await
-            {
-                self.poisoned = true;
-                return Err(e);
-            }
-            drop(secure_data_socket);
-        } else {
-            let mut plain_data_socket = raw_data_socket;
-            if let Err(e) = read_to_eof(
-                &mut plain_data_socket,
-                &mut file_payload,
-                &self.timer,
-                FTPS_READ_TIMEOUT_SECS * 1000,
-            )
-            .await
-            {
-                self.poisoned = true;
-                return Err(e);
-            }
-            drop(plain_data_socket);
+        let mut data_channel = self.open_data_channel(raw_data_socket).await?;
+        if let Err(e) = read_to_eof(
+            &mut data_channel,
+            &mut file_payload,
+            &self.timer,
+            FTPS_READ_TIMEOUT_SECS * 1000,
+        )
+        .await
+        {
+            self.poisoned = true;
+            return Err(e);
         }
+        drop(data_channel);
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = match read_response(
