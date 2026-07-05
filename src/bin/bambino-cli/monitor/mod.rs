@@ -76,7 +76,8 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 
     printer.request_pushall().await?;
 
-    let mut ping_timer = interval(Duration::from_secs(15));
+    const PING_TICK_SECS: u64 = 15;
+    let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
     ping_timer.tick().await;
 
     let _guard = TerminalGuard::enter().map_err(|_| {
@@ -116,6 +117,20 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
             _ = ping_timer.tick() => {
                 if let Err(e) = printer.send_ping().await {
                     log::warn!("Failed to dispatch keep-alive ping: {:?}", e);
+                }
+                // `tick_zombie_check` already logs its own `log::warn!` describing which
+                // liveness condition tripped before returning `Err`, so a detected zombie is
+                // treated as fatal here (mirroring the `poll_telemetry` error branch above)
+                // rather than logged-and-ignored like a single failed ping write above —
+                // continuing to loop against a connection this check has already confirmed
+                // dead would defeat the point of running it.
+                match printer.mqtt().await {
+                    Ok(mqtt) => {
+                        if let Err(e) = mqtt.tick_zombie_check(PING_TICK_SECS as u32) {
+                            break Err(e);
+                        }
+                    }
+                    Err(e) => break Err(e),
                 }
             }
 
