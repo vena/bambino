@@ -90,6 +90,48 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
     }
 }
 
+/// Configures a `std::net::UdpSocket` for SSDP discovery: enables broadcast, joins the
+/// standard Bambu multicast group (239.255.255.250) — on macOS and Windows, local firewalls
+/// and kernel routing stacks frequently drop incoming UDP replies from SSDP targets on
+/// ephemeral ports unless the receiving socket has registered a multicast group membership
+/// first — and puts the socket into non-blocking mode. Shared by every std-based platform
+/// backend that binds its own UDP socket (`TokioUdpSocket::bind`, `EspIdfUdpSocket::bind`);
+/// `set_broadcast`/`join_multicast_v4` failures are logged and otherwise ignored (best-effort,
+/// not fatal to discovery), while a `set_nonblocking` failure is returned since every caller
+/// requires it (Tokio panics on thread-local registration otherwise; ESP-IDF's recv pacing
+/// assumes it).
+#[cfg(feature = "std")]
+pub(crate) fn configure_std_udp_socket(socket: &std::net::UdpSocket) -> Result<(), SocketError> {
+    if let Err(e) = socket.set_broadcast(true) {
+        log::debug!("configure_std_udp_socket: set_broadcast failed: {e}");
+    }
+    let multiaddr = std::net::Ipv4Addr::new(239, 255, 255, 250);
+    let interface = std::net::Ipv4Addr::new(0, 0, 0, 0);
+    if let Err(e) = socket.join_multicast_v4(&multiaddr, &interface) {
+        log::debug!("configure_std_udp_socket: join_multicast_v4 failed: {e}");
+    }
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| map_std_io_error(e, "failed to set UDP socket non-blocking"))
+}
+
+/// Maps a `std::io::ErrorKind` to the closest `embedded_io_async::ErrorKind`. Shared by every
+/// std-based platform's `embedded_io_async::Error::kind()` impl (`TokioIoError`,
+/// `EspIdfIoError`) — both previously duplicated this exact match.
+#[cfg(feature = "std")]
+pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::ErrorKind {
+    match kind {
+        std::io::ErrorKind::ConnectionRefused => embedded_io_async::ErrorKind::ConnectionRefused,
+        std::io::ErrorKind::ConnectionAborted => embedded_io_async::ErrorKind::ConnectionAborted,
+        std::io::ErrorKind::ConnectionReset => embedded_io_async::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::NotConnected => embedded_io_async::ErrorKind::NotConnected,
+        std::io::ErrorKind::TimedOut => embedded_io_async::ErrorKind::TimedOut,
+        std::io::ErrorKind::AddrInUse => embedded_io_async::ErrorKind::AddrInUse,
+        std::io::ErrorKind::AddrNotAvailable => embedded_io_async::ErrorKind::AddrNotAvailable,
+        _ => embedded_io_async::ErrorKind::Other,
+    }
+}
+
 /// Unified timer/sleep errors, agnostic of runtime implementations.
 ///
 /// Mirrors [`SocketError`]'s shape. Tokio and Embassy sleeps are infallible, so only

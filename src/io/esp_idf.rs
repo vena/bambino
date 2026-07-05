@@ -70,21 +70,9 @@ pub struct EspIdfUdpSocket {
 #[cfg(feature = "esp-idf")]
 impl BindableUdpSocket for EspIdfUdpSocket {
     async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
-        let inner = std::net::UdpSocket::bind(addr).map_err(|e| to_esp_socket_error(e))?;
+        let inner = std::net::UdpSocket::bind(addr).map_err(to_esp_socket_error)?;
 
-        if let Err(e) = inner.set_broadcast(true) {
-            log::debug!("EspIdfUdpSocket::bind: set_broadcast failed: {e}");
-        }
-
-        let multiaddr = std::net::Ipv4Addr::new(239, 255, 255, 250);
-        let interface = std::net::Ipv4Addr::new(0, 0, 0, 0);
-        if let Err(e) = inner.join_multicast_v4(&multiaddr, &interface) {
-            log::debug!("EspIdfUdpSocket::bind: join_multicast_v4 failed: {e}");
-        }
-
-        inner
-            .set_nonblocking(true)
-            .map_err(|e| to_esp_socket_error(e))?;
+        crate::io::configure_std_udp_socket(&inner)?;
 
         let timer = EspIdfTimer::new().map_err(|_| {
             SocketError::Other("failed to create ESP-IDF async timer for UDP recv pacing".into())
@@ -335,46 +323,52 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::ErrorType for EspTlsStrea
 #[cfg(feature = "esp-idf")]
 impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspTlsStream<S> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        loop {
-            match self.tls.read(buf) {
-                Ok(n) => return Ok(n),
-                Err(e) if is_would_block(&e) => {
-                    self.timer
-                        .sleep(TLS_POLL_INTERVAL)
-                        .await
-                        .map_err(|_| embedded_io_async::ErrorKind::Other)?;
-                }
-                Err(e) => {
-                    log::debug!("ESP-IDF TLS read failed: {e}");
-                    return Err(embedded_io_async::ErrorKind::Other);
-                }
-            }
-        }
+        let tls = &mut self.tls;
+        retry_on_would_block(&self.timer, "read", || tls.read(buf)).await
     }
 }
 
 #[cfg(feature = "esp-idf")]
 impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        loop {
-            match self.tls.write(buf) {
-                Ok(n) => return Ok(n),
-                Err(e) if is_would_block(&e) => {
-                    self.timer
-                        .sleep(TLS_POLL_INTERVAL)
-                        .await
-                        .map_err(|_| embedded_io_async::ErrorKind::Other)?;
-                }
-                Err(e) => {
-                    log::debug!("ESP-IDF TLS write failed: {e}");
-                    return Err(embedded_io_async::ErrorKind::Other);
-                }
-            }
-        }
+        let tls = &mut self.tls;
+        retry_on_would_block(&self.timer, "write", || tls.write(buf)).await
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+/// Shared `WouldBlock` retry loop for `EspTlsStream::read`/`write` — both wrap a single
+/// `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on
+/// `is_would_block`, differing only in which `EspTls` method is invoked and the log message
+/// text. Takes `timer`/`op` separately rather than `&mut self` so the caller can borrow
+/// `self.tls` (via the closure) and `self.timer` (via this argument) as disjoint fields —
+/// see call sites in `EspTlsStream::read`/`write` above.
+#[cfg(feature = "esp-idf")]
+async fn retry_on_would_block<F>(
+    timer: &EspIdfTimer,
+    op_name: &str,
+    mut op: F,
+) -> Result<usize, embedded_io_async::ErrorKind>
+where
+    F: FnMut() -> Result<usize, ::esp_idf_svc::sys::EspError>,
+{
+    loop {
+        match op() {
+            Ok(n) => return Ok(n),
+            Err(e) if is_would_block(&e) => {
+                timer
+                    .sleep(TLS_POLL_INTERVAL)
+                    .await
+                    .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+            }
+            Err(e) => {
+                log::debug!("ESP-IDF TLS {op_name} failed: {e}");
+                return Err(embedded_io_async::ErrorKind::Other);
+            }
+        }
     }
 }
 
@@ -431,20 +425,7 @@ impl std::error::Error for EspIdfIoError {
 #[cfg(feature = "esp-idf")]
 impl embedded_io_async::Error for EspIdfIoError {
     fn kind(&self) -> embedded_io_async::ErrorKind {
-        match self.0.kind() {
-            std::io::ErrorKind::ConnectionRefused => {
-                embedded_io_async::ErrorKind::ConnectionRefused
-            }
-            std::io::ErrorKind::ConnectionAborted => {
-                embedded_io_async::ErrorKind::ConnectionAborted
-            }
-            std::io::ErrorKind::ConnectionReset => embedded_io_async::ErrorKind::ConnectionReset,
-            std::io::ErrorKind::NotConnected => embedded_io_async::ErrorKind::NotConnected,
-            std::io::ErrorKind::TimedOut => embedded_io_async::ErrorKind::TimedOut,
-            std::io::ErrorKind::AddrInUse => embedded_io_async::ErrorKind::AddrInUse,
-            std::io::ErrorKind::AddrNotAvailable => embedded_io_async::ErrorKind::AddrNotAvailable,
-            _ => embedded_io_async::ErrorKind::Other,
-        }
+        crate::io::map_io_error_kind(self.0.kind())
     }
 }
 

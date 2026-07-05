@@ -58,26 +58,10 @@ impl BindableUdpSocket for TokioUdpSocket {
         // before converting it cleanly into an asynchronous Tokio UdpSocket.
         let std_socket = std::net::UdpSocket::bind(addr).map_err(to_socket_error)?;
 
-        // Enable local broadcast capabilities safely.
-        if let Err(e) = std_socket.set_broadcast(true) {
-            log::debug!("TokioUdpSocket::bind: set_broadcast failed: {e}");
-        }
-
-        // Join the standard Bambu multicast group (239.255.255.250) to register an active IGMP membership.
-        // On macOS and Windows, local firewalls and kernel routing stacks frequently drop incoming UDP
-        // replies from SSDP targets on ephemeral ports unless the receiving socket has registered a
-        // multicast group membership first.
-        let multiaddr = std::net::Ipv4Addr::new(239, 255, 255, 250);
-        let interface = std::net::Ipv4Addr::new(0, 0, 0, 0);
-        if let Err(e) = std_socket.join_multicast_v4(&multiaddr, &interface) {
-            log::debug!("TokioUdpSocket::bind: join_multicast_v4 failed: {e}");
-        }
-
-        // **Non-blocking Mode Requirement [REF-NET-DISC]:**
-        // Putting the standard library socket in non-blocking mode is strictly required before wrapping
-        // it in the Tokio asynchronous engine. Failing to toggle this flag causes recent versions of Tokio
-        // (v1.40+) to panic immediately on thread-local registration.
-        std_socket.set_nonblocking(true).map_err(to_socket_error)?;
+        // Broadcast/multicast setup, then non-blocking mode — required before wrapping in the
+        // Tokio asynchronous engine (recent Tokio versions, v1.40+, panic immediately on
+        // thread-local registration otherwise). See `configure_std_udp_socket`'s doc comment.
+        crate::io::configure_std_udp_socket(&std_socket)?;
 
         // Convert the configured standard socket into an asynchronous Tokio UdpSocket.
         let inner = ::tokio::net::UdpSocket::from_std(std_socket).map_err(to_socket_error)?;
@@ -344,20 +328,7 @@ impl std::error::Error for TokioIoError {
 
 impl embedded_io_async::Error for TokioIoError {
     fn kind(&self) -> embedded_io_async::ErrorKind {
-        match self.0.kind() {
-            std::io::ErrorKind::ConnectionRefused => {
-                embedded_io_async::ErrorKind::ConnectionRefused
-            }
-            std::io::ErrorKind::ConnectionAborted => {
-                embedded_io_async::ErrorKind::ConnectionAborted
-            }
-            std::io::ErrorKind::ConnectionReset => embedded_io_async::ErrorKind::ConnectionReset,
-            std::io::ErrorKind::NotConnected => embedded_io_async::ErrorKind::NotConnected,
-            std::io::ErrorKind::TimedOut => embedded_io_async::ErrorKind::TimedOut,
-            std::io::ErrorKind::AddrInUse => embedded_io_async::ErrorKind::AddrInUse,
-            std::io::ErrorKind::AddrNotAvailable => embedded_io_async::ErrorKind::AddrNotAvailable,
-            _ => embedded_io_async::ErrorKind::Other,
-        }
+        crate::io::map_io_error_kind(self.0.kind())
     }
 }
 
