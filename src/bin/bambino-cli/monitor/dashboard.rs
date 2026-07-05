@@ -517,12 +517,48 @@ fn json_as_parsed_u64(val: Option<&serde_json::Value>) -> Option<u64> {
     }
 }
 
+/// Renders a terminal-escape color swatch from a `tray_color` hex string off the wire.
+///
+/// `hex_color` is untrusted printer telemetry. `.len() < 6` alone only checks *byte*
+/// length, not char-boundary safety — a value with 6+ bytes but containing a multi-byte
+/// UTF-8 character positioned so byte offset 2, 4, or 6 falls mid-codepoint would panic
+/// ("byte index N is not a char boundary") on the raw `&hex_color[0..2]`-style slices
+/// below. Checking that the first 6 bytes are all ASCII first guarantees each of those
+/// bytes is its own character, so slicing at any point within that prefix is always a
+/// valid char boundary.
 fn format_color_swatch(hex_color: &str) -> String {
-    if hex_color.len() < 6 {
+    if hex_color.len() < 6 || !hex_color.as_bytes()[..6].is_ascii() {
         return String::new();
     }
     let r = u8::from_str_radix(&hex_color[0..2], 16).unwrap_or(0);
     let g = u8::from_str_radix(&hex_color[2..4], 16).unwrap_or(0);
     let b = u8::from_str_radix(&hex_color[4..6], 16).unwrap_or(0);
     format!("\x1B[48;2;{};{};{}m  \x1B[0m", r, g, b)
+}
+
+#[cfg(test)]
+mod format_color_swatch_tests {
+    use super::format_color_swatch;
+
+    #[test]
+    fn test_format_color_swatch_valid_hex() {
+        let swatch = format_color_swatch("FF00FF");
+        assert!(swatch.contains("255;0;255"));
+    }
+
+    #[test]
+    fn test_format_color_swatch_too_short_returns_empty() {
+        assert_eq!(format_color_swatch("FF00"), "");
+    }
+
+    #[test]
+    fn test_format_color_swatch_multibyte_char_does_not_panic() {
+        // Regression test: a value with >= 6 bytes but a multi-byte UTF-8 character
+        // straddling a byte offset the old code sliced at (0, 2, 4, or 6) used to panic
+        // with "byte index N is not a char boundary" instead of degrading cleanly.
+        // "a" (1 byte) + "é" (2 bytes, occupying byte offsets 1-2) + "2345" (4 bytes) = 7
+        // bytes total; the old `&hex_color[0..2]` slice's end boundary (byte offset 2)
+        // fell in the middle of 'é'.
+        assert_eq!(format_color_swatch("a\u{e9}2345"), "");
+    }
 }
