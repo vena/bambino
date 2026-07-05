@@ -942,6 +942,25 @@ async fn test_change_filament_load_wire_payload() {
 }
 
 #[tokio::test]
+async fn test_change_filament_rejects_invalid_ams_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    let result = client.change_filament(99, 1, 1, -1, -1).await;
+    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_drying_lifecycle_wire_payload() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
@@ -1003,6 +1022,25 @@ async fn test_scan_rfid_wire_payload() {
 }
 
 #[tokio::test]
+async fn test_scan_rfid_rejects_invalid_ams_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    let result = client.scan_rfid(255, 2).await;
+    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_select_k_profile_wire_payload() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
@@ -1029,6 +1067,25 @@ async fn test_select_k_profile_wire_payload() {
         .select_k_profile(0, 1, 4, "GFA01", "0.4")
         .await
         .expect("select_k_profile failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_select_k_profile_rejects_invalid_combo() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    let result = client.select_k_profile(200, 200, 4, "GFA01", "0.4").await;
+    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");
 }

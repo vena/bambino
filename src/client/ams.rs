@@ -49,9 +49,14 @@ where
 {
     /// Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
     ///
-    /// * `ams_id`: AMS unit index (0-3), or `255` for external spool.
-    /// * `slot_id`: Slot within the AMS (0-3), or `254` for external spool.
-    /// * `target`: Load destination (`1` = toolhead load, `255` = unload/retract).
+    /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or `254`/`255`
+    ///   for external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
+    /// * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
+    ///   load, or `255` for an unload/retract (see `ams_change_filament` examples in
+    ///   `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
+    /// * `target`: Load/unload destination. Confirmed wire values (§5.3): `0` (IDEX Ext-R
+    ///   external-spool load), `1` (standard AMS slot load), `254` (single-nozzle
+    ///   external-spool load), `255` (unload/retract, any source).
     /// * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
     pub async fn change_filament(
         &mut self,
@@ -61,6 +66,18 @@ where
         curr_temp: i32,
         tar_temp: i32,
     ) -> Result<u16, BambuError> {
+        let ams_valid = (0..=3).contains(&ams_id)
+            || (128..=135).contains(&ams_id)
+            || ams_id == 254
+            || ams_id == 255;
+        let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
+        let target_valid = matches!(target, 0 | 1 | 254 | 255);
+        if !ams_valid || !slot_valid || !target_valid {
+            return Err(BambuError::ProtocolViolation(
+                "invalid AMS addressing parameters for change_filament".into(),
+            ));
+        }
+
         let seq = self.next_sequence_id();
         let req = crate::mqtt::AmsChangeFilamentRequest::new(
             ams_id, slot_id, target, curr_temp, tar_temp, seq,
@@ -104,7 +121,21 @@ where
     }
 
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
+    ///
+    /// * `ams_id`: AMS unit index (`0..=3`) or AMS-HT unit bus ID (`128..=135`). Only
+    ///   documented against a physical bus unit (`reference/03_mqtt_telemetry.md`
+    ///   `ams_get_rfid` example) — external spools have no RFID reader node, so no
+    ///   external-spool sentinel value applies here.
+    /// * `slot_id`: Slot within the AMS (`0..=3`).
     pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, BambuError> {
+        let ams_valid = (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id);
+        let slot_valid = (0..=3).contains(&slot_id);
+        if !ams_valid || !slot_valid {
+            return Err(BambuError::ProtocolViolation(
+                "invalid AMS addressing parameters for scan_rfid".into(),
+            ));
+        }
+
         let seq = self.next_sequence_id();
         let req = crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq);
         self.publish_request(&req).await
@@ -124,6 +155,16 @@ where
     /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
     ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`; Ext-R requires
     ///   `ams_id: 255` / `tray_id: 0`.
+    ///
+    /// **Validation note:** the cheat-sheet above documents only the *external-spool* case.
+    /// `reference/05_materials_ams.md` §5.3's own primary `extrusion_cali_sel` example binds a
+    /// perfectly ordinary AMS slot (`"ams_id": 0, "tray_id": 1`) — `tray_id` there is the
+    /// *global* tray ID (the same `(ams_id * 4) + slot_id` / `128..=135` AMS-HT composite the
+    /// flat `ams_mapping` array uses, per §5.3's "Hardware Channel Identifiers"), not a
+    /// per-unit slot index. The validation below therefore accepts the full documented
+    /// address space — standard AMS units, AMS-HT units, and the external-spool sentinels —
+    /// not just the two cheat-sheet pairs; restricting to only `(254,254)`/`(255,255)` (as an
+    /// earlier draft of this check assumed) would incorrectly reject this exact primary example.
     pub async fn select_k_profile(
         &mut self,
         ams_id: i32,
@@ -132,6 +173,20 @@ where
         filament_id: &str,
         nozzle_diameter: &str,
     ) -> Result<u16, BambuError> {
+        let ams_valid = (0..=3).contains(&ams_id)
+            || (128..=135).contains(&ams_id)
+            || ams_id == 254
+            || ams_id == 255;
+        let tray_valid = (0..=103).contains(&tray_id)
+            || (128..=135).contains(&tray_id)
+            || tray_id == 254
+            || tray_id == 255;
+        if !ams_valid || !tray_valid {
+            return Err(BambuError::ProtocolViolation(
+                "invalid ams_id/tray_id parameters for select_k_profile".into(),
+            ));
+        }
+
         let seq = self.next_sequence_id();
         let req = crate::diagnostics::ExtrusionCaliSelRequest::new(
             ams_id,
