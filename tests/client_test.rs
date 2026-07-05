@@ -12,8 +12,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bambino::client::{
-    CalibrationOption, DummyFactory, DummyTimer, DummyTls, FanTarget, PrintProgress, PrintSpeed,
-    PrintStatus, PrinterClient,
+    BuzzerMode, CalibrationOption, DummyFactory, DummyTimer, DummyTls, FanTarget, PrintProgress,
+    PrintSpeed, PrintStatus, PrinterClient,
 };
 use bambino::diagnostics::DecodedPrintError;
 use bambino::error::BambuError;
@@ -413,7 +413,7 @@ async fn test_peripheral_signals_and_climate_controls() {
         .await
         .expect("Airduct mode set failed");
     client_h2d
-        .set_buzzer_mode(2)
+        .set_buzzer_mode(BuzzerMode::Chirp)
         .await
         .expect("Buzzer mode set failed");
 
@@ -469,7 +469,7 @@ async fn test_peripheral_signals_and_climate_controls() {
         Err(BambuError::ModelMismatch(_))
     ));
     assert!(matches!(
-        client_p1s.set_buzzer_mode(1).await,
+        client_p1s.set_buzzer_mode(BuzzerMode::Alarm).await,
         Err(BambuError::ModelMismatch(_))
     ));
 
@@ -586,6 +586,45 @@ async fn test_temperature_clamping() {
 // ============================================================================
 // Negative / Failure Path Tests
 // ============================================================================
+
+#[tokio::test]
+async fn test_set_nozzle_temperature_validates_nozzle_id() {
+    // Single-nozzle model: nozzle_id 1 must be rejected.
+    let (client_stream_p1s, mut server_stream_p1s) = tokio::io::duplex(8192);
+    let broker_task_p1s = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_p1s).await;
+    });
+    let mqtt_client_p1s =
+        BambuMqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+    let mut client_p1s =
+        PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
+    assert!(matches!(
+        client_p1s.set_nozzle_temperature(1, 220).await,
+        Err(BambuError::ModelMismatch(_))
+    ));
+    broker_task_p1s.await.expect("P1S broker task panicked");
+
+    // IDEX model: nozzle_id 1 (secondary carriage) must be accepted.
+    let (client_stream_h2d, mut server_stream_h2d) = tokio::io::duplex(8192);
+    let broker_task_h2d = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_h2d).await;
+        let json = read_publish_payload(&mut server_stream_h2d).await;
+        assert_eq!(json["print"]["param"], "M104 T1 S220\n");
+    });
+    let mqtt_client_h2d =
+        BambuMqttClient::connect(TokioIo(client_stream_h2d), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+    let mut client_h2d =
+        PrinterClient::from_mqtt(mqtt_client_h2d, "01P000000000000", BambuModel::H2D);
+    client_h2d
+        .set_nozzle_temperature(1, 220)
+        .await
+        .expect("IDEX secondary nozzle should be accepted");
+    broker_task_h2d.await.expect("H2D broker task panicked");
+}
 
 #[tokio::test]
 async fn test_in_flight_saturation() {

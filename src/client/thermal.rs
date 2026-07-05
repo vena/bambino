@@ -74,7 +74,15 @@ where
 
     /// Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
     ///
-    /// * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on IDEX).
+    /// * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on
+    ///   IDEX). **Tool-changer exception (H2C):** per `reference/04_toolhead_thermal_motion.md`
+    ///   §4's "Nozzle & Carriage Kinematics", H2C addresses its dedicated fixed hotend as `0`
+    ///   (same `M104 T0` convention as every other model) but its 6 passive tool-changer rack
+    ///   slots as `16..=21` — NOT a simple `0..physical_nozzle_count()` linear index, despite
+    ///   `physical_nozzle_count()` returning `7` for this model. The reference doc only
+    ///   confirms `16..=21` for the rack slots' telemetry-side `stat` field, not that
+    ///   `M104 T16`-style writes are actually meaningful for a passively-stored (unmounted)
+    ///   tool — validation below is deliberately permissive on H2C for exactly that reason.
     ///
     /// Values exceeding the model's maximum nozzle temperature are clamped automatically.
     pub async fn set_nozzle_temperature(
@@ -82,6 +90,19 @@ where
         nozzle_id: u8,
         target_temp: u16,
     ) -> Result<u16, BambuError> {
+        let nozzle_count = self.model.quirks().physical_nozzle_count();
+        let nozzle_valid = if nozzle_count == 7 {
+            // H2C tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
+            nozzle_id == 0 || (16..=21).contains(&nozzle_id)
+        } else {
+            nozzle_id < nozzle_count
+        };
+        if !nozzle_valid {
+            return Err(BambuError::ModelMismatch(
+                "nozzle_id exceeds this model's physical nozzle count".into(),
+            ));
+        }
+
         let max = self.model.quirks().nozzle_temp_max();
         let target_temp = super::clamp_temp(target_temp, max, "Nozzle");
         let gcode = format!("M104 T{} S{}", nozzle_id, target_temp);

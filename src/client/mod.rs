@@ -30,7 +30,8 @@ pub mod types;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
 pub use types::{
-    CalibrationOption, FanTarget, PrintProgress, PrintSpeed, PrintStatus, TelemetryEvent,
+    BuzzerMode, CalibrationOption, FanTarget, PrintProgress, PrintSpeed, PrintStatus,
+    TelemetryEvent,
 };
 
 #[cfg(not(feature = "std"))]

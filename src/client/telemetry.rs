@@ -399,7 +399,7 @@ where
             .as_ref()?
             .parts
             .iter()
-            .find(|part| part.id == 160)?
+            .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_RIGHT)?
             .state?;
         Some(state.clamp(0, 100) as u8)
     }

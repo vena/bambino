@@ -57,6 +57,32 @@ pub enum FanTarget {
     AuxiliaryRight,
 }
 
+// Write-side fan port IDs: `hardware.rs::set_fan_speed` uses these as M106 `P` arguments.
+pub(crate) const FAN_WRITE_PORT_PART_COOLING: u16 = 1;
+pub(crate) const FAN_WRITE_PORT_AUXILIARY_LEFT: u16 = 2;
+pub(crate) const FAN_WRITE_PORT_CHAMBER_EXHAUST: u16 = 3;
+pub(crate) const FAN_WRITE_PORT_AUXILIARY_RIGHT: u16 = 10;
+
+/// Read-side telemetry port ID for the auxiliary-right fan (`device.airduct.parts[id]`),
+/// used by `telemetry.rs::auxiliary_right_fan_speed`. **Different address space from the
+/// write-side `FAN_WRITE_PORT_*` constants above** — this is not a typo; write ports are
+/// M106 `P` arguments while read ports index the telemetry `airduct.parts` array, and there
+/// is no compiler-enforced link between "this `FanTarget` variant" and both of its port
+/// numbers today.
+pub(crate) const FAN_READ_PORT_AUXILIARY_RIGHT: u32 = 160;
+
+/// Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`]
+/// [REF-MQTT-LIFECYCLE]. Supported on models with a physical fire alarm buzzer (H2 series).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuzzerMode {
+    /// Silent/disarmed.
+    Silent = 0,
+    /// Alarm triggered.
+    Alarm = 1,
+    /// Beeping attention chime.
+    Chirp = 2,
+}
+
 /// Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrintSpeed {

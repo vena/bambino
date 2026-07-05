@@ -5,7 +5,7 @@ use crate::error::BambuError;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
-use super::types::FanTarget;
+use super::types::{BuzzerMode, FanTarget};
 
 impl<
     MqttRawIO,
@@ -66,14 +66,14 @@ where
         let pwm = ((speed_clamped as u32 * 255) / 100) as u16;
 
         let port_id = match fan_type {
-            FanTarget::PartCooling => 1,
+            FanTarget::PartCooling => super::types::FAN_WRITE_PORT_PART_COOLING,
             FanTarget::AuxiliaryLeft => {
                 if !self.model.quirks().supports_auxiliary_left_fan() {
                     return Err(BambuError::ModelMismatch(
                         "auxiliary left fan not available on this model".into(),
                     ));
                 }
-                2
+                super::types::FAN_WRITE_PORT_AUXILIARY_LEFT
             }
             FanTarget::ChamberExhaust => {
                 if !self.model.quirks().has_chamber_exhaust_fan() {
@@ -81,7 +81,7 @@ where
                         "chamber exhaust fan not available on this model".into(),
                     ));
                 }
-                3
+                super::types::FAN_WRITE_PORT_CHAMBER_EXHAUST
             }
             FanTarget::AuxiliaryRight => {
                 if !self.model.quirks().supports_auxiliary_right_fan() {
@@ -89,7 +89,7 @@ where
                         "auxiliary right fan not available on this model".into(),
                     ));
                 }
-                10
+                super::types::FAN_WRITE_PORT_AUXILIARY_RIGHT
             }
         };
 
@@ -134,15 +134,14 @@ where
 
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
     ///
-    /// Buzzer mode codes map to: `0` (Silent/disarmed), `1` (Alarm triggered), `2` (Beeping attention).
     /// Supported on models with a physical fire alarm buzzer (H2 series).
-    pub async fn set_buzzer_mode(&mut self, mode_code: i32) -> Result<u16, BambuError> {
+    pub async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, BambuError> {
         if !self.model.quirks().supports_buzzer() {
             return Err(BambuError::ModelMismatch(
                 "buzzer control not available on this model".into(),
             ));
         }
-        self.dispatch(|seq| crate::mqtt::commands::BuzzerRequest::new(mode_code, seq))
+        self.dispatch(|seq| crate::mqtt::commands::BuzzerRequest::new(mode as i32, seq))
             .await
     }
 }
