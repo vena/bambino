@@ -12,8 +12,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bambino::client::{
-    CalibrationOption, DummyFactory, DummyTls, FanTarget, PrintProgress, PrintSpeed, PrintStatus,
-    PrinterClient,
+    CalibrationOption, DummyFactory, DummyTimer, DummyTls, FanTarget, PrintProgress, PrintSpeed,
+    PrintStatus, PrinterClient,
 };
 use bambino::diagnostics::DecodedPrintError;
 use bambino::error::BambuError;
@@ -2421,7 +2421,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
         "12345678",
         BambuModel::P1S,
     )
-    .with_ftps(DummyTlsConnector, factory);
+    .with_ftps(DummyTlsConnector, factory, DummyTimer);
 
     client
         .storage()

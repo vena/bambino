@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::error::BambuError;
-use crate::io::{AsyncIo, SocketError};
+use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race, read_chunk};
 
 // FTP response codes (RFC 959)
 pub(crate) const FTP_GREETING: u16 = 220;
@@ -42,6 +42,72 @@ pub(crate) const FTP_LINE_READ_CHUNK_SIZE: usize = 512;
 /// camera's `with_max_frame_size`, there is currently no `BambuFtpsClient` builder to lower
 /// this for embedded targets with tighter memory budgets.
 pub(crate) const FTPS_MAX_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
+
+/// Per-call wall-clock budget for ordinary control-channel reads (`read_response`/
+/// `read_line_raw`, and each individual read step inside `read_to_eof`) — matches
+/// `MQTT_READ_TIMEOUT_SECS`/`CAMERA_READ_TIMEOUT_SECS` for consistency. Ordinary FTP command
+/// replies (USER/PASS/PBSZ/PROT/TYPE/SIZE/DELE/MKD/RMD/RNFR/RNTO/AVBL/PASV, and the initial
+/// `150`/`125` "opening data connection" replies) are short single/few-line responses that
+/// complete quickly under healthy conditions, so a flat per-call budget is appropriate here —
+/// unlike the post-transfer confirmation wait below, which needs a much longer allowance for
+/// entirely different reasons.
+pub(crate) const FTPS_READ_TIMEOUT_SECS: u64 = 30;
+
+/// Wall-clock budget specifically for the post-transfer confirmation `read_response` call in
+/// `list_directory`/`upload_file`/`download_file` (the one waiting for `226`/`426` after the
+/// data channel closes). `upload_file`'s own doc comment already documents waiting "up to 300
+/// seconds for the `226` transfer confirmation to print" due to microSD flush latency — that
+/// wait is a genuine, entirely silent gap (zero bytes at all, not slow-trickling data), so it
+/// needs a long flat deadline rather than benefiting from `read_to_eof`'s per-chunk reset.
+pub(crate) const FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS: u64 = 300;
+
+/// Computes an absolute deadline (epoch-ms) `budget_secs` in the future, or `None` if `timer`
+/// has no real wall-clock (see `TimerProvider::has_real_clock`) — the same
+/// `has_real_clock()`-gated pattern used throughout this crate (`read_exact_packet`,
+/// `read_next_frame_with_timer`) so a `DummyTimer`-backed client sees zero behavior change
+/// (unbounded reads, exactly as before per-read deadlines existed).
+pub(crate) fn ftps_deadline_ms<T: TimerProvider>(timer: &T, budget_secs: u64) -> Option<u64> {
+    if timer.has_real_clock() {
+        Some(timer.now_millis().saturating_add(budget_secs * 1000))
+    } else {
+        None
+    }
+}
+
+/// Like `crate::io::read_chunk`, but treats a `0`-byte read as legitimate EOF (`Ok(0)`) rather
+/// than mapping it to `SocketError::ConnectionReset`. Required for `read_to_eof`: its data
+/// transfers signal "transfer complete" via the data-channel socket closing normally (the
+/// standard passive-mode end-of-transfer signal) — unlike `read_chunk`'s other callers (MQTT
+/// frames, camera frames, and this same module's `read_line_raw`/control-channel replies),
+/// none of which expect a legitimate stream closure mid-read, `read_to_eof` must not treat a
+/// clean EOF as an error or every successful download would fail.
+async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    buf: &mut [u8],
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<usize, SocketError> {
+    let Some(deadline_ms) = deadline_ms else {
+        return stream
+            .read(buf)
+            .await
+            .map_err(|_| SocketError::ConnectionReset);
+    };
+
+    let remaining_ms = deadline_ms.saturating_sub(timer.now_millis());
+    if remaining_ms == 0 {
+        return Err(SocketError::TimedOut);
+    }
+
+    let read_fut = stream.read(buf);
+    let sleep_fut = timer.sleep(core::time::Duration::from_millis(remaining_ms));
+
+    match race(read_fut, sleep_fut).await {
+        Raced::Left(Ok(n)) => Ok(n),
+        Raced::Left(Err(_)) => Err(SocketError::ConnectionReset),
+        Raced::Right(_) => Err(SocketError::TimedOut),
+    }
+}
 
 /// Sends a formatted ASCII FTP command string cleanly terminated with CRLF boundaries.
 pub(crate) async fn write_command<IO: AsyncIo>(
@@ -88,10 +154,12 @@ pub(crate) async fn write_command<IO: AsyncIo>(
 /// this (a struct field threaded through every method, not a local per-response variable).
 ///
 /// Enforces a maximum line length to prevent OOM from malformed server output.
-async fn read_line_raw<IO: AsyncIo>(
+async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     line_buf: &mut Vec<u8>,
     fill_buf: &mut Vec<u8>,
+    timer: &T,
+    deadline_ms: Option<u64>,
 ) -> Result<(), BambuError> {
     line_buf.clear();
     loop {
@@ -113,14 +181,9 @@ async fn read_line_raw<IO: AsyncIo>(
         }
 
         let mut chunk = [0u8; FTP_LINE_READ_CHUNK_SIZE];
-        let n = stream
-            .read(&mut chunk)
+        let n = read_chunk(stream, &mut chunk, timer, deadline_ms)
             .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionReset))?;
-        if n == 0 {
-            // EOF mid-line: the server closed the connection before terminating its response.
-            return Err(BambuError::NetworkError(SocketError::ConnectionReset));
-        }
+            .map_err(BambuError::NetworkError)?;
         fill_buf.extend_from_slice(&chunk[..n]);
     }
 }
@@ -151,16 +214,18 @@ async fn read_line_raw<IO: AsyncIo>(
 /// `read_response` call silently dropped the buffered `226` bytes, desyncing the next read.
 /// `BambuFtpsClient` (`src/ftps/client.rs`) holds its `fill_buf` as a field for exactly this
 /// reason, threading it through every method's `read_response` call.
-pub(crate) async fn read_response<IO: AsyncIo>(
+pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     line_buf: &mut Vec<u8>,
     fill_buf: &mut Vec<u8>,
+    timer: &T,
+    deadline_ms: Option<u64>,
 ) -> Result<(u16, String), BambuError> {
     let mut accumulated = String::new();
     let mut lines_read: usize = 0;
 
     loop {
-        read_line_raw(stream, line_buf, fill_buf).await?;
+        read_line_raw(stream, line_buf, fill_buf, timer, deadline_ms).await?;
         lines_read += 1;
         if lines_read > FTP_MAX_RESPONSE_LINES {
             return Err(BambuError::ProtocolViolation(
@@ -267,13 +332,30 @@ pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
 }
 
 /// Utility capturing passive stream data up to socket EOF bounds.
-pub(crate) async fn read_to_eof<IO: AsyncIo>(
+///
+/// `budget_ms` is a *duration*, not an absolute deadline: a fresh absolute deadline is
+/// computed from `timer.now_millis() + budget_ms` before every individual read attempt (not
+/// once for the whole transfer) — so a truly-stalled connection (zero bytes for `budget_ms`
+/// straight) times out, while a slow-but-live transfer that keeps producing at least some
+/// bytes every `budget_ms` never does, regardless of the transfer's total duration. This
+/// matters here specifically because transfers can legitimately be large (up to
+/// `FTPS_MAX_TRANSFER_BYTES`, hundreds of MB) — unlike `read_response`'s fixed per-call
+/// deadline, which is fine for short control-channel replies but would falsely reject a
+/// large, slow-but-healthy download if applied to the whole transfer at once.
+pub(crate) async fn read_to_eof<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     out: &mut Vec<u8>,
+    timer: &T,
+    budget_ms: u64,
 ) -> Result<(), BambuError> {
     let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
     loop {
-        match stream.read(&mut chunk).await {
+        let deadline_ms = if timer.has_real_clock() {
+            Some(timer.now_millis().saturating_add(budget_ms))
+        } else {
+            None
+        };
+        match read_transfer_chunk(stream, &mut chunk, timer, deadline_ms).await {
             Ok(0) => break,
             Ok(n) => {
                 if out.len() + n > FTPS_MAX_TRANSFER_BYTES {
@@ -283,7 +365,7 @@ pub(crate) async fn read_to_eof<IO: AsyncIo>(
                 }
                 out.extend_from_slice(&chunk[..n]);
             }
-            Err(_) => return Err(BambuError::NetworkError(SocketError::ConnectionAborted)),
+            Err(e) => return Err(BambuError::NetworkError(e)),
         }
     }
     Ok(())
@@ -292,6 +374,7 @@ pub(crate) async fn read_to_eof<IO: AsyncIo>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::dummy::DummyTimer;
     use crate::io::TokioIo;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
@@ -387,12 +470,12 @@ mod tests {
         let mut line_buf = Vec::new();
         let mut fill_buf = Vec::new();
 
-        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf)
+        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
             .await
             .expect("first line");
         assert_eq!(line_buf, b"150 Opening data connection\r\n");
 
-        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf)
+        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
             .await
             .expect("second line");
         assert_eq!(line_buf, b"226 Transfer complete\r\n");
@@ -407,7 +490,7 @@ mod tests {
         let mut line_buf = Vec::new();
         let mut fill_buf = Vec::new();
 
-        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf)
+        read_line_raw(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
             .await
             .expect("assembled line");
         assert_eq!(line_buf, b"220 Welcome\r\n");
@@ -427,9 +510,10 @@ mod tests {
         let mut line_buf = Vec::new();
         let mut fill_buf = Vec::new();
 
-        let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf)
-            .await
-            .expect("multi-line response");
+        let (code, text) =
+            read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+                .await
+                .expect("multi-line response");
         assert_eq!(code, 213);
         assert_eq!(text, "First line\nSecond line\nFinal line");
     }
@@ -449,12 +533,12 @@ mod tests {
         let mut line_buf = Vec::new();
         let mut fill_buf = Vec::new();
 
-        let (code, _) = read_response(&mut stream, &mut line_buf, &mut fill_buf)
+        let (code, _) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
             .await
             .expect("first reply");
         assert_eq!(code, 150);
 
-        let (code, _) = read_response(&mut stream, &mut line_buf, &mut fill_buf)
+        let (code, _) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
             .await
             .expect("second reply, from carried-over leftover bytes only");
         assert_eq!(code, 226);
@@ -506,9 +590,91 @@ mod tests {
         let mut stream = TokioIo(reader);
         let mut out = Vec::new();
 
-        let result = read_to_eof(&mut stream, &mut out).await;
+        let result = read_to_eof(&mut stream, &mut out, &DummyTimer, 30_000).await;
         assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
         assert!(out.len() <= FTPS_MAX_TRANSFER_BYTES);
+    }
+
+    /// Regression test mirroring `read_exact_packet`'s
+    /// `test_read_exact_packet_stalled_connection_times_out`: a data channel that stalls with
+    /// zero incoming bytes (e.g. firmware hang mid-transfer) must not hang `read_to_eof`
+    /// forever. `WriteRecorder`'s `poll_read` always returns `Pending`, simulating a
+    /// genuinely stalled socket rather than a merely slow or closed one. The outer
+    /// `tokio::time::timeout` is a meta-safety net — if the implementation regresses to
+    /// hanging forever, this test fails promptly instead of wedging the whole suite.
+    #[tokio::test]
+    async fn test_read_to_eof_stalled_connection_times_out() {
+        let mut stream = TokioIo(WriteRecorder::default());
+        let mut out = Vec::new();
+        let timer = crate::io::tokio::TokioTimer::new();
+        let budget_ms = 50;
+
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            core::time::Duration::from_secs(5),
+            read_to_eof(&mut stream, &mut out, &timer, budget_ms),
+        )
+        .await
+        .expect(
+            "read_to_eof hung past the 5s meta-safety timeout instead of honoring its own \
+             budget — this is the exact regression this test guards against",
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(result, Err(BambuError::NetworkError(SocketError::TimedOut))),
+            "Expected TimedOut for a stalled connection, got {:?}",
+            result
+        );
+        assert!(
+            elapsed < core::time::Duration::from_secs(2),
+            "read_to_eof took {:?} to time out against a {}ms budget — too slow",
+            elapsed,
+            budget_ms
+        );
+    }
+
+    /// Regression test mirroring the above, at the control-channel `read_response` level: a
+    /// control channel that stalls with zero incoming bytes (e.g. after a `150`/`125` reply,
+    /// before the eventual `226`) must not hang `read_response` forever.
+    #[tokio::test]
+    async fn test_read_response_stalled_connection_times_out() {
+        let mut stream = TokioIo(WriteRecorder::default());
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+        let timer = crate::io::tokio::TokioTimer::new();
+        let budget_ms = 50;
+        let deadline_ms = Some(timer.now_millis().saturating_add(budget_ms));
+
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            core::time::Duration::from_secs(5),
+            read_response(
+                &mut stream,
+                &mut line_buf,
+                &mut fill_buf,
+                &timer,
+                deadline_ms,
+            ),
+        )
+        .await
+        .expect(
+            "read_response hung past the 5s meta-safety timeout instead of honoring its own \
+             budget — this is the exact regression this test guards against",
+        );
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(result, Err(BambuError::NetworkError(SocketError::TimedOut))),
+            "Expected TimedOut for a stalled connection, got {:?}",
+            result
+        );
+        assert!(
+            elapsed < core::time::Duration::from_secs(2),
+            "read_response took {:?} to time out against a {}ms budget — too slow",
+            elapsed,
+            budget_ms
+        );
     }
 
     #[tokio::test]

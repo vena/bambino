@@ -12,6 +12,7 @@ impl<
     FtpsRawIO,
     FtpsTls,
     FtpsFactory,
+    FtpsTimer,
     CameraRawIO,
     CameraTls,
     CameraFactory,
@@ -24,6 +25,7 @@ impl<
         FtpsRawIO,
         FtpsTls,
         FtpsFactory,
+        FtpsTimer,
         CameraRawIO,
         CameraTls,
         CameraFactory,
@@ -36,6 +38,7 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    FtpsTimer: TimerProvider,
     CameraRawIO: AsyncIo,
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
@@ -46,7 +49,7 @@ where
     /// connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps).
     pub fn attach_storage(
         &mut self,
-        ftps_client: BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory>,
+        ftps_client: BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>,
     ) {
         self.ftps = Some(ftps_client);
     }
@@ -58,7 +61,7 @@ where
     /// [`.attach_storage()`](Self::attach_storage).
     pub async fn storage(
         &mut self,
-    ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory>, BambuError> {
+    ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, BambuError> {
         self.ensure_ftps().await?;
         Ok(self.ftps.as_mut().unwrap())
     }

@@ -12,6 +12,7 @@ mod common;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use bambino::client::DummyTimer;
 use bambino::error::BambuError;
 use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
@@ -47,7 +48,12 @@ async fn connect_client(
     client_control: tokio::io::DuplexStream,
     factory: MockDataStreamFactory,
     model: BambuModel,
-) -> BambuFtpsClient<TokioIo<tokio::io::DuplexStream>, DummyTlsConnector, MockDataStreamFactory> {
+) -> BambuFtpsClient<
+    TokioIo<tokio::io::DuplexStream>,
+    DummyTlsConnector,
+    MockDataStreamFactory,
+    DummyTimer,
+> {
     BambuFtpsClient::connect(
         TokioIo(client_control),
         DummyTlsConnector,
@@ -55,6 +61,7 @@ async fn connect_client(
         model,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await
     .expect("FTPS handshake failed")
@@ -223,6 +230,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         BambuModel::P1S,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await
     .expect("FTPS handshake failed");
@@ -317,6 +325,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
         BambuModel::P2S,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await;
 
@@ -338,6 +347,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
         BambuModel::X2D,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await;
 
@@ -364,6 +374,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         BambuModel::P2S,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await
     .expect("TLS 1.2 should be accepted for P2S");
@@ -388,6 +399,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         BambuModel::P1S,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await
     .expect("TLS 1.3 should be accepted for P1S");
@@ -407,6 +419,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
         BambuModel::P2S,
         "127.0.0.1",
         "12345678",
+        DummyTimer,
     )
     .await;
 

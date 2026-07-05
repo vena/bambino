@@ -45,6 +45,7 @@ impl<
     FtpsRawIO,
     FtpsTls,
     FtpsFactory,
+    FtpsTimer,
     CameraRawIO,
     CameraTls,
     CameraFactory,
@@ -57,6 +58,7 @@ impl<
         FtpsRawIO,
         FtpsTls,
         FtpsFactory,
+        FtpsTimer,
         CameraRawIO,
         CameraTls,
         CameraFactory,
@@ -69,6 +71,7 @@ where
     FtpsRawIO: AsyncIo,
     FtpsTls: TlsConnector<FtpsRawIO>,
     FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    FtpsTimer: TimerProvider,
     CameraRawIO: AsyncIo,
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
@@ -126,6 +129,7 @@ where
         FtpsRawIO,
         FtpsTls,
         FtpsFactory,
+        FtpsTimer,
         CameraRawIO,
         CameraTls,
         CameraFactory,
@@ -173,13 +177,18 @@ where
 
     /// Configures FTPS for lazy connection on first storage method call.
     ///
-    /// Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, and `FtpsFactory` type
-    /// parameters. The FTPS [`TlsConnector`] is independent from MQTT's (some models require
-    /// different TLS settings for FTPS, e.g. `force_tls_1_2`).
-    pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory>(
+    /// Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, `FtpsFactory`, and `FtpsTimer`
+    /// type parameters. The FTPS [`TlsConnector`] is independent from MQTT's (some models
+    /// require different TLS settings for FTPS, e.g. `force_tls_1_2`). `timer` is
+    /// constructed fresh by the caller (e.g. `TokioTimer::new()`) — `BambuFtpsClient` owns it
+    /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
+    /// out direct `&mut BambuFtpsClient` access rather than mediating every FTPS call itself,
+    /// so there's no call site to thread `self.timer` through the way MQTT/camera do.
+    pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
         self,
         tls: NewFtpsTls,
         factory: NewFtpsFactory,
+        timer: NewFtpsTimer,
     ) -> PrinterClient<
         MqttRawIO,
         MqttTls,
@@ -188,6 +197,7 @@ where
         NewFtpsRawIO,
         NewFtpsTls,
         NewFtpsFactory,
+        NewFtpsTimer,
         CameraRawIO,
         CameraTls,
         CameraFactory,
@@ -196,11 +206,12 @@ where
         NewFtpsRawIO: AsyncIo,
         NewFtpsTls: TlsConnector<NewFtpsRawIO>,
         NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
+        NewFtpsTimer: TimerProvider,
     {
         PrinterClient {
             mqtt: self.mqtt,
             ftps: None,
-            ftps_config: Some((tls, factory)),
+            ftps_config: Some((tls, factory, timer)),
             camera: self.camera,
             camera_config: self.camera_config,
             mqtt_tls: self.mqtt_tls,
@@ -241,7 +252,7 @@ where
         if self.ftps.is_some() {
             return Ok(());
         }
-        let (tls, factory) = self.ftps_config.take().ok_or_else(|| {
+        let (tls, factory, timer) = self.ftps_config.take().ok_or_else(|| {
             BambuError::ProtocolViolation(
                 "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
             )
@@ -253,7 +264,8 @@ where
         let ftps_client =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
                 let raw_stream = factory.dial(ip, ftps_port).await?;
-                BambuFtpsClient::connect(raw_stream, tls, factory, model, ip, access_code).await
+                BambuFtpsClient::connect(raw_stream, tls, factory, model, ip, access_code, timer)
+                    .await
             })
             .await?;
         self.ftps = Some(ftps_client);
@@ -342,6 +354,7 @@ where
         FtpsRawIO,
         FtpsTls,
         FtpsFactory,
+        FtpsTimer,
         NewCameraRawIO,
         NewCameraTls,
         NewCameraFactory,

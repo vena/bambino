@@ -16,7 +16,7 @@ use embedded_io_async::Write;
 
 use crate::error::BambuError;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
-use crate::io::{AsyncIo, RawStreamFactory, SocketError, TlsConnector, TlsVersion};
+use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::BambuModel;
 
 use super::protocol::*;
@@ -32,17 +32,27 @@ use super::protocol::*;
 /// `disconnect()`); every public method checks the flag first and returns
 /// [`BambuError::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
 /// reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.
-pub struct BambuFtpsClient<RawIO, Tls, Factory>
+///
+/// **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
+/// `FTPS_READ_TIMEOUT_SECS`/`FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS` in `protocol.rs`) — owned
+/// independently of whatever `Timer` a `PrinterClient` that hands out this client is using,
+/// since `PrinterClient::storage()` hands out direct `&mut BambuFtpsClient` access rather than
+/// mediating every method call the way it does for MQTT/camera (no call site to thread
+/// `&self.timer` through). Defaults to `DummyTimer` (unbounded, matching this crate's existing
+/// `DummyTimer` convention) for direct (non-`PrinterClient`) callers that don't supply one.
+pub struct BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer = crate::client::DummyTimer>
 where
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: RawStreamFactory<RawIO>,
+    FtpsTimer: TimerProvider,
 {
     control_stream: Tls::Stream,
     tls_connector: Tls,
     data_factory: Factory,
     model: BambuModel,
     ip: String,
+    timer: FtpsTimer,
     /// Set once a control-channel desync is possible (see struct doc comment). Checked by every
     /// public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
@@ -59,11 +69,12 @@ where
     control_fill_buf: Vec<u8>,
 }
 
-impl<RawIO, Tls, Factory> BambuFtpsClient<RawIO, Tls, Factory>
+impl<RawIO, Tls, Factory, FtpsTimer> BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>
 where
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
     Factory: RawStreamFactory<RawIO>,
+    FtpsTimer: TimerProvider,
 {
     /// Establishes the secure control channel, performs login handshakes, and configures security properties.
     ///
@@ -78,6 +89,7 @@ where
         model: BambuModel,
         ip: &str,
         access_code: &str,
+        timer: FtpsTimer,
     ) -> Result<Self, BambuError> {
         let mut control_stream = tls_connector.connect(ip, raw_control).await?;
 
@@ -87,8 +99,16 @@ where
         // Persists across every read_response call in this login sequence, and is carried
         // forward into `Self` below — see `control_fill_buf`'s doc comment on the struct.
         let mut fill_buf = Vec::new();
+        let deadline_ms = ftps_deadline_ms(&timer, FTPS_READ_TIMEOUT_SECS);
 
-        let (code, _) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
+        let (code, _) = read_response(
+            &mut control_stream,
+            &mut buf,
+            &mut fill_buf,
+            &timer,
+            deadline_ms,
+        )
+        .await?;
         if code != FTP_GREETING {
             return Err(BambuError::ProtocolViolation(
                 "Unexpected greeting from FTP server".into(),
@@ -96,7 +116,14 @@ where
         }
 
         write_command(&mut control_stream, "USER bblp").await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
+        let (code, text) = read_response(
+            &mut control_stream,
+            &mut buf,
+            &mut fill_buf,
+            &timer,
+            deadline_ms,
+        )
+        .await?;
         log::debug!("FTPS USER response: code={code} text={text:?}");
         if code != FTP_PASSWORD_NEEDED {
             return Err(BambuError::ProtocolViolation(
@@ -106,7 +133,14 @@ where
 
         let pass_cmd = format!("PASS {}", access_code);
         write_command(&mut control_stream, &pass_cmd).await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
+        let (code, text) = read_response(
+            &mut control_stream,
+            &mut buf,
+            &mut fill_buf,
+            &timer,
+            deadline_ms,
+        )
+        .await?;
         log::debug!("FTPS PASS response: code={code} text={text:?}");
 
         if code != FTP_LOGIN_OK {
@@ -114,7 +148,14 @@ where
         }
 
         write_command(&mut control_stream, "PBSZ 0").await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
+        let (code, text) = read_response(
+            &mut control_stream,
+            &mut buf,
+            &mut fill_buf,
+            &timer,
+            deadline_ms,
+        )
+        .await?;
         log::debug!("FTPS PBSZ response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
@@ -125,7 +166,14 @@ where
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !model.quirks().uses_plaintext_ftps_data_channel() {
             write_command(&mut control_stream, "PROT P").await?;
-            let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
+            let (code, text) = read_response(
+                &mut control_stream,
+                &mut buf,
+                &mut fill_buf,
+                &timer,
+                deadline_ms,
+            )
+            .await?;
             log::debug!("FTPS PROT P response: code={code} text={text:?}");
             if code != FTP_COMMAND_OK {
                 return Err(BambuError::ProtocolViolation(
@@ -136,7 +184,14 @@ where
 
         // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
         write_command(&mut control_stream, "TYPE I").await?;
-        let (code, text) = read_response(&mut control_stream, &mut buf, &mut fill_buf).await?;
+        let (code, text) = read_response(
+            &mut control_stream,
+            &mut buf,
+            &mut fill_buf,
+            &timer,
+            deadline_ms,
+        )
+        .await?;
         log::debug!("FTPS TYPE I response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
             return Err(BambuError::ProtocolViolation(
@@ -150,6 +205,7 @@ where
             data_factory,
             model,
             ip: String::from(ip),
+            timer,
             poisoned: false,
             control_fill_buf: fill_buf,
         })
@@ -169,6 +225,14 @@ where
             ));
         }
         Ok(())
+    }
+
+    /// Computes a fresh absolute deadline `budget_secs` in the future against `self.timer`, or
+    /// `None` under `DummyTimer` (unbounded) — see `ftps_deadline_ms`'s doc comment. Call this
+    /// fresh immediately before each `read_response`/`read_to_eof` call rather than reusing a
+    /// value computed earlier, so every call gets its own full budget.
+    fn read_deadline_ms(&self, budget_secs: u64) -> Option<u64> {
+        ftps_deadline_ms(&self.timer, budget_secs)
     }
 
     /// Fail-closed TLS-1.2 guard, shared by the control-channel check in `connect()` and the
@@ -214,10 +278,13 @@ where
         write_command(&mut self.control_stream, &list_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
@@ -249,24 +316,41 @@ where
                 self.poisoned = true;
                 return Err(e);
             }
-            if let Err(e) = read_to_eof(&mut secure_data_socket, &mut listing_payload).await {
+            if let Err(e) = read_to_eof(
+                &mut secure_data_socket,
+                &mut listing_payload,
+                &self.timer,
+                FTPS_READ_TIMEOUT_SECS * 1000,
+            )
+            .await
+            {
                 self.poisoned = true;
                 return Err(e);
             }
             drop(secure_data_socket);
         } else {
             let mut plain_data_socket = raw_data_socket;
-            if let Err(e) = read_to_eof(&mut plain_data_socket, &mut listing_payload).await {
+            if let Err(e) = read_to_eof(
+                &mut plain_data_socket,
+                &mut listing_payload,
+                &self.timer,
+                FTPS_READ_TIMEOUT_SECS * 1000,
+            )
+            .await
+            {
                 self.poisoned = true;
                 return Err(e);
             }
             drop(plain_data_socket);
         }
 
+        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = match read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await
         {
@@ -305,10 +389,13 @@ where
         write_command(&mut self.control_stream, &size_cmd).await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, text) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_SIZE_OK {
@@ -331,10 +418,13 @@ where
         write_command(&mut self.control_stream, &dele_cmd).await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
 
@@ -367,10 +457,13 @@ where
         write_command(&mut self.control_stream, &stor_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
@@ -441,10 +534,13 @@ where
             drop(plain_data_socket);
         }
 
+        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let res = read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await;
         match res {
@@ -478,10 +574,13 @@ where
         write_command(&mut self.control_stream, &retr_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
@@ -513,24 +612,41 @@ where
                 self.poisoned = true;
                 return Err(e);
             }
-            if let Err(e) = read_to_eof(&mut secure_data_socket, &mut file_payload).await {
+            if let Err(e) = read_to_eof(
+                &mut secure_data_socket,
+                &mut file_payload,
+                &self.timer,
+                FTPS_READ_TIMEOUT_SECS * 1000,
+            )
+            .await
+            {
                 self.poisoned = true;
                 return Err(e);
             }
             drop(secure_data_socket);
         } else {
             let mut plain_data_socket = raw_data_socket;
-            if let Err(e) = read_to_eof(&mut plain_data_socket, &mut file_payload).await {
+            if let Err(e) = read_to_eof(
+                &mut plain_data_socket,
+                &mut file_payload,
+                &self.timer,
+                FTPS_READ_TIMEOUT_SECS * 1000,
+            )
+            .await
+            {
                 self.poisoned = true;
                 return Err(e);
             }
             drop(plain_data_socket);
         }
 
+        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = match read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await
         {
@@ -558,10 +674,13 @@ where
         write_command(&mut self.control_stream, &mkd_cmd).await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_PATHNAME_CREATED {
@@ -584,10 +703,13 @@ where
         write_command(&mut self.control_stream, &rmd_cmd).await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
@@ -612,10 +734,13 @@ where
         write_command(&mut self.control_stream, &rnfr_cmd).await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_RENAME_PENDING {
@@ -627,10 +752,13 @@ where
         let rnto_cmd = format!("RNTO {}", to);
         write_command(&mut self.control_stream, &rnto_cmd).await?;
 
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, _) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_FILE_ACTION_OK {
@@ -648,10 +776,13 @@ where
         write_command(&mut self.control_stream, "AVBL").await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, text) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
 
@@ -671,10 +802,13 @@ where
         write_command(&mut self.control_stream, "PASV").await?;
 
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let (code, text) = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await?;
         if code != FTP_PASSIVE_MODE {
@@ -704,10 +838,13 @@ where
         }
         let _ = write_command(&mut self.control_stream, "QUIT").await;
         let mut buf = Vec::new();
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let _ = read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
         )
         .await;
         self.poisoned = true;
