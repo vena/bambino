@@ -62,10 +62,21 @@ pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 /// means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
 /// valid-but-unusual code — surfacing it as an error catches that mistake instead of
 /// silently building a malformed URL.
+///
+/// Also returns [`BambuError::ProtocolViolation`] if `ip` does not parse as a valid IPv4 or
+/// IPv6 address. Without this check, an `ip` containing an embedded `@` (e.g.
+/// `"1.2.3.4@attacker.example.com"`, spoofable by any device on the LAN via SSDP/mDNS
+/// discovery) would place everything up to the last `@` into the URL's userinfo component,
+/// redirecting the connection — and the LAN access code — to an attacker-controlled host.
 pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError> {
     if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(BambuError::ProtocolViolation(
             "access_code must be a non-empty ASCII alphanumeric string".into(),
+        ));
+    }
+    if ip.parse::<core::net::IpAddr>().is_err() {
+        return Err(BambuError::ProtocolViolation(
+            "ip must be a valid IPv4 or IPv6 address".into(),
         ));
     }
     Ok(format!(
@@ -159,6 +170,22 @@ mod tests {
         assert!(build_rtsps_url("192.168.1.150", "1234@678").is_err());
         assert!(build_rtsps_url("192.168.1.150", "1234 678").is_err());
         assert!(build_rtsps_url("192.168.1.150", "1234\n678").is_err());
+    }
+
+    #[test]
+    fn test_build_rtsps_url_rejects_ip_with_embedded_at() {
+        assert!(build_rtsps_url("1.2.3.4@attacker.example.com", "12345678").is_err());
+    }
+
+    #[test]
+    fn test_build_rtsps_url_rejects_non_ip_hostname() {
+        assert!(build_rtsps_url("attacker.example.com", "12345678").is_err());
+    }
+
+    #[test]
+    fn test_build_rtsps_url_accepts_ipv6() {
+        let url = build_rtsps_url("fe80::1", "12345678").unwrap();
+        assert_eq!(url, "rtsps://bblp:12345678@fe80::1:322/streaming/live/1");
     }
 
     #[test]
