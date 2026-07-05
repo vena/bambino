@@ -8,6 +8,18 @@ use crate::types::VersionInfo;
 
 use super::PrinterClient;
 
+/// Maximum documented drying-chamber temperature (°C) for an AMS-HT unit's built-in heater —
+/// confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-ht/Intr-to-ams-ht-workflow-and-features`),
+/// not this crate's `reference/` docs (no drying temperature ceiling is documented there).
+/// This is a property of the physical AMS-HT hardware, not the host printer model.
+pub(crate) const AMS_HT_DRY_TEMP_MAX: u32 = 85;
+
+/// Maximum documented drying-chamber temperature (°C) for an AMS 2 Pro / standard-AMS unit's
+/// built-in heater — confirmed via Bambu Lab's own wiki
+/// (`wiki.bambulab.com/en/ams-2-pro/manual/drying-function`). Property of the physical AMS 2
+/// Pro hardware, not the host printer model.
+pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
+
 impl<
     MqttRawIO,
     MqttTls,
@@ -87,9 +99,18 @@ where
 
     /// Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
     ///
-    /// * `ams_id`: Target AMS unit index.
-    /// * `dry_temp`: Drying temperature in degrees Celsius.
-    /// * `dry_time`: Duration in minutes (e.g., 480 for an 8-hour cycle).
+    /// * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
+    ///   `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`); anything else is treated as
+    ///   an AMS 2 Pro / standard-AMS drying unit.
+    /// * `dry_temp`: Drying temperature in degrees Celsius. Clamped to this AMS unit's
+    ///   documented ceiling — this is a property of the *attached AMS unit*, not the host
+    ///   printer model: AMS-HT's built-in heater is rated to 85°C, AMS 2 Pro's to 65°C
+    ///   (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
+    ///   `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
+    ///   variation is documented, so this does not go through `ModelQuirks`).
+    /// * `dry_time`: Duration in minutes (e.g., 480 for an 8-hour cycle). No documented
+    ///   maximum duration was found to validate against — drying time appears to be
+    ///   user-configurable with no firmware-enforced ceiling.
     /// * `rotate_tray`: Whether to rotate trays during the cycle.
     /// * `filament`: Filament type string (e.g., "PA-CF").
     pub async fn start_drying(
@@ -100,6 +121,22 @@ where
         rotate_tray: bool,
         filament: &str,
     ) -> Result<u16, BambuError> {
+        let max_temp: u32 = if (128..=135).contains(&ams_id) {
+            AMS_HT_DRY_TEMP_MAX
+        } else {
+            AMS_STANDARD_DRY_TEMP_MAX
+        };
+        let dry_temp = if dry_temp > max_temp {
+            log::warn!(
+                "AMS dry temperature {}°C exceeds maximum {}°C, clamping",
+                dry_temp,
+                max_temp
+            );
+            max_temp
+        } else {
+            dry_temp
+        };
+
         let seq = self.next_sequence_id();
         let req = crate::mqtt::AmsFilamentDryingRequest::new(
             ams_id,

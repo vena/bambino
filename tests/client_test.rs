@@ -997,6 +997,43 @@ async fn test_drying_lifecycle_wire_payload() {
 }
 
 #[tokio::test]
+async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // AMS-HT (ams_id 128) is rated to 85°C — a requested 200°C must clamp to 85, not
+        // the AMS 2 Pro / standard-AMS ceiling of 65°C.
+        let json_ht = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_ht["print"]["dry_temp"], 85);
+
+        // A standard AMS unit (ams_id 0) is rated to 65°C — a requested 200°C must clamp
+        // to 65.
+        let json_standard = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_standard["print"]["dry_temp"], 65);
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    client
+        .start_drying(128, 200, 480, true, "PA-CF")
+        .await
+        .expect("start_drying (AMS-HT) failed");
+    client
+        .start_drying(0, 200, 480, true, "PLA")
+        .await
+        .expect("start_drying (standard AMS) failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_scan_rfid_wire_payload() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
