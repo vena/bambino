@@ -112,6 +112,10 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
         tray.total_len = None;
         tray.bed_temp = None;
         tray.bed_temp_type = None;
+        tray.tray_temp = None;
+        tray.tray_time = None;
+        tray.drying_temp = None;
+        tray.drying_time = None;
 
         // Standardize absent state representation to 9
         if tray.state.is_none() {
@@ -196,6 +200,10 @@ mod tests {
             tag_uid: Some("ABCDEF1234567890".into()),
             tray_uuid: Some("UUID_SOME_MOCK_VAL".into()),
             remain: Some(85),
+            tray_temp: Some("50".into()),
+            tray_time: Some("240".into()),
+            drying_temp: Some("55".into()),
+            drying_time: Some("480".into()),
             ..Default::default()
         };
 
@@ -205,6 +213,34 @@ mod tests {
         assert_eq!(tray.tray_color, None);
         assert_eq!(tray.tag_uid, None);
         assert_eq!(tray.remain, Some(-1));
+        assert_eq!(tray.tray_temp, None);
+        assert_eq!(tray.tray_time, None);
+        assert_eq!(tray.drying_temp, None);
+        assert_eq!(tray.drying_time, None);
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_clears_drying_fields() {
+        // Phase 4.12 regression: a spool with a configured drying profile that's removed and
+        // replaced with a spool lacking drying config must not leave the *previous* spool's
+        // stale drying temp/time cached client-side (which could show a phantom drying
+        // countdown in a UI).
+        let mut tray = AmsTray {
+            id: "0".into(),
+            state: Some(9),
+            tray_temp: Some("50".into()),
+            tray_time: Some("240".into()),
+            drying_temp: Some("55".into()),
+            drying_time: Some("480".into()),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray);
+
+        assert_eq!(tray.tray_temp, None);
+        assert_eq!(tray.tray_time, None);
+        assert_eq!(tray.drying_temp, None);
+        assert_eq!(tray.drying_time, None);
     }
 
     #[test]
