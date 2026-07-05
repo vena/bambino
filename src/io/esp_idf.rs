@@ -85,9 +85,7 @@ impl BindableUdpSocket for EspIdfUdpSocket {
 #[cfg(feature = "esp-idf")]
 impl AsyncUdpSocket for EspIdfUdpSocket {
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError> {
-        self.inner
-            .send_to(buf, target)
-            .map_err(|e| to_esp_socket_error(e))
+        self.inner.send_to(buf, target).map_err(to_esp_socket_error)
     }
 
     /// Non-blocking read paced with a short sleep on the WouldBlock path so this never
@@ -335,6 +333,10 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S>
         retry_on_would_block(&self.timer, "write", || tls.write(buf)).await
     }
 
+    // esp_tls writes go straight to the socket with no internal buffering (confirmed via
+    // esp-idf-svc source: `EspTls::write_raw` calls `esp_tls_conn_write` directly, and
+    // esp-idf-svc's own `embedded_io::Write for EspTls` impl treats `flush()` as a no-op too)
+    // — nothing to flush.
     async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }

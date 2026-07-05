@@ -95,18 +95,42 @@ fn advance_packet_id(current: u16) -> u16 {
     if next == 0 { 1 } else { next }
 }
 
-/// Writes and flushes a complete packet to `stream`, mapping any I/O failure to
-/// `BambuError::NetworkError(SocketError::ConnectionAborted)`. A free function (not a
-/// method) so `connect()` can call it before `Self` exists.
+/// Maps an `embedded_io_async::ErrorKind` (the only information a generic `AsyncIo` error
+/// exposes, regardless of platform) to the closest `SocketError` variant — the
+/// `embedded_io_async::ErrorKind` counterpart to `map_io_error_kind`
+/// (`std::io::ErrorKind -> embedded_io_async::ErrorKind`, `src/io/mod.rs`), used here since
+/// `write_frame` operates over the generic `AsyncIo` trait rather than a concrete
+/// `std::io::Error`, so `map_io_error_kind` itself doesn't apply. Falls back to `Other` for
+/// kinds with no direct `SocketError` equivalent.
+fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError {
+    use embedded_io_async::ErrorKind;
+    match kind {
+        ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
+        ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
+        ErrorKind::ConnectionReset => SocketError::ConnectionReset,
+        ErrorKind::NotConnected => SocketError::NotConnected,
+        ErrorKind::TimedOut => SocketError::TimedOut,
+        ErrorKind::AddrInUse => SocketError::AddressInUse,
+        ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
+        ErrorKind::InvalidInput => SocketError::InvalidInput,
+        _ => SocketError::Other("MQTT write_frame I/O error".into()),
+    }
+}
+
+/// Writes and flushes a complete packet to `stream`, mapping I/O failures via
+/// `map_embedded_io_error_kind` instead of collapsing everything to a fixed
+/// `ConnectionAborted` (the previous behavior). A free function (not a method) so
+/// `connect()` can call it before `Self` exists.
 async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), BambuError> {
+    use embedded_io_async::Error as _;
     stream
         .write_all(packet)
         .await
-        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        .map_err(|e| BambuError::NetworkError(map_embedded_io_error_kind(e.kind())))?;
     stream
         .flush()
         .await
-        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))
+        .map_err(|e| BambuError::NetworkError(map_embedded_io_error_kind(e.kind())))
 }
 
 impl<IO: AsyncIo> BambuMqttClient<IO> {

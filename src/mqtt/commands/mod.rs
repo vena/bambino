@@ -316,6 +316,19 @@ mod tests {
     }
 
     #[test]
+    fn test_led_ctrl_request_new_flashing_json() {
+        let req = LedCtrlRequest::new_flashing("chamber_light", 500, 500, 3, 1000, 10005);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""command":"ledctrl"#));
+        assert!(json.contains(r#""led_node":"chamber_light""#));
+        assert!(json.contains(r#""led_mode":"flashing""#));
+        assert!(json.contains(r#""led_on_time":500"#));
+        assert!(json.contains(r#""led_off_time":500"#));
+        assert!(json.contains(r#""loop_times":3"#));
+        assert!(json.contains(r#""interval_time":1000"#));
+    }
+
+    #[test]
     fn test_airduct_request_json() {
         let req = AirductRequest::new(AirductMode::Cooling, 10007);
         let json = serde_json::to_string(&req).unwrap();

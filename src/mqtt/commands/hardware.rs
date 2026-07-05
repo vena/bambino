@@ -43,6 +43,30 @@ impl LedCtrlRequest {
             },
         }
     }
+
+    /// Builds a flashing-mode LED command with explicit on/off/loop/interval timing
+    /// (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
+    pub fn new_flashing(
+        led_node: &str,
+        on_time: u32,
+        off_time: u32,
+        loop_times: u32,
+        interval_time: u32,
+        sequence_id: u64,
+    ) -> Self {
+        Self {
+            system: LedCtrlPayload {
+                command: "ledctrl",
+                sequence_id: clamp_task_id(sequence_id).to_string(),
+                led_node: String::from(led_node),
+                led_mode: String::from("flashing"),
+                led_on_time: on_time,
+                led_off_time: off_time,
+                loop_times,
+                interval_time,
+            },
+        }
+    }
 }
 
 /// Airduct damper operating mode [REF-MQTT-LIFECYCLE].

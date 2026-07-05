@@ -18,8 +18,8 @@ pub(crate) const MQTTS_PORT: u16 = 8883;
 pub use client::{BambuMqttClient, MqttMessage};
 pub use commands::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest,
-    AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, BuzzerRequest,
-    CalibrationRequest, CleanPrintErrorRequest, GCodeRequest, GetVersionRequest, LedCtrlRequest,
-    PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest, PushAllRequest,
-    SkipObjectsRequest, StandardControlRequest, clamp_task_id,
+    AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, AmsMappingTable,
+    BuzzerRequest, CalibrationRequest, CleanPrintErrorRequest, GCodeRequest, GetVersionRequest,
+    LedCtrlRequest, PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest,
+    PushAllRequest, SkipObjectsRequest, StandardControlRequest, clamp_task_id,
 };
