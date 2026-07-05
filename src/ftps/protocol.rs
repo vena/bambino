@@ -328,6 +328,11 @@ pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
             "FTP path contains an illegal control character (CR, LF, or NUL)".into(),
         ));
     }
+    if path.split(['/', '\\']).any(|segment| segment == "..") {
+        return Err(BambuError::ProtocolViolation(
+            "FTP path contains a '..' path traversal segment".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -747,5 +752,29 @@ mod tests {
         // reversed range, which panics. Must return a clean error instead of crashing.
         let result = parse_pasv_port("227 Response ) some text ( more");
         assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    }
+
+    #[test]
+    fn test_validate_ftp_path_rejects_traversal_segment() {
+        assert!(matches!(
+            validate_ftp_path("../../etc/passwd"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
+        assert!(matches!(
+            validate_ftp_path("foo/../bar"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
+        assert!(matches!(
+            validate_ftp_path("foo\\..\\bar"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
+    }
+
+    #[test]
+    fn test_validate_ftp_path_allows_literal_dots_in_filename() {
+        // Segment-wise matching only: a filename that merely contains the substring ".."
+        // (not as a whole path segment) must not be spuriously rejected.
+        assert!(validate_ftp_path("/cache/model..with..dots.3mf").is_ok());
+        assert!(validate_ftp_path("my..cool..file.gcode").is_ok());
     }
 }
