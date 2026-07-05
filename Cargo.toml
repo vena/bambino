@@ -27,7 +27,7 @@ tokio = [
 cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "tokio"]
 
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
-esp-idf = ["dep:esp-idf-svc", "std"]
+esp-idf = ["dep:esp-idf-svc", "dep:socket2", "std"]
 
 # Bare-metal / restricted environment support (no standard library)
 no_std = []
@@ -92,6 +92,11 @@ rustls-pki-types = { version = "1.14", optional = true }
 
 # ESP-IDF system services binding for hardware transport
 esp-idf-svc = { version = "0.52.1", optional = true }
+
+# Low-level socket configuration for a non-blocking TCP `connect()` on ESP-IDF — the
+# nonblocking flag must be set before `connect()` is called on a not-yet-connected socket,
+# which `std::net::TcpStream::connect()`'s all-in-one API doesn't allow.
+socket2 = { version = "0.6", optional = true }
 
 # Embassy runtime stack components (for bare-metal integrations)
 # Explicitly propagate "proto-ipv4" and "medium-ethernet" features to satisfy smoltcp stack requirements

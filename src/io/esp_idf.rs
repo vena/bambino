@@ -128,6 +128,45 @@ fn to_esp_socket_error(err: std::io::Error) -> SocketError {
     crate::io::map_std_io_error(err, "ESP-IDF platform BSD network error")
 }
 
+/// True if `err` indicates a non-blocking `connect()` is still in progress rather than a
+/// genuine failure. `WouldBlock` covers whatever errno std's generic Unix `ErrorKind`
+/// decoder maps to it (`EAGAIN`/`EWOULDBLOCK`); `EINPROGRESS` — the errno `connect()`
+/// actually returns for a pending non-blocking connection — is checked separately because
+/// std's decoder does not recognize it as `WouldBlock` (confirmed against `socket2`'s own
+/// `Socket::connect_timeout()`, which checks both independently for the same reason).
+#[cfg(feature = "esp-idf")]
+fn is_connect_in_progress(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::WouldBlock
+        || err.raw_os_error() == Some(::esp_idf_svc::sys::EINPROGRESS as i32)
+}
+
+/// Polls a non-blocking `connect()` to completion by alternately checking `SO_ERROR` (via
+/// `take_error()`) and connectedness (via `peer_addr()`, which fails with `NotConnected`
+/// until the three-way handshake finishes) — `take_error()` alone can't distinguish "still
+/// connecting, no error yet" from "connected successfully," both of which return `Ok(None)`.
+/// Sleeps `TLS_POLL_INTERVAL` between attempts so the caller's outer
+/// `race_against_connect_timeout` can preempt this loop; does not bound itself (see
+/// `EspIdfTcpStream::connect`'s doc comment for why).
+#[cfg(feature = "esp-idf")]
+async fn poll_connect_until_complete(
+    socket: &::socket2::Socket,
+    timer: &EspIdfTimer,
+) -> Result<(), SocketError> {
+    loop {
+        if let Some(err) = socket.take_error().map_err(to_esp_socket_error)? {
+            return Err(to_esp_socket_error(err));
+        }
+        match socket.peer_addr() {
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotConnected => {}
+            Err(e) => return Err(to_esp_socket_error(e)),
+        }
+        timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
+            SocketError::Other("ESP-IDF timer failed while polling TCP connect".into())
+        })?;
+    }
+}
+
 /// Poll interval between non-blocking TLS retry attempts (handshake and read/write).
 ///
 /// `esp-idf-svc`/`esp-idf-hal` expose no async socket-readiness primitive for an
@@ -409,21 +448,21 @@ impl embedded_io_async::Error for EspIdfIoError {
     }
 }
 
-/// Raw (unencrypted) blocking TCP stream, used both as the seed for
-/// `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for
-/// models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS
-/// data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write`
-/// impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
+/// Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s
+/// `EspTls::adopt()` call and directly as `RawIO` for models whose
+/// `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is
+/// then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are
+/// exercised for real, not just to satisfy the `AsyncIo` trait bound).
 ///
-/// Blocking is deliberate and matches `EspIdfUdpSocket`'s approach of using
-/// `std::net::*` directly rather than inventing async socket polling for every raw
-/// transport — `esp-idf-svc`/`esp-idf-hal` expose no async readiness primitive for an
-/// arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment), so a genuine non-blocking wait
-/// isn't available here either way. The socket stays in ESP-IDF's default blocking mode
-/// unless `EspIdfTlsConnector::connect` flips it to non-blocking right before handing it
-/// to `EspTls::adopt()` (see that function) — plaintext callers never trigger that path,
-/// so their reads/writes block the calling task/thread until data is available, same as
-/// any other blocking `std::net::TcpStream` use.
+/// The underlying socket is only non-blocking transiently, during `connect()`'s own polling
+/// loop (see that function's doc comment) — by the time a caller receives an
+/// `EspIdfTcpStream`, it has always been switched back to blocking mode, matching
+/// `EspIdfUdpSocket`'s approach of using `std::net::*` directly rather than inventing async
+/// socket polling for every raw transport. Reads/writes below therefore block the calling
+/// task/thread until data is available/sent, same as any other blocking
+/// `std::net::TcpStream` use, unless `EspIdfTlsConnector::connect` flips the socket back to
+/// non-blocking right before handing it to `EspTls::adopt()` (see that function) —
+/// plaintext callers never trigger that path.
 ///
 /// Wraps `Option<TcpStream>` rather than `TcpStream` directly so `Socket::release()` can
 /// `.take()` the stream and hand its fd to `IntoRawFd::into_raw_fd()` — `esp_tls_conn_destroy`
@@ -434,11 +473,62 @@ pub struct EspIdfTcpStream(Option<std::net::TcpStream>);
 
 #[cfg(feature = "esp-idf")]
 impl EspIdfTcpStream {
-    /// Dials a raw TCP connection to `host:port`. Stays in ESP-IDF's default blocking
-    /// socket mode — see the type's doc comment for why.
-    pub fn connect(host: &str, port: u16) -> Result<Self, SocketError> {
-        let stream = std::net::TcpStream::connect((host, port)).map_err(to_esp_socket_error)?;
-        Ok(Self(Some(stream)))
+    /// Dials a raw TCP connection to `host:port`.
+    ///
+    /// Uses a non-blocking `connect()`, polled to completion by `.await`ing
+    /// `EspIdfTimer::sleep(TLS_POLL_INTERVAL)` between attempts, rather than a single
+    /// blocking `std::net::TcpStream::connect()` call. A blocking connect has no `.await`
+    /// yield point, so `race()` (`src/io/mod.rs`) can never preempt it — a printer that's
+    /// off, on another subnet, or behind a silent packet-dropping firewall used to hang the
+    /// whole task for however long the underlying OS/lwIP connect took, silently breaking
+    /// the `connect_timeout_secs` guarantee `race_against_connect_timeout`
+    /// (`src/client/connect.rs`) documents. This mirrors `EspIdfTlsConnector::connect`'s
+    /// existing non-blocking-handshake pattern, applied one layer earlier, to the TCP dial
+    /// itself. `std::net::TcpStream::connect()`'s all-in-one API can't be used here since
+    /// the non-blocking flag must be set *before* `connect()` is called on a not-yet-connected
+    /// socket — hence going through `socket2::Socket` instead.
+    ///
+    /// Once the connection completes, the socket is switched back to blocking mode before
+    /// being handed back as an `EspIdfTcpStream` — see that type's doc comment for why.
+    ///
+    /// Does not bound its own retry loop by a timeout — bounding is the responsibility of
+    /// the *outer* `race_against_connect_timeout` in `ensure_mqtt()`/`ensure_ftps()`/
+    /// `ensure_camera()`, which can now actually preempt this future because it has real
+    /// `.await` points, matching the plain (non-connector-owned) design
+    /// `RawStreamFactory::dial` has on every other platform.
+    pub async fn connect(host: &str, port: u16) -> Result<Self, SocketError> {
+        use std::net::ToSocketAddrs;
+
+        let addr = (host, port)
+            .to_socket_addrs()
+            .map_err(to_esp_socket_error)?
+            .next()
+            .ok_or(SocketError::AddressNotAvailable)?;
+
+        let socket = ::socket2::Socket::new(
+            ::socket2::Domain::for_address(addr),
+            ::socket2::Type::STREAM,
+            Some(::socket2::Protocol::TCP),
+        )
+        .map_err(to_esp_socket_error)?;
+
+        socket.set_nonblocking(true).map_err(to_esp_socket_error)?;
+
+        match socket.connect(&addr.into()) {
+            Ok(()) => {}
+            Err(e) if is_connect_in_progress(&e) => {}
+            Err(e) => return Err(to_esp_socket_error(e)),
+        }
+
+        let timer = EspIdfTimer::new().map_err(|_| {
+            SocketError::Other("failed to create ESP-IDF async timer for TCP connect".into())
+        })?;
+
+        poll_connect_until_complete(&socket, &timer).await?;
+
+        socket.set_nonblocking(false).map_err(to_esp_socket_error)?;
+
+        Ok(Self(Some(socket.into())))
     }
 
     fn inner(&self) -> &std::net::TcpStream {
@@ -619,6 +709,6 @@ pub struct EspIdfRawStreamFactory;
 #[cfg(feature = "esp-idf")]
 impl RawStreamFactory<EspIdfTcpStream> for EspIdfRawStreamFactory {
     async fn dial(&self, host: &str, port: u16) -> Result<EspIdfTcpStream, SocketError> {
-        EspIdfTcpStream::connect(host, port)
+        EspIdfTcpStream::connect(host, port).await
     }
 }
