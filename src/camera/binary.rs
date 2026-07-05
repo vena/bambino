@@ -151,16 +151,51 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// distinguish "wrong access code" from "transient network hiccup" cannot do so from this
     /// API alone.
     pub async fn authenticate(&mut self, access_code: &str) -> Result<(), BambuError> {
+        self.authenticate_with_timer(access_code, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
+            .await
+    }
+
+    /// Bounds the handshake write+flush against `timer` when a real wall-clock is available
+    /// (see [`TimerProvider::has_real_clock`]), mirroring [`Self::read_next_frame_with_timer`]'s
+    /// naming/delegation convention. Unlike that read-side method, a timed-out write here has
+    /// no partial-progress state worth preserving — the handshake is a single ~80-byte packet,
+    /// small enough that losing/retrying the whole write on timeout is an acceptable
+    /// simplification (unlike MQTT/camera frame *reads*, which must not lose already-read
+    /// bytes) — so this races the whole `write_all`+`flush` sequence against `timer.sleep()`
+    /// directly via the shared `race()` combinator instead of needing a resumable
+    /// chunk-at-a-time helper like `read_chunk`.
+    pub(crate) async fn authenticate_with_timer<T: TimerProvider>(
+        &mut self,
+        access_code: &str,
+        timer: &T,
+        budget_ms: u64,
+    ) -> Result<(), BambuError> {
         let handshake = build_handshake_packet(access_code)?;
-        self.stream
-            .write_all(&handshake)
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-        self.stream
-            .flush()
-            .await
-            .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
-        Ok(())
+
+        let write_fut = async {
+            self.stream
+                .write_all(&handshake)
+                .await
+                .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+            self.stream
+                .flush()
+                .await
+                .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))
+        };
+
+        if !timer.has_real_clock() {
+            return write_fut.await;
+        }
+
+        match crate::io::race(
+            write_fut,
+            timer.sleep(core::time::Duration::from_millis(budget_ms)),
+        )
+        .await
+        {
+            crate::io::Raced::Left(result) => result,
+            crate::io::Raced::Right(_) => Err(BambuError::NetworkError(SocketError::TimedOut)),
+        }
     }
 
     /// Asynchronously extracts the next complete frame from the stream, bounding each
@@ -410,6 +445,47 @@ mod tests {
             assert!(
                 elapsed < core::time::Duration::from_secs(2),
                 "read_next_frame_with_timer took {:?} to time out against a {}ms budget — too slow",
+                elapsed,
+                budget_ms
+            );
+        }
+
+        /// Regression test: a peer that never drains its TCP receive buffer during the
+        /// handshake must not hang `authenticate_with_timer` forever. `duplex(64)` gives the
+        /// write side a smaller buffer than the 80-byte handshake packet, and the server side
+        /// is kept alive but never reads — so `write_all` genuinely stalls partway through
+        /// once the buffer fills, rather than merely being slow.
+        #[tokio::test]
+        async fn test_authenticate_with_timer_stalled_connection_times_out() {
+            let (client_stream, _server_stream) = tokio::io::duplex(64);
+
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(client_stream));
+            let timer = crate::io::tokio::TokioTimer::new();
+            let budget_ms = 50;
+
+            let started = std::time::Instant::now();
+            let result = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                camera.authenticate_with_timer("ABCDEF12", &timer, budget_ms),
+            )
+            .await
+            .expect(
+                "authenticate_with_timer hung past the 5s meta-safety timeout instead of \
+                 honoring its own budget",
+            );
+            let elapsed = started.elapsed();
+
+            assert!(
+                matches!(
+                    result,
+                    Err(BambuError::NetworkError(crate::io::SocketError::TimedOut))
+                ),
+                "Expected TimedOut for a stalled connection, got {:?}",
+                result
+            );
+            assert!(
+                elapsed < core::time::Duration::from_secs(2),
+                "authenticate_with_timer took {:?} to time out against a {}ms budget — too slow",
                 elapsed,
                 budget_ms
             );
