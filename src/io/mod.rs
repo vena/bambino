@@ -256,10 +256,10 @@ pub trait TimerProvider {
     /// Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.
     ///
     /// Exists so code that races an I/O operation against
-    /// [`sleep()`](Self::sleep) — e.g. `src/mqtt/client.rs`'s `poll_wire`/
-    /// `read_exact_packet` per-read deadline — can tell whether doing so will actually
-    /// bound anything. `DummyTimer::sleep()` intentionally completes instantly
-    /// regardless of the requested duration (so it never blocks retry/backoff loops
+    /// [`sleep()`](Self::sleep) — e.g. `src/mqtt/client/mod.rs`'s `poll_wire`/
+    /// `src/mqtt/client/frame.rs`'s `read_exact_packet` per-read deadline — can tell whether
+    /// doing so will actually bound anything. `DummyTimer::sleep()` intentionally completes
+    /// instantly regardless of the requested duration (so it never blocks retry/backoff loops
     /// that happen to be generic over `TimerProvider`); racing against it would make
     /// such a race resolve to "timed out" on essentially every call that doesn't also
     /// complete synchronously, silently turning "no wall-clock timeout configured" into

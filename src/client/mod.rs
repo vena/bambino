@@ -292,6 +292,9 @@ where
 
     /// Sets the timeout (in seconds) used by command-response methods like
     /// [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
+    ///
+    /// Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
+    /// the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
     pub fn set_command_timeout(&mut self, secs: u64) {
         self.command_timeout_secs = secs;
     }
@@ -310,7 +313,7 @@ where
     /// stalls with zero incoming bytes mid-`await` bypasses them entirely — a real
     /// `Timer` does not help either, since the elapsed-time check is simply never
     /// reached. That protection is a distinct, lower layer: `poll_wire()`
-    /// (`src/mqtt/client.rs`) races each low-level read step against `self.timer`
+    /// (`src/mqtt/client/mod.rs`) races each low-level read step against `self.timer`
     /// internally, bounding how long a single call below can hang regardless of what
     /// this function's own loop does. See `read_exact_packet`'s doc comment for the
     /// mechanism and the resumability invariant that keeps a timed-out read from

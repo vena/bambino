@@ -66,6 +66,11 @@ pub fn build_handshake_packet(
     packet[CAMERA_USERNAME_OFFSET..CAMERA_USERNAME_OFFSET + username.len()]
         .copy_from_slice(username);
 
+    if !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(BambuError::ProtocolViolation(
+            "access_code must be ASCII alphanumeric".into(),
+        ));
+    }
     let code_bytes = access_code.as_bytes();
     if code_bytes.len() > CAMERA_PASSWORD_MAX_LEN {
         return Err(BambuError::ProtocolViolation(
@@ -349,6 +354,13 @@ mod tests {
         let code = "A".repeat(CAMERA_PASSWORD_MAX_LEN + 1);
         let result = build_handshake_packet(&code);
         assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    }
+
+    #[test]
+    fn test_handshake_rejects_non_alphanumeric_access_code() {
+        assert!(build_handshake_packet("1234@678").is_err());
+        assert!(build_handshake_packet("1234 678").is_err());
+        assert!(build_handshake_packet("1234\n678").is_err());
     }
 
     #[cfg(feature = "tokio")]

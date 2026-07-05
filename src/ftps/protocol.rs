@@ -323,14 +323,29 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
 /// method. Also rejects NUL (`\0`), which some FTP daemons treat as a string terminator, for
 /// the same class of confusion.
 pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
-    if path.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+    // Covers CR/LF/NUL (the original command-injection hazard this function guards
+    // against) plus every other C0 control byte and DEL — non-CR/LF control characters can
+    // smuggle ANSI escapes into a filename a caller later prints/logs.
+    if path.bytes().any(|b| b < 0x20 || b == 0x7F) {
         return Err(BambuError::ProtocolViolation(
-            "FTP path contains an illegal control character (CR, LF, or NUL)".into(),
+            "FTP path contains an illegal control character".into(),
         ));
     }
     if path.split(['/', '\\']).any(|segment| segment == "..") {
         return Err(BambuError::ProtocolViolation(
             "FTP path contains a '..' path traversal segment".into(),
+        ));
+    }
+    // Some FTP daemons interpret a leading-dash filename as a flag argument. Only the final
+    // segment matters here — a leading-dash directory component earlier in the path is not
+    // the same hazard.
+    if path
+        .split(['/', '\\'])
+        .next_back()
+        .is_some_and(|segment| segment.starts_with('-'))
+    {
+        return Err(BambuError::ProtocolViolation(
+            "FTP path's final segment must not start with '-'".into(),
         ));
     }
     Ok(())
@@ -776,5 +791,31 @@ mod tests {
         // (not as a whole path segment) must not be spuriously rejected.
         assert!(validate_ftp_path("/cache/model..with..dots.3mf").is_ok());
         assert!(validate_ftp_path("my..cool..file.gcode").is_ok());
+    }
+
+    #[test]
+    fn test_validate_ftp_path_rejects_leading_dash_in_final_segment() {
+        assert!(matches!(
+            validate_ftp_path("-rf"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
+        assert!(matches!(
+            validate_ftp_path("/cache/-file.3mf"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
+        // A leading-dash directory component earlier in the path is not the same hazard.
+        assert!(validate_ftp_path("/-oddly-named-dir/file.3mf").is_ok());
+    }
+
+    #[test]
+    fn test_validate_ftp_path_rejects_non_crlf_control_chars() {
+        assert!(matches!(
+            validate_ftp_path("/cache/\x01file.3mf"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
+        assert!(matches!(
+            validate_ftp_path("/cache/file\x7f.3mf"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
     }
 }
