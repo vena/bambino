@@ -105,9 +105,8 @@ where
     ///
     /// Returns the MQTT packet identifier assigned to track publication delivery status.
     pub async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
-        let seq = self.next_sequence_id();
-        let req = GCodeRequest::new(gcode_line, seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| GCodeRequest::new(gcode_line, seq))
+            .await
     }
 
     /// Dispatches safe homing operations to prevent hardware collisions.

@@ -67,16 +67,7 @@ where
             .last_home_flag
             .map(|flag| flag & POWER_220V_BITMASK != 0);
         let max = self.model.quirks().bed_temp_max(mains_220v);
-        let target_temp = if target_temp > max {
-            log::warn!(
-                "Bed temperature {}°C exceeds model max {}°C, clamping",
-                target_temp,
-                max
-            );
-            max
-        } else {
-            target_temp
-        };
+        let target_temp = super::clamp_temp(target_temp, max, "Bed");
         let gcode = format!("M140 S{}", target_temp);
         self.send_gcode_raw(&gcode).await
     }
@@ -92,16 +83,7 @@ where
         target_temp: u16,
     ) -> Result<u16, BambuError> {
         let max = self.model.quirks().nozzle_temp_max();
-        let target_temp = if target_temp > max {
-            log::warn!(
-                "Nozzle temperature {}°C exceeds model max {}°C, clamping",
-                target_temp,
-                max
-            );
-            max
-        } else {
-            target_temp
-        };
+        let target_temp = super::clamp_temp(target_temp, max, "Nozzle");
         let gcode = format!("M104 T{} S{}", nozzle_id, target_temp);
         self.send_gcode_raw(&gcode).await
     }
@@ -119,16 +101,7 @@ where
             ));
         }
         let max = self.model.quirks().chamber_temp_max();
-        let target_temp = if target_temp > max {
-            log::warn!(
-                "Chamber temperature {}°C exceeds model max {}°C, clamping",
-                target_temp,
-                max
-            );
-            max
-        } else {
-            target_temp
-        };
+        let target_temp = super::clamp_temp(target_temp, max, "Chamber");
         let gcode = format!("M141 S{}", target_temp);
         self.send_gcode_raw(&gcode).await
     }

@@ -99,9 +99,8 @@ where
 
     /// Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
     pub async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, BambuError> {
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq))
+            .await
     }
 
     /// Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
@@ -116,9 +115,8 @@ where
                 "airduct damper control not available on this model".into(),
             ));
         }
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::commands::AirductRequest::new(mode, seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| crate::mqtt::commands::AirductRequest::new(mode, seq))
+            .await
     }
 
     /// Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
@@ -130,9 +128,8 @@ where
                 "prompt sound not available on this model".into(),
             ));
         }
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq))
+            .await
     }
 
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
@@ -145,8 +142,7 @@ where
                 "buzzer control not available on this model".into(),
             ));
         }
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::commands::BuzzerRequest::new(mode_code, seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| crate::mqtt::commands::BuzzerRequest::new(mode_code, seq))
+            .await
     }
 }

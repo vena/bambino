@@ -56,6 +56,24 @@ pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
 /// (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
 pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
+/// Clamps `value` to `max`, logging a warning if it was reduced. Shared by every
+/// model-ceiling-clamped heater-setting method in `thermal.rs` (bed/nozzle/chamber), which
+/// previously repeated this identical clamp-and-warn block three times, differing only in
+/// `label`.
+pub(crate) fn clamp_temp(value: u16, max: u16, label: &str) -> u16 {
+    if value > max {
+        log::warn!(
+            "{} temperature {}°C exceeds model max {}°C, clamping",
+            label,
+            value,
+            max
+        );
+        max
+    } else {
+        value
+    }
+}
+
 /// High-level client for controlling a Bambu Lab printer.
 ///
 /// Wraps an MQTT session (connected or lazy) and optionally a [`BambuFtpsClient`] for
@@ -365,11 +383,22 @@ where
         self.mqtt.as_mut().unwrap().publish_command(&payload).await
     }
 
+    /// Collapses the repeated `next_sequence_id()` → build request → `publish_request()`
+    /// triplet used by nearly every command-dispatching method in this module. `build`
+    /// receives the freshly-clamped sequence ID and constructs the request struct; closures
+    /// can capture whatever other locals a given command needs beyond `seq`.
+    pub(crate) async fn dispatch<T: Serialize>(
+        &mut self,
+        build: impl FnOnce(u64) -> T,
+    ) -> Result<u16, BambuError> {
+        let seq = self.next_sequence_id();
+        let req = build(seq);
+        self.publish_request(&req).await
+    }
+
     /// Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
     pub async fn request_pushall(&mut self) -> Result<u16, BambuError> {
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::PushAllRequest::new(seq);
-        self.publish_request(&req).await
+        self.dispatch(crate::mqtt::PushAllRequest::new).await
     }
 
     /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.

@@ -90,11 +90,12 @@ where
             ));
         }
 
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::AmsChangeFilamentRequest::new(
-            ams_id, slot_id, target, curr_temp, tar_temp, seq,
-        );
-        self.publish_request(&req).await
+        self.dispatch(|seq| {
+            crate::mqtt::AmsChangeFilamentRequest::new(
+                ams_id, slot_id, target, curr_temp, tar_temp, seq,
+            )
+        })
+        .await
     }
 
     /// Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
@@ -137,24 +138,26 @@ where
             dry_temp
         };
 
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::AmsFilamentDryingRequest::new(
-            ams_id,
-            1,
-            dry_temp,
-            dry_time,
-            rotate_tray,
-            filament,
-            seq,
-        );
-        self.publish_request(&req).await
+        self.dispatch(|seq| {
+            crate::mqtt::AmsFilamentDryingRequest::new(
+                ams_id,
+                1,
+                dry_temp,
+                dry_time,
+                rotate_tray,
+                filament,
+                seq,
+            )
+        })
+        .await
     }
 
     /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
     pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, BambuError> {
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, 0, 0, false, "", seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| {
+            crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, 0, 0, false, "", seq)
+        })
+        .await
     }
 
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
@@ -173,9 +176,8 @@ where
             ));
         }
 
-        let seq = self.next_sequence_id();
-        let req = crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq);
-        self.publish_request(&req).await
+        self.dispatch(|seq| crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq))
+            .await
     }
 
     /// Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
@@ -224,16 +226,17 @@ where
             ));
         }
 
-        let seq = self.next_sequence_id();
-        let req = crate::diagnostics::ExtrusionCaliSelRequest::new(
-            ams_id,
-            tray_id,
-            cali_idx,
-            filament_id,
-            nozzle_diameter,
-            seq,
-        );
-        self.publish_request(&req).await
+        self.dispatch(|seq| {
+            crate::diagnostics::ExtrusionCaliSelRequest::new(
+                ams_id,
+                tray_id,
+                cali_idx,
+                filament_id,
+                nozzle_diameter,
+                seq,
+            )
+        })
+        .await
     }
 
     /// Queries the printer's expansion bus version database and returns typed module info.
