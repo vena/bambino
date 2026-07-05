@@ -71,6 +71,7 @@ impl PrintJobConfig {
     }
 
     pub fn with_ams_mapping2(mut self, mapping2: Vec<AmsMapping2Entry>) -> Self {
+        self.use_ams = true;
         self.ams_mapping2 = Some(mapping2);
         self
     }
@@ -208,7 +209,16 @@ impl ProjectFileRequest {
                 layer_inspect: config.layer_inspect,
                 use_ams,
                 ams_mapping: mapping,
-                ams_mapping2: config.ams_mapping2.clone(),
+                // Gated on the *computed* `use_ams` (not `config.use_ams`) so a tripped
+                // `validate_external_spool_safety` interlock can never leave the wire payload
+                // internally contradictory (`use_ams: false` alongside a populated
+                // `ams_mapping2` array) — see [REF-MQTT-LIFECYCLE] for the firmware error
+                // (`0700_8012`) this shape causes.
+                ams_mapping2: if use_ams {
+                    config.ams_mapping2.clone()
+                } else {
+                    None
+                },
             },
         }
     }

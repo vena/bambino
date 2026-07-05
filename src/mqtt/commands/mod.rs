@@ -114,6 +114,57 @@ mod tests {
     }
 
     #[test]
+    fn test_ams_mapping2_sets_use_ams_true() {
+        // Phase 2.2 regression: `.with_ams_mapping2(...)` alone (no `.with_ams(...)`) must
+        // set `use_ams` so the mapping2 array isn't silently dropped by `from_config`'s
+        // `use_ams`-gated serialization below.
+        use crate::ams::mapping::AmsMapping2Entry;
+
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        )
+        .with_ams_mapping2(vec![AmsMapping2Entry {
+            ams_id: 0,
+            slot_id: 1,
+        }]);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""use_ams":true"#));
+        assert!(json.contains(r#""ams_mapping2""#));
+    }
+
+    #[test]
+    fn test_ams_mapping2_dropped_when_safety_interlock_trips() {
+        // Phase 2.2 regression: an all-external-spool `ams_mapping2` on a single-nozzle
+        // printer trips `validate_external_spool_safety`, forcing `use_ams` to `false` — the
+        // wire payload must not also carry a populated `ams_mapping2` array in that case
+        // (the exact contradictory shape that causes firmware error `0700_8012`).
+        use crate::ams::mapping::AmsMapping2Entry;
+
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        )
+        .with_ams_mapping2(vec![AmsMapping2Entry {
+            ams_id: 255,
+            slot_id: 0,
+        }]);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""use_ams":false"#));
+        assert!(!json.contains("ams_mapping2"));
+    }
+
+    #[test]
     fn test_nozzle_offset_cali_quirks_default_idex() {
         let config = PrintJobConfig::new(
             "job.3mf",
