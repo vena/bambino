@@ -107,15 +107,31 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError
 ///
 /// This function expects proxy-generated URIs with a simple `rtsp://host:port/path` structure.
 /// It is not a general-purpose URI parser.
-pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> String {
+///
+/// # Errors
+///
+/// Returns [`BambuError::ProtocolViolation`] if `printer_ip` does not parse as a valid IPv4 or
+/// IPv6 address — the same check [`build_rtsps_url`] applies to its own `ip` parameter, and
+/// for the same reason: a `printer_ip` containing `@` or `/` (e.g. sourced from a
+/// spoofable SSDP/mDNS discovery response, same as [`build_rtsps_url`]'s hazard) could
+/// otherwise redirect the proxy's outbound connection or produce a malformed URI. This
+/// function has no other caller in this crate to rely on for pre-validation — it's called
+/// once per incoming request in a proxy's hot path, but IP-string parsing is cheap enough
+/// that re-validating here is not a meaningful cost.
+pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<String, BambuError> {
+    if printer_ip.parse::<core::net::IpAddr>().is_err() {
+        return Err(BambuError::ProtocolViolation(
+            "printer_ip must be a valid IPv4 or IPv6 address".into(),
+        ));
+    }
     if let Some(remainder) = request_uri.strip_prefix("rtsp://") {
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
-            return format!("rtsps://{}:322/{}", printer_ip, path);
+            return Ok(format!("rtsps://{}:322/{}", printer_ip, path));
         }
     }
-    String::from(request_uri)
+    Ok(String::from(request_uri))
 }
 
 /// Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freezes.
@@ -191,14 +207,14 @@ mod tests {
     #[test]
     fn test_rtsp_proxy_uri_rewrite() {
         let incoming_uri = "rtsp://127.0.0.1:8554/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(incoming_uri, "192.168.1.150");
+        let rewritten = rewrite_rtsp_request_uri(incoming_uri, "192.168.1.150").unwrap();
         assert_eq!(rewritten, "rtsps://192.168.1.150:322/streaming/live/1");
     }
 
     #[test]
     fn test_rewrite_uri_with_query_string() {
         let uri = "rtsp://127.0.0.1:8554/streaming/live/1?token=abc&quality=high";
-        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5");
+        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5").unwrap();
         assert_eq!(
             rewritten,
             "rtsps://10.0.0.5:322/streaming/live/1?token=abc&quality=high"
@@ -208,15 +224,21 @@ mod tests {
     #[test]
     fn test_rewrite_uri_already_rtsps_returns_unchanged() {
         let uri = "rtsps://192.168.1.150:322/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5");
+        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5").unwrap();
         assert_eq!(rewritten, uri);
     }
 
     #[test]
     fn test_rewrite_uri_no_path() {
         let uri = "rtsp://127.0.0.1:8554";
-        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150");
+        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150").unwrap();
         assert_eq!(rewritten, "rtsps://192.168.1.150:322/");
+    }
+
+    #[test]
+    fn test_rewrite_uri_rejects_ip_with_embedded_at() {
+        let uri = "rtsp://127.0.0.1:8554/streaming/live/1";
+        assert!(rewrite_rtsp_request_uri(uri, "1.2.3.4@attacker.example.com").is_err());
     }
 
     #[test]
@@ -253,7 +275,7 @@ mod tests {
         // matches at position 0, so a redirect-style URL that merely contains the
         // substring later on must be returned unchanged.
         let uri = "https://example.com/redirect?to=rtsp://192.168.1.150/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150");
+        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150").unwrap();
         assert_eq!(rewritten, uri);
     }
 }
