@@ -187,6 +187,20 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
     Ok(())
 }
 
+/// Prints `before_msg`, awaits `fut`, then prints `after_msg` on success — collapses the
+/// repeated "Dispatching.../call/...published successfully" triplet shared by most
+/// `ControlAction` match arms below.
+async fn dispatch<T>(
+    before_msg: &str,
+    after_msg: &str,
+    fut: impl std::future::Future<Output = Result<T, BambuError>>,
+) -> Result<T, BambuError> {
+    println!("{before_msg}");
+    let result = fut.await?;
+    println!("{after_msg}");
+    Ok(result)
+}
+
 /// Dispatches a typed control action to the printer.
 pub async fn run(
     ip: &str,
@@ -200,30 +214,44 @@ pub async fn run(
 
     match action {
         ControlAction::Home => {
-            println!("Dispatching safe homing command macro...");
-            client.home_axes(false).await?;
-            println!("Homing command published successfully.");
+            dispatch(
+                "Dispatching safe homing command macro...",
+                "Homing command published successfully.",
+                client.home_axes(false),
+            )
+            .await?;
         }
         ControlAction::Move {
             axis,
             distance,
             feedrate,
         } => {
-            let axis_char = axis.chars().next().ok_or_else(|| {
-                BambuError::ProtocolViolation(
-                    format!("Invalid axis: '{}' (expected X, Y, or Z)", axis).into(),
-                )
-            })?;
+            if axis.len() != 1 {
+                return Err(BambuError::ProtocolViolation(
+                    format!(
+                        "Invalid axis: '{}' (expected a single character X, Y, or Z)",
+                        axis
+                    )
+                    .into(),
+                ));
+            }
+            let axis_char = axis.chars().next().unwrap(); // safe: len() == 1 checked above
             let feedrate = feedrate.unwrap_or(3000);
-            println!("Dispatching motion G-code G0 relative move...");
-            client.move_relative(axis_char, distance, feedrate).await?;
-            println!("Motion command published successfully.");
+            dispatch(
+                "Dispatching motion G-code G0 relative move...",
+                "Motion command published successfully.",
+                client.move_relative(axis_char, distance, feedrate),
+            )
+            .await?;
         }
         ControlAction::Extrude { length, feedrate } => {
             let feedrate = feedrate.unwrap_or(900);
-            println!("Dispatching relative extrusion manual feed sequence...");
-            client.extrude(length, feedrate).await?;
-            println!("Extrusion command published successfully.");
+            dispatch(
+                "Dispatching relative extrusion manual feed sequence...",
+                "Extrusion command published successfully.",
+                client.extrude(length, feedrate),
+            )
+            .await?;
         }
         ControlAction::Fan {
             target,
@@ -235,27 +263,39 @@ pub async fn run(
                 FanTargetArg::Exhaust => FanTarget::ChamberExhaust,
                 FanTargetArg::Right => FanTarget::AuxiliaryRight,
             };
-            println!("Configuring cooling fan PWM scale...");
-            client.set_fan_speed(fan_target, speed_percent).await?;
-            println!("Fan control command published successfully.");
+            dispatch(
+                "Configuring cooling fan PWM scale...",
+                "Fan control command published successfully.",
+                client.set_fan_speed(fan_target, speed_percent),
+            )
+            .await?;
         }
-        ControlAction::Temp { target, value } => {
-            match target {
-                TempTargetArg::Nozzle => {
-                    println!("Dispatching T0 hotend heater target...");
-                    client.set_nozzle_temperature(0, value).await?;
-                }
-                TempTargetArg::Bed => {
-                    println!("Dispatching build-plate heater target...");
-                    client.set_bed_temperature(value).await?;
-                }
-                TempTargetArg::Chamber => {
-                    println!("Dispatching chamber heating target...");
-                    client.set_chamber_temperature(value).await?;
-                }
+        ControlAction::Temp { target, value } => match target {
+            TempTargetArg::Nozzle => {
+                dispatch(
+                    "Dispatching T0 hotend heater target...",
+                    "Thermal command published successfully.",
+                    client.set_nozzle_temperature(0, value),
+                )
+                .await?;
             }
-            println!("Thermal command published successfully.");
-        }
+            TempTargetArg::Bed => {
+                dispatch(
+                    "Dispatching build-plate heater target...",
+                    "Thermal command published successfully.",
+                    client.set_bed_temperature(value),
+                )
+                .await?;
+            }
+            TempTargetArg::Chamber => {
+                dispatch(
+                    "Dispatching chamber heating target...",
+                    "Thermal command published successfully.",
+                    client.set_chamber_temperature(value),
+                )
+                .await?;
+            }
+        },
         ControlAction::Led { node, state } => {
             let led_node = match node {
                 LedNodeArg::Chamber => "chamber_light",
@@ -265,29 +305,44 @@ pub async fn run(
                 LedStateArg::On => true,
                 LedStateArg::Off => false,
             };
-            println!("Dispatching ledctrl command register block...");
-            client.set_led(led_node, turn_on).await?;
-            println!("LED command published successfully.");
+            dispatch(
+                "Dispatching ledctrl command register block...",
+                "LED command published successfully.",
+                client.set_led(led_node, turn_on),
+            )
+            .await?;
         }
         ControlAction::Pause => {
-            println!("Suspending print queue execution...");
-            client.pause_print().await?;
-            println!("Pause command published successfully.");
+            dispatch(
+                "Suspending print queue execution...",
+                "Pause command published successfully.",
+                client.pause_print(),
+            )
+            .await?;
         }
         ControlAction::Resume => {
-            println!("Resuming print queue execution...");
-            client.resume_print().await?;
-            println!("Resume command published successfully.");
+            dispatch(
+                "Resuming print queue execution...",
+                "Resume command published successfully.",
+                client.resume_print(),
+            )
+            .await?;
         }
         ControlAction::Stop => {
-            println!("Aborting active print job pipeline...");
-            client.stop_print().await?;
-            println!("Stop command published successfully.");
+            dispatch(
+                "Aborting active print job pipeline...",
+                "Stop command published successfully.",
+                client.stop_print(),
+            )
+            .await?;
         }
         ControlAction::Gcode { gcode_line } => {
-            println!("Dispatching G-code (with safety checks)...");
-            client.send_gcode(&gcode_line).await?;
-            println!("G-code command published successfully.");
+            dispatch(
+                "Dispatching G-code (with safety checks)...",
+                "G-code command published successfully.",
+                client.send_gcode(&gcode_line),
+            )
+            .await?;
         }
         ControlAction::GcodeRaw {
             bypass_safety,
@@ -320,14 +375,20 @@ pub async fn run(
                 PrintSpeedArg::Sport => PrintSpeed::Sport,
                 PrintSpeedArg::Ludicrous => PrintSpeed::Ludicrous,
             };
-            println!("Setting print speed to {:?}...", level);
-            client.set_print_speed(speed).await?;
-            println!("Print speed command published successfully.");
+            dispatch(
+                &format!("Setting print speed to {:?}...", level),
+                "Print speed command published successfully.",
+                client.set_print_speed(speed),
+            )
+            .await?;
         }
         ControlAction::ClearError => {
-            println!("Clearing active print error codes...");
-            client.clear_print_error().await?;
-            println!("Clear error command published successfully.");
+            dispatch(
+                "Clearing active print error codes...",
+                "Clear error command published successfully.",
+                client.clear_print_error(),
+            )
+            .await?;
         }
         ControlAction::Airduct { mode } => {
             let airduct_mode = match mode {
@@ -335,9 +396,12 @@ pub async fn run(
                 AirductModeArg::Heating => AirductMode::Heating,
                 AirductModeArg::Laser => AirductMode::Laser,
             };
-            println!("Switching airduct damper to {:?} mode...", mode);
-            client.set_airduct_mode(airduct_mode).await?;
-            println!("Airduct command published successfully.");
+            dispatch(
+                &format!("Switching airduct damper to {:?} mode...", mode),
+                "Airduct command published successfully.",
+                client.set_airduct_mode(airduct_mode),
+            )
+            .await?;
         }
         ControlAction::Calibrate { routines } => {
             let mut options = CalibrationOption(0);
@@ -363,19 +427,23 @@ pub async fn run(
                 rotate,
                 filament,
             } => {
-                println!(
-                    "Starting AMS {} drying cycle at {}°C for {} minutes...",
-                    id, temp, time
-                );
-                client
-                    .start_drying(id, temp, time, rotate, &filament)
-                    .await?;
-                println!("AMS drying command published successfully.");
+                dispatch(
+                    &format!(
+                        "Starting AMS {} drying cycle at {}°C for {} minutes...",
+                        id, temp, time
+                    ),
+                    "AMS drying command published successfully.",
+                    client.start_drying(id, temp, time, rotate, &filament),
+                )
+                .await?;
             }
             AmsAction::DryStop { id } => {
-                println!("Stopping AMS {} drying cycle...", id);
-                client.stop_drying(id).await?;
-                println!("AMS drying stop command published successfully.");
+                dispatch(
+                    &format!("Stopping AMS {} drying cycle...", id),
+                    "AMS drying stop command published successfully.",
+                    client.stop_drying(id),
+                )
+                .await?;
             }
         },
     }

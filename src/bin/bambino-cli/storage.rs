@@ -16,6 +16,10 @@ use clap::Subcommand;
 
 use crate::connection::create_printer;
 
+/// Bytes per gibibyte — shared by the upload size ceiling and `format_size`'s unit
+/// conversion, which previously each hardcoded this same literal independently.
+const BYTES_PER_GIB: u64 = 1_073_741_824;
+
 #[derive(Subcommand, Debug)]
 pub enum FilesAction {
     /// Perform a UNIX directory listing traversal
@@ -113,7 +117,7 @@ pub async fn run(
                 BambuError::ProtocolViolation("Target local file does not exist".into())
             })?;
 
-            const MAX_UPLOAD_BYTES: u64 = 1_073_741_824;
+            const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
             if metadata.len() > MAX_UPLOAD_BYTES {
                 return Err(BambuError::ProtocolViolation(
                     format!(
@@ -165,8 +169,8 @@ pub async fn run(
 }
 
 fn format_size(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
+    if bytes >= BYTES_PER_GIB {
+        format!("{:.1} GB", bytes as f64 / BYTES_PER_GIB as f64)
     } else if bytes >= 1_048_576 {
         format!("{:.1} MB", bytes as f64 / 1_048_576.0)
     } else if bytes >= 1024 {

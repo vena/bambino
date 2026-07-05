@@ -8,6 +8,7 @@ check-fast:
 	cargo build
 	cargo build --bin bambino-cli --features cli
 	cargo test
+	cargo test --bin bambino-cli --features cli
 	cargo build --no-default-features --features alloc --lib
 	cargo check --no-default-features --features embassy --lib
 	cargo clippy

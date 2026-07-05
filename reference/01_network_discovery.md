@@ -119,9 +119,11 @@ The physical printer exposes a dedicated set of network interfaces on the local 
 | **8883** | TCP | TLS (MQTTS) | Local Broker Control & State Telemetry Stream | All Models |
 | **990** | TCP | Implicit TLS (FTPS) Only | MicroSD Storage Traversal, 3MF Print Transfer, Logs | All Models |
 | **322** | TCP | TLS (RTSPS) | H.264 video stream extraction via RTSPS over TLS (disabled by default on H2 series*) | X1, X1C, X1E, X2D, P2S, H2C, H2D, H2D Pro, H2S |
-| **6000** | TCP | TLS Socket | Direct chunked JPEG frame-buffer extraction | A1, A1 Mini, P1P, P1S |
+| **6000** | TCP | TLS Socket | Direct chunked JPEG frame-buffer extraction | A1, A1 Mini, A2L, P1P, P1S |
 
 \*Note: For the H2 series (H2S, H2D, H2C, H2D Pro), Port 322 is closed by default (`ECONNREFUSED`) in factory firmware. Telemetry reports `"rtsp_url": "disable"` until manually enabled via the physical touchscreen interface.
+
+\*\*Note: A2L added to the port 6000 model list above — this table originally predated the A2L's release. Corrected per `src/quirks/models/a2.rs`'s `A2LQuirks::camera_protocol()`, which returns `CameraProtocol::BinaryJpeg`, and `MODEL_MATRIX.csv`, both confirming A2L uses the same binary-JPEG protocol as A1/A1 Mini/P1P/P1S.
 
 ---
 

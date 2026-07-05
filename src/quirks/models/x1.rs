@@ -28,128 +28,96 @@ fn x1_is_door_open(telemetry: &PrinterTelemetry) -> bool {
     telemetry.is_door_open_from_home_flag()
 }
 
-impl ModelQuirks for X1CQuirks {
-    fn uses_plaintext_ftps_data_channel(&self) -> bool {
-        false
+/// X1C's bed ceiling is voltage-dependent — see `X1C_BED_TEMP_MAX_220V`'s doc comment.
+/// A free function (not inlined into the macro invocation) since a multi-arm `match` doesn't
+/// substitute cleanly as a macro argument without fighting macro hygiene.
+fn x1c_bed_temp_max(mains_220v: Option<bool>) -> u16 {
+    match mains_220v {
+        Some(true) => X1C_BED_TEMP_MAX_220V,
+        Some(false) => X1C_BED_TEMP_MAX_110V,
+        // Unknown mains region (no home_flag telemetry yet) — fail toward the safer,
+        // more conservative ceiling.
+        None => X1C_BED_TEMP_MAX_220V,
     }
+}
 
-    fn enforce_ftps_tls_1_2(&self) -> bool {
-        false
-    }
+/// X1E's bed ceiling is a flat constant — voltage-independent (its chamber-heater bed ceiling
+/// isn't voltage-dependent per the spec, unlike X1C's).
+fn x1e_bed_temp_max(_mains_220v: Option<bool>) -> u16 {
+    X1E_BED_TEMP_MAX
+}
 
-    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
-        x1_is_door_open(telemetry)
-    }
+macro_rules! impl_x1_shared {
+    ($quirks_type:ty, $has_chamber_heater:expr, $nozzle_max:expr, $bed_max_fn:expr, $chamber_max:expr) => {
+        impl ModelQuirks for $quirks_type {
+            fn uses_plaintext_ftps_data_channel(&self) -> bool {
+                false
+            }
 
-    fn has_door_sensor(&self) -> bool {
-        true
-    }
+            fn enforce_ftps_tls_1_2(&self) -> bool {
+                false
+            }
 
-    fn camera_protocol(&self) -> CameraProtocol {
-        CameraProtocol::Rtsps
-    }
+            fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
+                x1_is_door_open(telemetry)
+            }
 
-    fn ignores_chamber_temperature(&self) -> bool {
-        false
-    }
+            fn has_door_sensor(&self) -> bool {
+                true
+            }
 
-    fn has_stg_cur_idle_bug(&self) -> bool {
-        false
-    }
+            fn camera_protocol(&self) -> CameraProtocol {
+                CameraProtocol::Rtsps
+            }
 
-    fn has_active_chamber_heater(&self) -> bool {
-        false
-    }
+            fn ignores_chamber_temperature(&self) -> bool {
+                false
+            }
 
-    fn physical_nozzle_count(&self) -> u8 {
-        1
-    }
+            fn has_stg_cur_idle_bug(&self) -> bool {
+                false
+            }
 
-    fn supports_nozzle_offset_calibration(&self) -> bool {
-        false
-    }
+            fn has_active_chamber_heater(&self) -> bool {
+                $has_chamber_heater
+            }
 
-    fn is_bed_on_z(&self) -> bool {
-        true
-    }
+            fn physical_nozzle_count(&self) -> u8 {
+                1
+            }
 
-    fn z_max(&self) -> f32 {
-        X1_Z_MAX
-    }
+            fn supports_nozzle_offset_calibration(&self) -> bool {
+                false
+            }
 
-    fn nozzle_temp_max(&self) -> u16 {
-        X1C_NOZZLE_TEMP_MAX
-    }
+            fn is_bed_on_z(&self) -> bool {
+                true
+            }
 
-    fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16 {
-        match mains_220v {
-            Some(true) => X1C_BED_TEMP_MAX_220V,
-            Some(false) => X1C_BED_TEMP_MAX_110V,
-            // Unknown mains region (no home_flag telemetry yet) — fail toward the safer,
-            // more conservative ceiling.
-            None => X1C_BED_TEMP_MAX_220V,
+            fn z_max(&self) -> f32 {
+                X1_Z_MAX
+            }
+
+            fn nozzle_temp_max(&self) -> u16 {
+                $nozzle_max
+            }
+
+            fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16 {
+                $bed_max_fn(mains_220v)
+            }
+
+            fn chamber_temp_max(&self) -> u16 {
+                $chamber_max
+            }
         }
-    }
+    };
 }
 
-impl ModelQuirks for X1EQuirks {
-    fn uses_plaintext_ftps_data_channel(&self) -> bool {
-        false
-    }
-
-    fn enforce_ftps_tls_1_2(&self) -> bool {
-        false
-    }
-
-    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
-        x1_is_door_open(telemetry)
-    }
-
-    fn has_door_sensor(&self) -> bool {
-        true
-    }
-
-    fn camera_protocol(&self) -> CameraProtocol {
-        CameraProtocol::Rtsps
-    }
-
-    fn ignores_chamber_temperature(&self) -> bool {
-        false
-    }
-
-    fn has_stg_cur_idle_bug(&self) -> bool {
-        false
-    }
-
-    fn has_active_chamber_heater(&self) -> bool {
-        true
-    }
-
-    fn physical_nozzle_count(&self) -> u8 {
-        1
-    }
-
-    fn supports_nozzle_offset_calibration(&self) -> bool {
-        false
-    }
-
-    fn is_bed_on_z(&self) -> bool {
-        true
-    }
-
-    fn z_max(&self) -> f32 {
-        X1_Z_MAX
-    }
-
-    fn nozzle_temp_max(&self) -> u16 {
-        X1E_NOZZLE_TEMP_MAX
-    }
-
-    fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
-        X1E_BED_TEMP_MAX
-    }
-
-    fn chamber_temp_max(&self) -> u16 {
-        X1E_CHAMBER_TEMP_MAX
-    }
-}
+impl_x1_shared!(X1CQuirks, false, X1C_NOZZLE_TEMP_MAX, x1c_bed_temp_max, 0);
+impl_x1_shared!(
+    X1EQuirks,
+    true,
+    X1E_NOZZLE_TEMP_MAX,
+    x1e_bed_temp_max,
+    X1E_CHAMBER_TEMP_MAX
+);

@@ -35,7 +35,7 @@ impl Table {
             }
         }
 
-        let separator_width: usize = widths.iter().sum::<usize>() + (col_count - 1) * 3;
+        let separator_width: usize = widths.iter().sum::<usize>() + col_count.saturating_sub(1) * 3;
 
         write_row(w, &self.headers, &widths);
         let _ = writeln!(w, "{:─<width$}", "", width = separator_width);
@@ -55,4 +55,19 @@ fn write_row(w: &mut impl Write, cells: &[String], widths: &[usize]) {
         })
         .collect();
     let _ = writeln!(w, "{}", formatted.join(" │ "));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_to_empty_headers_does_not_panic() {
+        // Regression test: `col_count - 1` on an empty header vector used to underflow
+        // (panics in debug, huge wraparound repeat-count in release).
+        let table = Table::new(vec![]);
+        let mut buf = Vec::new();
+        table.write_to(&mut buf);
+        assert!(!buf.is_empty(), "expected some output, got none");
+    }
 }
