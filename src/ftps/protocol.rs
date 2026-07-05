@@ -32,6 +32,17 @@ pub(crate) const FTP_MAX_RESPONSE_LINES: usize = 100;
 /// staying well under `FTP_MAX_RESPONSE_LINE_BYTES`.
 pub(crate) const FTP_LINE_READ_CHUNK_SIZE: usize = 512;
 
+/// Maximum bytes accepted from a single FTPS data-channel transfer (`list_directory`'s
+/// listing payload, `download_file`'s file payload) before `read_to_eof` aborts with
+/// `ProtocolViolation` rather than growing `out` without bound. Mirrors
+/// `CAMERA_FRAME_MAX_SIZE`'s rationale (`src/camera/binary.rs`) — unbounded allocation on a
+/// no_std/Embassy target hits the uncatchable `alloc_error_handler` abort, not a recoverable
+/// `Result`. Chosen generously for legitimate large downloads (multi-hundred-MB timelapse
+/// videos) while still bounding worst case. Fixed, not yet caller-configurable — unlike
+/// camera's `with_max_frame_size`, there is currently no `BambuFtpsClient` builder to lower
+/// this for embedded targets with tighter memory budgets.
+pub(crate) const FTPS_MAX_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
+
 /// Sends a formatted ASCII FTP command string cleanly terminated with CRLF boundaries.
 pub(crate) async fn write_command<IO: AsyncIo>(
     stream: &mut IO,
@@ -264,7 +275,14 @@ pub(crate) async fn read_to_eof<IO: AsyncIo>(
     loop {
         match stream.read(&mut chunk).await {
             Ok(0) => break,
-            Ok(n) => out.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                if out.len() + n > FTPS_MAX_TRANSFER_BYTES {
+                    return Err(BambuError::ProtocolViolation(
+                        "FTPS transfer exceeds maximum accepted size".into(),
+                    ));
+                }
+                out.extend_from_slice(&chunk[..n]);
+            }
             Err(_) => return Err(BambuError::NetworkError(SocketError::ConnectionAborted)),
         }
     }
@@ -440,6 +458,57 @@ mod tests {
             .await
             .expect("second reply, from carried-over leftover bytes only");
         assert_eq!(code, 226);
+    }
+
+    /// Returns a fixed-size nonzero chunk on every `poll_read` call, forever — never signals
+    /// EOF. Used to exercise `read_to_eof`'s size cap against a stream that never stops
+    /// sending data.
+    #[derive(Clone)]
+    struct InfiniteReader {
+        chunk_len: usize,
+    }
+
+    impl tokio::io::AsyncRead for InfiniteReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            let chunk = vec![0u8; self.chunk_len];
+            buf.put_slice(&chunk);
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl tokio::io::AsyncWrite for InfiniteReader {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_to_eof_rejects_oversized_transfer() {
+        // A stream that never sends EOF and exceeds FTPS_MAX_TRANSFER_BYTES must error
+        // cleanly instead of growing `out` without bound.
+        let reader = InfiniteReader {
+            chunk_len: FTPS_DATA_READ_BUF_SIZE,
+        };
+        let mut stream = TokioIo(reader);
+        let mut out = Vec::new();
+
+        let result = read_to_eof(&mut stream, &mut out).await;
+        assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        assert!(out.len() <= FTPS_MAX_TRANSFER_BYTES);
     }
 
     #[tokio::test]
