@@ -592,6 +592,25 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`). Built
 /// on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
 /// mbedTLS FFI needed to wrap an existing fd) instead of `EspTls::new()` + `connect()`.
+///
+/// **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
+/// `build_verified_client_config_with_options(..., force_tls_1_2: bool)` /
+/// `build_unsafe_client_config_with_options(force_tls_1_2: bool)`, this connector has no
+/// equivalent knob: `esp_idf_svc::tls::Config` (0.52.1, as vendored) exposes no min/max TLS
+/// version field, and the mbedTLS accessor functions that would set it
+/// (`mbedtls_ssl_conf_min_tls_version`/`mbedtls_ssl_conf_max_tls_version`) are absent from
+/// this ESP-IDF build's actual bindgen output (confirmed by inspecting the generated
+/// `esp-idf-sys` bindings directly, not just the safe wrapper's public API) — the
+/// corresponding `mbedtls_ssl_config` struct fields are present but named
+/// `private_max_tls_version`/`private_min_tls_version` per mbedTLS's own field-privacy
+/// convention, so writing them directly would bypass that library's documented API contract
+/// with no ABI stability guarantee across ESP-IDF/mbedTLS version bumps. Practical impact:
+/// if a printer's vsFTPd offers/prefers TLS 1.3, `require_tls_1_2_if_enforced`
+/// (`ftps/client.rs`) still fails closed for models where
+/// `model.quirks().enforce_ftps_tls_1_2()` is true — the connection is safely rejected
+/// rather than silently downgraded — but there is currently no way to make it succeed on
+/// ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
+/// (`embedded-tls`) have no equivalent gap; both expose a genuine max-protocol-version knob.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfTlsConnector {
     certs: EspIdfTlsCerts,
