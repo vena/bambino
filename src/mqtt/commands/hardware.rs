@@ -5,6 +5,8 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
+use super::clamp_task_id;
+
 /// Chamber illumination and toolhead LED control configurations.
 #[derive(Debug, Clone, Serialize)]
 pub struct LedCtrlPayload {
@@ -31,7 +33,7 @@ impl LedCtrlRequest {
         Self {
             system: LedCtrlPayload {
                 command: "ledctrl",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
                 led_node: String::from(led_node),
                 led_mode: String::from(if turn_on { "on" } else { "off" }),
                 led_on_time: 0,
@@ -79,7 +81,7 @@ impl AirductRequest {
                 command: "set_airduct",
                 mode_id: mode as i32,
                 submode: -1,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -105,7 +107,7 @@ impl PromptSoundRequest {
             print: PromptSoundPayload {
                 command: "print_option",
                 sound_enable: enable,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -134,7 +136,7 @@ impl BuzzerRequest {
                 command: "buzzer_ctrl",
                 mode: mode_code,
                 reason: "",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }

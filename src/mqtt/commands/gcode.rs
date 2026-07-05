@@ -5,6 +5,8 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
+use super::clamp_task_id;
+
 /// Queues raw G-code strings directly to the printer's motion execution controller.
 ///
 /// Under the Bambu protocol specification, physical moves, manual extrusions, and
@@ -36,7 +38,7 @@ impl GCodeRequest {
             print: GCodePayload {
                 command: "gcode_line",
                 param,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }

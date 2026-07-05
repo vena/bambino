@@ -7,6 +7,8 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
+use super::clamp_task_id;
+
 /// Overwrites physical attributes or custom slicer presets assigned to a specific tray.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentSettingPayload {
@@ -70,7 +72,7 @@ impl AmsFilamentSettingRequest {
         Self {
             print: AmsFilamentSettingPayload {
                 command: "ams_filament_setting",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
                 ams_id,
                 tray_id,
                 tray_info_idx: String::from(preset_code),
@@ -105,7 +107,7 @@ impl AmsControlRequest {
             print: AmsControlPayload {
                 command: "ams_control",
                 param: String::from(operation),
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -133,7 +135,7 @@ impl AmsGetRfidRequest {
                 command: "ams_get_rfid",
                 ams_id,
                 slot_id,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -177,7 +179,7 @@ impl AmsChangeFilamentRequest {
                 target,
                 curr_temp,
                 tar_temp,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -223,7 +225,7 @@ impl AmsFilamentDryingRequest {
                 dry_time,
                 rotate_tray,
                 filament: String::from(filament),
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }

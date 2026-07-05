@@ -5,6 +5,8 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
+use super::clamp_task_id;
+
 /// Payload schema to trigger a complete state dump ("pushall") from the printer.
 #[derive(Debug, Clone, Serialize)]
 pub struct PushAllPayload {
@@ -23,7 +25,7 @@ impl PushAllRequest {
         Self {
             pushing: PushAllPayload {
                 command: "pushall",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -47,7 +49,7 @@ impl GetVersionRequest {
         Self {
             info: GetVersionPayload {
                 command: "get_version",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }

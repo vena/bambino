@@ -7,6 +7,8 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
+use super::clamp_task_id;
+
 /// General control payload used for pause, resume, stop, and clean actions.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardControlPayload {
@@ -25,7 +27,7 @@ impl StandardControlRequest {
         Self {
             print: StandardControlPayload {
                 command: String::from(command),
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -51,7 +53,7 @@ impl SkipObjectsRequest {
             print: SkipObjectsPayload {
                 command: "skip_objects",
                 obj_list: object_indices,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -75,7 +77,7 @@ impl CleanPrintErrorRequest {
         Self {
             print: CleanPrintErrorPayload {
                 command: "clean_print_error",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -102,7 +104,7 @@ impl CalibrationRequest {
             print: CalibrationPayload {
                 command: "calibration",
                 option: option_bitmask,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -133,7 +135,7 @@ impl PrintSpeedRequest {
             print: PrintSpeedPayload {
                 command: "print_speed",
                 param: String::from(speed_index_str),
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }

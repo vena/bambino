@@ -55,6 +55,22 @@ mod tests {
     use crate::models::BambuModel;
 
     #[test]
+    fn test_command_constructor_clamps_unclamped_sequence_id() {
+        // Phase 4.4 regression: every command constructor's `sequence_id: u64` parameter must
+        // be clamped even when called directly (bypassing PrinterClient::next_sequence_id(),
+        // which already clamps internally) — an external consumer of this public API could
+        // otherwise pass a raw epoch-millisecond value and reproduce the documented 32-bit
+        // overflow firmware lockup.
+        let req = GCodeRequest::new("G28", u64::MAX);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            req.print.sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+            "sequence_id {} exceeds i32::MAX in {json}",
+            req.print.sequence_id
+        );
+    }
+
+    #[test]
     fn test_task_id_modulo_math() {
         let raw_epoch: u64 = 1718626458000;
         let clamped = clamp_task_id(raw_epoch);
