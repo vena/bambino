@@ -143,7 +143,7 @@ which runtime it's running on. The key traits:
 
 Platform implementations live in the `tokio`, `esp_idf`, and `embassy` submodules
 (each gated behind its respective feature flag).
-The [`TokioIo`] adapter bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
+The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
 
 
 
