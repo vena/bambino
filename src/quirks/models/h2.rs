@@ -16,15 +16,24 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// H2S build volume Z depth (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const H2S_Z_MAX: f32 = 340.0;
+/// Z depth (mm) shared by H2D, H2D Pro, and H2C — does not vary by active nozzle, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const H2_DUAL_Z_MAX: f32 = 325.0;
+/// Nozzle temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const H2_NOZZLE_TEMP_MAX: u16 = 350;
+/// Bed temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const H2_BED_TEMP_MAX: u16 = 120;
+/// Chamber temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Chamber Temperature row.
 pub const H2_CHAMBER_TEMP_MAX: u16 = 65;
 
+/// Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 pub struct H2SQuirks;
+/// Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 pub struct H2DQuirks;
+/// Quirks for the H2D Pro — same kinematics as H2D.
 pub struct H2DProQuirks;
+/// Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 fixed nozzle).
 pub struct H2CQuirks;
 
 fn h2_is_door_open(telemetry: &PrinterTelemetry) -> bool {

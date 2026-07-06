@@ -9,11 +9,16 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// Build volume Z depth (mm) — uses the conservative aux/dual-nozzle value, not the main-nozzle value; see module docs.
 pub const X2D_Z_MAX: f32 = 256.0;
+/// Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const X2D_NOZZLE_TEMP_MAX: u16 = 300;
+/// Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const X2D_BED_TEMP_MAX: u16 = 120;
+/// Chamber temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Chamber Temperature row.
 pub const X2D_CHAMBER_TEMP_MAX: u16 = 65;
 
+/// Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 pub struct X2Quirks;
 
 impl ModelQuirks for X2Quirks {

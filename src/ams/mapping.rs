@@ -17,9 +17,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MaterialSource {
     /// Spool loaded inside a standard 4-slot AMS unit.
-    StandardAms { ams_id: u8, slot_id: u8 },
+    StandardAms {
+        /// AMS unit index (0-3).
+        ams_id: u8,
+        /// Tray slot index within the unit (0-3).
+        slot_id: u8,
+    },
     /// Spool loaded inside a single-slot High-Temperature (AMS-HT) dry-chamber.
-    AmsHt { ams_id: u8 },
+    AmsHt {
+        /// AMS-HT unit index (128+, per `AmsMapping2Entry::ams_id`'s range note).
+        ams_id: u8,
+    },
     /// Default virtual external spool holder (used for standard single-nozzle models).
     ExternalSpool,
     /// Left external spool holder (specifically used on dual-nozzle IDEX systems).

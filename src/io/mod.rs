@@ -146,7 +146,9 @@ pub enum TimerError {
 /// TLS protocol version negotiated during a handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsVersion {
+    /// TLS 1.2 negotiated.
     Tls12,
+    /// TLS 1.3 negotiated.
     Tls13,
 }
 

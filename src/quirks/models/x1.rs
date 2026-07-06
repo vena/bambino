@@ -7,8 +7,10 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// Build volume Z depth (mm) shared by X1C and X1E, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const X1_Z_MAX: f32 = 256.0;
 
+/// X1C nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const X1C_NOZZLE_TEMP_MAX: u16 = 300;
 /// Bed temperature ceiling on a 220V-region unit — confirmed, per the official spec sheet,
 /// non-obviously *lower* than the 110V ceiling. Also the conservative default when the mains
@@ -17,11 +19,16 @@ pub const X1C_BED_TEMP_MAX_220V: u16 = 110;
 /// Bed temperature ceiling on a 110V-region unit.
 pub const X1C_BED_TEMP_MAX_110V: u16 = 120;
 
+/// X1E nozzle temperature ceiling (°C) — higher than X1C's, per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const X1E_NOZZLE_TEMP_MAX: u16 = 320;
+/// X1E bed temperature ceiling (°C) — flat, not voltage-dependent (see [`x1e_bed_temp_max`]), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const X1E_BED_TEMP_MAX: u16 = 110;
+/// X1E chamber temperature ceiling (°C) — X1E has an active chamber heater, X1C does not, per `MODEL_MATRIX.csv`'s Max Chamber Temperature row.
 pub const X1E_CHAMBER_TEMP_MAX: u16 = 60;
 
+/// Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (see [`x1c_bed_temp_max`]).
 pub struct X1CQuirks;
+/// Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 pub struct X1EQuirks;
 
 fn x1_is_door_open(telemetry: &PrinterTelemetry) -> bool {

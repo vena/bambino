@@ -58,7 +58,9 @@ pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 /// Incoming MQTT message details parsed from the wire.
 #[derive(Debug, Clone)]
 pub struct MqttMessage {
+    /// Full MQTT topic string the message arrived on (e.g. "device/{serial}/report").
     pub topic: String,
+    /// Raw JSON payload bytes as received off the wire.
     pub payload: Vec<u8>,
 }
 

@@ -13,14 +13,18 @@ use super::clamp_task_id;
 /// temperature targets are issued by packing standard G-code lines into this wrapper.
 #[derive(Debug, Clone, Serialize)]
 pub struct GCodePayload {
+    /// Wire command name, always `"gcode_line"`.
     pub command: &'static str,
+    /// Raw G-code line, newline-terminated by [`GCodeRequest::new`].
     pub param: String,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// Sends a raw G-code line to the printer for immediate execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct GCodeRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: GCodePayload,
 }
 

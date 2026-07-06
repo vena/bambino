@@ -78,7 +78,9 @@ pub struct KProfileEntry {
 /// Inner payload for [`ExtrusionCaliGetRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliGetPayload {
+    /// Wire command name, always `"extrusion_cali_get"`.
     pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
@@ -93,10 +95,13 @@ pub struct ExtrusionCaliGetPayload {
 /// yourself.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliGetRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: ExtrusionCaliGetPayload,
 }
 
 impl ExtrusionCaliGetRequest {
+    /// Builds an `extrusion_cali_get` request. Callers should prefer
+    /// `PrinterClient::get_k_profiles()`, which handles the priming quirk documented above.
     pub fn new(sequence_id: u64) -> Self {
         Self {
             print: ExtrusionCaliGetPayload {
@@ -129,6 +134,7 @@ pub struct ExtrusionCaliGetResponsePayload {
 /// JSON response wrapper containing the printer's stored calibration profile database.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExtrusionCaliGetResponse {
+    /// The `print` namespace envelope wrapping the returned calibration data.
     pub print: ExtrusionCaliGetResponsePayload,
 }
 
@@ -139,14 +145,18 @@ pub struct ExtrusionCaliGetResponse {
 /// Inner payload for [`ExtrusionCaliSetRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliSetPayload {
+    /// Wire command name, always `"extrusion_cali_set"`.
     pub command: &'static str,
+    /// Calibration profile entries to write. Multiple entries support IDEX multi-nozzle writes.
     pub filaments: Vec<KProfileEntry>,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// JSON request wrapper to create or overwrite calibration profile allocations.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliSetRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: ExtrusionCaliSetPayload,
 }
 
@@ -182,13 +192,20 @@ impl ExtrusionCaliSetRequest {
 /// Inner payload for [`ExtrusionCaliSelRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliSelPayload {
+    /// Wire command name, always `"extrusion_cali_sel"`.
     pub command: &'static str,
+    /// Target AMS/external-spool address — see the addressing cheat-sheet on
+    /// [`ExtrusionCaliSelRequest::new`].
     pub ams_id: i32,
     /// Absolute global tray ID (not local slot index).
     pub tray_id: i32,
+    /// Index of the calibration entry within the target's profile database (`KProfileEntry::cali_idx`).
     pub cali_idx: i32,
+    /// Filament preset ID this K-profile applies to (`KProfileEntry::filament_id`).
     pub filament_id: String,
+    /// Nozzle diameter this K-profile applies to (`KProfileEntry::nozzle_diameter`).
     pub nozzle_diameter: String,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
@@ -198,6 +215,7 @@ pub struct ExtrusionCaliSelPayload {
 /// database mislinking on the motion board.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExtrusionCaliSelRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: ExtrusionCaliSelPayload,
 }
 
@@ -247,32 +265,44 @@ impl ExtrusionCaliSelRequest {
 /// Deletion data fields utilized by standard single-nozzle databases (Schema A).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StandardCaliDelEntry {
+    /// Index of the calibration entry to delete (`KProfileEntry::cali_idx`).
     pub cali_idx: i32,
+    /// Filament preset ID of the entry being deleted (`KProfileEntry::filament_id`).
     pub filament_id: String,
+    /// Nozzle diameter of the entry being deleted (`KProfileEntry::nozzle_diameter`).
     pub nozzle_diameter: String,
+    /// System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
     pub nozzle_id: String,
+    /// 19-character setting ID of the entry being deleted, validated by [`validate_setting_id`].
     pub setting_id: String,
 }
 
 /// Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IdexCaliDelEntry {
+    /// Nozzle diameter of the entry being deleted (`KProfileEntry::nozzle_diameter`).
     pub nozzle_diameter: String,
+    /// System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
     pub nozzle_id: String,
+    /// Carriage index of the entry being deleted (0 = Right/Primary, 1 = Left/Deputy).
     pub extruder_id: u8,
 }
 
 /// Inner payload for [`StandardCaliDelRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardCaliDelPayload {
+    /// Wire command name, always `"extrusion_cali_del"`.
     pub command: &'static str,
+    /// Entries to delete. `StandardCaliDelRequest::new` always sends exactly one.
     pub filaments: Vec<StandardCaliDelEntry>,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF].
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardCaliDelRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: StandardCaliDelPayload,
 }
 
@@ -299,14 +329,18 @@ impl StandardCaliDelRequest {
 /// Inner payload for [`IdexCaliDelRequest`].
 #[derive(Debug, Clone, Serialize)]
 pub struct IdexCaliDelPayload {
+    /// Wire command name, always `"extrusion_cali_del"`.
     pub command: &'static str,
+    /// Entries to delete. `IdexCaliDelRequest::new` always sends exactly one.
     pub filaments: Vec<IdexCaliDelEntry>,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF].
 #[derive(Debug, Clone, Serialize)]
 pub struct IdexCaliDelRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: IdexCaliDelPayload,
 }
 

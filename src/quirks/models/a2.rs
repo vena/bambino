@@ -6,10 +6,14 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// A2L build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm).
 pub const A2L_Z_MAX: f32 = 325.0;
+/// Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const A2L_NOZZLE_TEMP_MAX: u16 = 300;
+/// Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const A2L_BED_TEMP_MAX: u16 = 80;
 
+/// Quirks for the A2L large-format open-frame bed-slinger.
 pub struct A2LQuirks;
 
 impl ModelQuirks for A2LQuirks {

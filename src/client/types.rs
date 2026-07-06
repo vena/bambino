@@ -165,11 +165,17 @@ pub struct PrintProgress {
 /// needing to tell those apart should inspect the raw `gcode_state` string directly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrintStatus {
+    /// No print job active or loaded (wire: `"IDLE"`).
     Idle,
+    /// Print job actively executing (wire: `"RUNNING"`).
     Running,
+    /// Print job paused, resumable (wire: `"PAUSE"`).
     Paused,
+    /// Print job completed successfully (wire: `"FINISH"`).
     Finished,
+    /// Print job aborted by an error condition (wire: `"FAILED"`).
     Failed,
+    /// Unrecognized wire value, or `gcode_state` field missing entirely — see the enum's doc comment.
     Unknown,
 }
 

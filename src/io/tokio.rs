@@ -23,6 +23,7 @@ pub struct TokioTimer {
 }
 
 impl TokioTimer {
+    /// Creates a timer, capturing the current instant as its monotonic epoch.
     pub fn new() -> Self {
         Self {
             epoch: std::time::Instant::now(),

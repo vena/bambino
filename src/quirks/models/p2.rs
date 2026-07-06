@@ -6,10 +6,14 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// Build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const P2S_Z_MAX: f32 = 256.0;
+/// Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const P2S_NOZZLE_TEMP_MAX: u16 = 300;
+/// Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const P2S_BED_TEMP_MAX: u16 = 110;
 
+/// Quirks for the P2S CoreXY platform.
 pub struct P2Quirks;
 
 impl ModelQuirks for P2Quirks {

@@ -10,25 +10,33 @@ use super::clamp_task_id;
 /// Chamber illumination and toolhead LED control configurations.
 #[derive(Debug, Clone, Serialize)]
 pub struct LedCtrlPayload {
+    /// Wire command name, always `"ledctrl"`.
     pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
     /// Targets specific physical fixtures (e.g. "chamber_light", "chamber_light2").
     pub led_node: String,
     /// Mode state transitions (e.g., "on", "off", "flashing").
     pub led_mode: String,
+    /// On-time per flash cycle (ms); only meaningful in flashing mode.
     pub led_on_time: u32,
+    /// Off-time per flash cycle (ms); only meaningful in flashing mode.
     pub led_off_time: u32,
+    /// Number of flash loops; only meaningful in flashing mode.
     pub loop_times: u32,
+    /// Interval between flash cycles (ms); only meaningful in flashing mode.
     pub interval_time: u32,
 }
 
 /// Turns chamber or toolhead LEDs on or off.
 #[derive(Debug, Clone, Serialize)]
 pub struct LedCtrlRequest {
+    /// The `system` namespace envelope required by the wire protocol.
     pub system: LedCtrlPayload,
 }
 
 impl LedCtrlRequest {
+    /// Builds a simple on/off `ledctrl` request for the given fixture.
     pub fn new(led_node: &str, turn_on: bool, sequence_id: u64) -> Self {
         Self {
             system: LedCtrlPayload {
@@ -76,29 +84,37 @@ impl LedCtrlRequest {
 /// `Laser` (2): configuration for laser engraving module operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AirductMode {
+    /// Closes internal recirculation dampers, routes hot air out through exhaust.
     Cooling = 0,
+    /// Seals enclosure, closes exhaust flaps for heat retention.
     Heating = 1,
+    /// Laser engraving module configuration.
     Laser = 2,
 }
 
 /// Redirects internal climate airflows using active damper deflection plates.
 #[derive(Debug, Clone, Serialize)]
 pub struct AirductPayload {
+    /// Wire command name, always `"set_airduct"`.
     pub command: &'static str,
     /// Damper mode: 0=cooling (exhaust), 1=heating (sealed), 2=laser [REF-MQTT-LIFECYCLE].
     #[serde(rename = "modeId")]
     pub mode_id: i32,
+    /// Damper submode; always `-1` (unused) — [`AirductRequest::new`] never sets it otherwise.
     pub submode: i32,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// Switches the enclosure airduct damper between cooling, heating, and laser modes.
 #[derive(Debug, Clone, Serialize)]
 pub struct AirductRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: AirductPayload,
 }
 
 impl AirductRequest {
+    /// Builds a `set_airduct` request for the given damper mode.
     pub fn new(mode: AirductMode, sequence_id: u64) -> Self {
         Self {
             print: AirductPayload {
@@ -114,18 +130,23 @@ impl AirductRequest {
 /// Controls structural notification sound output via speakers (Supported on A1 and H2D series only).
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptSoundPayload {
+    /// Wire command name, always `"print_option"`.
     pub command: &'static str,
+    /// Whether notification sounds are enabled.
     pub sound_enable: bool,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// Enables or disables the printer's notification sounds.
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptSoundRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: PromptSoundPayload,
 }
 
 impl PromptSoundRequest {
+    /// Builds a `print_option` request enabling or disabling notification sounds.
     pub fn new(enable: bool, sequence_id: u64) -> Self {
         Self {
             print: PromptSoundPayload {
@@ -140,20 +161,25 @@ impl PromptSoundRequest {
 /// Modifies active alarm or attention chime parameters on the printer cabinet buzzer module.
 #[derive(Debug, Clone, Serialize)]
 pub struct BuzzerPayload {
+    /// Wire command name, always `"buzzer_ctrl"`.
     pub command: &'static str,
     /// Alarm state representation: `0` (Silent), `1` (Alarm), `2` (Chirp/Beep) [REF-MQTT-LIFECYCLE].
     pub mode: i32,
+    /// Reason string shown alongside the alarm; always empty in practice, per [`BuzzerRequest::new`].
     pub reason: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
 
 /// Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
 #[derive(Debug, Clone, Serialize)]
 pub struct BuzzerRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: BuzzerPayload,
 }
 
 impl BuzzerRequest {
+    /// Builds a `buzzer_ctrl` request for the given alarm mode.
     pub fn new(mode_code: i32, sequence_id: u64) -> Self {
         Self {
             print: BuzzerPayload {

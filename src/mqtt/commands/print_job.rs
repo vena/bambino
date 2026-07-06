@@ -21,24 +21,38 @@ use super::clamp_task_id;
 /// with named fields and sensible defaults for calibration flags.
 #[derive(Debug, Clone)]
 pub struct PrintJobConfig {
+    /// Filename of the `.3mf` file on SD card storage (e.g. "job.3mf").
     pub job_filename: String,
+    /// Sliced plate gcode path inside the `.3mf` (e.g. "Metadata/plate_1.gcode").
     pub plate_gcode_path: String,
+    /// User-friendly label for the print queue task.
     pub subtask_name: String,
+    /// Unique 32-bit tracking identifier before clamping (see `clamp_task_id`).
     pub raw_subtask_id: u64,
+    /// Bed plate type (e.g. "textured", "smooth").
     pub bed_type: String,
+    /// Whether to run automatic bed leveling before the print.
     pub bed_leveling: bool,
+    /// Whether to run dynamic flow calibration before the print.
     pub run_flow_calibration: bool,
+    /// Whether to run vibration compensation calibration before the print.
     pub run_vibration_compensation: bool,
+    /// Whether timelapse capture is enabled.
     pub timelapse: bool,
+    /// Whether to run first-layer inspection during the print.
     pub layer_inspect: bool,
     /// `None` defers to the quirks engine default in `PrinterClient::start_print()`.
     pub nozzle_offset_cali: Option<bool>,
+    /// Whether to route filament through the AMS rather than an external spool.
     pub use_ams: bool,
+    /// Flat AMS slot mapping (one entry per plate object, -1 = no AMS slot).
     pub ams_mapping: Vec<i32>,
+    /// Structured per-nozzle AMS mapping; takes precedence over `ams_mapping` when set.
     pub ams_mapping2: Option<Vec<AmsMapping2Entry>>,
 }
 
 impl PrintJobConfig {
+    /// Builds a job config with calibration flags defaulted on and AMS disabled.
     pub fn new(
         job_filename: &str,
         plate_gcode_path: &str,
@@ -64,43 +78,51 @@ impl PrintJobConfig {
         }
     }
 
+    /// Enables AMS and sets the flat slot-mapping array (`ams_mapping`).
     pub fn with_ams(mut self, mapping: Vec<i32>) -> Self {
         self.use_ams = true;
         self.ams_mapping = mapping;
         self
     }
 
+    /// Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
     pub fn with_ams_mapping2(mut self, mapping2: Vec<AmsMapping2Entry>) -> Self {
         self.use_ams = true;
         self.ams_mapping2 = Some(mapping2);
         self
     }
 
+    /// Enables or disables automatic bed leveling for this job.
     pub fn bed_leveling(mut self, enabled: bool) -> Self {
         self.bed_leveling = enabled;
         self
     }
 
+    /// Enables or disables flow calibration for this job.
     pub fn flow_calibration(mut self, enabled: bool) -> Self {
         self.run_flow_calibration = enabled;
         self
     }
 
+    /// Enables or disables vibration compensation calibration for this job.
     pub fn vibration_compensation(mut self, enabled: bool) -> Self {
         self.run_vibration_compensation = enabled;
         self
     }
 
+    /// Enables or disables timelapse capture for this job.
     pub fn timelapse(mut self, enabled: bool) -> Self {
         self.timelapse = enabled;
         self
     }
 
+    /// Enables or disables first-layer inspection for this job.
     pub fn layer_inspect(mut self, enabled: bool) -> Self {
         self.layer_inspect = enabled;
         self
     }
 
+    /// Overrides the model's default nozzle-offset-calibration behavior for this job.
     pub fn nozzle_offset_calibration(mut self, enabled: bool) -> Self {
         self.nozzle_offset_cali = Some(enabled);
         self
@@ -117,14 +139,18 @@ impl PrintJobConfig {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum AmsMappingTable {
+    /// External-spool mode: serializes to an empty string.
     Inactive(String),
+    /// AMS active mode: serializes to an integer slot-mapping array.
     Active(Vec<i32>),
 }
 
 /// Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectFilePayload {
+    /// Wire command name, always `"project_file"`.
     pub command: &'static str,
+    /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
     /// Target file path of the internal sliced plate payload (e.g. "Metadata/plate_1.gcode").
     pub param: String,
@@ -136,14 +162,19 @@ pub struct ProjectFilePayload {
     pub file: String,
     /// Connection endpoint directory scheme (Must use `ftp://` for local loopback parsing) [REF-MQTT-LIFECYCLE].
     pub url: String,
+    /// Whether timelapse capture is enabled for this job.
     pub timelapse: bool,
+    /// Bed plate type used for the print (e.g. "textured", "smooth").
     pub bed_type: String,
+    /// Whether to run automatic bed leveling before the print.
     pub bed_leveling: bool,
     /// Controls dynamic flow calibration. Expressed as an integer: `1` for active, `0` for bypass.
     pub extrude_cali_flag: i32,
     /// Active nozzle offset verification flag (Used primarily on IDEX and tool-changers).
     pub nozzle_offset_cali: i32,
+    /// Whether vibration compensation calibration ran as part of this job.
     pub vibration_cali: bool,
+    /// Whether layer inspection (first-layer scan) ran as part of this job.
     pub layer_inspect: bool,
     /// Triggers physical AMS multiplexer material routing. Must strictly be serialized as a boolean.
     pub use_ams: bool,
@@ -157,6 +188,7 @@ pub struct ProjectFilePayload {
 /// Submits a `.3mf` print job from the SD card for execution.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectFileRequest {
+    /// The `print` namespace envelope required by the wire protocol.
     pub print: ProjectFilePayload,
 }
 

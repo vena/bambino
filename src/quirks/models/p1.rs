@@ -6,10 +6,14 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// Build volume Z depth (mm) shared by P1P and P1S, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const P1_Z_MAX: f32 = 256.0;
+/// Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const P1_NOZZLE_TEMP_MAX: u16 = 300;
+/// Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const P1_BED_TEMP_MAX: u16 = 100;
 
+/// Quirks shared by the P1P and P1S CoreXY platforms.
 pub struct P1Quirks;
 
 impl ModelQuirks for P1Quirks {

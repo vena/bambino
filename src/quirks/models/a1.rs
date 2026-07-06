@@ -10,13 +10,20 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
+/// A1 build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const A1_Z_MAX: f32 = 256.0;
+/// A1 Mini build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const A1_MINI_Z_MAX: f32 = 180.0;
+/// Nozzle temperature ceiling (°C) shared by A1 and A1 Mini, per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const A1_NOZZLE_TEMP_MAX: u16 = 300;
+/// A1 bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const A1_BED_TEMP_MAX: u16 = 100;
+/// A1 Mini bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const A1_MINI_BED_TEMP_MAX: u16 = 80;
 
+/// Quirks for the full-size A1 bed-slinger.
 pub struct A1Quirks;
+/// Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceiling).
 pub struct A1MiniQuirks;
 
 macro_rules! impl_a1_shared {
