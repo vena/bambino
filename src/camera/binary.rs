@@ -121,7 +121,7 @@ pub struct BambuBinaryCameraStream<IO: AsyncIo> {
 impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// Instantiates a camera parser wrapper surrounding an active secure stream socket.
     ///
-    /// The accepted frame size defaults to [`CAMERA_FRAME_MAX_SIZE`] (10MB). Use
+    /// The accepted frame size defaults to `CAMERA_FRAME_MAX_SIZE` (10MB). Use
     /// [`Self::with_max_frame_size`] to lower it — useful on `no_std`/Embassy targets, where a
     /// 10MB transient allocation (see [`Self::read_next_frame`]) can exceed the entire SRAM
     /// budget and trigger an uncatchable `alloc_error_handler` abort rather than a recoverable
@@ -134,7 +134,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         }
     }
 
-    /// Overrides the maximum accepted frame size (default: [`CAMERA_FRAME_MAX_SIZE`], 10MB).
+    /// Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
     ///
     /// Non-consuming builder, matching the `PrinterClient::with_mqtt_port`/`with_ftps_port`
     /// convention (`src/client/mod.rs`). Embedded callers should clamp this to a value that
@@ -314,7 +314,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// Asynchronously extracts the next complete frame from the stream.
     ///
     /// Refills the user-supplied `Vec<u8>` to minimize memory churn during high-frequency
-    /// image extraction operations. Delegates to [`Self::read_next_frame_with_timer`] under
+    /// image extraction operations. Delegates to `read_next_frame_with_timer` under
     /// [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
     /// every existing caller not going through `PrinterClient`.
     pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError> {

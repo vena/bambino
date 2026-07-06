@@ -14,12 +14,7 @@ default = ["std", "tokio"]
 std = ["dep:thiserror", "serde/std", "serde_json/std"]
 
 # Tokio-specific dependencies and platform bridges
-tokio = [
-    "dep:tokio",
-    "dep:tokio-rustls",
-    "dep:rustls-pki-types",
-    "std",
-]
+tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "std"]
 
 # bambino-cli only: terminal manipulation and a concrete log sink. Not implied by
 # `tokio` so library consumers depending on `bambino` with default features don't

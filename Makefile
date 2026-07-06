@@ -1,4 +1,4 @@
-.PHONY: check-fast check-esp-idf check-all
+.PHONY: check-fast check-esp-idf check-all docs
 
 CHIP ?= esp32c6
 
@@ -22,3 +22,17 @@ check-esp-idf:
 	scripts/check-esp-idf.sh $(CHIP)
 
 check-all: check-fast check-esp-idf
+
+# LLM-facing API reference, one markdown file per top-level module (per-crate,
+# no transitive deps). cargo-doc-md nests output under an extra <crate-name>/
+# dir + writes a useless single-crate index.md — flatten both away since we
+# only ever document this one crate. Run manually when the public API
+# actually changes; not wired into a git hook (see CLAUDE.md's cargo-doc-md
+# discussion for why: post-commit can't include its own output in the commit
+# that triggered it, and every commit would pay the rebuild cost regardless
+# of whether the change touched the public API).
+docs:
+	cargo doc-md --no-deps -o docs
+	rm -f docs/index.md
+	mv docs/bambino/* docs/
+	rmdir docs/bambino

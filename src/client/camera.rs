@@ -60,7 +60,7 @@ where
     ///
     /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
     /// [`.attach_camera()`](Self::attach_camera). Returns `BambuError::ProtocolViolation`
-    /// immediately for RTSPS models — see [`ensure_camera()`](Self::ensure_camera)'s doc
+    /// immediately for RTSPS models — see `ensure_camera()`'s doc
     /// comment.
     pub async fn camera(
         &mut self,
@@ -86,7 +86,7 @@ where
 
     /// Disconnects the camera session, if one exists, and clears it from the client.
     ///
-    /// Once `camera_config` is consumed by [`ensure_camera()`](Self::ensure_camera), a dead
+    /// Once `camera_config` is consumed by `ensure_camera()`, a dead
     /// stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
     /// stuck `Some(...)` forever, since `ensure_camera()`'s `is_some()` short-circuit would
     /// keep handing back the same broken stream. There is no protocol-level teardown on
