@@ -156,7 +156,11 @@ async fn example() -> Result<(), bambino::BambuError> {
 
 ### [`io`](io.md)
 
-*1 module, 3 enums, 6 traits*
+*2 modules, 3 enums, 6 traits*
+
+### [`io::embassy`](io/embassy.md)
+
+*5 structs*
 
 ### [`io::tokio`](io/tokio.md)
 

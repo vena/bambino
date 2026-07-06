@@ -35,6 +35,8 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 **Trait Implementations:**
 
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
 - **PartialEq**
@@ -43,8 +45,6 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
   - `fn clone(self: &Self) -> AmsMapping2Entry`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -71,12 +71,12 @@ Enumeration of possible physical feed locations for loaded spools.
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &MaterialSource) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> MaterialSource`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 

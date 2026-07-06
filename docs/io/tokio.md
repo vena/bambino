@@ -85,13 +85,13 @@ Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trai
 **Trait Implementations:**
 
 - **Error**
-  - `fn source(self: &Self) -> Option<&dyn std::error::Error>`
-- **Error**
   - `fn kind(self: &Self) -> embedded_io_async::ErrorKind`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Display**
   - `fn fmt(self: &Self, f: & mut core::fmt::Formatter) -> core::fmt::Result`
+- **Error**
+  - `fn source(self: &Self) -> Option<&dyn std::error::Error>`
 
 
 

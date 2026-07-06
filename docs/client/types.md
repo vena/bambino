@@ -35,12 +35,12 @@ Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`]
 
 **Trait Implementations:**
 
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &BuzzerMode) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> BuzzerMode`
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -87,18 +87,18 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 - `ChamberExhaust` - Chamber exhaust/filtration fan (Port 3).
 - `AuxiliaryRight` - Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
 
-**Traits:** Copy, Eq
+**Traits:** Eq, Copy
 
 **Trait Implementations:**
 
-- **PartialEq**
-  - `fn eq(self: &Self, other: &FanTarget) -> bool`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Clone**
   - `fn clone(self: &Self) -> FanTarget`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &FanTarget) -> bool`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
 
 
 
@@ -126,14 +126,14 @@ means "never observed," not "printer reports zero/none."
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> PrintProgress`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &PrintProgress) -> bool`
 - **Default**
   - `fn default() -> PrintProgress`
+- **Clone**
+  - `fn clone(self: &Self) -> PrintProgress`
 
 
 

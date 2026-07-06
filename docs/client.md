@@ -45,6 +45,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 **Methods:**
 
+- `fn change_filament(self: & mut Self, ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, BambuError>` - Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
+- `fn start_drying(self: & mut Self, ams_id: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str) -> Result<u16, BambuError>` - Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
+- `fn stop_drying(self: & mut Self, ams_id: i32) -> Result<u16, BambuError>` - Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
+- `fn scan_rfid(self: & mut Self, ams_id: i32, slot_id: i32) -> Result<u16, BambuError>` - Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
+- `fn select_k_profile(self: & mut Self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, BambuError>` - Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
+- `fn get_version(self: & mut Self) -> Result<VersionInfo, BambuError>` - Queries the printer's expansion bus version database and returns typed module info.
+- `fn get_k_profiles(self: & mut Self) -> Result<ExtrusionCaliGetResponse, BambuError>` - Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
+- `fn set_k_profile_primed(self: & mut Self, primed: bool)` - Controls whether `get_k_profiles()` sends an automatic priming request.
 - `fn new(tls: MqttTls, factory: MqttFactory, ip: &str, serial: &str, access_code: &str, model: BambuModel) -> Self` - Creates a lazy client that defers MQTT connection until first use.
 - `fn connect_mqtt(self: & mut Self) -> Result<(), BambuError>` - Eagerly establishes the MQTT connection.
 - `fn mqtt_connected(self: &Self) -> bool` - Returns whether the MQTT session is currently established.
@@ -122,14 +130,6 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - `fn storage(self: & mut Self) -> Result<& mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, BambuError>` - Returns direct access to the underlying [`BambuFtpsClient`], auto-connecting
 - `fn disconnect_storage(self: & mut Self) -> Result<(), BambuError>` - Disconnects the FTPS session, if one exists, and clears it from the client.
 - `fn from_mqtt(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self` - Wraps an already-connected [`BambuMqttClient`] in a `PrinterClient`.
-- `fn change_filament(self: & mut Self, ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, BambuError>` - Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
-- `fn start_drying(self: & mut Self, ams_id: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str) -> Result<u16, BambuError>` - Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
-- `fn stop_drying(self: & mut Self, ams_id: i32) -> Result<u16, BambuError>` - Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
-- `fn scan_rfid(self: & mut Self, ams_id: i32, slot_id: i32) -> Result<u16, BambuError>` - Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
-- `fn select_k_profile(self: & mut Self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, BambuError>` - Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
-- `fn get_version(self: & mut Self) -> Result<VersionInfo, BambuError>` - Queries the printer's expansion bus version database and returns typed module info.
-- `fn get_k_profiles(self: & mut Self) -> Result<ExtrusionCaliGetResponse, BambuError>` - Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
-- `fn set_k_profile_primed(self: & mut Self, primed: bool)` - Controls whether `get_k_profiles()` sends an automatic priming request.
 
 
 

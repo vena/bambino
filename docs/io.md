@@ -6,6 +6,7 @@
 
 **Modules**
 
+- [`embassy`](#embassy) - # Bare-Metal Embassy Runtime Integration
 - [`tokio`](#tokio) - # Tokio Host Runtime Implementation
 
 **Enums**
@@ -121,12 +122,12 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &SocketError) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> SocketError`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -147,12 +148,12 @@ ever constructs this.
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> TimerError`
 - **PartialEq**
   - `fn eq(self: &Self, other: &TimerError) -> bool`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Clone**
+  - `fn clone(self: &Self) -> TimerError`
 
 
 
@@ -200,7 +201,7 @@ TLS protocol version negotiated during a handshake.
 - `Tls12` - TLS 1.2 negotiated.
 - `Tls13` - TLS 1.3 negotiated.
 
-**Traits:** Copy, Eq
+**Traits:** Eq, Copy
 
 **Trait Implementations:**
 
@@ -210,6 +211,16 @@ TLS protocol version negotiated during a handshake.
   - `fn eq(self: &Self, other: &TlsVersion) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> TlsVersion`
+
+
+
+## Module: embassy
+
+# Bare-Metal Embassy Runtime Integration
+
+Provides the concrete bindings of the abstract IO, Secure TLS transport,
+and Timer interfaces for bare-metal targets utilizing the Embassy network
+stack and `embedded-tls`.
 
 
 
