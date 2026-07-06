@@ -23,6 +23,7 @@ pub struct EspIdfTimer {
 
 #[cfg(feature = "esp-idf")]
 impl EspIdfTimer {
+    /// Constructs a new timer backed by a dedicated ESP-IDF high-resolution timer service.
     pub fn new() -> Result<Self, ::esp_idf_svc::sys::EspError> {
         let service = ::esp_idf_svc::timer::EspTimerService::<::esp_idf_svc::timer::Task>::new()?;
         let timer = service.timer_async()?;

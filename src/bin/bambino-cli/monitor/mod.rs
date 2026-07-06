@@ -100,6 +100,12 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
 
     let mut state = serde_json::Map::new();
 
+    // NOTE: racing `poll_telemetry()` against `ping_timer.tick()` here means a silently
+    // dropped connection is caught by `tick_zombie_check`'s 60s `secs_since_last_message`
+    // counter below, not by `poll_wire`'s 30s per-read deadline (`mqtt/client/frame.rs`) —
+    // every time this select drops the in-flight telemetry future (every PING_TICK_SECS),
+    // that deadline resets before it can fire. Confirmed on real hardware 2026-07-06; see
+    // CLAUDE.md's "select!-multiplexed consumers" entry for why this is expected, not a bug.
     let result = loop {
         tokio::select! {
             telemetry_res = printer.poll_telemetry() => {
