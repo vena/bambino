@@ -112,10 +112,10 @@ where
     /// Dispatches safe homing operations to prevent hardware collisions.
     ///
     /// **Z-Axis Homing Crash Hazards [REF-MOTO-GCODE]:**
-    /// * **Bed-on-Z models** (X1, P1, H2, P2S series) must strictly be homed using a bare `G28`
+    /// * **Bed-on-Z models** (X1, X2D, P1, H2, P2S series) must strictly be homed using a bare `G28`
     ///   to execute the safe firmware-defined toolhead parking sequence. Specifying axis constraints
     ///   (such as `G28 Z`) bypasses this and risks driving the bed directly into a misplaced toolhead.
-    /// * **Bed-Slingers** (A1, A1 Mini) can handle targeted homing macros safely, but a bare `G28` is
+    /// * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
     ///   highly recommended for standard configurations.
     pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, BambuError> {
         let is_bed_on_z = self.model.quirks().is_bed_on_z();

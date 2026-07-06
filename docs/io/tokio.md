@@ -122,7 +122,7 @@ Timer implementation utilizing Tokio's non-blocking system clock registry.
 
 **Methods:**
 
-- `fn new() -> Self`
+- `fn new() -> Self` - Creates a timer, capturing the current instant as its monotonic epoch.
 
 **Trait Implementations:**
 

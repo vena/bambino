@@ -26,13 +26,13 @@
 Triggers filament load or unload sequences on physical AMS units or virtual external spools [REF-AMS-MAP].
 
 **Fields:**
-- `command: &'static str`
-- `ams_id: i32`
-- `slot_id: i32`
-- `target: i32` - Load/unload destination (1 = toolhead load, 255 = unload/retract).
+- `command: &'static str` - Wire command name, always `"ams_change_filament"`.
+- `ams_id: i32` - Target AMS unit index (or external-spool address per the caller's convention).
+- `slot_id: i32` - Target slot index within the AMS unit.
+- `target: i32` - Load/unload destination slot — mirrors `slot_id` in every documented wire example
 - `curr_temp: i32` - Current nozzle temperature (-1 = let firmware decide).
 - `tar_temp: i32` - Target nozzle temperature (-1 = let firmware decide).
-- `sequence_id: String`
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -52,11 +52,11 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 Loads or unloads filament from an AMS slot or external spool to the toolhead.
 
 **Fields:**
-- `print: AmsChangeFilamentPayload`
+- `print: AmsChangeFilamentPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: u64) -> Self`
+- `fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: u64) -> Self` - Builds an `ams_change_filament` request to load or unload filament.
 
 **Trait Implementations:**
 
@@ -76,9 +76,9 @@ Loads or unloads filament from an AMS slot or external spool to the toolhead.
 Commands standard AMS controllers to resume, pause, or reset physical material feeds.
 
 **Fields:**
-- `command: &'static str`
+- `command: &'static str` - Wire command name, always `"ams_control"`.
 - `param: String` - Target physical operation (e.g., "resume", "pause").
-- `sequence_id: String`
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -98,11 +98,11 @@ Commands standard AMS controllers to resume, pause, or reset physical material f
 Sends a resume, pause, or reset command to the AMS feed mechanism.
 
 **Fields:**
-- `print: AmsControlPayload`
+- `print: AmsControlPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(operation: &str, sequence_id: u64) -> Self`
+- `fn new(operation: &str, sequence_id: u64) -> Self` - Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
 
 **Trait Implementations:**
 
@@ -122,14 +122,14 @@ Sends a resume, pause, or reset command to the AMS feed mechanism.
 Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
 
 **Fields:**
-- `command: &'static str`
-- `ams_id: i32`
+- `command: &'static str` - Wire command name, always `"ams_filament_drying"`.
+- `ams_id: i32` - Target AMS unit index.
 - `mode: i32` - 1 = start drying, 0 = stop drying.
-- `dry_temp: u32`
+- `dry_temp: u32` - Drying temperature (°C).
 - `dry_time: u32` - Duration in **minutes** (e.g., 8-hour cycle = 480).
-- `rotate_tray: bool`
-- `filament: String`
-- `sequence_id: String`
+- `rotate_tray: bool` - Whether to periodically rotate the tray during drying.
+- `filament: String` - Filament material type being dried (e.g. "PA-CF").
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -149,11 +149,11 @@ Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units
 Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 **Fields:**
-- `print: AmsFilamentDryingPayload`
+- `print: AmsFilamentDryingPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: u64) -> Self`
+- `fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: u64) -> Self` - Builds an `ams_filament_drying` request.
 
 **Trait Implementations:**
 
@@ -173,16 +173,16 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 Overwrites physical attributes or custom slicer presets assigned to a specific tray.
 
 **Fields:**
-- `command: &'static str`
-- `sequence_id: String`
-- `ams_id: i32`
-- `tray_id: i32`
+- `command: &'static str` - Wire command name, always `"ams_filament_setting"`.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
+- `ams_id: i32` - Target AMS unit or external-spool address — see the addressing cheat-sheet on
+- `tray_id: i32` - Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
 - `tray_info_idx: String` - Standard filament preset index code (e.g. "GFL05" / "PF12345678901234567") [REF-AMS-SP_CFG].
-- `tray_type: String`
-- `tray_sub_brands: String`
+- `tray_type: String` - Material type string (e.g. "PLA", "PETG").
+- `tray_sub_brands: String` - Sub-brand label (e.g. "Generic Basic"); defaults to `"{material_type} Basic"` when not given.
 - `tray_color: String` - Structural hexadecimal color in RRGGBBAA format (e.g., "FFFF00FF").
-- `nozzle_temp_min: u32`
-- `nozzle_temp_max: u32`
+- `nozzle_temp_min: u32` - Minimum safe nozzle temperature (°C) for this filament.
+- `nozzle_temp_max: u32` - Maximum safe nozzle temperature (°C) for this filament.
 
 **Trait Implementations:**
 
@@ -202,7 +202,7 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
 
 **Fields:**
-- `print: AmsFilamentSettingPayload`
+- `print: AmsFilamentSettingPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
@@ -226,10 +226,10 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 Triggers physical filament feeder movement to scan proprietary RFID tag properties.
 
 **Fields:**
-- `command: &'static str`
-- `ams_id: i32`
-- `slot_id: i32`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"ams_get_rfid"`.
+- `ams_id: i32` - Target AMS unit index.
+- `slot_id: i32` - Target slot index within the AMS unit.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -249,11 +249,11 @@ Triggers physical filament feeder movement to scan proprietary RFID tag properti
 Requests an RFID tag scan on a specific AMS slot.
 
 **Fields:**
-- `print: AmsGetRfidPayload`
+- `print: AmsGetRfidPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(ams_id: i32, slot_id: i32, sequence_id: u64) -> Self`
+- `fn new(ams_id: i32, slot_id: i32, sequence_id: u64) -> Self` - Builds an `ams_get_rfid` request.
 
 **Trait Implementations:**
 

@@ -53,7 +53,7 @@ pub enum FanTarget {
     AuxiliaryLeft,
     /// Chamber exhaust/filtration fan (Port 3).
     ChamberExhaust,
-    /// Secondary right-side auxiliary fan (Port 10, specifically supported on X2D).
+    /// Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
     AuxiliaryRight,
 }
 

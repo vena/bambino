@@ -170,7 +170,9 @@ pub struct AmsChangeFilamentPayload {
     pub ams_id: i32,
     /// Target slot index within the AMS unit.
     pub slot_id: i32,
-    /// Load/unload destination (1 = toolhead load, 255 = unload/retract).
+    /// Load/unload destination slot — mirrors `slot_id` in every documented wire example
+    /// (standard slot, external spool, or `255` for unload/retract), not a fixed enum code
+    /// [REF-AMS-MAP].
     pub target: i32,
     /// Current nozzle temperature (-1 = let firmware decide).
     pub curr_temp: i32,

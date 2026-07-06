@@ -21,18 +21,18 @@ Under the Bambu protocol specification, physical moves, manual extrusions, and
 temperature targets are issued by packing standard G-code lines into this wrapper.
 
 **Fields:**
-- `command: &'static str`
-- `param: String`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"gcode_line"`.
+- `param: String` - Raw G-code line, newline-terminated by [`GCodeRequest::new`].
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> GCodePayload`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **Clone**
-  - `fn clone(self: &Self) -> GCodePayload`
 
 
 
@@ -43,7 +43,7 @@ temperature targets are issued by packing standard G-code lines into this wrappe
 Sends a raw G-code line to the printer for immediate execution.
 
 **Fields:**
-- `print: GCodePayload`
+- `print: GCodePayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 

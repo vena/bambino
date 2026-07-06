@@ -24,12 +24,12 @@ Typed response from a `get_version` command containing all expansion bus modules
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> VersionInfo`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **Clone**
-  - `fn clone(self: &Self) -> VersionInfo`
 
 
 
@@ -53,12 +53,12 @@ Hardware or firmware module entry from the printer's expansion bus version datab
 
 **Trait Implementations:**
 
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
   - `fn clone(self: &Self) -> VersionModule`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 

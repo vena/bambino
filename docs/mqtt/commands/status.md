@@ -20,8 +20,8 @@
 Payload schema to retrieve hardware/firmware version strings from the expansion bus.
 
 **Fields:**
-- `command: &'static str`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"get_version"`.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -41,11 +41,11 @@ Payload schema to retrieve hardware/firmware version strings from the expansion 
 Queries the printer for its hardware and firmware version info.
 
 **Fields:**
-- `info: GetVersionPayload`
+- `info: GetVersionPayload` - The `info` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(sequence_id: u64) -> Self`
+- `fn new(sequence_id: u64) -> Self` - Builds a `get_version` request.
 
 **Trait Implementations:**
 
@@ -65,8 +65,8 @@ Queries the printer for its hardware and firmware version info.
 Payload schema to trigger a complete state dump ("pushall") from the printer.
 
 **Fields:**
-- `command: &'static str`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"pushall"`.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -86,11 +86,11 @@ Payload schema to trigger a complete state dump ("pushall") from the printer.
 Requests a full state dump from the printer (all telemetry fields at once).
 
 **Fields:**
-- `pushing: PushAllPayload`
+- `pushing: PushAllPayload` - The `pushing` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(sequence_id: u64) -> Self`
+- `fn new(sequence_id: u64) -> Self` - Builds a `pushall` request.
 
 **Trait Implementations:**
 

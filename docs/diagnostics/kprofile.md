@@ -35,8 +35,8 @@
 Inner payload for [`ExtrusionCaliGetRequest`].
 
 **Fields:**
-- `command: &'static str`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"extrusion_cali_get"`.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -64,11 +64,11 @@ automatically — use `set_k_profile_primed(true)` to opt out if you manage prim
 yourself.
 
 **Fields:**
-- `print: ExtrusionCaliGetPayload`
+- `print: ExtrusionCaliGetPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
-- `fn new(sequence_id: u64) -> Self`
+- `fn new(sequence_id: u64) -> Self` - Builds an `extrusion_cali_get` request. Callers should prefer
 
 **Trait Implementations:**
 
@@ -88,7 +88,7 @@ yourself.
 JSON response wrapper containing the printer's stored calibration profile database.
 
 **Fields:**
-- `print: ExtrusionCaliGetResponsePayload`
+- `print: ExtrusionCaliGetResponsePayload` - The `print` namespace envelope wrapping the returned calibration data.
 
 **Trait Implementations:**
 
@@ -131,22 +131,22 @@ Payload envelope returned by the printer in response to `extrusion_cali_get`.
 Inner payload for [`ExtrusionCaliSelRequest`].
 
 **Fields:**
-- `command: &'static str`
-- `ams_id: i32`
+- `command: &'static str` - Wire command name, always `"extrusion_cali_sel"`.
+- `ams_id: i32` - Target AMS/external-spool address — see the addressing cheat-sheet on
 - `tray_id: i32` - Absolute global tray ID (not local slot index).
-- `cali_idx: i32`
-- `filament_id: String`
-- `nozzle_diameter: String`
-- `sequence_id: String`
+- `cali_idx: i32` - Index of the calibration entry within the target's profile database (`KProfileEntry::cali_idx`).
+- `filament_id: String` - Filament preset ID this K-profile applies to (`KProfileEntry::filament_id`).
+- `nozzle_diameter: String` - Nozzle diameter this K-profile applies to (`KProfileEntry::nozzle_diameter`).
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> ExtrusionCaliSelPayload`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Clone**
+  - `fn clone(self: &Self) -> ExtrusionCaliSelPayload`
 
 
 
@@ -160,7 +160,7 @@ The `setting_id` field is intentionally omitted from this payload to prevent
 database mislinking on the motion board.
 
 **Fields:**
-- `print: ExtrusionCaliSelPayload`
+- `print: ExtrusionCaliSelPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
@@ -184,9 +184,9 @@ database mislinking on the motion board.
 Inner payload for [`ExtrusionCaliSetRequest`].
 
 **Fields:**
-- `command: &'static str`
-- `filaments: Vec<KProfileEntry>`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"extrusion_cali_set"`.
+- `filaments: Vec<KProfileEntry>` - Calibration profile entries to write. Multiple entries support IDEX multi-nozzle writes.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -206,7 +206,7 @@ Inner payload for [`ExtrusionCaliSetRequest`].
 JSON request wrapper to create or overwrite calibration profile allocations.
 
 **Fields:**
-- `print: ExtrusionCaliSetPayload`
+- `print: ExtrusionCaliSetPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
@@ -230,9 +230,9 @@ JSON request wrapper to create or overwrite calibration profile allocations.
 Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 
 **Fields:**
-- `nozzle_diameter: String`
-- `nozzle_id: String`
-- `extruder_id: u8`
+- `nozzle_diameter: String` - Nozzle diameter of the entry being deleted (`KProfileEntry::nozzle_diameter`).
+- `nozzle_id: String` - System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
+- `extruder_id: u8` - Carriage index of the entry being deleted (0 = Right/Primary, 1 = Left/Deputy).
 
 **Trait Implementations:**
 
@@ -256,9 +256,9 @@ Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 Inner payload for [`IdexCaliDelRequest`].
 
 **Fields:**
-- `command: &'static str`
-- `filaments: Vec<IdexCaliDelEntry>`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"extrusion_cali_del"`.
+- `filaments: Vec<IdexCaliDelEntry>` - Entries to delete. `IdexCaliDelRequest::new` always sends exactly one.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -278,7 +278,7 @@ Inner payload for [`IdexCaliDelRequest`].
 JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF].
 
 **Fields:**
-- `print: IdexCaliDelPayload`
+- `print: IdexCaliDelPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 
@@ -336,11 +336,11 @@ Structured representation of a Linear Advance calibration profile entry on the p
 Deletion data fields utilized by standard single-nozzle databases (Schema A).
 
 **Fields:**
-- `cali_idx: i32`
-- `filament_id: String`
-- `nozzle_diameter: String`
-- `nozzle_id: String`
-- `setting_id: String`
+- `cali_idx: i32` - Index of the calibration entry to delete (`KProfileEntry::cali_idx`).
+- `filament_id: String` - Filament preset ID of the entry being deleted (`KProfileEntry::filament_id`).
+- `nozzle_diameter: String` - Nozzle diameter of the entry being deleted (`KProfileEntry::nozzle_diameter`).
+- `nozzle_id: String` - System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
+- `setting_id: String` - 19-character setting ID of the entry being deleted, validated by [`validate_setting_id`].
 
 **Trait Implementations:**
 
@@ -364,9 +364,9 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 Inner payload for [`StandardCaliDelRequest`].
 
 **Fields:**
-- `command: &'static str`
-- `filaments: Vec<StandardCaliDelEntry>`
-- `sequence_id: String`
+- `command: &'static str` - Wire command name, always `"extrusion_cali_del"`.
+- `filaments: Vec<StandardCaliDelEntry>` - Entries to delete. `StandardCaliDelRequest::new` always sends exactly one.
+- `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
 
 **Trait Implementations:**
 
@@ -386,7 +386,7 @@ Inner payload for [`StandardCaliDelRequest`].
 JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF].
 
 **Fields:**
-- `print: StandardCaliDelPayload`
+- `print: StandardCaliDelPayload` - The `print` namespace envelope required by the wire protocol.
 
 **Methods:**
 

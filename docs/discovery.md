@@ -103,8 +103,9 @@ fn discover_devices<U, T>(timeout: core::time::Duration, timer: &T) -> Result<Ve
 
 Provides utilities to parse HTTP-like headers from multicast and unicast
 UDP frames on Port 2021 without performing runtime memory allocations.
-Differentiates Bambu Lab printers from general UPnP devices, resolves
-serial prefixes, and bypasses the H2S/H2D collision hazard.
+Differentiates Bambu Lab printers from general UPnP devices and resolves
+serial prefixes, falling back to the `DevModel` SSDP header when the prefix
+is unrecognized (see [`crate::models::resolve_model`]).
 
 
 

@@ -197,8 +197,8 @@ without enforcing a static library provider.
 TLS protocol version negotiated during a handshake.
 
 **Variants:**
-- `Tls12`
-- `Tls13`
+- `Tls12` - TLS 1.2 negotiated.
+- `Tls13` - TLS 1.3 negotiated.
 
 **Traits:** Copy, Eq
 

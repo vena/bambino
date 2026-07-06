@@ -32,6 +32,7 @@ check-all: check-fast check-esp-idf
 # that triggered it, and every commit would pay the rebuild cost regardless
 # of whether the change touched the public API).
 docs:
+	rm -rf docs
 	cargo doc-md --no-deps -o docs
 	rm -f docs/index.md
 	mv docs/bambino/* docs/

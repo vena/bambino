@@ -23,14 +23,14 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> LightReport`
-- **Serialize**
-  - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+- **Clone**
+  - `fn clone(self: &Self) -> LightReport`
+- **Serialize**
+  - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 
 
@@ -77,7 +77,7 @@ auxiliary fan configurations, and connected AMS arrays.
 - `ams: Option<super::ams::AmsStatusReport>` - AMS expansion bus status container [REF-AMS-DECODE].
 - `ams_status: Option<i32>` - Combined AMS state bitmask (lower 8 bits = sub status, bits 8–15 = main status).
 - `ams_mapping: Vec<i32>` - Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
-- `vt_tray: Option<super::ams::VirtualTray>` - Virtual/external spool holder state. Present on P1S, P1P, A1, H2D, X1C.
+- `vt_tray: Option<super::ams::VirtualTray>` - Virtual/external spool holder state on single-nozzle platforms (P1S, P1P, A1, X1C, H2S).
 - `vir_slot: Option<Vec<super::ams::VirtualTray>>` - IDEX external spool holder array. Each entry uses the same schema as `VirtualTray`.
 - `device: Option<super::device::DeviceTelemetry>` - Device sub-object nested inside pushall `print` envelope on H2/P2/X2 models.
 - `fun: Option<String>` - Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
@@ -119,14 +119,14 @@ auxiliary fan configurations, and connected AMS arrays.
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> PrinterTelemetry`
-- **Serialize**
-  - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+- **Clone**
+  - `fn clone(self: &Self) -> PrinterTelemetry`
+- **Serialize**
+  - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 
 

@@ -15,7 +15,7 @@
 
 **Constants**
 
-- [`CAMERA_PORT_BINARY_JPEG`](#camera_port_binary_jpeg) - Default port for binary JPEG camera streams (A1 and P1 series).
+- [`CAMERA_PORT_BINARY_JPEG`](#camera_port_binary_jpeg) - Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series).
 - [`CAMERA_PORT_RTSPS`](#camera_port_rtsps) - Default port for RTSPS camera streams (X1, X2, H2, P2S series).
 
 ---
@@ -24,7 +24,7 @@
 
 *Constant*: `u16`
 
-Default port for binary JPEG camera streams (A1 and P1 series).
+Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series).
 
 
 
@@ -44,7 +44,7 @@ Which camera streaming protocol a printer model uses.
 
 **Variants:**
 - `Rtsps` - RTSP stream wrapped in implicit TLS on Port 322 (X1, X2D, P2S, and H2 series).
-- `BinaryJpeg` - Custom binary TCP packet loop returning JPEG frames on Port 6000 (P1 and A1 series).
+- `BinaryJpeg` - Custom binary TCP packet loop returning JPEG frames on Port 6000 (P1 and A1 series, including A2L).
 
 **Methods:**
 
@@ -70,7 +70,7 @@ Which camera streaming protocol a printer model uses.
 # Chamber Image Binary JPEG Socket Protocol (Port 6000)
 
 Handles connection handshakes and payload processing for constrained printer lines
-(P1 and A1 series) transmitting discrete camera frames over raw TLS TCP sockets [REF-CAM-BINARY].
+(P1 and A1 series, including A2L) transmitting discrete camera frames over raw TLS TCP sockets [REF-CAM-BINARY].
 
 **Handshake Architecture [REF-CAM-BINARY]:**
 Upon establishing a TLS session, the connecting client must immediately transmit a

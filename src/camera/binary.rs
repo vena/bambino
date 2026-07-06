@@ -1,7 +1,7 @@
 //! # Chamber Image Binary JPEG Socket Protocol (Port 6000)
 //!
 //! Handles connection handshakes and payload processing for constrained printer lines
-//! (P1 and A1 series) transmitting discrete camera frames over raw TLS TCP sockets [REF-CAM-BINARY].
+//! (P1 and A1 series, including A2L) transmitting discrete camera frames over raw TLS TCP sockets [REF-CAM-BINARY].
 //!
 //! **Handshake Architecture [REF-CAM-BINARY]:**
 //! Upon establishing a TLS session, the connecting client must immediately transmit a

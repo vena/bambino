@@ -85,7 +85,7 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 - `PartCooling` - Primary part cooling fan (Port 1).
 - `AuxiliaryLeft` - Primary left-side auxiliary fan (Port 2).
 - `ChamberExhaust` - Chamber exhaust/filtration fan (Port 3).
-- `AuxiliaryRight` - Secondary right-side auxiliary fan (Port 10, specifically supported on X2D).
+- `AuxiliaryRight` - Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
 
 **Traits:** Copy, Eq
 
@@ -178,12 +178,12 @@ Decoded classification of the printer's high-level `gcode_state` telemetry field
 needing to tell those apart should inspect the raw `gcode_state` string directly.
 
 **Variants:**
-- `Idle`
-- `Running`
-- `Paused`
-- `Finished`
-- `Failed`
-- `Unknown`
+- `Idle` - No print job active or loaded (wire: `"IDLE"`).
+- `Running` - Print job actively executing (wire: `"RUNNING"`).
+- `Paused` - Print job paused, resumable (wire: `"PAUSE"`).
+- `Finished` - Print job completed successfully (wire: `"FINISH"`).
+- `Failed` - Print job aborted by an error condition (wire: `"FAILED"`).
+- `Unknown` - Unrecognized wire value, or `gcode_state` field missing entirely — see the enum's doc comment.
 
 **Methods:**
 

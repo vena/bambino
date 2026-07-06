@@ -476,9 +476,10 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// Platform-agnostic timer tick update.
     ///
     /// Evaluates two independent liveness conditions:
-    /// 1. **Write zombie**: A published command has gone unanswered for 10+ seconds.
+    /// 1. **Write zombie**: A published command has gone unanswered for 10+ seconds
+    ///    [REF-MQTT-ZOMBIE].
     /// 2. **Connection staleness**: No packets of any kind received for 60+ seconds,
-    ///    indicating a silently dropped connection [REF-MQTT-ZOMBIE].
+    ///    indicating a silently dropped connection — independent of (1) [REF-MQTT-CONN].
     pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), BambuError> {
         if let Some(ref mut secs) = self.write_pending_secs {
             *secs += elapsed_secs;

@@ -38,8 +38,8 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 Incoming MQTT message details parsed from the wire.
 
 **Fields:**
-- `topic: String`
-- `payload: Vec<u8>`
+- `topic: String` - Full MQTT topic string the message arrived on (e.g. "device/{serial}/report").
+- `payload: Vec<u8>` - Raw JSON payload bytes as received off the wire.
 
 **Trait Implementations:**
 

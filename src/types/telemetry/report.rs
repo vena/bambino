@@ -146,7 +146,8 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub ams_mapping: Vec<i32>,
 
-    /// Virtual/external spool holder state. Present on P1S, P1P, A1, H2D, X1C.
+    /// Virtual/external spool holder state on single-nozzle platforms (P1S, P1P, A1, X1C, H2S).
+    /// Dual-nozzle IDEX platforms (H2D, H2D Pro, X2D) report `vir_slot` instead [REF-AMS-DECODE].
     pub vt_tray: Option<VirtualTray>,
 
     /// IDEX external spool holder array. Each entry uses the same schema as `VirtualTray`.

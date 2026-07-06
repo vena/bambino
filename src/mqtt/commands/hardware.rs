@@ -127,7 +127,8 @@ impl AirductRequest {
     }
 }
 
-/// Controls structural notification sound output via speakers (Supported on A1 and H2D series only).
+/// Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only;
+/// H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptSoundPayload {
     /// Wire command name, always `"print_option"`.

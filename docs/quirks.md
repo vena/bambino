@@ -42,12 +42,12 @@ consecutive readings before committing a one-step change.
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> FanSpeedDebouncer`
 - **Default**
   - `fn default() -> Self`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Clone**
+  - `fn clone(self: &Self) -> FanSpeedDebouncer`
 
 
 

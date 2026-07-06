@@ -7,7 +7,7 @@ Async Rust library for talking to Bambu Lab 3D printers over your local network.
 - **Discovery** — find printers on your LAN via SSDP (ports 2021/1990)
 - **MQTT control** — connect to the printer's local broker (port 8883), send commands, receive telemetry
 - **File transfer** — implicit FTPS (port 990) for listing, uploading, downloading, and managing files on the SD card
-- **Camera** — complete binary JPEG streaming client (port 6000, A1/P1 series); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
+- **Camera** — complete binary JPEG streaming client (port 6000, A1/P1 series, A2L); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
 - **Model quirks** — per-model differences handled polymorphically: FTPS TLS requirements, fan step resolution, Z-axis homing safety, door sensors, camera protocols, nozzle counts (single/IDEX/tool changer), temperature limits, and chamber heater capabilities
 
 ## Two levels of API
@@ -183,7 +183,7 @@ let free = ftp.get_available_space().await?;
 
 Bambu printers use two different camera protocols depending on the model. Check which one with `model.quirks().camera_protocol()`.
 
-**Binary JPEG (A1, P1 series) — port 6000.** Streams JPEG frames over a lightweight binary protocol on TLS:
+**Binary JPEG (A1, P1 series, and A2L) — port 6000.** Streams JPEG frames over a lightweight binary protocol on TLS:
 
 ```rust
 use bambino::camera::binary::BambuBinaryCameraStream;

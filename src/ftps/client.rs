@@ -490,8 +490,9 @@ where
     ///    standard TLS graceful shutdown waits which would trigger indefinite hangs on physical vsFTPd.
     /// 2. Wait up to 300 seconds for the `226` transfer confirmation to print. Issuing downstream
     ///    print commands prior to this confirmation halts the printer due to microSD write latency exceptions [REF-FTPS-FLUSH].
-    /// 3. If a TLS 1.3 session close race triggers a transient 426 on P2S/X2D models, verify the uploaded size
-    ///    via the `SIZE` command to ensure data integrity [REF-FTPS-CONN].
+    /// 3. Unconditionally verify the uploaded size via the `SIZE` command on both a `226` and a
+    ///    transient `426` reply — this guards against silent SD card write truncation on every
+    ///    model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN].
     pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), BambuError> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
