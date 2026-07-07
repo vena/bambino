@@ -546,7 +546,7 @@ pub async fn run(
 
     let json = serde_json::to_string_pretty(&report).map_err(|_| BambuError::SerializationError)?;
 
-    std::fs::write(&output_path, json.as_bytes()).map_err(|e| {
+    std::fs::write(output_path, json.as_bytes()).map_err(|e| {
         BambuError::ProtocolViolation(
             format!("Failed to write report to '{}': {}", output_path, e).into(),
         )
