@@ -2,6 +2,8 @@
 
 Async Rust library for talking to Bambu Lab 3D printers over your local network. No Bambu Cloud, just direct MQTT, FTPS, and camera access from one codebase that compiles to desktop, ESP32 (ESP-IDF), and bare-metal (Embassy) targets.
 
+**🤖 Notice:** In case it's not obvious, this was built with the assistance of AI.
+
 ## What it does
 
 - **Discovery** — find printers on your LAN via SSDP (ports 2021/1990)
@@ -338,7 +340,7 @@ A CLI built on our own library client, for testing against real printers and pro
 cargo build --bin bambino-cli --features cli
 ```
 
-A `cargo bambino-cli` alias (`.cargo/config.toml`) wraps `cargo run --bin bambino-cli --features cli --`, so you don't have to type `--features cli` on every invocation — e.g. `cargo bambino-cli discover` instead of `cargo run --bin bambino-cli --features cli -- discover`. The examples below use the plain binary name (`bambino-cli ...`); substitute `cargo bambino-cli ...` if running from source instead of a built binary.
+A `cargo bambino-cli` alias (`.cargo/config.toml`) wraps `cargo run --bin bambino-cli --features cli --`, so you don't have to type `--features cli` on every invocation — e.g. `cargo bambino-cli discover` instead of `cargo run --bin bambino-cli --features cli -- discover`.
 
 ### Usage
 
@@ -376,8 +378,6 @@ Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
 ```
 
-### Credentials
-
 - **IP** and **Serial** — shown by `bambino-cli discover`
 - **Access Code** — on the printer's touchscreen under Network > LAN Mode
 
@@ -387,17 +387,29 @@ Probe options:    -o/--output  -t/--tests
 
 Bambu firmware silently ignores the first `extrusion_cali_get` command after connecting. `PrinterClient::get_k_profiles()` handles this automatically by sending a throwaway priming request first. If you manage priming yourself, call `set_k_profile_primed(true)` to skip it.
 
-## Not yet implemented
+### Native MQTT homing/jogging
 
-- **MQTT-native homing/jogging on newer models.** Some models advertise support for `back_to_center` (homing) and `xyz_ctrl` (jogging) as structured JSON commands instead of raw G-code, gated by a `fun` capability bitmask. This library always uses G-code. Sourced from BambuStudio, unverified on real hardware — see [REF-MOTO-MQTTCTRL] in `reference/04_toolhead_thermal_motion.md`.
+Some newer models support `back_to_center` (homing) and `xyz_ctrl` (jogging) as structured JSON commands instead of raw G-code, gated by a `fun` capability bitmask. These native MQTT commands were sourced from BambuStudio and have not been verified against real hardware — see [REF-MOTO-MQTTCTRL] in `reference/04_toolhead_thermal_motion.md`. This library always uses G-code instead.
+
+## Documentation
+
+### API
+
+Full API reference is generated straight from doc comments into [`docs/`](docs/index.md) — one markdown file per module. It covers all three platform targets (host, ESP-IDF, Embassy) merged into one tree. Regenerate it with `make docs` after a public API change; it's not wired into a git hook, so it can go stale — check the date on `docs/index.md` if something looks off.
+
+### Protocol spec
+
+[`reference/`](reference/00_index.md) is the reverse-engineered spec this library implements against — seven chapters (network/discovery, FTPS, MQTT/telemetry, thermal/motion, AMS, cameras, diagnostics/HMS), cross-referencing wire captures and prior open-source work in lieu of any official documentation from Bambu Lab. Individual claims are tagged with stable IDs like `[REF-MOTO-GCODE]` or `[REF-AMS-MAP]` so code comments can point at the exact section backing a decision. Start at `00_index.md` for the chapter map and terminology glossary — worth a read if you're debugging a firmware quirk this library doesn't already model, or just want to know why a given field is shaped the way it is.
 
 ## Acknowledgements
 
-Built on the reverse-engineering work of:
+The [protocol spec](reference/00_index.md) and this library would not have been possible without the prior work of these excellent open source projects.
 
-- [Bambuddy](https://github.com/maziggy/bambuddy)
+- [BambuStudio](https://github.com/bambulab/BambuStudio/)
+- [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer/)
+- [Bambuddy](https://github.com/maziggy/bambuddy/)
 - [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
-- [bambu-printer-manager](https://github.com/synman/bambu-printer-manager)
+- [bambu-printer-manager](https://github.com/synman/bambu-printer-manager/)
 - [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
 
 ## Safety Notice
