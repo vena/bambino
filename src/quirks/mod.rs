@@ -29,6 +29,10 @@ pub trait ModelQuirks {
 
     /// Returns true if this model series must restrict its TLS version strictly
     /// to TLS 1.2 to prevent session resumption failure [REF-FTPS-CONN].
+    ///
+    /// This is a firmware bug workaround, not a real protocol ceiling — see the
+    /// doc comments on `P2Quirks`/`X2Quirks` (the only two implementers returning
+    /// `true`) for per-model evidence and confidence level.
     fn enforce_ftps_tls_1_2(&self) -> bool;
 
     /// Evaluates whether the physical front enclosure door is open based on
