@@ -28,8 +28,7 @@ pub enum BambuError {
     #[cfg_attr(feature = "std", error("Network transport failure: {0:?}"))]
     NetworkError(crate::io::SocketError),
 
-    /// Encapsulates platform timer/sleep scheduling failures (e.g. ESP-IDF FreeRTOS
-    /// timer resource exhaustion).
+    /// Encapsulates platform timer/sleep scheduling failures (e.g. ESP-IDF FreeRTOS timer resource exhaustion).
     #[cfg_attr(feature = "std", error("Timer scheduling failure: {0:?}"))]
     TimerFailure(crate::io::TimerError),
 
@@ -72,8 +71,7 @@ pub enum BambuError {
     )]
     DiskWriteFailure,
 
-    /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer)
-    /// not present on the active model target.
+    /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
     #[cfg(any(feature = "alloc", feature = "std"))]
     #[cfg_attr(feature = "std", error("Model capability mismatch: {0}"))]
     ModelMismatch(Cow<'static, str>),
@@ -125,10 +123,10 @@ impl core::fmt::Display for BambuError {
 mod tests {
     use super::*;
 
-    /// Compile-time exhaustiveness guard, never called at runtime. A `match` with no wildcard
-    /// arm over every `BambuError` variant: if a future variant is added without adding an arm
-    /// here, this fails to *compile* rather than silently passing — a reminder to also add the
-    /// new variant to `test_display_consistency`'s `variants` vec below, which only guards
+    /// Compile-time exhaustiveness guard, never called at runtime.
+    /// A `match` with no wildcard arm over every `BambuError` variant: if a future variant is added
+    /// without adding an arm here, this fails to *compile* rather than silently passing — a reminder to
+    /// also add the new variant to `test_display_consistency`'s `variants` vec below, which only guards
     /// variants it's told about and won't catch a forgotten one on its own.
     #[allow(dead_code)]
     fn assert_all_variants_covered(e: &BambuError) {

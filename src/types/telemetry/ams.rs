@@ -91,8 +91,7 @@ pub struct AmsUnit {
     #[serde(default)]
     pub tray: Vec<AmsTray>,
 
-    /// Hex-encoded bitmask: bits 0–3 = AMS type, bits 4–7 = dry_status,
-    /// bits 8–11 = extruder assignment (IDEX routing).
+    /// Hex-encoded bitmask: bits 0–3 = AMS type, bits 4–7 = dry_status, bits 8–11 = extruder assignment (IDEX routing).
     #[serde(default)]
     pub info: Option<String>,
 
@@ -112,8 +111,8 @@ pub struct AmsDrySetting {
     pub dry_filament: Option<String>,
 }
 
-/// Virtual/external spool holder telemetry. Represents the filament loaded
-/// directly into the extruder without going through an AMS unit.
+/// Virtual/external spool holder telemetry.
+/// Represents the filament loaded directly into the extruder without going through an AMS unit.
 ///
 /// On the wire, this shares the same schema as `AmsTray` — both physical AMS trays
 /// and virtual/external spool holders use the same field set.
@@ -183,9 +182,9 @@ pub struct VirtualTray {
     pub cali_idx: Option<i32>,
 }
 
-/// Native state code meaning "slot empty" [REF-AMS-DECODE]. Lives here (not in
-/// `ams::parser`) since `AmsTray::get_state()` is a pure data accessor and `types/`
-/// must not depend on business-logic modules.
+/// Native state code meaning "slot empty" [REF-AMS-DECODE].
+/// Lives here (not in `ams::parser`) since `AmsTray::get_state()` is a pure data accessor and
+/// `types/` must not depend on business-logic modules.
 pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
 
 /// Material spool state descriptor representing a single physical tray slot.

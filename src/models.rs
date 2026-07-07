@@ -38,8 +38,7 @@ pub enum BambuModel {
     Unknown,
 }
 
-/// Resolves the specific printer model using physical serial number prefixes combined
-/// with target SSDP model advertisements as a secondary signal.
+/// Resolves the specific printer model using physical serial number prefixes combined with target SSDP model advertisements as a secondary signal.
 ///
 /// Each H2-series model has a distinct serial prefix confirmed by the Bambu Lab wiki:
 /// `094` = H2D, `093` = H2S, `239` = H2D Pro, `31B` = H2C. When the prefix is

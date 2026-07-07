@@ -7,7 +7,7 @@
 **Structs**
 
 - [`NoCertificateVerification`](#nocertificateverification) - Custom certificate verifier that bypasses standard CA chain authority validation.
-- [`TokioIo`](#tokioio) - Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation
+- [`TokioIo`](#tokioio) - Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
 - [`TokioIoError`](#tokioioerror) - Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
 - [`TokioRawStreamFactory`](#tokiorawstreamfactory) - Raw (pre-TLS) connection factory for the Tokio runtime.
 - [`TokioTimer`](#tokiotimer) - Timer implementation utilizing Tokio's non-blocking system clock registry.
@@ -54,8 +54,7 @@ standard verifiers reject the connections immediately.
 
 *Struct*
 
-Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation
-to satisfy `embedded-io-async` bounds.
+Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
 
 **Generic Parameters:**
 - T

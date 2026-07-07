@@ -8,16 +8,12 @@ use crate::types::VersionInfo;
 
 use super::PrinterClient;
 
-/// Maximum documented drying-chamber temperature (°C) for an AMS-HT unit's built-in heater —
-/// confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-ht/Intr-to-ams-ht-workflow-and-features`),
-/// not this crate's `reference/` docs (no drying temperature ceiling is documented there).
+/// Maximum documented drying-chamber temperature (°C) for an AMS-HT unit's built-in heater — confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-ht/Intr-to-ams-ht-workflow-and-features`), not this crate's `reference/` docs (no drying temperature ceiling is documented there).
 /// This is a property of the physical AMS-HT hardware, not the host printer model.
 pub(crate) const AMS_HT_DRY_TEMP_MAX: u32 = 85;
 
-/// Maximum documented drying-chamber temperature (°C) for an AMS 2 Pro / standard-AMS unit's
-/// built-in heater — confirmed via Bambu Lab's own wiki
-/// (`wiki.bambulab.com/en/ams-2-pro/manual/drying-function`). Property of the physical AMS 2
-/// Pro hardware, not the host printer model.
+/// Maximum documented drying-chamber temperature (°C) for an AMS 2 Pro / standard-AMS unit's built-in heater — confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-2-pro/manual/drying-function`).
+/// Property of the physical AMS 2 Pro hardware, not the host printer model.
 pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
 
 impl<

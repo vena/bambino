@@ -174,10 +174,9 @@ where
     CipherSuite: ::embedded_tls::TlsCipherSuite,
     Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
 {
-    /// Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch
-    /// buffers. `read_buf`/`write_buf` are consumed by the first `connect()` call — size
-    /// them for one TLS session (16KB is a safe default) and construct a separate connector
-    /// per concurrent connection.
+    /// Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch buffers.
+    /// `read_buf`/`write_buf` are consumed by the first `connect()` call — size them for one TLS
+    /// session (16KB is a safe default) and construct a separate connector per concurrent connection.
     pub fn new(
         config: &'a ::embedded_tls::TlsConfig<'a>,
         rng: Rng,
@@ -246,13 +245,11 @@ where
         Ok(EmbassyTlsStream { connection })
     }
 
-    /// `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it
-    /// has no TLS 1.2 handshake support and exposes no version-query method, since
-    /// there is only ever one possible answer). This is therefore a constant, not a
-    /// runtime query: any successful `connect()` on this connector negotiated TLS 1.3.
-    /// A model whose `model.quirks().enforce_ftps_tls_1_2()` is true (P2S, X2D) is
-    /// consequently incompatible with `EmbassyTlsConnector` — `BambuFtpsClient::connect()`
-    /// will correctly reject it with `ProtocolViolation` rather than silently proceeding.
+    /// `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it has no TLS 1.2 handshake support and exposes no version-query method, since there is only ever one possible answer).
+    /// This is therefore a constant, not a runtime query: any successful `connect()` on this connector
+    /// negotiated TLS 1.3. A model whose `model.quirks().enforce_ftps_tls_1_2()` is true (P2S, X2D) is
+    /// consequently incompatible with `EmbassyTlsConnector` — `BambuFtpsClient::connect()` will
+    /// correctly reject it with `ProtocolViolation` rather than silently proceeding.
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
         Some(TlsVersion::Tls13)
     }
@@ -303,8 +300,7 @@ pub struct EmbassyRawStreamFactory<
 impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
     EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>
 {
-    /// `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held
-    /// `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
+    /// `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
     pub fn new(
         client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>,
     ) -> Self {

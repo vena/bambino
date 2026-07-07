@@ -87,9 +87,10 @@ impl ProbeTest {
         }
     }
 
-    /// Full registry of every test, in stable order. Used for `-t` lookup and the
-    /// unknown-test help listing — includes manual-intervention tests, which are
-    /// otherwise excluded from the no-`-t` default run; see [`default_set()`](Self::default_set).
+    /// Full registry of every test, in stable order.
+    /// Used for `-t` lookup and the unknown-test help listing — includes manual-intervention tests,
+    /// which are otherwise excluded from the no-`-t` default run; see
+    /// [`default_set()`](Self::default_set).
     fn all_known() -> &'static [ProbeTest] {
         &[
             Self::MoveZUnhomed,
@@ -111,8 +112,7 @@ impl ProbeTest {
         ]
     }
 
-    /// Tests run when `-t`/`--tests` is omitted — every known test except those
-    /// requiring manual intervention.
+    /// Tests run when `-t`/`--tests` is omitted — every known test except those requiring manual intervention.
     fn default_set() -> Vec<ProbeTest> {
         Self::all_known()
             .iter()
@@ -121,9 +121,7 @@ impl ProbeTest {
             .collect()
     }
 
-    /// True for tests that need the operator to do something outside this process
-    /// (e.g. trigger homing from the touchscreen) — excluded from the default set,
-    /// selectable only explicitly via `-t`.
+    /// True for tests that need the operator to do something outside this process (e.g. trigger homing from the touchscreen) — excluded from the default set, selectable only explicitly via `-t`.
     fn requires_manual_intervention(&self) -> bool {
         matches!(self, Self::HomeAxesWithBusyCheck)
     }
@@ -136,9 +134,7 @@ impl ProbeTest {
         }
     }
 
-    /// True for tests that block on [`PrinterClient::wait_for_homing()`] instead of
-    /// capturing raw telemetry for a fixed window — `wait_for_homing()` consumes every
-    /// message it polls internally, so there's nothing left to capture alongside it.
+    /// True for tests that block on [`PrinterClient::wait_for_homing()`] instead of capturing raw telemetry for a fixed window — `wait_for_homing()` consumes every message it polls internally, so there's nothing left to capture alongside it.
     fn uses_wait_for_homing(&self) -> bool {
         matches!(self, Self::HomeAxesWait | Self::HomeAxesRepeatWait)
     }
@@ -246,9 +242,7 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
     Ok(())
 }
 
-/// Returns whether the printer is actively printing or paused — the one verified
-/// busy signal ([REF-MQTT-IDLEBUG]: `gcode_state` is the only field this codebase
-/// treats as authoritative for busy/idle classification).
+/// Returns whether the printer is actively printing or paused — the one verified busy signal ([REF-MQTT-IDLEBUG]: `gcode_state` is the only field this codebase treats as authoritative for busy/idle classification).
 fn printer_is_busy(client: &Printer) -> bool {
     matches!(
         client.print_status(),

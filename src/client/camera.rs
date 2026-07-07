@@ -55,8 +55,7 @@ where
         self.camera = Some(camera);
     }
 
-    /// Returns direct access to the underlying [`BambuBinaryCameraStream`], auto-connecting
-    /// if needed.
+    /// Returns direct access to the underlying [`BambuBinaryCameraStream`], auto-connecting if needed.
     ///
     /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
     /// [`.attach_camera()`](Self::attach_camera). Returns `BambuError::ProtocolViolation`

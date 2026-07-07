@@ -27,45 +27,36 @@ pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
 pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
 pub(crate) const FTP_MAX_RESPONSE_LINE_BYTES: usize = 4096;
 pub(crate) const FTP_MAX_RESPONSE_LINES: usize = 100;
-/// Size of each buffered socket read `read_line_raw` issues while scanning for `\n`. Control
-/// responses are short ASCII text, so this comfortably holds several lines per read while
+/// Size of each buffered socket read `read_line_raw` issues while scanning for `\n`.
+/// Control responses are short ASCII text, so this comfortably holds several lines per read while
 /// staying well under `FTP_MAX_RESPONSE_LINE_BYTES`.
 pub(crate) const FTP_LINE_READ_CHUNK_SIZE: usize = 512;
 
-/// Maximum bytes accepted from a single FTPS data-channel transfer (`list_directory`'s
-/// listing payload, `download_file`'s file payload) before `read_to_eof` aborts with
-/// `ProtocolViolation` rather than growing `out` without bound. Mirrors
-/// `CAMERA_FRAME_MAX_SIZE`'s rationale (`src/camera/binary.rs`) — unbounded allocation on a
+/// Maximum bytes accepted from a single FTPS data-channel transfer (`list_directory`'s listing payload, `download_file`'s file payload) before `read_to_eof` aborts with `ProtocolViolation` rather than growing `out` without bound.
+/// Mirrors `CAMERA_FRAME_MAX_SIZE`'s rationale (`src/camera/binary.rs`) — unbounded allocation on a
 /// no_std/Embassy target hits the uncatchable `alloc_error_handler` abort, not a recoverable
-/// `Result`. Chosen generously for legitimate large downloads (multi-hundred-MB timelapse
-/// videos) while still bounding worst case. Fixed, not yet caller-configurable — unlike
-/// camera's `with_max_frame_size`, there is currently no `BambuFtpsClient` builder to lower
-/// this for embedded targets with tighter memory budgets.
+/// `Result`. Chosen generously for legitimate large downloads (multi-hundred-MB timelapse videos)
+/// while still bounding worst case. Fixed, not yet caller-configurable — unlike camera's
+/// `with_max_frame_size`, there is currently no `BambuFtpsClient` builder to lower this for
+/// embedded targets with tighter memory budgets.
 pub(crate) const FTPS_MAX_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
 
-/// Per-call wall-clock budget for ordinary control-channel reads (`read_response`/
-/// `read_line_raw`, and each individual read step inside `read_to_eof`) — matches
-/// `MQTT_READ_TIMEOUT_SECS`/`CAMERA_READ_TIMEOUT_SECS` for consistency. Ordinary FTP command
-/// replies (USER/PASS/PBSZ/PROT/TYPE/SIZE/DELE/MKD/RMD/RNFR/RNTO/AVBL/PASV, and the initial
-/// `150`/`125` "opening data connection" replies) are short single/few-line responses that
-/// complete quickly under healthy conditions, so a flat per-call budget is appropriate here —
-/// unlike the post-transfer confirmation wait below, which needs a much longer allowance for
-/// entirely different reasons.
+/// Per-call wall-clock budget for ordinary control-channel reads (`read_response`/ `read_line_raw`, and each individual read step inside `read_to_eof`) — matches `MQTT_READ_TIMEOUT_SECS`/`CAMERA_READ_TIMEOUT_SECS` for consistency.
+/// Ordinary FTP command replies (USER/PASS/PBSZ/PROT/TYPE/SIZE/DELE/MKD/RMD/RNFR/RNTO/AVBL/PASV,
+/// and the initial `150`/`125` "opening data connection" replies) are short single/few-line
+/// responses that complete quickly under healthy conditions, so a flat per-call budget is
+/// appropriate here — unlike the post-transfer confirmation wait below, which needs a much longer
+/// allowance for entirely different reasons.
 pub(crate) const FTPS_READ_TIMEOUT_SECS: u64 = 30;
 
-/// Wall-clock budget specifically for the post-transfer confirmation `read_response` call in
-/// `list_directory`/`upload_file`/`download_file` (the one waiting for `226`/`426` after the
-/// data channel closes). `upload_file`'s own doc comment already documents waiting "up to 300
-/// seconds for the `226` transfer confirmation to print" due to microSD flush latency — that
-/// wait is a genuine, entirely silent gap (zero bytes at all, not slow-trickling data), so it
-/// needs a long flat deadline rather than benefiting from `read_to_eof`'s per-chunk reset.
+/// Wall-clock budget specifically for the post-transfer confirmation `read_response` call in `list_directory`/`upload_file`/`download_file` (the one waiting for `226`/`426` after the data channel closes).
+/// `upload_file`'s own doc comment already documents waiting "up to 300 seconds for the `226`
+/// transfer confirmation to print" due to microSD flush latency — that wait is a genuine, entirely
+/// silent gap (zero bytes at all, not slow-trickling data), so it needs a long flat deadline rather
+/// than benefiting from `read_to_eof`'s per-chunk reset.
 pub(crate) const FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS: u64 = 300;
 
-/// Computes an absolute deadline (epoch-ms) `budget_secs` in the future, or `None` if `timer`
-/// has no real wall-clock (see `TimerProvider::has_real_clock`) — the same
-/// `has_real_clock()`-gated pattern used throughout this crate (`read_exact_packet`,
-/// `read_next_frame_with_timer`) so a `DummyTimer`-backed client sees zero behavior change
-/// (unbounded reads, exactly as before per-read deadlines existed).
+/// Computes an absolute deadline (epoch-ms) `budget_secs` in the future, or `None` if `timer` has no real wall-clock (see `TimerProvider::has_real_clock`) — the same `has_real_clock()`-gated pattern used throughout this crate (`read_exact_packet`, `read_next_frame_with_timer`) so a `DummyTimer`-backed client sees zero behavior change (unbounded reads, exactly as before per-read deadlines existed).
 pub(crate) fn ftps_deadline_ms<T: TimerProvider>(timer: &T, budget_secs: u64) -> Option<u64> {
     if timer.has_real_clock() {
         Some(timer.now_millis().saturating_add(budget_secs * 1000))
@@ -74,13 +65,13 @@ pub(crate) fn ftps_deadline_ms<T: TimerProvider>(timer: &T, budget_secs: u64) ->
     }
 }
 
-/// Like `crate::io::read_chunk`, but treats a `0`-byte read as legitimate EOF (`Ok(0)`) rather
-/// than mapping it to `SocketError::ConnectionReset`. Required for `read_to_eof`: its data
-/// transfers signal "transfer complete" via the data-channel socket closing normally (the
-/// standard passive-mode end-of-transfer signal) — unlike `read_chunk`'s other callers (MQTT
-/// frames, camera frames, and this same module's `read_line_raw`/control-channel replies),
-/// none of which expect a legitimate stream closure mid-read, `read_to_eof` must not treat a
-/// clean EOF as an error or every successful download would fail.
+/// Like `crate::io::read_chunk`, but treats a `0`-byte read as legitimate EOF (`Ok(0)`) rather than mapping it to `SocketError::ConnectionReset`.
+/// Required for `read_to_eof`: its data transfers signal "transfer complete" via the data-channel
+/// socket closing normally (the standard passive-mode end-of-transfer signal) — unlike
+/// `read_chunk`'s other callers (MQTT frames, camera frames, and this same module's
+/// `read_line_raw`/control-channel replies), none of which expect a legitimate stream closure
+/// mid-read, `read_to_eof` must not treat a clean EOF as an error or every successful download
+/// would fail.
 async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     buf: &mut [u8],
@@ -400,8 +391,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll};
 
-    /// Records each individual `poll_write` call as its own chunk — lets a test assert
-    /// how many separate writes a function issued, not just the concatenated bytes.
+    /// Records each individual `poll_write` call as its own chunk — lets a test assert how many separate writes a function issued, not just the concatenated bytes.
     #[derive(Clone, Default)]
     struct WriteRecorder(Arc<Mutex<Vec<Vec<u8>>>>);
 
@@ -432,11 +422,9 @@ mod tests {
         }
     }
 
-    /// Returns one queued chunk per `poll_read` call — lets a test control exactly how many
-    /// bytes a single underlying socket read returns, to exercise `read_line_raw`'s buffered
-    /// leftover-carry behavior deterministically. Once the queue is drained, further reads
-    /// report EOF (0 bytes), which is fine since these tests only ever issue as many reads as
-    /// chunks provided.
+    /// Returns one queued chunk per `poll_read` call — lets a test control exactly how many bytes a single underlying socket read returns, to exercise `read_line_raw`'s buffered leftover-carry behavior deterministically.
+    /// Once the queue is drained, further reads report EOF (0 bytes), which is fine since these tests
+    /// only ever issue as many reads as chunks provided.
     #[derive(Clone, Default)]
     struct ChunkedReader(Arc<Mutex<std::collections::VecDeque<Vec<u8>>>>);
 
@@ -564,9 +552,8 @@ mod tests {
         assert_eq!(code, 226);
     }
 
-    /// Returns a fixed-size nonzero chunk on every `poll_read` call, forever — never signals
-    /// EOF. Used to exercise `read_to_eof`'s size cap against a stream that never stops
-    /// sending data.
+    /// Returns a fixed-size nonzero chunk on every `poll_read` call, forever — never signals EOF.
+    /// Used to exercise `read_to_eof`'s size cap against a stream that never stops sending data.
     #[derive(Clone)]
     struct InfiniteReader {
         chunk_len: usize,
@@ -615,13 +602,11 @@ mod tests {
         assert!(out.len() <= FTPS_MAX_TRANSFER_BYTES);
     }
 
-    /// Regression test mirroring `read_exact_packet`'s
-    /// `test_read_exact_packet_stalled_connection_times_out`: a data channel that stalls with
-    /// zero incoming bytes (e.g. firmware hang mid-transfer) must not hang `read_to_eof`
-    /// forever. `WriteRecorder`'s `poll_read` always returns `Pending`, simulating a
-    /// genuinely stalled socket rather than a merely slow or closed one. The outer
-    /// `tokio::time::timeout` is a meta-safety net — if the implementation regresses to
-    /// hanging forever, this test fails promptly instead of wedging the whole suite.
+    /// Regression test mirroring `read_exact_packet`'s `test_read_exact_packet_stalled_connection_times_out`: a data channel that stalls with zero incoming bytes (e.g. firmware hang mid-transfer) must not hang `read_to_eof` forever.
+    /// `WriteRecorder`'s `poll_read` always returns `Pending`, simulating a genuinely stalled socket
+    /// rather than a merely slow or closed one. The outer `tokio::time::timeout` is a meta-safety net —
+    /// if the implementation regresses to hanging forever, this test fails promptly instead of wedging
+    /// the whole suite.
     #[tokio::test]
     async fn test_read_to_eof_stalled_connection_times_out() {
         let mut stream = TokioIo(WriteRecorder::default());
@@ -654,9 +639,7 @@ mod tests {
         );
     }
 
-    /// Regression test mirroring the above, at the control-channel `read_response` level: a
-    /// control channel that stalls with zero incoming bytes (e.g. after a `150`/`125` reply,
-    /// before the eventual `226`) must not hang `read_response` forever.
+    /// Regression test mirroring the above, at the control-channel `read_response` level: a control channel that stalls with zero incoming bytes (e.g. after a `150`/`125` reply, before the eventual `226`) must not hang `read_response` forever.
     #[tokio::test]
     async fn test_read_response_stalled_connection_times_out() {
         let mut stream = TokioIo(WriteRecorder::default());

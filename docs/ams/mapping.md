@@ -17,7 +17,7 @@
 - [`build_ams_mapping`](#build_ams_mapping) - Builds the flat `ams_mapping` integer array from raw project allocations.
 - [`build_ams_mapping2`](#build_ams_mapping2) - Builds the structured `ams_mapping2` object array from raw project allocations.
 - [`validate_external_spool_safety`](#validate_external_spool_safety) - Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle.
-- [`validate_external_spool_safety_flat`](#validate_external_spool_safety_flat) - Flat-array equivalent of `validate_external_spool_safety`, for callers using
+- [`validate_external_spool_safety_flat`](#validate_external_spool_safety_flat) - Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
 
 ---
 
@@ -138,8 +138,7 @@ fn validate_external_spool_safety(is_single_nozzle: bool, mapping2: &[AmsMapping
 
 *Function*
 
-Flat-array equivalent of `validate_external_spool_safety`, for callers using
-`PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
+Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
 
 ```rust
 fn validate_external_spool_safety_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool

@@ -48,8 +48,8 @@ pub struct TelemetryReport {
     #[serde(default)]
     pub device: Option<DeviceTelemetry>,
 
-    /// Developer LAN Mode bitmask field (hex string). Drifts between top-level
-    /// and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
+    /// Developer LAN Mode bitmask field (hex string).
+    /// Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
     pub fun: Option<String>,
 }
 
@@ -88,10 +88,7 @@ impl TelemetryReport {
     }
 }
 
-/// Shared bed-temperature decode logic behind [`TelemetryReport::bed_temperatures()`] and
-/// [`crate::client::PrinterClient::bed_temperatures()`] — both need the same cross-model
-/// unpack (composite-packed new-gen `device.bed` vs. flat old-gen `bed_temper`/
-/// `bed_target_temper`), one sourced from a fresh report, the other from cached scalars.
+/// Shared bed-temperature decode logic behind [`TelemetryReport::bed_temperatures()`] and [`crate::client::PrinterClient::bed_temperatures()`] — both need the same cross-model unpack (composite-packed new-gen `device.bed` vs. flat old-gen `bed_temper`/ `bed_target_temper`), one sourced from a fresh report, the other from cached scalars.
 pub(crate) fn decode_bed_temperatures(
     device: Option<&DeviceTelemetry>,
     bed_temper: Option<f64>,
@@ -110,10 +107,7 @@ fn unpack_bed_telemetry(device: &DeviceTelemetry) -> Option<(u16, u16)> {
     Some(PrinterTelemetry::unpack_temperature(temp as f64))
 }
 
-/// Shared nozzle-temperature decode logic behind
-/// [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's
-/// `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place
-/// this IDEX routing quirk lived.
+/// Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
 ///
 /// Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
 /// (composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`]).

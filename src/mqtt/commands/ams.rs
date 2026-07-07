@@ -16,8 +16,7 @@ pub struct AmsFilamentSettingPayload {
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
-    /// Target AMS unit or external-spool address — see the addressing cheat-sheet on
-    /// [`AmsFilamentSettingRequest::new`].
+    /// Target AMS unit or external-spool address — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
     pub ams_id: i32,
     /// Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
     pub tray_id: i32,
@@ -170,9 +169,7 @@ pub struct AmsChangeFilamentPayload {
     pub ams_id: i32,
     /// Target slot index within the AMS unit.
     pub slot_id: i32,
-    /// Load/unload destination slot — mirrors `slot_id` in every documented wire example
-    /// (standard slot, external spool, or `255` for unload/retract), not a fixed enum code
-    /// [REF-AMS-MAP].
+    /// Load/unload destination slot — mirrors `slot_id` in every documented wire example (standard slot, external spool, or `255` for unload/retract), not a fixed enum code [REF-AMS-MAP].
     pub target: i32,
     /// Current nozzle temperature (-1 = let firmware decide).
     pub curr_temp: i32,

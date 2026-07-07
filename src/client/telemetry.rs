@@ -127,10 +127,10 @@ where
         }
     }
 
-    /// Updates every `last_*` telemetry cache from a freshly-parsed report. A field only
-    /// overwrites its cache when present in `report` — a message that omits a field leaves
-    /// the previously-cached value in place (staleness is intentional; see the `last_*`
-    /// field docs on the struct).
+    /// Updates every `last_*` telemetry cache from a freshly-parsed report.
+    /// A field only overwrites its cache when present in `report` — a message that omits a field leaves
+    /// the previously-cached value in place (staleness is intentional; see the `last_*` field docs on
+    /// the struct).
     fn update_telemetry_cache(&mut self, report: &TelemetryReport) {
         if let Some(device) = report.device() {
             self.cache.last_device = Some(device.clone());
@@ -234,10 +234,8 @@ where
         }
     }
 
-    /// Returns the printer's high-level activity classification as of the
-    /// last-observed `gcode_state` telemetry (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)). `None` means no telemetry
-    /// carrying `gcode_state` has been observed yet.
+    /// Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` means no telemetry carrying `gcode_state` has been observed yet.
     pub fn print_status(&self) -> Option<PrintStatus> {
         self.cache
             .last_gcode_state
@@ -245,8 +243,7 @@ where
             .map(PrintStatus::from_gcode_state)
     }
 
-    /// Returns whether the door was open as of the last-observed telemetry (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
     /// Returns `None` on models without a door sensor (`ModelQuirks::has_door_sensor()`
     /// returns `false`, e.g. A1/A2), regardless of telemetry observed — distinct from
@@ -259,8 +256,7 @@ where
         self.cache.last_door_open
     }
 
-    /// Returns the decoded active print-error fault as of the last-observed `print_error`
-    /// telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
     /// `None` covers both "no telemetry carrying `print_error` observed yet" and "the
     /// register reads 0 (no fault)" — both warrant the same caller action, so they are not
@@ -269,16 +265,15 @@ where
         decode_print_error(self.cache.last_print_error?)
     }
 
-    /// Returns the print progress snapshot as of the last-observed telemetry (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)). Each field independently tracks its own
-    /// "last observed" value — see [`PrintProgress`]'s doc comment.
+    /// Returns the print progress snapshot as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Each field independently tracks its own "last observed" value — see [`PrintProgress`]'s doc
+    /// comment.
     pub fn print_progress(&self) -> PrintProgress {
         self.cache.last_progress
     }
 
-    /// Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed
-    /// telemetry (via [`poll_telemetry()`](Self::poll_telemetry)). Returns `(0, 0)` before any
-    /// telemetry carrying bed temperature has been observed.
+    /// Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns `(0, 0)` before any telemetry carrying bed temperature has been observed.
     ///
     /// Shares its cross-model decode logic with
     /// [`TelemetryReport::bed_temperatures()`](crate::types::TelemetryReport::bed_temperatures) —
@@ -291,34 +286,30 @@ where
         )
     }
 
-    /// Returns the cached AMS/tray status report as of the last-observed telemetry (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)). `None` means no telemetry carrying
-    /// `print.ams` has been observed yet.
+    /// Returns the cached AMS/tray status report as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` means no telemetry carrying `print.ams` has been observed yet.
     pub fn ams(&self) -> Option<&AmsStatusReport> {
         self.cache.last_ams.as_ref()
     }
 
-    /// Returns the cached virtual/external spool holder state (single-nozzle models) as of
-    /// the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)). `None`
-    /// means no telemetry carrying `print.vt_tray` has been observed yet — including on IDEX
+    /// Returns the cached virtual/external spool holder state (single-nozzle models) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` means no telemetry carrying `print.vt_tray` has been observed yet — including on IDEX
     /// models, which send [`vir_slot()`](Self::vir_slot) instead.
     pub fn vt_tray(&self) -> Option<&VirtualTray> {
         self.cache.last_vt_tray.as_ref()
     }
 
-    /// Returns the cached IDEX external spool holder array as of the last-observed telemetry
-    /// (via [`poll_telemetry()`](Self::poll_telemetry)). `None` means no telemetry carrying
-    /// `print.vir_slot` has been observed yet — including on single-nozzle models, which send
-    /// [`vt_tray()`](Self::vt_tray) instead.
+    /// Returns the cached IDEX external spool holder array as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` means no telemetry carrying `print.vir_slot` has been observed yet — including on
+    /// single-nozzle models, which send [`vt_tray()`](Self::vt_tray) instead.
     pub fn vir_slot(&self) -> Option<&[VirtualTray]> {
         self.cache.last_vir_slot.as_deref()
     }
 
-    /// Returns the nozzle temperatures as of the last-observed telemetry (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)) as `(id, actual, target)` tuples in °C.
-    /// Single-nozzle models return one entry (`id` 0); IDEX models return one entry per
-    /// physical nozzle. See [`decode_nozzle_temperatures`] for the cross-model decode
-    /// (including the undocumented IDEX flat-field routing quirk).
+    /// Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) as `(id, actual, target)` tuples in °C.
+    /// Single-nozzle models return one entry (`id` 0); IDEX models return one entry per physical
+    /// nozzle. See [`decode_nozzle_temperatures`] for the cross-model decode (including the
+    /// undocumented IDEX flat-field routing quirk).
     pub fn nozzle_temperatures(&self) -> Vec<(u8, u16, u16)> {
         decode_nozzle_temperatures(
             self.cache.last_device.as_ref(),
@@ -327,8 +318,7 @@ where
         )
     }
 
-    /// Returns the chamber's (actual, target) temperatures in °C, decoded from the
-    /// last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
     /// Returns `None` on models without an active chamber temperature sensor/heater
     /// (`ModelQuirks::ignores_chamber_temperature()` returns `true`, e.g. A1/A1 Mini/A2L/P1P/
@@ -342,17 +332,15 @@ where
         Some(PrinterTelemetry::unpack_temperature(raw))
     }
 
-    /// Returns the cached active hardware-alert (HMS) entries as of the last-observed
-    /// telemetry (via [`poll_telemetry()`](Self::poll_telemetry)). `None` means no telemetry
-    /// carrying `print.hms` has been observed yet.
+    /// Returns the cached active hardware-alert (HMS) entries as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` means no telemetry carrying `print.hms` has been observed yet.
     pub fn hms(&self) -> Option<&[HmsEntry]> {
         self.cache.last_hms.as_deref()
     }
 
-    /// Returns every cached HMS entry decoded and filtered to genuine faults (mirrors
-    /// `active_fault()`'s raw-cache-decode-on-access shape). Empty when nothing is cached or
-    /// nothing currently decodes as a genuine fault — there's no caller action that would
-    /// differ between those two cases.
+    /// Returns every cached HMS entry decoded and filtered to genuine faults (mirrors `active_fault()`'s raw-cache-decode-on-access shape).
+    /// Empty when nothing is cached or nothing currently decodes as a genuine fault — there's no caller
+    /// action that would differ between those two cases.
     pub fn active_hms_alerts(&self) -> Vec<DecodedHmsAlert> {
         self.cache
             .last_hms
@@ -364,8 +352,7 @@ where
             .collect()
     }
 
-    /// Returns the part-cooling fan speed (Port 1) as a percentage (0-100), decoded from the
-    /// last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns the part-cooling fan speed (Port 1) as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     pub fn part_cooling_fan_speed(&self) -> Option<u8> {
         self.decode_fan_speed(self.cache.last_cooling_fan_speed.as_deref())
     }
@@ -380,16 +367,17 @@ where
         self.decode_fan_speed(self.cache.last_big_fan2_speed.as_deref())
     }
 
-    /// Returns the toolhead heatbreak fan speed as a percentage (0-100). Not independently
-    /// controllable (no corresponding `FanTarget` variant/M106 port) — read-only telemetry.
+    /// Returns the toolhead heatbreak fan speed as a percentage (0-100).
+    /// Not independently controllable (no corresponding `FanTarget` variant/M106 port) — read-only
+    /// telemetry.
     pub fn heatbreak_fan_speed(&self) -> Option<u8> {
         self.decode_fan_speed(self.cache.last_heatbreak_fan_speed.as_deref())
     }
 
-    /// Returns the X2D/P2S secondary right-side auxiliary fan speed (Port 10,
-    /// `FanTarget::AuxiliaryRight`) as a percentage (0-100). Reported at a different wire
-    /// location than the other four fans — `device.airduct.parts[id=160].state` — already a
-    /// direct percentage, no 0-15 step conversion [REF-CLIM-FANS].
+    /// Returns the X2D/P2S secondary right-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryRight`) as a percentage (0-100).
+    /// Reported at a different wire location than the other four fans —
+    /// `device.airduct.parts[id=160].state` — already a direct percentage, no 0-15 step conversion
+    /// [REF-CLIM-FANS].
     pub fn auxiliary_right_fan_speed(&self) -> Option<u8> {
         let state = self
             .cache
@@ -408,29 +396,24 @@ where
         decode_fan_percentage(raw, self.model.quirks().auxiliary_fan_uses_percentage())
     }
 
-    /// Returns the printer's current print-speed level as of the last-observed telemetry (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)). `None` before any telemetry carrying
-    /// `spd_lvl` has been observed, or if the observed value is out of the known 1-4 range.
+    /// Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` before any telemetry carrying `spd_lvl` has been observed, or if the observed value is
+    /// out of the known 1-4 range.
     pub fn print_speed(&self) -> Option<PrintSpeed> {
         PrintSpeed::from_level(self.cache.last_spd_lvl?)
     }
 
-    /// Returns the printer's current print-speed magnitude (percentage of nominal feedrate) as
-    /// of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns the printer's current print-speed magnitude (percentage of nominal feedrate) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     pub fn print_speed_magnitude(&self) -> Option<u16> {
         self.cache.last_spd_mag
     }
 
-    /// Returns the raw wireless signal strength string (e.g. `"-52dBm"`) as of the
-    /// last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns the raw wireless signal strength string (e.g. `"-52dBm"`) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     pub fn wifi_signal(&self) -> Option<&str> {
         self.cache.last_wifi_signal.as_deref()
     }
 
-    /// Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel
-    /// (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls
-    /// off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works
-    /// off cached `home_flag`).
+    /// Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works off cached `home_flag`).
     pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
         self.cache.last_wifi_signal.as_deref() == Some("-90dBm")
     }

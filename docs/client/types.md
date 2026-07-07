@@ -7,11 +7,11 @@
 **Structs**
 
 - [`CalibrationOption`](#calibrationoption) - Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE].
-- [`PrintProgress`](#printprogress) - Cached print-progress snapshot as of the last-observed telemetry carrying any of these
+- [`PrintProgress`](#printprogress) - Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
 
 **Enums**
 
-- [`BuzzerMode`](#buzzermode) - Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`]
+- [`BuzzerMode`](#buzzermode) - Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE].
 - [`FanTarget`](#fantarget) - Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 - [`PrintSpeed`](#printspeed) - Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE].
 - [`PrintStatus`](#printstatus) - Decoded classification of the printer's high-level `gcode_state` telemetry field.
@@ -23,8 +23,8 @@
 
 *Enum*
 
-Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`]
-[REF-MQTT-LIFECYCLE]. Supported on models with a physical fire alarm buzzer (H2 series).
+Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE].
+Supported on models with a physical fire alarm buzzer (H2 series).
 
 **Variants:**
 - `Silent` - Silent/disarmed.
@@ -106,8 +106,7 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 
 *Struct*
 
-Cached print-progress snapshot as of the last-observed telemetry carrying any of these
-fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
+Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
 
 Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
 `gcode_state`/`door_open`/`print_error`, which answer four independent questions) because
@@ -151,7 +150,7 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 
 **Methods:**
 
-- `fn from_level(level: u8) -> Option<Self>` - Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values
+- `fn from_level(level: u8) -> Option<Self>` - Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
 
 **Traits:** Eq, Copy
 
@@ -187,7 +186,7 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
 **Methods:**
 
-- `fn from_gcode_state(state: &str) -> Self` - Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`,
+- `fn from_gcode_state(state: &str) -> Self` - Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
 
 **Traits:** Eq, Copy
 

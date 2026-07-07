@@ -29,7 +29,7 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 - `command: &'static str` - Wire command name, always `"ams_change_filament"`.
 - `ams_id: i32` - Target AMS unit index (or external-spool address per the caller's convention).
 - `slot_id: i32` - Target slot index within the AMS unit.
-- `target: i32` - Load/unload destination slot — mirrors `slot_id` in every documented wire example
+- `target: i32` - Load/unload destination slot — mirrors `slot_id` in every documented wire example (standard slot, external spool, or `255` for unload/retract), not a fixed enum code [REF-AMS-MAP].
 - `curr_temp: i32` - Current nozzle temperature (-1 = let firmware decide).
 - `tar_temp: i32` - Target nozzle temperature (-1 = let firmware decide).
 - `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
@@ -175,7 +175,7 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 **Fields:**
 - `command: &'static str` - Wire command name, always `"ams_filament_setting"`.
 - `sequence_id: String` - Request sequence ID, serialized as a string on the wire.
-- `ams_id: i32` - Target AMS unit or external-spool address — see the addressing cheat-sheet on
+- `ams_id: i32` - Target AMS unit or external-spool address — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
 - `tray_id: i32` - Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
 - `tray_info_idx: String` - Standard filament preset index code (e.g. "GFL05" / "PF12345678901234567") [REF-AMS-SP_CFG].
 - `tray_type: String` - Material type string (e.g. "PLA", "PETG").

@@ -9,8 +9,7 @@ use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 
 pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 
-/// Per-call deadline for `read_exact_packet` when a genuine wall-clock
-/// [`TimerProvider`] is available (see [`TimerProvider::has_real_clock`]).
+/// Per-call deadline for `read_exact_packet` when a genuine wall-clock [`TimerProvider`] is available (see [`TimerProvider::has_real_clock`]).
 ///
 /// Bounds a single `poll_wire()` invocation's total wait for *new* bytes to arrive —
 /// independent of, and strictly lower-level than, `PrinterClient::poll_until`'s
@@ -23,25 +22,19 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 /// or coordinated.
 pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
 
-/// Byte-level progress of an in-flight MQTT frame read, preserved across a timed-out
-/// `read_exact_packet` call so a subsequent call resumes exactly where the previous one
-/// left off instead of misinterpreting still-arriving bytes of the *same* frame as a new
-/// frame's header — see `read_exact_packet`'s doc comment for why losing this state
-/// would permanently desync the stream parser.
+/// Byte-level progress of an in-flight MQTT frame read, preserved across a timed-out `read_exact_packet` call so a subsequent call resumes exactly where the previous one left off instead of misinterpreting still-arriving bytes of the *same* frame as a new frame's header — see `read_exact_packet`'s doc comment for why losing this state would permanently desync the stream parser.
 #[derive(Default)]
 pub(crate) enum FrameReadState {
     /// No partial frame in progress — the next read starts a fresh header byte.
     #[default]
     Idle,
-    /// Header byte read; the MQTT variable-length "remaining length" field is not yet
-    /// fully decoded.
+    /// Header byte read; the MQTT variable-length "remaining length" field is not yet fully decoded.
     ReadingRemainingLength {
         header: u8,
         value: usize,
         multiplier: usize,
     },
-    /// Remaining length fully decoded; `buf` is pre-sized to the full payload length and
-    /// accumulates bytes as they arrive, `filled` tracks how many are valid so far.
+    /// Remaining length fully decoded; `buf` is pre-sized to the full payload length and accumulates bytes as they arrive, `filled` tracks how many are valid so far.
     ReadingPayload {
         header: u8,
         buf: Vec<u8>,
@@ -49,8 +42,7 @@ pub(crate) enum FrameReadState {
     },
 }
 
-/// Reads exactly one standard MQTT frame asynchronously from our abstract socket,
-/// resuming from `state` if a prior call on this same stream timed out partway through.
+/// Reads exactly one standard MQTT frame asynchronously from our abstract socket, resuming from `state` if a prior call on this same stream timed out partway through.
 ///
 /// **Correctness invariant — never violate this:** on a `SocketError::TimedOut` return,
 /// `state` must retain every byte already read for the in-progress frame. The MQTT wire
@@ -223,16 +215,13 @@ mod tests {
             );
         }
 
-        /// Regression test: a connection that stalls with zero
-        /// incoming bytes must not hang `read_exact_packet`/`poll_wire` forever. Uses a
-        /// `tokio::io::duplex` whose server side never writes anything, so the client's
-        /// low-level `read()` call is genuinely pending (not merely slow) — exactly the
-        /// "dead TCP, printer powered off mid-session" scenario the fix targets. Passes
-        /// a small `budget_ms` directly (bypassing the real `MQTT_READ_TIMEOUT_SECS`
-        /// constant) so this test doesn't need to wait out the production timeout. The
-        /// outer `tokio::time::timeout` is a meta-safety net: if the implementation
-        /// regresses to hanging forever, this test fails promptly instead of wedging the
-        /// whole suite.
+        /// Regression test: a connection that stalls with zero incoming bytes must not hang `read_exact_packet`/`poll_wire` forever.
+        /// Uses a `tokio::io::duplex` whose server side never writes anything, so the client's low-level
+        /// `read()` call is genuinely pending (not merely slow) — exactly the "dead TCP, printer powered
+        /// off mid-session" scenario the fix targets. Passes a small `budget_ms` directly (bypassing the
+        /// real `MQTT_READ_TIMEOUT_SECS` constant) so this test doesn't need to wait out the production
+        /// timeout. The outer `tokio::time::timeout` is a meta-safety net: if the implementation regresses
+        /// to hanging forever, this test fails promptly instead of wedging the whole suite.
         #[tokio::test]
         async fn test_read_exact_packet_stalled_connection_times_out() {
             let (client_stream, _server_stream) = tokio::io::duplex(64);
@@ -270,13 +259,11 @@ mod tests {
             );
         }
 
-        /// Regression test for the correctness hinge above: bytes already read
-        /// into a partial-packet buffer before a timeout must never be lost. Simulates a
-        /// connection that delivers *part* of a frame, stalls long enough to time out,
-        /// then delivers the rest — and asserts the second `read_exact_packet` call
-        /// reconstructs the exact original frame (not corrupted, not desynced, not
-        /// duplicated), proving `FrameReadState` correctly carried the partial payload
-        /// across the timed-out attempt.
+        /// Regression test for the correctness hinge above: bytes already read into a partial-packet buffer before a timeout must never be lost.
+        /// Simulates a connection that delivers *part* of a frame, stalls long enough to time out, then
+        /// delivers the rest — and asserts the second `read_exact_packet` call reconstructs the exact
+        /// original frame (not corrupted, not desynced, not duplicated), proving `FrameReadState` correctly
+        /// carried the partial payload across the timed-out attempt.
         #[tokio::test]
         async fn test_read_exact_packet_resumes_after_timeout_without_losing_bytes() {
             use tokio::io::AsyncWriteExt;

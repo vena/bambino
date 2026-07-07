@@ -17,7 +17,7 @@
 
 **Functions**
 
-- [`decode_nozzle_temperatures`](#decode_nozzle_temperatures) - Shared nozzle-temperature decode logic behind
+- [`decode_nozzle_temperatures`](#decode_nozzle_temperatures) - Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
 - [`is_developer_mode`](#is_developer_mode) - Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].
 
 ---
@@ -34,7 +34,7 @@ top-level domains depending on which micro-system published the frame.
 **Fields:**
 - `print: Option<PrinterTelemetry>` - Telemetry parameters representing the physical printer state machine.
 - `device: Option<DeviceTelemetry>` - Network and hardware board capability descriptors.
-- `fun: Option<String>` - Developer LAN Mode bitmask field (hex string). Drifts between top-level
+- `fun: Option<String>` - Developer LAN Mode bitmask field (hex string).
 
 **Methods:**
 
@@ -64,10 +64,7 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
 
 *Function*
 
-Shared nozzle-temperature decode logic behind
-[`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's
-`bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place
-this IDEX routing quirk lived.
+Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
 
 Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
 (composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`]).

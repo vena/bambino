@@ -37,8 +37,7 @@ pub use status::{GetVersionRequest, PushAllRequest};
 
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
 
-/// Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch
-/// milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`).
+/// Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`).
 ///
 /// **Why this is critical [REF-MQTT-ENV]:**
 /// The printer's onboard G-code parsing routine clamps subtask identifiers to standard 32-bit

@@ -71,8 +71,7 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     next_packet_id: u16,
     /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
     in_flight: BTreeSet<u16>,
-    /// Messages buffered by request-response round-trips (e.g. `poll_until`),
-    /// drained first by `poll_telemetry()` before reading from the wire.
+    /// Messages buffered by request-response round-trips (e.g. `poll_until`), drained first by `poll_telemetry()` before reading from the wire.
     pending_messages: VecDeque<MqttMessage>,
     /// Combined topic+payload byte size of every message currently in `pending_messages`.
     /// Kept in sync by `push_pending()` (adds/evicts) and `poll_telemetry()` (drains) so
@@ -85,9 +84,7 @@ pub struct BambuMqttClient<IO: AsyncIo> {
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
     secs_since_last_message: u32,
-    /// Byte-level progress of an in-flight frame read, preserved across a timed-out
-    /// `read_exact_packet` call so `poll_wire()` resumes correctly instead of desyncing
-    /// the stream — see `FrameReadState`'s doc comment.
+    /// Byte-level progress of an in-flight frame read, preserved across a timed-out `read_exact_packet` call so `poll_wire()` resumes correctly instead of desyncing the stream — see `FrameReadState`'s doc comment.
     read_state: FrameReadState,
 }
 
@@ -119,10 +116,8 @@ fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError
     }
 }
 
-/// Writes and flushes a complete packet to `stream`, mapping I/O failures via
-/// `map_embedded_io_error_kind` instead of collapsing everything to a fixed
-/// `ConnectionAborted` (the previous behavior). A free function (not a method) so
-/// `connect()` can call it before `Self` exists.
+/// Writes and flushes a complete packet to `stream`, mapping I/O failures via `map_embedded_io_error_kind` instead of collapsing everything to a fixed `ConnectionAborted` (the previous behavior).
+/// A free function (not a method) so `connect()` can call it before `Self` exists.
 async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), BambuError> {
     use embedded_io_async::Error as _;
     stream
@@ -323,8 +318,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         self.poll_telemetry_with_timer(&DummyTimer).await
     }
 
-    /// Same as [`poll_telemetry()`](Self::poll_telemetry), but honors `timer` for the
-    /// underlying wire read's per-read deadline (see [`poll_wire`](Self::poll_wire)).
+    /// Same as [`poll_telemetry()`](Self::poll_telemetry), but honors `timer` for the underlying wire read's per-read deadline (see [`poll_wire`](Self::poll_wire)).
     ///
     /// Used by `PrinterClient`, which owns its own configurable `Timer` and wants the
     /// stalled-read protection that requires a genuine wall-clock to be meaningful.

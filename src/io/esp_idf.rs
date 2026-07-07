@@ -89,12 +89,11 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
         self.inner.send_to(buf, target).map_err(to_esp_socket_error)
     }
 
-    /// Non-blocking read paced with a short sleep on the WouldBlock path so this never
-    /// busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc
-    /// comment. `TokioUdpSocket::recv_from` achieves the same pacing via a 100ms timeout
-    /// wrapping a genuinely-blocking OS call; this platform has no async socket-readiness
-    /// primitive for an arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment for why), so
-    /// pacing is applied explicitly here instead.
+    /// Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.
+    /// `TokioUdpSocket::recv_from` achieves the same pacing via a 100ms timeout wrapping a
+    /// genuinely-blocking OS call; this platform has no async socket-readiness primitive for an
+    /// arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment for why), so pacing is applied explicitly
+    /// here instead.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
         match self.inner.recv_from(buf) {
             Ok((len, addr)) => Ok((len, addr)),
@@ -115,25 +114,22 @@ fn to_esp_socket_error(err: std::io::Error) -> SocketError {
     crate::io::map_std_io_error(err, "ESP-IDF platform BSD network error")
 }
 
-/// True if `err` indicates a non-blocking `connect()` is still in progress rather than a
-/// genuine failure. `WouldBlock` covers whatever errno std's generic Unix `ErrorKind`
-/// decoder maps to it (`EAGAIN`/`EWOULDBLOCK`); `EINPROGRESS` — the errno `connect()`
-/// actually returns for a pending non-blocking connection — is checked separately because
-/// std's decoder does not recognize it as `WouldBlock` (confirmed against `socket2`'s own
-/// `Socket::connect_timeout()`, which checks both independently for the same reason).
+/// True if `err` indicates a non-blocking `connect()` is still in progress rather than a genuine failure.
+/// `WouldBlock` covers whatever errno std's generic Unix `ErrorKind` decoder maps to it
+/// (`EAGAIN`/`EWOULDBLOCK`); `EINPROGRESS` — the errno `connect()` actually returns for a pending
+/// non-blocking connection — is checked separately because std's decoder does not recognize it as
+/// `WouldBlock` (confirmed against `socket2`'s own `Socket::connect_timeout()`, which checks both
+/// independently for the same reason).
 #[cfg(feature = "esp-idf")]
 fn is_connect_in_progress(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::WouldBlock
         || err.raw_os_error() == Some(::esp_idf_svc::sys::EINPROGRESS as i32)
 }
 
-/// Polls a non-blocking `connect()` to completion by alternately checking `SO_ERROR` (via
-/// `take_error()`) and connectedness (via `peer_addr()`, which fails with `NotConnected`
-/// until the three-way handshake finishes) — `take_error()` alone can't distinguish "still
-/// connecting, no error yet" from "connected successfully," both of which return `Ok(None)`.
-/// Sleeps `TLS_POLL_INTERVAL` between attempts so the caller's outer
-/// `race_against_connect_timeout` can preempt this loop; does not bound itself (see
-/// `EspIdfTcpStream::connect`'s doc comment for why).
+/// Polls a non-blocking `connect()` to completion by alternately checking `SO_ERROR` (via `take_error()`) and connectedness (via `peer_addr()`, which fails with `NotConnected` until the three-way handshake finishes) — `take_error()` alone can't distinguish "still connecting, no error yet" from "connected successfully," both of which return `Ok(None)`.
+/// Sleeps `TLS_POLL_INTERVAL` between attempts so the caller's outer `race_against_connect_timeout`
+/// can preempt this loop; does not bound itself (see `EspIdfTcpStream::connect`'s doc comment for
+/// why).
 #[cfg(feature = "esp-idf")]
 async fn poll_connect_until_complete(
     socket: &::socket2::Socket,
@@ -170,18 +166,16 @@ async fn poll_connect_until_complete(
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
-/// Default upper bound on the handshake loop in `EspIdfTlsConnector::connect`, used when the
-/// caller doesn't supply one via `.with_connect_timeout(d)`. Chosen generously — printers on
-/// a healthy LAN handshake in well under a second, but a 10s budget avoids false timeouts on
-/// congested Wi-Fi.
+/// Default upper bound on the handshake loop in `EspIdfTlsConnector::connect`, used when the caller doesn't supply one via `.with_connect_timeout(d)`.
+/// Chosen generously — printers on a healthy LAN handshake in well under a second, but a 10s budget
+/// avoids false timeouts on congested Wi-Fi.
 #[cfg(feature = "esp-idf")]
 const DEFAULT_CONNECT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
 
-/// True if `err` indicates the non-blocking TLS operation would have blocked and should
-/// be retried, rather than a real failure. `EWOULDBLOCK` is included alongside the two
-/// `esp_tls`-specific codes because `EspTls::connect`/`read`/`write` can surface it
-/// directly in non-blocking mode — documented upstream as "a peculiarity/bug of the
-/// esp-tls C module".
+/// True if `err` indicates the non-blocking TLS operation would have blocked and should be retried, rather than a real failure.
+/// `EWOULDBLOCK` is included alongside the two `esp_tls`-specific codes because
+/// `EspTls::connect`/`read`/`write` can surface it directly in non-blocking mode — documented
+/// upstream as "a peculiarity/bug of the esp-tls C module".
 #[cfg(feature = "esp-idf")]
 fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
     let code = err.code();
@@ -232,11 +226,10 @@ fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError 
     SocketError::Other(std::format!("ESP-IDF TLS handshake failed: {err}").into())
 }
 
-/// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields and
-/// `new()`/`with_certs()` constructors. Factored out (originally shared with the now-deleted
-/// `EspIdfSecureConnector` — `SecureConnect` was removed crate-wide in favor of
-/// `TlsConnector`+`RawStreamFactory`) so a future cert-related option (e.g. ALPN config) only
-/// needs to be added in one place.
+/// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields and `new()`/`with_certs()` constructors.
+/// Factored out (originally shared with the now-deleted `EspIdfSecureConnector` — `SecureConnect`
+/// was removed crate-wide in favor of `TlsConnector`+`RawStreamFactory`) so a future cert-related
+/// option (e.g. ALPN config) only needs to be added in one place.
 #[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
     ca_cert: Option<Vec<u8>>,
@@ -271,8 +264,7 @@ impl EspIdfTlsCerts {
     }
 }
 
-/// Builds an `esp_idf_svc::tls::Config` from cert bytes, used by `EspIdfTlsConnector`'s
-/// wrap-existing-stream `TlsConnector` impl below.
+/// Builds an `esp_idf_svc::tls::Config` from cert bytes, used by `EspIdfTlsConnector`'s wrap-existing-stream `TlsConnector` impl below.
 #[cfg(feature = "esp-idf")]
 fn build_tls_config<'a>(
     ca_cert: &'a Option<Vec<u8>>,
@@ -343,12 +335,10 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S>
     }
 }
 
-/// Shared `WouldBlock` retry loop for `EspTlsStream::read`/`write` — both wrap a single
-/// `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on
-/// `is_would_block`, differing only in which `EspTls` method is invoked and the log message
-/// text. Takes `timer`/`op` separately rather than `&mut self` so the caller can borrow
-/// `self.tls` (via the closure) and `self.timer` (via this argument) as disjoint fields —
-/// see call sites in `EspTlsStream::read`/`write` above.
+/// Shared `WouldBlock` retry loop for `EspTlsStream::read`/`write` — both wrap a single `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on `is_would_block`, differing only in which `EspTls` method is invoked and the log message text.
+/// Takes `timer`/`op` separately rather than `&mut self` so the caller can borrow `self.tls` (via
+/// the closure) and `self.timer` (via this argument) as disjoint fields — see call sites in
+/// `EspTlsStream::read`/`write` above.
 #[cfg(feature = "esp-idf")]
 async fn retry_on_would_block<F>(
     timer: &EspIdfTimer,
@@ -404,9 +394,7 @@ fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
     }
 }
 
-/// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring
-/// `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl
-/// for `std::io::Error` itself, only for types that opt in explicitly.
+/// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
 #[cfg(feature = "esp-idf")]
 #[derive(Debug)]
 pub struct EspIdfIoError(std::io::Error);
@@ -432,11 +420,7 @@ impl embedded_io_async::Error for EspIdfIoError {
     }
 }
 
-/// Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s
-/// `EspTls::adopt()` call and directly as `RawIO` for models whose
-/// `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is
-/// then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are
-/// exercised for real, not just to satisfy the `AsyncIo` trait bound).
+/// Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 ///
 /// The underlying socket is only non-blocking transiently, during `connect()`'s own polling
 /// loop (see that function's doc comment) — by the time a caller receives an
@@ -572,9 +556,8 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
     }
 }
 
-/// TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and
-/// control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`). Built
-/// on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
+/// TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`).
+/// Built on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
 /// mbedTLS FFI needed to wrap an existing fd) instead of `EspTls::new()` + `connect()`.
 ///
 /// **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
@@ -603,10 +586,10 @@ pub struct EspIdfTlsConnector {
 
 #[cfg(feature = "esp-idf")]
 impl EspIdfTlsConnector {
-    /// Creates a connector that skips server certificate verification. The handshake
-    /// (this connector wraps an already-connected raw stream, so there's no TCP dial to
-    /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override
-    /// via `.with_connect_timeout(d)`.
+    /// Creates a connector that skips server certificate verification.
+    /// The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
+    /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
+    /// `.with_connect_timeout(d)`.
     pub fn new() -> Self {
         Self {
             certs: EspIdfTlsCerts::new(),
@@ -625,8 +608,8 @@ impl EspIdfTlsConnector {
         }
     }
 
-    /// Overrides the default handshake deadline. Non-consuming — chain onto
-    /// `new()`/`with_certs()`.
+    /// Overrides the default handshake deadline.
+    /// Non-consuming — chain onto `new()`/`with_certs()`.
     pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
         self.connect_timeout = connect_timeout;
         self
@@ -644,10 +627,7 @@ impl Default for EspIdfTlsConnector {
 impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     type Stream = EspTlsStream<EspIdfTcpStream>;
 
-    /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way
-    /// `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop,
-    /// compare `saturating_sub` against a budget each iteration); previously this loop had
-    /// no upper bound at all.
+    /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
     async fn connect(
         &self,
         host: &str,
@@ -701,11 +681,9 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     }
 }
 
-/// Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the
-/// ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's
-/// lazy connect and FTPS's passive data channel. Whether the returned stream ends up
-/// TLS-wrapped (via `EspIdfTlsConnector`) or used directly (plaintext FTPS data-channel
-/// models) is decided by the caller, not this factory.
+/// Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's lazy connect and FTPS's passive data channel.
+/// Whether the returned stream ends up TLS-wrapped (via `EspIdfTlsConnector`) or used directly
+/// (plaintext FTPS data-channel models) is decided by the caller, not this factory.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfRawStreamFactory;
 

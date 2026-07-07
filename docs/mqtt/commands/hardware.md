@@ -12,7 +12,7 @@
 - [`BuzzerRequest`](#buzzerrequest) - Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
 - [`LedCtrlPayload`](#ledctrlpayload) - Chamber illumination and toolhead LED control configurations.
 - [`LedCtrlRequest`](#ledctrlrequest) - Turns chamber or toolhead LEDs on or off.
-- [`PromptSoundPayload`](#promptsoundpayload) - Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only;
+- [`PromptSoundPayload`](#promptsoundpayload) - Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
 - [`PromptSoundRequest`](#promptsoundrequest) - Enables or disables the printer's notification sounds.
 
 **Enums**
@@ -182,7 +182,7 @@ Turns chamber or toolhead LEDs on or off.
 **Methods:**
 
 - `fn new(led_node: &str, turn_on: bool, sequence_id: u64) -> Self` - Builds a simple on/off `ledctrl` request for the given fixture.
-- `fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: u64) -> Self` - Builds a flashing-mode LED command with explicit on/off/loop/interval timing
+- `fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: u64) -> Self` - Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
 
 **Trait Implementations:**
 
@@ -199,8 +199,7 @@ Turns chamber or toolhead LEDs on or off.
 
 *Struct*
 
-Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only;
-H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
+Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
 
 **Fields:**
 - `command: &'static str` - Wire command name, always `"print_option"`.

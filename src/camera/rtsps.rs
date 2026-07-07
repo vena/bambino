@@ -141,9 +141,8 @@ pub struct RtpTimestampCorrector {
 }
 
 impl RtpTimestampCorrector {
-    /// Initializes the corrector by capturing the stream's first embedded RTP timestamp
-    /// as the base coordinate for all subsequent corrections. This preserves alignment
-    /// with the SDP stream definition.
+    /// Initializes the corrector by capturing the stream's first embedded RTP timestamp as the base coordinate for all subsequent corrections.
+    /// This preserves alignment with the SDP stream definition.
     pub fn init(embedded_rtp: u32) -> Self {
         Self {
             base_timestamp: embedded_rtp,

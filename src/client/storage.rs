@@ -54,8 +54,7 @@ where
         self.ftps = Some(ftps_client);
     }
 
-    /// Returns direct access to the underlying [`BambuFtpsClient`], auto-connecting
-    /// if needed.
+    /// Returns direct access to the underlying [`BambuFtpsClient`], auto-connecting if needed.
     ///
     /// Requires prior FTPS configuration via [`.with_ftps()`](Self::with_ftps) or
     /// [`.attach_storage()`](Self::attach_storage).

@@ -22,8 +22,7 @@ pub struct LightReport {
     pub mode: String,
 }
 
-/// Core printer state machine telemetry, containing kinematics, thermal targets,
-/// auxiliary fan configurations, and connected AMS arrays.
+/// Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterTelemetry {
     /// High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
@@ -303,9 +302,7 @@ impl PrinterTelemetry {
             .unwrap_or(false)
     }
 
-    /// Evaluates whether the physical printer is connected via wired Ethernet using the
-    /// doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the
-    /// disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
+    /// Evaluates whether the physical printer is connected via wired Ethernet using the doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
     ///
     /// A printer with no wifi signal to report (i.e. running wired-only) sends a fixed
     /// `wifi_signal` of `"-90dBm"`. Not confirmed authoritative either — consider cross-checking
@@ -314,8 +311,7 @@ impl PrinterTelemetry {
         self.wifi_signal.as_deref() == Some("-90dBm")
     }
 
-    /// Evaluates whether the printer's mains power supply is wired for the 220V region,
-    /// based on bit 3 (`0x00000008`) of the `home_flag` register.
+    /// Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
     ///
     /// Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
     /// temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the

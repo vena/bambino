@@ -10,13 +10,13 @@ use crate::mqtt::BambuMqttClient;
 
 use super::PrinterClient;
 
-/// Races `fut` against a `connect_timeout_secs`-second deadline on `timer`, used by
-/// `ensure_mqtt()`/`ensure_ftps()` to bound their two-step dial+connect sequences. Reuses the
-/// `race()` combinator `src/mqtt/client/{mod,frame}.rs`'s `poll_wire`/`read_exact_packet` per-read deadline
-/// is built on, including its `has_real_clock()` guard: under `DummyTimer` (`has_real_clock()
-/// == false`), `sleep()` completes instantly regardless of duration, so racing against it
-/// unconditionally would make every connect attempt look timed out instead of providing real
-/// protection — see `TimerProvider::has_real_clock`'s doc comment.
+/// Races `fut` against a `connect_timeout_secs`-second deadline on `timer`, used by `ensure_mqtt()`/`ensure_ftps()` to bound their two-step dial+connect sequences.
+/// Reuses the `race()` combinator `src/mqtt/client/{mod,frame}.rs`'s
+/// `poll_wire`/`read_exact_packet` per-read deadline is built on, including its `has_real_clock()`
+/// guard: under `DummyTimer` (`has_real_clock() == false`), `sleep()` completes instantly
+/// regardless of duration, so racing against it unconditionally would make every connect attempt
+/// look timed out instead of providing real protection — see `TimerProvider::has_real_clock`'s doc
+/// comment.
 async fn race_against_connect_timeout<TP, F, T, E>(
     timer: &TP,
     connect_timeout_secs: u64,
@@ -167,8 +167,7 @@ where
         self
     }
 
-    /// Overrides the default connect-timeout deadline (10s) that bounds
-    /// `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
+    /// Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
     /// Non-consuming — chain onto any construction path.
     pub fn with_connect_timeout(mut self, secs: u64) -> Self {
         self.connect_timeout_secs = secs;
@@ -397,8 +396,7 @@ where
         self
     }
 
-    /// Overrides the default maximum accepted camera frame size (see
-    /// `BambuBinaryCameraStream::with_max_frame_size`).
+    /// Overrides the default maximum accepted camera frame size (see `BambuBinaryCameraStream::with_max_frame_size`).
     pub fn with_camera_max_frame_size(mut self, bytes: usize) -> Self {
         self.camera_max_frame_size = Some(bytes);
         self

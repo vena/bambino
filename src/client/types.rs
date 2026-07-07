@@ -63,16 +63,15 @@ pub(crate) const FAN_WRITE_PORT_AUXILIARY_LEFT: u16 = 2;
 pub(crate) const FAN_WRITE_PORT_CHAMBER_EXHAUST: u16 = 3;
 pub(crate) const FAN_WRITE_PORT_AUXILIARY_RIGHT: u16 = 10;
 
-/// Read-side telemetry port ID for the auxiliary-right fan (`device.airduct.parts[id]`),
-/// used by `telemetry.rs::auxiliary_right_fan_speed`. **Different address space from the
-/// write-side `FAN_WRITE_PORT_*` constants above** — this is not a typo; write ports are
-/// M106 `P` arguments while read ports index the telemetry `airduct.parts` array, and there
-/// is no compiler-enforced link between "this `FanTarget` variant" and both of its port
-/// numbers today.
+/// Read-side telemetry port ID for the auxiliary-right fan (`device.airduct.parts[id]`), used by `telemetry.rs::auxiliary_right_fan_speed`.
+/// **Different address space from the write-side `FAN_WRITE_PORT_*` constants above** — this is not
+/// a typo; write ports are M106 `P` arguments while read ports index the telemetry `airduct.parts`
+/// array, and there is no compiler-enforced link between "this `FanTarget` variant" and both of its
+/// port numbers today.
 pub(crate) const FAN_READ_PORT_AUXILIARY_RIGHT: u32 = 160;
 
-/// Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`]
-/// [REF-MQTT-LIFECYCLE]. Supported on models with a physical fire alarm buzzer (H2 series).
+/// Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE].
+/// Supported on models with a physical fire alarm buzzer (H2 series).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuzzerMode {
     /// Silent/disarmed.
@@ -97,8 +96,7 @@ pub enum PrintSpeed {
 }
 
 impl PrintSpeed {
-    /// Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values
-    /// [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
+    /// Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
     /// Returns `None` for an out-of-range level.
     pub fn from_level(level: u8) -> Option<Self> {
         match level {
@@ -138,8 +136,7 @@ impl core::ops::BitOr for CalibrationOption {
     }
 }
 
-/// Cached print-progress snapshot as of the last-observed telemetry carrying any of these
-/// fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
+/// Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
 ///
 /// Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
 /// `gcode_state`/`door_open`/`print_error`, which answer four independent questions) because
@@ -180,8 +177,7 @@ pub enum PrintStatus {
 }
 
 impl PrintStatus {
-    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`,
-    /// `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
+    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
     pub fn from_gcode_state(state: &str) -> Self {
         match state {
             "IDLE" => PrintStatus::Idle,

@@ -90,16 +90,12 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
     }
 }
 
-/// Configures a `std::net::UdpSocket` for SSDP discovery: enables broadcast, joins the
-/// standard Bambu multicast group (239.255.255.250) — on macOS and Windows, local firewalls
-/// and kernel routing stacks frequently drop incoming UDP replies from SSDP targets on
-/// ephemeral ports unless the receiving socket has registered a multicast group membership
-/// first — and puts the socket into non-blocking mode. Shared by every std-based platform
-/// backend that binds its own UDP socket (`TokioUdpSocket::bind`, `EspIdfUdpSocket::bind`);
-/// `set_broadcast`/`join_multicast_v4` failures are logged and otherwise ignored (best-effort,
-/// not fatal to discovery), while a `set_nonblocking` failure is returned since every caller
-/// requires it (Tokio panics on thread-local registration otherwise; ESP-IDF's recv pacing
-/// assumes it).
+/// Configures a `std::net::UdpSocket` for SSDP discovery: enables broadcast, joins the standard Bambu multicast group (239.255.255.250) — on macOS and Windows, local firewalls and kernel routing stacks frequently drop incoming UDP replies from SSDP targets on ephemeral ports unless the receiving socket has registered a multicast group membership first — and puts the socket into non-blocking mode.
+/// Shared by every std-based platform backend that binds its own UDP socket
+/// (`TokioUdpSocket::bind`, `EspIdfUdpSocket::bind`); `set_broadcast`/`join_multicast_v4` failures
+/// are logged and otherwise ignored (best-effort, not fatal to discovery), while a
+/// `set_nonblocking` failure is returned since every caller requires it (Tokio panics on
+/// thread-local registration otherwise; ESP-IDF's recv pacing assumes it).
 #[cfg(feature = "std")]
 pub(crate) fn configure_std_udp_socket(socket: &std::net::UdpSocket) -> Result<(), SocketError> {
     if let Err(e) = socket.set_broadcast(true) {
@@ -115,8 +111,8 @@ pub(crate) fn configure_std_udp_socket(socket: &std::net::UdpSocket) -> Result<(
         .map_err(|e| map_std_io_error(e, "failed to set UDP socket non-blocking"))
 }
 
-/// Maps a `std::io::ErrorKind` to the closest `embedded_io_async::ErrorKind`. Shared by every
-/// std-based platform's `embedded_io_async::Error::kind()` impl (`TokioIoError`,
+/// Maps a `std::io::ErrorKind` to the closest `embedded_io_async::ErrorKind`.
+/// Shared by every std-based platform's `embedded_io_async::Error::kind()` impl (`TokioIoError`,
 /// `EspIdfIoError`) — both previously duplicated this exact match.
 #[cfg(feature = "std")]
 pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::ErrorKind {
@@ -253,9 +249,9 @@ pub trait TimerProvider {
     /// *differences* between two calls are meaningful.
     fn now_millis(&self) -> u64;
 
-    /// Whether this timer provides genuine wall-clock timing. `true` (the default) for
-    /// every real platform implementation (`TokioTimer`, `EmbassyTimer`, `EspIdfTimer`).
-    /// Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.
+    /// Whether this timer provides genuine wall-clock timing.
+    /// `true` (the default) for every real platform implementation (`TokioTimer`, `EmbassyTimer`,
+    /// `EspIdfTimer`). Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.
     ///
     /// Exists so code that races an I/O operation against
     /// [`sleep()`](Self::sleep) — e.g. `src/mqtt/client/mod.rs`'s `poll_wire`/
@@ -313,8 +309,7 @@ where
     .await
 }
 
-/// Reads up to `buf.len()` bytes via a single underlying `read()` call, optionally raced
-/// against a wall-clock deadline.
+/// Reads up to `buf.len()` bytes via a single underlying `read()` call, optionally raced against a wall-clock deadline.
 ///
 /// **Why a single `read()` step (not `read_exact`, and not the whole multi-byte target
 /// in one shot):** `embedded_io_async::Read::read_exact`'s default implementation writes

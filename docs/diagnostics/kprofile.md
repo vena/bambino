@@ -68,7 +68,7 @@ yourself.
 
 **Methods:**
 
-- `fn new(sequence_id: u64) -> Self` - Builds an `extrusion_cali_get` request. Callers should prefer
+- `fn new(sequence_id: u64) -> Self` - Builds an `extrusion_cali_get` request.
 
 **Trait Implementations:**
 
@@ -132,7 +132,7 @@ Inner payload for [`ExtrusionCaliSelRequest`].
 
 **Fields:**
 - `command: &'static str` - Wire command name, always `"extrusion_cali_sel"`.
-- `ams_id: i32` - Target AMS/external-spool address — see the addressing cheat-sheet on
+- `ams_id: i32` - Target AMS/external-spool address — see the addressing cheat-sheet on [`ExtrusionCaliSelRequest::new`].
 - `tray_id: i32` - Absolute global tray ID (not local slot index).
 - `cali_idx: i32` - Index of the calibration entry within the target's profile database (`KProfileEntry::cali_idx`).
 - `filament_id: String` - Filament preset ID this K-profile applies to (`KProfileEntry::filament_id`).

@@ -16,8 +16,7 @@ use clap::Subcommand;
 
 use crate::connection::create_printer;
 
-/// Bytes per gibibyte — shared by the upload size ceiling and `format_size`'s unit
-/// conversion, which previously each hardcoded this same literal independently.
+/// Bytes per gibibyte — shared by the upload size ceiling and `format_size`'s unit conversion, which previously each hardcoded this same literal independently.
 const BYTES_PER_GIB: u64 = 1_073_741_824;
 
 #[derive(Subcommand, Debug)]

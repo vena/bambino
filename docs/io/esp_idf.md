@@ -6,11 +6,11 @@
 
 **Structs**
 
-- [`EspIdfIoError`](#espidfioerror) - Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring
-- [`EspIdfRawStreamFactory`](#espidfrawstreamfactory) - Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the
-- [`EspIdfTcpStream`](#espidftcpstream) - Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s
+- [`EspIdfIoError`](#espidfioerror) - Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
+- [`EspIdfRawStreamFactory`](#espidfrawstreamfactory) - Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's lazy connect and FTPS's passive data channel.
+- [`EspIdfTcpStream`](#espidftcpstream) - Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 - [`EspIdfTimer`](#espidftimer) - Async timer utilizing the ESP-IDF high-resolution timer service.
-- [`EspIdfTlsConnector`](#espidftlsconnector) - TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and
+- [`EspIdfTlsConnector`](#espidftlsconnector) - TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`).
 - [`EspIdfUdpSocket`](#espidfudpsocket) - UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 - [`EspTlsStream`](#esptlsstream) - Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
 
@@ -20,9 +20,7 @@
 
 *Struct*
 
-Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring
-`TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl
-for `std::io::Error` itself, only for types that opt in explicitly.
+Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
 
 **Tuple Struct**: `()`
 
@@ -43,11 +41,9 @@ for `std::io::Error` itself, only for types that opt in explicitly.
 
 *Struct*
 
-Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the
-ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's
-lazy connect and FTPS's passive data channel. Whether the returned stream ends up
-TLS-wrapped (via `EspIdfTlsConnector`) or used directly (plaintext FTPS data-channel
-models) is decided by the caller, not this factory.
+Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's lazy connect and FTPS's passive data channel.
+Whether the returned stream ends up TLS-wrapped (via `EspIdfTlsConnector`) or used directly
+(plaintext FTPS data-channel models) is decided by the caller, not this factory.
 
 **Unit Struct**
 
@@ -62,11 +58,7 @@ models) is decided by the caller, not this factory.
 
 *Struct*
 
-Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s
-`EspTls::adopt()` call and directly as `RawIO` for models whose
-`model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is
-then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are
-exercised for real, not just to satisfy the `AsyncIo` trait bound).
+Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 
 The underlying socket is only non-blocking transiently, during `connect()`'s own polling
 loop (see that function's doc comment) — by the time a caller receives an
@@ -129,9 +121,8 @@ with the FreeRTOS scheduler instead of blocking the task thread.
 
 *Struct*
 
-TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and
-control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`). Built
-on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
+TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`).
+Built on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
 mbedTLS FFI needed to wrap an existing fd) instead of `EspTls::new()` + `connect()`.
 
 **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
@@ -155,16 +146,16 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 
 **Methods:**
 
-- `fn new() -> Self` - Creates a connector that skips server certificate verification. The handshake
+- `fn new() -> Self` - Creates a connector that skips server certificate verification.
 - `fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self` - Creates a connector that verifies the server certificate against a CA cert.
-- `fn with_connect_timeout(self: Self, connect_timeout: core::time::Duration) -> Self` - Overrides the default handshake deadline. Non-consuming — chain onto
+- `fn with_connect_timeout(self: Self, connect_timeout: core::time::Duration) -> Self` - Overrides the default handshake deadline.
 
 **Trait Implementations:**
 
 - **Default**
   - `fn default() -> Self`
 - **TlsConnector**
-  - `fn connect(self: &Self, host: &str, raw_stream: EspIdfTcpStream) -> Result<<Self as >::Stream, SocketError>` - Bounds the handshake loop by `self.connect_timeout`, tracked the same way
+  - `fn connect(self: &Self, host: &str, raw_stream: EspIdfTcpStream) -> Result<<Self as >::Stream, SocketError>` - Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
   - `fn negotiated_version(self: &Self, stream: &<Self as >::Stream) -> Option<TlsVersion>`
 
 
@@ -179,7 +170,7 @@ UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 
 - **AsyncUdpSocket**
   - `fn send_to(self: &Self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError>`
-  - `fn recv_from(self: &Self, buf: & mut [u8]) -> Result<(usize, SocketAddr), SocketError>` - Non-blocking read paced with a short sleep on the WouldBlock path so this never
+  - `fn recv_from(self: &Self, buf: & mut [u8]) -> Result<(usize, SocketAddr), SocketError>` - Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.
 - **BindableUdpSocket**
   - `fn bind(addr: SocketAddr) -> Result<Self, SocketError>`
 

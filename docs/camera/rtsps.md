@@ -23,7 +23,7 @@ Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freez
 
 **Methods:**
 
-- `fn init(embedded_rtp: u32) -> Self` - Initializes the corrector by capturing the stream's first embedded RTP timestamp
+- `fn init(embedded_rtp: u32) -> Self` - Initializes the corrector by capturing the stream's first embedded RTP timestamp as the base coordinate for all subsequent corrections.
 - `fn correct(self: &Self, elapsed_secs: f64) -> u32` - Computes the corrected RTP timestamp from host-observed elapsed time.
 
 

@@ -58,7 +58,7 @@ README's Embassy section for a worked example.
 
 **Methods:**
 
-- `fn new(client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>) -> Self` - `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held
+- `fn new(client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>) -> Self` - `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
 
 **Trait Implementations:**
 
@@ -120,13 +120,13 @@ need a bounded connect must race `EmbassyTlsConnector::connect` against
 
 **Methods:**
 
-- `fn new(config: &'a ::embedded_tls::TlsConfig<'a>, rng: Rng, read_buf: &'a  mut [u8], write_buf: &'a  mut [u8]) -> Self` - Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch
+- `fn new(config: &'a ::embedded_tls::TlsConfig<'a>, rng: Rng, read_buf: &'a  mut [u8], write_buf: &'a  mut [u8]) -> Self` - Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch buffers.
 
 **Trait Implementations:**
 
 - **TlsConnector**
   - `fn connect(self: &Self, _host: &str, raw_stream: RawStream) -> Result<<Self as >::Stream, SocketError>`
-  - `fn negotiated_version(self: &Self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` - `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it
+  - `fn negotiated_version(self: &Self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` - `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it has no TLS 1.2 handshake support and exposes no version-query method, since there is only ever one possible answer).
 
 
 

@@ -12,9 +12,9 @@ pub const X1_Z_MAX: f32 = 256.0;
 
 /// X1C nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const X1C_NOZZLE_TEMP_MAX: u16 = 300;
-/// Bed temperature ceiling on a 220V-region unit — confirmed, per the official spec sheet,
-/// non-obviously *lower* than the 110V ceiling. Also the conservative default when the mains
-/// region is unknown (no `home_flag` telemetry received yet).
+/// Bed temperature ceiling on a 220V-region unit — confirmed, per the official spec sheet, non-obviously *lower* than the 110V ceiling.
+/// Also the conservative default when the mains region is unknown (no `home_flag` telemetry
+/// received yet).
 pub const X1C_BED_TEMP_MAX_220V: u16 = 110;
 /// Bed temperature ceiling on a 110V-region unit.
 pub const X1C_BED_TEMP_MAX_110V: u16 = 120;
@@ -48,8 +48,7 @@ fn x1c_bed_temp_max(mains_220v: Option<bool>) -> u16 {
     }
 }
 
-/// X1E's bed ceiling is a flat constant — voltage-independent (its chamber-heater bed ceiling
-/// isn't voltage-dependent per the spec, unlike X1C's).
+/// X1E's bed ceiling is a flat constant — voltage-independent (its chamber-heater bed ceiling isn't voltage-dependent per the spec, unlike X1C's).
 fn x1e_bed_temp_max(_mains_220v: Option<bool>) -> u16 {
     X1E_BED_TEMP_MAX
 }

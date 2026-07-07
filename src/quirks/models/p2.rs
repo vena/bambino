@@ -21,13 +21,10 @@ impl ModelQuirks for P2Quirks {
         false
     }
 
-    /// P2S firmware `01.02.00.00`'s embedded vsFTPd can't process TLS 1.3's
-    /// asynchronous session-ticket model on the FTPS data channel — transfers
-    /// truncate mid-stream with `426 "Failure reading network stream"`. This is
-    /// a firmware bug, not a real TLS-1.3 incompatibility: independently
-    /// confirmed by the `bambuddy` project (reporter `@iitazz`, upstream issue
-    /// #1401), which hit the identical symptom only after its own client
-    /// started defaulting to TLS 1.3. See [REF-FTPS-CONN] in
+    /// P2S firmware `01.02.00.00`'s embedded vsFTPd can't process TLS 1.3's asynchronous session-ticket model on the FTPS data channel — transfers truncate mid-stream with `426 "Failure reading network stream"`.
+    /// This is a firmware bug, not a real TLS-1.3 incompatibility: independently confirmed by the
+    /// `bambuddy` project (reporter `@iitazz`, upstream issue #1401), which hit the identical symptom
+    /// only after its own client started defaulting to TLS 1.3. See [REF-FTPS-CONN] in
     /// `reference/02_ftps.md` §2.1.
     ///
     /// The cap narrows the race, it doesn't close it: `bambuddy`'s own

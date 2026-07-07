@@ -55,10 +55,10 @@ where
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
-    /// Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the
-    /// last-observed `home_flag` telemetry. `None` means no telemetry carrying `home_flag`
-    /// has been observed yet (via [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed".
-    /// Advisory only: the firmware does not reject motion on unhomed axes [REF-MOTO-HOME].
+    /// Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
+    /// `None` means no telemetry carrying `home_flag` has been observed yet (via
+    /// [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed". Advisory only: the firmware does
+    /// not reject motion on unhomed axes [REF-MOTO-HOME].
     pub fn is_axis_homed(&self, axis: char) -> Option<bool> {
         let bit = match axis.to_ascii_uppercase() {
             'X' => HOME_FLAG_X_BIT,
@@ -69,8 +69,8 @@ where
         self.cache.last_home_flag.map(|flag| flag & bit != 0)
     }
 
-    /// Returns whether X, Y, and Z were all homed as of the last-observed `home_flag`
-    /// telemetry. `None` means no telemetry carrying `home_flag` has been observed yet.
+    /// Returns whether X, Y, and Z were all homed as of the last-observed `home_flag` telemetry.
+    /// `None` means no telemetry carrying `home_flag` has been observed yet.
     pub fn is_all_axes_homed(&self) -> Option<bool> {
         self.cache
             .last_home_flag

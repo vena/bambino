@@ -170,7 +170,7 @@ without burning processor cycles on embedded platforms.
 
 - `sleep`: Suspends execution of the calling task for the specified duration.
 - `now_millis`: Returns the current monotonic clock value in milliseconds.
-- `has_real_clock`: Whether this timer provides genuine wall-clock timing. `true` (the default) for
+- `has_real_clock`: Whether this timer provides genuine wall-clock timing.
 
 
 

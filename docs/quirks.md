@@ -14,7 +14,7 @@
 
 **Functions**
 
-- [`decode_fan_percentage`](#decode_fan_percentage) - Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/
+- [`decode_fan_percentage`](#decode_fan_percentage) - Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
 - [`fan_step_to_percentage`](#fan_step_to_percentage) - Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
 
 **Traits**
@@ -59,13 +59,13 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 **Methods:**
 
-- `uses_plaintext_ftps_data_channel`: Returns true if this model series requires plaintext transmissions on the
-- `enforce_ftps_tls_1_2`: Returns true if this model series must restrict its TLS version strictly
-- `is_door_open`: Evaluates whether the physical front enclosure door is open based on
-- `has_door_sensor`: Returns true if the physical machine chassis is equipped with an electronic
+- `uses_plaintext_ftps_data_channel`: Returns true if this model series requires plaintext transmissions on the FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
+- `enforce_ftps_tls_1_2`: Returns true if this model series must restrict its TLS version strictly to TLS 1.2 to prevent session resumption failure [REF-FTPS-CONN].
+- `is_door_open`: Evaluates whether the physical front enclosure door is open based on model-specific sensor routing [REF-NET-DOOR].
+- `has_door_sensor`: Returns true if the physical machine chassis is equipped with an electronic front enclosure door open sensor switch.
 - `camera_protocol`: Returns the camera streaming protocol used by this model's hardware [REF-NET-PORTS].
-- `ignores_chamber_temperature`: Returns true if the model is an open-frame or entry-level machine lacking
-- `has_stg_cur_idle_bug`: Returns true if the model series exhibits the idle state-machine bug where
+- `ignores_chamber_temperature`: Returns true if the model is an open-frame or entry-level machine lacking a physical chamber temperature sensor [REF-THER-DECODE].
+- `has_stg_cur_idle_bug`: Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
 - `has_active_chamber_heater`: Returns true if the model possesses an active PTC chamber heater (M141) [REF-MOTO-GCODE].
 - `physical_nozzle_count`: Returns the number of physical extruder carriages present on the machine carriage bus.
 - `supports_nozzle_offset_calibration`: Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.
@@ -73,12 +73,12 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - `is_unsafe_homing_command`: Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].
 - `z_max`: Returns the maximum safe Z-axis travel distance in millimeters for this model.
 - `relative_z_move_gcode`: Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
-- `requires_wallclock_rtsp_timestamps`: Returns true if the model's RTSP camera stream requires wallclock timestamps
+- `requires_wallclock_rtsp_timestamps`: Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
 - `supports_auxiliary_right_fan`: Returns true if the model has a secondary right-side auxiliary fan (port 10) [REF-CLIM-FANS].
 - `supports_auxiliary_left_fan`: Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
 - `has_chamber_exhaust_fan`: Returns true if the model has a chamber exhaust/filtration fan (port 3) [REF-CLIM-FANS].
-- `auxiliary_fan_uses_percentage`: Returns true if the model's auxiliary fan telemetry reports speed as a direct
-- `supports_airduct_mode`: Returns true if the model has controllable airduct dampers for climate
+- `auxiliary_fan_uses_percentage`: Returns true if the model's auxiliary fan telemetry reports speed as a direct percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
+- `supports_airduct_mode`: Returns true if the model has controllable airduct dampers for climate mode switching (cooling vs heating recirculation) [REF-CLIM-FANS].
 - `supports_prompt_sound`: Returns true if the model has onboard speakers for prompt sound notifications.
 - `supports_buzzer`: Returns true if the model has a physical fire alarm buzzer module.
 - `nozzle_temp_max`: Returns the maximum safe nozzle/hotend temperature in °C for this model.
@@ -91,8 +91,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 *Function*
 
-Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/
-`big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
+Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
 
 `uses_percentage` should come from [`ModelQuirks::auxiliary_fan_uses_percentage()`] — most
 models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an

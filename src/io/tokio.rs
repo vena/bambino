@@ -304,8 +304,7 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
     }
 }
 
-/// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation
-/// to satisfy `embedded-io-async` bounds.
+/// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
 pub struct TokioIo<T>(pub T);
 
 /// Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.

@@ -52,8 +52,7 @@ impl LedCtrlRequest {
         }
     }
 
-    /// Builds a flashing-mode LED command with explicit on/off/loop/interval timing
-    /// (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
+    /// Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
     pub fn new_flashing(
         led_node: &str,
         on_time: u32,
@@ -127,8 +126,7 @@ impl AirductRequest {
     }
 }
 
-/// Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only;
-/// H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
+/// Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptSoundPayload {
     /// Wire command name, always `"print_option"`.

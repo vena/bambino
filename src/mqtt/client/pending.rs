@@ -57,9 +57,8 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         self.pending_messages.push_back(msg);
     }
 
-    /// Scans the pending buffer (FIFO order) for the first message `matcher` accepts,
-    /// removing and returning it. Non-matching messages are left in the buffer in their
-    /// original relative order.
+    /// Scans the pending buffer (FIFO order) for the first message `matcher` accepts, removing and returning it.
+    /// Non-matching messages are left in the buffer in their original relative order.
     ///
     /// Used by `PrinterClient::poll_until()` to check previously-buffered messages
     /// (stashed by an earlier, unrelated `poll_until()` call) for a match before falling
@@ -101,9 +100,7 @@ mod tests {
         use crate::mqtt::client::frame::FrameReadState;
         use std::collections::BTreeSet;
 
-        /// Builds a `BambuMqttClient` without going through `connect()`'s handshake — the
-        /// stream is never touched by the pending-buffer tests below, so an unread/unwritten
-        /// in-memory cursor is sufficient.
+        /// Builds a `BambuMqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below, so an unread/unwritten in-memory cursor is sufficient.
         fn test_client() -> BambuMqttClient<TokioIo<std::io::Cursor<Vec<u8>>>> {
             BambuMqttClient {
                 stream: TokioIo(std::io::Cursor::new(Vec::new())),
@@ -119,11 +116,8 @@ mod tests {
             }
         }
 
-        /// Regression test: a caller that keeps issuing request-response calls whose responses
-        /// never arrive (firmware bug, wrong echoed sequence_id, or a malicious/compromised
-        /// device on the LAN) must not be able to grow `pending_messages` without bound —
-        /// unacceptable on ESP-IDF/Embassy targets where RAM is measured in KB. Pushes 320
-        /// never-matching messages (well past a generous margin) and asserts the buffer stays
+        /// Regression test: a caller that keeps issuing request-response calls whose responses never arrive (firmware bug, wrong echoed sequence_id, or a malicious/compromised device on the LAN) must not be able to grow `pending_messages` without bound — unacceptable on ESP-IDF/Embassy targets where RAM is measured in KB.
+        /// Pushes 320 never-matching messages (well past a generous margin) and asserts the buffer stays
         /// within `MQTT_PENDING_BUFFER_MAX_BYTES` with the oldest entries evicted first (FIFO).
         #[test]
         fn test_push_pending_evicts_oldest_beyond_max_bytes() {
@@ -172,9 +166,7 @@ mod tests {
             );
         }
 
-        /// Regression test for the `poll_until` integration: `take_pending_matching` must
-        /// find and remove exactly the matching message, leaving the rest in their original
-        /// relative order, and must keep `pending_bytes` accounting in sync with the removal.
+        /// Regression test for the `poll_until` integration: `take_pending_matching` must find and remove exactly the matching message, leaving the rest in their original relative order, and must keep `pending_bytes` accounting in sync with the removal.
         #[test]
         fn test_take_pending_matching_removes_only_the_match() {
             let mut client = test_client();
@@ -220,8 +212,7 @@ mod tests {
             );
         }
 
-        /// `take_pending_matching` must return `None` and leave the buffer untouched when
-        /// nothing matches.
+        /// `take_pending_matching` must return `None` and leave the buffer untouched when nothing matches.
         #[test]
         fn test_take_pending_matching_returns_none_when_no_match() {
             let mut client = test_client();

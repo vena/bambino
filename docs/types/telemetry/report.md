@@ -7,7 +7,7 @@
 **Structs**
 
 - [`LightReport`](#lightreport) - Chamber/work/heatbed light state entry from the `lights_report` array.
-- [`PrinterTelemetry`](#printertelemetry) - Core printer state machine telemetry, containing kinematics, thermal targets,
+- [`PrinterTelemetry`](#printertelemetry) - Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
 
 ---
 
@@ -38,8 +38,7 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 *Struct*
 
-Core printer state machine telemetry, containing kinematics, thermal targets,
-auxiliary fan configurations, and connected AMS arrays.
+Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
 
 **Fields:**
 - `gcode_state: Option<String>` - High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
@@ -112,8 +111,8 @@ auxiliary fan configurations, and connected AMS arrays.
 
 - `fn unpack_temperature(raw_val: f64) -> (u16, u16)` - Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
 - `fn is_ethernet_active(self: &Self) -> bool` - Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
-- `fn is_ethernet_active_via_wifi_signal(self: &Self) -> bool` - Evaluates whether the physical printer is connected via wired Ethernet using the
-- `fn is_220v_power(self: &Self) -> bool` - Evaluates whether the printer's mains power supply is wired for the 220V region,
+- `fn is_ethernet_active_via_wifi_signal(self: &Self) -> bool` - Evaluates whether the physical printer is connected via wired Ethernet using the doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
+- `fn is_220v_power(self: &Self) -> bool` - Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
 - `fn is_door_open_from_home_flag(self: &Self) -> bool` - Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
 - `fn is_door_open_from_stat(self: &Self) -> bool` - Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
 

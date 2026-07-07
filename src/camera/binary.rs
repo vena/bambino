@@ -40,10 +40,7 @@ pub(crate) const JPEG_MARKER_SOI_LOW: u8 = 0xD8;
 pub(crate) const JPEG_MARKER_EOI_HIGH: u8 = 0xFF;
 pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
 
-/// Per-read wall-clock deadline for [`BambuBinaryCameraStream::read_next_frame_with_timer`]
-/// when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and
-/// rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on
-/// an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
+/// Per-read wall-clock deadline for [`BambuBinaryCameraStream::read_next_frame_with_timer`] when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
 pub(crate) const CAMERA_READ_TIMEOUT_SECS: u64 = 30;
 
 /// Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY].
@@ -83,27 +80,22 @@ pub fn build_handshake_packet(
     Ok(packet)
 }
 
-/// Byte-level progress of an in-flight camera frame read, preserved across a timed-out
-/// [`BambuBinaryCameraStream::read_next_frame_with_timer`] call so a subsequent call resumes
-/// exactly where the previous one left off — losing this state would permanently desync the
-/// stream, the same failure class `FrameReadState` guards against for MQTT
-/// (`src/mqtt/client/frame.rs`). Not a straight copy of that shape: MQTT's 1-byte header can't
-/// partially complete a single `read()` step, so its `Idle` variant never needs
-/// header-partial-progress tracking — camera's 16-byte header can, so `ReadingHeader` carries
-/// its own `filled` counter (closer in shape to `ReadingPayload` below).
+/// Byte-level progress of an in-flight camera frame read, preserved across a timed-out [`BambuBinaryCameraStream::read_next_frame_with_timer`] call so a subsequent call resumes exactly where the previous one left off — losing this state would permanently desync the stream, the same failure class `FrameReadState` guards against for MQTT (`src/mqtt/client/frame.rs`).
+/// Not a straight copy of that shape: MQTT's 1-byte header can't partially complete a single
+/// `read()` step, so its `Idle` variant never needs header-partial-progress tracking — camera's
+/// 16-byte header can, so `ReadingHeader` carries its own `filled` counter (closer in shape to
+/// `ReadingPayload` below).
 #[derive(Default)]
 enum CameraFrameReadState {
     /// No partial frame in progress — the next read starts a fresh header.
     #[default]
     Idle,
-    /// Header bytes read so far; `filled` may be less than `CAMERA_FRAME_HEADER_SIZE` if a
-    /// prior call timed out mid-header.
+    /// Header bytes read so far; `filled` may be less than `CAMERA_FRAME_HEADER_SIZE` if a prior call timed out mid-header.
     ReadingHeader {
         buf: [u8; CAMERA_FRAME_HEADER_SIZE],
         filled: usize,
     },
-    /// Header fully decoded; `size` is the expected payload length, `buf` accumulates bytes
-    /// as they arrive, `filled` tracks how many are valid so far.
+    /// Header fully decoded; `size` is the expected payload length, `buf` accumulates bytes as they arrive, `filled` tracks how many are valid so far.
     ReadingPayload {
         size: usize,
         buf: Vec<u8>,
@@ -160,14 +152,12 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             .await
     }
 
-    /// Bounds the handshake write+flush against `timer` when a real wall-clock is available
-    /// (see [`TimerProvider::has_real_clock`]), mirroring [`Self::read_next_frame_with_timer`]'s
-    /// naming/delegation convention. Unlike that read-side method, a timed-out write here has
-    /// no partial-progress state worth preserving — the handshake is a single ~80-byte packet,
-    /// small enough that losing/retrying the whole write on timeout is an acceptable
-    /// simplification (unlike MQTT/camera frame *reads*, which must not lose already-read
-    /// bytes) — so this races the whole `write_all`+`flush` sequence against `timer.sleep()`
-    /// directly via the shared `race()` combinator instead of needing a resumable
+    /// Bounds the handshake write+flush against `timer` when a real wall-clock is available (see [`TimerProvider::has_real_clock`]), mirroring [`Self::read_next_frame_with_timer`]'s naming/delegation convention.
+    /// Unlike that read-side method, a timed-out write here has no partial-progress state worth
+    /// preserving — the handshake is a single ~80-byte packet, small enough that losing/retrying the
+    /// whole write on timeout is an acceptable simplification (unlike MQTT/camera frame *reads*, which
+    /// must not lose already-read bytes) — so this races the whole `write_all`+`flush` sequence against
+    /// `timer.sleep()` directly via the shared `race()` combinator instead of needing a resumable
     /// chunk-at-a-time helper like `read_chunk`.
     pub(crate) async fn authenticate_with_timer<T: TimerProvider>(
         &mut self,
@@ -203,13 +193,11 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         }
     }
 
-    /// Asynchronously extracts the next complete frame from the stream, bounding each
-    /// low-level read step against `timer` when a real wall-clock is available (see
-    /// [`TimerProvider::has_real_clock`]). Resumable: if a prior call on this stream timed
-    /// out partway through a frame, the next call picks up from `self.read_state` instead of
-    /// re-reading a fresh header — losing already-read bytes here would permanently desync
-    /// the stream, the same failure class documented for MQTT's `read_exact_packet`
-    /// (`src/mqtt/client/frame.rs`).
+    /// Asynchronously extracts the next complete frame from the stream, bounding each low-level read step against `timer` when a real wall-clock is available (see [`TimerProvider::has_real_clock`]).
+    /// Resumable: if a prior call on this stream timed out partway through a frame, the next call picks
+    /// up from `self.read_state` instead of re-reading a fresh header — losing already-read bytes here
+    /// would permanently desync the stream, the same failure class documented for MQTT's
+    /// `read_exact_packet` (`src/mqtt/client/frame.rs`).
     ///
     /// `budget_ms` is an explicit parameter (not a hardcoded constant) so tests can pass a
     /// small budget instead of waiting out [`CAMERA_READ_TIMEOUT_SECS`] for real; production
@@ -418,11 +406,9 @@ mod tests {
             assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
         }
 
-        /// Regression test mirroring `test_read_exact_packet_stalled_connection_times_out`
-        /// (`src/mqtt/client/frame.rs`): a connection that stalls with zero incoming bytes must not
-        /// hang `read_next_frame_with_timer` forever. Uses a `tokio::io::duplex` whose server
-        /// side never writes, so the client's low-level `read()` call is genuinely pending.
-        /// The outer `tokio::time::timeout` is a meta-safety net.
+        /// Regression test mirroring `test_read_exact_packet_stalled_connection_times_out` (`src/mqtt/client/frame.rs`): a connection that stalls with zero incoming bytes must not hang `read_next_frame_with_timer` forever.
+        /// Uses a `tokio::io::duplex` whose server side never writes, so the client's low-level `read()`
+        /// call is genuinely pending. The outer `tokio::time::timeout` is a meta-safety net.
         #[tokio::test]
         async fn test_read_next_frame_with_timer_stalled_connection_times_out() {
             let (client_stream, _server_stream) = tokio::io::duplex(64);
@@ -462,11 +448,10 @@ mod tests {
             );
         }
 
-        /// Regression test: a peer that never drains its TCP receive buffer during the
-        /// handshake must not hang `authenticate_with_timer` forever. `duplex(64)` gives the
-        /// write side a smaller buffer than the 80-byte handshake packet, and the server side
-        /// is kept alive but never reads — so `write_all` genuinely stalls partway through
-        /// once the buffer fills, rather than merely being slow.
+        /// Regression test: a peer that never drains its TCP receive buffer during the handshake must not hang `authenticate_with_timer` forever.
+        /// `duplex(64)` gives the write side a smaller buffer than the 80-byte handshake packet, and the
+        /// server side is kept alive but never reads — so `write_all` genuinely stalls partway through once
+        /// the buffer fills, rather than merely being slow.
         #[tokio::test]
         async fn test_authenticate_with_timer_stalled_connection_times_out() {
             let (client_stream, _server_stream) = tokio::io::duplex(64);
@@ -503,12 +488,10 @@ mod tests {
             );
         }
 
-        /// Regression test mirroring
-        /// `test_read_exact_packet_resumes_after_timeout_without_losing_bytes`
-        /// (`src/mqtt/client/frame.rs`): bytes already read into a partial-frame buffer before a
-        /// timeout must never be lost. Server delivers the full 16-byte header plus 2 of 4
-        /// expected payload bytes, then stalls; the first call times out mid-payload; the
-        /// second call (after the rest arrives) must reconstruct the exact original frame.
+        /// Regression test mirroring `test_read_exact_packet_resumes_after_timeout_without_losing_bytes` (`src/mqtt/client/frame.rs`): bytes already read into a partial-frame buffer before a timeout must never be lost.
+        /// Server delivers the full 16-byte header plus 2 of 4 expected payload bytes, then stalls; the
+        /// first call times out mid-payload; the second call (after the rest arrives) must reconstruct the
+        /// exact original frame.
         #[tokio::test]
         async fn test_read_next_frame_with_timer_resumes_after_timeout_without_losing_bytes() {
             let (client_stream, mut server_stream) = tokio::io::duplex(64);

@@ -21,11 +21,10 @@ use crate::models::BambuModel;
 
 use super::protocol::*;
 
-/// Unifies a data-channel socket that may or may not be TLS-wrapped behind one concrete type,
-/// so `list_directory`/`upload_file`/`download_file` can share a single transfer code path
-/// instead of duplicating it once per branch. `RawIO` and `Tls::Stream` are different
-/// concrete types (one wrapped in TLS, one not), so returning "either" from
-/// `open_data_channel` requires this enum wrapper rather than plain `impl AsyncIo`.
+/// Unifies a data-channel socket that may or may not be TLS-wrapped behind one concrete type, so `list_directory`/`upload_file`/`download_file` can share a single transfer code path instead of duplicating it once per branch.
+/// `RawIO` and `Tls::Stream` are different concrete types (one wrapped in TLS, one not), so
+/// returning "either" from `open_data_channel` requires this enum wrapper rather than plain `impl
+/// AsyncIo`.
 ///
 /// `CLAUDE.md` calls out this exact shape of branch duplication as the root cause of the
 /// `write_command` regression (commit `6385019`) — a fix applied to one branch and missed in
@@ -102,19 +101,17 @@ where
     model: BambuModel,
     ip: String,
     timer: FtpsTimer,
-    /// Set once a control-channel desync is possible (see struct doc comment). Checked by every
-    /// public method; once `true` the client must be discarded and reconnected.
+    /// Set once a control-channel desync is possible (see struct doc comment).
+    /// Checked by every public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
-    /// `read_line_raw`'s leftover-byte carry buffer, threaded through every `read_response`
-    /// call made against `control_stream` for the life of this client —
-    /// not reset per method call. This must live at least as long as `control_stream` itself:
-    /// FTP servers may write two logically separate replies to one command (e.g. `150`
-    /// immediately followed by `226`) without waiting for the client to finish reading the
-    /// first, so a single socket read can contain bytes belonging to a reply a *later* method
-    /// call is expecting. Scoping this buffer to a single `read_response` call instead (an
-    /// earlier version of this fix did) silently dropped those bytes and desynced the next
-    /// read — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing with a
-    /// spurious `ConnectionReset` when scoped too narrowly.
+    /// `read_line_raw`'s leftover-byte carry buffer, threaded through every `read_response` call made against `control_stream` for the life of this client — not reset per method call.
+    /// This must live at least as long as `control_stream` itself: FTP servers may write two logically
+    /// separate replies to one command (e.g. `150` immediately followed by `226`) without waiting for
+    /// the client to finish reading the first, so a single socket read can contain bytes belonging to a
+    /// reply a *later* method call is expecting. Scoping this buffer to a single `read_response` call
+    /// instead (an earlier version of this fix did) silently dropped those bytes and desynced the next
+    /// read — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing with a spurious
+    /// `ConnectionReset` when scoped too narrowly.
     control_fill_buf: Vec<u8>,
 }
 
@@ -276,9 +273,8 @@ where
         Ok(())
     }
 
-    /// Computes a fresh absolute deadline `budget_secs` in the future against `self.timer`, or
-    /// `None` under `DummyTimer` (unbounded) — see `ftps_deadline_ms`'s doc comment. Call this
-    /// fresh immediately before each `read_response`/`read_to_eof` call rather than reusing a
+    /// Computes a fresh absolute deadline `budget_secs` in the future against `self.timer`, or `None` under `DummyTimer` (unbounded) — see `ftps_deadline_ms`'s doc comment.
+    /// Call this fresh immediately before each `read_response`/`read_to_eof` call rather than reusing a
     /// value computed earlier, so every call gets its own full budget.
     fn read_deadline_ms(&self, budget_secs: u64) -> Option<u64> {
         ftps_deadline_ms(&self.timer, budget_secs)
@@ -307,12 +303,10 @@ where
         Ok(())
     }
 
-    /// Wraps a raw data-channel socket in TLS (or not, per
-    /// `model.quirks().uses_plaintext_ftps_data_channel()`), re-checking TLS-1.2 enforcement
-    /// on the resulting stream, and returns it behind the unified `DataChannel` type. Poisons
-    /// the client on either failure path — see the struct doc comment's poisoning invariant —
-    /// so `list_directory`/`upload_file`/`download_file` can all share this one path instead
-    /// of duplicating it.
+    /// Wraps a raw data-channel socket in TLS (or not, per `model.quirks().uses_plaintext_ftps_data_channel()`), re-checking TLS-1.2 enforcement on the resulting stream, and returns it behind the unified `DataChannel` type.
+    /// Poisons the client on either failure path — see the struct doc comment's poisoning invariant —
+    /// so `list_directory`/`upload_file`/`download_file` can all share this one path instead of
+    /// duplicating it.
     async fn open_data_channel(
         &mut self,
         raw_data_socket: RawIO,

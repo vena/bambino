@@ -177,8 +177,7 @@ pub fn validate_external_spool_safety(
     has_physical_ams
 }
 
-/// Flat-array equivalent of `validate_external_spool_safety`, for callers using
-/// `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
+/// Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
 pub fn validate_external_spool_safety_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool {
     if !is_single_nozzle {
         return true;

@@ -10,7 +10,7 @@
 - [`AmsStatusReport`](#amsstatusreport) - Top-level AMS status wrapper containing the units array and bus-wide metadata [REF-AMS-DECODE].
 - [`AmsTray`](#amstray) - Material spool state descriptor representing a single physical tray slot.
 - [`AmsUnit`](#amsunit) - Modular standard expansion unit managing up to 4 physical spool slots.
-- [`VirtualTray`](#virtualtray) - Virtual/external spool holder telemetry. Represents the filament loaded
+- [`VirtualTray`](#virtualtray) - Virtual/external spool holder telemetry.
 
 ---
 
@@ -148,7 +148,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - `dry_time: Option<u32>` - Remaining drying time in minutes during an active dry cycle [REF-AMS-DRYER].
 - `dry_setting: Option<AmsDrySetting>` - Drying configuration settings (target temperature, duration, filament type).
 - `tray: Vec<AmsTray>` - Trays / spool slots configured inside the designated unit.
-- `info: Option<String>` - Hex-encoded bitmask: bits 0–3 = AMS type, bits 4–7 = dry_status,
+- `info: Option<String>` - Hex-encoded bitmask: bits 0–3 = AMS type, bits 4–7 = dry_status, bits 8–11 = extruder assignment (IDEX routing).
 - `dry_sf_reason: Option<Vec<i32>>` - Drying failure reason codes per slot (X2D).
 
 **Methods:**
@@ -176,8 +176,8 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 *Struct*
 
-Virtual/external spool holder telemetry. Represents the filament loaded
-directly into the extruder without going through an AMS unit.
+Virtual/external spool holder telemetry.
+Represents the filament loaded directly into the extruder without going through an AMS unit.
 
 On the wire, this shares the same schema as `AmsTray` — both physical AMS trays
 and virtual/external spool holders use the same field set.

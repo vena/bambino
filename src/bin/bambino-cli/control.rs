@@ -187,9 +187,7 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
     Ok(())
 }
 
-/// Prints `before_msg`, awaits `fut`, then prints `after_msg` on success — collapses the
-/// repeated "Dispatching.../call/...published successfully" triplet shared by most
-/// `ControlAction` match arms below.
+/// Prints `before_msg`, awaits `fut`, then prints `after_msg` on success — collapses the repeated "Dispatching.../call/...published successfully" triplet shared by most `ControlAction` match arms below.
 async fn dispatch<T>(
     before_msg: &str,
     after_msg: &str,

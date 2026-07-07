@@ -52,15 +52,14 @@ use crate::mqtt::{BambuMqttClient, MqttMessage};
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
-/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined
-/// dial+connect sequence — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT`
-/// (`src/io/esp_idf.rs`). Override via `.with_connect_timeout(secs)`.
+/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined dial+connect sequence — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT` (`src/io/esp_idf.rs`).
+/// Override via `.with_connect_timeout(secs)`.
 pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Clamps `value` to `max`, logging a warning if it was reduced. Shared by every
-/// model-ceiling-clamped heater-setting method in `thermal.rs` (bed/nozzle/chamber), which
-/// previously repeated this identical clamp-and-warn block three times, differing only in
-/// `label`.
+/// Clamps `value` to `max`, logging a warning if it was reduced.
+/// Shared by every model-ceiling-clamped heater-setting method in `thermal.rs`
+/// (bed/nozzle/chamber), which previously repeated this identical clamp-and-warn block three times,
+/// differing only in `label`.
 pub(crate) fn clamp_temp(value: u16, max: u16, label: &str) -> u16 {
     if value > max {
         log::warn!(
@@ -309,8 +308,7 @@ where
         self.sequence_counter
     }
 
-    /// Sets the timeout (in seconds) used by command-response methods like
-    /// [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
+    /// Sets the timeout (in seconds) used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
     ///
     /// Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
     /// the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
@@ -318,8 +316,7 @@ where
         self.command_timeout_secs = secs;
     }
 
-    /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching
-    /// messages for later retrieval via `poll_telemetry()` / `poll_raw()`.
+    /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching messages for later retrieval via `poll_telemetry()` / `poll_raw()`.
     ///
     /// Checks previously-buffered messages (stashed by an earlier `poll_until()` call)
     /// for a match before reading from the wire — a leftover message from a prior
@@ -384,10 +381,9 @@ where
         self.mqtt.as_mut().unwrap().publish_command(&payload).await
     }
 
-    /// Collapses the repeated `next_sequence_id()` → build request → `publish_request()`
-    /// triplet used by nearly every command-dispatching method in this module. `build`
-    /// receives the freshly-clamped sequence ID and constructs the request struct; closures
-    /// can capture whatever other locals a given command needs beyond `seq`.
+    /// Collapses the repeated `next_sequence_id()` → build request → `publish_request()` triplet used by nearly every command-dispatching method in this module.
+    /// `build` receives the freshly-clamped sequence ID and constructs the request struct; closures can
+    /// capture whatever other locals a given command needs beyond `seq`.
     pub(crate) async fn dispatch<T: Serialize>(
         &mut self,
         build: impl FnOnce(u64) -> T,
@@ -418,8 +414,7 @@ where
         self.model
     }
 
-    /// Returns direct access to the underlying [`BambuMqttClient`], auto-connecting
-    /// if needed.
+    /// Returns direct access to the underlying [`BambuMqttClient`], auto-connecting if needed.
     ///
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting

@@ -23,37 +23,31 @@ use crate::types::PrinterTelemetry;
 
 /// Polymorphic interface tracking model-specific hardware variations and transport exceptions.
 pub trait ModelQuirks {
-    /// Returns true if this model series requires plaintext transmissions on the
-    /// FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
+    /// Returns true if this model series requires plaintext transmissions on the FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
     fn uses_plaintext_ftps_data_channel(&self) -> bool;
 
-    /// Returns true if this model series must restrict its TLS version strictly
-    /// to TLS 1.2 to prevent session resumption failure [REF-FTPS-CONN].
+    /// Returns true if this model series must restrict its TLS version strictly to TLS 1.2 to prevent session resumption failure [REF-FTPS-CONN].
     ///
     /// This is a firmware bug workaround, not a real protocol ceiling — see the
     /// doc comments on `P2Quirks`/`X2Quirks` (the only two implementers returning
     /// `true`) for per-model evidence and confidence level.
     fn enforce_ftps_tls_1_2(&self) -> bool;
 
-    /// Evaluates whether the physical front enclosure door is open based on
-    /// model-specific sensor routing [REF-NET-DOOR].
+    /// Evaluates whether the physical front enclosure door is open based on model-specific sensor routing [REF-NET-DOOR].
     ///
     /// If the target model lacks an electronic door sensor switch, returns `false`.
     fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool;
 
-    /// Returns true if the physical machine chassis is equipped with an electronic
-    /// front enclosure door open sensor switch.
+    /// Returns true if the physical machine chassis is equipped with an electronic front enclosure door open sensor switch.
     fn has_door_sensor(&self) -> bool;
 
     /// Returns the camera streaming protocol used by this model's hardware [REF-NET-PORTS].
     fn camera_protocol(&self) -> CameraProtocol;
 
-    /// Returns true if the model is an open-frame or entry-level machine lacking
-    /// a physical chamber temperature sensor [REF-THER-DECODE].
+    /// Returns true if the model is an open-frame or entry-level machine lacking a physical chamber temperature sensor [REF-THER-DECODE].
     fn ignores_chamber_temperature(&self) -> bool;
 
-    /// Returns true if the model series exhibits the idle state-machine bug where
-    /// `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
+    /// Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
     fn has_stg_cur_idle_bug(&self) -> bool;
 
     /// Returns true if the model possesses an active PTC chamber heater (M141) [REF-MOTO-GCODE].
@@ -104,8 +98,7 @@ pub trait ModelQuirks {
         format_z_move_gcode(distance, feedrate, self.z_max())
     }
 
-    /// Returns true if the model's RTSP camera stream requires wallclock timestamps
-    /// instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
+    /// Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
     fn requires_wallclock_rtsp_timestamps(&self) -> bool {
         false
     }
@@ -130,14 +123,12 @@ pub trait ModelQuirks {
         false
     }
 
-    /// Returns true if the model's auxiliary fan telemetry reports speed as a direct
-    /// percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
+    /// Returns true if the model's auxiliary fan telemetry reports speed as a direct percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
     fn auxiliary_fan_uses_percentage(&self) -> bool {
         false
     }
 
-    /// Returns true if the model has controllable airduct dampers for climate
-    /// mode switching (cooling vs heating recirculation) [REF-CLIM-FANS].
+    /// Returns true if the model has controllable airduct dampers for climate mode switching (cooling vs heating recirculation) [REF-CLIM-FANS].
     ///
     /// Supported on: H2S, H2D, H2D Pro, H2C, P2S, X2D.
     fn supports_airduct_mode(&self) -> bool {
@@ -243,8 +234,7 @@ fn line_has_unsafe_homing(line: &str) -> bool {
     false
 }
 
-/// Returns true if `bytes[i..]` starts with `G28` (case-insensitive on the `G`; `2`/`8` are digits
-/// with no case to normalize).
+/// Returns true if `bytes[i..]` starts with `G28` (case-insensitive on the `G`; `2`/`8` are digits with no case to normalize).
 fn is_g28_prefix(bytes: &[u8], i: usize) -> bool {
     bytes.len() >= i + 3
         && bytes[i].eq_ignore_ascii_case(&b'G')
@@ -279,8 +269,7 @@ pub fn fan_step_to_percentage(step: u8) -> u8 {
     }
 }
 
-/// Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/
-/// `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
+/// Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
 ///
 /// `uses_percentage` should come from [`ModelQuirks::auxiliary_fan_uses_percentage()`] — most
 /// models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an

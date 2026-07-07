@@ -100,8 +100,9 @@ pub struct ExtrusionCaliGetRequest {
 }
 
 impl ExtrusionCaliGetRequest {
-    /// Builds an `extrusion_cali_get` request. Callers should prefer
-    /// `PrinterClient::get_k_profiles()`, which handles the priming quirk documented above.
+    /// Builds an `extrusion_cali_get` request.
+    /// Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
+    /// documented above.
     pub fn new(sequence_id: u64) -> Self {
         Self {
             print: ExtrusionCaliGetPayload {
@@ -194,8 +195,7 @@ impl ExtrusionCaliSetRequest {
 pub struct ExtrusionCaliSelPayload {
     /// Wire command name, always `"extrusion_cali_sel"`.
     pub command: &'static str,
-    /// Target AMS/external-spool address — see the addressing cheat-sheet on
-    /// [`ExtrusionCaliSelRequest::new`].
+    /// Target AMS/external-spool address — see the addressing cheat-sheet on [`ExtrusionCaliSelRequest::new`].
     pub ams_id: i32,
     /// Absolute global tray ID (not local slot index).
     pub tray_id: i32,
