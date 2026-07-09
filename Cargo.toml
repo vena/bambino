@@ -32,7 +32,7 @@ no_std = []
 alloc = ["serde/alloc", "serde_json/alloc"]
 
 # Embassy-net framework support with mbedtls-rs (real TLS 1.2+1.3, hw-accelerated on ESP32)
-# and async IO bindings. See EMBASSY_TLS_ESCAPE_HATCH_PLAN.md Track B for why mbedtls-rs
+# and async IO bindings. See 405436e986a67fe470cc7170bdf85278b772d225 for when mbedtls-rs
 # replaced embedded-tls (TLS-1.3-only) here.
 embassy = [
     "dep:embassy-net",
@@ -86,9 +86,9 @@ rustls-pki-types = { version = "1.14", optional = true }
 
 # X.509 parsing for the "verified" TLS path's CnFallbackServerVerifier (src/io/tokio.rs).
 # Unlike rustls-webpki, this does not enforce a v3-only policy (real Bambu printer certs are
-# X.509 v1) — see TLS_SNI_HOSTNAME_MISMATCH_PLAN.md. "verify" feature pulls in `ring`-backed
-# cert-signature verification (X509Certificate::verify_signature), reusing the same crypto
-# backend already used elsewhere via rustls's ring provider.
+# X.509 v1) — see commit 8b80acc46817786dca8801daa38d85d02d3104f0. "verify" feature pulls in
+#`ring`-backed cert-signature verification (X509Certificate::verify_signature), reusing the
+# same crypto backend already used elsewhere via rustls's ring provider.
 x509-parser = { version = "0.18", features = ["verify"], optional = true }
 
 # ESP-IDF system services binding for hardware transport
