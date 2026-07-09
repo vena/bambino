@@ -1,6 +1,6 @@
-# bambino
+# Crate `bambino`
 
-# bambino
+**Version:** 0.1.0
 
 Talk to Bambu Lab 3D printers over your local network.
 
@@ -14,7 +14,7 @@ for printer discovery. It compiles to three targets from one codebase:
 | ESP-IDF (ESP32, FreeRTOS) | std threads | ESP-TLS | `esp-idf` |
 | Bare-metal (embassy) | embassy | embedded-tls | `embassy` (implies `no_std` + `alloc`) |
 
-All network I/O goes through abstract traits in the [`io`] module, so library
+All network I/O goes through abstract traits in the [`io`](io/index.md#io) module, so library
 code never touches `tokio::` or `std::net::` directly.
 
 # Quick start
@@ -66,207 +66,261 @@ async fn example() -> Result<(), bambino::BambuError> {
 
 # Module guide
 
-- [`client`] — The main entry point. [`client::PrinterClient`] wraps MQTT + FTPS into
+- [`client`](client/index.md#client) — The main entry point. [`PrinterClient`](client/index.md#printerclient) wraps MQTT + FTPS into
   one coordinated interface with methods for thermal control, motion, print jobs, etc.
-- [`mqtt`] — Low-level MQTT v3.1.1 client and command serialization.
-- [`ftps`] — Implicit FTPS client for SD card file operations.
-- [`discovery`] — SSDP-based printer discovery on the local network.
-- [`types`] — Telemetry schemas, version info, and shared data types.
-- [`models`] — Printer model identification from serial numbers.
-- [`quirks`] — Per-model behavioral differences (fan mapping, door sensors, temp limits, etc.).
-- [`io`] — Transport abstraction traits ([`io::AsyncIo`], [`io::TlsConnector`], etc.).
-- [`ams`] — AMS filament system helpers (slot mapping, presence detection).
-- [`camera`] — Camera streaming protocols (binary JPEG on port 6000, RTSPS on port 322).
-- [`diagnostics`] — HMS alert decoding and K-profile (Linear Advance) management.
-- [`error`] — The unified [`BambuError`] type.
+- [`mqtt`](mqtt/index.md#mqtt) — Low-level MQTT v3.1.1 client and command serialization.
+- [`ftps`](ftps/index.md#ftps) — Implicit FTPS client for SD card file operations.
+- [`discovery`](discovery/index.md#discovery) — SSDP-based printer discovery on the local network.
+- [`types`](client/types/index.md#types) — Telemetry schemas, version info, and shared data types.
+- [`models`](models/index.md#models) — Printer model identification from serial numbers.
+- [`quirks`](quirks/index.md#quirks) — Per-model behavioral differences (fan mapping, door sensors, temp limits, etc.).
+- [`io`](io/index.md#io) — Transport abstraction traits ([`AsyncIo`](io/index.md#asyncio), [`TlsConnector`](io/index.md#tlsconnector), etc.).
+- [`ams`](ams/index.md#ams) — AMS filament system helpers (slot mapping, presence detection).
+- [`camera`](camera/index.md#camera) — Camera streaming protocols (binary JPEG on port 6000, RTSPS on port 322).
+- [`diagnostics`](diagnostics/index.md#diagnostics) — HMS alert decoding and K-profile (Linear Advance) management.
+- [`error`](error/index.md#error) — The unified [`BambuError`](error/index.md#bambuerror) type.
+
+## Contents
+
+- [Modules](#modules)
+  - [`ams`](#ams)
+  - [`camera`](#camera)
+  - [`client`](#client)
+  - [`diagnostics`](#diagnostics)
+  - [`discovery`](#discovery)
+  - [`error`](#error)
+  - [`ftps`](#ftps)
+  - [`io`](#io)
+  - [`models`](#models)
+  - [`mqtt`](#mqtt)
+  - [`quirks`](#quirks)
+  - [`types`](#types)
+- [Types](#types)
+
+## Quick Reference
+
+| Item | Kind | Description |
+|------|------|-------------|
+| [`ams`](#ams) | mod | # AMS Filament System |
+| [`camera`](#camera) | mod | # Camera & Video Streaming |
+| [`client`](#client) | mod | # Printer Client |
+| [`diagnostics`](#diagnostics) | mod | # Diagnostics & Calibration |
+| [`discovery`](#discovery) | mod | # Printer Discovery (SSDP) |
+| [`error`](#error) | mod | # Error Types |
+| [`ftps`](#ftps) | mod | # FTPS File Transfer Client |
+| [`io`](#io) | mod | # Transport Abstraction Layer |
+| [`models`](#models) | mod | # Printer Model Identification |
+| [`mqtt`](#mqtt) | mod | # MQTT Client & Command Serialization |
+| [`quirks`](#quirks) | mod | # Model-Specific Quirks |
+| [`types`](#types) | mod | # Types & Telemetry Schemas |
 
 ## Modules
 
-### [`bambino`](bambino.md)
+- [`ams`](ams/index.md#ams) — # AMS Filament System
+- [`camera`](camera/index.md#camera) — # Camera & Video Streaming
+- [`client`](client/index.md#client) — # Printer Client
+- [`diagnostics`](diagnostics/index.md#diagnostics) — # Diagnostics & Calibration
+- [`discovery`](discovery/index.md#discovery) — # Printer Discovery (SSDP)
+- [`error`](error/index.md#error) — # Error Types
+- [`ftps`](ftps/index.md#ftps) — # FTPS File Transfer Client
+- [`io`](io/index.md#io) — # Transport Abstraction Layer
+- [`models`](models/index.md#models) — # Printer Model Identification
+- [`mqtt`](mqtt/index.md#mqtt) — # MQTT Client & Command Serialization
+- [`quirks`](quirks/index.md#quirks) — # Model-Specific Quirks
+- [`types`](types/index.md#types) — # Types & Telemetry Schemas
 
-*12 modules*
 
-### [`ams`](ams.md)
+---
 
-*2 modules*
+## Types
 
-### [`ams::mapping`](ams/mapping.md)
+### `BambuError`
 
-*1 enum, 1 struct, 4 functions*
+```rust
+enum BambuError {
+    NetworkError(crate::io::SocketError),
+    TimerFailure(crate::io::TimerError),
+    TlsHandshakeFailed,
+    ProtocolViolation(std::borrow::Cow<'static, str>),
+    SerializationError,
+    AccessDenied,
+    Timeout,
+    DiskWriteFailure,
+    ModelMismatch(std::borrow::Cow<'static, str>),
+}
+```
 
-### [`ams::parser`](ams/parser.md)
+Unified error type for the `bambino` crate.
 
-*4 functions*
+This enum wraps all protocol, serialization, and transport-level failures
+with localized error contexts. Under `std` environments, standard formatting
+and source error tracing are derived automatically via `thiserror`.
 
-### [`camera`](camera.md)
+#### Variants
 
-*1 enum, 2 constants, 2 modules*
+- **`NetworkError`**
 
-### [`camera::binary`](camera/binary.md)
+  Encapsulates direct socket-level failures on TCP, UDP, or TLS streams.
 
-*1 function, 1 struct*
+- **`TimerFailure`**
 
-### [`camera::rtsps`](camera/rtsps.md)
+  Encapsulates platform timer/sleep scheduling failures (e.g. ESP-IDF FreeRTOS timer resource exhaustion).
 
-*1 struct, 2 functions*
+- **`TlsHandshakeFailed`**
 
-### [`client`](client.md)
+  Emitted when local MQTTS, FTPS, or RTSPS TLS negotiations fail.
+  This frequently occurs during self-signed certificate verification or SNI mismatches.
 
-*1 struct, 2 modules*
+- **`ProtocolViolation`**
 
-### [`client::types`](client/types.md)
+  Emitted when a printer violates expected protocol states or emits illegal data lines.
 
-*2 structs, 5 enums*
+- **`SerializationError`**
 
-### [`diagnostics`](diagnostics.md)
+  Serializer and Deserializer mismatches during telemetry JSON parsing.
 
-*2 modules*
+- **`AccessDenied`**
 
-### [`diagnostics::hms`](diagnostics/hms.md)
+  Emitted when the provided 8-character LAN access code fails verification checks.
 
-*1 enum, 2 functions, 2 structs*
+- **`Timeout`**
 
-### [`diagnostics::kprofile`](diagnostics/kprofile.md)
+  Handshake, read, or write negotiations exceeded designated timeouts.
 
-*1 function, 15 structs*
+- **`DiskWriteFailure`**
 
-### [`discovery`](discovery.md)
+  Upload verification failed — printer reported unexpected file size after transfer.
 
-*1 function, 1 module, 1 struct, 3 constants*
+- **`ModelMismatch`**
 
-### [`discovery::parser`](discovery/parser.md)
+  Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
 
-*1 function, 1 struct*
+#### Trait Implementations
 
-### [`error`](error.md)
+##### `impl Clone for BambuError`
 
-*1 enum*
+- <span id="bambuerror-clone"></span>`fn clone(&self) -> BambuError` — [`BambuError`](error/index.md#bambuerror)
 
-### [`ftps`](ftps.md)
+##### `impl Debug for BambuError`
 
-*2 modules*
+- <span id="bambuerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-### [`ftps::client`](ftps/client.md)
+##### `impl Display for BambuError`
 
-*1 struct*
+- <span id="bambuerror-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
 
-### [`ftps::parser`](ftps/parser.md)
+##### `impl Error for BambuError`
 
-*1 function, 1 struct*
+##### `impl ToString for BambuError`
 
-### [`io`](io.md)
+- <span id="bambuerror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
-*2 modules, 3 enums, 6 traits*
+### `BambuModel`
 
-### [`io::embassy`](io/embassy.md)
+```rust
+enum BambuModel {
+    X1C,
+    X1E,
+    X2D,
+    A1Mini,
+    A1,
+    A2L,
+    P1P,
+    P1S,
+    P2S,
+    H2D,
+    H2DPro,
+    H2C,
+    H2S,
+    Unknown,
+}
+```
 
-*4 structs*
+Enumeration of physical Bambu Lab printer models supported on the local interface.
 
-### [`io::tokio`](io/tokio.md)
+#### Variants
 
-*5 functions, 8 structs*
+- **`X1C`**
 
-### [`models`](models.md)
+  X1 and X1C Series (CoreXY architecture, RTSP-capable)
 
-*1 enum, 1 function*
+- **`X1E`**
 
-### [`mqtt`](mqtt.md)
+  X1E (Enterprise CoreXY architecture, wired Ethernet)
 
-*2 modules*
+- **`X2D`**
 
-### [`mqtt::client`](mqtt/client.md)
+  X2D Series (CoreXY architecture, dual auxiliary cooling)
 
-*2 structs*
+- **`A1Mini`**
 
-### [`mqtt::commands`](mqtt/commands.md)
+  A1 Mini (Constrained bed-slinger, binary camera stream)
 
-*1 function, 6 modules*
+- **`A1`**
 
-### [`mqtt::commands::ams`](mqtt/commands/ams.md)
+  A1 (Standard bed-slinger, binary camera stream)
 
-*10 structs*
+- **`A2L`**
 
-### [`mqtt::commands::control`](mqtt/commands/control.md)
+  A2L Series
 
-*10 structs*
+- **`P1P`**
 
-### [`mqtt::commands::gcode`](mqtt/commands/gcode.md)
+  P1P (Early CoreXY architecture, binary camera stream)
 
-*2 structs*
+- **`P1S`**
 
-### [`mqtt::commands::hardware`](mqtt/commands/hardware.md)
+  P1S (Enclosed CoreXY architecture, binary camera stream)
 
-*1 enum, 8 structs*
+- **`P2S`**
 
-### [`mqtt::commands::print_job`](mqtt/commands/print_job.md)
+  P2S Series (RTSP-capable)
 
-*1 enum, 3 structs*
+- **`H2D`**
 
-### [`mqtt::commands::status`](mqtt/commands/status.md)
+  H2D (Dual-nozzle IDEX platform)
 
-*4 structs*
+- **`H2DPro`**
 
-### [`quirks`](quirks.md)
+  H2D Pro (Premium IDEX platform)
 
-*1 module, 1 struct, 1 trait, 2 functions*
+- **`H2C`**
 
-### [`quirks::models`](quirks/models.md)
+  H2C (Vortek tool-changer + fixed hotend, 7 nozzles total)
 
-*7 modules*
+- **`H2S`**
 
-### [`quirks::models::a1`](quirks/models/a1.md)
+  H2S (Single-nozzle platform sharing H2 mechanics)
 
-*2 structs, 5 constants*
+- **`Unknown`**
 
-### [`quirks::models::a2`](quirks/models/a2.md)
+  Fallback variant for newly released or unrecognized printer targets
 
-*1 struct, 3 constants*
+#### Implementations
 
-### [`quirks::models::h2`](quirks/models/h2.md)
+- <span id="cratemodelsbambumodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
 
-*4 structs, 5 constants*
+  Returns the [`ModelQuirks`](quirks/index.md#modelquirks) strategy for this model variant.
 
-### [`quirks::models::p1`](quirks/models/p1.md)
+#### Trait Implementations
 
-*1 struct, 3 constants*
+##### `impl Clone for BambuModel`
 
-### [`quirks::models::p2`](quirks/models/p2.md)
+- <span id="bambumodel-clone"></span>`fn clone(&self) -> BambuModel` — [`BambuModel`](models/index.md#bambumodel)
 
-*1 struct, 3 constants*
+##### `impl Copy for BambuModel`
 
-### [`quirks::models::x1`](quirks/models/x1.md)
+##### `impl Debug for BambuModel`
 
-*2 structs, 7 constants*
+- <span id="bambumodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-### [`quirks::models::x2`](quirks/models/x2.md)
+##### `impl Eq for BambuModel`
 
-*1 struct, 4 constants*
+##### `impl Hash for BambuModel`
 
-### [`types`](types.md)
+- <span id="bambumodel-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
 
-*2 modules*
+##### `impl PartialEq for BambuModel`
 
-### [`types::telemetry`](types/telemetry.md)
-
-*1 struct, 2 functions, 4 modules*
-
-### [`types::telemetry::ams`](types/telemetry/ams.md)
-
-*5 structs*
-
-### [`types::telemetry::device`](types/telemetry/device.md)
-
-*11 structs*
-
-### [`types::telemetry::diagnostics`](types/telemetry/diagnostics.md)
-
-*4 structs*
-
-### [`types::telemetry::report`](types/telemetry/report.md)
-
-*2 structs*
-
-### [`types::version`](types/version.md)
-
-*2 structs*
+- <span id="bambumodel-partialeq-eq"></span>`fn eq(&self, other: &BambuModel) -> bool` — [`BambuModel`](models/index.md#bambumodel)
 

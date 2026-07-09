@@ -1,0 +1,117 @@
+*[bambino](../../index.md) / [ftps](../index.md) / [parser](index.md)*
+
+---
+
+# Module `parser`
+
+# UNIX Directory Listing Parsing Engine for FTPS
+
+Decodes raw UNIX-style directory listings emitted by the printer's onboard vsFTPd server
+over passive data channels. Employs whitespace-insensitive tokenization to handle
+variable-width column padding and embeds robust temporal rollover heuristics.
+
+## Quick Reference
+
+| Item | Kind | Description |
+|------|------|-------------|
+| [`FtpFile`](#ftpfile) | struct | Standardized representation of an entry retrieved from physical printer storage. |
+| [`parse_unix_listing`](#parse-unix-listing) | fn | Parses a line-separated UNIX directory listing payload returned by `LIST`. |
+
+## Types
+
+### `FtpFile`
+
+```rust
+struct FtpFile {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+}
+```
+
+Standardized representation of an entry retrieved from physical printer storage.
+
+#### Fields
+
+- **`name`**: `String`
+
+  The parsed file or directory name, preserving single spaces between words.
+
+- **`is_dir`**: `bool`
+
+  Identifies directory nodes versus standard data payloads.
+
+- **`size`**: `u64`
+
+  Absolute size of the file, in bytes.
+
+- **`year`**: `i32`
+
+  Reconstructed modification year, calculated using current time markers.
+
+- **`month`**: `u8`
+
+  Numeric calendar month (1 to 12).
+
+- **`day`**: `u8`
+
+  Numeric day of the month (1 to 31).
+
+- **`hour`**: `u8`
+
+  Clock hour (0 to 23). Default is 0 if listing only provides a calendar year.
+
+- **`minute`**: `u8`
+
+  Clock minute (0 to 59). Default is 0 if listing only provides a calendar year.
+
+#### Trait Implementations
+
+##### `impl Clone for FtpFile`
+
+- <span id="ftpfile-clone"></span>`fn clone(&self) -> FtpFile` — [`FtpFile`](#ftpfile)
+
+##### `impl Debug for FtpFile`
+
+- <span id="ftpfile-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FtpFile`
+
+##### `impl PartialEq for FtpFile`
+
+- <span id="ftpfile-partialeq-eq"></span>`fn eq(&self, other: &FtpFile) -> bool` — [`FtpFile`](#ftpfile)
+
+
+---
+
+## Functions
+
+### `parse_unix_listing`
+
+```rust
+fn parse_unix_listing(payload: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Vec<FtpFile>
+```
+
+**Types:** [`FtpFile`](#ftpfile)
+
+Parses a line-separated UNIX directory listing payload returned by `LIST`.
+
+**Whitespace-Insensitive Delimiting:**
+Embedded systems typically insert arbitrary, variable-width spacing gaps to line up listings.
+Rather than relying on rigid column indexes, this implementation tokenizes columns by splitting
+on contiguous whitespace sequences, collecting the initial 8 protocol columns, and rebuilding
+the rest as the filename.
+
+**Temporal Rollover Mitigation:**
+UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
+was updated within the last six months. In this scenario, we default to the host system's
+`current_year`. If comparing the parsed datetime markers against our system context reveals
+that the parsed datetime is in the future, the file belongs to last year's calendar cycle
+(e.g., parsing a December modification date in January). In this event, we decrement the
+calculated year by 1.
+

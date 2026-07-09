@@ -4,7 +4,7 @@
 # esp-idf-sys's build script needs Python/cmake/ninja/the ESP-IDF SDK, unavailable
 # on host. Writes target/esp-idf-doc-<chip>.json (host-side, real filesystem, not
 # the container's cached target/ volume) for `make docs` to convert to markdown on
-# the host via `cargo doc-md --json` — cargo-doc-md itself is never installed
+# the host via `cargo docs-md --path` — cargo-docs-md itself is never installed
 # inside the container, only rustdoc's JSON output is generated there.
 #
 # Usage: scripts/doc-esp-idf.sh [chip]   (default esp32c6)

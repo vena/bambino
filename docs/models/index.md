@@ -1,0 +1,150 @@
+*[bambino](../index.md) / [models](index.md)*
+
+---
+
+# Module `models`
+
+# Printer Model Identification
+
+Every Bambu Lab printer has a 3-character serial number prefix that identifies
+its model. [`BambuModel`](#bambumodel) enumerates all known models, and [`resolve_model()`]
+maps serial prefixes (with an SSDP `DevModel` fallback) to the right variant.
+The resolved model drives behavioral dispatch through the [`quirks`](../quirks/index.md#quirks) engine.
+
+## Quick Reference
+
+| Item | Kind | Description |
+|------|------|-------------|
+| [`BambuModel`](#bambumodel) | enum | Enumeration of physical Bambu Lab printer models supported on the local interface. |
+| [`resolve_model`](#resolve-model) | fn | Resolves the specific printer model using physical serial number prefixes combined with target SSDP model advertisements as a secondary signal. |
+
+## Types
+
+### `BambuModel`
+
+```rust
+enum BambuModel {
+    X1C,
+    X1E,
+    X2D,
+    A1Mini,
+    A1,
+    A2L,
+    P1P,
+    P1S,
+    P2S,
+    H2D,
+    H2DPro,
+    H2C,
+    H2S,
+    Unknown,
+}
+```
+
+Enumeration of physical Bambu Lab printer models supported on the local interface.
+
+#### Variants
+
+- **`X1C`**
+
+  X1 and X1C Series (CoreXY architecture, RTSP-capable)
+
+- **`X1E`**
+
+  X1E (Enterprise CoreXY architecture, wired Ethernet)
+
+- **`X2D`**
+
+  X2D Series (CoreXY architecture, dual auxiliary cooling)
+
+- **`A1Mini`**
+
+  A1 Mini (Constrained bed-slinger, binary camera stream)
+
+- **`A1`**
+
+  A1 (Standard bed-slinger, binary camera stream)
+
+- **`A2L`**
+
+  A2L Series
+
+- **`P1P`**
+
+  P1P (Early CoreXY architecture, binary camera stream)
+
+- **`P1S`**
+
+  P1S (Enclosed CoreXY architecture, binary camera stream)
+
+- **`P2S`**
+
+  P2S Series (RTSP-capable)
+
+- **`H2D`**
+
+  H2D (Dual-nozzle IDEX platform)
+
+- **`H2DPro`**
+
+  H2D Pro (Premium IDEX platform)
+
+- **`H2C`**
+
+  H2C (Vortek tool-changer + fixed hotend, 7 nozzles total)
+
+- **`H2S`**
+
+  H2S (Single-nozzle platform sharing H2 mechanics)
+
+- **`Unknown`**
+
+  Fallback variant for newly released or unrecognized printer targets
+
+#### Implementations
+
+- <span id="cratemodelsbambumodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+
+  Returns the [`ModelQuirks`](../quirks/index.md#modelquirks) strategy for this model variant.
+
+#### Trait Implementations
+
+##### `impl Clone for BambuModel`
+
+- <span id="bambumodel-clone"></span>`fn clone(&self) -> BambuModel` — [`BambuModel`](#bambumodel)
+
+##### `impl Copy for BambuModel`
+
+##### `impl Debug for BambuModel`
+
+- <span id="bambumodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for BambuModel`
+
+##### `impl Hash for BambuModel`
+
+- <span id="bambumodel-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for BambuModel`
+
+- <span id="bambumodel-partialeq-eq"></span>`fn eq(&self, other: &BambuModel) -> bool` — [`BambuModel`](#bambumodel)
+
+
+---
+
+## Functions
+
+### `resolve_model`
+
+```rust
+fn resolve_model(serial: &str, dev_model: Option<&str>) -> BambuModel
+```
+
+**Types:** [`BambuModel`](#bambumodel)
+
+Resolves the specific printer model using physical serial number prefixes combined with target SSDP model advertisements as a secondary signal.
+
+Each H2-series model has a distinct serial prefix confirmed by the Bambu Lab wiki:
+`094` = H2D, `093` = H2S, `239` = H2D Pro, `31B` = H2C. When the prefix is
+unrecognized, the optional `DevModel` SSDP header provides a fallback path.
+
