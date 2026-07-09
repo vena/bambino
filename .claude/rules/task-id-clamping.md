@@ -1,7 +1,7 @@
 ---
 paths:
   - "src/mqtt/commands/**"
-  - "src/diagnostics/kprofile.rs"
+  - "src/diagnostics/**"
   - "src/client/connect.rs"
   - "src/client/mod.rs"
 ---
