@@ -55,6 +55,7 @@ pub async fn run(
     serial: &str,
     access_code: &str,
     action: FilesAction,
+    allow_unverified_tls_1_2: bool,
 ) -> Result<(), BambuError> {
     let printer = create_printer(ip, serial, access_code)?;
     let model = printer.model();
@@ -63,7 +64,9 @@ pub async fn run(
         build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2());
     let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
-    let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new());
+    let mut printer = printer
+        .with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new())
+        .with_ftps_allow_unverified_tls_1_2(allow_unverified_tls_1_2);
 
     println!(
         "Connecting to implicitly secure FTPS server at {}:990...",

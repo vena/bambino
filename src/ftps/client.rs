@@ -104,6 +104,13 @@ where
     /// Set once a control-channel desync is possible (see struct doc comment).
     /// Checked by every public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
+    /// Bypasses `require_tls_1_2_if_enforced`'s rejection when set — see
+    /// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s "Why the escape hatch is safe" section for why this
+    /// is a reliability tradeoff, not a safety hole: `upload_file`'s `SIZE` recheck and
+    /// `download_file`'s exact-`226` check already catch a truncated/corrupted transfer
+    /// regardless of this flag. Only meaningful today for the `embassy` feature talking to
+    /// P2S/X2D, where no available TLS backend can honestly satisfy the exact-version check.
+    allow_unverified_tls_1_2: bool,
     /// `read_line_raw`'s leftover-byte carry buffer, threaded through every `read_response` call made against `control_stream` for the life of this client — not reset per method call.
     /// This must live at least as long as `control_stream` itself: FTP servers may write two logically
     /// separate replies to one command (e.g. `150` immediately followed by `226`) without waiting for
@@ -128,6 +135,7 @@ where
     /// Prior to issuing or evaluating any standard text commands, the raw connection socket must be
     /// wrapped in a secure TLS session immediately upon establishment. Explicit handshakes (such as `AUTH TLS`)
     /// are not utilized.
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         raw_control: RawIO,
         tls_connector: Tls,
@@ -136,10 +144,11 @@ where
         ip: &str,
         access_code: &str,
         timer: FtpsTimer,
+        allow_unverified_tls_1_2: bool,
     ) -> Result<Self, BambuError> {
         let mut control_stream = tls_connector.connect(ip, raw_control).await?;
 
-        Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model)?;
+        Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model, allow_unverified_tls_1_2)?;
 
         let mut buf = Vec::new();
         // Persists across every read_response call in this login sequence, and is carried
@@ -253,6 +262,7 @@ where
             ip: String::from(ip),
             timer,
             poisoned: false,
+            allow_unverified_tls_1_2,
             control_fill_buf: fill_buf,
         })
     }
@@ -289,7 +299,15 @@ where
         tls_connector: &Tls,
         stream: &Tls::Stream,
         model: BambuModel,
+        allow_unverified: bool,
     ) -> Result<(), BambuError> {
+        if allow_unverified {
+            log::warn!(
+                "FTPS TLS 1.2 enforcement bypassed by caller configuration \
+                 (allow_unverified_tls_1_2) — see EMBASSY_TLS_ESCAPE_HATCH_PLAN.md"
+            );
+            return Ok(());
+        }
         if model.quirks().enforce_ftps_tls_1_2()
             && tls_connector.negotiated_version(stream) != Some(TlsVersion::Tls12)
         {
@@ -321,7 +339,12 @@ where
                 return Err(e.into());
             }
         };
-        if let Err(e) = Self::require_tls_1_2_if_enforced(&self.tls_connector, &secure, self.model)
+        if let Err(e) = Self::require_tls_1_2_if_enforced(
+            &self.tls_connector,
+            &secure,
+            self.model,
+            self.allow_unverified_tls_1_2,
+        )
         {
             self.poisoned = true;
             return Err(e);

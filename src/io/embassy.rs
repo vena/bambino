@@ -2,7 +2,7 @@
 //!
 //! Provides the concrete bindings of the abstract IO, Secure TLS transport,
 //! and Timer interfaces for bare-metal targets utilizing the Embassy network
-//! stack and `embedded-tls`.
+//! stack and `mbedtls-rs`.
 
 #[cfg(feature = "embassy")]
 use crate::io::{
@@ -88,170 +88,130 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
     }
 }
 
-/// Wrapper around an `embedded-tls` connection over an Embassy-supplied buffer pair.
+/// TLS Secure connector wrapping an `mbedtls-rs` async [`Session`](::mbedtls_rs::Session).
 ///
-/// No longer guards a process-wide static — the read/write buffers are owned by the
-/// [`EmbassyTlsConnector`] that produced this stream (see that type's doc comment).
-#[cfg(feature = "embassy")]
-pub struct EmbassyTlsStream<
-    'a,
-    RawStream: AsyncIo,
-    CipherSuite: ::embedded_tls::TlsCipherSuite + 'static,
-> {
-    connection: ::embedded_tls::TlsConnection<'a, RawStream, CipherSuite>,
-}
-
-#[cfg(feature = "embassy")]
-impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::ErrorType
-    for EmbassyTlsStream<'a, S, C>
-{
-    type Error = <::embedded_tls::TlsConnection<'a, S, C> as embedded_io_async::ErrorType>::Error;
-}
-
-#[cfg(feature = "embassy")]
-impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::Read
-    for EmbassyTlsStream<'a, S, C>
-{
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        self.connection.read(buf).await
-    }
-}
-
-#[cfg(feature = "embassy")]
-impl<'a, S: AsyncIo, C: ::embedded_tls::TlsCipherSuite + 'static> embedded_io_async::Write
-    for EmbassyTlsStream<'a, S, C>
-{
-    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        self.connection.write(buf).await
-    }
-
-    async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.connection.flush().await
-    }
-}
-
-/// TLS Secure connector wrapping the `embedded-tls` engine over caller-supplied buffers.
+/// **One global `Tls` instance.** MbedTLS only permits one active library instance
+/// program-wide (enforced by `mbedtls-rs` itself — a second `Tls::new()` call errors while one
+/// is already live). The caller constructs that single `::mbedtls_rs::Tls` once at startup
+/// (e.g. behind a `static_cell::StaticCell`, mirroring `EmbassyRawStreamFactory`'s `'static`
+/// storage convention below — see the README's Embassy setup example) and passes a
+/// [`TlsReference`](::mbedtls_rs::TlsReference) — a cheap `Copy` handle, not the `Tls` itself —
+/// into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
+/// control/data connectors all share the one instance concurrently.
 ///
-/// Generic over `Rng`: callers must provide a platform-appropriate RNG implementation
-/// (e.g., hardware TRNG peripheral). The RNG must implement the legacy `rand_core` v0.6
-/// traits expected by `embedded-tls` v0.19.
+/// **No caller-supplied buffers, unlike the old `embedded-tls` connector.** `mbedtls-rs`
+/// allocates its own SSL context/config/record buffers per `Session` (via `mbedtls_calloc`,
+/// 16 KiB in/out by default — see `Cargo.toml`'s `mbedtls-rs` dependency comment to shrink
+/// this via the `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features), so `connect()`
+/// can be called repeatedly on the same connector — there is no one-shot buffer-consumption
+/// constraint to work around, unlike the old `embedded-tls`-backed connector.
 ///
-/// **Buffer ownership.** `embedded-tls` needs a read and write scratch buffer for the
-/// lifetime of a TLS session (16KB apiece is a reasonable default, matching TLS's max
-/// record size). Earlier versions of this connector hid two such buffers behind
-/// process-wide statics, which meant a second concurrent connection (e.g. FTPS's control
-/// and data channels, opened at the same time) would panic. There is no such thing as a
-/// concurrency-safe *global* buffer pair, so this connector takes its buffers from the
-/// caller instead: construct one `EmbassyTlsConnector` per concurrent connection you need,
-/// each with its own `&'a mut [u8]` pair, and the caller's board-RAM budget decides how
-/// many can exist at once. `connect()` takes the buffers out of the connector on first use
-/// (`Option::take`) — calling `connect()` again on the same connector without a fresh one
-/// returns `SocketError::Other` instead of a second, aliased borrow.
+/// **`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
+/// API to read back the TLS version actually negotiated (see
+/// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section — confirmed by reading its source, not
+/// assumed) — unlike the old `embedded-tls` connector, which hard-coded a wrong `Some(Tls13)`
+/// answer. This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
+/// closed for P2S/X2D even after this backend swap; use
+/// `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
+/// needed (see `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md` Track A).
 ///
-/// **No built-in connect timeout.** Unlike `EspIdfTlsConnector` (which bounds its handshake
-/// loop behind a `connect_timeout`), `connect()` here has no retry/poll loop of its own to bound:
-/// it calls `TlsConnection::open(context).await` once, and the hang risk lives entirely
-/// inside `embedded-tls`'s handshake await, which this crate doesn't control. Callers that
-/// need a bounded connect must race `EmbassyTlsConnector::connect` against
-/// `embassy_time::with_timeout` themselves — `embassy-time` (already a dependency of the
-/// `embassy` feature) provides exactly that combinator.
+/// **No built-in connect timeout**, same as before: `connect()` has no retry/poll loop of its
+/// own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Callers that need
+/// a bounded connect must race `EmbassyTlsConnector::connect` against
+/// `embassy_time::with_timeout` themselves.
 #[cfg(feature = "embassy")]
-pub struct EmbassyTlsConnector<'a, CipherSuite, Rng>
-where
-    CipherSuite: ::embedded_tls::TlsCipherSuite,
-    Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
-{
-    config: &'a ::embedded_tls::TlsConfig<'a>,
-    rng: core::cell::RefCell<Rng>,
-    read_buf: core::cell::RefCell<Option<&'a mut [u8]>>,
-    write_buf: core::cell::RefCell<Option<&'a mut [u8]>>,
-    _phantom: core::marker::PhantomData<CipherSuite>,
+pub struct EmbassyTlsConnector<'a> {
+    tls: ::mbedtls_rs::TlsReference<'a>,
+    ca_chain: Option<::mbedtls_rs::Certificate<'a>>,
+    creds: Option<::mbedtls_rs::Credentials<'a>>,
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, CipherSuite, Rng> EmbassyTlsConnector<'a, CipherSuite, Rng>
-where
-    CipherSuite: ::embedded_tls::TlsCipherSuite,
-    Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
-{
-    /// Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch buffers.
-    /// `read_buf`/`write_buf` are consumed by the first `connect()` call — size them for one TLS
-    /// session (16KB is a safe default) and construct a separate connector per concurrent connection.
-    pub fn new(
-        config: &'a ::embedded_tls::TlsConfig<'a>,
-        rng: Rng,
-        read_buf: &'a mut [u8],
-        write_buf: &'a mut [u8],
-    ) -> Self {
+impl<'a> EmbassyTlsConnector<'a> {
+    /// Creates a new connector against the single active [`Tls`](::mbedtls_rs::Tls) instance
+    /// (via its [`TlsReference`](::mbedtls_rs::TlsReference)), defaulting to no certificate
+    /// verification — matching this crate's existing unsafe-by-default convention on other
+    /// platforms (`build_unsafe_client_config`), since Bambu printers use self-signed certs.
+    pub fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self {
         Self {
-            config,
-            rng: core::cell::RefCell::new(rng),
-            read_buf: core::cell::RefCell::new(Some(read_buf)),
-            write_buf: core::cell::RefCell::new(Some(write_buf)),
-            _phantom: core::marker::PhantomData,
+            tls,
+            ca_chain: None,
+            creds: None,
         }
     }
+
+    /// Enables server certificate verification against the given CA chain. Without this,
+    /// the connector never checks the printer's certificate.
+    pub fn with_ca_chain(mut self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self {
+        self.ca_chain = Some(ca_chain);
+        self
+    }
+
+    /// Supplies client credentials for mutual TLS (mTLS).
+    pub fn with_client_credentials(mut self, creds: ::mbedtls_rs::Credentials<'a>) -> Self {
+        self.creds = Some(creds);
+        self
+    }
 }
 
 #[cfg(feature = "embassy")]
-impl<'a, RawStream, CipherSuite, Rng> TlsConnector<RawStream>
-    for EmbassyTlsConnector<'a, CipherSuite, Rng>
+impl<'a, RawStream> TlsConnector<RawStream> for EmbassyTlsConnector<'a>
 where
-    RawStream: AsyncIo + 'static,
-    CipherSuite: ::embedded_tls::TlsCipherSuite + 'static,
-    Rng: ::rand_core_legacy::CryptoRng + ::rand_core_legacy::RngCore,
+    RawStream: AsyncIo,
 {
-    type Stream = EmbassyTlsStream<'a, RawStream, CipherSuite>;
+    // `Session<'a, T>` implements `embedded_io_async::{ErrorType, Read, Write}` directly (see
+    // `mbedtls-rs`'s `session/asynch.rs`), so it already satisfies `AsyncIo` via this crate's
+    // blanket impl — no wrapper stream type is needed, unlike the old `embedded-tls` connector.
+    type Stream = ::mbedtls_rs::Session<'a, RawStream>;
 
-    // Safe because `read_buf`/`write_buf`'s `Option::take()` below already rejects any
-    // call after the first (with `SocketError::Other`), before the `self.rng.borrow_mut()`
-    // later in this function is ever reached — a concurrent second `connect()` call on the
-    // same connector never reaches that borrow, so the `RefCell` guard can never actually be
-    // double-borrowed even though it's held across the `.open().await`. If a future refactor
-    // reorders these lines (e.g. moves the rng borrow earlier, before the buffer takes),
-    // re-verify that invariant still holds before relying on this `allow` — clippy's
-    // `await_holding_refcell_ref` lint only accepts a function-level (not statement-level)
-    // `#[allow]`, so it can't be scoped tighter than this.
-    #[allow(clippy::await_holding_refcell_ref)]
     async fn connect(
         &self,
-        _host: &str,
+        host: &str,
         raw_stream: RawStream,
     ) -> Result<Self::Stream, SocketError> {
-        let read_buf = self.read_buf.borrow_mut().take().ok_or(SocketError::Other(
-            "EmbassyTlsConnector buffers already consumed by a previous connect() call".into(),
-        ))?;
-        let write_buf = self
-            .write_buf
-            .borrow_mut()
-            .take()
-            .ok_or(SocketError::Other(
-                "EmbassyTlsConnector buffers already consumed by a previous connect() call".into(),
-            ))?;
+        let mut config = ::mbedtls_rs::ClientSessionConfig::new();
+        config.ca_chain = self.ca_chain.clone();
+        config.creds = self.creds.clone();
+        config.auth_mode = if self.ca_chain.is_some() {
+            ::mbedtls_rs::AuthMode::Required
+        } else {
+            ::mbedtls_rs::AuthMode::None
+        };
+        config.min_version = ::mbedtls_rs::TlsVersion::Tls1_2;
 
-        let mut connection = ::embedded_tls::TlsConnection::new(raw_stream, read_buf, write_buf);
+        let mut session = ::mbedtls_rs::Session::new(
+            self.tls,
+            raw_stream,
+            &::mbedtls_rs::SessionConfig::Client(config),
+        )
+        .map_err(|_| SocketError::ConnectionAborted)?;
 
-        let mut rng = self.rng.borrow_mut();
-        let context = ::embedded_tls::TlsContext::new(
-            self.config,
-            ::embedded_tls::UnsecureProvider::new::<CipherSuite>(&mut *rng),
-        );
+        // `ClientSessionConfig.server_name` can't hold `host` directly: its lifetime is
+        // pinned to this connector's `'a` (the same `'a` as the returned `Self::Stream`), but
+        // `host` only lives for this call. `set_server_name` takes an independent, shorter-lived
+        // `&CStr` for exactly this reason — MbedTLS copies it internally via
+        // `mbedtls_ssl_set_hostname` before `set_server_name` returns, so the `CString` below
+        // doesn't need to outlive this function.
+        let host_cstring =
+            alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
+        session
+            .set_server_name(&host_cstring)
+            .map_err(|_| SocketError::ConnectionAborted)?;
 
-        connection
-            .open(context)
+        session
+            .connect()
             .await
             .map_err(|_| SocketError::ConnectionAborted)?;
 
-        Ok(EmbassyTlsStream { connection })
+        Ok(session)
     }
 
-    /// `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it has no TLS 1.2 handshake support and exposes no version-query method, since there is only ever one possible answer).
-    /// This is therefore a constant, not a runtime query: any successful `connect()` on this connector
-    /// negotiated TLS 1.3. A model whose `model.quirks().enforce_ftps_tls_1_2()` is true (P2S, X2D) is
-    /// consequently incompatible with `EmbassyTlsConnector` — `BambuFtpsClient::connect()` will
-    /// correctly reject it with `ProtocolViolation` rather than silently proceeding.
+    /// `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this type's
+    /// doc comment and `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section. Return `None`
+    /// honestly rather than hard-coding a guess (the anti-pattern the old `embedded-tls`
+    /// connector had, just wrong in the other direction).
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
-        Some(TlsVersion::Tls13)
+        None
     }
 }
 

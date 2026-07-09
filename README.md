@@ -269,7 +269,9 @@ let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config))
 
 Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models — P2S and X2D — need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().enforce_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
 
-This is platform-general — `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfTlsConnector` all implement `negotiated_version` for real. `EmbassyTlsConnector` always reports TLS 1.3 (`embedded-tls` 0.19 is TLS-1.3-only), so Embassy + P2S/X2D is unconditionally rejected rather than downgraded.
+This is platform-general — `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfTlsConnector` all implement `negotiated_version` for real. **`EmbassyTlsConnector` always reports TLS 1.3 (`embedded-tls` 0.19 is TLS-1.3-only), so Embassy + P2S/X2D is unconditionally rejected rather than downgraded.** `mbedtls-rs` (investigated 2026-07-07 as a replacement) has real TLS 1.2 support but exposes neither a negotiated-version getter nor a max-version cap, so it can't satisfy this fail-closed check either — no backend swap alone can fix this.
+
+`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` opts out of the check entirely instead: `require_tls_1_2_if_enforced` logs a warning and returns `Ok(())` unconditionally, regardless of what (if anything) `negotiated_version` reports. This is a reliability tradeoff, not a safety hole — `upload_file`'s `SIZE` recheck and `download_file`'s exact-`226` requirement already catch a truncated/corrupted transfer independently of this flag, so bypassing the version check risks more failed transfers/retries against P2S/X2D, never silently-corrupt data. Default is `false` (fail closed, unchanged). Only meaningful for the `embassy` feature — on `tokio`/`esp-idf`, use `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually negotiate TLS 1.2 for real. See `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md` for the full design rationale.
 
 ## Platform targets
 
@@ -287,20 +289,27 @@ All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerP
 
 **Embassy note:** `discover_devices()` is not available on Embassy — the convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
-**Embassy TLS buffers:** `EmbassyTlsConnector` has no hidden static buffers — you supply the `embedded-tls` read/write scratch buffers yourself. Each connector owns one buffer pair for exactly one `connect()` call; concurrent connections (e.g. FTPS's control and data channels) need separate connectors:
+**Embassy TLS:** `EmbassyTlsConnector` wraps `mbedtls-rs` (real TLS 1.2+1.3, hardware-accelerated crypto on ESP32 targets — see `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md` for why this replaced `embedded-tls`). MbedTLS only permits one active library instance program-wide, so construct a single `mbedtls_rs::Tls` once at startup and hand out cheap `Copy` `TlsReference`s to as many connectors as you need (e.g. one for MQTT, one for FTPS's control channel, one for FTPS's data channel):
 
 ```rust
 use bambino::io::embassy::EmbassyTlsConnector;
-use embedded_tls::{Aes128GcmSha256, TlsConfig};
+use mbedtls_rs::Tls;
+use static_cell::StaticCell;
 
-let config = TlsConfig::new().with_server_name("printer-serial");
-let mut read_buf = [0u8; 16384];
-let mut write_buf = [0u8; 16384];
-let connector: EmbassyTlsConnector<'_, Aes128GcmSha256, _> =
-    EmbassyTlsConnector::new(&config, rng, &mut read_buf, &mut write_buf);
+static TLS: StaticCell<Tls<'static>> = StaticCell::new();
+
+// `rng` must be `&'static mut (dyn rand_core::CryptoRng + Send)` — e.g. another
+// `StaticCell`-held hardware TRNG wrapper.
+let tls: &'static mut Tls<'static> =
+    TLS.init(Tls::new(rng).expect("only one Tls instance may exist program-wide"));
+
+let mqtt_tls = EmbassyTlsConnector::new(tls.reference());
+let ftps_tls = EmbassyTlsConnector::new(tls.reference());
 ```
 
-Calling `connect()` twice on the same connector returns `SocketError::Other` instead of a second connection — construct another `EmbassyTlsConnector` for a second concurrent connection.
+Unlike the old `embedded-tls`-backed connector, there's no buffer-consumption limit — `connect()` can be called repeatedly on the same connector (`mbedtls-rs` allocates its own 16 KiB in/out record buffers per session). Certificate verification defaults to off, matching this crate's unsafe-by-default convention elsewhere; call `.with_ca_chain(cert)` to enable it, or `.with_client_credentials(creds)` for mTLS.
+
+**`negotiated_version` always returns `None`** — `mbedtls-rs` exposes no API to read back the negotiated TLS version, so `BambuFtpsClient`'s TLS-1.2 enforcement check for P2S/X2D still fails closed under Embassy even with this real-TLS-1.2-capable backend (nothing forces the handshake to actually land on 1.2 over 1.3). Use `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when talking to those two models under Embassy — see the "TLS configuration" section above and `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`.
 
 **Embassy raw streams:** `EmbassyRawStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool — used for both MQTT's lazy connect and FTPS's data channel. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs — `N = 1` covers FTPS's usage, since data-channel connections are always sequential (MQTT needs its own factory instance since it's a separate, concurrent connection). Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `dial`'s host must be a literal IPv4 address — Bambu printers are always addressed that way, so this isn't a limitation in practice:
 

@@ -128,6 +128,10 @@ pub struct PrinterClient<
     pub(crate) connect_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
+    /// Bypasses `BambuFtpsClient`'s TLS-1.2-enforcement rejection for P2S/X2D when set —
+    /// see `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`. Only meaningful for the `embassy` feature; on
+    /// `tokio`/`esp-idf`, use `force_tls_1_2` on the `TlsConnector` instead. Default `false`.
+    pub(crate) ftps_allow_unverified_tls_1_2: bool,
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,
     pub(crate) _mqtt_raw_io: PhantomData<MqttRawIO>,
@@ -194,6 +198,7 @@ where
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
+            ftps_allow_unverified_tls_1_2: false,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             _mqtt_raw_io: PhantomData,
@@ -249,6 +254,7 @@ where
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
+            ftps_allow_unverified_tls_1_2: false,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             _mqtt_raw_io: PhantomData,

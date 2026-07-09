@@ -128,6 +128,12 @@ enum Command {
         access_code: String,
         #[command(subcommand)]
         action: storage::FilesAction,
+        /// Bypass BambuFtpsClient's TLS-1.2-enforcement check for P2S/X2D (embassy escape
+        /// hatch semantics ported to the CLI for testing; see EMBASSY_TLS_ESCAPE_HATCH_PLAN.md).
+        /// On tokio, force_tls_1_2 is already applied automatically per-model — this flag exists
+        /// to let a caller override enforcement even when negotiated_version reports non-1.2.
+        #[arg(long)]
+        allow_unverified_tls_1_2: bool,
     },
 
     /// Camera streaming operations
@@ -197,7 +203,17 @@ async fn main() {
             serial,
             access_code,
             action,
-        } => storage::run(&ip, &serial, &resolve_access_code(access_code), action).await,
+            allow_unverified_tls_1_2,
+        } => {
+            storage::run(
+                &ip,
+                &serial,
+                &resolve_access_code(access_code),
+                action,
+                allow_unverified_tls_1_2,
+            )
+            .await
+        }
         Command::Camera {
             ip,
             serial,

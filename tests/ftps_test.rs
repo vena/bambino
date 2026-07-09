@@ -62,6 +62,7 @@ async fn connect_client(
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await
     .expect("FTPS handshake failed")
@@ -231,6 +232,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await
     .expect("FTPS handshake failed");
@@ -326,6 +328,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await;
 
@@ -348,6 +351,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await;
 
@@ -375,6 +379,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await
     .expect("TLS 1.2 should be accepted for P2S");
@@ -400,6 +405,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await
     .expect("TLS 1.3 should be accepted for P1S");
@@ -420,6 +426,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
         "127.0.0.1",
         "12345678",
         DummyTimer,
+        false,
     )
     .await;
 
@@ -433,4 +440,62 @@ async fn test_ftps_version_none_rejected_for_p2s() {
             panic!("Expected error for undetermined TLS version on P2S, but connect succeeded")
         }
     }
+}
+
+/// Track A of EMBASSY_TLS_ESCAPE_HATCH_PLAN.md: `allow_unverified_tls_1_2 == true` must bypass
+/// `require_tls_1_2_if_enforced`'s rejection even though P2S enforces TLS 1.2 and the mock
+/// connector reports TLS 1.3 was negotiated — mirrors `test_ftps_tls13_rejected_for_p2s` but
+/// with the bypass flag set, so `connect()` must now succeed instead of erroring.
+#[tokio::test]
+async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
+    let (client_control, server_control, _data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        server_control,
+        Arc::new(Mutex::new(None)),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
+        factory,
+        BambuModel::P2S,
+        "127.0.0.1",
+        "12345678",
+        DummyTimer,
+        true,
+    )
+    .await
+    .expect("allow_unverified_tls_1_2 should bypass the TLS 1.3 rejection for P2S");
+
+    client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Same as above but for the undetermined-version (`None`) case — mirrors
+/// `test_ftps_version_none_rejected_for_p2s` but with the bypass flag set.
+#[tokio::test]
+async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
+    let (client_control, server_control, _data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        server_control,
+        Arc::new(Mutex::new(None)),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        VersionReportingTlsConnector(None),
+        factory,
+        BambuModel::P2S,
+        "127.0.0.1",
+        "12345678",
+        DummyTimer,
+        true,
+    )
+    .await
+    .expect("allow_unverified_tls_1_2 should bypass the undetermined-version rejection for P2S");
+
+    client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
 }

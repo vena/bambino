@@ -4,7 +4,7 @@
 //! which runtime it's running on. The key traits:
 //!
 //! - [`AsyncIo`] — Read + Write (blanket-implemented for anything satisfying `embedded-io-async`).
-//! - [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/embedded-tls).
+//! - [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/mbedtls-rs).
 //! - [`RawStreamFactory`] — Dials a fresh raw (pre-TLS) stream to a host:port. Used for MQTT's
 //!   lazy connect and FTPS's per-transfer data channel.
 //! - [`AsyncUdpSocket`] — UDP send/recv for SSDP discovery.
@@ -208,8 +208,13 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 
     /// Returns the TLS protocol version negotiated on the given stream.
     ///
-    /// Platforms that cannot inspect the negotiated version return `None`,
-    /// which causes the FTPS client to skip TLS version validation (best-effort).
+    /// Platforms that cannot inspect the negotiated version return `None`. This does **not**
+    /// mean "skip validation" — a caller enforcing a specific version (e.g.
+    /// `BambuFtpsClient::require_tls_1_2_if_enforced`, which P2S/X2D need) treats an
+    /// undetermined `None` as a failure to confirm the required version and rejects the
+    /// connection, the same as a confirmed wrong version. `None` only means "this platform
+    /// has nothing useful to report" — whether that's fail-open or fail-closed is entirely
+    /// up to the caller.
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
         None
     }

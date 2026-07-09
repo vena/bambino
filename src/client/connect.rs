@@ -154,6 +154,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
@@ -227,6 +228,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
@@ -237,6 +239,18 @@ where
     /// Overrides the default FTPS port (990).
     pub fn with_ftps_port(mut self, port: u16) -> Self {
         self.ftps_port = port;
+        self
+    }
+
+    /// Overrides the default `false` for `BambuFtpsClient`'s TLS-1.2-enforcement bypass.
+    ///
+    /// Only meaningful for the `embassy` feature talking to P2S/X2D, where no available TLS
+    /// backend can honestly satisfy `require_tls_1_2_if_enforced`'s exact-version check — see
+    /// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`. On `tokio`/`esp-idf`, use `force_tls_1_2` on the
+    /// `TlsConnector` instead, since those platforms can actually satisfy the check for real.
+    /// Non-consuming — chain onto any construction path.
+    pub fn with_ftps_allow_unverified_tls_1_2(mut self, allow: bool) -> Self {
+        self.ftps_allow_unverified_tls_1_2 = allow;
         self
     }
 
@@ -260,10 +274,20 @@ where
         let access_code = &self.access_code;
         let model = self.model;
         let ftps_port = self.ftps_port;
+        let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
         let ftps_client =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
                 let raw_stream = factory.dial(ip, ftps_port).await?;
-                BambuFtpsClient::connect(raw_stream, tls, factory, model, ip, access_code, timer)
+                BambuFtpsClient::connect(
+                    raw_stream,
+                    tls,
+                    factory,
+                    model,
+                    ip,
+                    access_code,
+                    timer,
+                    allow_unverified_tls_1_2,
+                )
                     .await
             })
             .await?;
@@ -383,6 +407,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
+            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
