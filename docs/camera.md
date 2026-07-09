@@ -50,18 +50,18 @@ Which camera streaming protocol a printer model uses.
 
 - `fn default_port(self: &Self) -> u16` - Returns the standard TCP port associated with the physical interface.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &CameraProtocol) -> bool`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Clone**
   - `fn clone(self: &Self) -> CameraProtocol`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &CameraProtocol) -> bool`
 
 
 

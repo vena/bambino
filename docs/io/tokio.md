@@ -97,13 +97,13 @@ standard verifiers reject the connections immediately.
 
 **Trait Implementations:**
 
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **ServerCertVerifier**
   - `fn verify_server_cert(self: &Self, _end_entity: &CertificateDer, _intermediates: &[CertificateDer], _server_name: &ServerName, _ocsp_response: &[u8], _now: UnixTime) -> Result<rustls::client::danger::ServerCertVerified, RustlsError>`
   - `fn verify_tls12_signature(self: &Self, _message: &[u8], _cert: &CertificateDer, _dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
   - `fn verify_tls13_signature(self: &Self, _message: &[u8], _cert: &CertificateDer, _dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
   - `fn supported_verify_schemes(self: &Self) -> Vec<SignatureScheme>`
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -122,11 +122,11 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 **Trait Implementations:**
 
+- **Read**
+  - `fn read(self: & mut Self, buf: & mut [u8]) -> Result<usize, <Self as >::Error>`
 - **Write**
   - `fn write(self: & mut Self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
   - `fn flush(self: & mut Self) -> Result<(), <Self as >::Error>`
-- **Read**
-  - `fn read(self: & mut Self, buf: & mut [u8]) -> Result<usize, <Self as >::Error>`
 
 
 
@@ -140,14 +140,14 @@ Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trai
 
 **Trait Implementations:**
 
-- **Error**
-  - `fn source(self: &Self) -> Option<&dyn std::error::Error>`
-- **Error**
-  - `fn kind(self: &Self) -> embedded_io_async::ErrorKind`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Display**
   - `fn fmt(self: &Self, f: & mut core::fmt::Formatter) -> core::fmt::Result`
+- **Error**
+  - `fn source(self: &Self) -> Option<&dyn std::error::Error>`
+- **Error**
+  - `fn kind(self: &Self) -> embedded_io_async::ErrorKind`
 
 
 

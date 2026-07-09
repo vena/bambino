@@ -39,12 +39,12 @@ Fully decoded representation of an active diagnostic entry from the `hms` teleme
 
 - **Clone**
   - `fn clone(self: &Self) -> DecodedHmsAlert`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &DecodedHmsAlert) -> bool`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &DecodedHmsAlert) -> bool`
 
 
 
@@ -63,14 +63,14 @@ Fully decoded representation of the primary system `print_error` register.
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
   - `fn clone(self: &Self) -> DecodedPrintError`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &DecodedPrintError) -> bool`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Hash**
   - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &DecodedPrintError) -> bool`
 
 
 
@@ -91,7 +91,7 @@ Numerical classification of the severity level of an HMS diagnostic alert.
 
 - `fn from_attr(attr: u32) -> Self` - Extracts the severity level from the second byte of the 32-bit `attr` value.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
@@ -99,10 +99,10 @@ Numerical classification of the severity level of an HMS diagnostic alert.
   - `fn clone(self: &Self) -> HmsSeverity`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &HmsSeverity) -> bool`
 - **Hash**
   - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &HmsSeverity) -> bool`
 
 
 

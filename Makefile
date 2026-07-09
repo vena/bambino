@@ -42,6 +42,12 @@ check-all: check-fast check-esp-idf
 # hook (see CLAUDE.md's cargo-doc-md discussion for why: post-commit can't
 # include its own output in the commit that triggered it, and every commit would
 # pay the rebuild cost regardless of whether the change touched the public API).
+# cargo-doc-md (github.com/Crazytieguy/cargo-doc-md v0.11.0) groups trait impls
+# by iterating a HashMap with no sort before printing (converter.rs
+# collect_impls_for_type) -- "Trait Implementations:" and "Traits:" derive-list
+# order is genuinely random per run, confirmed 2026-07-09. scripts/sort-docs.py
+# canonicalizes both alphabetically after generation so `git diff` on docs/
+# only shows real API changes, not shuffled sections.
 docs:
 	rm -rf docs
 	RUSTC_BOOTSTRAP=1 cargo rustdoc --features embassy --lib -- -Z unstable-options --output-format json
@@ -54,3 +60,4 @@ docs:
 	rm -f docs/index.md
 	mv docs/bambino/* docs/
 	rmdir docs/bambino
+	scripts/sort-docs.py docs

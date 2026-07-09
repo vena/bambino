@@ -35,16 +35,16 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> AmsMapping2Entry`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
 - **PartialEq**
   - `fn eq(self: &Self, other: &AmsMapping2Entry) -> bool`
-- **Clone**
-  - `fn clone(self: &Self) -> AmsMapping2Entry`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -67,16 +67,16 @@ Enumeration of possible physical feed locations for loaded spools.
 - `fn flat_channel_id(self: &Self) -> i32` - Computes the flat channel integer value used in standard `ams_mapping` arrays.
 - `fn to_mapping2_entry(self: &Self) -> AmsMapping2Entry` - Converts this source location into a structured `ams_mapping2` JSON entry.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> MaterialSource`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &MaterialSource) -> bool`
-- **Clone**
-  - `fn clone(self: &Self) -> MaterialSource`
 
 
 

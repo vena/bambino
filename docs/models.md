@@ -40,16 +40,16 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 - `fn quirks(self: &Self) -> &'static dyn ModelQuirks` - Returns the [`ModelQuirks`] strategy for this model variant.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
 - **Clone**
   - `fn clone(self: &Self) -> BambuModel`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **PartialEq**
   - `fn eq(self: &Self, other: &BambuModel) -> bool`
 

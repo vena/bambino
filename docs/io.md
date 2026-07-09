@@ -144,16 +144,16 @@ ever constructs this.
 **Variants:**
 - `Other(&'static str)` - Catch-all for platform-specific timer scheduling failures.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
 - **Clone**
   - `fn clone(self: &Self) -> TimerError`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &TimerError) -> bool`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &TimerError) -> bool`
 
 
 
@@ -205,12 +205,12 @@ TLS protocol version negotiated during a handshake.
 
 **Trait Implementations:**
 
-- **PartialEq**
-  - `fn eq(self: &Self, other: &TlsVersion) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> TlsVersion`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &TlsVersion) -> bool`
 
 
 

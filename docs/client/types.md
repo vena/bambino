@@ -31,16 +31,16 @@ Supported on models with a physical fire alarm buzzer (H2 series).
 - `Alarm` - Alarm triggered.
 - `Chirp` - Beeping attention chime.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> BuzzerMode`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &BuzzerMode) -> bool`
-- **Clone**
-  - `fn clone(self: &Self) -> BuzzerMode`
 
 
 
@@ -58,20 +58,20 @@ Combine flags with bitwise OR to trigger multiple calibration routines simultane
 **Methods:**
 
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
-- **PartialEq**
-  - `fn eq(self: &Self, other: &CalibrationOption) -> bool`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **BitOr**
   - `fn bitor(self: Self, rhs: Self) -> Self`
 - **Clone**
   - `fn clone(self: &Self) -> CalibrationOption`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &CalibrationOption) -> bool`
 
 
 
@@ -87,18 +87,18 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 - `ChamberExhaust` - Chamber exhaust/filtration fan (Port 3).
 - `AuxiliaryRight` - Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &FanTarget) -> bool`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Clone**
   - `fn clone(self: &Self) -> FanTarget`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &FanTarget) -> bool`
 
 
 
@@ -121,18 +121,18 @@ means "never observed," not "printer reports zero/none."
 - `layer_num: Option<i32>` - Active layer progress tracker.
 - `total_layers: Option<i32>` - Total layers within the sliced print pipeline.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &PrintProgress) -> bool`
-- **Default**
-  - `fn default() -> PrintProgress`
 - **Clone**
   - `fn clone(self: &Self) -> PrintProgress`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Default**
+  - `fn default() -> PrintProgress`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &PrintProgress) -> bool`
 
 
 
@@ -152,16 +152,16 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 
 - `fn from_level(level: u8) -> Option<Self>` - Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Clone**
   - `fn clone(self: &Self) -> PrintSpeed`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **PartialEq**
   - `fn eq(self: &Self, other: &PrintSpeed) -> bool`
 
@@ -192,14 +192,14 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &PrintStatus) -> bool`
-- **Hash**
-  - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Clone**
   - `fn clone(self: &Self) -> PrintStatus`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Hash**
+  - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &PrintStatus) -> bool`
 
 
 
@@ -225,10 +225,10 @@ available via [`into_raw`](TelemetryEvent::into_raw).
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
   - `fn clone(self: &Self) -> TelemetryEvent`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
