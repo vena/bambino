@@ -16,13 +16,17 @@ cargo check --no-default-features --features embassy --lib  # embassy target che
 
 `make check-fast` runs all of the above (build, test, both feature-gate checks, clippy) in one command; `make check-esp-idf [CHIP=esp32c6]` wraps `scripts/check-esp-idf.sh`; `make check-all` runs both. `.github/workflows/ci.yml` and `.github/workflows/esp-idf.yml` mirror the same commands but are dormant — this repo has no GitHub remote yet.
 
+The `esp-idf` target needs `scripts/check-esp-idf.sh [chip]` instead of plain `cargo check` — see `src/io/CLAUDE.md` for the toolchain/Docker details.
+
+## Verification Gate
+
 Every change must compile under both the default `tokio` feature set and the `alloc`, `embassy`, and `no_std` library targets. Run `cargo clippy` as part of the verification gate. The `--lib` flag scopes the no_std check to library code only — the CLI is host-only. Use `#[cfg(not(feature = "std"))]` imports from `alloc` (String, Vec, format!) for no_std paths.
 
-The `embassy` feature is not implied by `alloc` alone — `io/embassy.rs` and `#[cfg(feature = "embassy")]` code aren't exercised by the plain no_std/alloc check, so both commands above are required. The `esp-idf` target needs `scripts/check-esp-idf.sh [chip]` instead of plain `cargo check` — see `src/io/CLAUDE.md` for the toolchain/Docker details.
+The `embassy` feature is not implied by `alloc` alone — `io/embassy.rs` and `#[cfg(feature = "embassy")]` code aren't exercised by the plain no_std/alloc check, so both commands above are required.
 
-**Mock tests cannot verify wire-level write/read framing changes — see `.claude/rules/wire-framing-hardware-verification.md`.** Never write an access code or serial number into a file in this repository (docs, tests, scratch files, commit messages) — treat them the same as any other credential.
+**Mock tests cannot verify wire-level write/read framing changes — see `.claude/rules/wire-framing-hardware-verification.md`.**
 
-**CLI-only dependencies live behind the `cli` feature, not `tokio`.** `crossterm`, `env_logger`, and any future CLI-exclusive dep (e.g. `clap`) must be gated by `cli = ["dep:...", "tokio"]`, never added to the `tokio` feature directly — see the feature comments in `Cargo.toml` for why. `[[bin]] required-features = ["cli"]` in Cargo.toml enforces this at the target level — every file under `src/bin/bambino-cli/` starts with `#![cfg(feature = "cli")]`.
+This section is likely to change once this repo lands on GitHub and CI actually runs — kept separate from the raw command list above so that change doesn't tangle the two back together.
 
 ## Architecture
 
@@ -39,11 +43,13 @@ The `embassy` feature is not implied by `alloc` alone — `io/embassy.rs` and `#
    - A wrapper struct with a single `pub print: PayloadType` field (or `pushing:`, `system:`, `info:`)
    - An `impl` block with `pub fn new(...)` constructor
 
-Non-obvious type decisions and behavioral invariants live close to the code they govern, not here:
+### Where Other Invariants Live
+
+Non-obvious type decisions and behavioral invariants live close to the code they govern, not here — these aren't Key Invariants themselves, this is a routing note for where to find them:
 
 - Cross-cutting invariants (span multiple non-adjacent `src/` paths) → `.claude/rules/*.md`, each scoped with a `paths:` frontmatter glob.
 - Single-directory invariants → a nested `CLAUDE.md` in that directory (currently: `src/types/telemetry/`, `src/camera/`, `src/ftps/`, `src/io/`, `src/mqtt/client/`).
-- Only truly global content (this section, build/test commands, architecture overview) stays here.
+- Only truly global content (Key Invariants above, build/test commands, verification gate, architecture overview) stays here.
 
 ## Key Conventions
 
@@ -53,9 +59,11 @@ Non-obvious type decisions and behavioral invariants live close to the code they
 - Magic numbers are extracted into named `pub(crate) const` blocks in each module. Use existing constants rather than introducing new literals.
 - Protocol specs live in `reference/` as numbered markdown files. Always verify field names and types against reference docs when adding or modifying commands. When external sources (pybambu, Bambuddy, Bambu Studio, wire captures) contradict a reference doc, update the reference doc with the correction and note the verification source.
 - Use MODEL_MATRIX.csv to track physical characteristics of printer models. When new information is **confirmed** about a printer model, update MODEL_MATRIX.csv
+- CLI-only dependencies live behind the `cli` feature, not `tokio`. `crossterm`, `env_logger`, and any future CLI-exclusive dep (e.g. `clap`) must be gated by `cli = ["dep:...", "tokio"]`, never added to the `tokio` feature directly — see the feature comments in `Cargo.toml` for why. `[[bin]] required-features = ["cli"]` in Cargo.toml enforces this at the target level — every file under `src/bin/bambino-cli/` starts with `#![cfg(feature = "cli")]`.
+- Never write an access code or serial number into a file in this repository (docs, tests, scratch files, commit messages) — treat them the same as any other credential.
 - When adding public types, modules, traits, or changing conventions: decide the routing *at the time you add the invariant*, don't defer it. A new invariant spanning multiple non-adjacent `src/` paths goes to `.claude/rules/<topic>.md` with a `paths:` glob; one confined to a single directory is a candidate for that directory's nested `CLAUDE.md`; only genuinely global content (applies regardless of which files a session touches) goes in this file. Keep whichever file it lands in concise — document constraints and gotchas, not API summaries.
 - Write real commit bodies for anything that would otherwise become a narrative bullet — the "why," not just the "what" — and delete a completed `*_PLAN.md` file in its own commit with a body describing what shipped and where the resulting invariant lives.
-- **Moving, renaming, or splitting a file changes what its `.claude/rules/*.md` globs match — grep `.claude/rules/` for the old path in the same commit and update every glob that references it.** A glob that stops matching doesn't error, it just silently stops loading — worse than never moving the invariant out of root `CLAUDE.md` at all, since root always loads. Same check applies to a nested `<dir>/CLAUDE.md`: if the split moves an invariant's code out of that directory, move the bullet too.
+- Moving, renaming, or splitting a file changes what its `.claude/rules/*.md` globs match — grep `.claude/rules/` for the old path in the same commit and update every glob that references it. A glob that stops matching doesn't error, it just silently stops loading — worse than never moving the invariant out of root `CLAUDE.md` at all, since root always loads. Same check applies to a nested `<dir>/CLAUDE.md`: if the split moves an invariant's code out of that directory, move the bullet too.
 - Full-crate review sweeps require the `deep-review` skill, not ad hoc agent orchestration.
 - `BACKLOG.md` entries require the `backlog` skill for rules/severity/next-ID — don't restate its rubric elsewhere.
-- **Phases in markdown planning documents must be self-contained** — implementable by a clean session with zero prior conversation context beyond the existing codebase. When adding or altering a phase, briefly inform the next session of what we learned and guide it by spelling out: the problem being solved (not just what to build), design constraints and trade-offs that shape the implementation, ordering dependencies between items, and which items are trivially independent. If a task has a hard design decision, state the options and either pick one or mark it as "decide first." A phase that requires the executing session to reconstruct missing rationale or scope by reading git history or guessing at intent is underspecified.
+- Phases in markdown planning documents must be self-contained — implementable by a clean session with zero prior conversation context beyond the existing codebase. When adding or altering a phase, briefly inform the next session of what we learned and guide it by spelling out: the problem being solved (not just what to build), design constraints and trade-offs that shape the implementation, ordering dependencies between items, and which items are trivially independent. If a task has a hard design decision, state the options and either pick one or mark it as "decide first." A phase that requires the executing session to reconstruct missing rationale or scope by reading git history or guessing at intent is underspecified.
