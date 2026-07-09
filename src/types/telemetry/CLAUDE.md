@@ -1,0 +1,10 @@
+# src/types/telemetry — Non-Obvious Type Decisions
+
+- **Temperature fields** are `Option<f64>` — the wire sends both integers (H2D) and floats (P1S/A1). Bed and nozzle targets arrive as separate `_target_temper` fields (never composite-packed). Use `unpack_temperature()` only for `chamber_temper` on models with active chamber heaters, and for `ExtruderInfo.temp` on IDEX platforms.
+- **`DeviceTelemetry`** appears at two wire locations (see its doc comment for which triggers which). `TelemetryReport::device()` checks top-level `device` first, then `print.device` — prefer it over manually checking both.
+- **`PrinterTelemetry::is_ethernet_active()`** implements the *disputed* pybambu `home_flag` bit-18 heuristic (OrcaSlicer maps the same bit to `is_support_prompt_sound`) — not confirmed authoritative. `is_ethernet_active_via_wifi_signal()` (checks `wifi_signal == "-90dBm"`) is the doc-recommended alternative; consider cross-checking both on unfamiliar firmware.
+- **`ExtruderInfo.temp`** uses the same composite packing as `chamber_temper` (values > 500 encode target << 16 | actual). Use `ExtruderInfo::temperatures()` to decode. The `ExtruderCollection.state` bitmask encodes extruder count (low 4 bits) and active index (bits 4–7); use `active_extruder_index()` / `extruder_count()`.
+- **`AmsTray.id`** is `String` (wire sends `"0"`, not `0`). **`CtcInfo.temp`** is `u32` (composite-packed integers, not floats).
+- **`AmsUnit.info`** is `Option<String>` — wire sends hex-encoded bitmask (e.g. `"11002103"`). Parse with `u64::from_str_radix(s, 16)`. Bits 0–3 = AMS type, bits 4–7 = dry_status, bits 8–11 = extruder assignment (0=right, 1=left, 0xE=uninitialized), bits 22–25 = dry_sub_status.
+- **`BedTelemetry`** (`device.bed`) uses the same composite packing as `chamber_temper` — `bed.info.temp` values > 500 encode `(target << 16) | actual`. Present on H2/P2/X2 models; old-gen models use `bed_temper` / `bed_target_temper` instead.
+- **`vir_slot`** is separate from `vt_tray` — IDEX models send `vir_slot: Vec<VirtualTray>` (one per extruder), while single-nozzle models send `vt_tray: VirtualTray`. Both use the same `VirtualTray` schema.
