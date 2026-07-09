@@ -89,7 +89,7 @@ where
         let mqtt_client =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw = self.mqtt_factory.dial(&self.ip, self.mqtt_port).await?;
-                let stream = self.mqtt_tls.connect(&self.ip, raw).await?;
+                let stream = self.mqtt_tls.connect(&self.serial, raw).await?;
                 BambuMqttClient::connect(stream, &self.serial, &self.access_code).await
             })
             .await?;
@@ -271,6 +271,7 @@ where
             )
         })?;
         let ip = &self.ip;
+        let serial = &self.serial;
         let access_code = &self.access_code;
         let model = self.model;
         let ftps_port = self.ftps_port;
@@ -284,6 +285,7 @@ where
                     factory,
                     model,
                     ip,
+                    serial,
                     access_code,
                     timer,
                     allow_unverified_tls_1_2,
@@ -330,13 +332,14 @@ where
             )
         })?;
         let ip = &self.ip;
+        let serial = &self.serial;
         let access_code = &self.access_code;
         let camera_port = self.camera_port;
         let max_frame_size = self.camera_max_frame_size;
         let camera_stream =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
                 let raw = factory.dial(ip, camera_port).await?;
-                let stream = tls.connect(ip, raw).await?;
+                let stream = tls.connect(serial, raw).await?;
                 let mut cam = BambuBinaryCameraStream::new(stream);
                 if let Some(max) = max_frame_size {
                     cam = cam.with_max_frame_size(max);

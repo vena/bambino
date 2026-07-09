@@ -35,8 +35,6 @@ and source error tracing are derived automatically via `thiserror`.
 
 **Trait Implementations:**
 
-- **Display**
-  - `fn fmt(self: &Self, __formatter: & mut ::core::fmt::Formatter) -> ::core::fmt::Result`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
@@ -45,6 +43,8 @@ and source error tracing are derived automatically via `thiserror`.
   - `fn from(e: crate::io::SocketError) -> Self`
 - **From**
   - `fn from(e: crate::io::TimerError) -> Self`
+- **Display**
+  - `fn fmt(self: &Self, __formatter: & mut ::core::fmt::Formatter) -> ::core::fmt::Result`
 
 
 

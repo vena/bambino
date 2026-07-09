@@ -134,7 +134,7 @@ Defines the async I/O traits that let the rest of the crate work without knowing
 which runtime it's running on. The key traits:
 
 - [`AsyncIo`] — Read + Write (blanket-implemented for anything satisfying `embedded-io-async`).
-- [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/embedded-tls).
+- [`TlsConnector`] — Wraps a raw stream in TLS (used by tokio/rustls and embassy/mbedtls-rs).
 - [`RawStreamFactory`] — Dials a fresh raw (pre-TLS) stream to a host:port. Used for MQTT's
   lazy connect and FTPS's per-transfer data channel.
 - [`AsyncUdpSocket`] — UDP send/recv for SSDP discovery.

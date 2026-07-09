@@ -21,7 +21,8 @@ use bambino::models::BambuModel;
 use bambino::io::TlsVersion;
 
 use common::io::{
-    DummyTlsConnector, FailingDataTlsConnector, MockDataStreamFactory, VersionReportingTlsConnector,
+    DummyTlsConnector, FailingDataTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
+    VersionReportingTlsConnector,
 };
 use common::mock_ftps;
 
@@ -60,12 +61,50 @@ async fn connect_client(
         factory,
         model,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
     )
     .await
     .expect("FTPS handshake failed")
+}
+
+/// Regression test for `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`: the control-channel TLS connect
+/// must send the printer's serial as the SNI/identity value, never the IP — the printer's cert
+/// has the serial in its Subject CN and no SAN, so a verified connection checking hostname
+/// against the IP could never match.
+#[tokio::test]
+async fn test_ftps_control_channel_connects_with_serial_not_ip() {
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let (connector, captured_host) = HostCapturingTlsConnector::new();
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        connector,
+        factory,
+        BambuModel::P1S,
+        "127.0.0.1",
+        "TEST0000000001",
+        "12345678",
+        DummyTimer,
+        false,
+    )
+    .await
+    .expect("FTPS handshake failed");
+
+    assert_eq!(
+        captured_host.lock().await.as_deref(),
+        Some("TEST0000000001"),
+        "control-channel TLS connect must use the serial, not the IP, as SNI/identity"
+    );
+
+    client.disconnect().await;
+    server_handle.abort();
 }
 
 #[tokio::test]
@@ -230,6 +269,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         factory,
         BambuModel::P1S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
@@ -326,6 +366,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
         factory,
         BambuModel::P2S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
@@ -349,6 +390,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
         factory,
         BambuModel::X2D,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
@@ -377,6 +419,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         factory,
         BambuModel::P2S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
@@ -403,6 +446,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         factory,
         BambuModel::P1S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
@@ -424,6 +468,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
         factory,
         BambuModel::P2S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         false,
@@ -461,6 +506,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
         factory,
         BambuModel::P2S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         true,
@@ -489,6 +535,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
         factory,
         BambuModel::P2S,
         "127.0.0.1",
+        "TEST0000000001",
         "12345678",
         DummyTimer,
         true,

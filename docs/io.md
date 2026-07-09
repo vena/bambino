@@ -122,12 +122,12 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 
 **Trait Implementations:**
 
-- **PartialEq**
-  - `fn eq(self: &Self, other: &SocketError) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> SocketError`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &SocketError) -> bool`
 
 
 
@@ -144,16 +144,16 @@ ever constructs this.
 **Variants:**
 - `Other(&'static str)` - Catch-all for platform-specific timer scheduling failures.
 
-**Traits:** Copy, Eq
+**Traits:** Eq, Copy
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> TimerError`
 - **PartialEq**
   - `fn eq(self: &Self, other: &TimerError) -> bool`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **Clone**
-  - `fn clone(self: &Self) -> TimerError`
 
 
 
@@ -201,16 +201,16 @@ TLS protocol version negotiated during a handshake.
 - `Tls12` - TLS 1.2 negotiated.
 - `Tls13` - TLS 1.3 negotiated.
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &TlsVersion) -> bool`
 - **Clone**
   - `fn clone(self: &Self) -> TlsVersion`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -220,7 +220,7 @@ TLS protocol version negotiated during a handshake.
 
 Provides the concrete bindings of the abstract IO, Secure TLS transport,
 and Timer interfaces for bare-metal targets utilizing the Embassy network
-stack and `embedded-tls`.
+stack and `mbedtls-rs`.
 
 
 

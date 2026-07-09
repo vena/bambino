@@ -100,6 +100,11 @@ where
     data_factory: Factory,
     model: BambuModel,
     ip: String,
+    /// The printer's serial number — carried separately from `ip` because it, not the IP, is
+    /// what the printer's TLS server expects as SNI/identity (see
+    /// `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`); used for the data-channel TLS connect in
+    /// `open_data_channel`.
+    serial: String,
     timer: FtpsTimer,
     /// Set once a control-channel desync is possible (see struct doc comment).
     /// Checked by every public method; once `true` the client must be discarded and reconnected.
@@ -142,11 +147,12 @@ where
         data_factory: Factory,
         model: BambuModel,
         ip: &str,
+        serial: &str,
         access_code: &str,
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
     ) -> Result<Self, BambuError> {
-        let mut control_stream = tls_connector.connect(ip, raw_control).await?;
+        let mut control_stream = tls_connector.connect(serial, raw_control).await?;
 
         Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model, allow_unverified_tls_1_2)?;
 
@@ -260,6 +266,7 @@ where
             data_factory,
             model,
             ip: String::from(ip),
+            serial: String::from(serial),
             timer,
             poisoned: false,
             allow_unverified_tls_1_2,
@@ -332,7 +339,7 @@ where
         if self.model.quirks().uses_plaintext_ftps_data_channel() {
             return Ok(DataChannel::Plain(raw_data_socket));
         }
-        let secure = match self.tls_connector.connect(&self.ip, raw_data_socket).await {
+        let secure = match self.tls_connector.connect(&self.serial, raw_data_socket).await {
             Ok(s) => s,
             Err(e) => {
                 self.poisoned = true;

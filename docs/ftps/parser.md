@@ -34,12 +34,12 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 **Trait Implementations:**
 
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
   - `fn clone(self: &Self) -> FtpFile`
 - **PartialEq**
   - `fn eq(self: &Self, other: &FtpFile) -> bool`
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 

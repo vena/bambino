@@ -267,6 +267,8 @@ let config = build_verified_client_config(
 let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 ```
 
+`build_verified_client_config()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `build_unsafe_client_config()` is unaffected — it never checks certificate identity.
+
 Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models — P2S and X2D — need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().enforce_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
 
 This is platform-general — `TokioTlsConnector`, `EmbassyTlsConnector`, and `EspIdfTlsConnector` all implement `negotiated_version` for real. **`EmbassyTlsConnector` always reports TLS 1.3 (`embedded-tls` 0.19 is TLS-1.3-only), so Embassy + P2S/X2D is unconditionally rejected rather than downgraded.** `mbedtls-rs` (investigated 2026-07-07 as a replacement) has real TLS 1.2 support but exposes neither a negotiated-version getter nor a max-version cap, so it can't satisfy this fail-closed check either — no backend swap alone can fix this.

@@ -160,11 +160,11 @@ async fn example() -> Result<(), bambino::BambuError> {
 
 ### [`io::embassy`](io/embassy.md)
 
-*5 structs*
+*4 structs*
 
 ### [`io::tokio`](io/tokio.md)
 
-*5 functions, 7 structs*
+*5 functions, 8 structs*
 
 ### [`models`](models.md)
 

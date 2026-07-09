@@ -14,10 +14,12 @@ mod camera;
 mod connection;
 mod control;
 mod discover;
+mod inspect_cert;
 mod monitor;
 mod probe;
 mod storage;
 mod table;
+mod verify_tls;
 
 use connection::resolve_access_code;
 
@@ -147,6 +149,33 @@ enum Command {
         #[command(subcommand)]
         action: camera::CameraAction,
     },
+
+    /// Diagnostic: capture a printer's raw leaf TLS cert to disk for SAN/CN inspection
+    /// (see TLS_SNI_HOSTNAME_MISMATCH_PLAN.md). No FTPS/MQTT traffic is exchanged.
+    InspectCert {
+        ip: String,
+        serial: String,
+        /// TLS port to connect to (990=FTPS, 8883=MQTT, 322=RTSPS, 6000=camera)
+        #[arg(long, default_value_t = 990)]
+        port: u16,
+        /// Where to write the captured leaf certificate's raw DER bytes
+        #[arg(short = 'o', long, default_value = "printer_leaf_cert.der")]
+        output: String,
+    },
+
+    /// Diagnostic: attempt a real CA-verified TLS handshake (SNI=serial) against a printer
+    /// using build_verified_client_config, to validate CnFallbackServerVerifier end-to-end
+    /// (see TLS_SNI_HOSTNAME_MISMATCH_PLAN.md). No FTPS/MQTT traffic is exchanged.
+    VerifyTls {
+        ip: String,
+        serial: String,
+        /// TLS port to connect to (990=FTPS, 8883=MQTT, 322=RTSPS, 6000=camera)
+        #[arg(long, default_value_t = 990)]
+        port: u16,
+        /// Path to a PEM-encoded CA cert to trust (e.g. certs/bbl-ca-root.pem)
+        #[arg(long)]
+        ca_cert: String,
+    },
 }
 
 #[tokio::main]
@@ -220,6 +249,18 @@ async fn main() {
             access_code,
             action,
         } => camera::run(&ip, &serial, &resolve_access_code(access_code), action).await,
+        Command::InspectCert {
+            ip,
+            serial,
+            port,
+            output,
+        } => inspect_cert::run(&ip, &serial, port, &output).await,
+        Command::VerifyTls {
+            ip,
+            serial,
+            port,
+            ca_cert,
+        } => verify_tls::run(&ip, &serial, port, &ca_cert).await,
     };
 
     if let Err(e) = result {

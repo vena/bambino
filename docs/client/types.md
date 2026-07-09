@@ -62,8 +62,6 @@ Combine flags with bitwise OR to trigger multiple calibration routines simultane
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &CalibrationOption) -> bool`
 - **Hash**
@@ -72,6 +70,8 @@ Combine flags with bitwise OR to trigger multiple calibration routines simultane
   - `fn bitor(self: Self, rhs: Self) -> Self`
 - **Clone**
   - `fn clone(self: &Self) -> CalibrationOption`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -91,14 +91,14 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> FanTarget`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **PartialEq**
   - `fn eq(self: &Self, other: &FanTarget) -> bool`
 - **Hash**
   - `fn hash<__H>(self: &Self, state: & mut __H)`
+- **Clone**
+  - `fn clone(self: &Self) -> FanTarget`
 
 
 
@@ -156,14 +156,14 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **PartialEq**
-  - `fn eq(self: &Self, other: &PrintSpeed) -> bool`
 - **Hash**
   - `fn hash<__H>(self: &Self, state: & mut __H)`
 - **Clone**
   - `fn clone(self: &Self) -> PrintSpeed`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **PartialEq**
+  - `fn eq(self: &Self, other: &PrintSpeed) -> bool`
 
 
 
@@ -188,7 +188,7 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
 - `fn from_gcode_state(state: &str) -> Self` - Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
 
-**Traits:** Eq, Copy
+**Traits:** Copy, Eq
 
 **Trait Implementations:**
 
@@ -225,10 +225,10 @@ available via [`into_raw`](TelemetryEvent::into_raw).
 
 **Trait Implementations:**
 
-- **Clone**
-  - `fn clone(self: &Self) -> TelemetryEvent`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
+- **Clone**
+  - `fn clone(self: &Self) -> TelemetryEvent`
 
 
 

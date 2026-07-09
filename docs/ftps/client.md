@@ -42,7 +42,7 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 **Methods:**
 
-- `fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: BambuModel, ip: &str, access_code: &str, timer: FtpsTimer) -> Result<Self, BambuError>` - Establishes the secure control channel, performs login handshakes, and configures security properties.
+- `fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: BambuModel, ip: &str, serial: &str, access_code: &str, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, BambuError>` - Establishes the secure control channel, performs login handshakes, and configures security properties.
 - `fn list_directory(self: & mut Self, remote_path: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Result<Vec<FtpFile>, BambuError>` - Queries the storage server for raw directory listings and parses their structures.
 - `fn get_file_size(self: & mut Self, remote_path: &str) -> Result<u64, BambuError>` - Queries the exact size of a file stored on the printer's MicroSD card.
 - `fn delete_file(self: & mut Self, remote_path: &str) -> Result<(), BambuError>` - Removes a targeted file from non-volatile storage.

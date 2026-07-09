@@ -6,6 +6,7 @@
 
 **Structs**
 
+- [`CnFallbackServerVerifier`](#cnfallbackserververifier) - Certificate verifier for the "verified" (CA-checked) connection path that validates real
 - [`NoCertificateVerification`](#nocertificateverification) - Custom certificate verifier that bypasses standard CA chain authority validation.
 - [`TokioIo`](#tokioio) - Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
 - [`TokioIoError`](#tokioioerror) - Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
@@ -23,6 +24,62 @@
 - [`to_socket_error`](#to_socket_error) - Helper mapping standard standard Rust IO errors to our runtime-agnostic SocketError enum.
 
 ---
+
+## bambino::io::tokio::CnFallbackServerVerifier
+
+*Struct*
+
+Certificate verifier for the "verified" (CA-checked) connection path that validates real
+chain-of-trust against caller-supplied trusted roots, but — unlike rustls's default
+`WebPkiServerVerifier` — works against real Bambu printer certs at all.
+
+**Why this can't use `rustls-webpki`:** real Bambu printer certs are X.509 **v1** (confirmed
+against a live P1S — no version tag, implicit v1 encoding per RFC 5280 §4.1.2.1).
+`rustls-webpki` (confirmed against the pinned `0.103.13`, `src/cert.rs::version3`) rejects
+*any* cert that isn't v3, unconditionally — this is deliberate mozilla::pkix policy
+("We allow only v3"), not a bug, and it applies to `EndEntityCert`/`ParsedCertificate`
+parsing used by chain validation *and* to the free functions `verify_tls12_signature`/
+`verify_tls13_signature` (which independently re-parse the leaf via
+`EndEntityCert::try_from` during the handshake's signature check). So neither chain
+validation nor the handshake-signature check can be delegated to anything in
+`rustls-webpki` for a real Bambu cert — confirmed as a known limitation other real-world
+self-signed device certs have hit too (see `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md` for the
+GitHub issue citations, including the LND project's identical problem).
+
+This verifier uses `x509-parser` instead (a general ASN.1/X.509 parser, not a
+policy-enforcing validator — confirmed via its own test suite that it treats the version
+field as optional, defaulting to v1 when absent, exactly per the DER grammar) for all
+parsing, and does two independent things no other code in this crate does:
+- **Chain-of-trust**: is the leaf's signature valid under one of the caller-supplied
+  trusted roots' public keys, with a matching issuer/subject and unexpired validity period?
+  (`verify_server_cert`, via `X509Certificate::verify_signature` — real `ring`-backed
+  verification, not hand-rolled crypto.)
+- **Handshake-signature check**: does the live TLS handshake signature verify under the
+  leaf's own public key? (`verify_tls12_signature`/`verify_tls13_signature`, via
+  `rustls_pki_types::SignatureVerificationAlgorithm::verify_signature` directly — this is
+  the check that actually proves the peer holds the private key matching the presented
+  cert; per the LND issue's own reasoning, this is what prevents MITM here, not the chain
+  check alone.)
+
+Identity (SAN-then-CN, mirroring mbedtls's `x509_crt_verify_name` algorithm) is still
+checked last, same logic as before — only its data source changed, from a hand-rolled DER
+walker to `x509-parser`'s parsed fields.
+
+**Methods:**
+
+- `fn new<impl IntoIterator<Item = CertificateDer<'static>>>(ca_certs: impl Trait) -> Result<Self, RustlsError>` - Builds the verifier from a set of trusted root certs. Fails if `ca_certs` is empty or
+
+**Trait Implementations:**
+
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut core::fmt::Formatter) -> core::fmt::Result`
+- **ServerCertVerifier**
+  - `fn verify_server_cert(self: &Self, end_entity: &CertificateDer, _intermediates: &[CertificateDer], server_name: &ServerName, _ocsp_response: &[u8], now: UnixTime) -> Result<ServerCertVerified, RustlsError>`
+  - `fn verify_tls12_signature(self: &Self, message: &[u8], cert: &CertificateDer, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+  - `fn verify_tls13_signature(self: &Self, message: &[u8], cert: &CertificateDer, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+  - `fn supported_verify_schemes(self: &Self) -> Vec<SignatureScheme>`
+
+
 
 ## bambino::io::tokio::NoCertificateVerification
 
@@ -84,13 +141,13 @@ Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trai
 **Trait Implementations:**
 
 - **Error**
+  - `fn source(self: &Self) -> Option<&dyn std::error::Error>`
+- **Error**
   - `fn kind(self: &Self) -> embedded_io_async::ErrorKind`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Display**
   - `fn fmt(self: &Self, f: & mut core::fmt::Formatter) -> core::fmt::Result`
-- **Error**
-  - `fn source(self: &Self) -> Option<&dyn std::error::Error>`
 
 
 

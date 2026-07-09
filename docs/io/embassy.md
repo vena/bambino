@@ -8,8 +8,7 @@
 
 - [`EmbassyRawStreamFactory`](#embassyrawstreamfactory) - Raw (pre-TLS) connection factory for the Embassy network stack.
 - [`EmbassyTimer`](#embassytimer) - Timer implementation designed for the hardware microsecond clock in Embassy.
-- [`EmbassyTlsConnector`](#embassytlsconnector) - TLS Secure connector wrapping the `embedded-tls` engine over caller-supplied buffers.
-- [`EmbassyTlsStream`](#embassytlsstream) - Wrapper around an `embedded-tls` connection over an Embassy-supplied buffer pair.
+- [`EmbassyTlsConnector`](#embassytlsconnector) - TLS Secure connector wrapping an `mbedtls-rs` async [`Session`](::mbedtls_rs::Session).
 - [`EmbassyUdpSocket`](#embassyudpsocket) - UDP Socket implementation designed for the Embassy network stack.
 
 ---
@@ -87,72 +86,52 @@ Timer implementation designed for the hardware microsecond clock in Embassy.
 
 *Struct*
 
-TLS Secure connector wrapping the `embedded-tls` engine over caller-supplied buffers.
+TLS Secure connector wrapping an `mbedtls-rs` async [`Session`](::mbedtls_rs::Session).
 
-Generic over `Rng`: callers must provide a platform-appropriate RNG implementation
-(e.g., hardware TRNG peripheral). The RNG must implement the legacy `rand_core` v0.6
-traits expected by `embedded-tls` v0.19.
+**One global `Tls` instance.** MbedTLS only permits one active library instance
+program-wide (enforced by `mbedtls-rs` itself — a second `Tls::new()` call errors while one
+is already live). The caller constructs that single `::mbedtls_rs::Tls` once at startup
+(e.g. behind a `static_cell::StaticCell`, mirroring `EmbassyRawStreamFactory`'s `'static`
+storage convention below — see the README's Embassy setup example) and passes a
+[`TlsReference`](::mbedtls_rs::TlsReference) — a cheap `Copy` handle, not the `Tls` itself —
+into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
+control/data connectors all share the one instance concurrently.
 
-**Buffer ownership.** `embedded-tls` needs a read and write scratch buffer for the
-lifetime of a TLS session (16KB apiece is a reasonable default, matching TLS's max
-record size). Earlier versions of this connector hid two such buffers behind
-process-wide statics, which meant a second concurrent connection (e.g. FTPS's control
-and data channels, opened at the same time) would panic. There is no such thing as a
-concurrency-safe *global* buffer pair, so this connector takes its buffers from the
-caller instead: construct one `EmbassyTlsConnector` per concurrent connection you need,
-each with its own `&'a mut [u8]` pair, and the caller's board-RAM budget decides how
-many can exist at once. `connect()` takes the buffers out of the connector on first use
-(`Option::take`) — calling `connect()` again on the same connector without a fresh one
-returns `SocketError::Other` instead of a second, aliased borrow.
+**No caller-supplied buffers, unlike the old `embedded-tls` connector.** `mbedtls-rs`
+allocates its own SSL context/config/record buffers per `Session` (via `mbedtls_calloc`,
+16 KiB in/out by default — see `Cargo.toml`'s `mbedtls-rs` dependency comment to shrink
+this via the `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features), so `connect()`
+can be called repeatedly on the same connector — there is no one-shot buffer-consumption
+constraint to work around, unlike the old `embedded-tls`-backed connector.
 
-**No built-in connect timeout.** Unlike `EspIdfTlsConnector` (which bounds its handshake
-loop behind a `connect_timeout`), `connect()` here has no retry/poll loop of its own to bound:
-it calls `TlsConnection::open(context).await` once, and the hang risk lives entirely
-inside `embedded-tls`'s handshake await, which this crate doesn't control. Callers that
-need a bounded connect must race `EmbassyTlsConnector::connect` against
-`embassy_time::with_timeout` themselves — `embassy-time` (already a dependency of the
-`embassy` feature) provides exactly that combinator.
+**`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
+API to read back the TLS version actually negotiated (see
+`EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section — confirmed by reading its source, not
+assumed) — unlike the old `embedded-tls` connector, which hard-coded a wrong `Some(Tls13)`
+answer. This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
+closed for P2S/X2D even after this backend swap; use
+`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
+needed (see `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md` Track A).
+
+**No built-in connect timeout**, same as before: `connect()` has no retry/poll loop of its
+own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Callers that need
+a bounded connect must race `EmbassyTlsConnector::connect` against
+`embassy_time::with_timeout` themselves.
 
 **Generic Parameters:**
 - 'a
-- CipherSuite
-- Rng
 
 **Methods:**
 
-- `fn new(config: &'a ::embedded_tls::TlsConfig<'a>, rng: Rng, read_buf: &'a  mut [u8], write_buf: &'a  mut [u8]) -> Self` - Creates a new Embassy secure connector with a caller-provided RNG and TLS scratch buffers.
+- `fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self` - Creates a new connector against the single active [`Tls`](::mbedtls_rs::Tls) instance
+- `fn with_ca_chain(self: Self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self` - Enables server certificate verification against the given CA chain. Without this,
+- `fn with_client_credentials(self: Self, creds: ::mbedtls_rs::Credentials<'a>) -> Self` - Supplies client credentials for mutual TLS (mTLS).
 
 **Trait Implementations:**
 
 - **TlsConnector**
-  - `fn connect(self: &Self, _host: &str, raw_stream: RawStream) -> Result<<Self as >::Stream, SocketError>`
-  - `fn negotiated_version(self: &Self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` - `embedded-tls` 0.19 is a TLS 1.3-only client (confirmed against its docs — it has no TLS 1.2 handshake support and exposes no version-query method, since there is only ever one possible answer).
-
-
-
-## bambino::io::embassy::EmbassyTlsStream
-
-*Struct*
-
-Wrapper around an `embedded-tls` connection over an Embassy-supplied buffer pair.
-
-No longer guards a process-wide static — the read/write buffers are owned by the
-[`EmbassyTlsConnector`] that produced this stream (see that type's doc comment).
-
-**Generic Parameters:**
-- 'a
-- RawStream
-- CipherSuite
-
-**Traits:** ErrorType
-
-**Trait Implementations:**
-
-- **Read**
-  - `fn read(self: & mut Self, buf: & mut [u8]) -> Result<usize, <Self as >::Error>`
-- **Write**
-  - `fn write(self: & mut Self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
-  - `fn flush(self: & mut Self) -> Result<(), <Self as >::Error>`
+  - `fn connect(self: &Self, host: &str, raw_stream: RawStream) -> Result<<Self as >::Stream, SocketError>`
+  - `fn negotiated_version(self: &Self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` - `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this type's
 
 
 

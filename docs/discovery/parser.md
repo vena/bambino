@@ -38,12 +38,12 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
   - `fn clone(self: &Self) -> SsdpDevice`
 - **PartialEq**
   - `fn eq(self: &Self, other: &SsdpDevice) -> bool`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 

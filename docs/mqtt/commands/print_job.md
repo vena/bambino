@@ -36,14 +36,14 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 
 **Trait Implementations:**
 
-- **Debug**
-  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Clone**
   - `fn clone(self: &Self) -> AmsMappingTable`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **PartialEq**
   - `fn eq(self: &Self, other: &AmsMappingTable) -> bool`
+- **Debug**
+  - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 
 
 
@@ -144,12 +144,12 @@ Submits a `.3mf` print job from the SD card for execution.
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> ProjectFileRequest`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
-- **Clone**
-  - `fn clone(self: &Self) -> ProjectFileRequest`
 
 
 

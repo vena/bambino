@@ -43,14 +43,14 @@ top-level domains depending on which micro-system published the frame.
 
 **Trait Implementations:**
 
+- **Clone**
+  - `fn clone(self: &Self) -> TelemetryReport`
 - **Serialize**
   - `fn serialize<__S>(self: &Self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 - **Debug**
   - `fn fmt(self: &Self, f: & mut $crate::fmt::Formatter) -> $crate::fmt::Result`
 - **Deserialize**
   - `fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
-- **Clone**
-  - `fn clone(self: &Self) -> TelemetryReport`
 
 
 

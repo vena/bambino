@@ -85,6 +85,36 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for FailingDataTlsConnector {
     }
 }
 
+/// A pass-through TLS connector that records the `host` string it was given, so tests can
+/// assert *which* identity value (serial vs. IP) a connect call site actually sent — see
+/// `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`.
+pub struct HostCapturingTlsConnector {
+    pub captured_host: Arc<Mutex<Option<String>>>,
+}
+
+impl HostCapturingTlsConnector {
+    /// Returns the connector plus a cloned handle to its capture cell — grab the handle before
+    /// handing the connector's ownership off to `connect()`, which consumes it.
+    pub fn new() -> (Self, Arc<Mutex<Option<String>>>) {
+        let captured_host = Arc::new(Mutex::new(None));
+        (
+            Self {
+                captured_host: captured_host.clone(),
+            },
+            captured_host,
+        )
+    }
+}
+
+impl<RawIO: AsyncIo> TlsConnector<RawIO> for HostCapturingTlsConnector {
+    type Stream = RawIO;
+
+    async fn connect(&self, host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
+        *self.captured_host.lock().await = Some(host.to_string());
+        Ok(raw_stream)
+    }
+}
+
 /// A dynamic, in-memory stream factory for passive FTP data channels.
 ///
 /// **Why this is used:**

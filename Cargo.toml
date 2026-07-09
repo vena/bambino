@@ -14,7 +14,7 @@ default = ["std", "tokio"]
 std = ["dep:thiserror", "serde/std", "serde_json/std"]
 
 # Tokio-specific dependencies and platform bridges
-tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "std"]
+tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "dep:x509-parser", "std"]
 
 # bambino-cli only: terminal manipulation and a concrete log sink. Not implied by
 # `tokio` so library consumers depending on `bambino` with default features don't
@@ -84,6 +84,13 @@ tokio-rustls = { version = "0.26.4", features = [
 ], optional = true }
 rustls-pki-types = { version = "1.14", optional = true }
 
+# X.509 parsing for the "verified" TLS path's CnFallbackServerVerifier (src/io/tokio.rs).
+# Unlike rustls-webpki, this does not enforce a v3-only policy (real Bambu printer certs are
+# X.509 v1) — see TLS_SNI_HOSTNAME_MISMATCH_PLAN.md. "verify" feature pulls in `ring`-backed
+# cert-signature verification (X509Certificate::verify_signature), reusing the same crypto
+# backend already used elsewhere via rustls's ring provider.
+x509-parser = { version = "0.18", features = ["verify"], optional = true }
+
 # ESP-IDF system services binding for hardware transport
 esp-idf-svc = { version = "0.52.1", optional = true }
 
@@ -136,3 +143,12 @@ time = { version = "0.3", features = ["std"], optional = true }
 [dev-dependencies]
 # Standard testing runtime components
 tokio = { version = "1.52.3", features = ["full"] }
+
+# Generates real X.509 certs in-memory for io::tokio's TLS verifier tests (custom CN/SAN
+# combinations) — avoids committing cert fixtures and lets tests exercise real DER encoding
+# rather than hand-crafted byte arrays.
+rcgen = "0.14"
+
+# For constructing an explicit (possibly expired) certificate validity window in
+# io::tokio's CnFallbackServerVerifier expiry test.
+time = "0.3"

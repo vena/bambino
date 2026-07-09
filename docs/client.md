@@ -45,6 +45,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 **Methods:**
 
+- `fn new(tls: MqttTls, factory: MqttFactory, ip: &str, serial: &str, access_code: &str, model: BambuModel) -> Self` - Creates a lazy client that defers MQTT connection until first use.
 - `fn change_filament(self: & mut Self, ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, BambuError>` - Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 - `fn start_drying(self: & mut Self, ams_id: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str) -> Result<u16, BambuError>` - Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
 - `fn stop_drying(self: & mut Self, ams_id: i32) -> Result<u16, BambuError>` - Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
@@ -53,7 +54,6 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - `fn get_version(self: & mut Self) -> Result<VersionInfo, BambuError>` - Queries the printer's expansion bus version database and returns typed module info.
 - `fn get_k_profiles(self: & mut Self) -> Result<ExtrusionCaliGetResponse, BambuError>` - Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
 - `fn set_k_profile_primed(self: & mut Self, primed: bool)` - Controls whether `get_k_profiles()` sends an automatic priming request.
-- `fn new(tls: MqttTls, factory: MqttFactory, ip: &str, serial: &str, access_code: &str, model: BambuModel) -> Self` - Creates a lazy client that defers MQTT connection until first use.
 - `fn connect_mqtt(self: & mut Self) -> Result<(), BambuError>` - Eagerly establishes the MQTT connection.
 - `fn mqtt_connected(self: &Self) -> bool` - Returns whether the MQTT session is currently established.
 - `fn with_timer<NewTimer>(self: Self, timer: NewTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, NewTimer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` - Sets a [`TimerProvider`] for wall-clock command-response timeouts.
@@ -61,6 +61,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - `fn with_connect_timeout(self: Self, secs: u64) -> Self` - Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
 - `fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(self: Self, tls: NewFtpsTls, factory: NewFtpsFactory, timer: NewFtpsTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer, CameraRawIO, CameraTls, CameraFactory>` - Configures FTPS for lazy connection on first storage method call.
 - `fn with_ftps_port(self: Self, port: u16) -> Self` - Overrides the default FTPS port (990).
+- `fn with_ftps_allow_unverified_tls_1_2(self: Self, allow: bool) -> Self` - Overrides the default `false` for `BambuFtpsClient`'s TLS-1.2-enforcement bypass.
 - `fn connect_ftps(self: & mut Self) -> Result<(), BambuError>` - Eagerly establishes the FTPS connection.
 - `fn ftps_connected(self: &Self) -> bool` - Returns whether the FTPS session is currently established.
 - `fn connect_camera(self: & mut Self) -> Result<(), BambuError>` - Eagerly establishes the camera connection.
@@ -91,10 +92,6 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - `fn wifi_signal(self: &Self) -> Option<&str>` - Returns the raw wireless signal strength string (e.g. `"-52dBm"`) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 - `fn is_ethernet_active_via_wifi_signal(self: &Self) -> bool` - Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works off cached `home_flag`).
 - `fn poll_raw(self: & mut Self) -> Result<MqttMessage, BambuError>` - Pulls the next raw MQTT message without deserialization.
-- `fn attach_camera(self: & mut Self, camera: BambuBinaryCameraStream<<CameraTls as >::Stream>)` - Injects a pre-connected [`BambuBinaryCameraStream`] directly.
-- `fn camera(self: & mut Self) -> Result<& mut BambuBinaryCameraStream<<CameraTls as >::Stream>, BambuError>` - Returns direct access to the underlying [`BambuBinaryCameraStream`], auto-connecting if needed.
-- `fn read_camera_frame(self: & mut Self, frame_buf: & mut Vec<u8>) -> Result<(), BambuError>` - Reads the next camera frame, auto-connecting (and authenticating) if needed.
-- `fn disconnect_camera(self: & mut Self) -> Result<(), BambuError>` - Disconnects the camera session, if one exists, and clears it from the client.
 - `fn set_fan_speed(self: & mut Self, fan_type: FanTarget, speed_percent: u8) -> Result<u16, BambuError>` - Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
 - `fn set_led(self: & mut Self, node: &str, turn_on: bool) -> Result<u16, BambuError>` - Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
 - `fn set_airduct_mode(self: & mut Self, mode: crate::mqtt::commands::AirductMode) -> Result<u16, BambuError>` - Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
@@ -115,6 +112,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - `fn serial(self: &Self) -> &str` - Returns a reference to the printer's unique hardware serial number.
 - `fn model(self: &Self) -> BambuModel` - Returns the resolved printer hardware model.
 - `fn mqtt(self: & mut Self) -> Result<& mut BambuMqttClient<<MqttTls as >::Stream>, BambuError>` - Returns direct access to the underlying [`BambuMqttClient`], auto-connecting if needed.
+- `fn attach_camera(self: & mut Self, camera: BambuBinaryCameraStream<<CameraTls as >::Stream>)` - Injects a pre-connected [`BambuBinaryCameraStream`] directly.
+- `fn camera(self: & mut Self) -> Result<& mut BambuBinaryCameraStream<<CameraTls as >::Stream>, BambuError>` - Returns direct access to the underlying [`BambuBinaryCameraStream`], auto-connecting if needed.
+- `fn read_camera_frame(self: & mut Self, frame_buf: & mut Vec<u8>) -> Result<(), BambuError>` - Reads the next camera frame, auto-connecting (and authenticating) if needed.
+- `fn disconnect_camera(self: & mut Self) -> Result<(), BambuError>` - Disconnects the camera session, if one exists, and clears it from the client.
 - `fn pause_print(self: & mut Self) -> Result<u16, BambuError>` - Pauses the currently active print job [REF-MQTT-LIFECYCLE].
 - `fn resume_print(self: & mut Self) -> Result<u16, BambuError>` - Resumes a paused print job [REF-MQTT-LIFECYCLE].
 - `fn stop_print(self: & mut Self) -> Result<u16, BambuError>` - Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].

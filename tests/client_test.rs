@@ -21,7 +21,7 @@ use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 use bambino::mqtt::{BambuMqttClient, PrintJobConfig};
 
-use common::io::{DummyTlsConnector, MockDataStreamFactory};
+use common::io::{DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory};
 use common::mock_ftps;
 use common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
@@ -2616,5 +2616,36 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
         "expected a bounded NetworkError(TimedOut) once connect_timeout_secs elapses \
          mid-CONNACK-handshake, got {:?}",
         result.map(|_| ())
+    );
+}
+
+/// Regression test for `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`: `ensure_mqtt()`'s TLS connect must
+/// send the printer's serial as SNI/identity, never the IP.
+#[tokio::test]
+async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
+    let (client_stream, _server_stream) = tokio::io::duplex(8192);
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container,
+    };
+
+    let (connector, captured_host) = HostCapturingTlsConnector::new();
+    let mut client = PrinterClient::new(
+        connector,
+        factory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    )
+    .with_timer(bambino::io::tokio::TokioTimer::new())
+    .with_connect_timeout(1);
+
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), client.connect_mqtt()).await;
+
+    assert_eq!(
+        captured_host.lock().await.as_deref(),
+        Some(SERIAL),
+        "MQTT TLS connect must use the serial, not the IP, as SNI/identity"
     );
 }

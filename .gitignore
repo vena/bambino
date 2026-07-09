@@ -18,6 +18,7 @@ env/
 *.log
 *.so
 /certs
+*.der
 .lean-ctx/
 /reference/specs
 /reference/probes
