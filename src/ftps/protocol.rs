@@ -214,6 +214,12 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
 ) -> Result<(u16, String), BambuError> {
     let mut accumulated = String::new();
     let mut lines_read: usize = 0;
+    // BUG-028: RFC 959 §4.2 requires tracking the reply's opening code and only treating a
+    // later line as the terminator if *both* its separator is ' ' and its code matches this —
+    // an intermediate multi-line body line can itself start with a 3-digit-number-plus-space
+    // sequence that must not be mistaken for the terminator. `None` until the header line
+    // (first line of the reply) has been read.
+    let mut header_code: Option<u16> = None;
 
     loop {
         read_line_raw(stream, line_buf, fill_buf, timer, deadline_ms).await?;
@@ -223,39 +229,73 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
                 "FTP response exceeded maximum line count".into(),
             ));
         }
-        if line_buf.len() < 4 {
-            log::debug!(
-                "skipping malformed FTP response line ({} bytes)",
-                line_buf.len()
-            );
-            continue;
-        }
-        let code_str = match core::str::from_utf8(&line_buf[0..3]) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let code = match code_str.parse::<u16>() {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let separator = line_buf[3];
 
-        if separator == b' ' {
-            let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
-            if accumulated.is_empty() {
-                return Ok((code, text.to_string()));
+        let Some(code) = header_code else {
+            // No header established yet — this line must establish one (single-line reply,
+            // or the opening line of a multi-line reply). A line that can't be parsed as
+            // such is skipped rather than treated as body text, matching the prior behavior.
+            if line_buf.len() < 4 {
+                log::debug!(
+                    "skipping malformed FTP response line ({} bytes)",
+                    line_buf.len()
+                );
+                continue;
             }
-            if !text.is_empty() {
+            let code_str = match core::str::from_utf8(&line_buf[0..3]) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let code = match code_str.parse::<u16>() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let separator = line_buf[3];
+
+            if separator == b' ' {
+                let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                return Ok((code, text.to_string()));
+            } else if separator == b'-' {
+                header_code = Some(code);
+                let line_text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                accumulated.push_str(line_text);
+            }
+            continue;
+        };
+
+        // Inside a multi-line reply body: only a line starting with the *same* code followed
+        // by a space terminates it. A line starting with the same code followed by a hyphen is
+        // a continuation line in this parser's supported padded format — its prefix is
+        // stripped like the header line's. Anything else (wrong code, or plain free text with
+        // no code prefix at all) is body content appended verbatim, per RFC 959 §4.2's warning
+        // that intermediate lines aren't required to carry any code prefix.
+        let prefix_code = if line_buf.len() >= 4 {
+            core::str::from_utf8(&line_buf[0..3])
+                .ok()
+                .and_then(|s| s.parse::<u16>().ok())
+                .filter(|c| *c == code)
+        } else {
+            None
+        };
+
+        match (prefix_code, line_buf.get(3)) {
+            (Some(_), Some(b' ')) => {
+                let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                if !text.is_empty() {
+                    accumulated.push('\n');
+                    accumulated.push_str(text);
+                }
+                return Ok((code, accumulated));
+            }
+            (Some(_), Some(b'-')) => {
+                let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
                 accumulated.push('\n');
                 accumulated.push_str(text);
             }
-            return Ok((code, accumulated));
-        } else if separator == b'-' {
-            let line_text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
-            if !accumulated.is_empty() {
+            _ => {
+                let line_text = core::str::from_utf8(line_buf).unwrap_or("").trim_end();
                 accumulated.push('\n');
+                accumulated.push_str(line_text);
             }
-            accumulated.push_str(line_text);
         }
     }
 }
@@ -524,6 +564,47 @@ mod tests {
                 .expect("multi-line response");
         assert_eq!(code, 213);
         assert_eq!(text, "First line\nSecond line\nFinal line");
+    }
+
+    #[tokio::test]
+    async fn test_read_response_intermediate_line_matching_terminator_shape_not_mistaken() {
+        // BUG-028: RFC 959 §4.2 explicitly warns that an intermediate line can itself start
+        // with a 3-digit-number-plus-space sequence — it must not be mistaken for the
+        // terminator unless its code also matches the reply's opening code.
+        let reader = ChunkedReader::with_chunks(&[
+            b"213-Header\r\n150 looks like a terminator but isn't\r\n213 Final line\r\n",
+        ]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        let (code, text) =
+            read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+                .await
+                .expect("multi-line response");
+        assert_eq!(code, 213);
+        assert_eq!(
+            text,
+            "Header\n150 looks like a terminator but isn't\nFinal line"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_response_free_text_intermediate_line_preserved() {
+        // BUG-028: RFC 959 §4.2 — intermediate lines aren't required to carry any code prefix
+        // at all; free text must be preserved verbatim, not silently dropped.
+        let reader =
+            ChunkedReader::with_chunks(&[b"213-Header\r\nplain free text, no code\r\n213 End\r\n"]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        let (code, text) =
+            read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+                .await
+                .expect("multi-line response");
+        assert_eq!(code, 213);
+        assert_eq!(text, "Header\nplain free text, no code\nEnd");
     }
 
     #[tokio::test]
