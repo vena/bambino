@@ -27,7 +27,7 @@ Scan `Open` + `Fixed` + `Wontfix` for the current highest `BUG-NNN`, use `NNN+1`
 
 ## `Fixed` / `Wontfix` row schema
 
-Same columns as `Open` plus one: `ID | Sev | Module | Title | Found | Closed | Detail`. No standing `commit:` column: a commit can't contain its own hash without amending (forbidden, see global git rules), and a follow-up commit to inject it right after the fact would violate rule 6's same-commit requirement. `git blame` on this row answers "which commit closed it" while the row still links to a review file. Once that link goes dead (see "Review-file lifecycle" below), the replacement inline note gets the commit hash written into it directly — by then it's a later, separate commit doing the rewrite, so there's no self-reference problem, just a `git log --grep` lookup.
+Same columns as `Open` plus one: `ID | Sev | Module | Title | Found | Closed | Detail`. No standing `commit:` column — see rule 6 for why a fix commit can't carry one, and "Review-file lifecycle" below for how the hash gets in eventually. `Closed` is the date the row moved out of `Open` (fixed or marked wontfix, not the date it was found). `Wontfix`'s `Detail` states the one-line reason it's not a real issue, same 3-line budget as everything else in this file.
 
 ```
 | BUG-NNN | SevX | module/path.rs | one-line title | YYYY-MM-DD | YYYY-MM-DD | link to review-file section, or a terse inline note + fix commit's short hash once that file's deleted |
