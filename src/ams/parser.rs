@@ -57,7 +57,7 @@ pub fn evaluate_spool_presence(
     // amount below (mirrors resolve_global_tray_id's bounds check in this same file) —
     // otherwise an out-of-range ams_id produces a shift amount >= 32, which panics in
     // debug builds and silently returns a wrong result in release builds.
-    if ams_id > AMS_MAX_STANDARD_ID {
+    if ams_id > AMS_MAX_STANDARD_ID || tray_id >= AMS_SLOTS_PER_UNIT {
         return None;
     }
 
@@ -353,6 +353,16 @@ mod tests {
         assert_eq!(evaluate_spool_presence("f", 4, 0, true), None);
         assert_eq!(evaluate_spool_presence("f", 127, 0, true), None);
         assert_eq!(evaluate_spool_presence("f", 255, 0, true), None);
+    }
+
+    #[test]
+    fn test_evaluate_spool_presence_tray_id_out_of_range() {
+        // BUG-014: a valid ams_id (0-3) with tray_id >= 4 must not reach the bit-shift —
+        // tray_id comes straight off the wire, so a malformed packet must not panic
+        // (debug) or silently wrap into a bogus shift amount (release).
+        assert_eq!(evaluate_spool_presence("f", 0, 4, true), None);
+        assert_eq!(evaluate_spool_presence("f", 3, 32, true), None);
+        assert_eq!(evaluate_spool_presence("f", 0, 255, true), None);
     }
 
     #[test]
