@@ -10,10 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-034 | Sev3 | types/telemetry/mod.rs | No `fun()` merging accessor despite documented dual-location drift | 2026-07-10 | src/types/telemetry/mod.rs:52 → `07-10-REVIEW.md` §18 |
-| BUG-035 | Sev3 | types/telemetry/tests.rs | `test_ams_unit_info_bitmask` doesn't call the accessors it claims to verify | 2026-07-10 | src/types/telemetry/tests.rs:1416-1449 → `07-10-REVIEW.md` §19 |
-| BUG-036 | Sev3 | types/telemetry/mod.rs | `decode_nozzle_temperatures()` has zero test coverage | 2026-07-10 | src/types/telemetry/mod.rs:119 → `07-10-REVIEW.md` §19 |
-| BUG-037 | Sev3 | types/telemetry/report.rs | `is_220v_power()` has zero test coverage despite gating a safety ceiling | 2026-07-10 | src/types/telemetry/report.rs:320 → `07-10-REVIEW.md` §19 |
 | BUG-038 | Sev3 | tests/common/mock_ftps.rs | `read_cmd`'s single read can't detect a `write_command` framing regression | 2026-07-10 | tests/common/mock_ftps.rs:181-217 → `07-10-REVIEW.md` §20 |
 
 ## Fixed
@@ -53,6 +49,10 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-029 | Sev3 | ftps/client.rs | LIST/STOR/RETR initial write/read not poisoned on failure | 2026-07-10 | 2026-07-10 | src/ftps/client.rs — LIST/STOR/RETR's initial `write_command`/`read_response` now poison on `Err`, matching every other control-channel operation per `.claude/rules/ftps-poisoning.md` |
 | BUG-030 | Sev3 | ftps/client.rs | `download_file`'s 426→SIZE recheck isn't symmetric with `upload_file`'s | 2026-07-10 | 2026-07-10 | src/ftps/client.rs — `download_file`'s confirmation check now accepts `FTP_TRANSFER_ABORTED` (426) alongside `FTP_TRANSFER_COMPLETE` before the SIZE recheck, matching `upload_file`'s existing handling |
 | BUG-032 | Sev3 | mqtt/client/mod.rs | CONNACK codes 1-3 collapsed into `AccessDenied` along with 4-5 | 2026-07-10 | 2026-07-10 | src/mqtt/client/mod.rs — only codes 4/5 (bad credentials/not authorized) now map to `AccessDenied`; codes 1-3 map to `ProtocolViolation` with the raw code preserved |
+| BUG-034 | Sev3 | types/telemetry/mod.rs | No `fun()` merging accessor despite documented dual-location drift | 2026-07-10 | 2026-07-10 | src/types/telemetry/mod.rs — added `TelemetryReport::fun()` mirroring `device()`'s fallback order (top-level first, then `print.fun`) |
+| BUG-035 | Sev3 | types/telemetry/tests.rs | `test_ams_unit_info_bitmask` doesn't call the accessors it claims to verify | 2026-07-10 | 2026-07-10 | src/types/telemetry/tests.rs — replaced the hand-rolled bit math with real `unit.ams_type()`/`unit.extruder_assignment()` calls |
+| BUG-036 | Sev3 | types/telemetry/mod.rs | `decode_nozzle_temperatures()` has zero test coverage | 2026-07-10 | 2026-07-10 | src/types/telemetry/tests.rs — added tests for all three branches (composite `device.extruder.info`, single-nozzle flat fallback, IDEX swapped-fallback quirk) |
+| BUG-037 | Sev3 | types/telemetry/report.rs | `is_220v_power()` has zero test coverage despite gating a safety ceiling | 2026-07-10 | 2026-07-10 | src/types/telemetry/tests.rs — added `test_is_220v_power_from_home_flag` (set/clear/missing), mirroring `test_door_open_from_home_flag` |
 
 ## Wontfix
 

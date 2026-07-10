@@ -266,6 +266,32 @@ fn test_door_open_from_home_flag() {
     assert!(!print.is_door_open_from_home_flag());
 }
 
+// BUG-037: is_220v_power() gates X1C's voltage-dependent bed-temp safety ceiling but had zero
+// test coverage, unlike its sibling home_flag bit-accessors.
+#[test]
+fn test_is_220v_power_from_home_flag() {
+    let json_220v = r#"{ "print": { "home_flag": 8 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json_220v)
+        .expect("valid json")
+        .print
+        .expect("print present");
+    assert!(print.is_220v_power());
+
+    let json_110v = r#"{ "print": { "home_flag": 0 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json_110v)
+        .expect("valid json")
+        .print
+        .expect("print present");
+    assert!(!print.is_220v_power());
+
+    let json_missing = r#"{ "print": {} }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json_missing)
+        .expect("valid json")
+        .print
+        .expect("print present");
+    assert!(!print.is_220v_power());
+}
+
 #[test]
 fn test_door_open_from_stat() {
     let json_open = r#"{ "print": { "stat": "0x00800000" } }"#;
@@ -1440,12 +1466,11 @@ fn test_ams_unit_info_bitmask() {
     assert_eq!(unit.info.as_deref(), Some("11002103"));
     assert_eq!(unit.dry_sf_reason, Some(vec![0, 0, 0, 0]));
 
-    // Verify bitmask parsing: bits 0-3 = AMS type, bits 8-11 = extruder assignment
-    let info_val = u64::from_str_radix("11002103", 16).unwrap();
-    let ams_type = (info_val & 0xF) as u8;
-    let extruder_id = ((info_val >> 8) & 0xF) as u8;
-    assert_eq!(ams_type, 3); // AMS Lite type
-    assert_eq!(extruder_id, 1); // Left/deputy extruder
+    // BUG-035: call the real accessors instead of hand-rolling the same bit math here — a
+    // regression in ams_type()/extruder_assignment()'s shift/mask constants wouldn't have been
+    // caught by this test recomputing the expected value independently.
+    assert_eq!(unit.ams_type(), Some(3)); // AMS Lite type
+    assert_eq!(unit.extruder_assignment(), Some(1)); // Left/deputy extruder
 }
 
 #[test]
@@ -1800,6 +1825,76 @@ fn test_bed_temperatures_empty_report() {
     assert_eq!(report.bed_temperatures(), (0, 0));
 }
 
+// BUG-036: decode_nozzle_temperatures() had zero test coverage across all three branches
+// (composite device.extruder.info path, single-nozzle flat-field fallback, and the IDEX
+// swapped-fallback quirk).
+
+#[test]
+fn test_decode_nozzle_temperatures_composite_extruder_path() {
+    // 4587590 = (70 << 16) | 70, same composite packing as bed/chamber.
+    let json = r#"{
+            "device": {
+                "extruder": {
+                    "info": [
+                        { "id": 0, "temp": 4587590 },
+                        { "id": 1, "temp": 3211296 }
+                    ],
+                    "state": 18
+                }
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let temps = decode_nozzle_temperatures(report.device(), None, None);
+    // 3211296 = (49 << 16) | 32 -> actual=32, target=49
+    assert_eq!(temps, vec![(0, 70, 70), (1, 32, 49)]);
+}
+
+#[test]
+fn test_decode_nozzle_temperatures_single_nozzle_flat_fallback() {
+    // No device.extruder and only one nozzle entry -> single (0, actual, target) tuple from
+    // the flat print-level fields.
+    let json = r#"{
+            "device": {
+                "nozzle": { "info": [{ "id": 0 }] }
+            },
+            "print": {
+                "nozzle_temper": 210.0,
+                "nozzle_target_temper": 220.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let temps = decode_nozzle_temperatures(
+        report.device(),
+        report.print.as_ref().unwrap().nozzle_temper,
+        report.print.as_ref().unwrap().nozzle_target_temper,
+    );
+    assert_eq!(temps, vec![(0, 210, 220)]);
+}
+
+#[test]
+fn test_decode_nozzle_temperatures_idex_swapped_fallback() {
+    // IDEX model (2 nozzle.info entries) with no live device.extruder telemetry yet — the
+    // undocumented wire routing quirk: nozzle_temper is nozzle 1's actual, and
+    // nozzle_target_temper is nozzle 0's target, each nozzle getting only half of its own
+    // reading from the flat fields.
+    let json = r#"{
+            "device": {
+                "nozzle": { "info": [{ "id": 0 }, { "id": 1 }] }
+            },
+            "print": {
+                "nozzle_temper": 210.0,
+                "nozzle_target_temper": 220.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let temps = decode_nozzle_temperatures(
+        report.device(),
+        report.print.as_ref().unwrap().nozzle_temper,
+        report.print.as_ref().unwrap().nozzle_target_temper,
+    );
+    assert_eq!(temps, vec![(0, 0, 220), (1, 210, 0)]);
+}
+
 // --- device() accessor tests (mirrors bed_temperatures()'s fallback pattern) ---
 
 #[test]
@@ -1855,4 +1950,38 @@ fn test_device_empty_report() {
     let json = r#"{}"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     assert!(report.device().is_none());
+}
+
+// BUG-034: TelemetryReport::fun() mirrors device()'s fallback order — top-level `fun` first,
+// then print.fun.
+
+#[test]
+fn test_fun_top_level_only() {
+    let json = r#"{ "fun": "3EC1AFFF9CFF" }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.fun(), Some("3EC1AFFF9CFF"));
+}
+
+#[test]
+fn test_fun_print_nested_only() {
+    let json = r#"{ "print": { "fun": "3EC1AFFF9CFF" } }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.fun(), Some("3EC1AFFF9CFF"));
+}
+
+#[test]
+fn test_fun_both_present_top_level_wins() {
+    let json = r#"{
+            "fun": "TOP_LEVEL",
+            "print": { "fun": "NESTED" }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.fun(), Some("TOP_LEVEL"));
+}
+
+#[test]
+fn test_fun_neither_present() {
+    let json = r#"{ "print": {} }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert!(report.fun().is_none());
 }

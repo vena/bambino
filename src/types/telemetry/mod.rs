@@ -86,6 +86,18 @@ impl TelemetryReport {
             .as_ref()
             .or_else(|| self.print.as_ref().and_then(|print| print.device.as_ref()))
     }
+
+    /// Returns the `fun` Developer LAN Mode bitmask, checking both wire locations it can
+    /// arrive at.
+    ///
+    /// BUG-034: mirrors `device()`'s fallback order — top-level `fun` is checked first,
+    /// falling back to `print.fun` [REF-MQTT-ENV §3.2.1]. Prefer this over reading `self.fun`
+    /// directly, the same way `device()` is preferred over `self.device`.
+    pub fn fun(&self) -> Option<&str> {
+        self.fun
+            .as_deref()
+            .or_else(|| self.print.as_ref().and_then(|print| print.fun.as_deref()))
+    }
 }
 
 /// Shared bed-temperature decode logic behind [`TelemetryReport::bed_temperatures()`] and [`crate::client::PrinterClient::bed_temperatures()`] — both need the same cross-model unpack (composite-packed new-gen `device.bed` vs. flat old-gen `bed_temper`/ `bed_target_temper`), one sourced from a fresh report, the other from cached scalars.
