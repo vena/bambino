@@ -157,6 +157,10 @@ struct ProbeEntry {
     capture_window_secs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     publish_error: Option<String>,
+    // BUG-017: capture_responses() failures are recorded here instead of aborting run() via
+    // `?`, which previously discarded every already-captured entry and wrote nothing at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_error: Option<String>,
     responses: Vec<CapturedMessage>,
     elapsed_ms: u64,
     response_count: usize,
@@ -458,6 +462,7 @@ pub async fn run(
                 description: test.description().to_string(),
                 capture_window_secs: 0,
                 publish_error: None,
+                capture_error: None,
                 responses: Vec::new(),
                 elapsed_ms,
                 response_count: 0,
@@ -491,30 +496,42 @@ pub async fn run(
             Err(e) => Some(e.to_string()),
         };
 
-        let (responses, wait_outcome) = if publish_error.is_none() {
+        // BUG-017: capture_responses() failures used to propagate via `?`, discarding every
+        // already-captured entry and aborting before the report was ever written. Recorded
+        // as a per-entry capture_error instead, mirroring how publish_error already handles
+        // send_command() failures — the run continues to the next test either way.
+        let (responses, wait_outcome, capture_error) = if publish_error.is_none() {
             if test.uses_wait_for_homing() {
                 let outcome = match client.wait_for_homing().await {
                     Ok(()) => "resolved".to_string(),
                     Err(e) => format!("error: {e}"),
                 };
-                (Vec::new(), Some(outcome))
+                (Vec::new(), Some(outcome), None)
             } else {
-                (capture_responses(&mut client, capture_window).await?, None)
+                match capture_responses(&mut client, capture_window).await {
+                    Ok(r) => (r, None, None),
+                    Err(e) => (Vec::new(), None, Some(e.to_string())),
+                }
             }
         } else {
-            (Vec::new(), None)
+            (Vec::new(), None, None)
         };
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let response_count = responses.len();
 
         eprintln!(
-            "{} response{} in {}ms{}{}",
+            "{} response{} in {}ms{}{}{}",
             response_count,
             if response_count == 1 { "" } else { "s" },
             elapsed_ms,
             if publish_error.is_some() {
                 " (publish failed)"
+            } else {
+                ""
+            },
+            if capture_error.is_some() {
+                " (capture failed)"
             } else {
                 ""
             },
@@ -529,6 +546,7 @@ pub async fn run(
             description: test.description().to_string(),
             capture_window_secs: window_secs,
             publish_error,
+            capture_error,
             responses,
             elapsed_ms,
             response_count,
