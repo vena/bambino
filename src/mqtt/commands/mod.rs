@@ -67,6 +67,26 @@ mod tests {
             "sequence_id {} exceeds i32::MAX in {json}",
             req.print.sequence_id
         );
+
+        // BUG-001: ProjectFileRequest::from_config previously skipped clamp_task_id() too.
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            u64::MAX,
+            "textured",
+        );
+        let project_req = ProjectFileRequest::from_config(&config, u64::MAX, BambuModel::P1S);
+        assert!(
+            project_req.print.sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+            "ProjectFileRequest sequence_id {} exceeds i32::MAX",
+            project_req.print.sequence_id
+        );
+        assert!(
+            project_req.print.subtask_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+            "ProjectFileRequest subtask_id {} exceeds i32::MAX",
+            project_req.print.subtask_id
+        );
     }
 
     #[test]

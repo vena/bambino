@@ -20,6 +20,7 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 use crate::error::BambuError;
+use crate::mqtt::commands::clamp_task_id;
 
 /// Validates whether a provided calibration profile setting ID complies with EEPROM limits.
 ///
@@ -107,7 +108,7 @@ impl ExtrusionCaliGetRequest {
         Self {
             print: ExtrusionCaliGetPayload {
                 command: "extrusion_cali_get",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -180,7 +181,7 @@ impl ExtrusionCaliSetRequest {
             print: ExtrusionCaliSetPayload {
                 command: "extrusion_cali_set",
                 filaments: profiles,
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         })
     }
@@ -252,7 +253,7 @@ impl ExtrusionCaliSelRequest {
                 cali_idx,
                 filament_id: String::from(filament_id),
                 nozzle_diameter: String::from(nozzle_diameter),
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -320,7 +321,7 @@ impl StandardCaliDelRequest {
             print: StandardCaliDelPayload {
                 command: "extrusion_cali_del",
                 filaments: vec![target],
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         })
     }
@@ -351,7 +352,7 @@ impl IdexCaliDelRequest {
             print: IdexCaliDelPayload {
                 command: "extrusion_cali_del",
                 filaments: vec![target],
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
             },
         }
     }
@@ -555,5 +556,76 @@ mod tests {
         assert_eq!(resp.print.filaments[0].cali_idx, 4);
         assert_eq!(resp.print.filaments[0].k_value, "0.022000");
         assert_eq!(resp.print.filaments[0].n_coef, Some("0.000000".into()));
+    }
+
+    #[test]
+    fn test_all_constructors_clamp_unclamped_sequence_id() {
+        // BUG-001: these five constructors previously serialized sequence_id.to_string()
+        // directly, skipping clamp_task_id() — see .claude/rules/task-id-clamping.md.
+        let raw = u64::MAX;
+        let assert_clamped = |sequence_id: &str, label: &str| {
+            assert!(
+                sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+                "{label} sequence_id {sequence_id} exceeds i32::MAX"
+            );
+        };
+
+        assert_clamped(
+            &ExtrusionCaliGetRequest::new(raw).print.sequence_id,
+            "ExtrusionCaliGetRequest",
+        );
+
+        let profile = KProfileEntry {
+            cali_idx: -1,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            extruder_id: 0,
+            name: "Test".into(),
+            k_value: "0.022".into(),
+            n_coef: None,
+            setting_id: "PF12345678901234567".into(),
+            ams_id: None,
+            tray_id: None,
+        };
+        assert_clamped(
+            &ExtrusionCaliSetRequest::new(vec![profile], raw)
+                .unwrap()
+                .print
+                .sequence_id,
+            "ExtrusionCaliSetRequest",
+        );
+
+        assert_clamped(
+            &ExtrusionCaliSelRequest::new(0, 1, 4, "GFA01", "0.4", raw)
+                .print
+                .sequence_id,
+            "ExtrusionCaliSelRequest",
+        );
+
+        let standard_entry = StandardCaliDelEntry {
+            cali_idx: 4,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            setting_id: "PF12345678901234567".into(),
+        };
+        assert_clamped(
+            &StandardCaliDelRequest::new(standard_entry, raw)
+                .unwrap()
+                .print
+                .sequence_id,
+            "StandardCaliDelRequest",
+        );
+
+        let idex_entry = IdexCaliDelEntry {
+            nozzle_diameter: "0.4".into(),
+            nozzle_id: "HS00-0.4".into(),
+            extruder_id: 0,
+        };
+        assert_clamped(
+            &IdexCaliDelRequest::new(idex_entry, raw).print.sequence_id,
+            "IdexCaliDelRequest",
+        );
     }
 }

@@ -226,7 +226,7 @@ impl ProjectFileRequest {
         Self {
             print: ProjectFilePayload {
                 command: "project_file",
-                sequence_id: sequence_id.to_string(),
+                sequence_id: clamp_task_id(sequence_id).to_string(),
                 param: config.plate_gcode_path.clone(),
                 subtask_name: config.subtask_name.clone(),
                 subtask_id: clamp_task_id(config.raw_subtask_id).to_string(),
