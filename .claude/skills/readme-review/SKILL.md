@@ -5,7 +5,7 @@ description: Audits README.md for content that doesn't belong there — contribu
 
 # README Review (bambino)
 
-**Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_patch")` first and use those tools throughout. Restated here on purpose, redundant with the global lean-ctx rule — same reasoning as every other skill in this repo.
+**Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_patch")` first and use those tools throughout. Restated here on purpose, redundant with the global lean-ctx rule — a mandate stated once and not repeated near the point of use gets lost across a long task.
 
 ## Why this exists
 
