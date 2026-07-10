@@ -10,13 +10,9 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-016 | Sev3 | bin/bambino-cli/main.rs | `--help` missing `gcode-raw --unsafe` documentation | 2026-07-10 | src/bin/bambino-cli/main.rs:42-53 → `07-10-REVIEW.md` §3 |
 | BUG-017 | Sev3 | bin/bambino-cli/probe.rs | Capture-window error discards all previously-captured probe results | 2026-07-10 | src/bin/bambino-cli/probe.rs:502,414 → `07-10-REVIEW.md` §4 |
 | BUG-022 | Sev3 | tests/client_test.rs | `test_sequence_id_wrapping` never exercises wraparound | 2026-07-10 | tests/client_test.rs:1346-1372 → `07-10-REVIEW.md` §7 |
 | BUG-023 | Sev3 | tests/client_test.rs | No test coverage for X1C's voltage-dependent bed-temp ceiling | 2026-07-10 | tests/client_test.rs:213-291,543-584 → `07-10-REVIEW.md` §7 |
-| BUG-025 | Sev3 | discovery/mod.rs | Module doc wrongly claims `discover_devices()` works on Embassy | 2026-07-10 | src/discovery/mod.rs:8 → `07-10-REVIEW.md` §9 |
-| BUG-026 | Sev3 | lib.rs | Docs claim embassy TLS backend is `embedded-tls`, actually `mbedtls-rs` | 2026-07-10 | src/lib.rs:16,65 → `07-10-REVIEW.md` §10 |
-| BUG-027 | Sev3 | lib.rs | Feature Flags table wrongly claims `tokio` enables the CLI binary | 2026-07-10 | src/lib.rs:63 → `07-10-REVIEW.md` §10 |
 | BUG-028 | Sev3 | ftps/protocol.rs | `read_response` doesn't follow RFC 959 multi-line reply parsing | 2026-07-10 | src/ftps/protocol.rs:208-260 → `07-10-REVIEW.md` §11 |
 | BUG-029 | Sev3 | ftps/client.rs | LIST/STOR/RETR initial write/read not poisoned on failure | 2026-07-10 | src/ftps/client.rs:389-400,558-569,641-652 → `07-10-REVIEW.md` §12 |
 | BUG-030 | Sev3 | ftps/client.rs | `download_file`'s 426→SIZE recheck isn't symmetric with `upload_file`'s | 2026-07-10 | src/ftps/client.rs:598-657 → `07-10-REVIEW.md` §12 |
@@ -53,6 +49,10 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-024 | Sev2 | discovery/mod.rs | `poll_next_device` never stamps `discovery_port` | 2026-07-10 | 2026-07-10 | src/discovery/mod.rs — `poll_next_device` now stamps `device.discovery_port = self.port` itself before returning, instead of relying on the `discover_devices()` wrapper; required for Embassy callers, which drive `DiscoveryEngine` directly |
 | BUG-031 | Sev2 | io/esp_idf.rs | `EspIdfTcpStream` Read/Write block with no preempt point | 2026-07-10 | 2026-07-10 | src/io/esp_idf.rs — socket now stays non-blocking past `connect()`; `read()`/`write()` retry on `WouldBlock` via a new `retry_on_would_block_io()` helper pacing on `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`, mirroring `EspTlsStream`'s existing pattern; verified via `scripts/check-esp-idf.sh esp32c6` |
 | BUG-033 | Sev2 | mqtt/commands/print_job.rs | `with_ams_mapping2()` doesn't sync `ams_mapping`, breaking documented 1:1 pairing | 2026-07-10 | 2026-07-10 | src/ams/mapping.rs, src/mqtt/commands/print_job.rs — added `flat_channel_id_for_entry()`; `from_config` now derives the flat `ams_mapping` array from `ams_mapping2` whenever the latter is the active source, instead of trusting the separately-set `config.ams_mapping` |
+| BUG-016 | Sev3 | bin/bambino-cli/main.rs | `--help` missing `gcode-raw --unsafe` documentation | 2026-07-10 | 2026-07-10 | src/bin/bambino-cli/main.rs:49 — added `--unsafe`/confirmation-prompt lines to `after_help` |
+| BUG-025 | Sev3 | discovery/mod.rs | Module doc wrongly claims `discover_devices()` works on Embassy | 2026-07-10 | 2026-07-10 | src/discovery/mod.rs:1-12 — reworded to attribute cross-platform support to `DiscoveryEngine`, note `discover_devices()` is std-only |
+| BUG-026 | Sev3 | lib.rs | Docs claim embassy TLS backend is `embedded-tls`, actually `mbedtls-rs` | 2026-07-10 | 2026-07-10 | src/lib.rs:16,65 — both occurrences corrected to `mbedtls-rs` |
+| BUG-027 | Sev3 | lib.rs | Feature Flags table wrongly claims `tokio` enables the CLI binary | 2026-07-10 | 2026-07-10 | src/lib.rs:60-67 — removed "CLI binary" from the `tokio` row, added a `cli` row |
 
 ## Wontfix
 

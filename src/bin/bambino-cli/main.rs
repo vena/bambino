@@ -47,6 +47,8 @@ Run 'bambino-cli <COMMAND> --help' for full argument details.
 
 Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   airduct  calibrate  gcode  gcode-raw  pause  resume  stop
+                  gcode-raw prompts for interactive confirmation unless --unsafe is
+                  passed, and bypasses all model safety checks — see its --help.
                   ams (dry | dry-stop)
 Files actions:    list  upload  delete  space
 Camera actions:   snapshot
