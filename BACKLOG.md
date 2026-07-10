@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-032 | Sev3 | mqtt/client/mod.rs | CONNACK codes 1-3 collapsed into `AccessDenied` along with 4-5 | 2026-07-10 | src/mqtt/client/mod.rs:182-201 → `07-10-REVIEW.md` §15 |
 | BUG-034 | Sev3 | types/telemetry/mod.rs | No `fun()` merging accessor despite documented dual-location drift | 2026-07-10 | src/types/telemetry/mod.rs:52 → `07-10-REVIEW.md` §18 |
 | BUG-035 | Sev3 | types/telemetry/tests.rs | `test_ams_unit_info_bitmask` doesn't call the accessors it claims to verify | 2026-07-10 | src/types/telemetry/tests.rs:1416-1449 → `07-10-REVIEW.md` §19 |
 | BUG-036 | Sev3 | types/telemetry/mod.rs | `decode_nozzle_temperatures()` has zero test coverage | 2026-07-10 | src/types/telemetry/mod.rs:119 → `07-10-REVIEW.md` §19 |
@@ -53,6 +52,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-028 | Sev3 | ftps/protocol.rs | `read_response` doesn't follow RFC 959 multi-line reply parsing | 2026-07-10 | 2026-07-10 | src/ftps/protocol.rs — now tracks the reply's opening code; only a line with the same code + space terminates, same code + hyphen continues in this parser's padded format, anything else is preserved verbatim as free-text body |
 | BUG-029 | Sev3 | ftps/client.rs | LIST/STOR/RETR initial write/read not poisoned on failure | 2026-07-10 | 2026-07-10 | src/ftps/client.rs — LIST/STOR/RETR's initial `write_command`/`read_response` now poison on `Err`, matching every other control-channel operation per `.claude/rules/ftps-poisoning.md` |
 | BUG-030 | Sev3 | ftps/client.rs | `download_file`'s 426→SIZE recheck isn't symmetric with `upload_file`'s | 2026-07-10 | 2026-07-10 | src/ftps/client.rs — `download_file`'s confirmation check now accepts `FTP_TRANSFER_ABORTED` (426) alongside `FTP_TRANSFER_COMPLETE` before the SIZE recheck, matching `upload_file`'s existing handling |
+| BUG-032 | Sev3 | mqtt/client/mod.rs | CONNACK codes 1-3 collapsed into `AccessDenied` along with 4-5 | 2026-07-10 | 2026-07-10 | src/mqtt/client/mod.rs — only codes 4/5 (bad credentials/not authorized) now map to `AccessDenied`; codes 1-3 map to `ProtocolViolation` with the raw code preserved |
 
 ## Wontfix
 

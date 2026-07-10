@@ -193,12 +193,29 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         log::debug!("Connection accepted response byte: {}", connack_code);
 
-        if connack_code != 0 {
-            log::warn!(
-                "Broker rejected connection with CONNACK return code: {}",
-                connack_code
-            );
-            return Err(BambuError::AccessDenied);
+        // BUG-032: MQTT v3.1.1 CONNACK codes 1-3 (unacceptable protocol version, identifier
+        // rejected, server unavailable) are distinct from 4-5 (bad credentials/not authorized)
+        // — only the latter pair actually means the access code was rejected, matching
+        // AccessDenied's own doc comment. Collapsing 1-3 into AccessDenied too would misdiagnose
+        // e.g. a transient "server unavailable" as "check your access code."
+        match connack_code {
+            0 => {}
+            4 | 5 => {
+                log::warn!(
+                    "Broker rejected connection with CONNACK return code: {} (access denied)",
+                    connack_code
+                );
+                return Err(BambuError::AccessDenied);
+            }
+            other => {
+                log::warn!(
+                    "Broker rejected connection with CONNACK return code: {} (not an access-code rejection)",
+                    other
+                );
+                return Err(BambuError::ProtocolViolation(
+                    format!("Broker rejected connection with CONNACK return code {other}").into(),
+                ));
+            }
         }
 
         // Subscribe to report topic
@@ -561,6 +578,38 @@ mod tests {
             assert!(
                 matches!(err, crate::error::BambuError::AccessDenied),
                 "Expected AccessDenied, got {:?}",
+                err
+            );
+            server_task.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn test_connack_server_unavailable_returns_protocol_violation() {
+            // BUG-032: CONNACK codes 1-3 (unacceptable protocol version, identifier rejected,
+            // server unavailable) are distinct from 4-5 (bad credentials/not authorized) — only
+            // the latter pair means the access code was actually rejected. Code 3 here
+            // (server unavailable) must not misdiagnose as AccessDenied.
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+            let server_task = tokio::spawn(async move {
+                let mut discard = vec![0u8; 256];
+                let _ = server_stream.read(&mut discard).await;
+
+                // Reply with CONNACK: return code 3 (server unavailable)
+                server_stream
+                    .write_all(&[0x20, 0x02, 0x00, 0x03])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+            });
+
+            let result =
+                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                    .await;
+            let err = result.err().expect("Expected error, got Ok");
+            assert!(
+                matches!(err, crate::error::BambuError::ProtocolViolation(_)),
+                "Expected ProtocolViolation, got {:?}",
                 err
             );
             server_task.await.unwrap();
