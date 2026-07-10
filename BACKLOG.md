@@ -8,7 +8,33 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 ## Open
 
-*(none open as of 2026-07-09)*
+| ID | Sev | Module | Title | Found | Detail |
+|---|---|---|---|---|---|
+| BUG-014 | Sev2 | ams/parser.rs | `evaluate_spool_presence` doesn't bounds-check `tray_id` before a bit-shift | 2026-07-10 | src/ams/parser.rs:60-65 — shift can exceed 31 bits on malformed wire data → `07-10-REVIEW.md` §1 |
+| BUG-015 | Sev2 | ams/parser.rs | AMS-HT slots always report `Some(true)` presence regardless of actual state | 2026-07-10 | src/ams/parser.rs:50-54 → `07-10-REVIEW.md` §1 |
+| BUG-016 | Sev3 | bin/bambino-cli/main.rs | `--help` missing `gcode-raw --unsafe` documentation | 2026-07-10 | src/bin/bambino-cli/main.rs:42-53 → `07-10-REVIEW.md` §3 |
+| BUG-017 | Sev3 | bin/bambino-cli/probe.rs | Capture-window error discards all previously-captured probe results | 2026-07-10 | src/bin/bambino-cli/probe.rs:502,414 → `07-10-REVIEW.md` §4 |
+| BUG-018 | Sev2 | client/connect.rs | No `disconnect_mqtt()`/`attach_mqtt()` — dead MQTT session has no recovery path | 2026-07-10 | src/client/connect.rs:92-114 → `07-10-REVIEW.md` §5 |
+| BUG-019 | Sev2 | client/connect.rs | Sequence-counter reseed is a no-op under the default `DummyTimer` | 2026-07-10 | src/client/connect.rs:107-109 → `07-10-REVIEW.md` §5 |
+| BUG-020 | Sev2 | client/connect.rs | `ensure_ftps`/`ensure_camera` consume config even on a failed connect attempt | 2026-07-10 | src/client/connect.rs:273-306,328-361 → `07-10-REVIEW.md` §5 |
+| BUG-021 | Sev2 | client/telemetry.rs | `last_door_open` cache overwritten unconditionally, ignoring absent-field staleness contract | 2026-07-10 | src/client/telemetry.rs:156 → `07-10-REVIEW.md` §6 |
+| BUG-022 | Sev3 | tests/client_test.rs | `test_sequence_id_wrapping` never exercises wraparound | 2026-07-10 | tests/client_test.rs:1346-1372 → `07-10-REVIEW.md` §7 |
+| BUG-023 | Sev3 | tests/client_test.rs | No test coverage for X1C's voltage-dependent bed-temp ceiling | 2026-07-10 | tests/client_test.rs:213-291,543-584 → `07-10-REVIEW.md` §7 |
+| BUG-024 | Sev2 | discovery/mod.rs | `poll_next_device` never stamps `discovery_port` | 2026-07-10 | src/discovery/mod.rs:113-134 → `07-10-REVIEW.md` §9 |
+| BUG-025 | Sev3 | discovery/mod.rs | Module doc wrongly claims `discover_devices()` works on Embassy | 2026-07-10 | src/discovery/mod.rs:8 → `07-10-REVIEW.md` §9 |
+| BUG-026 | Sev3 | lib.rs | Docs claim embassy TLS backend is `embedded-tls`, actually `mbedtls-rs` | 2026-07-10 | src/lib.rs:16,65 → `07-10-REVIEW.md` §10 |
+| BUG-027 | Sev3 | lib.rs | Feature Flags table wrongly claims `tokio` enables the CLI binary | 2026-07-10 | src/lib.rs:63 → `07-10-REVIEW.md` §10 |
+| BUG-028 | Sev3 | ftps/protocol.rs | `read_response` doesn't follow RFC 959 multi-line reply parsing | 2026-07-10 | src/ftps/protocol.rs:208-260 → `07-10-REVIEW.md` §11 |
+| BUG-029 | Sev3 | ftps/client.rs | LIST/STOR/RETR initial write/read not poisoned on failure | 2026-07-10 | src/ftps/client.rs:389-400,558-569,641-652 → `07-10-REVIEW.md` §12 |
+| BUG-030 | Sev3 | ftps/client.rs | `download_file`'s 426→SIZE recheck isn't symmetric with `upload_file`'s | 2026-07-10 | src/ftps/client.rs:598-657 → `07-10-REVIEW.md` §12 |
+| BUG-031 | Sev2 | io/esp_idf.rs | `EspIdfTcpStream` Read/Write block with no preempt point | 2026-07-10 | src/io/esp_idf.rs:521-539 → `07-10-REVIEW.md` §14 |
+| BUG-032 | Sev3 | mqtt/client/mod.rs | CONNACK codes 1-3 collapsed into `AccessDenied` along with 4-5 | 2026-07-10 | src/mqtt/client/mod.rs:182-201 → `07-10-REVIEW.md` §15 |
+| BUG-033 | Sev2 | mqtt/commands/print_job.rs | `with_ams_mapping2()` doesn't sync `ams_mapping`, breaking documented 1:1 pairing | 2026-07-10 | src/mqtt/commands/print_job.rs:88-93,216-220 → `07-10-REVIEW.md` §16 |
+| BUG-034 | Sev3 | types/telemetry/mod.rs | No `fun()` merging accessor despite documented dual-location drift | 2026-07-10 | src/types/telemetry/mod.rs:52 → `07-10-REVIEW.md` §18 |
+| BUG-035 | Sev3 | types/telemetry/tests.rs | `test_ams_unit_info_bitmask` doesn't call the accessors it claims to verify | 2026-07-10 | src/types/telemetry/tests.rs:1416-1449 → `07-10-REVIEW.md` §19 |
+| BUG-036 | Sev3 | types/telemetry/mod.rs | `decode_nozzle_temperatures()` has zero test coverage | 2026-07-10 | src/types/telemetry/mod.rs:119 → `07-10-REVIEW.md` §19 |
+| BUG-037 | Sev3 | types/telemetry/report.rs | `is_220v_power()` has zero test coverage despite gating a safety ceiling | 2026-07-10 | src/types/telemetry/report.rs:320 → `07-10-REVIEW.md` §19 |
+| BUG-038 | Sev3 | tests/common/mock_ftps.rs | `read_cmd`'s single read can't detect a `write_command` framing regression | 2026-07-10 | tests/common/mock_ftps.rs:181-217 → `07-10-REVIEW.md` §20 |
 
 ## Fixed
 
