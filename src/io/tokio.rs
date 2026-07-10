@@ -16,9 +16,9 @@ use rustls::{CertificateError, DigitallySignedStruct, Error as RustlsError, Sign
 use rustls_pki_types::{
     CertificateDer, PrivateKeyDer, ServerName, SignatureVerificationAlgorithm, UnixTime,
 };
-use x509_parser::prelude::FromDer;
 use std::sync::Arc;
 use tokio_rustls::rustls;
+use x509_parser::prelude::FromDer;
 
 /// Timer implementation utilizing Tokio's non-blocking system clock registry.
 pub struct TokioTimer {
@@ -189,10 +189,14 @@ impl ServerCertVerifier for NoCertificateVerification {
 /// policy-enforcing validator — confirmed via its own test suite that it treats the version
 /// field as optional, defaulting to v1 when absent, exactly per the DER grammar) for all
 /// parsing, and does two independent things no other code in this crate does:
-/// - **Chain-of-trust**: is the leaf's signature valid under one of the caller-supplied
-///   trusted roots' public keys, with a matching issuer/subject and unexpired validity period?
-///   (`verify_server_cert`, via `X509Certificate::verify_signature` — real `ring`-backed
-///   verification, not hand-rolled crypto.)
+/// - **Chain-of-trust**: walks from the leaf through the presented intermediates (BUG-008: this
+///   used to check the leaf directly against the trusted roots only, silently ignoring
+///   `intermediates` — a legitimate two-level custom CA (offline root + issuing intermediate)
+///   failed with `UnknownIssuer` even though the chain was valid) until it either lands on a
+///   caller-supplied trusted root's public key or runs out of intermediates, verifying each
+///   issuer/subject match and signature link along the way, with an unexpired validity period
+///   on the leaf. (`verify_server_cert`, via `X509Certificate::verify_signature` — real
+///   `ring`-backed verification, not hand-rolled crypto.)
 /// - **Handshake-signature check**: does the live TLS handshake signature verify under the
 ///   leaf's own public key? (`verify_tls12_signature`/`verify_tls13_signature`, via
 ///   `rustls_pki_types::SignatureVerificationAlgorithm::verify_signature` directly — this is
@@ -205,8 +209,10 @@ impl ServerCertVerifier for NoCertificateVerification {
 /// walker to `x509-parser`'s parsed fields.
 pub struct CnFallbackServerVerifier {
     trusted_roots: Vec<CertificateDer<'static>>,
-    algs_mapping:
-        &'static [(SignatureScheme, &'static [&'static dyn SignatureVerificationAlgorithm])],
+    algs_mapping: &'static [(
+        SignatureScheme,
+        &'static [&'static dyn SignatureVerificationAlgorithm],
+    )],
 }
 
 impl CnFallbackServerVerifier {
@@ -247,7 +253,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
+        intermediates: &[CertificateDer<'_>],
         server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         now: UnixTime,
@@ -269,20 +275,46 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             return Err(RustlsError::InvalidCertificate(err));
         }
 
-        let mut signed_by_trusted_root = false;
-        for root_der in &self.trusted_roots {
-            let Ok((_, root)) = X509Certificate::from_der(root_der.as_ref()) else {
-                continue;
-            };
-            if leaf.issuer().as_raw() != root.subject().as_raw() {
-                continue;
-            }
-            if leaf.verify_signature(Some(root.public_key())).is_ok() {
-                signed_by_trusted_root = true;
+        // BUG-008: walk from the leaf through `intermediates` (parsed once up front, then
+        // consumed as they're matched — each intermediate is usable at most once, so a cyclic
+        // issuer/subject arrangement can't stall the loop) until landing on a trusted root or
+        // running out of intermediates. Every hop must both match issuer/subject *and* verify
+        // the signature — a name match alone proves nothing. Previously this only checked the
+        // leaf directly against the trusted roots, so a legitimate multi-level custom CA
+        // (offline root + issuing intermediate) always failed with `UnknownIssuer`.
+        let parsed_intermediates: Vec<X509Certificate> = intermediates
+            .iter()
+            .filter_map(|der| X509Certificate::from_der(der.as_ref()).ok().map(|(_, c)| c))
+            .collect();
+        let mut used = vec![false; parsed_intermediates.len()];
+
+        let mut current = &leaf;
+        let mut chain_trusted = false;
+        for _ in 0..=parsed_intermediates.len() {
+            if self.trusted_roots.iter().any(|root_der| {
+                let Ok((_, root)) = X509Certificate::from_der(root_der.as_ref()) else {
+                    return false;
+                };
+                current.issuer().as_raw() == root.subject().as_raw()
+                    && current.verify_signature(Some(root.public_key())).is_ok()
+            }) {
+                chain_trusted = true;
                 break;
             }
+
+            let next_idx = parsed_intermediates
+                .iter()
+                .enumerate()
+                .position(|(i, c)| !used[i] && current.issuer().as_raw() == c.subject().as_raw());
+            let Some(idx) = next_idx else { break };
+            let next = &parsed_intermediates[idx];
+            if current.verify_signature(Some(next.public_key())).is_err() {
+                break;
+            }
+            used[idx] = true;
+            current = next;
         }
-        if !signed_by_trusted_root {
+        if !chain_trusted {
             return Err(RustlsError::InvalidCertificate(
                 CertificateError::UnknownIssuer,
             ));
@@ -312,7 +344,10 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.algs_mapping.iter().map(|(scheme, _)| *scheme).collect()
+        self.algs_mapping
+            .iter()
+            .map(|(scheme, _)| *scheme)
+            .collect()
     }
 }
 
@@ -326,7 +361,10 @@ fn verify_handshake_signature(
     cert: &CertificateDer<'_>,
     message: &[u8],
     dss: &DigitallySignedStruct,
-    algs_mapping: &'static [(SignatureScheme, &'static [&'static dyn SignatureVerificationAlgorithm])],
+    algs_mapping: &'static [(
+        SignatureScheme,
+        &'static [&'static dyn SignatureVerificationAlgorithm],
+    )],
     try_all: bool,
 ) -> Result<HandshakeSignatureValid, RustlsError> {
     let (_, leaf) = x509_parser::certificate::X509Certificate::from_der(cert.as_ref())
@@ -635,15 +673,16 @@ mod tests {
     #[test]
     fn test_build_verified_client_config_with_options_tls12() {
         let (ca_der, ..) = test_support::generate_test_ca();
-        let config =
-            build_verified_client_config_with_options([ca_der], None, true);
+        let config = build_verified_client_config_with_options([ca_der], None, true);
         assert!(config.is_ok());
     }
 
     /// Shared fixtures for `CnFallbackServerVerifier` tests: real DER-encoded certs rather than
     /// hand-crafted byte arrays, so the parser is exercised against genuine X.509 encoding.
     mod test_support {
-        use rcgen::{BasicConstraints, CertificateParams, DnType, Issuer, IsCa, KeyPair, SigningKey};
+        use rcgen::{
+            BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, SigningKey,
+        };
 
         use super::*;
 
@@ -667,6 +706,23 @@ mod tests {
             let cert = params.clone().self_signed(&key).unwrap();
             let der = cert.der().clone();
             (der, Issuer::new(params, key), key_der, algo)
+        }
+
+        /// Builds an intermediate CA cert signed by `parent_issuer`, plus an `Issuer` for
+        /// signing leaves under it — used by the two-level chain regression test (BUG-008).
+        pub(super) fn generate_test_intermediate_ca(
+            parent_issuer: &Issuer<'_, KeyPair>,
+            common_name: &str,
+        ) -> (CertificateDer<'static>, Issuer<'static, KeyPair>) {
+            let mut params = CertificateParams::new(Vec::new()).unwrap();
+            params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+            params
+                .distinguished_name
+                .push(DnType::CommonName, common_name);
+            let key = KeyPair::generate().unwrap();
+            let cert = params.clone().signed_by(&key, parent_issuer).unwrap();
+            let der = cert.der().clone();
+            (der, Issuer::new(params, key))
         }
 
         /// Builds a v3 leaf cert signed by `issuer`. `common_name` is always set; `san_dns_names`
@@ -731,7 +787,10 @@ mod tests {
                 out.push(len as u8);
             } else {
                 let bytes = len.to_be_bytes();
-                let first_nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len() - 1);
+                let first_nonzero = bytes
+                    .iter()
+                    .position(|&b| b != 0)
+                    .unwrap_or(bytes.len() - 1);
                 let significant = &bytes[first_nonzero..];
                 out.push(0x80 | significant.len() as u8);
                 out.extend_from_slice(significant);
@@ -845,6 +904,66 @@ mod tests {
     }
 
     #[test]
+    fn test_cn_fallback_verifier_accepts_leaf_via_intermediate() {
+        // BUG-008: a leaf signed by an intermediate CA (itself signed by the trusted root, not
+        // trusted directly) must validate when the intermediate is presented in `intermediates`
+        // — the verifier previously only ever checked the leaf's issuer directly against the
+        // trusted roots, so this always failed with UnknownIssuer regardless.
+        let (root_der, root_issuer, ..) = test_support::generate_test_ca();
+        let (intermediate_der, intermediate_issuer) = test_support::generate_test_intermediate_ca(
+            &root_issuer,
+            "bambino test intermediate CA",
+        );
+        let leaf =
+            test_support::generate_test_leaf(&intermediate_issuer, "TESTSERIAL0001", Vec::new());
+
+        let verifier = CnFallbackServerVerifier::new([root_der]).unwrap();
+        let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
+
+        let result = verifier.verify_server_cert(
+            &leaf,
+            &[intermediate_der],
+            &server_name,
+            &[],
+            UnixTime::now(),
+        );
+        assert!(
+            result.is_ok(),
+            "expected a leaf signed by a trusted root's intermediate to validate, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_cn_fallback_verifier_rejects_leaf_via_untrusted_intermediate() {
+        // Sibling of the acceptance case: an intermediate signed by an *unrelated* CA must still
+        // be rejected even when presented as an intermediate — presence in `intermediates` alone
+        // must never grant trust, only an unbroken signature chain up to a trusted root does.
+        let (root_der, ..) = test_support::generate_test_ca();
+        let (_other_root_der, other_root_issuer, ..) = test_support::generate_test_ca();
+        let (intermediate_der, intermediate_issuer) = test_support::generate_test_intermediate_ca(
+            &other_root_issuer,
+            "bambino test rogue intermediate CA",
+        );
+        let leaf =
+            test_support::generate_test_leaf(&intermediate_issuer, "TESTSERIAL0001", Vec::new());
+
+        let verifier = CnFallbackServerVerifier::new([root_der]).unwrap();
+        let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
+
+        let result = verifier.verify_server_cert(
+            &leaf,
+            &[intermediate_der],
+            &server_name,
+            &[],
+            UnixTime::now(),
+        );
+        assert!(
+            result.is_err(),
+            "a leaf chained through an untrusted intermediate must still be rejected"
+        );
+    }
+
+    #[test]
     fn test_cn_fallback_verifier_rejects_expired_cert() {
         let (ca_der, issuer, ..) = test_support::generate_test_ca();
         let not_before = time::OffsetDateTime::UNIX_EPOCH;
@@ -888,8 +1007,7 @@ mod tests {
         let verifier = CnFallbackServerVerifier::new([ca_der]).unwrap();
         let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
 
-        let result =
-            verifier.verify_server_cert(&v1_leaf, &[], &server_name, &[], UnixTime::now());
+        let result = verifier.verify_server_cert(&v1_leaf, &[], &server_name, &[], UnixTime::now());
         assert!(
             result.is_ok(),
             "expected a real v1-shaped, SAN-less cert to validate via CN fallback, got {result:?}"
