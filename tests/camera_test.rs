@@ -99,10 +99,11 @@ async fn test_binary_camera_handshake_and_streaming() {
         .expect("Background mock camera server panicked");
 }
 
-/// Exercises the full `PrinterClient` camera path (`PLAN.md` Phase 13): `.with_camera()`
-/// lazy-connects on first `read_camera_frame()` call, dialing via the mock factory,
-/// passing through the (pass-through) mock TLS connector, authenticating, and reading a
-/// frame — analogous to `tests/client_test.rs::test_disconnect_storage_clears_ftps_for_clean_reconnect`'s
+/// Exercises the full `PrinterClient` camera path (see `.claude/rules/camera-trio.md`):
+/// `.with_camera()` lazy-connects on first `read_camera_frame()` call, dialing via the mock
+/// factory, passing through the (pass-through) mock TLS connector, authenticating, and
+/// reading a frame — analogous to
+/// `tests/client_test.rs::test_disconnect_storage_clears_ftps_for_clean_reconnect`'s
 /// FTPS-through-`PrinterClient` pattern.
 #[tokio::test]
 async fn test_printer_client_camera_end_to_end() {
@@ -146,8 +147,8 @@ async fn test_printer_client_camera_end_to_end() {
 }
 
 /// `ensure_camera()` must reject an RTSPS model immediately — before any dial, and even
-/// without `.with_camera()` ever being called — per `PLAN.md` Phase 13's design: the
-/// protocol check runs first, so an RTSPS model gets "this model doesn't support this
+/// without `.with_camera()` ever being called — per `.claude/rules/camera-trio.md`'s design:
+/// the protocol check runs first, so an RTSPS model gets "this model doesn't support this
 /// connection type," not "you forgot to configure it."
 #[tokio::test]
 async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {

@@ -117,13 +117,12 @@ can be called repeatedly on the same connector — there is no one-shot buffer-c
 constraint to work around, unlike the old `embedded-tls`-backed connector.
 
 **`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
-API to read back the TLS version actually negotiated (see
-`EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section — confirmed by reading its source, not
+API to read back the TLS version actually negotiated (confirmed by reading its source, not
 assumed) — unlike the old `embedded-tls` connector, which hard-coded a wrong `Some(Tls13)`
 answer. This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
 closed for P2S/X2D even after this backend swap; use
 `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
-needed (see `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md` Track A).
+needed (see `src/ftps/CLAUDE.md` and this module's `CLAUDE.md`).
 
 **No built-in connect timeout**, same as before: `connect()` has no retry/poll loop of its
 own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Callers that need
@@ -162,13 +161,13 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
 - <span id="embassytlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
-  `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this type's
+  `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this
 
-  doc comment and `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section. Return `None`
+  type's doc comment above. Return `None` honestly rather than hard-coding a guess
 
-  honestly rather than hard-coding a guess (the anti-pattern the old `embedded-tls`
+  (the anti-pattern the old `embedded-tls` connector had, just wrong in the other
 
-  connector had, just wrong in the other direction).
+  direction).
 
 ### `EmbassyUdpSocket<'a>`
 

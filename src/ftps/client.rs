@@ -105,19 +105,18 @@ where
     ip: String,
     /// The printer's serial number — carried separately from `ip` because it, not the IP, is
     /// what the printer's TLS server expects as SNI/identity (see
-    /// `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`); used for the data-channel TLS connect in
+    /// `.claude/rules/tls-identity-sni.md`); used for the data-channel TLS connect in
     /// `open_data_channel`.
     serial: String,
     timer: FtpsTimer,
     /// Set once a control-channel desync is possible (see struct doc comment).
     /// Checked by every public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
-    /// Bypasses `require_tls_1_2_if_enforced`'s rejection when set — see
-    /// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s "Why the escape hatch is safe" section for why this
-    /// is a reliability tradeoff, not a safety hole: `upload_file`'s and `download_file`'s
-    /// symmetric `SIZE` rechecks already catch a truncated/corrupted transfer
-    /// regardless of this flag. Only meaningful today for the `embassy` feature talking to
-    /// P2S/X2D, where no available TLS backend can honestly satisfy the exact-version check.
+    /// Bypasses `require_tls_1_2_if_enforced`'s rejection when set — safe despite being
+    /// fail-open (see `src/ftps/CLAUDE.md`): `upload_file`'s and `download_file`'s symmetric
+    /// `SIZE` rechecks already catch a truncated/corrupted transfer regardless of this flag.
+    /// Only meaningful today for the `embassy` feature talking to P2S/X2D, where no available
+    /// TLS backend can honestly satisfy the exact-version check.
     allow_unverified_tls_1_2: bool,
     /// `read_line_raw`'s leftover-byte carry buffer, threaded through every `read_response` call made against `control_stream` for the life of this client — not reset per method call.
     /// This must live at least as long as `control_stream` itself: FTP servers may write two logically
@@ -319,7 +318,7 @@ where
         if allow_unverified {
             log::warn!(
                 "FTPS TLS 1.2 enforcement bypassed by caller configuration \
-                 (allow_unverified_tls_1_2) — see EMBASSY_TLS_ESCAPE_HATCH_PLAN.md"
+                 (allow_unverified_tls_1_2) — see src/ftps/CLAUDE.md"
             );
             return Ok(());
         }

@@ -87,7 +87,7 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for FailingDataTlsConnector {
 
 /// A pass-through TLS connector that records the `host` string it was given, so tests can
 /// assert *which* identity value (serial vs. IP) a connect call site actually sent — see
-/// `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`.
+/// `.claude/rules/tls-identity-sni.md`.
 pub struct HostCapturingTlsConnector {
     pub captured_host: Arc<Mutex<Option<String>>>,
 }

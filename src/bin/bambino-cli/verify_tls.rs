@@ -1,11 +1,12 @@
 #![cfg(feature = "cli")]
 
-//! Diagnostic-only command supporting `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`'s final validation
-//! step: attempts a real CA-verified TLS handshake against a printer using
-//! `bambino::io::tokio::build_verified_client_config` (and therefore the new
-//! `CnFallbackServerVerifier`), sending `serial` as the SNI value. Reports success or the exact
-//! `rustls`/`BambuError` failure — this is the only way to confirm the verifier's SAN-then-CN
-//! logic behaves correctly against a real printer's handshake, not just against rcgen fixtures.
+//! Diagnostic-only command that attempts a real CA-verified TLS handshake
+//! against a printer using `bambino::io::tokio::build_verified_client_config`
+//! (and therefore `CnFallbackServerVerifier`), sending `serial` as the SNI
+//! value. Reports success or the exact `rustls`/`BambuError` failure — this
+//! is the only way to confirm the verifier's SAN-then-CN logic (see
+//! `.claude/rules/tls-identity-sni.md`) behaves correctly against a real
+//! printer's handshake, not just against rcgen fixtures.
 
 use bambino::error::BambuError;
 use bambino::io::tokio::build_verified_client_config;

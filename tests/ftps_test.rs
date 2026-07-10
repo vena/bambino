@@ -70,10 +70,10 @@ async fn connect_client(
     .expect("FTPS handshake failed")
 }
 
-/// Regression test for `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`: the control-channel TLS connect
-/// must send the printer's serial as the SNI/identity value, never the IP — the printer's cert
-/// has the serial in its Subject CN and no SAN, so a verified connection checking hostname
-/// against the IP could never match.
+/// Regression test for `.claude/rules/tls-identity-sni.md`: the control-channel TLS connect
+/// must send the printer's serial as the SNI/identity value, never the IP — the printer's
+/// cert has the serial in its Subject CN and no SAN, so a verified connection checking
+/// hostname against the IP could never match.
 #[tokio::test]
 async fn test_ftps_control_channel_connects_with_serial_not_ip() {
     let (client_control, server_control, data_container, factory) = setup();
@@ -544,10 +544,11 @@ async fn test_ftps_version_none_rejected_for_p2s() {
     }
 }
 
-/// Track A of EMBASSY_TLS_ESCAPE_HATCH_PLAN.md: `allow_unverified_tls_1_2 == true` must bypass
-/// `require_tls_1_2_if_enforced`'s rejection even though P2S enforces TLS 1.2 and the mock
-/// connector reports TLS 1.3 was negotiated — mirrors `test_ftps_tls13_rejected_for_p2s` but
-/// with the bypass flag set, so `connect()` must now succeed instead of erroring.
+/// Regression test for `src/ftps/CLAUDE.md`'s TLS-1.2-enforcement opt-out:
+/// `allow_unverified_tls_1_2 == true` must bypass `require_tls_1_2_if_enforced`'s rejection
+/// even though P2S enforces TLS 1.2 and the mock connector reports TLS 1.3 was negotiated —
+/// mirrors `test_ftps_tls13_rejected_for_p2s` but with the bypass flag set, so `connect()`
+/// must now succeed instead of erroring.
 #[tokio::test]
 async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
     let (client_control, server_control, _data_container, factory) = setup();

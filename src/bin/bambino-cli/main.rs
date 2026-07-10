@@ -130,10 +130,11 @@ enum Command {
         access_code: String,
         #[command(subcommand)]
         action: storage::FilesAction,
-        /// Bypass BambuFtpsClient's TLS-1.2-enforcement check for P2S/X2D (embassy escape
-        /// hatch semantics ported to the CLI for testing; see EMBASSY_TLS_ESCAPE_HATCH_PLAN.md).
-        /// On tokio, force_tls_1_2 is already applied automatically per-model — this flag exists
-        /// to let a caller override enforcement even when negotiated_version reports non-1.2.
+        /// Bypass BambuFtpsClient's TLS-1.2-enforcement check for P2S/X2D (the embassy
+        /// escape hatch, ported to the CLI for testing; see src/ftps/CLAUDE.md and
+        /// src/io/CLAUDE.md). On tokio, force_tls_1_2 is already applied automatically
+        /// per-model — this flag exists to let a caller override enforcement even when
+        /// negotiated_version reports non-1.2.
         #[arg(long)]
         allow_unverified_tls_1_2: bool,
     },
@@ -151,7 +152,7 @@ enum Command {
     },
 
     /// Diagnostic: capture a printer's raw leaf TLS cert to disk for SAN/CN inspection
-    /// (see TLS_SNI_HOSTNAME_MISMATCH_PLAN.md). No FTPS/MQTT traffic is exchanged.
+    /// (see .claude/rules/tls-identity-sni.md). No FTPS/MQTT traffic is exchanged.
     InspectCert {
         ip: String,
         serial: String,
@@ -165,7 +166,7 @@ enum Command {
 
     /// Diagnostic: attempt a real CA-verified TLS handshake (SNI=serial) against a printer
     /// using build_verified_client_config, to validate CnFallbackServerVerifier end-to-end
-    /// (see TLS_SNI_HOSTNAME_MISMATCH_PLAN.md). No FTPS/MQTT traffic is exchanged.
+    /// (see .claude/rules/tls-identity-sni.md). No FTPS/MQTT traffic is exchanged.
     VerifyTls {
         ip: String,
         serial: String,

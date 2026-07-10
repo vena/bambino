@@ -182,8 +182,13 @@ impl ServerCertVerifier for NoCertificateVerification {
 /// `EndEntityCert::try_from` during the handshake's signature check). So neither chain
 /// validation nor the handshake-signature check can be delegated to anything in
 /// `rustls-webpki` for a real Bambu cert — confirmed as a known limitation other real-world
-/// self-signed device certs have hit too (see `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md` for the
-/// GitHub issue citations, including the LND project's identical problem).
+/// self-signed device certs have hit too: rustls/rustls#1298 (the identical
+/// "UnsupportedCertVersion" error, hit by an unrelated user), rustls/webpki#205 ("Support
+/// self-signed certificate"), and rustls/rustls#772, where the LND project hit the exact same
+/// wall with its own self-signed device cert — their `SingleCertVerifier` pattern (comparing
+/// the peer cert against a pinned expected cert, bypassing webpki's chain logic entirely) is
+/// the community-blessed approach this verifier adapts, using signed-by-root trust instead of
+/// exact-leaf pinning so it survives individual device cert rotation.
 ///
 /// This verifier uses `x509-parser` instead (a general ASN.1/X.509 parser, not a
 /// policy-enforcing validator — confirmed via its own test suite that it treats the version

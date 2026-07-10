@@ -1,11 +1,13 @@
 #![cfg(feature = "cli")]
 
-//! Diagnostic-only command supporting the investigation in
-//! `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`: captures the raw leaf TLS certificate a printer
-//! presents so it can be inspected for a Subject Alternative Name (SAN) — every cert sample
-//! checked into `certs/` is a CA/intermediate cert, never an actual per-printer leaf cert, so
-//! this is the only way to confirm what a real printer sends. Not part of the library's
-//! connection path; does not touch `NoCertificateVerification` or any `PrinterClient` code.
+//! Diagnostic-only command that captures the raw leaf TLS certificate a
+//! printer presents so it can be inspected for a Subject Alternative Name
+//! (SAN) — every cert sample checked into `certs/` is a CA/intermediate
+//! cert, never an actual per-printer leaf cert, so this is the only way to
+//! confirm what a real printer sends. See `.claude/rules/tls-identity-sni.md`
+//! for the resulting identity-verification invariant. Not part of the
+//! library's connection path; does not touch `NoCertificateVerification` or
+//! any `PrinterClient` code.
 
 use std::sync::{Arc, Mutex};
 

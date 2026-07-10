@@ -107,13 +107,12 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
 /// constraint to work around, unlike the old `embedded-tls`-backed connector.
 ///
 /// **`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
-/// API to read back the TLS version actually negotiated (see
-/// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section — confirmed by reading its source, not
+/// API to read back the TLS version actually negotiated (confirmed by reading its source, not
 /// assumed) — unlike the old `embedded-tls` connector, which hard-coded a wrong `Some(Tls13)`
 /// answer. This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
 /// closed for P2S/X2D even after this backend swap; use
 /// `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
-/// needed (see `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md` Track A).
+/// needed (see `src/ftps/CLAUDE.md` and this module's `CLAUDE.md`).
 ///
 /// **No built-in connect timeout**, same as before: `connect()` has no retry/poll loop of its
 /// own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Callers that need
@@ -192,8 +191,7 @@ where
         // `&CStr` for exactly this reason — MbedTLS copies it internally via
         // `mbedtls_ssl_set_hostname` before `set_server_name` returns, so the `CString` below
         // doesn't need to outlive this function.
-        let host_cstring =
-            alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
+        let host_cstring = alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
         session
             .set_server_name(&host_cstring)
             .map_err(|_| SocketError::ConnectionAborted)?;
@@ -206,10 +204,10 @@ where
         Ok(session)
     }
 
-    /// `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this type's
-    /// doc comment and `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s Problem section. Return `None`
-    /// honestly rather than hard-coding a guess (the anti-pattern the old `embedded-tls`
-    /// connector had, just wrong in the other direction).
+    /// `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this
+    /// type's doc comment above. Return `None` honestly rather than hard-coding a guess
+    /// (the anti-pattern the old `embedded-tls` connector had, just wrong in the other
+    /// direction).
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
         None
     }

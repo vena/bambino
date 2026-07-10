@@ -253,9 +253,10 @@ where
     /// Overrides the default `false` for `BambuFtpsClient`'s TLS-1.2-enforcement bypass.
     ///
     /// Only meaningful for the `embassy` feature talking to P2S/X2D, where no available TLS
-    /// backend can honestly satisfy `require_tls_1_2_if_enforced`'s exact-version check — see
-    /// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`. On `tokio`/`esp-idf`, use `force_tls_1_2` on the
-    /// `TlsConnector` instead, since those platforms can actually satisfy the check for real.
+    /// backend can honestly satisfy `require_tls_1_2_if_enforced`'s exact-version check —
+    /// see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. On `tokio`/`esp-idf`, use
+    /// `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually
+    /// satisfy the check for real.
     /// Non-consuming — chain onto any construction path.
     pub fn with_ftps_allow_unverified_tls_1_2(mut self, allow: bool) -> Self {
         self.ftps_allow_unverified_tls_1_2 = allow;

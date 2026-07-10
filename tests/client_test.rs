@@ -2660,8 +2660,8 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
     broker_task.await.expect("mock broker task panicked");
 }
 
-/// Regression test for `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`: `ensure_mqtt()`'s TLS connect must
-/// send the printer's serial as SNI/identity, never the IP.
+/// Regression test for `.claude/rules/tls-identity-sni.md`: `ensure_mqtt()`'s TLS connect
+/// must send the printer's serial as SNI/identity, never the IP.
 #[tokio::test]
 async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     let (client_stream, _server_stream) = tokio::io::duplex(8192);
