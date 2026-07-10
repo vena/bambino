@@ -63,9 +63,9 @@ pub fn build_handshake_packet(
     packet[CAMERA_USERNAME_OFFSET..CAMERA_USERNAME_OFFSET + username.len()]
         .copy_from_slice(username);
 
-    if !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
+    if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(BambuError::ProtocolViolation(
-            "access_code must be ASCII alphanumeric".into(),
+            "access_code must be a non-empty ASCII alphanumeric string".into(),
         ));
     }
     let code_bytes = access_code.as_bytes();
@@ -349,6 +349,18 @@ mod tests {
         assert!(build_handshake_packet("1234@678").is_err());
         assert!(build_handshake_packet("1234 678").is_err());
         assert!(build_handshake_packet("1234\n678").is_err());
+    }
+
+    #[test]
+    fn test_handshake_rejects_empty_access_code() {
+        // BUG-006: `.all()` on an empty string's char iterator vacuously returns true, so the
+        // alphanumeric check alone let an empty access_code silently build a handshake packet
+        // with a zero-length password field. rtsps.rs's build_rtsps_url already has this
+        // explicit empty-string guard for the same copy-paste-mistake reason.
+        assert!(matches!(
+            build_handshake_packet(""),
+            Err(BambuError::ProtocolViolation(_))
+        ));
     }
 
     #[cfg(feature = "tokio")]
