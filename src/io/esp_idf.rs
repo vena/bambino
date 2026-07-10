@@ -422,22 +422,23 @@ impl embedded_io_async::Error for EspIdfIoError {
 
 /// Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 ///
-/// The underlying socket is only non-blocking transiently, during `connect()`'s own polling
-/// loop (see that function's doc comment) — by the time a caller receives an
-/// `EspIdfTcpStream`, it has always been switched back to blocking mode, matching
-/// `EspIdfUdpSocket`'s approach of using `std::net::*` directly rather than inventing async
-/// socket polling for every raw transport. Reads/writes below therefore block the calling
-/// task/thread until data is available/sent, same as any other blocking
-/// `std::net::TcpStream` use, unless `EspIdfTlsConnector::connect` flips the socket back to
-/// non-blocking right before handing it to `EspTls::adopt()` (see that function) —
-/// plaintext callers never trigger that path.
+/// BUG-031: the underlying socket stays non-blocking for the stream's entire lifetime (not
+/// just during `connect()`'s own polling loop) — `read()`/`write()` below retry on
+/// `WouldBlock` by yielding to the async executor via `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`,
+/// the same pattern `EspTlsStream` already uses. A genuinely blocking socket here would give a
+/// stalled peer (network partition, printer reboot) no `.await` yield point for any outer
+/// timeout/cancellation to preempt, indefinitely parking the FreeRTOS task — exactly the hazard
+/// `connect()`'s own non-blocking dial already fixes one layer up.
 ///
 /// Wraps `Option<TcpStream>` rather than `TcpStream` directly so `Socket::release()` can
 /// `.take()` the stream and hand its fd to `IntoRawFd::into_raw_fd()` — `esp_tls_conn_destroy`
 /// closes an adopted fd itself once `release()` returns, so the Rust-side `TcpStream` must
 /// give up ownership of the fd first or the fd would be double-closed.
 #[cfg(feature = "esp-idf")]
-pub struct EspIdfTcpStream(Option<std::net::TcpStream>);
+pub struct EspIdfTcpStream {
+    stream: Option<std::net::TcpStream>,
+    timer: EspIdfTimer,
+}
 
 #[cfg(feature = "esp-idf")]
 impl EspIdfTcpStream {
@@ -456,8 +457,8 @@ impl EspIdfTcpStream {
     /// the non-blocking flag must be set *before* `connect()` is called on a not-yet-connected
     /// socket — hence going through `socket2::Socket` instead.
     ///
-    /// Once the connection completes, the socket is switched back to blocking mode before
-    /// being handed back as an `EspIdfTcpStream` — see that type's doc comment for why.
+    /// The socket stays non-blocking after the connection completes (BUG-031) — see
+    /// `EspIdfTcpStream`'s doc comment for why `read()`/`write()` need that.
     ///
     /// Does not bound its own retry loop by a timeout — bounding is the responsibility of
     /// the *outer* `race_against_connect_timeout` in `ensure_mqtt()`/`ensure_ftps()`/
@@ -494,19 +495,20 @@ impl EspIdfTcpStream {
 
         poll_connect_until_complete(&socket, &timer).await?;
 
-        socket.set_nonblocking(false).map_err(to_esp_socket_error)?;
-
-        Ok(Self(Some(socket.into())))
+        Ok(Self {
+            stream: Some(socket.into()),
+            timer,
+        })
     }
 
     fn inner(&self) -> &std::net::TcpStream {
-        self.0
+        self.stream
             .as_ref()
             .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS")
     }
 
     fn inner_mut(&mut self) -> &mut std::net::TcpStream {
-        self.0
+        self.stream
             .as_mut()
             .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS")
     }
@@ -517,11 +519,48 @@ impl embedded_io_async::ErrorType for EspIdfTcpStream {
     type Error = EspIdfIoError;
 }
 
+/// Shared `WouldBlock` retry loop for `EspIdfTcpStream::read`/`write`, mirroring
+/// `retry_on_would_block` above but for plain `std::io` calls instead of `EspTls` ones.
+/// BUG-031: without this, the raw plaintext stream had no preempt point at all — a stuck
+/// peer blocked the FreeRTOS task indefinitely with no `.await` yield point for an outer
+/// timeout to preempt.
+#[cfg(feature = "esp-idf")]
+async fn retry_on_would_block_io<F>(
+    timer: &EspIdfTimer,
+    op_name: &str,
+    mut op: F,
+) -> Result<usize, EspIdfIoError>
+where
+    F: FnMut() -> std::io::Result<usize>,
+{
+    loop {
+        match op() {
+            Ok(n) => return Ok(n),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
+                    EspIdfIoError(std::io::Error::other(
+                        "ESP-IDF timer failed while polling TCP I/O",
+                    ))
+                })?;
+            }
+            Err(e) => {
+                log::debug!("ESP-IDF TCP {op_name} failed: {e}");
+                return Err(EspIdfIoError(e));
+            }
+        }
+    }
+}
+
 #[cfg(feature = "esp-idf")]
 impl embedded_io_async::Read for EspIdfTcpStream {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         use std::io::Read;
-        self.inner_mut().read(buf).map_err(EspIdfIoError)
+        let timer = &self.timer;
+        let stream = self
+            .stream
+            .as_mut()
+            .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS");
+        retry_on_would_block_io(timer, "read", || stream.read(buf)).await
     }
 }
 
@@ -529,7 +568,12 @@ impl embedded_io_async::Read for EspIdfTcpStream {
 impl embedded_io_async::Write for EspIdfTcpStream {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         use std::io::Write as _;
-        self.inner_mut().write(buf).map_err(EspIdfIoError)
+        let timer = &self.timer;
+        let stream = self
+            .stream
+            .as_mut()
+            .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS");
+        retry_on_would_block_io(timer, "write", || stream.write(buf)).await
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
@@ -547,7 +591,7 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 
     fn release(&mut self) -> Result<(), ::esp_idf_svc::sys::EspError> {
         use std::os::fd::IntoRawFd;
-        if let Some(stream) = self.0.take() {
+        if let Some(stream) = self.stream.take() {
             // esp_tls_conn_destroy() closes the adopted fd itself; abandon the Rust-side
             // owner without running its Drop (which would close the same fd again).
             let _ = stream.into_raw_fd();

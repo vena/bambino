@@ -119,9 +119,14 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                     from_addr
                 );
 
-                let parsed = parse_ssdp_payload(&buf[..len]);
-                match &parsed {
+                let mut parsed = parse_ssdp_payload(&buf[..len]);
+                match &mut parsed {
                     Some(device) => {
+                        // BUG-024: stamp discovery_port here, not just in the discover_devices()
+                        // convenience wrapper, so callers driving DiscoveryEngine directly (the
+                        // required pattern on Embassy, since discover_devices() is std-only) also
+                        // get a correctly populated field instead of the zero-value default.
+                        device.discovery_port = self.port;
                         log::debug!(
                             "Parsed Bambu Lab printer record: serial='{}', model={:?}, ip={}, name='{}', version='{}'",
                             device.serial,
@@ -248,12 +253,11 @@ where
         }
 
         for (engine, port) in &engines {
-            if let Ok(Some(mut device)) = engine.poll_next_device(&mut buf).await {
-                device.discovery_port = *port;
-                if seen_serials.insert(device.serial.clone()) {
-                    log::debug!("Discovered '{}' via port {}", device.serial, port);
-                    devices.push(device);
-                }
+            if let Ok(Some(device)) = engine.poll_next_device(&mut buf).await
+                && seen_serials.insert(device.serial.clone())
+            {
+                log::debug!("Discovered '{}' via port {}", device.serial, port);
+                devices.push(device);
             }
         }
     }
@@ -337,6 +341,9 @@ mod tests {
         let device = engine.poll_next_device(&mut buf).await.unwrap().unwrap();
         assert_eq!(device.serial, "01P06A521703222");
         assert_eq!(device.model, BambuModel::P1S);
+        // BUG-024: poll_next_device must stamp discovery_port itself, not rely on the
+        // discover_devices() wrapper — Embassy callers use DiscoveryEngine directly.
+        assert_eq!(device.discovery_port, SSDP_PORT);
 
         let empty_device = engine.poll_next_device(&mut buf).await.unwrap();
         assert!(empty_device.is_none());
