@@ -214,7 +214,11 @@ where
     for i in 0..2 {
         log::debug!("Initializing active query scan block #{}", i + 1);
         for (engine, _) in &engines {
-            engine.broadcast_search().await?;
+            // BUG-010: tolerate a per-engine send failure here too, matching the degraded-mode
+            // bind loop above and the periodic re-broadcast loop below — propagating the error
+            // with `?` aborted the whole sweep even when a healthy port could still have found
+            // printers.
+            let _ = engine.broadcast_search().await;
         }
         timer.sleep(core::time::Duration::from_millis(50)).await?;
     }
@@ -590,6 +594,55 @@ mod tests {
         )
         .await
         .expect("discovery should succeed in degraded single-port mode when the first port fails");
+
+        assert!(devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_discover_devices_tolerates_initial_broadcast_failure_on_one_engine() {
+        use crate::io::tokio::TokioTimer;
+
+        // BUG-010: the initial scan loop used `?` on each engine's broadcast_search(), so one
+        // engine failing to send aborted the whole sweep before the listen loop was ever
+        // reached — even though the other, healthy port could still have found printers. This
+        // contradicted the degraded-mode design used everywhere else in discover_devices
+        // (the bind loop and the periodic re-broadcast loop both tolerate per-port failure).
+        struct PartialSendFailSocket {
+            port: u16,
+        }
+
+        impl BindableUdpSocket for PartialSendFailSocket {
+            async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
+                Ok(Self { port: addr.port() })
+            }
+        }
+
+        impl AsyncUdpSocket for PartialSendFailSocket {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
+                // The engine bound on SSDP_PORT fails every send (both multicast and
+                // broadcast targets), so its broadcast_search() call always errors.
+                if self.port == SSDP_PORT {
+                    Err(SocketError::ConnectionRefused)
+                } else {
+                    Ok(100)
+                }
+            }
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
+                Err(SocketError::TimedOut)
+            }
+        }
+
+        let timer = TokioTimer::new();
+        let devices = discover_devices::<PartialSendFailSocket, TokioTimer>(
+            core::time::Duration::from_millis(100),
+            &timer,
+        )
+        .await
+        .expect("a single engine's initial broadcast failure must not abort the whole sweep");
 
         assert!(devices.is_empty());
     }
