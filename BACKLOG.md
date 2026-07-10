@@ -1,6 +1,6 @@
 # bambino — Findings Backlog
 
-Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace REVIEW/PLAN files (full investigative record, linked per row) or hold its own rules.
+Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace REVIEW/PLAN files (full investigative record, linked per row) or hold its own rules — and stands in for a real issue tracker until this repo has a GitHub remote, migrate to Issues then rather than extending this further.
 
 **Rules, severity definitions, release bar, and next-BUG-ID logic live in the `backlog` skill, not here** — invoke it before adding or updating an entry. Keeping the rules out of this file is deliberate: a passive preamble nobody re-reads before editing is exactly how `CLAUDE.md` got out of hand.
 
@@ -8,7 +8,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 ## Open
 
-*(none open as of 2026-07-09 — release bar met)*
+*(none open as of 2026-07-09)*
 
 ## Fixed
 
