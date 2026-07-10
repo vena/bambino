@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
-use crate::ams::mapping::AmsMapping2Entry;
+use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
 use crate::ams::{validate_external_spool_safety, validate_external_spool_safety_flat};
 use crate::models::BambuModel;
 
@@ -213,8 +213,17 @@ impl ProjectFileRequest {
                 Some(mapping2) => validate_external_spool_safety(is_single_nozzle, mapping2),
                 None => validate_external_spool_safety_flat(is_single_nozzle, &config.ams_mapping),
             };
+        // BUG-033: derive the flat array from ams_mapping2 whenever it's the active source,
+        // instead of trusting config.ams_mapping — with_ams_mapping2() alone never touches
+        // ams_mapping, so a caller who only calls that builder previously got a populated
+        // ams_mapping2 paired with an empty ams_mapping, breaking the documented 1:1 index
+        // pairing the firmware relies on [REF-AMS-MAP].
+        let flat_mapping: Vec<i32> = match &config.ams_mapping2 {
+            Some(mapping2) => mapping2.iter().map(flat_channel_id_for_entry).collect(),
+            None => config.ams_mapping.clone(),
+        };
         let mapping = if use_ams {
-            AmsMappingTable::Active(config.ams_mapping.clone())
+            AmsMappingTable::Active(flat_mapping)
         } else {
             AmsMappingTable::Inactive(String::new())
         };

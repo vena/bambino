@@ -21,7 +21,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-029 | Sev3 | ftps/client.rs | LIST/STOR/RETR initial write/read not poisoned on failure | 2026-07-10 | src/ftps/client.rs:389-400,558-569,641-652 → `07-10-REVIEW.md` §12 |
 | BUG-030 | Sev3 | ftps/client.rs | `download_file`'s 426→SIZE recheck isn't symmetric with `upload_file`'s | 2026-07-10 | src/ftps/client.rs:598-657 → `07-10-REVIEW.md` §12 |
 | BUG-032 | Sev3 | mqtt/client/mod.rs | CONNACK codes 1-3 collapsed into `AccessDenied` along with 4-5 | 2026-07-10 | src/mqtt/client/mod.rs:182-201 → `07-10-REVIEW.md` §15 |
-| BUG-033 | Sev2 | mqtt/commands/print_job.rs | `with_ams_mapping2()` doesn't sync `ams_mapping`, breaking documented 1:1 pairing | 2026-07-10 | src/mqtt/commands/print_job.rs:88-93,216-220 → `07-10-REVIEW.md` §16 |
 | BUG-034 | Sev3 | types/telemetry/mod.rs | No `fun()` merging accessor despite documented dual-location drift | 2026-07-10 | src/types/telemetry/mod.rs:52 → `07-10-REVIEW.md` §18 |
 | BUG-035 | Sev3 | types/telemetry/tests.rs | `test_ams_unit_info_bitmask` doesn't call the accessors it claims to verify | 2026-07-10 | src/types/telemetry/tests.rs:1416-1449 → `07-10-REVIEW.md` §19 |
 | BUG-036 | Sev3 | types/telemetry/mod.rs | `decode_nozzle_temperatures()` has zero test coverage | 2026-07-10 | src/types/telemetry/mod.rs:119 → `07-10-REVIEW.md` §19 |
@@ -53,6 +52,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-021 | Sev2 | client/telemetry.rs | `last_door_open` cache overwritten unconditionally, ignoring absent-field staleness contract | 2026-07-10 | 2026-07-10 | src/client/telemetry.rs:156, src/quirks/{mod.rs,models/{x1,h2,p2,x2}.rs} — added `ModelQuirks::door_sensor_field_present()` (home_flag for X1, stat for H2/P2/X2) to gate the cache update precisely, instead of an imprecise "either field present" shortcut |
 | BUG-024 | Sev2 | discovery/mod.rs | `poll_next_device` never stamps `discovery_port` | 2026-07-10 | 2026-07-10 | src/discovery/mod.rs — `poll_next_device` now stamps `device.discovery_port = self.port` itself before returning, instead of relying on the `discover_devices()` wrapper; required for Embassy callers, which drive `DiscoveryEngine` directly |
 | BUG-031 | Sev2 | io/esp_idf.rs | `EspIdfTcpStream` Read/Write block with no preempt point | 2026-07-10 | 2026-07-10 | src/io/esp_idf.rs — socket now stays non-blocking past `connect()`; `read()`/`write()` retry on `WouldBlock` via a new `retry_on_would_block_io()` helper pacing on `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`, mirroring `EspTlsStream`'s existing pattern; verified via `scripts/check-esp-idf.sh esp32c6` |
+| BUG-033 | Sev2 | mqtt/commands/print_job.rs | `with_ams_mapping2()` doesn't sync `ams_mapping`, breaking documented 1:1 pairing | 2026-07-10 | 2026-07-10 | src/ams/mapping.rs, src/mqtt/commands/print_job.rs — added `flat_channel_id_for_entry()`; `from_config` now derives the flat `ams_mapping` array from `ams_mapping2` whenever the latter is the active source, instead of trusting the separately-set `config.ams_mapping` |
 
 ## Wontfix
 

@@ -5,7 +5,7 @@ description: Rules for adding, updating, and triaging entries in this repo's BAC
 
 # Backlog rules (bambino)
 
-**Step 0, mandatory, before touching `BACKLOG.md`:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_patch")` first and use `ctx_read(mode="anchored")` → `ctx_patch` for edits, not native Read/Edit. This is restated here on purpose, redundant with the global lean-ctx bootstrap rule — sessions drift off a rule stated once at the top and not repeated near the point of use.
+**Step 0, mandatory, before touching `BACKLOG.md`:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_shell")` first and use `ctx_read(mode="anchored")` → `ctx_patch` for edits, not native Read/Edit. Use `ctx_shell`, not native Bash. This is restated here on purpose, redundant with the global lean-ctx bootstrap rule — sessions drift off a rule stated once at the top and not repeated near the point of use.
 
 ## Entry point
 

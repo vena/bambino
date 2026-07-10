@@ -174,6 +174,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ams_mapping2_syncs_flat_ams_mapping() {
+        // BUG-033: with_ams_mapping2() alone (no with_ams()) must still populate the flat
+        // ams_mapping array in sync with ams_mapping2 — the firmware requires the two arrays
+        // to stay index-parallel [REF-AMS-MAP], and with_ams_mapping2() never touches
+        // config.ams_mapping directly.
+        use crate::ams::mapping::AmsMapping2Entry;
+
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        )
+        .with_ams_mapping2(vec![
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 1,
+            },
+            AmsMapping2Entry {
+                ams_id: 128,
+                slot_id: 0,
+            },
+        ]);
+        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""use_ams":true"#));
+        // ams_id 0, slot_id 1 -> flat channel (0 * 4) + 1 = 1; ams_id 128 (AMS-HT) -> 128.
+        assert!(json.contains(r#""ams_mapping":[1,128]"#));
+    }
+
+    #[test]
     fn test_ams_mapping2_dropped_when_safety_interlock_trips() {
         // Phase 2.2 regression: an all-external-spool `ams_mapping2` on a single-nozzle
         // printer trips `validate_external_spool_safety`, forcing `use_ams` to `false` — the

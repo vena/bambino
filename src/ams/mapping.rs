@@ -96,6 +96,24 @@ pub struct AmsMapping2Entry {
     pub slot_id: u8,
 }
 
+/// Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to.
+///
+/// Inverse of `MaterialSource::flat_channel_id`, operating on the already-structured
+/// `ams_id`/`slot_id` pair instead of a `MaterialSource` — used by
+/// `ProjectFileRequest::from_config` (`mqtt/commands/print_job.rs`) to derive `ams_mapping`
+/// from `ams_mapping2` when the caller only supplied the latter via
+/// `PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
+pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
+    if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
+        (entry.ams_id as i32) * (super::parser::AMS_SLOTS_PER_UNIT as i32) + entry.slot_id as i32
+    } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id)
+    {
+        entry.ams_id as i32
+    } else {
+        -1 // External and unmapped slots are strictly mapped to -1, same as MaterialSource's rule.
+    }
+}
+
 /// Builds the flat `ams_mapping` integer array from raw project allocations.
 ///
 /// `allocations` is a slice of `(filament_id, MaterialSource)` pairs where `filament_id`
