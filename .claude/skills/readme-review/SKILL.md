@@ -17,6 +17,10 @@ README.md is consumer-facing — for someone using `bambino` as a dependency. `C
 2. **Duplication.** Does README restate something that has a more authoritative home elsewhere (a Makefile target's comment, a `CLAUDE.md`/`.claude/rules/` invariant, `reference/`'s protocol docs)? If the other location is genuinely the source of truth, trim README to a pointer instead of restating.
 3. **Staleness vs. current code.** Do the code examples, method signatures, and described behavior still match what's actually in `src/`? Check especially against any `BACKLOG.md` `Fixed` rows since the last README review — a fix that changed public API shape or documented behavior is the exact class of change that makes an example silently wrong. Don't assume; grep the actual current signature for anything README shows a code sample for.
 4. **Dead cross-references.** Links to `docs/`, `reference/`, or any other file — do they still resolve? A file this project deletes on purpose (a completed `*_PLAN.md`, a fully-resolved `NN-NN-REVIEW.md`) may have been linked from README at some point; confirm nothing still points at it.
+5. **Changelog narration.** Grep for `replaced|used to|no longer|unlike the old|previously|formerly|instead of the old`. README states current behavior only — "X replaced Y" or "unlike the old Z" is commit-message content, not API doc. State the current fact and drop the history.
+6. **Cross-section consistency.** When the same function/type is described in more than one section, diff the claims against each other, not just against source — contradictions between two true-at-different-times statements survive a source-only check since each half may individually match some version of the code.
+
+Before finishing: re-run checks 1-6 against any line you just edited, including edits made while fixing an unrelated finding — a fix for one item can reintroduce another (e.g. patching a dead cross-reference by inline-summarizing what the deleted file said is exactly how changelog narration gets written back in).
 
 ## Reporting
 
