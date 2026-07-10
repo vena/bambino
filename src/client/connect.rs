@@ -103,9 +103,14 @@ where
         self.mqtt = Some(mqtt_client);
         // Reseed from wall-clock time so two independent sessions connecting to the
         // same printer don't start from the same fixed counter and risk colliding
-        // sequence IDs while both have in-flight requests.
-        self.sequence_counter =
-            crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
+        // sequence IDs while both have in-flight requests. Skipped under a timer with
+        // no real clock (e.g. DummyTimer, always 0) — reseeding to a constant would
+        // recreate exactly the collision this exists to prevent, and existing tests
+        // rely on the deterministic default sequence when no real timer is chained.
+        if self.timer.has_real_clock() {
+            self.sequence_counter =
+                crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
+        }
         Ok(())
     }
 

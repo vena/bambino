@@ -2527,6 +2527,45 @@ async fn test_wifi_signal_cache_from_telemetry() {
 }
 
 #[tokio::test]
+async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
+    // BUG-019: the wall-clock sequence-counter reseed in ensure_mqtt() is meant to stop two
+    // independent sessions connecting to the same printer from both starting at the same
+    // fixed counter. Under DummyTimer (the documented, first-class default when
+    // .with_timer() isn't chained), now_millis() always returns 0, so reseeding
+    // unconditionally would collide every default-configured client onto the same seed —
+    // exactly the bug this guard prevents. Verify the first command after a lazy
+    // ensure_mqtt() connect still carries the untouched default sequence ID (10001).
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container,
+    };
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(
+            json["print"]["sequence_id"], "10001",
+            "DummyTimer has no real clock — reseed must be skipped, not collapse every \
+             default-configured client onto the same wall-clock seed"
+        );
+    });
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        factory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    );
+
+    client.send_gcode("G28").await.expect("send_gcode failed");
+
+    broker_task.await.expect("mock broker task panicked");
+}
+
+#[tokio::test]
 async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     // BUG-018: before disconnect_mqtt()/attach_mqtt() existed, a dead MQTT session (a
     // tick_zombie_check()-detected zombie, a transport error) had no supported recovery
