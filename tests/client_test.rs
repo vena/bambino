@@ -2619,6 +2619,47 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
     );
 }
 
+#[tokio::test]
+async fn test_with_connect_timeout_zero_disables_timeout() {
+    // BUG-007: connect_timeout_secs == 0 used to race against timer.sleep(Duration::from_secs(0)),
+    // which resolves near-instantly and wins the race against the dial+TLS+handshake future on
+    // nearly every attempt — making `0` mean "always fail immediately" instead of "disabled,"
+    // unlike the sibling `command_timeout_secs` field's documented "0 disables" convention.
+    // With a real (non-stalled) peer completing the handshake, connect_mqtt() must now succeed.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container,
+    };
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        factory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    )
+    .with_timer(bambino::io::tokio::TokioTimer::new())
+    .with_connect_timeout(0);
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), client.connect_mqtt())
+        .await
+        .expect("connect_mqtt() must return within the 5s test safety margin, not hang forever");
+
+    assert!(
+        result.is_ok(),
+        "connect_timeout_secs == 0 must disable the timeout, not fail immediately, got {:?}",
+        result.map(|_| ())
+    );
+
+    broker_task.await.expect("mock broker task panicked");
+}
+
 /// Regression test for `TLS_SNI_HOSTNAME_MISMATCH_PLAN.md`: `ensure_mqtt()`'s TLS connect must
 /// send the printer's serial as SNI/identity, never the IP.
 #[tokio::test]

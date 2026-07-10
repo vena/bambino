@@ -17,6 +17,13 @@ use super::PrinterClient;
 /// regardless of duration, so racing against it unconditionally would make every connect attempt
 /// look timed out instead of providing real protection — see `TimerProvider::has_real_clock`'s doc
 /// comment.
+///
+/// `connect_timeout_secs == 0` also skips the race, matching `set_command_timeout`'s "0 disables
+/// the timeout" convention — without this, `timer.sleep(Duration::from_secs(0))` resolves
+/// effectively instantly and wins the race against the dial+TLS+handshake future on nearly every
+/// attempt, since that future essentially never completes synchronously on its first poll. That
+/// would make `0` mean "always fail immediately" instead of "disabled," the opposite of the
+/// sibling `command_timeout_secs` field's documented behavior.
 async fn race_against_connect_timeout<TP, F, T, E>(
     timer: &TP,
     connect_timeout_secs: u64,
@@ -27,7 +34,7 @@ where
     F: Future<Output = Result<T, E>>,
     E: From<SocketError>,
 {
-    if !timer.has_real_clock() {
+    if !timer.has_real_clock() || connect_timeout_secs == 0 {
         return fut.await;
     }
     let sleep_fut = timer.sleep(core::time::Duration::from_secs(connect_timeout_secs));
@@ -169,7 +176,8 @@ where
     }
 
     /// Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
-    /// Non-consuming — chain onto any construction path.
+    /// Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
+    /// convention. Non-consuming — chain onto any construction path.
     pub fn with_connect_timeout(mut self, secs: u64) -> Self {
         self.connect_timeout_secs = secs;
         self
@@ -290,7 +298,7 @@ where
                     timer,
                     allow_unverified_tls_1_2,
                 )
-                    .await
+                .await
             })
             .await?;
         self.ftps = Some(ftps_client);

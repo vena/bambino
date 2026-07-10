@@ -6,3 +6,5 @@ paths:
 ---
 
 Connect-phase timeouts are two layers, not one. `PrinterClient::ensure_mqtt()`/`ensure_ftps()` bound the entire dial+TLS-connect sequence via `connect_timeout_secs` (default 10s) — the layer `PrinterClient` users rely on everywhere. `EspIdfTlsConnector` separately carries its own `connect_timeout` bounding only its handshake retry loop, for direct (non-`PrinterClient`) consumers. `EmbassyTlsConnector::connect` has no connector-level equivalent — a direct caller needing a bounded connect must race it against `embassy_time::with_timeout` itself.
+
+`connect_timeout_secs == 0` disables the timeout entirely (matches `set_command_timeout`'s "0 disables" convention) — `race_against_connect_timeout` special-cases it rather than racing against `timer.sleep(Duration::from_secs(0))`, which resolves near-instantly and would make every connect attempt fail immediately instead.
