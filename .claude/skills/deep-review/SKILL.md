@@ -5,7 +5,7 @@ description: Runs a parallel, module-by-module deep code review sweep across the
 
 # Deep Review — bambino module sweep
 
-Full-crate correctness review via parallel subagents, one per module. Designed to be re-run as the crate grows — never hardcode today's module list or file count; rediscover both every time this runs.
+Full-crate correctness review via parallel subagents, one per module. Designed to be re-run as the crate grows — never hardcode today's module list or file count; rediscover both every time this runs. Also designed to survive a session cutoff mid-sweep: results persist to disk per-unit as they land, not batched at the end, so an interrupted run resumes from what's actually on disk (Step 1/Step 4) instead of a fresh session guessing at — or hallucinating — what already happened.
 
 **Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_shell,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_tree,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_compose,mcp__lean-ctx__ctx_explore,mcp__lean-ctx__ctx_call")` first and use those tools throughout — for this session's own orchestration work (discovery, `BACKLOG.md` edits) _and_ as a mandatory Step 0 inside every spawned agent's prompt (see Step 3's requirements below — there's no literal fill-in-the-blank template, just a checklist each prompt needs to satisfy). This is restated here on purpose, redundant with the global lean-ctx rule — a mandate stated once at session start and not repeated near the point of use gets lost across a long multi-step task.
 
@@ -13,7 +13,9 @@ Also read `CLAUDE.md` and `README.md` in full before starting — the module-bou
 
 ## Step 1 — Discover current structure
 
-Don't reuse a module list from a prior run of this skill. Walk the tree fresh:
+**Resuming an interrupted run:** check for an existing `MM-DD-REVIEW.md` for *today's* date with a `**Status:** IN PROGRESS` marker (see Step 4) before doing anything else — that's a prior run that got cut off, not a stale one. Resume it (skip straight to Step 4's resume logic) instead of re-discovering and re-partitioning from scratch, which would silently re-review already-done units and risk a second, conflicting set of findings for them.
+
+Starting fresh (no in-progress file for today): don't reuse a module list from a prior *day's* run of this skill — that's genuinely stale. Walk the tree fresh:
 
 ```
 ctx_tree(path="src", depth=3)
@@ -58,29 +60,32 @@ Every spawned agent needs, at minimum:
 6. **Output contract**: for each finding, `### <file>:<line>` / **Verdict** (`CONFIRMED` or `PLAUSIBLE`, per the confidence-tagging rule above) / **Issue** (one line) / **Detail** (concrete failure scenario) / **Suggested fix** (brief). If the unit has no findings at all, say so explicitly (`NO ISSUES FOUND in <unit>`) rather than staying silent — a silent report is indistinguishable from a forgotten one.
 7. **Self-contained framing**: the report will be read by a fresh session with none of this conversation's context — file paths and line numbers must be exact and unambiguous on their own.
 
-## Step 4 — Spawn
+## Step 4 — Spawn and persist incrementally
 
-All units' agents in parallel — single message, multiple `Agent` tool calls, `subagent_type: general-purpose`, background (default). Use `TodoWrite` with one entry per unit plus a final "compile findings" entry; mark each in-progress → completed as results land, don't batch.
+Resuming an interrupted run (per Step 1): skip straight to spawning agents only for the units still marked `PENDING` in the existing file — everything below still applies to each of those.
 
-## Step 5 — Triage and compile
+Starting fresh: write `MM-DD-REVIEW.md`'s skeleton to disk *before* spawning anything. This is what makes the run resumable — if this session gets cut off mid-sweep, whatever's on disk is a genuine, informative partial artifact, not conversation-only state a fresh session would have to reconstruct or guess at. The skeleton needs:
+- `**Status:** IN PROGRESS (0/N units complete)` at the very top.
+- An opening paragraph: what was reviewed and how (crate description, parallel-agent methodology, unit count).
+- The scope exclusions from Step 3 item 5, restated for the reader (LAN-only-security minor issues and style/refactor suggestions are out of scope, not overlooked).
+- A brief explanation of the `CONFIRMED`/`PLAUSIBLE` distinction — later sections assume the reader already knows why `PLAUSIBLE` findings are separate and un-promoted.
+- An explicit note that the file is meant to be consumed standalone by a fresh session.
+- A caveat that file:line references may have drifted if other changes landed on `main` since this sweep.
+- One `## N. <unit path(s)> — PENDING` placeholder section per unit from Step 2's partition.
 
-For each finding reported back (both tiers, see items 1–2 for what differs by tier):
+Spawn all remaining units' agents in parallel — single message, multiple `Agent` tool calls, `subagent_type: general-purpose`, background (default).
 
-1. **Dedupe first** — check `BACKLOG.md`'s existing rows for the same file/topic before treating it as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
-2. **Assign severity** for `CONFIRMED` findings only, per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly. `PLAUSIBLE` findings don't get a severity yet; that happens if/when a human triages one into a real `BUG-ID` later.
-3. Write the full writeup to a new dated review file, `MM-DD-REVIEW.md`, at repo root. A fresh session with zero context needs this, not just the findings — required elements:
-   - Opening paragraph: what was reviewed and how (crate description, parallel-agent methodology, unit count).
-   - The scope exclusions from Step 3 item 5, restated for the reader (LAN-only-security minor issues and style/refactor suggestions are out of scope, not overlooked).
-   - A brief explanation of the `CONFIRMED`/`PLAUSIBLE` distinction — the Plausible section below assumes the reader already knows why it's separate and un-promoted.
-   - An explicit note that the file is meant to be consumed standalone by a fresh session.
-   - A caveat that file:line references may have drifted if other changes landed on `main` since this sweep.
-   - One section per unit (`## N. <unit path(s)> — <one-line summary>`) containing only that unit's `CONFIRMED` findings, in Step 3's Issue/Detail/Suggested-fix format.
-   - A one-line "Modules reviewed with no issues" list near the top, for units with zero findings of either tier.
-   - A closing `## Plausible, Unverified Findings` section collecting every `PLAUSIBLE` finding from every unit (same format, plus which unit it came from) — these don't get a `BUG-ID` yet, flag the section for the user to manually triage.
-   - A summary table (`BUG-ID | Sev | Module | File(s) | One-line`) mapping every `CONFIRMED`-and-promoted finding to its `BUG-ID` and severity, with a note directly above it that `BACKLOG.md` is the status source of truth once this file exists — the table itself is a point-in-time snapshot and won't be updated as bugs get fixed.
+As each agent reports back — don't wait for the rest — immediately, for that one unit:
+1. **Dedupe** — check `BACKLOG.md`'s existing rows for the same file/topic before treating a finding as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
+2. **Assign severity** to `CONFIRMED` findings only, per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly. `PLAUSIBLE` findings don't get a severity yet; that happens if/when a human triages one into a real `BUG-ID` later.
+3. **Promote `CONFIRMED` findings to `BACKLOG.md`'s `Open` table now**, using the `backlog` skill's entry-format and next-BUG-ID rules — don't wait until every unit finishes.
+4. **Replace that unit's `PENDING` placeholder** in `MM-DD-REVIEW.md` with its real content: `CONFIRMED` findings in Step 3's Issue/Detail/Suggested-fix format, each linked to its new `BUG-ID`; or `NO ISSUES FOUND in <unit>` if it came back clean of both tiers. Append any `PLAUSIBLE` findings to a `## Plausible, Unverified Findings` section (create it on the first one) — these don't get a `BUG-ID`, flag the section for the user to manually triage. Update the `Status` line's count.
 
-   Don't rely on a prior sweep's review file surviving as a template — per the `backlog` skill's review-file lifecycle rule, a fully-resolved one gets deleted; `git log --all -- 'NN-NN-REVIEW.md'` finds a deleted one's content if a concrete example is wanted.
-4. Append new rows to `BACKLOG.md`'s `Open` table for `CONFIRMED` findings only, using the `backlog` skill's entry-format and next-BUG-ID rules — link each row's `Detail` column back to the matching section of the new dated review file. `PLAUSIBLE` findings stay in the review file's own section, not promoted here — that's a decision for whoever triages the sweep afterward, not automatic.
+Use `TodoWrite` too, alongside this — a useful in-conversation view, but the on-disk file is the actual source of truth if this session doesn't survive to the end.
+
+## Step 5 — Finalize
+
+Once every unit's `PENDING` placeholder is gone: write the closing summary table (`BUG-ID | Sev | Module | File(s) | One-line`) mapping every promoted finding to its `BUG-ID` and severity, with a note directly above it that `BACKLOG.md` is the status source of truth from here on — the table itself is a point-in-time snapshot and won't be updated as bugs get fixed. Flip the top-of-file `Status` line to `**Status:** COMPLETE`. Don't rely on a prior sweep's review file surviving as a template for any of this — per the `backlog` skill's review-file lifecycle rule, a fully-resolved one gets deleted; `git log --all -- 'NN-NN-REVIEW.md'` finds a deleted one's content if a concrete example is wanted.
 
 ## Step 6 — Report
 
