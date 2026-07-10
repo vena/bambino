@@ -51,4 +51,5 @@ docs:
 	cargo docs-md --path target/esp-idf-doc-$(CHIP).json -o target/doc-md-esp-idf --format nested
 	rsync -a --ignore-existing target/doc-md-esp-idf/ docs/
 	rm -rf target/doc-md-esp-idf
+	rm -rf host-target
 	scripts/strip-doc-noise.py docs

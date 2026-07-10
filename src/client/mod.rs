@@ -163,7 +163,7 @@ where
     /// requires it (e.g. [`poll_telemetry()`](Self::poll_telemetry),
     /// [`request_pushall()`](Self::request_pushall)), or eagerly via
     /// [`connect_mqtt()`](Self::connect_mqtt). `tls`/`factory` mirror
-    /// [`.with_ftps(tls, factory)`](Self::with_ftps)'s call shape — `factory.dial()` opens the
+    /// [`.with_ftps(tls, factory, timer)`](Self::with_ftps)'s call shape — `factory.dial()` opens the
     /// raw TCP socket, then `tls.connect()` wraps it in TLS.
     ///
     /// Without a [`TimerProvider`], command-response methods like
