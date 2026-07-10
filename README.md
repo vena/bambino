@@ -406,7 +406,7 @@ Some newer models support `back_to_center` (homing) and `xyz_ctrl` (jogging) as 
 
 ### API
 
-Full API reference is generated straight from doc comments into [`docs/`](docs/index.md) — one markdown file per module. It covers all three platform targets (host, ESP-IDF, Embassy) merged into one tree. Regenerate it with `make docs` after a public API change; it's not wired into a git hook, so it can go stale — check the date on `docs/index.md` if something looks off.
+Full API reference is generated straight from doc comments into [`docs/`](docs/index.md) — one markdown file per module. It covers all three platform targets (host, ESP-IDF, Embassy) merged into one tree.
 
 ### Protocol spec
 
