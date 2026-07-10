@@ -1,4 +1,4 @@
-.PHONY: check-fast check-esp-idf check-all docs
+.PHONY: check-fast check-esp-idf check-all docs install-hooks
 
 CHIP ?= esp32c6
 
@@ -23,6 +23,9 @@ check-esp-idf:
 	scripts/check-esp-idf.sh $(CHIP)
 
 check-all: check-fast check-esp-idf
+
+install-hooks:
+	scripts/install-hooks.sh
 
 # LLM-facing API reference, one markdown file per module (per-crate, no
 # transitive deps), via cargo-docs-md (github.com/consistent-milk12/docs-md).

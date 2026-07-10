@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Local commit gate: rejects the commit unless `make check-fast` passes.
+# See 07-09-REVIEW.md item 0 for why this exists (no CI yet — this repo has
+# no GitHub remote — so this is the only backstop against regressions
+# slipping in between review passes). Installed via scripts/install-hooks.sh
+# since .git/hooks/ isn't tracked by git.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+exec make check-fast

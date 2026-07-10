@@ -16,6 +16,8 @@ cargo check --no-default-features --features embassy --lib  # embassy target che
 
 `make check-fast` runs all of the above (build, test, both feature-gate checks, clippy) in one command; `make check-esp-idf [CHIP=esp32c6]` wraps `scripts/check-esp-idf.sh`; `make check-all` runs both. `.github/workflows/ci.yml` and `.github/workflows/esp-idf.yml` mirror the same commands but are dormant — this repo has no GitHub remote yet.
 
+Run `make install-hooks` once after cloning — it installs a pre-commit hook (source in `scripts/hooks/`) that runs `make check-fast` and rejects the commit on failure. `.git/hooks/` isn't tracked by git, so this is the only thing making the gate survive a fresh clone; it's the sole regression backstop until CI is live.
+
 The `esp-idf` target needs `scripts/check-esp-idf.sh [chip]` instead of plain `cargo check` — see `src/io/CLAUDE.md` for the toolchain/Docker details.
 
 ## Verification Gate
