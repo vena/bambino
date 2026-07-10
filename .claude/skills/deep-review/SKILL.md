@@ -18,6 +18,7 @@ Don't reuse a module list from a prior run of this skill. Walk the tree fresh:
 ```
 ctx_tree(path="src", depth=3)
 ctx_tree(path="tests", depth=2)
+find src tests -name '*.rs' 2>/dev/null | xargs wc -l | sort -rn
 ```
 
 Note: `src/bin/*/` (CLI binaries, if any — currently `bambino-cli`), loose top-level files (`error.rs`, `models.rs`, `lib.rs`), `tests/` (integration tests + shared mock infrastructure — see Step 2 for why this walk matters and how these fold into the partition), and whether `docs/` exists and mirrors `src/`'s layout (generated via `make docs` per `CLAUDE.md`'s Documentation section — if `docs/` looks present but stale relative to recent `src/` changes, note that in each agent's prompt as "cross-check but don't over-trust").
@@ -32,7 +33,7 @@ Heuristic, not a fixed list:
 - Bundle loose top-level files (`error.rs`, `models.rs`, `lib.rs`, etc.) into one "core" unit.
 - Any `src/bin/*/` binary is its own unit.
 - Fold each `tests/*_test.rs` integration test file into the same unit as the `src/` code it exercises (e.g. `tests/ftps_test.rs` joins the `ftps` unit) — judging mock fidelity needs the mock and the real implementation in the same agent's view. `tests/common/*` (shared mock infrastructure used across multiple units) doesn't belong to just one — give it its own small unit, or fold it into whichever unit relies on it most this run; decide fresh, don't hardcode which.
-- Target 3–12 files per unit. Too few wastes an agent spawn on triviality; too many means the agent can't actually deeply read everything.
+- Target 3–12 files per unit, but weight by size, not just count. A single file over ~800 lines (or clearly larger than its siblings, e.g. 3x the unit's average) counts as 2–3 file-slots against that target, or gets split into its own unit outright if it's large enough to dominate the agent's attention on its own — the file-count target alone doesn't catch a unit that's technically 3 files but one of them is huge. Too few (by count or effective weighted count) wastes an agent spawn on triviality; too many (by either measure) means the agent can't actually deeply read everything.
 
 Record the resulting partition (unit name → file list) — this is the actual worklist, and it will differ from any previous run once the crate's structure changes.
 
