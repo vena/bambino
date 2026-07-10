@@ -13,7 +13,9 @@ Also read `CLAUDE.md` and `README.md` in full before starting — the module-bou
 
 ## Step 1 — Discover current structure
 
-**Resuming an interrupted run:** check for an existing `MM-DD-REVIEW.md` for *today's* date with a `**Status:** IN PROGRESS` marker (see Step 4) before doing anything else — that's a prior run that got cut off, not a stale one. Resume it (skip straight to Step 4's resume logic) instead of re-discovering and re-partitioning from scratch, which would silently re-review already-done units and risk a second, conflicting set of findings for them.
+Run `date +%m-%d` first — don't infer today's date from context. Step 4 uses it to name a *new* skeleton file when starting fresh.
+
+**Resuming an interrupted run:** check for *any* `*-REVIEW.md` with a `**Status:** IN PROGRESS` marker (see Step 4) — not just one matching today's date. A file's name is fixed at creation, so a run that started yesterday (or earlier) and got cut off mid-sweep still carries yesterday's date; matching only today's date would miss it, silently orphan it at `IN PROGRESS` forever, and start a redundant second sweep that re-reviews already-done units. If found, resume that file as-is (skip straight to Step 4's resume logic, keep its original filename) instead of re-discovering and re-partitioning from scratch. Only start a fresh `MM-DD-REVIEW.md` (today's date) when no `IN PROGRESS` file exists at all.
 
 Starting fresh (no in-progress file for today): don't reuse a module list from a prior *day's* run of this skill — that's genuinely stale. Walk the tree fresh:
 
@@ -78,7 +80,7 @@ Spawn all remaining units' agents in parallel — single message, multiple `Agen
 As each agent reports back — don't wait for the rest — immediately, for that one unit:
 1. **Dedupe** — check `BACKLOG.md`'s existing rows for the same file/topic before treating a finding as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
 2. **Assign severity** to `CONFIRMED` findings only, per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly. `PLAUSIBLE` findings don't get a severity yet; that happens if/when a human triages one into a real `BUG-ID` later.
-3. **Promote `CONFIRMED` findings to `BACKLOG.md`'s `Open` table now**, using the `backlog` skill's entry-format and next-BUG-ID rules — don't wait until every unit finishes.
+3. **Promote `CONFIRMED` findings to `BACKLOG.md`'s `Open` table now**, using only the `backlog` skill's Entry rules, Next BUG-ID logic, and Severity section — don't wait until every unit finishes. Nothing else from that skill applies mid-sweep: not its Review-file lifecycle (the file it'd delete is the one this sweep is actively writing), not Docs regen, not Wontfix triage — those are separate, human-triggered concerns, out of scope for this step.
 4. **Replace that unit's `PENDING` placeholder** in `MM-DD-REVIEW.md` with its real content: `CONFIRMED` findings in Step 3's Issue/Detail/Suggested-fix format, each linked to its new `BUG-ID`; or `NO ISSUES FOUND in <unit>` if it came back clean of both tiers. Append any `PLAUSIBLE` findings to a `## Plausible, Unverified Findings` section (create it on the first one) — these don't get a `BUG-ID`, flag the section for the user to manually triage. Update the `Status` line's count.
 
 Use `TodoWrite` too, alongside this — a useful in-conversation view, but the on-disk file is the actual source of truth if this session doesn't survive to the end.
@@ -89,4 +91,4 @@ Once every unit's `PENDING` placeholder is gone: write the closing summary table
 
 ## Step 6 — Report
 
-Summarize to the user: unit count, clean vs. flagged, new `BUG-ID`s and their severities, how many `PLAUSIBLE` findings are sitting in the review file's own section awaiting manual triage, and point at the two artifacts (`MM-DD-REVIEW.md`, updated `BACKLOG.md`) rather than dumping full findings inline into the conversation.
+Summarize to the user: unit count, clean vs. flagged, new `BUG-ID`s and their severities, how many `PLAUSIBLE` findings are sitting in the review file's own section awaiting manual triage, and point at the two artifacts (`MM-DD-REVIEW.md`, updated `BACKLOG.md`) rather than dumping full findings inline into the conversation. Ask whether to commit them now, as one sweep-record commit — don't commit without that confirmation, per this project's standing git-safety rule.
