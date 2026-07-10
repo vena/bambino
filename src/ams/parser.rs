@@ -28,6 +28,10 @@ pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
 /// this evaluator returns `None` strictly when both conditions are met. If `power_on_flag`
 /// is `false` but the parsed bitmask is non-zero, this represents a valid offline state
 /// and is processed normally.
+///
+/// **AMS-HT units (IDs 128-135) don't participate in `tray_exist_bits` at all**
+/// (per `reference/05_materials_ams.md` §5.1) — this function returns `None` for that
+/// range rather than guessing, so callers must consult the tray's `state` field instead.
 pub fn evaluate_spool_presence(
     tray_exist_bits: &str,
     ams_id: u8,
@@ -48,9 +52,10 @@ pub fn evaluate_spool_presence(
     }
 
     // High-temperature AMS-HT units (IDs 128-135) reside on their own bus addresses
-    // and do not participate in standard bitwise exists strings.
+    // and do not participate in standard bitwise exists strings — presence must come
+    // from tray state instead, so report unknown rather than hardcoding a guess.
     if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
-        return Some(true);
+        return None;
     }
 
     // Reject ams_id values outside the standard AMS range before computing the shift
@@ -182,6 +187,16 @@ mod tests {
         // Hex "2" is binary 0010 -> slot 1 present, slot 0 absent on AMS 0
         assert_eq!(evaluate_spool_presence("0x2", 0, 0, true), Some(false));
         assert_eq!(evaluate_spool_presence("0x2", 0, 1, true), Some(true));
+    }
+
+    #[test]
+    fn test_evaluate_spool_presence_ams_ht_returns_none() {
+        // BUG-015: AMS-HT units (128-135) don't participate in tray_exist_bits — this
+        // must report unknown (None), not hardcode Some(true), so callers fall back to
+        // consulting the tray's own `state` field for real presence.
+        assert_eq!(evaluate_spool_presence("f", 128, 0, true), None);
+        assert_eq!(evaluate_spool_presence("f", 135, 0, true), None);
+        assert_eq!(evaluate_spool_presence("0", 130, 0, true), None);
     }
 
     #[test]

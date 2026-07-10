@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-015 | Sev2 | ams/parser.rs | AMS-HT slots always report `Some(true)` presence regardless of actual state | 2026-07-10 | src/ams/parser.rs:50-54 → `07-10-REVIEW.md` §1 |
 | BUG-016 | Sev3 | bin/bambino-cli/main.rs | `--help` missing `gcode-raw --unsafe` documentation | 2026-07-10 | src/bin/bambino-cli/main.rs:42-53 → `07-10-REVIEW.md` §3 |
 | BUG-017 | Sev3 | bin/bambino-cli/probe.rs | Capture-window error discards all previously-captured probe results | 2026-07-10 | src/bin/bambino-cli/probe.rs:502,414 → `07-10-REVIEW.md` §4 |
 | BUG-018 | Sev2 | client/connect.rs | No `disconnect_mqtt()`/`attach_mqtt()` — dead MQTT session has no recovery path | 2026-07-10 | src/client/connect.rs:92-114 → `07-10-REVIEW.md` §5 |
@@ -53,6 +52,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-012 | Sev2 | ams/parser.rs | State-10 tray-clearing: doc said clear, code didn't | 2026-07-09 | 2026-07-09 | ams/parser.rs:112-116 `clean_stale_tray_data` — state 10 alone didn't clear stale tray data — fixed in `66f3f6c`; resolved via pybambu/Bambuddy cross-check (no H2D hardware available), see `reference/05_materials_ams.md`'s verification-source note |
 | BUG-013 | Sev3 | error.rs | `no_std` `Display` impl sync unverified by any test that actually runs | 2026-07-09 | 2026-07-09 | error.rs — `test_display_consistency` only runs under `std`, so the `no_std` impl's sync was never test-verified, just manually inspected — doc comment corrected in `f288cd8` (process gap, no `no_std` test harness exists to fix it properly) |
 | BUG-014 | Sev2 | ams/parser.rs | `evaluate_spool_presence` doesn't bounds-check `tray_id` before a bit-shift | 2026-07-10 | 2026-07-10 | src/ams/parser.rs:60-61 — added `tray_id >= AMS_SLOTS_PER_UNIT` guard alongside the existing `ams_id` check |
+| BUG-015 | Sev2 | ams/parser.rs | AMS-HT slots always report `Some(true)` presence regardless of actual state | 2026-07-10 | 2026-07-10 | src/ams/parser.rs:52-53 — AMS-HT range now returns `None` (unknown), forcing callers to consult tray `state` instead of a hardcoded guess |
 
 ## Wontfix
 
