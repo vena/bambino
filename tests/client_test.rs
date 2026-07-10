@@ -2527,6 +2527,65 @@ async fn test_wifi_signal_cache_from_telemetry() {
 }
 
 #[tokio::test]
+async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
+    // BUG-018: before disconnect_mqtt()/attach_mqtt() existed, a dead MQTT session (a
+    // tick_zombie_check()-detected zombie, a transport error) had no supported recovery
+    // path — ensure_mqtt()'s is_some() short-circuit kept handing back the same broken
+    // stream forever, unlike disconnect_camera()/attach_camera() and
+    // disconnect_storage()/attach_storage(). Verify disconnect clears the slot and attach
+    // reinstalls a fresh connected client that telemetry keeps working through.
+    let (client_stream_a, mut server_stream_a) = tokio::io::duplex(8192);
+    let broker_task_a = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_a).await;
+    });
+    let mqtt_client_a = BambuMqttClient::connect(TokioIo(client_stream_a), SERIAL, "12345678")
+        .await
+        .expect("first MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client_a, SERIAL, BambuModel::P1S);
+    assert!(client.mqtt_connected());
+    broker_task_a.await.expect("First broker task panicked");
+
+    client
+        .disconnect_mqtt()
+        .await
+        .expect("disconnect_mqtt should succeed");
+    assert!(
+        !client.mqtt_connected(),
+        "disconnect_mqtt must clear self.mqtt"
+    );
+
+    let (client_stream_b, mut server_stream_b) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+    let broker_task_b = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_b).await;
+        send_publish_payload(
+            &mut server_stream_b,
+            &topic,
+            9001,
+            br#"{"print":{"wifi_signal":"-60dBm"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream_b).await;
+    });
+    let mqtt_client_b = BambuMqttClient::connect(TokioIo(client_stream_b), SERIAL, "12345678")
+        .await
+        .expect("second MQTT connect handshake failed");
+    client.attach_mqtt(mqtt_client_b);
+    assert!(
+        client.mqtt_connected(),
+        "attach_mqtt must reinstall a session"
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should work over the reattached session");
+    assert_eq!(client.wifi_signal(), Some("-60dBm"));
+
+    broker_task_b.await.expect("Second broker task panicked");
+}
+
+#[tokio::test]
 async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     // `disconnect_storage()` (review/client.md Phase 5) must leave `self.ftps` as `None`
     // afterward, so a later `storage()` call falls through to `ensure_ftps()`'s existing

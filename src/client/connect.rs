@@ -121,6 +121,32 @@ where
         self.mqtt.is_some()
     }
 
+    /// Injects a pre-connected [`BambuMqttClient`] directly.
+    ///
+    /// Use this for test mocks or Embassy where the caller manages the MQTT connection,
+    /// mirroring [`attach_camera()`](super::PrinterClient::attach_camera)/
+    /// [`attach_storage()`](super::PrinterClient::attach_storage).
+    pub fn attach_mqtt(&mut self, mqtt: BambuMqttClient<MqttTls::Stream>) {
+        self.mqtt = Some(mqtt);
+    }
+
+    /// Disconnects the MQTT session, if one exists, and clears it from the client.
+    ///
+    /// There is no protocol-level teardown on `BambuMqttClient` to call — this just clears
+    /// the slot, mirroring `disconnect_camera()`. Without this, a dead stream (a
+    /// [`tick_zombie_check()`](crate::mqtt::BambuMqttClient::tick_zombie_check)-detected
+    /// zombie, a transport error) left `self.mqtt` stuck `Some(...)` forever, since
+    /// `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken
+    /// connection with no supported redial path.
+    ///
+    /// Idempotent. Reconnecting requires either [`.attach_mqtt()`](Self::attach_mqtt) with a
+    /// fresh `BambuMqttClient`, or letting the next call fall through to `ensure_mqtt()`'s
+    /// own lazy dial.
+    pub async fn disconnect_mqtt(&mut self) -> Result<(), BambuError> {
+        self.mqtt = None;
+        Ok(())
+    }
+
     /// Sets a [`TimerProvider`] for wall-clock command-response timeouts.
     ///
     /// Consuming builder — works on both [`new()`](PrinterClient::new) and
