@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-003 | Sev2 | ftps/client.rs | `download_file` has no integrity recheck (unlike `upload_file`'s SIZE recheck) | 2026-07-09 | [07-09-REVIEW.md §3](07-09-REVIEW.md#3-srcftpsclientrs--download_file-missing-integrity-recheck) |
 | BUG-004 | Sev3 | ftps/client.rs | 6 single-reply commands don't poison on `read_response` timeout | 2026-07-09 | [07-09-REVIEW.md §3b](07-09-REVIEW.md#3b-srcftpsclientrs--poisoning-coverage-gap-on-single-reply-commands) — needs a design call (poison vs. document), not just a mechanical fix |
 | BUG-005 | Sev3 | camera/rtsps.rs | IPv6 addresses not bracketed in RTSPS URLs | 2026-07-09 | [07-09-REVIEW.md §4](07-09-REVIEW.md#4-srccamerartspsrs--ipv6-addresses-not-bracketed-in-rtsps-urls) |
 | BUG-006 | Sev3 | camera/binary.rs | `build_handshake_packet` accepts empty access code | 2026-07-09 | [07-09-REVIEW.md §4b](07-09-REVIEW.md#4b-srccamerabinaryrs--build_handshake_packet-accepts-empty-access-code) |
@@ -28,6 +27,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | ID | Sev | Module | Title | Found | Closed | Detail |
 |---|---|---|---|---|---|---|
 | BUG-001 | Sev2 | mqtt/commands, diagnostics/kprofile | `sequence_id` unclamped in 6 public command constructors | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §1](07-09-REVIEW.md#1-srcmqttcommands--srcdiagnosticskprofilers--unclamped-sequence-ids-real-bug-public-api-facing) |
+| BUG-003 | Sev2 | ftps/client.rs | `download_file` has no integrity recheck (unlike `upload_file`'s SIZE recheck) | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §3](07-09-REVIEW.md#3-srcftpsclientrs--download_file-missing-integrity-recheck) |
 
 ## Wontfix
 

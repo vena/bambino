@@ -204,6 +204,42 @@ pub async fn run_mock_server_download(
     server_data.flush().await.expect("RETR data flush");
     drop(server_data);
     respond(&mut server_control, b"226 Transfer complete.\r\n").await;
+
+    // Post-download SIZE verification (BUG-003)
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
+    respond(&mut server_control, b"213 30\r\n").await;
+}
+
+/// Mock server for download (RETR) with a SIZE mismatch (should trigger ProtocolViolation).
+pub async fn run_mock_server_download_size_mismatch(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    // RETR download
+    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "RETR /model/job.3mf\r\n");
+    respond(&mut server_control, b"150 Opening data connection.\r\n").await;
+
+    // Data channel closes early after only partial content — the client still sees a clean
+    // 226 confirmation, but the payload it actually read is shorter than the real file.
+    server_data
+        .write_all(b"MOCK_FILE_CONTENT_FOR_DOWNLOAD")
+        .await
+        .expect("RETR data write");
+    server_data.flush().await.expect("RETR data flush");
+    drop(server_data);
+    respond(&mut server_control, b"226 Transfer complete.\r\n").await;
+
+    // SIZE verification — report a larger size than what was actually transferred.
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
+    respond(&mut server_control, b"213 99999\r\n").await;
 }
 
 /// Mock server for directory operations: MKD, RMD, RNFR/RNTO.

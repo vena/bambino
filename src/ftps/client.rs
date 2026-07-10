@@ -111,8 +111,8 @@ where
     poisoned: bool,
     /// Bypasses `require_tls_1_2_if_enforced`'s rejection when set — see
     /// `EMBASSY_TLS_ESCAPE_HATCH_PLAN.md`'s "Why the escape hatch is safe" section for why this
-    /// is a reliability tradeoff, not a safety hole: `upload_file`'s `SIZE` recheck and
-    /// `download_file`'s exact-`226` check already catch a truncated/corrupted transfer
+    /// is a reliability tradeoff, not a safety hole: `upload_file`'s and `download_file`'s
+    /// symmetric `SIZE` rechecks already catch a truncated/corrupted transfer
     /// regardless of this flag. Only meaningful today for the `embassy` feature talking to
     /// P2S/X2D, where no available TLS backend can honestly satisfy the exact-version check.
     allow_unverified_tls_1_2: bool,
@@ -596,7 +596,10 @@ where
 
     /// Downloads the contents of a remote file from MicroSD storage via the RETR command.
     ///
-    /// Negotiates a passive data channel, retrieves the binary payload, and returns the raw bytes.
+    /// Negotiates a passive data channel, retrieves the binary payload, and returns the raw
+    /// bytes. Unconditionally verifies the downloaded length against the `SIZE` command after
+    /// transfer completes — a clean `226` reply alone doesn't prove the data channel didn't
+    /// close early [REF-FTPS-CONN].
     pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, BambuError> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
@@ -662,6 +665,19 @@ where
         if code != FTP_TRANSFER_COMPLETE {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer confirmation aborted".into(),
+            ));
+        }
+
+        // Unconditionally verify the downloaded size via SIZE, mirroring upload_file's
+        // symmetric recheck — a clean 226 alone doesn't prove the data channel didn't close
+        // early (same failure class documented for P2S/X2D, or any other early-close
+        // condition). The control channel was read cleanly here, so this is a plain error,
+        // not a poisoning path.
+        let remote_size = self.get_file_size(remote_path).await?;
+        if remote_size != file_payload.len() as u64 {
+            return Err(BambuError::ProtocolViolation(
+                "Downloaded file size does not match remote SIZE (possible truncated transfer)"
+                    .into(),
             ));
         }
 

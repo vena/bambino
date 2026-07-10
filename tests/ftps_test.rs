@@ -191,6 +191,30 @@ async fn test_ftps_download_file() {
 }
 
 #[tokio::test]
+async fn test_ftps_download_size_mismatch_returns_protocol_violation() {
+    // BUG-003: download_file previously trusted a clean 226 alone, with no comparison against
+    // the file's expected length — a data channel that closes early while the server still
+    // emits 226 was silently reported as a successful (but truncated) download.
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_download_size_mismatch(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+
+    let result = client.download_file("/model/job.3mf").await;
+    assert!(
+        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        "Expected ProtocolViolation on a downloaded-size/SIZE mismatch, got {:?}",
+        result.map(|data| data.len())
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
 async fn test_ftps_directory_operations() {
     let (client_control, server_control, data_container, factory) = setup();
 
