@@ -498,7 +498,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         Ok(())
     }
 
-    /// Returns a slice containing current un-acknowledged QoS 1 packet identifiers.
+    /// Returns the number of current un-acknowledged QoS 1 packets.
     pub fn get_in_flight_count(&self) -> usize {
         self.in_flight.len()
     }
