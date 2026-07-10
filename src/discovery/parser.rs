@@ -188,7 +188,15 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     };
 
     let raw_usn_str = raw.usn?;
-    let serial = raw_usn_str.strip_prefix("uuid:").unwrap_or(raw_usn_str);
+    // BUG-011: uppercase the serial to make the SsdpDevice::serial doc comment's "uppercase"
+    // promise true. SSDP USN casing varies by firmware compile target, but MQTT broker
+    // subscriptions and TLS SNI/identity route strictly on exact casing as printed on the
+    // physical label — see reference/01_network_discovery.md §1.6 and
+    // .claude/rules/tls-identity-sni.md.
+    let serial = raw_usn_str
+        .strip_prefix("uuid:")
+        .unwrap_or(raw_usn_str)
+        .to_ascii_uppercase();
 
     // Use DevModel header, falling back to model embedded in NT/ST per Protocol Violation #7
     let effective_dev_model = raw
@@ -196,12 +204,12 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
         .or_else(|| raw.nt_or_st.and_then(extract_model_from_nt_st));
 
     let (ip, port) = raw.location.and_then(parse_location)?;
-    let model = resolve_model(serial, effective_dev_model);
+    let model = resolve_model(&serial, effective_dev_model);
 
     let signal_dbm = raw.dev_signal.and_then(|s| s.parse::<i32>().ok());
 
     Some(SsdpDevice {
-        serial: serial.to_owned(),
+        serial,
         model,
         name: raw.dev_name.unwrap_or("").to_owned(),
         ip: ip.to_owned(),
@@ -280,6 +288,21 @@ mod tests {
         assert_eq!(device.model, BambuModel::P1S);
         assert_eq!(device.ip, "10.0.0.5");
         assert_eq!(device.port, 80);
+    }
+
+    #[test]
+    fn test_parse_ssdp_lowercase_usn_serial_is_uppercased() {
+        // BUG-011: firmware-dependent USN casing must not leak into SsdpDevice::serial — the
+        // doc comment promises "uppercase," and downstream MQTT subscription/TLS SNI routing
+        // is exact-casing-sensitive (reference/01_network_discovery.md §1.6).
+        let payload = b"HTTP/1.1 200 OK\r\n\
+                        LOCATION: http://10.0.0.5:80/\r\n\
+                        USN: 01p06a521703222\r\n\
+                        DevModel.bambu.com: C12\r\n\r\n";
+
+        let device = parse_ssdp_payload(payload).unwrap();
+        assert_eq!(device.serial, "01P06A521703222");
+        assert_eq!(device.model, BambuModel::P1S);
     }
 
     #[test]
