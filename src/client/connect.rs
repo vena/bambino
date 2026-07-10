@@ -296,16 +296,19 @@ where
 
     /// Establishes the FTPS connection if not already connected.
     ///
-    /// Short-circuits when `self.ftps` is already `Some`. Otherwise, takes the TLS connector
-    /// and data factory from `ftps_config`, dials a raw connection, and calls
-    /// `BambuFtpsClient::connect()` — the whole dial+connect sequence is raced against
-    /// `self.connect_timeout_secs`. The config is consumed on first connection —
-    /// reconnecting requires a new `PrinterClient`.
+    /// Short-circuits when `self.ftps` is already `Some`. Otherwise, borrows the TLS
+    /// connector and data factory from `ftps_config`, dials a raw connection, and runs
+    /// `BambuFtpsClient::connect_control_stream()` — the whole dial+connect sequence is
+    /// raced against `self.connect_timeout_secs`. `ftps_config` is only consumed
+    /// (`.take()`n) once that attempt has actually succeeded (BUG-020) — a failed attempt,
+    /// including a `connect_timeout_secs` timeout on a slow LAN, leaves it intact so the
+    /// next call retries instead of permanently reporting "not configured". Reconnecting
+    /// after a *successful* connect still requires a new `PrinterClient`.
     pub(super) async fn ensure_ftps(&mut self) -> Result<(), BambuError> {
         if self.ftps.is_some() {
             return Ok(());
         }
-        let (tls, factory, timer) = self.ftps_config.take().ok_or_else(|| {
+        let (tls, factory, timer) = self.ftps_config.as_ref().ok_or_else(|| {
             BambuError::ProtocolViolation(
                 "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
             )
@@ -316,15 +319,13 @@ where
         let model = self.model;
         let ftps_port = self.ftps_port;
         let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
-        let ftps_client =
-            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
+        let (control_stream, fill_buf) =
+            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw_stream = factory.dial(ip, ftps_port).await?;
-                BambuFtpsClient::connect(
+                BambuFtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
                     raw_stream,
                     tls,
-                    factory,
                     model,
-                    ip,
                     serial,
                     access_code,
                     timer,
@@ -333,7 +334,19 @@ where
                 .await
             })
             .await?;
-        self.ftps = Some(ftps_client);
+        // Safe to consume now — the handshake above already succeeded.
+        let (tls, factory, timer) = self.ftps_config.take().unwrap();
+        self.ftps = Some(BambuFtpsClient::from_control_stream(
+            control_stream,
+            tls,
+            factory,
+            model,
+            ip,
+            serial,
+            timer,
+            allow_unverified_tls_1_2,
+            fill_buf,
+        ));
         Ok(())
     }
 
@@ -366,7 +379,7 @@ where
         if self.camera.is_some() {
             return Ok(());
         }
-        let (tls, factory) = self.camera_config.take().ok_or_else(|| {
+        let (tls, factory) = self.camera_config.as_ref().ok_or_else(|| {
             BambuError::ProtocolViolation(
                 "Camera not configured — call .with_camera() or .attach_camera()".into(),
             )
@@ -377,7 +390,7 @@ where
         let camera_port = self.camera_port;
         let max_frame_size = self.camera_max_frame_size;
         let camera_stream =
-            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async move {
+            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw = factory.dial(ip, camera_port).await?;
                 let stream = tls.connect(serial, raw).await?;
                 let mut cam = BambuBinaryCameraStream::new(stream);
@@ -388,6 +401,10 @@ where
                 Ok::<_, BambuError>(cam)
             })
             .await?;
+        // Only clear camera_config once the connection has actually succeeded — a failed
+        // attempt (including a connect_timeout_secs timeout on a slow LAN) must leave it
+        // intact so the next call retries instead of permanently reporting "not configured".
+        self.camera_config = None;
         self.camera = Some(camera_stream);
         Ok(())
     }

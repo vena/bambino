@@ -171,3 +171,41 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
     );
     assert!(!printer.camera_connected());
 }
+
+/// BUG-020: `ensure_camera()` used to `.take()` `camera_config` before attempting the dial,
+/// so a failed attempt permanently discarded it — every later call would then report the
+/// misleading "Camera not configured" error instead of retrying. `MockDataStreamFactory`'s
+/// `dial()` fails with `ConnectionRefused` whenever its stream container is empty, so two
+/// consecutive calls over the same never-populated container must both fail the *same*
+/// dial-level way, never degrading into "not configured" (which would mean the config got
+/// dropped after the first attempt).
+#[tokio::test]
+async fn test_ensure_camera_retries_after_failed_dial() {
+    let data_container = Arc::new(Mutex::new(None));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container.clone(),
+    };
+
+    let mut printer = PrinterClient::new(
+        DummyTls,
+        DummyFactory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    )
+    .with_camera(DummyTlsConnector, factory);
+
+    let mut frame_buf = Vec::new();
+    for attempt in 1..=2 {
+        let result = printer.read_camera_frame(&mut frame_buf).await;
+        assert!(
+            matches!(result, Err(BambuError::NetworkError(_))),
+            "attempt {attempt}: expected the dial failure to surface as NetworkError, not \
+             degrade into \"Camera not configured\" from a config consumed on a prior failed \
+             attempt, got {:?}",
+            result.map(|_| ())
+        );
+    }
+    assert!(!printer.camera_connected());
+}

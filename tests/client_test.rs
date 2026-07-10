@@ -2625,6 +2625,43 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
 }
 
 #[tokio::test]
+async fn test_ensure_ftps_retries_after_failed_dial() {
+    // BUG-020: ensure_ftps() used to .take() ftps_config before attempting the dial, so a
+    // failed attempt (including a connect_timeout_secs timeout on a slow LAN) permanently
+    // discarded it — every later call would then report the misleading "FTPS not
+    // configured" error instead of retrying. MockDataStreamFactory's dial() fails with
+    // ConnectionRefused whenever its stream container is empty, so two consecutive calls
+    // over the same never-populated container must both fail the *same* dial-level way,
+    // never degrading into "not configured" (which would mean the config got dropped after
+    // the first attempt).
+    let data_container = Arc::new(Mutex::new(None));
+    let factory = MockDataStreamFactory {
+        active_stream: data_container.clone(),
+    };
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        DummyFactory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    )
+    .with_ftps(DummyTlsConnector, factory, DummyTimer);
+
+    for attempt in 1..=2 {
+        let result = client.storage().await;
+        assert!(
+            matches!(result, Err(BambuError::NetworkError(_))),
+            "attempt {attempt}: expected the dial failure to surface as NetworkError, not \
+             degrade into \"FTPS not configured\" from a config consumed on a prior failed \
+             attempt, got {:?}",
+            result.map(|_| ())
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     // `disconnect_storage()` (review/client.md Phase 5) must leave `self.ftps` as `None`
     // afterward, so a later `storage()` call falls through to `ensure_ftps()`'s existing

@@ -154,10 +154,55 @@ where
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
     ) -> Result<Self, BambuError> {
+        let (control_stream, fill_buf) = Self::connect_control_stream(
+            raw_control,
+            &tls_connector,
+            model,
+            serial,
+            access_code,
+            &timer,
+            allow_unverified_tls_1_2,
+        )
+        .await?;
+        Ok(Self {
+            control_stream,
+            tls_connector,
+            data_factory,
+            model,
+            ip: String::from(ip),
+            serial: String::from(serial),
+            timer,
+            poisoned: false,
+            allow_unverified_tls_1_2,
+            control_fill_buf: fill_buf,
+        })
+    }
+
+    /// Performs the TLS-wrap + login handshake using only borrowed `tls_connector`/`timer`,
+    /// returning the resulting stream and carry-buffer state instead of a fully-assembled
+    /// `Self`.
+    ///
+    /// Split out of `connect()` so `PrinterClient::ensure_ftps()` (`src/client/connect.rs`)
+    /// can run the handshake against `self.ftps_config`'s borrowed contents without
+    /// consuming them first (BUG-020) — a failed attempt (including a `connect_timeout_secs`
+    /// timeout on a slow LAN) then leaves the config untouched for a retry, instead of
+    /// permanently discarding it via a premature `.take()`. `connect()` above stays the
+    /// normal owned-argument entry point for direct (non-`PrinterClient`) callers and is
+    /// implemented in terms of this helper.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn connect_control_stream(
+        raw_control: RawIO,
+        tls_connector: &Tls,
+        model: BambuModel,
+        serial: &str,
+        access_code: &str,
+        timer: &FtpsTimer,
+        allow_unverified_tls_1_2: bool,
+    ) -> Result<(Tls::Stream, Vec<u8>), BambuError> {
         let mut control_stream = tls_connector.connect(serial, raw_control).await?;
 
         Self::require_tls_1_2_if_enforced(
-            &tls_connector,
+            tls_connector,
             &control_stream,
             model,
             allow_unverified_tls_1_2,
@@ -167,13 +212,13 @@ where
         // Persists across every read_response call in this login sequence, and is carried
         // forward into `Self` below — see `control_fill_buf`'s doc comment on the struct.
         let mut fill_buf = Vec::new();
-        let deadline_ms = ftps_deadline_ms(&timer, FTPS_READ_TIMEOUT_SECS);
+        let deadline_ms = ftps_deadline_ms(timer, FTPS_READ_TIMEOUT_SECS);
 
         let (code, _) = read_response(
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
-            &timer,
+            timer,
             deadline_ms,
         )
         .await?;
@@ -188,7 +233,7 @@ where
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
-            &timer,
+            timer,
             deadline_ms,
         )
         .await?;
@@ -205,7 +250,7 @@ where
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
-            &timer,
+            timer,
             deadline_ms,
         )
         .await?;
@@ -220,7 +265,7 @@ where
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
-            &timer,
+            timer,
             deadline_ms,
         )
         .await?;
@@ -238,7 +283,7 @@ where
                 &mut control_stream,
                 &mut buf,
                 &mut fill_buf,
-                &timer,
+                timer,
                 deadline_ms,
             )
             .await?;
@@ -256,7 +301,7 @@ where
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
-            &timer,
+            timer,
             deadline_ms,
         )
         .await?;
@@ -267,7 +312,26 @@ where
             ));
         }
 
-        Ok(Self {
+        Ok((control_stream, fill_buf))
+    }
+
+    /// Assembles a `Self` from an already-established control stream plus the config that
+    /// produced it — the second half of the `connect_control_stream()` split (BUG-020).
+    /// `PrinterClient::ensure_ftps()` calls this only after `connect_control_stream()` has
+    /// already succeeded, once it's safe to actually consume `self.ftps_config` via `.take()`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_control_stream(
+        control_stream: Tls::Stream,
+        tls_connector: Tls,
+        data_factory: Factory,
+        model: BambuModel,
+        ip: &str,
+        serial: &str,
+        timer: FtpsTimer,
+        allow_unverified_tls_1_2: bool,
+        control_fill_buf: Vec<u8>,
+    ) -> Self {
+        Self {
             control_stream,
             tls_connector,
             data_factory,
@@ -277,8 +341,8 @@ where
             timer,
             poisoned: false,
             allow_unverified_tls_1_2,
-            control_fill_buf: fill_buf,
-        })
+            control_fill_buf,
+        }
     }
 
     /// Returns an error if this client has been poisoned by a prior control-channel desync.
