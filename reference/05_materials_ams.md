@@ -44,6 +44,8 @@ When the bitwise presence check indicates a spool has been removed (or when the 
 
 Additionally, some models (such as `H2D`) only emit `{id, state}` in incremental updates when a slot is not fully loaded. A transition to state `9` (empty) or `10` (present but retracted), or receiving an empty string for `tray_type`, must be treated as an explicit clearing signal. Without this active sanitization, stale material parameters from previously loaded spools will persist in the state representation.
 
+**Verification source (BUG-012):** confirmed against two independent reverse-engineering projects, not just this doc's original wording. `pybambu`'s `AMSTrayStateFlags` bitmask model disagreed (treated state 9 as "present but unknown"), but `Bambuddy`'s `bambu_mqtt.py` (`apply_tray_exist_bits`, incremental-merge handler citing issue #784) and `main.py`'s `on_ams_change` (`loaded = cur_state == 11 or (cur_state not in (9, 10) and cur_type.strip())`, citing issue #1322, cross-tested against H2D/A1 Mini/P1S firmware) both treat `state ∈ {9, 10}` as the firmware's explicit "not loaded" signals — matching this doc, not pybambu. `src/ams/parser.rs::clean_stale_tray_data` now clears on both.
+
 #### Multi-AMS Local Index Resolution (`tray_now`)
 When multiple standard AMS units or virtual slots are connected, the printer's status stream may report only the local slot ID (0-3) in `tray_now` rather than a global ID.
 

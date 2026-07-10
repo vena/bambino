@@ -6,7 +6,7 @@
 //! tray data, and calculating global indexes.
 
 use crate::types::AmsTray;
-use crate::types::telemetry::ams::AMS_TRAY_STATE_EMPTY;
+use crate::types::telemetry::ams::{AMS_TRAY_STATE_EMPTY, AMS_TRAY_STATE_SPOOL_NOT_FED};
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
 pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
@@ -75,12 +75,19 @@ pub fn evaluate_spool_presence(
 /// cleanup on the client side, standard parsers would preserve the material properties of the
 /// previously loaded spool indefinitely.
 ///
-/// This routine inspects the tray's state (with 9 representing Empty / Absent) and clears all
-/// stale config keys if empty. It treats an empty `tray_type` string as an explicit clearing signal.
+/// This routine inspects the tray's state — 9 (`AMS_TRAY_STATE_EMPTY`) meaning Empty/Absent and
+/// 10 (`AMS_TRAY_STATE_SPOOL_NOT_FED`) meaning a spool is physically present but not yet fed to
+/// the extruder, both treated as absent-equivalent for stale-data cleansing (BUG-012, verified
+/// against pybambu/Bambuddy — see `AMS_TRAY_STATE_SPOOL_NOT_FED`'s doc comment) — and clears all
+/// stale config keys if either applies. It treats an empty `tray_type` string as an explicit
+/// clearing signal too.
 pub fn clean_stale_tray_data(tray: &mut AmsTray) {
     let is_absent_state = matches!(
         tray.state,
-        Some(AMS_TRAY_STATE_EMPTY) | Some(AMS_TRAY_STATE_POWER_OFF) | None
+        Some(AMS_TRAY_STATE_EMPTY)
+            | Some(AMS_TRAY_STATE_SPOOL_NOT_FED)
+            | Some(AMS_TRAY_STATE_POWER_OFF)
+            | None
     );
 
     let is_type_cleared = tray
@@ -363,8 +370,13 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_stale_tray_data_state_10_with_type() {
-        // State 10 (present but retracted) with tray_type present — should NOT clear
+    fn test_clean_stale_tray_data_state_10_with_type_clears() {
+        // BUG-012: state 10 (spool present but not yet fed to the extruder) with a populated
+        // tray_type used to be treated as "keep" — this locked in the wrong behavior. Verified
+        // against pybambu/Bambuddy's independent reverse-engineering (see
+        // AMS_TRAY_STATE_SPOOL_NOT_FED's doc comment): state 10 is one of the firmware's two
+        // explicit "not loaded" signals (alongside state 9) regardless of what stale metadata
+        // is still attached, so it must clear here too.
         let mut tray = AmsTray {
             id: "0".into(),
             state: Some(10),
@@ -379,9 +391,9 @@ mod tests {
 
         clean_stale_tray_data(&mut tray);
 
-        assert_eq!(tray.tray_type.as_deref(), Some("PLA"));
-        assert_eq!(tray.tray_color.as_deref(), Some("FF0000FF"));
-        assert_eq!(tray.remain, Some(85));
+        assert_eq!(tray.tray_type, None);
+        assert_eq!(tray.tray_color, None);
+        assert_eq!(tray.remain, Some(-1));
     }
 
     #[test]

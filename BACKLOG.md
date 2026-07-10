@@ -8,9 +8,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 ## Open
 
-| ID | Sev | Module | Title | Found | Detail |
-|---|---|---|---|---|---|
-| BUG-012 | needs-verification | ams/parser.rs | State-10 tray-clearing: doc says clear, code doesn't — unclear which is right | 2026-07-09 | [07-09-REVIEW.md §8](07-09-REVIEW.md#8-srcamsparserrs--possible-doccode-mismatch-on-state-10-tray-clearing-needs-hardware-verification-not-a-confirmed-bug) — needs a real H2D wire capture, not a code-only fix |
+*(none open as of 2026-07-09 — release bar met)*
 
 ## Fixed
 
@@ -27,6 +25,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-009 | Sev2 | discovery/mod.rs | Degraded-mode SSDP bind is order-dependent, not "try all ports" | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §7](07-09-REVIEW.md#7-srcdiscoverymodrs--degraded-mode-ssdp-bind-is-order-dependent-not-try-all-ports) |
 | BUG-010 | Sev2 | discovery/mod.rs | Initial broadcast loop aborts whole sweep on one engine's send failure | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §7b](07-09-REVIEW.md#7b-srcdiscoverymodrs--initial-broadcast-loop-aborts-sweep-on-single-engine-send-failure) |
 | BUG-011 | Sev2 | discovery/parser.rs | SSDP-discovered serial not uppercased despite doc promise | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §7c](07-09-REVIEW.md#7c-srcdiscoveryparserrs--ssdp-discovered-serial-not-uppercased-despite-doc-promise) |
+| BUG-012 | Sev2 | ams/parser.rs | State-10 tray-clearing: doc said clear, code didn't | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §8](07-09-REVIEW.md#8-srcamsparserrs--possible-doccode-mismatch-on-state-10-tray-clearing-needs-hardware-verification-not-a-confirmed-bug) — resolved via pybambu/Bambuddy cross-check (no H2D hardware available) instead of a wire capture; see `reference/05_materials_ams.md`'s verification-source note |
 | BUG-013 | Sev3 | error.rs | `no_std` `Display` impl sync unverified by any test that actually runs | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §9](07-09-REVIEW.md#9-srcerrorrs--no_std-display-impl-sync-is-unverified-by-any-test-run-in-practice-soft-finding-not-a-live-bug) |
 
 ## Wontfix
