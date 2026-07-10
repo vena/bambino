@@ -397,6 +397,62 @@ async fn test_ftps_upload_size_mismatch_returns_disk_failure() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// BUG-029 regression: a `write_command`/`read_response` failure on `LIST`'s *initial*
+/// negotiation (before the `150`/`226` data-transfer window BUG-004's poisoning already
+/// covered) must poison the client too — previously only failures after the initial exchange
+/// did, leaving the control channel silently desynced on this specific failure window.
+#[tokio::test]
+async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_list_connection_drop(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+
+    let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
+    assert!(
+        matches!(result, Err(BambuError::NetworkError(_))),
+        "Expected the dropped connection to surface as NetworkError, got {:?}",
+        result
+    );
+
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(next_result, Err(BambuError::ProtocolViolation(_))),
+        "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
+        next_result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// BUG-030 regression: `download_file`'s confirmation-read handling must accept `426` (the
+/// documented P2S/X2D TLS 1.3 close race) and fall through to the SIZE recheck, symmetric with
+/// `upload_file`'s existing 426 handling — previously RETR treated 426 as an unconditional hard
+/// failure, discarding an already-fully-received payload.
+#[tokio::test]
+async fn test_ftps_download_426_recovery_via_size() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_download_426_recovery(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+
+    let data = client
+        .download_file("/model/job.3mf")
+        .await
+        .expect("Download should succeed via 426 + SIZE verification recovery");
+    assert_eq!(data, b"TEST_DATA");
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 #[tokio::test]
 async fn test_ftps_disconnect() {
     let (client_control, server_control, data_container, factory) = setup();

@@ -423,6 +423,66 @@ pub async fn run_mock_server_dele_connection_drop(
     // Drop the stream instead of responding.
 }
 
+/// Mock server for the BUG-029 regression test: `LIST`'s *initial* write/read (the `150`/`125`
+/// negotiation, before the data-transfer window BUG-004's poisoning already covered) must
+/// poison the client on failure too. Drops the control stream right after reading the `LIST`
+/// command, before ever sending a `150`/`125` reply.
+pub async fn run_mock_server_list_connection_drop(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let _server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "LIST /model\r\n");
+    // Drop the stream instead of responding.
+}
+
+/// Mock server for the BUG-030 regression test: `download_file`'s confirmation-read handling
+/// must accept `426` (the documented P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]) and fall
+/// through to the SIZE recheck, symmetric with `upload_file`'s existing 426 handling —
+/// previously RETR treated 426 as an unconditional hard failure.
+pub async fn run_mock_server_download_426_recovery(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_download_data =
+        handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "RETR /model/job.3mf\r\n");
+    respond(&mut server_control, b"150 Opening data connection.\r\n").await;
+
+    let payload = b"TEST_DATA";
+    server_download_data
+        .write_all(payload)
+        .await
+        .expect("download data write");
+    drop(server_download_data);
+
+    // Return 426 (TLS 1.3 close race) instead of 226 — the payload was already fully sent.
+    respond(
+        &mut server_control,
+        b"426 Failure reading network stream.\r\n",
+    )
+    .await;
+
+    // SIZE verification — report size matches, so download_file should still succeed.
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert!(cmd.starts_with("SIZE "));
+    respond(
+        &mut server_control,
+        format!("213 {}\r\n", payload.len()).as_bytes(),
+    )
+    .await;
+}
+
 /// Mock server for disconnect (QUIT) test.
 pub async fn run_mock_server_disconnect(
     mut server_control: tokio::io::DuplexStream,

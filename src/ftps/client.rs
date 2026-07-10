@@ -450,18 +450,32 @@ where
         let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let list_cmd = format!("LIST {}", remote_path);
-        write_command(&mut self.control_stream, &list_cmd).await?;
+        // BUG-029: poison on the initial write/read too, matching every other control-channel
+        // operation in this file (per .claude/rules/ftps-poisoning.md) — an unpoisoned failure
+        // here leaves the control channel in the same desynced state the poisoning mechanism
+        // exists to prevent.
+        if let Err(e) = write_command(&mut self.control_stream, &list_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut ctrl_buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "LIST transfer initialization failed".into(),
@@ -619,18 +633,30 @@ where
         let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let stor_cmd = format!("STOR {}", remote_path);
-        write_command(&mut self.control_stream, &stor_cmd).await?;
+        // BUG-029: poison on the initial write/read too — see the matching comment in
+        // list_directory() above.
+        if let Err(e) = write_command(&mut self.control_stream, &stor_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut ctrl_buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "STOR upload negotiation rejected".into(),
@@ -702,18 +728,30 @@ where
         let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let retr_cmd = format!("RETR {}", remote_path);
-        write_command(&mut self.control_stream, &retr_cmd).await?;
+        // BUG-029: poison on the initial write/read too — see the matching comment in
+        // list_directory() above.
+        if let Err(e) = write_command(&mut self.control_stream, &retr_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut ctrl_buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer initialization failed".into(),
@@ -756,7 +794,12 @@ where
                 return Err(e);
             }
         };
-        if code != FTP_TRANSFER_COMPLETE {
+        // BUG-030: also attempt the SIZE recheck on 426 (transient close, e.g. the documented
+        // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]), matching upload_file's symmetric
+        // handling — previously this branch treated 426 as an unconditional hard failure,
+        // discarding an already-fully-received payload on exactly the race this recheck
+        // exists to catch.
+        if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
             return Err(BambuError::ProtocolViolation(
                 "RETR transfer confirmation aborted".into(),
             ));
