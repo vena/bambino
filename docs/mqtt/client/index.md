@@ -57,7 +57,7 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 - <span id="bambumqttclient-get-in-flight-count"></span>`fn get_in_flight_count(&self) -> usize`
 
-  Returns a slice containing current un-acknowledged QoS 1 packet identifiers.
+  Returns the number of current un-acknowledged QoS 1 packets.
 
 #### Trait Implementations
 

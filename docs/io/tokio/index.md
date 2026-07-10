@@ -77,10 +77,14 @@ This verifier uses `x509-parser` instead (a general ASN.1/X.509 parser, not a
 policy-enforcing validator — confirmed via its own test suite that it treats the version
 field as optional, defaulting to v1 when absent, exactly per the DER grammar) for all
 parsing, and does two independent things no other code in this crate does:
-- **Chain-of-trust**: is the leaf's signature valid under one of the caller-supplied
-  trusted roots' public keys, with a matching issuer/subject and unexpired validity period?
-  (`verify_server_cert`, via `X509Certificate::verify_signature` — real `ring`-backed
-  verification, not hand-rolled crypto.)
+- **Chain-of-trust**: walks from the leaf through the presented intermediates (BUG-008: this
+  used to check the leaf directly against the trusted roots only, silently ignoring
+  `intermediates` — a legitimate two-level custom CA (offline root + issuing intermediate)
+  failed with `UnknownIssuer` even though the chain was valid) until it either lands on a
+  caller-supplied trusted root's public key or runs out of intermediates, verifying each
+  issuer/subject match and signature link along the way, with an unexpired validity period
+  on the leaf. (`verify_server_cert`, via `X509Certificate::verify_signature` — real
+  `ring`-backed verification, not hand-rolled crypto.)
 - **Handshake-signature check**: does the live TLS handshake signature verify under the
   leaf's own public key? (`verify_tls12_signature`/`verify_tls13_signature`, via
   `rustls_pki_types::SignatureVerificationAlgorithm::verify_signature` directly — this is
@@ -112,7 +116,7 @@ walker to `x509-parser`'s parsed fields.
 
 ##### `impl ServerCertVerifier for CnFallbackServerVerifier`
 
-- <span id="cnfallbackserververifier-servercertverifier-verify-server-cert"></span>`fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, _intermediates: &[CertificateDer<'_>], server_name: &ServerName<'_>, _ocsp_response: &[u8], now: UnixTime) -> Result<ServerCertVerified, RustlsError>`
+- <span id="cnfallbackserververifier-servercertverifier-verify-server-cert"></span>`fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], server_name: &ServerName<'_>, _ocsp_response: &[u8], now: UnixTime) -> Result<ServerCertVerified, RustlsError>`
 
 - <span id="cnfallbackserververifier-servercertverifier-verify-tls12-signature"></span>`fn verify_tls12_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
 

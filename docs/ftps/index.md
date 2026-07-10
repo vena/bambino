@@ -45,12 +45,15 @@ where
 
 Lightweight, high-reliability implicit FTPS client running on top of abstract I/O traits.
 
-**Poisoning invariant:** if a data-channel transfer (`list_directory`/`upload_file`/
-`download_file`) fails after the server has sent its `150`/`125` "opening data connection"
-reply but before the matching final reply (`226`/etc.) has been read off the control channel,
-the control channel is left mid-response. Reusing the client at that point risks a later,
-unrelated command silently reading the stale trailing reply instead of its own. To make this
-safe, the client sets `poisoned = true` on every such error path (and unconditionally in
+**Poisoning invariant:** the control channel is a single ordered stream — every command gets
+exactly one reply, and a `write_command`/`read_response` failure anywhere leaves no way to
+know whether the server's reply for that command is still coming. Reusing the client at that
+point risks a later, unrelated command silently reading the stale reply instead of its own.
+To make this safe, the client sets `poisoned = true` (BUG-004: originally only on the
+`list_directory`/`upload_file`/`download_file` data-transfer window between the server's
+`150`/`125` "opening data connection" reply and the matching final reply, since that's the
+widest such window; now on every `write_command`/`read_response` failure in every method,
+including the single-reply metadata/filesystem commands, and unconditionally in
 `disconnect()`); every public method checks the flag first and returns
 [`BambuError::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
 reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.

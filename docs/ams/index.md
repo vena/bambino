@@ -227,8 +227,12 @@ parameters (like `tray_type` or `tray_color`) when a spool is extracted. Without
 cleanup on the client side, standard parsers would preserve the material properties of the
 previously loaded spool indefinitely.
 
-This routine inspects the tray's state (with 9 representing Empty / Absent) and clears all
-stale config keys if empty. It treats an empty `tray_type` string as an explicit clearing signal.
+This routine inspects the tray's state — 9 (`AMS_TRAY_STATE_EMPTY`) meaning Empty/Absent and
+10 (`AMS_TRAY_STATE_SPOOL_NOT_FED`) meaning a spool is physically present but not yet fed to
+the extruder, both treated as absent-equivalent for stale-data cleansing (BUG-012, verified
+against pybambu/Bambuddy — see `AMS_TRAY_STATE_SPOOL_NOT_FED`'s doc comment) — and clears all
+stale config keys if either applies. It treats an empty `tray_type` string as an explicit
+clearing signal too.
 
 ### `evaluate_spool_presence`
 
