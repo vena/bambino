@@ -15,7 +15,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-006 | Sev3 | camera/binary.rs | `build_handshake_packet` accepts empty access code | 2026-07-09 | [07-09-REVIEW.md §4b](07-09-REVIEW.md#4b-srccamerabinaryrs--build_handshake_packet-accepts-empty-access-code) |
 | BUG-007 | Sev3 | client/connect.rs | `with_connect_timeout(0)` fails instantly instead of disabling the timeout | 2026-07-09 | [07-09-REVIEW.md §5](07-09-REVIEW.md#5-srcclientconnectrs--with_connect_timeout0-causes-immediate-spurious-timeout) |
 | BUG-008 | Sev3 | io/tokio.rs | `CnFallbackServerVerifier` ignores intermediate certs (single-hop chain only) | 2026-07-09 | [07-09-REVIEW.md §6](07-09-REVIEW.md#6-srciotokiors--cnfallbackserververifier-ignores-intermediate-certs-single-hop-chain-only) |
-| BUG-009 | Sev2 | discovery/mod.rs | Degraded-mode SSDP bind is order-dependent, not "try all ports" | 2026-07-09 | [07-09-REVIEW.md §7](07-09-REVIEW.md#7-srcdiscoverymodrs--degraded-mode-ssdp-bind-is-order-dependent-not-try-all-ports) |
 | BUG-010 | Sev2 | discovery/mod.rs | Initial broadcast loop aborts whole sweep on one engine's send failure | 2026-07-09 | [07-09-REVIEW.md §7b](07-09-REVIEW.md#7b-srcdiscoverymodrs--initial-broadcast-loop-aborts-sweep-on-single-engine-send-failure) |
 | BUG-011 | Sev2 | discovery/parser.rs | SSDP-discovered serial not uppercased despite doc promise | 2026-07-09 | [07-09-REVIEW.md §7c](07-09-REVIEW.md#7c-srcdiscoveryparserrs--ssdp-discovered-serial-not-uppercased-despite-doc-promise) |
 | BUG-012 | needs-verification | ams/parser.rs | State-10 tray-clearing: doc says clear, code doesn't — unclear which is right | 2026-07-09 | [07-09-REVIEW.md §8](07-09-REVIEW.md#8-srcamsparserrs--possible-doccode-mismatch-on-state-10-tray-clearing-needs-hardware-verification-not-a-confirmed-bug) — needs a real H2D wire capture, not a code-only fix |
@@ -28,6 +27,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 |---|---|---|---|---|---|---|
 | BUG-001 | Sev2 | mqtt/commands, diagnostics/kprofile | `sequence_id` unclamped in 6 public command constructors | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §1](07-09-REVIEW.md#1-srcmqttcommands--srcdiagnosticskprofilers--unclamped-sequence-ids-real-bug-public-api-facing) |
 | BUG-003 | Sev2 | ftps/client.rs | `download_file` has no integrity recheck (unlike `upload_file`'s SIZE recheck) | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §3](07-09-REVIEW.md#3-srcftpsclientrs--download_file-missing-integrity-recheck) |
+| BUG-009 | Sev2 | discovery/mod.rs | Degraded-mode SSDP bind is order-dependent, not "try all ports" | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §7](07-09-REVIEW.md#7-srcdiscoverymodrs--degraded-mode-ssdp-bind-is-order-dependent-not-try-all-ports) |
 
 ## Wontfix
 

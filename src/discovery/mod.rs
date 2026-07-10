@@ -180,6 +180,11 @@ where
     let ports: &[u16] = &[SSDP_PORT, SSDP_PORT_ALT];
 
     let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
+    // BUG-009: track the last bind failure and keep trying every port, instead of returning
+    // as soon as the *first* port fails to bind. Returning early made degraded mode only work
+    // when the second port failed after the first succeeded — if the first port failed (e.g.
+    // another process already holds it), the second, free port was never even attempted.
+    let mut last_bind_err: Option<crate::io::SocketError> = None;
     for &port in ports {
         let bind_addr = SocketAddr::from((IpAddr::V4(UNSPECIFIED_ADDR), port));
         log::debug!("Binding UDP socket on '{}'", bind_addr);
@@ -187,11 +192,15 @@ where
             Ok(socket) => engines.push((DiscoveryEngine::new(socket, port), port)),
             Err(e) => {
                 log::debug!("Failed to bind port {}: {:?} (skipping)", port, e);
-                if engines.is_empty() {
-                    return Err(BambuError::NetworkError(e));
-                }
+                last_bind_err = Some(e);
             }
         }
+    }
+
+    if engines.is_empty() {
+        return Err(BambuError::NetworkError(last_bind_err.expect(
+            "ports is non-empty, so an empty engines list means every bind attempt recorded an error",
+        )));
     }
 
     if engines.len() < ports.len() {
@@ -537,6 +546,50 @@ mod tests {
         )
         .await
         .expect("discovery should succeed in degraded single-port mode");
+
+        assert!(devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_discover_devices_succeeds_in_degraded_mode_when_first_port_fails_to_bind() {
+        use crate::io::tokio::TokioTimer;
+
+        // BUG-009: the bind loop used to return as soon as SSDP_PORT (the *first* port in the
+        // list) failed to bind, so SSDP_PORT_ALT was never even attempted — degraded mode only
+        // actually worked when the *second* port failed. Mirrors the sibling test above but
+        // fails the other port to prove both orderings now succeed.
+        struct FirstPortBindFailSocket;
+
+        impl BindableUdpSocket for FirstPortBindFailSocket {
+            async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
+                if addr.port() == SSDP_PORT {
+                    Err(SocketError::AddressInUse)
+                } else {
+                    Ok(Self)
+                }
+            }
+        }
+
+        impl AsyncUdpSocket for FirstPortBindFailSocket {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
+                Ok(100)
+            }
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
+                Err(SocketError::TimedOut)
+            }
+        }
+
+        let timer = TokioTimer::new();
+        let devices = discover_devices::<FirstPortBindFailSocket, TokioTimer>(
+            core::time::Duration::from_millis(100),
+            &timer,
+        )
+        .await
+        .expect("discovery should succeed in degraded single-port mode when the first port fails");
 
         assert!(devices.is_empty());
     }
