@@ -159,7 +159,7 @@ Add FTPS to a `PrinterClient` with `.with_ftps()`. The FTPS TLS connector is ind
 
 ```rust
 use bambino::io::tokio::{
-    TokioTlsConnector, TokioRawStreamFactory,
+    TokioTlsConnector, TokioRawStreamFactory, TokioTimer,
     build_unsafe_client_config_with_options,
 };
 
@@ -169,7 +169,7 @@ let ftps_config = build_unsafe_client_config_with_options(
 );
 let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
-let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory);
+let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new());
 
 // storage() auto-connects on first call
 let ftp = printer.storage().await?;
@@ -316,7 +316,7 @@ There's no buffer-consumption limit — `connect()` can be called repeatedly on 
 **Embassy raw streams:** `EmbassyRawStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool — used for both MQTT's lazy connect and FTPS's data channel. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs — `N = 1` covers FTPS's usage, since data-channel connections are always sequential (MQTT needs its own factory instance since it's a separate, concurrent connection). Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `dial`'s host must be a literal IPv4 address — Bambu printers are always addressed that way, so this isn't a limitation in practice:
 
 ```rust
-use bambino::io::embassy::EmbassyRawStreamFactory;
+use bambino::io::embassy::{EmbassyRawStreamFactory, EmbassyTimer};
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use static_cell::StaticCell;
 
@@ -327,7 +327,7 @@ let state = TCP_CLIENT_STATE.init(TcpClientState::new());
 let client = TCP_CLIENT.init(TcpClient::new(stack, state));
 let factory = EmbassyRawStreamFactory::new(client);
 
-let mut printer = printer.with_ftps(ftps_tls, factory);
+let mut printer = printer.with_ftps(ftps_tls, factory, EmbassyTimer);
 ```
 
 **ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK` — so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI.
@@ -337,10 +337,10 @@ let mut printer = printer.with_ftps(ftps_tls, factory);
 **ESP-IDF FTPS/MQTT:** `EspIdfTlsConnector` wraps an already-connected raw stream (via `esp_idf_svc::tls::EspTls::adopt()`) — used for FTPS's control/data channels and MQTT's lazy connect alike, paired with `EspIdfRawStreamFactory` for the raw dial. Models where `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS on the FTPS data channel entirely:
 
 ```rust
-use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory};
+use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer};
 
 let ftps_tls = EspIdfTlsConnector::new(); // or ::with_certs(ca_cert, client_auth) to verify
-let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory);
+let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTimer::new()?);
 ```
 
 ## bambino-cli
@@ -359,15 +359,17 @@ A `cargo bambino-cli` alias (`.cargo/config.toml`) wraps `cargo run --bin bambin
 Usage: bambino-cli [OPTIONS] <COMMAND>
 
 Commands:
-  discover  Scan the local subnet for nearby active printers
-  info      Query expansion bus module and firmware versions
-  monitor   Stream real-time status telemetry and HMS warnings
-  dump      Dump the raw pushall JSON response and exit
-  probe     Run command response capture suite and write report
-  control   Dispatch a movement or hardware control command
-  files     Traverse and transfer files on the printer's MicroSD card
-  camera    Camera streaming operations
-  help      Print this message or the help of the given subcommand(s)
+  discover      Scan the local subnet for nearby active printers
+  info          Query expansion bus module and firmware versions
+  monitor       Stream real-time status telemetry and HMS warnings
+  dump          Dump the raw pushall JSON response and exit
+  probe         Run command response capture suite and write report
+  control       Dispatch a movement or hardware control command
+  files         Traverse and transfer files on the printer's MicroSD card
+  camera        Camera streaming operations
+  inspect-cert  Capture a printer's raw leaf TLS cert to disk for SAN/CN inspection
+  verify-tls    Attempt a real CA-verified TLS handshake against a printer
+  help          Print this message or the help of the given subcommand(s)
 
 Options:
   -v, --verbose  Enable verbose connection and packet debugging output
