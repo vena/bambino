@@ -35,6 +35,10 @@ fn x1_is_door_open(telemetry: &PrinterTelemetry) -> bool {
     telemetry.is_door_open_from_home_flag()
 }
 
+fn x1_door_sensor_field_present(telemetry: &PrinterTelemetry) -> bool {
+    telemetry.home_flag.is_some()
+}
+
 /// X1C's bed ceiling is voltage-dependent — see `X1C_BED_TEMP_MAX_220V`'s doc comment.
 /// A free function (not inlined into the macro invocation) since a multi-arm `match` doesn't
 /// substitute cleanly as a macro argument without fighting macro hygiene.
@@ -66,6 +70,10 @@ macro_rules! impl_x1_shared {
 
             fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
                 x1_is_door_open(telemetry)
+            }
+
+            fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool {
+                x1_door_sensor_field_present(telemetry)
             }
 
             fn has_door_sensor(&self) -> bool {

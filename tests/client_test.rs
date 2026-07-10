@@ -1957,6 +1957,66 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
 }
 
 #[tokio::test]
+async fn test_door_open_cache_survives_message_omitting_home_flag() {
+    // BUG-021: last_door_open used to be overwritten unconditionally on every telemetry
+    // message, ignoring the same absent-field staleness contract every other cache field
+    // respects. A print-carrying message that omits home_flag (X1C's door-sensor field)
+    // must leave a previously-observed "door open" cached, not reset it to Some(false).
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", "00M000000000000");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Bit 23 set: door open.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5110,
+            br#"{"print":{"home_flag":8388608}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // A print-carrying message with no home_flag at all (e.g. an incremental update
+        // only touching an unrelated field) must not reset the cached door state.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5111,
+            br#"{"print":{"mc_percent":42}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1C);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first home_flag report");
+    assert_eq!(client.door_open(), Some(true));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second, home_flag-omitting report");
+    assert_eq!(
+        client.door_open(),
+        Some(true),
+        "a message omitting home_flag must not reset the cached door-open state"
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_active_fault_cache_from_telemetry() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{}/report", SERIAL);

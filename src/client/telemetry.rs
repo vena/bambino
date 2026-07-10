@@ -153,7 +153,9 @@ where
         if let Some(state) = &print.gcode_state {
             self.cache.last_gcode_state = Some(state.clone());
         }
-        self.cache.last_door_open = Some(self.model.quirks().is_door_open(print));
+        if self.model.quirks().door_sensor_field_present(print) {
+            self.cache.last_door_open = Some(self.model.quirks().is_door_open(print));
+        }
         if let Some(print_error) = print.print_error {
             self.cache.last_print_error = Some(print_error);
         }

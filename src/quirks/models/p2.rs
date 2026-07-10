@@ -44,6 +44,10 @@ impl ModelQuirks for P2Quirks {
         telemetry.is_door_open_from_stat()
     }
 
+    fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool {
+        telemetry.stat.is_some()
+    }
+
     fn has_door_sensor(&self) -> bool {
         true
     }

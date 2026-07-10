@@ -38,6 +38,18 @@ pub trait ModelQuirks {
     /// If the target model lacks an electronic door sensor switch, returns `false`.
     fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool;
 
+    /// Returns true if `telemetry` carries the specific wire field this model's
+    /// [`is_door_open()`](Self::is_door_open) actually reads (`home_flag` for X1 series,
+    /// `stat` for H2/P2/X2 series) [REF-NET-DOOR].
+    ///
+    /// Used to gate telemetry-cache updates (`PrinterClient::update_state_cache`) so an
+    /// incremental message that omits this field doesn't overwrite a previously-observed
+    /// door state with `is_door_open()`'s absent-field default of `false` (BUG-021).
+    /// Defaults to `false`, correct for every model without a door sensor.
+    fn door_sensor_field_present(&self, _telemetry: &PrinterTelemetry) -> bool {
+        false
+    }
+
     /// Returns true if the physical machine chassis is equipped with an electronic front enclosure door open sensor switch.
     fn has_door_sensor(&self) -> bool;
 
