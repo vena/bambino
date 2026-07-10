@@ -60,7 +60,7 @@ For each real finding reported back:
 
 1. **Dedupe first** — check `BACKLOG.md`'s existing rows for the same file/topic before treating it as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
 2. **Assign severity** per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly.
-3. Write the full writeup (all units, including clean ones and their file lists, and a closing summary table) to a new dated review file, `MM-DD-REVIEW.md` at repo root, following the structure of the review file this skill was extracted from as a template (per-unit sections, self-contained enough for a fresh session, summary table at the end mapping findings to severities).
+3. Write the full writeup to a new dated review file, `MM-DD-REVIEW.md`, at repo root. Structure: one section per unit (`## N. <unit path(s)> — <one-line summary>`, using the same **Issue**/**Detail**/**Suggested fix** format from Step 3's output contract for each finding), a one-line "Modules reviewed with no issues" list near the top for units that came back clean, and a closing summary table (`BUG-ID | Sev | Module | File(s) | One-line`) mapping every finding to its assigned `BUG-ID` and severity. Don't rely on a prior sweep's review file surviving as a template — per the `backlog` skill's review-file lifecycle rule, a fully-resolved one gets deleted.
 4. Append new rows to `BACKLOG.md`'s `Open` table using the `backlog` skill's entry-format and next-BUG-ID rules — link each row's `Detail` column back to the matching section of the new dated review file.
 
 ## Step 6 — Report
