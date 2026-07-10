@@ -1,13 +1,13 @@
 ---
 name: deep-review
-description: Runs a parallel, module-by-module deep code review sweep across the whole bambino crate — discovers the current src/ structure, spawns one review agent per module boundary, and compiles findings into a dated review file plus new BUG-ID rows in BACKLOG.md. Use when asked for a "full review", "deep review", "review sweep", to audit the whole crate/codebase, or to check for accumulated bugs before a release milestone. Not for reviewing a single diff/PR/recent change — use the code-review skill for that instead.
+description: Runs a parallel, module-by-module deep code review sweep across the whole bambino crate — discovers the current src/ and tests/ structure, spawns one review agent per module boundary, and compiles findings into a dated review file (confident bugs get new BUG-ID rows in BACKLOG.md; plausible-but-unverified ones get flagged in the review file for manual triage). Use when asked for a "full review", "deep review", "review sweep", to audit the whole crate/codebase, or to check for accumulated bugs before a release milestone. Not for reviewing a single diff/PR/recent change — use the code-review skill for that instead.
 ---
 
 # Deep Review — bambino module sweep
 
 Full-crate correctness review via parallel subagents, one per module. Designed to be re-run as the crate grows — never hardcode today's module list or file count; rediscover both every time this runs.
 
-**Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_shell,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_tree,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_compose,mcp__lean-ctx__ctx_explore,mcp__lean-ctx__ctx_call")` first and use those tools throughout — for this session's own orchestration work (discovery, `BACKLOG.md` edits) _and_ as a mandatory Step 0 inside every spawned agent's prompt (see template below). This is restated here on purpose, redundant with the global lean-ctx rule — a mandate stated once at session start and not repeated near the point of use gets lost across a long multi-step task; this happened in the session that built this skill.
+**Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_shell,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_tree,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_compose,mcp__lean-ctx__ctx_explore,mcp__lean-ctx__ctx_call")` first and use those tools throughout — for this session's own orchestration work (discovery, `BACKLOG.md` edits) _and_ as a mandatory Step 0 inside every spawned agent's prompt (see Step 3's requirements below — there's no literal fill-in-the-blank template, just a checklist each prompt needs to satisfy). This is restated here on purpose, redundant with the global lean-ctx rule — a mandate stated once at session start and not repeated near the point of use gets lost across a long multi-step task.
 
 Also read `CLAUDE.md` and `README.md` in full before starting — the module-boundary and scope decisions below depend on understanding this crate's actual architecture, not just its file layout.
 
@@ -21,7 +21,11 @@ ctx_tree(path="tests", depth=2)
 find src tests -name '*.rs' 2>/dev/null | xargs wc -l | sort -rn
 ```
 
-Note: `src/bin/*/` (CLI binaries, if any — currently `bambino-cli`), loose top-level files (`error.rs`, `models.rs`, `lib.rs`), `tests/` (integration tests + shared mock infrastructure — see Step 2 for why this walk matters and how these fold into the partition), and whether `docs/` exists and mirrors `src/`'s layout (generated via `make docs` per `CLAUDE.md`'s Documentation section — if `docs/` looks present but stale relative to recent `src/` changes, note that in each agent's prompt as "cross-check but don't over-trust").
+Also note, while discovering:
+- `src/bin/*/` (CLI binaries, if any — currently `bambino-cli`).
+- Loose top-level files (`error.rs`, `models.rs`, `lib.rs`).
+- `tests/` (integration tests + shared mock infrastructure — see Step 2 for why this walk matters and how these fold into the partition).
+- Whether `docs/` exists and mirrors `src/`'s layout (generated via `make docs` per `CLAUDE.md`'s Documentation section) — if it looks present but stale relative to recent `src/` changes, note that in each agent's prompt as "cross-check but don't over-trust."
 
 ## Step 2 — Partition into review units
 
@@ -60,11 +64,22 @@ All units' agents in parallel — single message, multiple `Agent` tool calls, `
 
 ## Step 5 — Triage and compile
 
-For each real finding reported back:
+For each finding reported back (both tiers, see items 1–2 for what differs by tier):
 
 1. **Dedupe first** — check `BACKLOG.md`'s existing rows for the same file/topic before treating it as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
-2. **Assign severity** per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly.
-3. Write the full writeup to a new dated review file, `MM-DD-REVIEW.md`, at repo root. Required framing (a fresh session with zero context needs this, not just the findings): an opening paragraph stating what was reviewed and how (crate description, parallel-agent methodology, unit count), the scope exclusions from Step 3 item 5 restated for the reader (LAN-only-security minor issues and style/refactor suggestions are out of scope, not overlooked), an explicit note that the file is meant to be consumed standalone by a fresh session, and a caveat that file:line references may have drifted if other changes landed on `main` since this sweep. Structure: one section per unit (`## N. <unit path(s)> — <one-line summary>`) containing only that unit's `CONFIRMED` findings, in Step 3's Issue/Detail/Suggested-fix format; a one-line "Modules reviewed with no issues" list near the top for units with zero findings of either tier; a closing `## Plausible, Unverified Findings` section collecting every `PLAUSIBLE` finding from every unit (same format, plus which unit it came from) — these don't get a `BUG-ID` yet, flag the section for the user to manually triage; and a summary table (`BUG-ID | Sev | Module | File(s) | One-line`) mapping every `CONFIRMED`-and-promoted finding to its `BUG-ID` and severity, with a note directly above it that `BACKLOG.md` is the status source of truth once this file exists — the table itself is a point-in-time snapshot and won't be updated as bugs get fixed. Don't rely on a prior sweep's review file surviving as a template — per the `backlog` skill's review-file lifecycle rule, a fully-resolved one gets deleted; `git log --all -- 'NN-NN-REVIEW.md'` finds a deleted one's content if a concrete example is wanted.
+2. **Assign severity** for `CONFIRMED` findings only, per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly. `PLAUSIBLE` findings don't get a severity yet; that happens if/when a human triages one into a real `BUG-ID` later.
+3. Write the full writeup to a new dated review file, `MM-DD-REVIEW.md`, at repo root. A fresh session with zero context needs this, not just the findings — required elements:
+   - Opening paragraph: what was reviewed and how (crate description, parallel-agent methodology, unit count).
+   - The scope exclusions from Step 3 item 5, restated for the reader (LAN-only-security minor issues and style/refactor suggestions are out of scope, not overlooked).
+   - A brief explanation of the `CONFIRMED`/`PLAUSIBLE` distinction — the Plausible section below assumes the reader already knows why it's separate and un-promoted.
+   - An explicit note that the file is meant to be consumed standalone by a fresh session.
+   - A caveat that file:line references may have drifted if other changes landed on `main` since this sweep.
+   - One section per unit (`## N. <unit path(s)> — <one-line summary>`) containing only that unit's `CONFIRMED` findings, in Step 3's Issue/Detail/Suggested-fix format.
+   - A one-line "Modules reviewed with no issues" list near the top, for units with zero findings of either tier.
+   - A closing `## Plausible, Unverified Findings` section collecting every `PLAUSIBLE` finding from every unit (same format, plus which unit it came from) — these don't get a `BUG-ID` yet, flag the section for the user to manually triage.
+   - A summary table (`BUG-ID | Sev | Module | File(s) | One-line`) mapping every `CONFIRMED`-and-promoted finding to its `BUG-ID` and severity, with a note directly above it that `BACKLOG.md` is the status source of truth once this file exists — the table itself is a point-in-time snapshot and won't be updated as bugs get fixed.
+
+   Don't rely on a prior sweep's review file surviving as a template — per the `backlog` skill's review-file lifecycle rule, a fully-resolved one gets deleted; `git log --all -- 'NN-NN-REVIEW.md'` finds a deleted one's content if a concrete example is wanted.
 4. Append new rows to `BACKLOG.md`'s `Open` table for `CONFIRMED` findings only, using the `backlog` skill's entry-format and next-BUG-ID rules — link each row's `Detail` column back to the matching section of the new dated review file. `PLAUSIBLE` findings stay in the review file's own section, not promoted here — that's a decision for whoever triages the sweep afterward, not automatic.
 
 ## Step 6 — Report
