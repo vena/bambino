@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-004 | Sev3 | ftps/client.rs | 6 single-reply commands don't poison on `read_response` timeout | 2026-07-09 | [07-09-REVIEW.md §3b](07-09-REVIEW.md#3b-srcftpsclientrs--poisoning-coverage-gap-on-single-reply-commands) — needs a design call (poison vs. document), not just a mechanical fix |
 | BUG-012 | needs-verification | ams/parser.rs | State-10 tray-clearing: doc says clear, code doesn't — unclear which is right | 2026-07-09 | [07-09-REVIEW.md §8](07-09-REVIEW.md#8-srcamsparserrs--possible-doccode-mismatch-on-state-10-tray-clearing-needs-hardware-verification-not-a-confirmed-bug) — needs a real H2D wire capture, not a code-only fix |
 
 ## Fixed
@@ -20,6 +19,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-001 | Sev2 | mqtt/commands, diagnostics/kprofile | `sequence_id` unclamped in 6 public command constructors | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §1](07-09-REVIEW.md#1-srcmqttcommands--srcdiagnosticskprofilers--unclamped-sequence-ids-real-bug-public-api-facing) |
 | BUG-002 | Sev3 | mqtt/client/mod.rs | `get_in_flight_count` doc comment says slice, returns `usize` | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §2](07-09-REVIEW.md#2-srcmqttclientmodrs--stale-doc-comment-on-get_in_flight_count) |
 | BUG-003 | Sev2 | ftps/client.rs | `download_file` has no integrity recheck (unlike `upload_file`'s SIZE recheck) | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §3](07-09-REVIEW.md#3-srcftpsclientrs--download_file-missing-integrity-recheck) |
+| BUG-004 | Sev3 | ftps/client.rs | 6 single-reply commands don't poison on `read_response`/`write_command` failure | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §3b](07-09-REVIEW.md#3b-srcftpsclientrs--poisoning-coverage-gap-on-single-reply-commands) — user chose poisoning (deterministic) over the cheaper drain-and-continue alternative |
 | BUG-005 | Sev3 | camera/rtsps.rs | IPv6 addresses not bracketed in RTSPS URLs | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §4](07-09-REVIEW.md#4-srccamerartspsrs--ipv6-addresses-not-bracketed-in-rtsps-urls) |
 | BUG-006 | Sev3 | camera/binary.rs | `build_handshake_packet` accepts empty access code | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §4b](07-09-REVIEW.md#4b-srccamerabinaryrs--build_handshake_packet-accepts-empty-access-code) |
 | BUG-007 | Sev3 | client/connect.rs | `with_connect_timeout(0)` fails instantly instead of disabling the timeout | 2026-07-09 | 2026-07-09 | [07-09-REVIEW.md §5](07-09-REVIEW.md#5-srcclientconnectrs--with_connect_timeout0-causes-immediate-spurious-timeout) |

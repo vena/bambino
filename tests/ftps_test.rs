@@ -324,6 +324,39 @@ async fn test_ftps_data_channel_failure_poisons_client() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// BUG-004 regression: a `read_response` failure on a single-reply command (`delete_file` here)
+/// must poison the client the same way the data-transfer methods already do — previously these
+/// six single-reply commands (`get_file_size`/`delete_file`/`create_directory`/
+/// `remove_directory`/`rename_file`/`get_available_space`) plus `negotiate_passive_port` left the
+/// client silently desynced on a transport error, with no poisoning.
+#[tokio::test]
+async fn test_ftps_single_reply_command_failure_poisons_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_dele_connection_drop(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+
+    let result = client.delete_file("/model/job.3mf").await;
+    assert!(
+        matches!(result, Err(BambuError::NetworkError(_))),
+        "Expected the dropped connection to surface as NetworkError, got {:?}",
+        result
+    );
+
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(next_result, Err(BambuError::ProtocolViolation(_))),
+        "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
+        next_result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 #[tokio::test]
 async fn test_ftps_upload_426_recovery_via_size() {
     let (client_control, server_control, data_container, factory) = setup();

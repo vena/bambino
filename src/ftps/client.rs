@@ -71,12 +71,15 @@ impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
 
 /// Lightweight, high-reliability implicit FTPS client running on top of abstract I/O traits.
 ///
-/// **Poisoning invariant:** if a data-channel transfer (`list_directory`/`upload_file`/
-/// `download_file`) fails after the server has sent its `150`/`125` "opening data connection"
-/// reply but before the matching final reply (`226`/etc.) has been read off the control channel,
-/// the control channel is left mid-response. Reusing the client at that point risks a later,
-/// unrelated command silently reading the stale trailing reply instead of its own. To make this
-/// safe, the client sets `poisoned = true` on every such error path (and unconditionally in
+/// **Poisoning invariant:** the control channel is a single ordered stream — every command gets
+/// exactly one reply, and a `write_command`/`read_response` failure anywhere leaves no way to
+/// know whether the server's reply for that command is still coming. Reusing the client at that
+/// point risks a later, unrelated command silently reading the stale reply instead of its own.
+/// To make this safe, the client sets `poisoned = true` (BUG-004: originally only on the
+/// `list_directory`/`upload_file`/`download_file` data-transfer window between the server's
+/// `150`/`125` "opening data connection" reply and the matching final reply, since that's the
+/// widest such window; now on every `write_command`/`read_response` failure in every method,
+/// including the single-reply metadata/filesystem commands, and unconditionally in
 /// `disconnect()`); every public method checks the flag first and returns
 /// [`BambuError::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
 /// reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.
@@ -154,7 +157,12 @@ where
     ) -> Result<Self, BambuError> {
         let mut control_stream = tls_connector.connect(serial, raw_control).await?;
 
-        Self::require_tls_1_2_if_enforced(&tls_connector, &control_stream, model, allow_unverified_tls_1_2)?;
+        Self::require_tls_1_2_if_enforced(
+            &tls_connector,
+            &control_stream,
+            model,
+            allow_unverified_tls_1_2,
+        )?;
 
         let mut buf = Vec::new();
         // Persists across every read_response call in this login sequence, and is carried
@@ -339,7 +347,11 @@ where
         if self.model.quirks().uses_plaintext_ftps_data_channel() {
             return Ok(DataChannel::Plain(raw_data_socket));
         }
-        let secure = match self.tls_connector.connect(&self.serial, raw_data_socket).await {
+        let secure = match self
+            .tls_connector
+            .connect(&self.serial, raw_data_socket)
+            .await
+        {
             Ok(s) => s,
             Err(e) => {
                 self.poisoned = true;
@@ -351,8 +363,7 @@ where
             &secure,
             self.model,
             self.allow_unverified_tls_1_2,
-        )
-        {
+        ) {
             self.poisoned = true;
             return Err(e);
         }
@@ -456,18 +467,28 @@ where
         validate_ftp_path(remote_path)?;
 
         let size_cmd = format!("SIZE {}", remote_path);
-        write_command(&mut self.control_stream, &size_cmd).await?;
+        if let Err(e) = write_command(&mut self.control_stream, &size_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = read_response(
+        let (code, text) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_SIZE_OK {
             return Err(BambuError::ProtocolViolation(
                 "SIZE query rejected by storage server".into(),
@@ -485,18 +506,28 @@ where
         validate_ftp_path(remote_path)?;
 
         let dele_cmd = format!("DELE {}", remote_path);
-        write_command(&mut self.control_stream, &dele_cmd).await?;
+        if let Err(e) = write_command(&mut self.control_stream, &dele_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
 
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
@@ -690,18 +721,28 @@ where
         validate_ftp_path(path)?;
 
         let mkd_cmd = format!("MKD {}", path);
-        write_command(&mut self.control_stream, &mkd_cmd).await?;
+        if let Err(e) = write_command(&mut self.control_stream, &mkd_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_PATHNAME_CREATED {
             return Err(BambuError::ProtocolViolation(
                 "MKD directory creation failed".into(),
@@ -719,18 +760,28 @@ where
         validate_ftp_path(path)?;
 
         let rmd_cmd = format!("RMD {}", path);
-        write_command(&mut self.control_stream, &rmd_cmd).await?;
+        if let Err(e) = write_command(&mut self.control_stream, &rmd_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
@@ -750,18 +801,28 @@ where
         validate_ftp_path(to)?;
 
         let rnfr_cmd = format!("RNFR {}", from);
-        write_command(&mut self.control_stream, &rnfr_cmd).await?;
+        if let Err(e) = write_command(&mut self.control_stream, &rnfr_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_RENAME_PENDING {
             return Err(BambuError::ProtocolViolation(
                 "RNFR rename source path rejected".into(),
@@ -769,17 +830,27 @@ where
         }
 
         let rnto_cmd = format!("RNTO {}", to);
-        write_command(&mut self.control_stream, &rnto_cmd).await?;
+        if let Err(e) = write_command(&mut self.control_stream, &rnto_cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = read_response(
+        let (code, _) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_FILE_ACTION_OK {
             return Err(BambuError::ProtocolViolation(
                 "RNTO rename destination path rejected".into(),
@@ -792,18 +863,28 @@ where
     pub async fn get_available_space(&mut self) -> Result<u64, BambuError> {
         self.check_poisoned()?;
 
-        write_command(&mut self.control_stream, "AVBL").await?;
+        if let Err(e) = write_command(&mut self.control_stream, "AVBL").await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = read_response(
+        let (code, text) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
 
         if code == FTP_SIZE_OK {
             text.parse::<u64>().map_err(|_| {
@@ -818,18 +899,28 @@ where
 
     /// Issues `PASV` over control channel and extracts passive connection port details.
     async fn negotiate_passive_port(&mut self) -> Result<u16, BambuError> {
-        write_command(&mut self.control_stream, "PASV").await?;
+        if let Err(e) = write_command(&mut self.control_stream, "PASV").await {
+            self.poisoned = true;
+            return Err(e);
+        }
 
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = read_response(
+        let (code, text) = match read_response(
             &mut self.control_stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
             deadline_ms,
         )
-        .await?;
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.poisoned = true;
+                return Err(e);
+            }
+        };
         if code != FTP_PASSIVE_MODE {
             return Err(BambuError::ProtocolViolation(
                 "PASV port negotiation rejected".into(),

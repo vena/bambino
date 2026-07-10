@@ -405,6 +405,24 @@ pub async fn run_mock_server_data_channel_failure(
     // before it would ever consume this reply.
 }
 
+/// Mock server for the BUG-004 single-reply-command poisoning regression test.
+///
+/// Reads the `DELE` command and then drops the control stream without ever replying — the
+/// client's `read_response` sees a clean 0-byte read, which `read_chunk` maps to
+/// `SocketError::ConnectionReset` immediately (no 30s timeout wait needed for this test).
+pub async fn run_mock_server_dele_connection_drop(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "DELE /model/job.3mf\r\n");
+    // Drop the stream instead of responding.
+}
+
 /// Mock server for disconnect (QUIT) test.
 pub async fn run_mock_server_disconnect(
     mut server_control: tokio::io::DuplexStream,
