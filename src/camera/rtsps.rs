@@ -74,14 +74,21 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError
             "access_code must be a non-empty ASCII alphanumeric string".into(),
         ));
     }
-    if ip.parse::<core::net::IpAddr>().is_err() {
+    let Ok(ip_addr) = ip.parse::<core::net::IpAddr>() else {
         return Err(BambuError::ProtocolViolation(
             "ip must be a valid IPv4 or IPv6 address".into(),
         ));
-    }
+    };
+    // RFC 3986 §3.2.2: an IPv6 literal used as a URI host must be bracketed, or its colons
+    // are indistinguishable from the port separator to a conforming URI parser.
+    let host = if ip_addr.is_ipv6() {
+        format!("[{}]", ip)
+    } else {
+        String::from(ip)
+    };
     Ok(format!(
         "rtsps://bblp:{}@{}:322/streaming/live/1",
-        access_code, ip
+        access_code, host
     ))
 }
 
@@ -119,16 +126,22 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError
 /// once per incoming request in a proxy's hot path, but IP-string parsing is cheap enough
 /// that re-validating here is not a meaningful cost.
 pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<String, BambuError> {
-    if printer_ip.parse::<core::net::IpAddr>().is_err() {
+    let Ok(printer_ip_addr) = printer_ip.parse::<core::net::IpAddr>() else {
         return Err(BambuError::ProtocolViolation(
             "printer_ip must be a valid IPv4 or IPv6 address".into(),
         ));
-    }
+    };
+    // RFC 3986 §3.2.2: bracket IPv6 literals, matching build_rtsps_url.
+    let host = if printer_ip_addr.is_ipv6() {
+        format!("[{}]", printer_ip)
+    } else {
+        String::from(printer_ip)
+    };
     if let Some(remainder) = request_uri.strip_prefix("rtsp://") {
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
-            return Ok(format!("rtsps://{}:322/{}", printer_ip, path));
+            return Ok(format!("rtsps://{}:322/{}", host, path));
         }
     }
     Ok(String::from(request_uri))
@@ -199,8 +212,10 @@ mod tests {
 
     #[test]
     fn test_build_rtsps_url_accepts_ipv6() {
+        // BUG-005: an unbracketed IPv6 literal is malformed per RFC 3986 §3.2.2 — its colons
+        // are indistinguishable from the port separator to a conforming URI parser.
         let url = build_rtsps_url("fe80::1", "12345678").unwrap();
-        assert_eq!(url, "rtsps://bblp:12345678@fe80::1:322/streaming/live/1");
+        assert_eq!(url, "rtsps://bblp:12345678@[fe80::1]:322/streaming/live/1");
     }
 
     #[test]
@@ -238,6 +253,14 @@ mod tests {
     fn test_rewrite_uri_rejects_ip_with_embedded_at() {
         let uri = "rtsp://127.0.0.1:8554/streaming/live/1";
         assert!(rewrite_rtsp_request_uri(uri, "1.2.3.4@attacker.example.com").is_err());
+    }
+
+    #[test]
+    fn test_rewrite_uri_brackets_ipv6_printer_ip() {
+        // BUG-005: same RFC 3986 §3.2.2 bracketing requirement as build_rtsps_url.
+        let uri = "rtsp://127.0.0.1:8554/streaming/live/1";
+        let rewritten = rewrite_rtsp_request_uri(uri, "fe80::1").unwrap();
+        assert_eq!(rewritten, "rtsps://[fe80::1]:322/streaming/live/1");
     }
 
     #[test]
