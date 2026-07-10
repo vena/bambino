@@ -17,9 +17,9 @@ description: Rules for adding, updating, and triaging entries in this repo's BAC
 2. **No narrative.** Don't record *how* a bug was found or what was tried — that belongs in the commit message or the source review file.
 3. **Move status by moving rows between tables, not by adding a status column.** `BACKLOG.md` is three separate tables by section (`Open`/`Fixed`/`Wontfix`), not one table with a status field — fixing BUG-004 means deleting its row from `Open` and inserting it into `Fixed`. Never leave a stale copy behind in `Open`, never append a second row for a bug already tracked elsewhere.
 4. **Close stale entries aggressively.** Turns out to be a non-issue on investigation → `wontfix` with a one-line reason, move on.
-5. **Severity is fixed at triage time** and doesn't get re-litigated per entry. If the definition itself needs to change, change it once here, not per-row. Reassigning a `needs-verification` entry to a real severity is the one exception to "fixed at triage time" — see its own section below, it isn't a silent call.
-6. **The commit that fixes a bug updates this file's status in the same commit, and its message references the `BUG-ID` it closes.** No separate "update the backlog" follow-up — same diff, or the tracker silently goes stale exactly when it's most useful. Referencing the `BUG-ID` (subject or trailer, e.g. `Closes BUG-012`) is the one direction `git blame` doesn't cover for free: blame on a `BACKLOG.md` row finds its commit automatically, but blame on the actual fixed source line doesn't find its `BUG-ID` unless the message says so — especially once the review file's deleted. This is also why the `Fixed`/`Wontfix` schema below has no `commit:` field: a commit can't contain its own hash without an amend (forbidden, see global git rules), and a follow-up commit to inject it after the fact would itself violate this rule. Don't reintroduce a `commit:` field to "fix" that — `git blame` already answers "which commit closed this row" without a dedicated field.
-7. **If applying these rules hits a genuine conflict or an undefined case, stop and flag it — don't resolve it silently and move on.** Rule 6 and "Reassigning a needs-verification entry" below both exist because a real conflict/gap got resolved silently instead of surfaced, once each, before this rule existed. Treat any judgment call in this file the same weight as a design tradeoff on the actual code: surface it, don't guess and stay quiet about it.
+5. **Severity is fixed at triage time** and doesn't get re-litigated per entry, except reassigning `needs-verification` to a real severity — see rule 7. If the severity definition itself needs to change, change it once here, not per-row.
+6. **The commit that fixes a bug updates this file's status in the same commit, and its message references the `BUG-ID` it closes** (e.g. `Closes BUG-012`). No separate "update the backlog" follow-up — same diff, or the tracker silently goes stale exactly when it's most useful. Referencing the `BUG-ID` is the one direction `git blame` doesn't cover for free: blame on a `BACKLOG.md` row finds its commit automatically, but blame on the actual fixed source line doesn't find its `BUG-ID` unless the message says so — especially once the review file's deleted.
+7. **If applying these rules hits a genuine conflict or an undefined case, stop and flag it — don't resolve it silently and move on.** Rule 6 and the `needs-verification` severity entry below both exist because a real conflict/gap got resolved silently instead of surfaced, once each, before this rule existed. Treat any judgment call in this file the same weight as a design tradeoff on the actual code: surface it, don't guess and stay quiet about it.
 
 ## Next BUG-ID
 
@@ -27,15 +27,11 @@ Scan `Open` + `Fixed` + `Wontfix` for the current highest `BUG-NNN`, use `NNN+1`
 
 ## `Fixed` / `Wontfix` row schema
 
-Same columns as `Open` plus one: `ID | Sev | Module | Title | Found | Closed | Detail`. No `commit:` field — see rule 6 above for why. `Closed` is the date the row moved out of `Open` (fixed or marked wontfix, not the date it was found). `Wontfix`'s `Detail` states the one-line reason it's not a real issue, same 3-line budget as everything else in this file.
+Same columns as `Open` plus one: `ID | Sev | Module | Title | Found | Closed | Detail`. No `commit:` field: a commit can't contain its own hash without amending (forbidden, see global git rules), and a follow-up commit to inject it after the fact would violate rule 6's same-commit requirement — `git blame` on this row already answers "which commit closed it" without a dedicated field. `Closed` is the date the row moved out of `Open` (fixed or marked wontfix, not the date it was found). `Wontfix`'s `Detail` states the one-line reason it's not a real issue, same 3-line budget as everything else in this file.
 
 ```
 | BUG-NNN | SevX | module/path.rs | one-line title | YYYY-MM-DD | YYYY-MM-DD | link to review-file section, or a terse inline note once that file's deleted |
 ```
-
-## Reassigning a `needs-verification` entry to a real severity
-
-Not a silent call — treat it the same as any other design tradeoff surfaced to the user before closing the row (see rule 7). State what resolved it in `Detail`: a wire capture, a cross-reference to a known-good source (reference docs, an upstream project's issue tracker), whatever actually settled it. If nothing settled it and you're guessing at severity to make progress, that's exactly the case rule 7 exists for — say so, don't pick quietly.
 
 ## Review-file lifecycle
 
@@ -46,7 +42,7 @@ Once every row that references a dated `NN-NN-REVIEW.md` has left `Open` (grep `
 - **Sev1** — can cause unsafe physical behavior (temp overshoot past a real hardware ceiling, uncommanded/unsafe motion, bypass of a documented safety guard). Blocks release.
 - **Sev2** — silent data corruption, silent success-on-failure, or a core feature broken under a plausible/common condition. Blocks release.
 - **Sev3** — everything else: narrow edge cases, footguns with a workaround, doc drift, process gaps. Tracked, non-blocking.
-- **needs-verification** — can't be triaged into the above without something only real hardware can confirm (a wire capture, physical behavior on a specific model). Not a severity in itself; see "Reassigning a needs-verification entry" above for how it becomes one.
+- **needs-verification** — can't be triaged into the above without something only real hardware can confirm (a wire capture, physical behavior on a specific model). Not a severity in itself. Assigning one once evidence lands is a surfaced decision, same as any other design tradeoff (rule 7) — state what resolved it (wire capture, cross-reference to a known-good source) in `Detail`, don't pick quietly.
 
 ## Release bar
 
