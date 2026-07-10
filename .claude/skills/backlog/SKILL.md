@@ -35,7 +35,7 @@ Same columns as `Open` plus one: `ID | Sev | Module | Title | Found | Closed | D
 
 ## Review-file lifecycle
 
-Once every row that references a dated `NN-NN-REVIEW.md` has left `Open` (grep `Open` for the filename to confirm — zero hits means clear), delete that review file in its own signposted commit, same convention as a completed `*_PLAN.md` (see `CLAUDE.md`'s Key Conventions). The now-`Fixed`/`Wontfix` rows' `Detail` links go dead after deletion — expected, not a bug to fix. The review file's job was getting a fresh session to a real fix; once every row it seeded has closed, the fix commit's own body (required to be real, not narrative, per `CLAUDE.md`) is the durable record of what changed and why — the review file has done its job and doesn't need to keep living just to keep a link alive. Don't rewrite `Detail` links to route around the deletion; `git log --all --grep`/`git show` on the deletion commit recovers the original content, same as `*_PLAN.md`.
+Once every row that references a dated `NN-NN-REVIEW.md` has left `Open` (grep `Open` for the filename to confirm — zero hits means clear), delete that review file in its own signposted commit, same convention as a completed `*_PLAN.md` (see `CLAUDE.md`'s Key Conventions). Before deleting, rewrite each affected `Fixed`/`Wontfix` row's `Detail` column from a link into that file to a terse inline note (file:line + fix direction, same 3-line budget as rule 1) — read the section before it's gone, don't leave a dead link. This is a cleanup commit, not a fix commit, so rule 6 (same-commit-as-the-fix) doesn't apply to it — nothing forbids it from touching `BACKLOG.md` again.
 
 ## Severity
 
