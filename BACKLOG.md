@@ -10,8 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-022 | Sev3 | tests/client_test.rs | `test_sequence_id_wrapping` never exercises wraparound | 2026-07-10 | tests/client_test.rs:1346-1372 → `07-10-REVIEW.md` §7 |
-| BUG-023 | Sev3 | tests/client_test.rs | No test coverage for X1C's voltage-dependent bed-temp ceiling | 2026-07-10 | tests/client_test.rs:213-291,543-584 → `07-10-REVIEW.md` §7 |
 | BUG-028 | Sev3 | ftps/protocol.rs | `read_response` doesn't follow RFC 959 multi-line reply parsing | 2026-07-10 | src/ftps/protocol.rs:208-260 → `07-10-REVIEW.md` §11 |
 | BUG-029 | Sev3 | ftps/client.rs | LIST/STOR/RETR initial write/read not poisoned on failure | 2026-07-10 | src/ftps/client.rs:389-400,558-569,641-652 → `07-10-REVIEW.md` §12 |
 | BUG-030 | Sev3 | ftps/client.rs | `download_file`'s 426→SIZE recheck isn't symmetric with `upload_file`'s | 2026-07-10 | src/ftps/client.rs:598-657 → `07-10-REVIEW.md` §12 |
@@ -53,6 +51,8 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-026 | Sev3 | lib.rs | Docs claim embassy TLS backend is `embedded-tls`, actually `mbedtls-rs` | 2026-07-10 | 2026-07-10 | src/lib.rs:16,65 — both occurrences corrected to `mbedtls-rs` |
 | BUG-027 | Sev3 | lib.rs | Feature Flags table wrongly claims `tokio` enables the CLI binary | 2026-07-10 | 2026-07-10 | src/lib.rs:60-67 — removed "CLI binary" from the `tokio` row, added a `cli` row |
 | BUG-017 | Sev3 | bin/bambino-cli/probe.rs | Capture-window error discards all previously-captured probe results | 2026-07-10 | 2026-07-10 | src/bin/bambino-cli/probe.rs — `capture_responses()` failures now recorded as a per-entry `capture_error` field instead of propagating via `?`, mirroring `publish_error`'s existing pattern; the run continues and still writes the report |
+| BUG-022 | Sev3 | tests/client_test.rs | `test_sequence_id_wrapping` never exercises wraparound | 2026-07-10 | 2026-07-10 | tests/client_test.rs (renamed `test_sequence_id_fits_in_i32`), src/mqtt/commands/mod.rs — added `test_clamp_task_id_wraps_near_max` colocated with `clamp_task_id()`, since `sequence_counter` is `pub(crate)` and unreachable from the external integration test |
+| BUG-023 | Sev3 | tests/client_test.rs | No test coverage for X1C's voltage-dependent bed-temp ceiling | 2026-07-10 | 2026-07-10 | tests/client_test.rs — added `test_x1c_bed_temp_ceiling_voltage_dependent`, feeding `home_flag` telemetry via `poll_telemetry()` and asserting all three branches (pre-telemetry conservative default, confirmed 220V, confirmed 110V) |
 
 ## Wontfix
 

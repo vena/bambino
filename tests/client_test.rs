@@ -290,6 +290,83 @@ async fn test_thermal_guards_and_temperatures() {
     broker_task_a1.await.expect("A1 broker task panicked");
 }
 
+// BUG-023: X1C's bed_temp_max ceiling is voltage-dependent (110°C @220V, 120°C @110V, per
+// src/quirks/models/x1.rs's x1c_bed_temp_max), derived from cached home_flag telemetry — but
+// every existing bed-clamping test above only exercises X1E, whose ceiling ignores the
+// parameter entirely. A regression that swapped the two constants or flipped the None-case
+// fallback direction would pass every existing test untouched.
+#[tokio::test]
+async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", "00M000000000000");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // No home_flag observed yet — must clamp to the conservative 220V-region default.
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "M140 S110\n");
+
+        // home_flag bit 3 set -> confirmed 220V region.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            2000,
+            br#"{"print":{"home_flag":8}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "M140 S110\n");
+
+        // home_flag bit 3 clear -> confirmed 110V region, higher ceiling.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            2001,
+            br#"{"print":{"home_flag":0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "M140 S120\n");
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1C);
+
+    client
+        .set_bed_temperature(999)
+        .await
+        .expect("bed temp set should succeed pre-telemetry");
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse home_flag=8");
+    client
+        .set_bed_temperature(999)
+        .await
+        .expect("bed temp set should succeed at confirmed 220V");
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse home_flag=0");
+    client
+        .set_bed_temperature(999)
+        .await
+        .expect("bed temp set should succeed at confirmed 110V");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 #[tokio::test]
 async fn test_cooling_fans_and_peripheral_switches() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
@@ -1343,8 +1420,14 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
     broker_task.await.expect("Broker task panicked");
 }
 
+// BUG-022: this only exercises a single command from a freshly-constructed client (sequence
+// ID 10001), so it can't seed sequence_counter near TASK_ID_MAX to actually trigger wraparound
+// — that field is pub(crate), invisible to this external integration test. It still verifies a
+// real invariant (every wire sequence_id fits in i32), just not wraparound itself; the
+// wraparound math is covered directly by
+// mqtt::commands::tests::test_clamp_task_id_wraps_near_max, colocated with clamp_task_id().
 #[tokio::test]
-async fn test_sequence_id_wrapping() {
+async fn test_sequence_id_fits_in_i32() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
     let broker_task = tokio::spawn(async move {

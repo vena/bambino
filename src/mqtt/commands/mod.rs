@@ -97,6 +97,17 @@ mod tests {
     }
 
     #[test]
+    fn test_clamp_task_id_wraps_near_max() {
+        // BUG-022: tests/client_test.rs's integration test can't seed sequence_counter near
+        // TASK_ID_MAX (it's pub(crate), invisible outside this crate) so it never actually
+        // exercised wraparound. clamp_task_id() is a free function, so this unit test can seed
+        // any raw_id directly.
+        assert_eq!(clamp_task_id(TASK_ID_MAX), 0);
+        assert_eq!(clamp_task_id(TASK_ID_MAX + 1), 1);
+        assert_eq!(clamp_task_id(TASK_ID_MAX - 1), (TASK_ID_MAX - 1) as u32);
+    }
+
+    #[test]
     fn test_ams_mapping_polymorphism_inactive() {
         let config = PrintJobConfig::new(
             "job.3mf",
