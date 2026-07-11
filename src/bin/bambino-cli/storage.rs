@@ -34,9 +34,14 @@ pub enum FilesAction {
     /// Remove a file from the remote filesystem path
     Delete { remote_path: String },
     /// Uploads a tiny probe file, diffs its printer-reported mtime against host wall-clock
-    /// time, then deletes it — checks whether the printer's onboard clock is usably accurate
-    /// (LAN-mode NTP sync is unreliable; needs-verification for the TZ convention this feeds
-    /// into `list_directory`'s year-rollover math [BUG-042] hinges on having a synced clock).
+    /// time, then deletes it — checks whether the printer's onboard clock is usably accurate.
+    ///
+    /// BUG-042: confirmed unreliable on ESP32/FreeRTOS-class printers (e.g. P1S) — no RTC
+    /// battery, and absent a successful LAN-mode NTP sync (observed unreliable), the clock
+    /// falls back to the firmware build date on boot. `list_directory`'s year-rollover math
+    /// can't be trusted whenever this is the case, since the raw `LIST` HH:MM timestamps come
+    /// from the printer's own wrong clock. Unconfirmed on printers with more capable AP
+    /// controllers (X1/H2 series).
     ClockCheck,
     /// Query available MicroSD card capacity
     Space,
