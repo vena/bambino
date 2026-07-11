@@ -10,6 +10,18 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
+| BUG-056 | Sev2 | client/connect.rs, diagnostics/kprofile.rs | `k_profile_primed` not reset on `disconnect_mqtt()`, so a reconnect skips required priming and `get_k_profiles()` hangs until timeout | 2026-07-11 | See `07-11-REVIEW.md` §8 |
+| BUG-057 | Sev3 | bin/bambino-cli/storage.rs | `run_clock_check` silently drops the cleanup-delete's error when the preceding directory listing also fails | 2026-07-11 | See `07-11-REVIEW.md` §2 |
+| BUG-058 | Sev3 | bin/bambino-cli/main.rs | `control ams` usage lines omit `<IP> <SERIAL> [ACCESS_CODE]`, same class as BUG-016 | 2026-07-11 | See `07-11-REVIEW.md` §3 |
+| BUG-059 | Sev3 | tests/client_test.rs | No test asserts the `extrude_cali_flag` wire field despite README documenting flow calibration as a `PrintJobConfig` default | 2026-07-11 | See `07-11-REVIEW.md` §7 |
+| BUG-060 | Sev2 | discovery/parser.rs | `parse_ssdp_payload` accepts any USN+LOCATION SSDP packet with no Bambu-specific signal, so non-printer LAN devices can appear in `discover_devices()` results | 2026-07-11 | See `07-11-REVIEW.md` §9 |
+| BUG-061 | Sev3 | ftps/parser.rs | `parse_unix_listing` doesn't range-validate `day`/`hour`/`minute` (unlike `month`), so garbage timestamps can reach `FtpFile` | 2026-07-11 | See `07-11-REVIEW.md` §12 |
+| BUG-062 | Sev3 | ftps/protocol.rs | `read_response`'s header-establishing branch silently drops a reply line whose 4th byte is neither space nor hyphen, instead of surfacing it | 2026-07-11 | See `07-11-REVIEW.md` §12 |
+| BUG-063 | Sev3 | io/embassy.rs | `EmbassyTlsConnector::connect` collapses every mbedtls-rs failure into `ConnectionAborted` with no `log::debug!` of the real error at any of 3 sites | 2026-07-11 | See `07-11-REVIEW.md` §14 |
+| BUG-064 | Sev3 | io/esp_idf.rs | `EspTls::adopt()` failure mapped to a fixed string with the real `EspError` discarded, unlike every other FFI error site in the file | 2026-07-11 | See `07-11-REVIEW.md` §14 |
+| BUG-065 | Sev1 | quirks/mod.rs | `format_z_move_gcode` doesn't reject `NaN` distance; both its `== 0.0` and `.abs() > z_max` guards are false for `NaN`, so a malformed `G0 ZNaN` command reaches the printer instead of erroring | 2026-07-11 | See `07-11-REVIEW.md` §17 |
+| BUG-066 | Sev3 | quirks/mod.rs | Default `z_max()` hardcodes `256.0` instead of a named `pub(crate) const`, unlike this same file's `FAN_STEP_MAX`/`FAN_ROUNDING_OFFSET` convention | 2026-07-11 | See `07-11-REVIEW.md` §17 |
+| BUG-067 | Sev3 | types/telemetry/tests.rs | `test_progress_field_removed` is a verbatim duplicate of `test_mc_percent_deserialization` and asserts nothing about a removed `progress` field | 2026-07-11 | See `07-11-REVIEW.md` §20 |
 
 ## Fixed
 
