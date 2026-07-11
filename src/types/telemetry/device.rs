@@ -40,7 +40,12 @@ pub struct DeviceTelemetry {
     #[serde(default)]
     pub fire_ext: Option<serde_json::Value>,
 
-    /// Alternative top-level bed temperature in device envelope.
+    /// Composite-packed bed temperature mirroring `bed.info.temp`; confirmed redundant, not a fallback.
+    ///
+    /// BUG-054: a fixture payload carries the identical value in both fields, and both
+    /// pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
+    /// never consult this field either. Parsed for wire-format completeness only —
+    /// `decode_bed_temperatures()` deliberately does not read it.
     #[serde(default)]
     pub bed_temp: Option<u32>,
 }

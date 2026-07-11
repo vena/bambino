@@ -40,6 +40,8 @@ Bed temperature telemetry arrives via different wire paths depending on the hard
 
 Clients should check `device.bed` first (including the nested `print.device.bed` path used in pushall responses on new-gen models), then fall back to the old-gen direct fields.
 
+New-gen payloads also carry a top-level `device.bed_temp` field, composite-packed identically to `device.bed.info.temp` — a captured payload shows both fields holding the same value. Cross-referenced against `pybambu` (`models.py`, reads only `device.bed.info.temp`) and `Bambuddy`: neither consults `device.bed_temp`, confirming it is redundant wire data, not a distinct fallback source. Clients should ignore it and decode via `device.bed.info.temp` only.
+
 ##### Case Study: Bed Temperature Composite Encoding
 When the heatbed target temperature and actual temperature are both set to 100°C, the telemetry channel transmits the packed decimal integer `6553700` (which is hex `0x00640064`).
 *   $\text{Target} = 0\text{x}00640064 \gg 16 = 0\text{x}0064 = 100^\circ\text{C}$
