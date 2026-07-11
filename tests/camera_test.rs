@@ -20,7 +20,10 @@ use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 
 use common::io::{DummyTlsConnector, MockDataStreamFactory};
-use common::mock_camera::run_mock_camera_server;
+use common::mock_camera::{
+    run_mock_camera_server, run_mock_camera_server_closes_after_handshake,
+    run_mock_camera_server_drops_mid_frame,
+};
 
 const SERIAL: &str = "01P000000000000";
 
@@ -208,4 +211,77 @@ async fn test_ensure_camera_retries_after_failed_dial() {
         );
     }
     assert!(!printer.camera_connected());
+}
+
+/// BUG-055: full integration-level coverage of a rejected access code — `authenticate()`
+/// only confirms the handshake bytes were written (see `src/camera/CLAUDE.md`), so the
+/// actual rejection must surface on the following `read_next_frame()` call as a connection
+/// error, not a hang or a misleading success.
+#[tokio::test]
+async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
+    let access_code = "87654321";
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+
+    let server_handle = tokio::spawn(run_mock_camera_server_closes_after_handshake(
+        server_stream,
+        access_code,
+    ));
+
+    let mut camera_client: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
+        BambuBinaryCameraStream::new(TokioIo(client_stream));
+
+    camera_client
+        .authenticate(access_code)
+        .await
+        .expect("authenticate() only confirms the handshake write, must still succeed here");
+
+    let mut frame_buf = Vec::new();
+    let result = camera_client.read_next_frame(&mut frame_buf).await;
+    assert!(
+        result.is_err(),
+        "expected a connection error on the first read after a rejected handshake, got {:?}",
+        result
+    );
+
+    server_handle
+        .await
+        .expect("Background mock camera server panicked");
+}
+
+/// BUG-055: full integration-level coverage of a connection dropping partway through a
+/// frame's declared payload — no existing unit test in `src/camera/binary.rs` exercises a
+/// short read against an already-valid header (its tests cover fully-present-but-structurally-
+/// invalid payloads instead).
+#[tokio::test]
+async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
+    let access_code = "87654321";
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+
+    // Header declares a 40-byte payload; server only ever writes 10 before dropping.
+    let server_handle = tokio::spawn(run_mock_camera_server_drops_mid_frame(
+        server_stream,
+        access_code,
+        40,
+        10,
+    ));
+
+    let mut camera_client: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
+        BambuBinaryCameraStream::new(TokioIo(client_stream));
+
+    camera_client
+        .authenticate(access_code)
+        .await
+        .expect("Failed to negotiate binary stream authentication handshake");
+
+    let mut frame_buf = Vec::new();
+    let result = camera_client.read_next_frame(&mut frame_buf).await;
+    assert!(
+        result.is_err(),
+        "expected a connection error when the stream closes mid-payload, got {:?}",
+        result
+    );
+
+    server_handle
+        .await
+        .expect("Background mock camera server panicked");
 }

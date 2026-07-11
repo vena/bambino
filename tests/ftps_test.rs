@@ -149,6 +149,38 @@ async fn test_ftps_client_lifecycle_and_operations() {
 }
 
 #[tokio::test]
+async fn test_ftps_upload_multi_chunk_reassembles_correctly() {
+    // BUG-055: proves upload_file's chunked write loop (FTPS_UPLOAD_CHUNK_SIZE = 65536)
+    // reassembles correctly server-side across more than one chunk — every other upload test
+    // uses a payload far under one chunk, so this loop's second-and-later iterations were
+    // previously untested. Payload size is chosen to force exactly two chunks with a
+    // non-power-of-two final partial chunk.
+    let payload: Vec<u8> = (0..77_881usize).map(|i| (i % 256) as u8).collect();
+
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_upload_multi_chunk(
+        server_control,
+        data_container.clone(),
+        payload.len(),
+    ));
+
+    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+
+    client
+        .upload_file("/model/big.bin", &payload)
+        .await
+        .expect("multi-chunk STOR upload failed");
+
+    let received = server_handle.await.expect("Mock server panicked");
+    assert_eq!(
+        received, payload,
+        "payload must reassemble byte-for-byte across chunk boundaries"
+    );
+
+    client.disconnect().await;
+}
+
+#[tokio::test]
 async fn test_ftps_a1_plaintext_data_channel() {
     let (client_control, server_control, data_container, factory) = setup();
 

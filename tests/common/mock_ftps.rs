@@ -162,6 +162,57 @@ pub async fn run_mock_server(
     respond(&mut server_control, b"250 File deleted successfully.\r\n").await;
 }
 
+/// Mock server for upload exercising `upload_file`'s multi-chunk write loop with a payload
+/// larger than one `FTPS_UPLOAD_CHUNK_SIZE` (64 KiB).
+///
+/// BUG-055: `run_mock_server`'s upload capture does a single non-looping `read()` into a
+/// fixed 100-byte buffer, and every test payload built on this harness (e.g.
+/// `b"MOCK_UPLOAD_DATA"`, 16 bytes) is far under one chunk — so no test ever exercised
+/// `upload_file`'s multi-chunk loop past its first iteration. This loops the read until
+/// `expected_len` bytes are captured and returns them so the caller can assert content
+/// integrity across chunk boundaries — it can't prove how many separate `write_all()` calls
+/// produced the bytes (`.claude/rules/wire-framing-hardware-verification.md`: a mock reads a
+/// stream regardless of write count), only that the client's offset-tracking loop reassembles
+/// a multi-chunk payload correctly end-to-end.
+pub async fn run_mock_server_upload_multi_chunk(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    expected_len: usize,
+) -> Vec<u8> {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_upload_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "STOR /model/big.bin\r\n");
+    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+
+    let mut received = Vec::with_capacity(expected_len);
+    let mut chunk = vec![0u8; 8192];
+    while received.len() < expected_len {
+        let n = server_upload_data
+            .read(&mut chunk)
+            .await
+            .expect("upload data read");
+        assert!(n > 0, "data channel closed before all bytes were received");
+        received.extend_from_slice(&chunk[..n]);
+    }
+    drop(server_upload_data);
+
+    respond(&mut server_control, b"226 File receive OK.\r\n").await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "SIZE /model/big.bin\r\n");
+    respond(
+        &mut server_control,
+        format!("213 {}\r\n", expected_len).as_bytes(),
+    )
+    .await;
+
+    received
+}
+
 /// Mock server for A1 plaintext data channel tests: skips PROT P.
 pub async fn run_mock_server_a1_plaintext(
     mut server_control: tokio::io::DuplexStream,

@@ -219,10 +219,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 20 — tests/common mock infra
-**tests/common/mock_ftps.rs:243-263** — Upload capture in `run_mock_server` uses a single non-looping read into a fixed 100-byte buffer; every test payload built on this harness is far under one 64KB upload chunk, so `upload_file`'s multi-chunk loop is never exercised past one iteration by any test using it.
-**tests/common/mock_camera.rs** — Only implements the happy path (valid handshake, well-formed frames); no variant simulates auth rejection, a malformed frame header, or a mid-frame connection drop, so no *integration-level* regression coverage exists for those documented failure modes (though `src/camera/binary.rs`'s own unit tests do cover some of this directly via raw duplex streams).
-
 ---
 
 ## Summary table
