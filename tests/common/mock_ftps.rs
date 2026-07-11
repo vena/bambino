@@ -14,6 +14,14 @@ use tokio::sync::Mutex;
 use bambino::io::TokioIo;
 
 /// Helper: reads the next command from the control stream and returns it as a string.
+///
+/// BUG-038: this single, non-looping `read()` is *not* a safety net against
+/// `write_command`'s single-write-call guarantee regressing back to two writes — under tokio's
+/// cooperative scheduling, two sequential small writes on a `tokio::io::duplex` normally
+/// coalesce into one `.read()` before this task is ever polled, so every test built on this
+/// harness would very likely keep passing even if `write_command` regressed. The dedicated
+/// `WriteRecorder`-based unit test in `src/ftps/protocol.rs` is the only thing actually guarding
+/// that invariant end-to-end; don't rely on this helper for it.
 async fn read_cmd(stream: &mut tokio::io::DuplexStream, buf: &mut [u8]) -> String {
     let n = stream.read(buf).await.expect("Failed to read FTP command");
     core::str::from_utf8(&buf[..n])
