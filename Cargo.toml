@@ -5,6 +5,7 @@ edition = "2024"
 authors = ["vena <deaconvena+bambino@gmail.com>"]
 description = "A multi-platform, asynchronous Rust library for direct local network control of Bambu Lab 3D printers."
 license = "AGPL-3.0"
+exclude = ["esp32-hw-probe/"]
 
 [features]
 # Default features: compilation targeting high-capability host systems using Tokio and Rustls

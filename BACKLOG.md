@@ -11,7 +11,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
 | BUG-042 | Sev3 | bin/bambino-cli/storage.rs | `list_directory`'s year-rollover math anchors to host UTC; printer's own clock (source of raw `LIST` HH:MM timestamps) is often unsynced | 2026-07-10 | Confirmed on a real P1S: no RTC battery, unreliable LAN-mode NTP, firmware-build-date fallback on boot — the printer's default LAN-mode state, not a rare edge case. `files clock-check` is the diagnostic; no bambino-side fix exists for a printer clock it doesn't control. Unconfirmed on X1/H2-series AP controllers. |
-| BUG-051 | needs-verification | io/esp_idf.rs | `EspIdfTimer` allocated fresh (own `EspTimerService`) per dial/handshake phase instead of shared across a connect sequence | 2026-07-11 | src/io/esp_idf.rs:492 (`EspIdfTcpStream::connect`), :692 (`EspIdfTlsConnector::connect`) — two separate `EspTimerService::<Task>::new()` calls per full connect (dial's is dropped when `EspTls::adopt` consumes the raw stream; the handshake one persists on `EspTlsStream`). Could contend for ESP-IDF's `esp_timer` slot cap under connection-heavy workloads (e.g. FTPS opening a fresh data channel per transfer) — needs a real ESP32 stress test (many sequential connects) to confirm whether this is a real limit or a non-issue; found while manually triaging `07-10-REVIEW.md`'s Plausible Findings (Unit 14). |
 
 ## Fixed
 
@@ -73,4 +72,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 ## Wontfix
 
-*(none yet)*
+| ID | Sev | Module | Title | Found | Closed | Detail |
+|---|---|---|---|---|---|---|
+| BUG-051 | needs-verification | io/esp_idf.rs | `EspIdfTimer` allocated fresh (own `EspTimerService`) per dial/handshake phase instead of shared across a connect sequence | 2026-07-11 | 2026-07-11 | `esp32-hw-probe/` stress test (10,000 sequential dial+handshake `EspTimerService::new()`/drop cycles): 0 failures across ESP32-C6 and ESP32-C3, 2 runs each (fresh boot between runs). `esp_timer` slot cap isn't exhausted in practice; no `bambino` code change warranted. |
