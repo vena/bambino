@@ -13,6 +13,7 @@ use crate::connection::create_printer;
 #[derive(Subcommand, Debug)]
 pub enum CameraAction {
     /// Capture a single JPEG frame (A1/P1 binary protocol only)
+    #[command(override_usage = "bambino-cli camera <IP> <SERIAL> [ACCESS_CODE] snapshot [OUTPUT]")]
     Snapshot { output: Option<String> },
 }
 

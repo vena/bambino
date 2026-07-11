@@ -111,7 +111,10 @@ enum Command {
     },
 
     /// Dispatch a movement or hardware control command
-    #[command(flatten_help = true)]
+    #[command(
+        flatten_help = true,
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>...\n       bambino-cli control ams dry <ID> <TEMP> <TIME> <ROTATE> <FILAMENT>\n       bambino-cli control ams dry-stop <ID>\n       bambino-cli control ams help [COMMAND]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+    )]
     Control {
         ip: String,
         serial: String,
@@ -123,7 +126,10 @@ enum Command {
     },
 
     /// Traverse and transfer files on the printer's MicroSD card
-    #[command(flatten_help = true)]
+    #[command(
+        flatten_help = true,
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+    )]
     Files {
         ip: String,
         serial: String,
@@ -142,7 +148,10 @@ enum Command {
     },
 
     /// Camera streaming operations
-    #[command(flatten_help = true)]
+    #[command(
+        flatten_help = true,
+        override_usage = "bambino-cli camera <IP> <SERIAL> [ACCESS_CODE] snapshot [OUTPUT]\n       bambino-cli camera <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+    )]
     Camera {
         ip: String,
         serial: String,

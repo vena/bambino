@@ -22,16 +22,21 @@ const BYTES_PER_GIB: u64 = 1_073_741_824;
 #[derive(Subcommand, Debug)]
 pub enum FilesAction {
     /// Perform a UNIX directory listing traversal
+    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]")]
     List {
         #[arg(default_value = "/")]
         remote_path: String,
     },
     /// Upload a local file to the remote card path
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>"
+    )]
     Upload {
         local_path: String,
         remote_path: String,
     },
     /// Remove a file from the remote filesystem path
+    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>")]
     Delete { remote_path: String },
     /// Uploads a tiny probe file, diffs its printer-reported mtime against host wall-clock
     /// time, then deletes it — checks whether the printer's onboard clock is usably accurate.
@@ -42,8 +47,10 @@ pub enum FilesAction {
     /// can't be trusted whenever this is the case, since the raw `LIST` HH:MM timestamps come
     /// from the printer's own wrong clock. Unconfirmed on printers with more capable AP
     /// controllers (X1/H2 series).
+    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check")]
     ClockCheck,
     /// Query available MicroSD card capacity
+    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space")]
     Space,
 }
 

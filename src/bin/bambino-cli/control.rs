@@ -104,36 +104,59 @@ pub enum AmsAction {
 #[derive(Subcommand, Debug)]
 pub enum ControlAction {
     /// Home all structural motion axes safely
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home")]
     Home,
     /// Execute relative motion (e.g., move z -10 3000)
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]"
+    )]
     Move {
         axis: AxisArg,
         distance: f32,
         feedrate: Option<u32>,
     },
     /// Extrude relative filament length (e.g., extrude 10 900)
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]"
+    )]
     Extrude { length: f32, feedrate: Option<u32> },
     /// Configure PWM fan speed
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>"
+    )]
     Fan {
         target: FanTargetArg,
         speed_percent: u8,
     },
     /// Set hotend or build-plate temperatures
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>"
+    )]
     Temp { target: TempTargetArg, value: u16 },
     /// Toggle chamber or auxiliary LEDs
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>"
+    )]
     Led {
         node: LedNodeArg,
         state: LedStateArg,
     },
     /// Suspend print queue execution
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause")]
     Pause,
     /// Resume print queue execution
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume")]
     Resume,
     /// Abort active print job
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop")]
     Stop,
     /// Send G-code with model safety checks
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>")]
     Gcode { gcode_line: String },
     /// Send raw G-code bypassing safety checks
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>"
+    )]
     GcodeRaw {
         /// Skip interactive confirmation prompt
         #[arg(long = "unsafe")]
@@ -141,12 +164,20 @@ pub enum ControlAction {
         gcode_line: String,
     },
     /// Set print speed profile
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>")]
     Speed { level: PrintSpeedArg },
     /// Clear active print error codes
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error")]
     ClearError,
     /// Switch airduct damper mode
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>"
+    )]
     Airduct { mode: AirductModeArg },
     /// Trigger one or more calibration routines
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>..."
+    )]
     Calibrate {
         #[arg(required = true)]
         routines: Vec<CalibrationArg>,
