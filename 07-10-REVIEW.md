@@ -217,8 +217,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 7 — tests/client_test.rs
-**tests/client_test.rs:629-664** — `test_in_flight_saturation` only asserts `is_err()`, not the specific `BambuError::NetworkError(SocketError::TimedOut)` variant the saturation path is documented to return — weaker than the sibling `test_connection_drop_during_operation`, which does assert the specific variant.
 
 ### Unit 9 — discovery/
 **src/discovery/mod.rs:249-256** — The `discover_devices()` poll loop silently discards `Err` from `poll_next_device` with no logging and no backoff; a persistently-erroring socket (e.g. an ICMP-port-unreachable-induced synchronous error, a known cross-platform UDP quirk) could spin for the rest of the discovery window with zero operator-visible signal.

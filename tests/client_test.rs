@@ -735,8 +735,13 @@ async fn test_in_flight_saturation() {
     // The 201st command must be rejected due to in-flight saturation
     let err = client.send_gcode("G28").await;
     assert!(
-        err.is_err(),
-        "Expected in-flight saturation error on command 201"
+        matches!(
+            err,
+            Err(BambuError::NetworkError(bambino::io::SocketError::TimedOut))
+        ),
+        "Expected NetworkError(TimedOut) on command 201 (BambuMqttClient::publish_command's \
+         documented in-flight-saturation response), got {:?}",
+        err
     );
 }
 
