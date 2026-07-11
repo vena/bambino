@@ -219,9 +219,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 13 — io/ host
-**src/io/tokio.rs:298-320** — `CnFallbackServerVerifier`'s chain-walk finds the *first* unused intermediate matching the issuer's subject name; if that specific candidate fails signature verification, the walk `break`s instead of trying other unused intermediates with the same subject name. Same shape as the already-fixed BUG-008, narrower trigger (duplicate-subject-name chains). Fail-closed only — an attacker cannot exploit this to get a bad cert accepted, only a valid chain spuriously rejected.
-
 ### Unit 14 — io/ embedded
 **src/io/embassy.rs:70, 82** — `EmbassyUdpSocket::send_to`/`recv_from` collapse every underlying error into `SocketError::ConnectionReset`, discarding the actual failure mode — same collapsing-error-at-an-FFI-boundary pattern this crate has previously fixed elsewhere (`map_esp_tls_connect_error`).
 **src/io/embassy.rs:292-295** — `EmbassyRawStreamFactory::dial` collapses every `TcpClient::connect` failure (including pool exhaustion) into `SocketError::ConnectionRefused`, potentially misrouting retry/backoff decisions that key off `TimedOut` vs `ConnectionRefused`.

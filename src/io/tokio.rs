@@ -307,17 +307,24 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
                 break;
             }
 
+            // BUG-048: try every unused intermediate matching the issuer subject, not just the
+            // first by position — a duplicate-subject-name chain (e.g. a rotated intermediate
+            // reusing its predecessor's subject) could have the wrong one land first, fail
+            // signature verification, and abort the whole walk even though a later same-subject
+            // candidate would verify. Fail-closed only: this could spuriously reject a legitimate
+            // chain, never accept a bad one, since every candidate is still signature-checked.
             let next_idx = parsed_intermediates
                 .iter()
                 .enumerate()
-                .position(|(i, c)| !used[i] && current.issuer().as_raw() == c.subject().as_raw());
+                .find(|(i, c)| {
+                    !used[*i]
+                        && current.issuer().as_raw() == c.subject().as_raw()
+                        && current.verify_signature(Some(c.public_key())).is_ok()
+                })
+                .map(|(i, _)| i);
             let Some(idx) = next_idx else { break };
-            let next = &parsed_intermediates[idx];
-            if current.verify_signature(Some(next.public_key())).is_err() {
-                break;
-            }
             used[idx] = true;
-            current = next;
+            current = &parsed_intermediates[idx];
         }
         if !chain_trusted {
             return Err(RustlsError::InvalidCertificate(
@@ -965,6 +972,43 @@ mod tests {
         assert!(
             result.is_err(),
             "a leaf chained through an untrusted intermediate must still be rejected"
+        );
+    }
+
+    #[test]
+    fn test_cn_fallback_verifier_skips_wrong_signature_for_duplicate_subject_intermediate() {
+        // BUG-048: two intermediates share the same subject CN, but only the second (by
+        // position in `intermediates`) is the one that actually signed the leaf. The old
+        // chain-walk picked the first subject-name match, failed its signature check, and
+        // `break`s the whole walk — this proves it now tries the next same-subject candidate
+        // instead of giving up.
+        let (root_der, root_issuer, ..) = test_support::generate_test_ca();
+        let (_decoy_root_der, decoy_root_issuer, ..) = test_support::generate_test_ca();
+        let (decoy_intermediate_der, _decoy_intermediate_issuer) =
+            test_support::generate_test_intermediate_ca(&decoy_root_issuer, "shared-subject-name");
+        let (genuine_intermediate_der, genuine_intermediate_issuer) =
+            test_support::generate_test_intermediate_ca(&root_issuer, "shared-subject-name");
+        let leaf = test_support::generate_test_leaf(
+            &genuine_intermediate_issuer,
+            "TESTSERIAL0001",
+            Vec::new(),
+        );
+
+        let verifier = CnFallbackServerVerifier::new([root_der]).unwrap();
+        let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
+
+        let result = verifier.verify_server_cert(
+            &leaf,
+            // Decoy (wrong signer, same subject name) ordered first on purpose.
+            &[decoy_intermediate_der, genuine_intermediate_der],
+            &server_name,
+            &[],
+            UnixTime::now(),
+        );
+        assert!(
+            result.is_ok(),
+            "expected chain-walk to skip the signature-mismatched same-subject decoy and find \
+             the genuine intermediate, got {result:?}"
         );
     }
 
