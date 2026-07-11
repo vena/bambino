@@ -51,10 +51,17 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
+        // BUG-043: construct the guard immediately after raw mode is enabled, before the
+        // fallible alt-screen/cursor-hide write below — if that write or flush fails and `?`
+        // returns early, `guard` (already bound) still gets dropped as this function returns,
+        // so `Drop` still restores the terminal. Returning `Ok(Self)` only at the end (the
+        // previous shape) meant a write failure left raw mode enabled with no guard ever
+        // constructed to undo it.
+        let guard = Self;
         let mut stdout = io::stdout();
         write!(stdout, "\x1B[?1049h\x1B[?25l")?;
         stdout.flush()?;
-        Ok(Self)
+        Ok(guard)
     }
 }
 

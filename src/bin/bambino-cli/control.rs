@@ -26,6 +26,23 @@ pub enum FanTargetArg {
     Right,
 }
 
+#[derive(Clone, Copy, ValueEnum, Debug)]
+pub enum AxisArg {
+    X,
+    Y,
+    Z,
+}
+
+impl AxisArg {
+    fn as_char(self) -> char {
+        match self {
+            AxisArg::X => 'X',
+            AxisArg::Y => 'Y',
+            AxisArg::Z => 'Z',
+        }
+    }
+}
+
 #[derive(Clone, ValueEnum, Debug)]
 pub enum TempTargetArg {
     Nozzle,
@@ -90,7 +107,7 @@ pub enum ControlAction {
     Home,
     /// Execute relative motion (e.g., move z -10 3000)
     Move {
-        axis: String,
+        axis: AxisArg,
         distance: f32,
         feedrate: Option<u32>,
     },
@@ -224,21 +241,11 @@ pub async fn run(
             distance,
             feedrate,
         } => {
-            if axis.len() != 1 {
-                return Err(BambuError::ProtocolViolation(
-                    format!(
-                        "Invalid axis: '{}' (expected a single character X, Y, or Z)",
-                        axis
-                    )
-                    .into(),
-                ));
-            }
-            let axis_char = axis.chars().next().unwrap(); // safe: len() == 1 checked above
             let feedrate = feedrate.unwrap_or(3000);
             dispatch(
                 "Dispatching motion G-code G0 relative move...",
                 "Motion command published successfully.",
-                client.move_relative(axis_char, distance, feedrate),
+                client.move_relative(axis.as_char(), distance, feedrate),
             )
             .await?;
         }

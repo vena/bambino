@@ -216,9 +216,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 4 — bin/bambino-cli control/probe/monitor
-**src/bin/bambino-cli/monitor/mod.rs:52-58** — `TerminalGuard::enter()` enables raw mode before constructing the guard; if the subsequent alt-screen/cursor-hide write fails, `Drop` never runs and the terminal is left stuck in raw mode.
-**src/bin/bambino-cli/control.rs:203-238** — `ControlAction::Move`'s `axis` is a free-form `String` (only length-checked), unlike every other CLI arg in this file which uses a `ValueEnum`. A stray single-byte value could be spliced into raw G-code sent via `send_gcode_raw` with none of `gcode-raw`'s interactive confirmation.
 
 ### Unit 7 — tests/client_test.rs
 **tests/client_test.rs:629-664** — `test_in_flight_saturation` only asserts `is_err()`, not the specific `BambuError::NetworkError(SocketError::TimedOut)` variant the saturation path is documented to return — weaker than the sibling `test_connection_drop_during_operation`, which does assert the specific variant.
