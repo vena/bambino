@@ -44,6 +44,7 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use crate::camera::CAMERA_PORT_RTSPS;
 use crate::error::BambuError;
 
 pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
@@ -87,8 +88,8 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError
         String::from(ip)
     };
     Ok(format!(
-        "rtsps://bblp:{}@{}:322/streaming/live/1",
-        access_code, host
+        "rtsps://bblp:{}@{}:{}/streaming/live/1",
+        access_code, host, CAMERA_PORT_RTSPS
     ))
 }
 
@@ -141,7 +142,7 @@ pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<S
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
-            return Ok(format!("rtsps://{}:322/{}", host, path));
+            return Ok(format!("rtsps://{}:{}/{}", host, CAMERA_PORT_RTSPS, path));
         }
     }
     Ok(String::from(request_uri))

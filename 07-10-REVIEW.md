@@ -214,9 +214,6 @@ This is a full-crate deep code review of **bambino**, a multi-platform async Rus
 Findings below look real but couldn't be fully verified by the reviewing agent — no `BUG-ID` assigned yet; flagged here for manual triage.
 
 
-### Unit 2 — camera/
-**src/camera/binary.rs:238-253** — An oversized-frame `ProtocolViolation` resets `read_state` to `Idle` without draining the declared `size` payload bytes still pending on the wire, permanently desyncing the stream for any caller that retries on the same instance instead of reconnecting (contrast with the JPEG-marker-validation failure path, which is safe because the payload was already consumed).
-**src/camera/rtsps.rs:90, 144** — Both `build_rtsps_url` and `rewrite_rtsp_request_uri` hardcode the literal `322` instead of referencing `CAMERA_PORT_RTSPS`, violating the crate's "no new literals" convention. Not a bug today (values agree), but unlinked from the const.
 
 ### Unit 3 — bin/bambino-cli core
 **src/bin/bambino-cli/storage.rs:40-49** — `current_date_utc()` feeds `list_directory`'s year-rollover disambiguation with UTC time; if the printer's `LIST` mtimes are actually in local (non-UTC) time, a timezone offset near a year boundary could flip a recently-modified file's inferred year. Reference doc doesn't specify which convention the printer uses.

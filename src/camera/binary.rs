@@ -43,6 +43,12 @@ pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
 /// Per-read wall-clock deadline for [`BambuBinaryCameraStream::read_next_frame_with_timer`] when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
 pub(crate) const CAMERA_READ_TIMEOUT_SECS: u64 = 30;
 
+/// Chunk size for draining an oversized frame's declared-but-rejected payload off the wire
+/// (see `CameraFrameReadState::DiscardingOversizedPayload`) — matches `FTP_LINE_READ_CHUNK_SIZE`
+/// (`src/ftps/protocol.rs`)'s rationale: small enough to never itself risk an allocation
+/// concern, since `remaining` can be attacker/corruption-controlled up to `u32::MAX`.
+pub(crate) const CAMERA_DISCARD_CHUNK_SIZE: usize = 512;
+
 /// Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY].
 ///
 /// **Byte Ordering Specifications:**
@@ -101,6 +107,14 @@ enum CameraFrameReadState {
         buf: Vec<u8>,
         filled: usize,
     },
+    /// An oversized frame's header was decoded, but its declared payload is still pending on
+    /// the wire — `remaining` counts bytes left to discard before the stream is resynced.
+    /// Never allocates `remaining` bytes up front (it's an attacker/corruption-controlled
+    /// value up to `u32::MAX`); drains in small fixed chunks instead. Preserved across a
+    /// timed-out call the same way `ReadingPayload` is — losing this would permanently desync
+    /// the stream, which is the exact bug this state exists to fix (see
+    /// `drain_oversized_payload`'s doc comment).
+    DiscardingOversizedPayload { remaining: usize },
 }
 
 /// Abstract state controller parsing incoming frame buffers from raw Port 6000 streams.
@@ -216,6 +230,16 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             None
         };
 
+        // Resume draining a prior oversized frame's payload before anything else — bytes still
+        // pending on the wire from that frame must be consumed before a fresh header can be
+        // read, or the next header/payload split would desync against stale payload bytes.
+        if matches!(
+            self.read_state,
+            CameraFrameReadState::DiscardingOversizedPayload { .. }
+        ) {
+            return self.drain_oversized_payload(timer, deadline_ms).await;
+        }
+
         // Header bytes (only start a fresh header if not already mid-header from a prior,
         // timed-out call).
         if matches!(self.read_state, CameraFrameReadState::Idle) {
@@ -244,12 +268,16 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
                 )
             })?;
 
-            // Bounded allocation check to guard against memory allocation overflow attacks
+            // Bounded allocation check to guard against memory allocation overflow attacks.
+            // The declared payload is still pending on the wire — drain it (never allocating
+            // `size` bytes) before returning, so a caller that keeps polling the same instance
+            // instead of reconnecting doesn't get permanently desynced (previously this reset
+            // straight to `Idle` without draining, unlike the JPEG-marker-validation failure
+            // path below, which is safe only because its payload was already fully consumed).
             if size > self.max_frame_size {
-                self.read_state = CameraFrameReadState::Idle;
-                return Err(BambuError::ProtocolViolation(
-                    "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
-                ));
+                self.read_state =
+                    CameraFrameReadState::DiscardingOversizedPayload { remaining: size };
+                return self.drain_oversized_payload(timer, deadline_ms).await;
             }
             if size == 0 {
                 self.read_state = CameraFrameReadState::Idle;
@@ -297,6 +325,37 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         }
 
         unreachable!("CameraFrameReadState must be ReadingPayload after header decode")
+    }
+
+    /// Drains an oversized frame's declared-but-rejected payload off the wire in bounded
+    /// `CAMERA_DISCARD_CHUNK_SIZE` chunks (never allocating `remaining` bytes, which can be
+    /// attacker/corruption-controlled up to `u32::MAX`), keeping the stream in sync so a
+    /// caller that retries `read_next_frame`/`read_next_frame_with_timer` on this same
+    /// instance — rather than reconnecting — reads the *next* real frame's header instead of
+    /// misreading stale payload bytes. Resumable: if the deadline hits mid-drain,
+    /// `self.read_state`'s `remaining` count persists and the next call picks up the drain
+    /// before attempting anything else (see the check at the top of
+    /// `read_next_frame_with_timer`).
+    async fn drain_oversized_payload<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+        deadline_ms: Option<u64>,
+    ) -> Result<(), BambuError> {
+        if let CameraFrameReadState::DiscardingOversizedPayload { remaining } = &mut self.read_state
+        {
+            let mut scratch = [0u8; CAMERA_DISCARD_CHUNK_SIZE];
+            while *remaining > 0 {
+                let want = core::cmp::min(*remaining, scratch.len());
+                let n = read_chunk(&mut self.stream, &mut scratch[..want], timer, deadline_ms)
+                    .await
+                    .map_err(BambuError::NetworkError)?;
+                *remaining -= n;
+            }
+        }
+        self.read_state = CameraFrameReadState::Idle;
+        Err(BambuError::ProtocolViolation(
+            "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
+        ))
     }
 
     /// Asynchronously extracts the next complete frame from the stream.
@@ -382,19 +441,62 @@ mod tests {
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+            assert!(matches!(result, Err(BambuError::NetworkError(_))));
+            // Cursor has no more bytes after the header, so draining the (never-sent) declared
+            // payload hits EOF — confirms the drain path is actually exercised (BUG: this used
+            // to bail straight to Idle without draining at all, which this test's mere
+            // ProtocolViolation-without-EOF assertion couldn't have caught). See
+            // `test_read_frame_oversized_drains_and_resyncs_stream` for the full happy-path
+            // proof that a subsequent frame reads correctly after an oversized one.
         }
 
         #[tokio::test]
         async fn test_read_frame_respects_custom_max_frame_size() {
             // A frame well under the default 10MB cap but over a custom, smaller cap must be
             // rejected — this is the behavior embedded callers rely on via `with_max_frame_size`.
-            let data = make_frame_header(1024);
+            // The full declared payload is included so the oversized-frame drain path (BUG)
+            // actually completes instead of hitting EOF, yielding the real ProtocolViolation.
+            let mut data = make_frame_header(1024);
+            data.extend(vec![0u8; 1024]);
             let cursor = std::io::Cursor::new(data);
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_read_frame_oversized_drains_and_resyncs_stream() {
+            // BUG: an oversized-frame rejection used to reset read_state to Idle without
+            // draining the declared payload still pending on the wire, permanently desyncing
+            // the stream for any caller that retries on the same instance instead of
+            // reconnecting. Sends an oversized frame's full payload followed by a real valid
+            // frame, and asserts the second read correctly recovers the valid frame instead of
+            // misreading stale oversized-payload bytes as a bogus header.
+            let mut data = make_frame_header(1024);
+            data.extend(vec![0xAAu8; 1024]);
+            let mut valid_frame = vec![JPEG_MARKER_SOI_HIGH, JPEG_MARKER_SOI_LOW];
+            valid_frame.extend([JPEG_MARKER_EOI_HIGH, JPEG_MARKER_EOI_LOW]);
+            data.extend(make_frame_header(valid_frame.len() as u32));
+            data.extend(&valid_frame);
+
+            let cursor = std::io::Cursor::new(data);
+            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
+            let mut buf = Vec::new();
+
+            let oversized_result = camera.read_next_frame(&mut buf).await;
+            assert!(matches!(
+                oversized_result,
+                Err(BambuError::ProtocolViolation(_))
+            ));
+
+            let resynced_result = camera.read_next_frame(&mut buf).await;
+            assert!(
+                resynced_result.is_ok(),
+                "expected the stream to resync onto the next real frame, got {:?}",
+                resynced_result
+            );
+            assert_eq!(buf, valid_frame);
         }
 
         #[tokio::test]
