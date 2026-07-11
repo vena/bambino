@@ -22,6 +22,21 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-065 | Sev1 | quirks/mod.rs | `format_z_move_gcode` doesn't reject `NaN` distance; both its `== 0.0` and `.abs() > z_max` guards are false for `NaN`, so a malformed `G0 ZNaN` command reaches the printer instead of erroring | 2026-07-11 | See `07-11-REVIEW.md` §17 |
 | BUG-066 | Sev3 | quirks/mod.rs | Default `z_max()` hardcodes `256.0` instead of a named `pub(crate) const`, unlike this same file's `FAN_STEP_MAX`/`FAN_ROUNDING_OFFSET` convention | 2026-07-11 | See `07-11-REVIEW.md` §17 |
 | BUG-067 | Sev3 | types/telemetry/tests.rs | `test_progress_field_removed` is a verbatim duplicate of `test_mc_percent_deserialization` and asserts nothing about a removed `progress` field | 2026-07-11 | See `07-11-REVIEW.md` §20 |
+| BUG-068 | Sev2 | ams/parser.rs, ams/mapping.rs | `AMS_MAX_STANDARD_ID = 3` (caps standard AMS at 4 units) confirmed too low against bambuddy's `ck_ams_id_range` DB constraint (0-7, 8 units) | 2026-07-11 | See `07-11-REVIEW.md` §1, 3rd-party-verified |
+| BUG-069 | Sev3 | ams/mapping.rs | `MaterialSource::StandardAms`/`AmsHt` fields are public `u8`s never range-validated in `flat_channel_id()`/`to_mapping2_entry()`, unlike `parser.rs`'s inbound-side bounds-checking | 2026-07-11 | See `07-11-REVIEW.md` §1 |
+| BUG-070 | Sev3 | ams/mapping.rs | `build_ams_mapping`/`build_ams_mapping2` (both `pub`) silently drop any allocation with `filament_id == 0` instead of erroring | 2026-07-11 | See `07-11-REVIEW.md` §1 |
+| BUG-071 | Sev3 | bin/bambino-cli/storage.rs | Every `FilesAction` arm using `?` bypasses `client.disconnect()` at the bottom of `run()` on error, skipping FTPS's graceful `QUIT` | 2026-07-11 | See `07-11-REVIEW.md` §2 |
+| BUG-072 | Sev3 | client/mod.rs | `from_mqtt()` hardcodes empty `ip`/`access_code` with no compile-time block on later `.with_ftps()`/`.with_camera()`, which then fail opaquely | 2026-07-11 | See `07-11-REVIEW.md` §6 |
+| BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | See `07-11-REVIEW.md` §7 |
+| BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | See `07-11-REVIEW.md` §7 |
+| BUG-075 | Sev3 | ftps/protocol.rs | `validate_ftp_path`'s leading-dash check returns `""` via `next_back()` on a trailing-slash path, missing a dash-prefixed final directory component | 2026-07-11 | See `07-11-REVIEW.md` §12 |
+| BUG-076 | Sev3 | io/esp_idf.rs | 3 more `EspIdfTimer::new()` sites (UDP pacing, TCP connect, TLS connect timers) discard the real `EspError` with no `log::debug!`, same shape as BUG-064 | 2026-07-11 | See `07-11-REVIEW.md` §14 |
+| BUG-077 | Sev3 | io/esp_idf.rs | `EspIdfTlsConnector::with_connect_timeout(Duration::ZERO)` fails immediately instead of disabling the timeout, same class as already-fixed BUG-007 | 2026-07-11 | See `07-11-REVIEW.md` §14 |
+| BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearms the 10s write-zombie timer on every call regardless of already-in-flight commands | 2026-07-11 | See `07-11-REVIEW.md` §15 |
+| BUG-079 | Sev3 | tests/common/mock_mqtt.rs | `read_packet` is not cancellation-safe yet is raced inside `tokio::select!` in `run_mock_mqtt_broker` | 2026-07-11 | See `07-11-REVIEW.md` §15 |
+| BUG-080 | Sev3 | mqtt/commands/print_job.rs | `subtask_id` clamped via ad hoc `clamp_task_id()` call instead of the `ClampedTaskId` newtype `sequence_id` uses in the same constructor | 2026-07-11 | See `07-11-REVIEW.md` §16 |
+| BUG-081 | Sev3 | types/telemetry/tests.rs | No test verifies `bed_temperatures()` ignores `device.bed_temp` (confirmed-redundant per BUG-054) rather than falling back to it | 2026-07-11 | See `07-11-REVIEW.md` §20 |
+| BUG-082 | Sev3 | types/telemetry/tests.rs | No test exercises a composite-packed (`>500`) `chamber_temper` value through `unpack_temperature()` | 2026-07-11 | See `07-11-REVIEW.md` §20 |
 
 ## Fixed
 
