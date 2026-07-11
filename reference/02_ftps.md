@@ -54,6 +54,8 @@ Once tokenized, the fields correspond to:
 ##### Rollover Logic
 If `parts[7]` contains a time pattern (`HH:MM`), the modification year is omitted. In this scenario, the host's current calendar year is assumed. If the calculated datetime is in the future relative to the host machine's system clock (`parsed_time > current_time`), the year value must be decremented by 1 (`year = current_year - 1`) to account for rollover boundaries (e.g., parsing a December modification date in January).
 
+This rollover math anchors to the *host's* clock, but the `HH:MM`/month/day values themselves come from the printer's own onboard clock — which this heuristic implicitly assumes is roughly synced to real time. Confirmed on a P1S (BUG-042, `BACKLOG.md`): ESP32/FreeRTOS-class printers have no RTC battery, LAN-mode NTP sync is unreliable, and the clock falls back to the firmware build date on boot. Two `LIST` checks minutes apart against a fresh boot returned an identical, months-stale timestamp rather than an advancing one — this is the printer's default LAN-mode state, not a rare edge case. Unconfirmed on X1/H2-series printers with more capable AP controllers.
+
 #### Space Evaluation via AVBL and STAT
 To query available storage capacity on the MicroSD card without performing expensive recursive directory traversals, the client must execute a direct hardware-level space query over the active control channel:
 1.  **AVBL Command**: The client transmits `AVBL\r\n` to the control socket.
