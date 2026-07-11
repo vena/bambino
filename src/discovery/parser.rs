@@ -198,9 +198,13 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
         .unwrap_or(raw_usn_str)
         .to_ascii_uppercase();
 
-    // Use DevModel header, falling back to model embedded in NT/ST per Protocol Violation #7
+    // Use DevModel header, falling back to model embedded in NT/ST per Protocol Violation #7.
+    // BUG-047: a present-but-empty DevModel header (`Some("")`) must not short-circuit the
+    // NT/ST fallback — `.filter()` treats it the same as absent, matching the intent of "use
+    // the header if it actually carries a value."
     let effective_dev_model = raw
         .dev_model
+        .filter(|s| !s.is_empty())
         .or_else(|| raw.nt_or_st.and_then(extract_model_from_nt_st));
 
     let (ip, port) = raw.location.and_then(parse_location)?;
@@ -345,6 +349,24 @@ mod tests {
                         HOST: 239.255.255.250:2021\r\n\
                         LOCATION: http://192.168.1.42:80/\r\n\
                         USN: 01P06A521703222\r\n\
+                        NT: urn:bambulab-com:device:C12:1\r\n\r\n";
+
+        let device = parse_ssdp_payload(payload).unwrap();
+        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.raw_model_str, "C12");
+    }
+
+    #[test]
+    fn test_empty_dev_model_header_does_not_block_nt_st_fallback() {
+        // BUG-047: a present-but-empty DevModel header (`Some("")`) previously short-circuited
+        // the NT/ST fallback via `.or_else()`, which only triggers on `None`. Uses an
+        // unrecognized serial prefix ("999") so resolve_model() must fall through to
+        // effective_dev_model rather than resolving via the serial-prefix table directly.
+        let payload = b"NOTIFY * HTTP/1.1\r\n\
+                        HOST: 239.255.255.250:2021\r\n\
+                        LOCATION: http://192.168.1.42:80/\r\n\
+                        USN: 999123456789012\r\n\
+                        DevModel.bambu.com: \r\n\
                         NT: urn:bambulab-com:device:C12:1\r\n\r\n";
 
         let device = parse_ssdp_payload(payload).unwrap();

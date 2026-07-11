@@ -218,9 +218,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 9 — discovery/
-**src/discovery/mod.rs:249-256** — The `discover_devices()` poll loop silently discards `Err` from `poll_next_device` with no logging and no backoff; a persistently-erroring socket (e.g. an ICMP-port-unreachable-induced synchronous error, a known cross-platform UDP quirk) could spin for the rest of the discovery window with zero operator-visible signal.
-**src/discovery/parser.rs:196** — A present-but-empty `DevModel.bambu.com` header (`Some("")`) is treated as authoritative and skips the NT/ST fallback that exists to catch exactly this class of missing-model-hint case. No test covers an empty (vs. absent) header.
 
 ### Unit 13 — io/ host
 **src/io/tokio.rs:298-320** — `CnFallbackServerVerifier`'s chain-walk finds the *first* unused intermediate matching the issuer's subject name; if that specific candidate fails signature verification, the walk `break`s instead of trying other unused intermediates with the same subject name. Same shape as the already-fixed BUG-008, narrower trigger (duplicate-subject-name chains). Fail-closed only — an attacker cannot exploit this to get a bad cert accepted, only a valid chain spuriously rejected.

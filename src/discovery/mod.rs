@@ -46,6 +46,14 @@ pub const SSDP_PORT_ALT: u16 = 1990;
 #[cfg(feature = "std")]
 pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u128 = 3000;
 
+/// Pacing sleep after a `poll_next_device` error inside `discover_devices()`'s listen loop, so
+/// a persistently-erroring socket (e.g. a platform-specific UDP ICMP-unreachable quirk) can't
+/// busy-spin for the rest of the discovery window — `poll_next_device` returns `Err` (not
+/// `Ok(None)`) only for genuine socket faults, which have no `.await` yield point of their own
+/// on the error path.
+#[cfg(feature = "std")]
+const SSDP_POLL_ERROR_BACKOFF_MS: u64 = 50;
+
 const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
                                      HOST: 239.255.255.250:2021\r\n\
                                      MAN: \"ssdp:discover\"\r\n\
@@ -256,11 +264,31 @@ where
         }
 
         for (engine, port) in &engines {
-            if let Ok(Some(device)) = engine.poll_next_device(&mut buf).await
-                && seen_serials.insert(device.serial.clone())
-            {
-                log::debug!("Discovered '{}' via port {}", device.serial, port);
-                devices.push(device);
+            // BUG-046: log and pace on Err (previously silently discarded with no backoff) —
+            // poll_next_device's Err path is reserved for genuine socket faults (not the
+            // TimedOut/Ok(None) transient case), which have no `.await` yield point of their
+            // own, so a persistently-erroring socket could otherwise busy-spin for the rest of
+            // the discovery window with zero operator-visible signal.
+            match engine.poll_next_device(&mut buf).await {
+                Ok(Some(device)) => {
+                    if seen_serials.insert(device.serial.clone()) {
+                        log::debug!("Discovered '{}' via port {}", device.serial, port);
+                        devices.push(device);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log::debug!(
+                        "poll_next_device on port {} failed: {:?} (pacing before retry)",
+                        port,
+                        e
+                    );
+                    let _ = timer
+                        .sleep(core::time::Duration::from_millis(
+                            SSDP_POLL_ERROR_BACKOFF_MS,
+                        ))
+                        .await;
+                }
             }
         }
     }
