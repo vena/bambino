@@ -95,7 +95,7 @@ Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
 
 #### Implementations
 
-- <span id="calibrationrequest-new"></span>`fn new(option_bitmask: u32, sequence_id: u64) -> Self`
+- <span id="calibrationrequest-new"></span>`fn new(option_bitmask: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `calibration` request from a capability option bitmask.
 
@@ -166,7 +166,7 @@ Clears the printer's current error state so it can resume operation.
 
 #### Implementations
 
-- <span id="cleanprinterrorrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="cleanprinterrorrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `clean_print_error` request.
 
@@ -246,7 +246,7 @@ Changes the active print speed profile (silent, standard, sport, ludicrous).
 
 #### Implementations
 
-- <span id="printspeedrequest-new"></span>`fn new(speed_index_str: &str, sequence_id: u64) -> Self`
+- <span id="printspeedrequest-new"></span>`fn new(speed_index_str: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `print_speed` request from a stringified speed index.
 
@@ -322,7 +322,7 @@ Tells the printer to skip specific objects in a multi-object print.
 
 #### Implementations
 
-- <span id="skipobjectsrequest-new"></span>`fn new(object_indices: Vec<u32>, sequence_id: u64) -> Self`
+- <span id="skipobjectsrequest-new"></span>`fn new(object_indices: Vec<u32>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `skip_objects` request from a list of object indices to skip.
 
@@ -393,7 +393,7 @@ Sends a print lifecycle command (pause, resume, stop) to the printer.
 
 #### Implementations
 
-- <span id="standardcontrolrequest-new"></span>`fn new(command: &str, sequence_id: u64) -> Self`
+- <span id="standardcontrolrequest-new"></span>`fn new(command: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
 

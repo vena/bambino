@@ -29,6 +29,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
   - [`print_job`](#print-job)
   - [`status`](#status)
 - [Types](#types)
+  - [`ClampedTaskId`](#clampedtaskid)
 - [Functions](#functions)
   - [`clamp_task_id`](#clamp-task-id)
 
@@ -42,6 +43,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 | [`hardware`](#hardware) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound). |
 | [`print_job`](#print-job) | mod | Print job dispatch (file selection, AMS material mapping, plate/timelapse config). |
 | [`status`](#status) | mod | Status query commands (pushall, get_version, clean_print_error). |
+| [`ClampedTaskId`](#clampedtaskid) | struct | A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId), which always clamps. |
 | [`clamp_task_id`](#clamp-task-id) | fn | Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`). |
 
 ## Modules
@@ -76,7 +78,7 @@ Loads or unloads filament from an AMS slot or external spool to the toolhead.
 
 #### Implementations
 
-- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: u64) -> Self`
+- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds an `ams_change_filament` request to load or unload filament.
 
@@ -112,7 +114,7 @@ Sends a resume, pause, or reset command to the AMS feed mechanism.
 
 #### Implementations
 
-- <span id="amscontrolrequest-new"></span>`fn new(operation: &str, sequence_id: u64) -> Self`
+- <span id="amscontrolrequest-new"></span>`fn new(operation: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
 
@@ -148,7 +150,7 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 #### Implementations
 
-- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: u64) -> Self`
+- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds an `ams_filament_drying` request.
 
@@ -184,7 +186,7 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
 #### Implementations
 
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: u64) -> Self`
+- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Creates a request payload to update slot parameters.
 
@@ -220,7 +222,7 @@ Requests an RFID tag scan on a specific AMS slot.
 
 #### Implementations
 
-- <span id="amsgetrfidrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: u64) -> Self`
+- <span id="amsgetrfidrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds an `ams_get_rfid` request.
 
@@ -256,7 +258,7 @@ Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
 
 #### Implementations
 
-- <span id="calibrationrequest-new"></span>`fn new(option_bitmask: u32, sequence_id: u64) -> Self`
+- <span id="calibrationrequest-new"></span>`fn new(option_bitmask: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `calibration` request from a capability option bitmask.
 
@@ -292,7 +294,7 @@ Clears the printer's current error state so it can resume operation.
 
 #### Implementations
 
-- <span id="cleanprinterrorrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="cleanprinterrorrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `clean_print_error` request.
 
@@ -328,7 +330,7 @@ Changes the active print speed profile (silent, standard, sport, ludicrous).
 
 #### Implementations
 
-- <span id="printspeedrequest-new"></span>`fn new(speed_index_str: &str, sequence_id: u64) -> Self`
+- <span id="printspeedrequest-new"></span>`fn new(speed_index_str: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `print_speed` request from a stringified speed index.
 
@@ -364,7 +366,7 @@ Tells the printer to skip specific objects in a multi-object print.
 
 #### Implementations
 
-- <span id="skipobjectsrequest-new"></span>`fn new(object_indices: Vec<u32>, sequence_id: u64) -> Self`
+- <span id="skipobjectsrequest-new"></span>`fn new(object_indices: Vec<u32>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `skip_objects` request from a list of object indices to skip.
 
@@ -400,7 +402,7 @@ Sends a print lifecycle command (pause, resume, stop) to the printer.
 
 #### Implementations
 
-- <span id="standardcontrolrequest-new"></span>`fn new(command: &str, sequence_id: u64) -> Self`
+- <span id="standardcontrolrequest-new"></span>`fn new(command: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
 
@@ -436,7 +438,7 @@ Sends a raw G-code line to the printer for immediate execution.
 
 #### Implementations
 
-- <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: u64) -> Self`
+- <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Creates a request envelope wrapping a raw G-code payload.
 
@@ -472,7 +474,7 @@ Switches the enclosure airduct damper between cooling, heating, and laser modes.
 
 #### Implementations
 
-- <span id="airductrequest-new"></span>`fn new(mode: AirductMode, sequence_id: u64) -> Self` — [`AirductMode`](hardware/index.md#airductmode)
+- <span id="airductrequest-new"></span>`fn new(mode: AirductMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`AirductMode`](hardware/index.md#airductmode), [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `set_airduct` request for the given damper mode.
 
@@ -508,7 +510,7 @@ Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
 
 #### Implementations
 
-- <span id="buzzerrequest-new"></span>`fn new(mode_code: i32, sequence_id: u64) -> Self`
+- <span id="buzzerrequest-new"></span>`fn new(mode_code: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `buzzer_ctrl` request for the given alarm mode.
 
@@ -544,11 +546,11 @@ Turns chamber or toolhead LEDs on or off.
 
 #### Implementations
 
-- <span id="ledctrlrequest-new"></span>`fn new(led_node: &str, turn_on: bool, sequence_id: u64) -> Self`
+- <span id="ledctrlrequest-new"></span>`fn new(led_node: &str, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a simple on/off `ledctrl` request for the given fixture.
 
-- <span id="ledctrlrequest-new-flashing"></span>`fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: u64) -> Self`
+- <span id="ledctrlrequest-new-flashing"></span>`fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
 
@@ -584,7 +586,7 @@ Enables or disables the printer's notification sounds.
 
 #### Implementations
 
-- <span id="promptsoundrequest-new"></span>`fn new(enable: bool, sequence_id: u64) -> Self`
+- <span id="promptsoundrequest-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `print_option` request enabling or disabling notification sounds.
 
@@ -752,7 +754,7 @@ Submits a `.3mf` print job from the SD card for execution.
 
 #### Implementations
 
-- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: u64, model: BambuModel) -> Self` — [`PrintJobConfig`](print_job/index.md#printjobconfig), [`BambuModel`](../../models/index.md#bambumodel)
+- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: BambuModel) -> Self` — [`PrintJobConfig`](print_job/index.md#printjobconfig), [`ClampedTaskId`](#clampedtaskid), [`BambuModel`](../../models/index.md#bambumodel)
 
   Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
 
@@ -788,7 +790,7 @@ Queries the printer for its hardware and firmware version info.
 
 #### Implementations
 
-- <span id="getversionrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="getversionrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `get_version` request.
 
@@ -824,7 +826,7 @@ Requests a full state dump from the printer (all telemetry fields at once).
 
 #### Implementations
 
-- <span id="pushallrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="pushallrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds a `pushall` request.
 
@@ -841,6 +843,50 @@ Requests a full state dump from the printer (all telemetry fields at once).
 ##### `impl Serialize for PushAllRequest`
 
 - <span id="pushallrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `ClampedTaskId`
+
+```rust
+struct ClampedTaskId();
+```
+
+A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId),
+which always clamps.
+
+BUG-001 (a constructor that called `clamp_task_id()` on every field except one) and BUG-053
+(24 constructors across 7 files each independently remembering to call `clamp_task_id()`,
+with a regression test that only ever exercised 2 of them) were both instances of the same
+gap: the clamping invariant was enforced by convention, not the type system, so a future
+constructor could silently skip it. Every command constructor now takes `impl
+Into<ClampedTaskId>` for its `sequence_id` parameter instead of a raw `u64` — since the only
+way to produce a `ClampedTaskId` is through the clamping `From<u64>` impl below, skipping
+the clamp is no longer possible to write, not just discouraged.
+
+#### Trait Implementations
+
+##### `impl Clone for ClampedTaskId`
+
+- <span id="clampedtaskid-clone"></span>`fn clone(&self) -> ClampedTaskId` — [`ClampedTaskId`](#clampedtaskid)
+
+##### `impl Copy for ClampedTaskId`
+
+##### `impl Debug for ClampedTaskId`
+
+- <span id="clampedtaskid-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Display for ClampedTaskId`
+
+- <span id="clampedtaskid-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl Eq for ClampedTaskId`
+
+##### `impl PartialEq for ClampedTaskId`
+
+- <span id="clampedtaskid-partialeq-eq"></span>`fn eq(&self, other: &ClampedTaskId) -> bool` — [`ClampedTaskId`](#clampedtaskid)
+
+##### `impl ToString for ClampedTaskId`
+
+- <span id="clampedtaskid-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `AirductMode`
 

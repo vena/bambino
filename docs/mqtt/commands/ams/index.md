@@ -115,7 +115,7 @@ Loads or unloads filament from an AMS slot or external spool to the toolhead.
 
 #### Implementations
 
-- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: u64) -> Self`
+- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds an `ams_change_filament` request to load or unload filament.
 
@@ -191,7 +191,7 @@ Sends a resume, pause, or reset command to the AMS feed mechanism.
 
 #### Implementations
 
-- <span id="amscontrolrequest-new"></span>`fn new(operation: &str, sequence_id: u64) -> Self`
+- <span id="amscontrolrequest-new"></span>`fn new(operation: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
 
@@ -292,7 +292,7 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 #### Implementations
 
-- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: u64) -> Self`
+- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds an `ams_filament_drying` request.
 
@@ -403,7 +403,7 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
 #### Implementations
 
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: u64) -> Self`
+- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Creates a request payload to update slot parameters.
 
@@ -484,7 +484,7 @@ Requests an RFID tag scan on a specific AMS slot.
 
 #### Implementations
 
-- <span id="amsgetrfidrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: u64) -> Self`
+- <span id="amsgetrfidrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds an `ams_get_rfid` request.
 

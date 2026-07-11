@@ -98,7 +98,7 @@ Switches the enclosure airduct damper between cooling, heating, and laser modes.
 
 #### Implementations
 
-- <span id="airductrequest-new"></span>`fn new(mode: AirductMode, sequence_id: u64) -> Self` — [`AirductMode`](#airductmode)
+- <span id="airductrequest-new"></span>`fn new(mode: AirductMode, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`AirductMode`](#airductmode), [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `set_airduct` request for the given damper mode.
 
@@ -179,7 +179,7 @@ Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
 
 #### Implementations
 
-- <span id="buzzerrequest-new"></span>`fn new(mode_code: i32, sequence_id: u64) -> Self`
+- <span id="buzzerrequest-new"></span>`fn new(mode_code: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `buzzer_ctrl` request for the given alarm mode.
 
@@ -280,11 +280,11 @@ Turns chamber or toolhead LEDs on or off.
 
 #### Implementations
 
-- <span id="ledctrlrequest-new"></span>`fn new(led_node: &str, turn_on: bool, sequence_id: u64) -> Self`
+- <span id="ledctrlrequest-new"></span>`fn new(led_node: &str, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a simple on/off `ledctrl` request for the given fixture.
 
-- <span id="ledctrlrequest-new-flashing"></span>`fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: u64) -> Self`
+- <span id="ledctrlrequest-new-flashing"></span>`fn new_flashing(led_node: &str, on_time: u32, off_time: u32, loop_times: u32, interval_time: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
 
@@ -360,7 +360,7 @@ Enables or disables the printer's notification sounds.
 
 #### Implementations
 
-- <span id="promptsoundrequest-new"></span>`fn new(enable: bool, sequence_id: u64) -> Self`
+- <span id="promptsoundrequest-new"></span>`fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `print_option` request enabling or disabling notification sounds.
 

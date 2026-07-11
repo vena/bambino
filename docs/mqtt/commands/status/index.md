@@ -70,7 +70,7 @@ Queries the printer for its hardware and firmware version info.
 
 #### Implementations
 
-- <span id="getversionrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="getversionrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `get_version` request.
 
@@ -141,7 +141,7 @@ Requests a full state dump from the printer (all telemetry fields at once).
 
 #### Implementations
 
-- <span id="pushallrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="pushallrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds a `pushall` request.
 

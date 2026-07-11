@@ -76,7 +76,7 @@ Sends a raw G-code line to the printer for immediate execution.
 
 #### Implementations
 
-- <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: u64) -> Self`
+- <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Creates a request envelope wrapping a raw G-code payload.
 

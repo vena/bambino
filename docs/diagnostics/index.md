@@ -159,7 +159,7 @@ yourself.
 
 #### Implementations
 
-- <span id="extrusioncaligetrequest-new"></span>`fn new(sequence_id: u64) -> Self`
+- <span id="extrusioncaligetrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid)
 
   Builds an `extrusion_cali_get` request.
 
@@ -234,7 +234,7 @@ database mislinking on the motion board.
 
 #### Implementations
 
-- <span id="extrusioncaliselrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str, sequence_id: u64) -> Self`
+- <span id="extrusioncaliselrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid)
 
   Creates a request payload to bind a stored K-profile calibration entry to an AMS
 
@@ -272,7 +272,7 @@ JSON request wrapper to create or overwrite calibration profile allocations.
 
 #### Implementations
 
-- <span id="extrusioncalisetrequest-new"></span>`fn new(profiles: Vec<KProfileEntry>, sequence_id: u64) -> Result<Self, BambuError>` — [`KProfileEntry`](kprofile/index.md#kprofileentry), [`BambuError`](../error/index.md#bambuerror)
+- <span id="extrusioncalisetrequest-new"></span>`fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, BambuError>` — [`KProfileEntry`](kprofile/index.md#kprofileentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid), [`BambuError`](../error/index.md#bambuerror)
 
   Builds a secure write-transaction payload targeting physical EEPROM slots.
 
@@ -358,7 +358,7 @@ JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [RE
 
 #### Implementations
 
-- <span id="idexcalidelrequest-new"></span>`fn new(target: IdexCaliDelEntry, sequence_id: u64) -> Self` — [`IdexCaliDelEntry`](kprofile/index.md#idexcalidelentry)
+- <span id="idexcalidelrequest-new"></span>`fn new(target: IdexCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`IdexCaliDelEntry`](kprofile/index.md#idexcalidelentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid)
 
   Builds a dual-nozzle carriage deletion transaction keyed on physical coordinates.
 
@@ -544,7 +544,7 @@ JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-D
 
 #### Implementations
 
-- <span id="standardcalidelrequest-new"></span>`fn new(target: StandardCaliDelEntry, sequence_id: u64) -> Result<Self, BambuError>` — [`StandardCaliDelEntry`](kprofile/index.md#standardcalidelentry), [`BambuError`](../error/index.md#bambuerror)
+- <span id="standardcalidelrequest-new"></span>`fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, BambuError>` — [`StandardCaliDelEntry`](kprofile/index.md#standardcalidelentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid), [`BambuError`](../error/index.md#bambuerror)
 
   Builds a single-nozzle deletion transaction keyed on the setting identifier.
 
