@@ -102,23 +102,7 @@ pub async fn run(
                 return Ok(());
             }
 
-            println!("\nDirectory listing: {}\n", remote_path);
-            let mut table = crate::table::Table::new(vec!["Type", "Size", "Modified", "Name"]);
-            for file in &files {
-                let type_str = if file.is_dir { "DIR" } else { "FILE" };
-                let size_str = if file.is_dir {
-                    String::from("-")
-                } else {
-                    format_size(file.size)
-                };
-                let modified_str = format!(
-                    "{:04}-{:02}-{:02} {:02}:{:02}",
-                    file.year, file.month, file.day, file.hour, file.minute
-                );
-                table.add_row(vec![type_str, &size_str, &modified_str, &file.name]);
-            }
-            table.print();
-            println!();
+            print_file_listing_table(&remote_path, &files);
         }
         FilesAction::Upload {
             local_path,
@@ -309,6 +293,45 @@ fn split_duration(duration: time::Duration) -> (i64, i64, i64) {
     let hours = duration.whole_hours() % 24;
     let minutes = duration.whole_minutes() % 60;
     (days, hours, minutes)
+}
+
+/// Renders `files list`'s output table. Factored out of `run()`'s `List` arm to keep that
+/// match readable — see `FilesAction::List`'s `year_is_inferred` handling (BUG-042) for why
+/// this isn't a trivial print loop: every row whose year was inferred (not reported by the
+/// printer) gets marked, since a per-row plausibility threshold can never actually detect
+/// printer clock skew (see `FtpFile::year_is_inferred`'s doc comment).
+fn print_file_listing_table(remote_path: &str, files: &[bambino::ftps::FtpFile]) {
+    println!("\nDirectory listing: {}\n", remote_path);
+    let mut table = crate::table::Table::new(vec!["Type", "Size", "Modified", "Name"]);
+    let mut any_inferred = false;
+    for file in files {
+        let type_str = if file.is_dir { "DIR" } else { "FILE" };
+        let size_str = if file.is_dir {
+            String::from("-")
+        } else {
+            format_size(file.size)
+        };
+        let inferred_marker = if file.year_is_inferred {
+            any_inferred = true;
+            " *"
+        } else {
+            ""
+        };
+        let modified_str = format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}{}",
+            file.year, file.month, file.day, file.hour, file.minute, inferred_marker
+        );
+        table.add_row(vec![type_str, &size_str, &modified_str, &file.name]);
+    }
+    table.print();
+    if any_inferred {
+        println!(
+            "\n* year inferred from host clock, not reported by the printer — its onboard \
+             clock may be unsynced (see BUG-042 in BACKLOG.md); run `files clock-check` to \
+             verify."
+        );
+    }
+    println!();
 }
 
 fn format_size(bytes: u64) -> String {

@@ -796,7 +796,12 @@ Appears at two locations on the wire:
 
 - **`bed_temp`**: `Option<u32>`
 
-  Alternative top-level bed temperature in device envelope.
+  Composite-packed bed temperature mirroring `bed.info.temp`; confirmed redundant, not a fallback.
+  
+  BUG-054: a fixture payload carries the identical value in both fields, and both
+  pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
+  never consult this field either. Parsed for wire-format completeness only —
+  `decode_bed_temperatures()` deliberately does not read it.
 
 #### Trait Implementations
 

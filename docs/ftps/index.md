@@ -126,6 +126,7 @@ struct FtpFile {
     pub day: u8,
     pub hour: u8,
     pub minute: u8,
+    pub year_is_inferred: bool,
 }
 ```
 
@@ -164,6 +165,16 @@ Standardized representation of an entry retrieved from physical printer storage.
 - **`minute`**: `u8`
 
   Clock minute (0 to 59). Default is 0 if listing only provides a calendar year.
+
+- **`year_is_inferred`**: `bool`
+
+  `true` when `year` was inferred from the host's current date (the wire's HH:MM-recent-
+  file format, ambiguous by design — see this function's doc comment), `false` when the
+  wire reported an explicit `YYYY` directly. BUG-042: `year`'s rollover math always lands
+  in `{current_year, current_year - 1}` for an inferred entry by construction, so it can
+  never itself look implausible even when the printer's own clock (the source of the
+  month/day/HH:MM this was inferred from) is wrong — this flag is the only honest signal
+  available without an independent probe like `bambino-cli`'s `files clock-check`.
 
 #### Trait Implementations
 

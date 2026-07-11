@@ -28,6 +28,14 @@ pub struct FtpFile {
     pub hour: u8,
     /// Clock minute (0 to 59). Default is 0 if listing only provides a calendar year.
     pub minute: u8,
+    /// `true` when `year` was inferred from the host's current date (the wire's HH:MM-recent-
+    /// file format, ambiguous by design — see this function's doc comment), `false` when the
+    /// wire reported an explicit `YYYY` directly. BUG-042: `year`'s rollover math always lands
+    /// in `{current_year, current_year - 1}` for an inferred entry by construction, so it can
+    /// never itself look implausible even when the printer's own clock (the source of the
+    /// month/day/HH:MM this was inferred from) is wrong — this flag is the only honest signal
+    /// available without an independent probe like `bambino-cli`'s `files clock-check`.
+    pub year_is_inferred: bool,
 }
 
 /// Converts a 3-letter month abbreviation into a calendar month index.
@@ -141,6 +149,7 @@ pub fn parse_unix_listing(
         let mut hour = 0;
         let mut minute = 0;
         let mut year = current_year;
+        let year_is_inferred = time_or_year.contains(':');
 
         if time_or_year.contains(':') {
             // Field contains HH:MM time layout. Parse temporal properties.
@@ -178,6 +187,7 @@ pub fn parse_unix_listing(
             day,
             hour,
             minute,
+            year_is_inferred,
         });
     }
 
@@ -208,6 +218,7 @@ mod tests {
         assert_eq!(file.day, 17);
         assert_eq!(file.hour, 12);
         assert_eq!(file.minute, 14);
+        assert!(file.year_is_inferred, "HH:MM-format entry must be flagged as inferred");
 
         // Verify standard directory node properties
         let dir = &files[1];
@@ -219,6 +230,10 @@ mod tests {
         assert_eq!(dir.day, 17);
         assert_eq!(dir.hour, 0);
         assert_eq!(dir.minute, 0);
+        assert!(
+            !dir.year_is_inferred,
+            "explicit-YYYY-format entry must not be flagged as inferred"
+        );
     }
 
     #[test]
