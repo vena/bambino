@@ -55,6 +55,8 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
+- <span id="x2quirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
 - <span id="x2quirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
 - <span id="x2quirks-modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../../../camera/index.md#cameraprotocol)

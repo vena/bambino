@@ -57,6 +57,8 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 - <span id="x1cquirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
+- <span id="x1cquirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
 - <span id="x1cquirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
 - <span id="x1cquirks-modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../../../camera/index.md#cameraprotocol)
@@ -98,6 +100,8 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 - <span id="x1equirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
 
 - <span id="x1equirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
+- <span id="x1equirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="x1equirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 

@@ -68,20 +68,20 @@ Whether the returned stream ends up TLS-wrapped (via `EspIdfTlsConnector`) or us
 ### `EspIdfTcpStream`
 
 ```rust
-struct EspIdfTcpStream();
+struct EspIdfTcpStream {
+    // [REDACTED: Private Fields]
+}
 ```
 
 Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 
-The underlying socket is only non-blocking transiently, during `connect()`'s own polling
-loop (see that function's doc comment) — by the time a caller receives an
-`EspIdfTcpStream`, it has always been switched back to blocking mode, matching
-`EspIdfUdpSocket`'s approach of using `std::net::*` directly rather than inventing async
-socket polling for every raw transport. Reads/writes below therefore block the calling
-task/thread until data is available/sent, same as any other blocking
-`std::net::TcpStream` use, unless `EspIdfTlsConnector::connect` flips the socket back to
-non-blocking right before handing it to `EspTls::adopt()` (see that function) —
-plaintext callers never trigger that path.
+BUG-031: the underlying socket stays non-blocking for the stream's entire lifetime (not
+just during `connect()`'s own polling loop) — `read()`/`write()` below retry on
+`WouldBlock` by yielding to the async executor via `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`,
+the same pattern `EspTlsStream` already uses. A genuinely blocking socket here would give a
+stalled peer (network partition, printer reboot) no `.await` yield point for any outer
+timeout/cancellation to preempt, indefinitely parking the FreeRTOS task — exactly the hazard
+`connect()`'s own non-blocking dial already fixes one layer up.
 
 Wraps `Option<TcpStream>` rather than `TcpStream` directly so `Socket::release()` can
 `.take()` the stream and hand its fd to `IntoRawFd::into_raw_fd()` — `esp_tls_conn_destroy`

@@ -253,6 +253,10 @@ this evaluator returns `None` strictly when both conditions are met. If `power_o
 is `false` but the parsed bitmask is non-zero, this represents a valid offline state
 and is processed normally.
 
+**AMS-HT units (IDs 128-135) don't participate in `tray_exist_bits` at all**
+(per `reference/05_materials_ams.md` §5.1) — this function returns `None` for that
+range rather than guessing, so callers must consult the tray's `state` field instead.
+
 ### `resolve_global_tray_id`
 
 ```rust

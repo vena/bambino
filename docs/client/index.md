@@ -239,6 +239,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns whether the MQTT session is currently established.
 
+- <span id="superprinterclient-attach-mqtt"></span>`fn attach_mqtt(&mut self, mqtt: BambuMqttClient<<MqttTls as >::Stream>)` — [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), [`TlsConnector`](../io/index.md#tlsconnector)
+
+  Injects a pre-connected [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient) directly.
+
+- <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+
+  Disconnects the MQTT session, if one exists, and clears it from the client.
+
 - <span id="superprinterclient-with-timer"></span>`fn with_timer<NewTimer: TimerProvider>(self, timer: NewTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, NewTimer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`PrinterClient`](#printerclient)
 
   Sets a [`TimerProvider`](../io/index.md#timerprovider) for wall-clock command-response timeouts.

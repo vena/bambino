@@ -1800,6 +1800,12 @@ top-level domains depending on which micro-system published the frame.
 
   Returns the `DeviceTelemetry` sub-object, checking both wire locations it can arrive at.
 
+- <span id="telemetryreport-fun"></span>`fn fun(&self) -> Option<&str>`
+
+  Returns the `fun` Developer LAN Mode bitmask, checking both wire locations it can
+
+  arrive at.
+
 #### Trait Implementations
 
 ##### `impl Clone for TelemetryReport`

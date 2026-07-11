@@ -145,6 +145,10 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 #### Provided Methods 
 
+- `fn door_sensor_field_present(&self, _telemetry: &PrinterTelemetry) -> bool`
+
+  Returns true if `telemetry` carries the specific wire field this model's
+
 - `fn is_unsafe_homing_command(&self, gcode: &str) -> bool`
 
   Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].

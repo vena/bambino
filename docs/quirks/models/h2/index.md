@@ -66,6 +66,8 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 
 - <span id="h2cquirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
+- <span id="h2cquirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
 - <span id="h2cquirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
 - <span id="h2cquirks-modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../../../camera/index.md#cameraprotocol)
@@ -113,6 +115,8 @@ Quirks for the H2D Pro — same kinematics as H2D.
 - <span id="h2dproquirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
 
 - <span id="h2dproquirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
+- <span id="h2dproquirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="h2dproquirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
@@ -162,6 +166,8 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 - <span id="h2dquirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
+- <span id="h2dquirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
 - <span id="h2dquirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
 - <span id="h2dquirks-modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../../../camera/index.md#cameraprotocol)
@@ -209,6 +215,8 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 - <span id="h2squirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
 
 - <span id="h2squirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+
+- <span id="h2squirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="h2squirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 

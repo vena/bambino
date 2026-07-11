@@ -19,6 +19,7 @@ external spools [REF-AMS-USEAMS].
 | [`MaterialSource`](#materialsource) | enum | Enumeration of possible physical feed locations for loaded spools. |
 | [`build_ams_mapping`](#build-ams-mapping) | fn | Builds the flat `ams_mapping` integer array from raw project allocations. |
 | [`build_ams_mapping2`](#build-ams-mapping2) | fn | Builds the structured `ams_mapping2` object array from raw project allocations. |
+| [`flat_channel_id_for_entry`](#flat-channel-id-for-entry) | fn | Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to. |
 | [`validate_external_spool_safety`](#validate-external-spool-safety) | fn | Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle. |
 | [`validate_external_spool_safety_flat`](#validate-external-spool-safety-flat) | fn | Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`. |
 
@@ -181,6 +182,22 @@ Builds the structured `ams_mapping2` object array from raw project allocations.
 
 Symmetrical to `build_ams_mapping`, this array provides detailed physical unit routing
 parameters to ensure correct material transitions on multi-AMS and IDEX platforms.
+
+### `flat_channel_id_for_entry`
+
+```rust
+fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32
+```
+
+**Types:** [`AmsMapping2Entry`](#amsmapping2entry)
+
+Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to.
+
+Inverse of `MaterialSource::flat_channel_id`, operating on the already-structured
+`ams_id`/`slot_id` pair instead of a `MaterialSource` — used by
+`ProjectFileRequest::from_config` (`mqtt/commands/print_job.rs`) to derive `ams_mapping`
+from `ams_mapping2` when the caller only supplied the latter via
+`PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
 
 ### `validate_external_spool_safety`
 
