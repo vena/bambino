@@ -14,6 +14,19 @@ use crate::io::AsyncIo;
 /// message fits, logging a `log::warn!` for each eviction.
 pub(crate) const MQTT_PENDING_BUFFER_MAX_BYTES: usize = 2_097_152; // 2 MiB
 
+// BUG-052: `push_pending`'s eviction loop stops once the buffer is empty (see its `while`
+// guard below) and unconditionally pushes the incoming message regardless of whether it fit
+// — so a single message whose own size exceeds the cap slips through unenforced. That's
+// currently unreachable only by convention: `MQTT_MAX_PAYLOAD_BYTES` (frame.rs) plus the
+// worst-case MQTT topic length (`u16::MAX`, the wire format's topic-length field width) must
+// stay under this cap, and nothing linked the two constants together until this assertion.
+const _: () = assert!(
+    super::frame::MQTT_MAX_PAYLOAD_BYTES + u16::MAX as usize <= MQTT_PENDING_BUFFER_MAX_BYTES,
+    "a single MQTT message's worst-case size (MQTT_MAX_PAYLOAD_BYTES + max topic length) must \
+     fit under MQTT_PENDING_BUFFER_MAX_BYTES, or push_pending's eviction loop can never evict \
+     enough to bring the buffer back under the cap"
+);
+
 impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// Combined topic+payload byte size accounted for a single buffered message.
     /// Shared by `push_pending()` (accounting on insert/evict) and `poll_telemetry()`

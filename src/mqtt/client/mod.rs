@@ -434,13 +434,25 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                         payload.len()
                     );
 
-                    // QoS 1 requires PUBACK; QoS 2 would require PUBREC (unsupported)
+                    // QoS 1 requires PUBACK; QoS 2 requires a PUBREC/PUBREL/PUBCOMP handshake,
+                    // which this client doesn't implement (BUG-052) — Bambu printers never
+                    // publish above QoS 1 in practice, so this stays a logged, non-fatal gap
+                    // rather than a full protocol extension for a case never observed against
+                    // real hardware. A broker that did send genuine QoS 2 would see no PUBREC
+                    // and may retransmit with DUP set.
                     if qos == 1 {
                         let id = packet_id.expect("QoS 1 always has packet_id");
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         let ack = encode_puback(id);
                         write_frame(&mut self.stream, &ack).await?;
+                    } else if qos >= 2 {
+                        log::warn!(
+                            "Received QoS {} PUBLISH (packet_id: {:?}) — QoS 2 handshake \
+                             (PUBREC/PUBREL/PUBCOMP) is not implemented; broker may retransmit",
+                            qos,
+                            packet_id
+                        );
                     }
 
                     // Reset write channel zombie tracking since a telemetry update was received

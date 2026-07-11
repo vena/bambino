@@ -219,10 +219,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 15 — mqtt/client/
-**src/mqtt/client/pending.rs:38-58** — `push_pending`'s eviction loop can't enforce `MQTT_PENDING_BUFFER_MAX_BYTES` against a single message that already exceeds the cap on its own — currently unreachable since `MQTT_MAX_PAYLOAD_BYTES` (1 MiB) is smaller than the pending cap (2 MiB), but that relationship is enforced only by convention across two separate constants in two files, with no static assertion linking them.
-**src/mqtt/client/mod.rs:374-433** — QoS 2 (and reserved QoS 3) PUBLISH frames are parsed like QoS 1 but never acknowledged (no PUBREC handshake) — low risk since the client only ever subscribes at QoS 1, but an unhandled protocol case with no error surfaced.
-
 ### Unit 16 — mqtt/commands/
 **src/mqtt/commands/mod.rs:47-49** — Task-ID clamping is enforced only by convention (every constructor manually calling `clamp_task_id`), not by the type system or a shared code path — the exact shape that produced BUG-001. All 22 current call sites clamp correctly, but nothing prevents a future 23rd constructor from skipping it undetected by the existing regression test (which only covers 2 of the 22 constructors).
 
