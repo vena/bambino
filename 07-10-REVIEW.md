@@ -219,11 +219,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 14 — io/ embedded
-**src/io/embassy.rs:70, 82** — `EmbassyUdpSocket::send_to`/`recv_from` collapse every underlying error into `SocketError::ConnectionReset`, discarding the actual failure mode — same collapsing-error-at-an-FFI-boundary pattern this crate has previously fixed elsewhere (`map_esp_tls_connect_error`).
-**src/io/embassy.rs:292-295** — `EmbassyRawStreamFactory::dial` collapses every `TcpClient::connect` failure (including pool exhaustion) into `SocketError::ConnectionRefused`, potentially misrouting retry/backoff decisions that key off `TimedOut` vs `ConnectionRefused`.
-**src/io/esp_idf.rs:491, 648** — A fresh `EspIdfTimer` (and its own `EspTimerService`) is allocated per dial/handshake phase rather than shared across a connect sequence; could contend for ESP-IDF's `esp_timer` slot cap under connection-heavy workloads (e.g. FTPS opening a fresh data channel per transfer). Unverified without real hardware.
-
 ### Unit 15 — mqtt/client/
 **src/mqtt/client/pending.rs:38-58** — `push_pending`'s eviction loop can't enforce `MQTT_PENDING_BUFFER_MAX_BYTES` against a single message that already exceeds the cap on its own — currently unreachable since `MQTT_MAX_PAYLOAD_BYTES` (1 MiB) is smaller than the pending cap (2 MiB), but that relationship is enforced only by convention across two separate constants in two files, with no static assertion linking them.
 **src/mqtt/client/mod.rs:374-433** — QoS 2 (and reserved QoS 3) PUBLISH frames are parsed like QoS 1 but never acknowledged (no PUBREC handshake) — low risk since the client only ever subscribes at QoS 1, but an unhandled protocol case with no error surfaced.

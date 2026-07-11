@@ -67,7 +67,17 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
         self.inner
             .send_to(buf, endpoint)
             .await
-            .map_err(|_| SocketError::ConnectionReset)?;
+            // BUG-049: preserve the specific embassy-net failure mode instead of collapsing
+            // every `SendError` variant to `ConnectionReset` — `NoRoute` has no matching
+            // `SocketError` variant (kept as `Other`, honest rather than a wrong-shaped
+            // guess); `SocketNotBound`/`PacketTooLarge` map to existing variants that fit.
+            .map_err(|e| match e {
+                ::embassy_net::udp::SendError::NoRoute => {
+                    SocketError::Other("embassy UDP send: no route to host".into())
+                }
+                ::embassy_net::udp::SendError::SocketNotBound => SocketError::NotConnected,
+                ::embassy_net::udp::SendError::PacketTooLarge => SocketError::InvalidInput,
+            })?;
         Ok(buf.len())
     }
 
@@ -79,7 +89,12 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
             .inner
             .recv_from(buf)
             .await
-            .map_err(|_| SocketError::ConnectionReset)?;
+            // BUG-049: `RecvError` currently has one variant (`Truncated` — buffer too small
+            // for the received datagram), no matching `SocketError` variant exists, so this
+            // stays `Other` rather than the misleading `ConnectionReset` it was before.
+            .map_err(|_| {
+                SocketError::Other("embassy UDP recv: buffer too small for received datagram".into())
+            })?;
 
         // Under embassy-net 0.9.1, UdpMetadata wraps its IpEndpoint target inside the
         // `endpoint` field. `smoltcp::wire::IpEndpoint` converts directly to
@@ -292,6 +307,11 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
         self.client
             .connect(addr)
             .await
-            .map_err(|_| SocketError::ConnectionRefused)
+            // BUG-050: `embassy_net::tcp::client`'s `TcpConnect::Error` (`tcp::Error`) has a
+            // single variant, `ConnectionReset` — used for both a genuine remote RST and pool
+            // exhaustion (`TcpConnection::new` on an empty pool). Mapping it to
+            // `ConnectionRefused` fabricated a distinction the source type doesn't make, which
+            // could misroute `SocketError`-keyed retry/backoff decisions.
+            .map_err(|_| SocketError::ConnectionReset)
     }
 }
