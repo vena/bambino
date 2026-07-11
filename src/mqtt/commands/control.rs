@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
-use super::clamp_task_id;
+use super::ClampedTaskId;
 
 /// General control payload used for pause, resume, stop, and clean actions.
 #[derive(Debug, Clone, Serialize)]
@@ -27,11 +27,11 @@ pub struct StandardControlRequest {
 
 impl StandardControlRequest {
     /// Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
-    pub fn new(command: &str, sequence_id: u64) -> Self {
+    pub fn new(command: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: StandardControlPayload {
                 command: String::from(command),
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -57,12 +57,12 @@ pub struct SkipObjectsRequest {
 
 impl SkipObjectsRequest {
     /// Builds a `skip_objects` request from a list of object indices to skip.
-    pub fn new(object_indices: Vec<u32>, sequence_id: u64) -> Self {
+    pub fn new(object_indices: Vec<u32>, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: SkipObjectsPayload {
                 command: "skip_objects",
                 obj_list: object_indices,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -86,11 +86,11 @@ pub struct CleanPrintErrorRequest {
 
 impl CleanPrintErrorRequest {
     /// Builds a `clean_print_error` request.
-    pub fn new(sequence_id: u64) -> Self {
+    pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: CleanPrintErrorPayload {
                 command: "clean_print_error",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -116,12 +116,12 @@ pub struct CalibrationRequest {
 
 impl CalibrationRequest {
     /// Builds a `calibration` request from a capability option bitmask.
-    pub fn new(option_bitmask: u32, sequence_id: u64) -> Self {
+    pub fn new(option_bitmask: u32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: CalibrationPayload {
                 command: "calibration",
                 option: option_bitmask,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -151,12 +151,12 @@ pub struct PrintSpeedRequest {
 
 impl PrintSpeedRequest {
     /// Builds a `print_speed` request from a stringified speed index.
-    pub fn new(speed_index_str: &str, sequence_id: u64) -> Self {
+    pub fn new(speed_index_str: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: PrintSpeedPayload {
                 command: "print_speed",
                 param: String::from(speed_index_str),
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }

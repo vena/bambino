@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 use crate::error::BambuError;
-use crate::mqtt::commands::clamp_task_id;
+use crate::mqtt::commands::ClampedTaskId;
 
 /// Validates whether a provided calibration profile setting ID complies with EEPROM limits.
 ///
@@ -104,11 +104,11 @@ impl ExtrusionCaliGetRequest {
     /// Builds an `extrusion_cali_get` request.
     /// Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
     /// documented above.
-    pub fn new(sequence_id: u64) -> Self {
+    pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: ExtrusionCaliGetPayload {
                 command: "extrusion_cali_get",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -167,7 +167,7 @@ impl ExtrusionCaliSetRequest {
     ///
     /// Verifies that all target profiles carry valid setting identifiers to protect local
     /// database health. Supports multi-profile writes for IDEX platforms.
-    pub fn new(profiles: Vec<KProfileEntry>, sequence_id: u64) -> Result<Self, BambuError> {
+    pub fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, BambuError> {
         for profile in &profiles {
             if !validate_setting_id(&profile.setting_id) {
                 return Err(BambuError::ProtocolViolation(
@@ -181,7 +181,7 @@ impl ExtrusionCaliSetRequest {
             print: ExtrusionCaliSetPayload {
                 command: "extrusion_cali_set",
                 filaments: profiles,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         })
     }
@@ -243,7 +243,7 @@ impl ExtrusionCaliSelRequest {
         cali_idx: i32,
         filament_id: &str,
         nozzle_diameter: &str,
-        sequence_id: u64,
+        sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
             print: ExtrusionCaliSelPayload {
@@ -253,7 +253,7 @@ impl ExtrusionCaliSelRequest {
                 cali_idx,
                 filament_id: String::from(filament_id),
                 nozzle_diameter: String::from(nozzle_diameter),
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -309,7 +309,7 @@ pub struct StandardCaliDelRequest {
 
 impl StandardCaliDelRequest {
     /// Builds a single-nozzle deletion transaction keyed on the setting identifier.
-    pub fn new(target: StandardCaliDelEntry, sequence_id: u64) -> Result<Self, BambuError> {
+    pub fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, BambuError> {
         if !validate_setting_id(&target.setting_id) {
             return Err(BambuError::ProtocolViolation(
                 "Setting ID violates the strict 19-character numeric calibration boundary rule"
@@ -321,7 +321,7 @@ impl StandardCaliDelRequest {
             print: StandardCaliDelPayload {
                 command: "extrusion_cali_del",
                 filaments: vec![target],
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         })
     }
@@ -347,12 +347,12 @@ pub struct IdexCaliDelRequest {
 
 impl IdexCaliDelRequest {
     /// Builds a dual-nozzle carriage deletion transaction keyed on physical coordinates.
-    pub fn new(target: IdexCaliDelEntry, sequence_id: u64) -> Self {
+    pub fn new(target: IdexCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: IdexCaliDelPayload {
                 command: "extrusion_cali_del",
                 filaments: vec![target],
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }

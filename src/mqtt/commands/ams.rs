@@ -7,7 +7,7 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
-use super::clamp_task_id;
+use super::ClampedTaskId;
 
 /// Overwrites physical attributes or custom slicer presets assigned to a specific tray.
 #[derive(Debug, Clone, Serialize)]
@@ -72,7 +72,7 @@ impl AmsFilamentSettingRequest {
         color_hex: &str,
         temp_min: u32,
         temp_max: u32,
-        sequence_id: u64,
+        sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         let tray_sub_brands = match sub_brands {
             Some(s) => String::from(s),
@@ -81,7 +81,7 @@ impl AmsFilamentSettingRequest {
         Self {
             print: AmsFilamentSettingPayload {
                 command: "ams_filament_setting",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
                 ams_id,
                 tray_id,
                 tray_info_idx: String::from(preset_code),
@@ -115,12 +115,12 @@ pub struct AmsControlRequest {
 
 impl AmsControlRequest {
     /// Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
-    pub fn new(operation: &str, sequence_id: u64) -> Self {
+    pub fn new(operation: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AmsControlPayload {
                 command: "ams_control",
                 param: String::from(operation),
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -148,13 +148,13 @@ pub struct AmsGetRfidRequest {
 
 impl AmsGetRfidRequest {
     /// Builds an `ams_get_rfid` request.
-    pub fn new(ams_id: i32, slot_id: i32, sequence_id: u64) -> Self {
+    pub fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AmsGetRfidPayload {
                 command: "ams_get_rfid",
                 ams_id,
                 slot_id,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -194,7 +194,7 @@ impl AmsChangeFilamentRequest {
         target: i32,
         curr_temp: i32,
         tar_temp: i32,
-        sequence_id: u64,
+        sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
             print: AmsChangeFilamentPayload {
@@ -204,7 +204,7 @@ impl AmsChangeFilamentRequest {
                 target,
                 curr_temp,
                 tar_temp,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -247,7 +247,7 @@ impl AmsFilamentDryingRequest {
         dry_time: u32,
         rotate_tray: bool,
         filament: &str,
-        sequence_id: u64,
+        sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
             print: AmsFilamentDryingPayload {
@@ -258,7 +258,7 @@ impl AmsFilamentDryingRequest {
                 dry_time,
                 rotate_tray,
                 filament: String::from(filament),
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }

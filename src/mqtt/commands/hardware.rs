@@ -5,7 +5,7 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
-use super::clamp_task_id;
+use super::ClampedTaskId;
 
 /// Chamber illumination and toolhead LED control configurations.
 #[derive(Debug, Clone, Serialize)]
@@ -37,11 +37,11 @@ pub struct LedCtrlRequest {
 
 impl LedCtrlRequest {
     /// Builds a simple on/off `ledctrl` request for the given fixture.
-    pub fn new(led_node: &str, turn_on: bool, sequence_id: u64) -> Self {
+    pub fn new(led_node: &str, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             system: LedCtrlPayload {
                 command: "ledctrl",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
                 led_node: String::from(led_node),
                 led_mode: String::from(if turn_on { "on" } else { "off" }),
                 led_on_time: 0,
@@ -59,12 +59,12 @@ impl LedCtrlRequest {
         off_time: u32,
         loop_times: u32,
         interval_time: u32,
-        sequence_id: u64,
+        sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
             system: LedCtrlPayload {
                 command: "ledctrl",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
                 led_node: String::from(led_node),
                 led_mode: String::from("flashing"),
                 led_on_time: on_time,
@@ -114,13 +114,13 @@ pub struct AirductRequest {
 
 impl AirductRequest {
     /// Builds a `set_airduct` request for the given damper mode.
-    pub fn new(mode: AirductMode, sequence_id: u64) -> Self {
+    pub fn new(mode: AirductMode, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AirductPayload {
                 command: "set_airduct",
                 mode_id: mode as i32,
                 submode: -1,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -146,12 +146,12 @@ pub struct PromptSoundRequest {
 
 impl PromptSoundRequest {
     /// Builds a `print_option` request enabling or disabling notification sounds.
-    pub fn new(enable: bool, sequence_id: u64) -> Self {
+    pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: PromptSoundPayload {
                 command: "print_option",
                 sound_enable: enable,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }
@@ -179,13 +179,13 @@ pub struct BuzzerRequest {
 
 impl BuzzerRequest {
     /// Builds a `buzzer_ctrl` request for the given alarm mode.
-    pub fn new(mode_code: i32, sequence_id: u64) -> Self {
+    pub fn new(mode_code: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: BuzzerPayload {
                 command: "buzzer_ctrl",
                 mode: mode_code,
                 reason: "",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }

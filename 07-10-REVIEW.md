@@ -219,9 +219,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 16 — mqtt/commands/
-**src/mqtt/commands/mod.rs:47-49** — Task-ID clamping is enforced only by convention (every constructor manually calling `clamp_task_id`), not by the type system or a shared code path — the exact shape that produced BUG-001. All 22 current call sites clamp correctly, but nothing prevents a future 23rd constructor from skipping it undetected by the existing regression test (which only covers 2 of the 22 constructors).
-
 ### Unit 18 — types/telemetry model
 **src/types/telemetry/device.rs:45** — `DeviceTelemetry.bed_temp: Option<u32>` is parsed off the wire but never consulted by any decode path (`decode_bed_temperatures()` only reads `device.bed.info.temp`). A fixture shows both fields carrying the identical value in one payload, suggesting it may be an intentional fallback source that was never wired up — or intentionally-unused reserved data. Reference doc doesn't mention this field either way.
 

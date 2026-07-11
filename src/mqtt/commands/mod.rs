@@ -48,6 +48,32 @@ pub fn clamp_task_id(raw_id: u64) -> u32 {
     (raw_id % TASK_ID_MAX) as u32
 }
 
+/// A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId),
+/// which always clamps.
+///
+/// BUG-001 (a constructor that called `clamp_task_id()` on every field except one) and BUG-053
+/// (24 constructors across 7 files each independently remembering to call `clamp_task_id()`,
+/// with a regression test that only ever exercised 2 of them) were both instances of the same
+/// gap: the clamping invariant was enforced by convention, not the type system, so a future
+/// constructor could silently skip it. Every command constructor now takes `impl
+/// Into<ClampedTaskId>` for its `sequence_id` parameter instead of a raw `u64` — since the only
+/// way to produce a `ClampedTaskId` is through the clamping `From<u64>` impl below, skipping
+/// the clamp is no longer possible to write, not just discouraged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClampedTaskId(u32);
+
+impl From<u64> for ClampedTaskId {
+    fn from(raw_id: u64) -> Self {
+        Self(clamp_task_id(raw_id))
+    }
+}
+
+impl core::fmt::Display for ClampedTaskId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

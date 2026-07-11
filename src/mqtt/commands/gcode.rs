@@ -5,7 +5,7 @@ use alloc::string::{String, ToString};
 
 use serde::Serialize;
 
-use super::clamp_task_id;
+use super::ClampedTaskId;
 
 /// Queues raw G-code strings directly to the printer's motion execution controller.
 ///
@@ -33,7 +33,7 @@ impl GCodeRequest {
     ///
     /// **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
     /// to ensure the physical controller's stream parser identifies the end-of-command boundary.
-    pub fn new(gcode_line: &str, sequence_id: u64) -> Self {
+    pub fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
         let mut param = String::from(gcode_line);
         if !param.ends_with('\n') {
             param.push('\n');
@@ -42,7 +42,7 @@ impl GCodeRequest {
             print: GCodePayload {
                 command: "gcode_line",
                 param,
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
             },
         }
     }

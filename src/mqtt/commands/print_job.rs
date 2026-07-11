@@ -13,7 +13,7 @@ use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
 use crate::ams::{validate_external_spool_safety, validate_external_spool_safety_flat};
 use crate::models::BambuModel;
 
-use super::clamp_task_id;
+use super::{ClampedTaskId, clamp_task_id};
 
 /// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 ///
@@ -204,7 +204,11 @@ impl ProjectFileRequest {
     /// serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
     /// to treat the value as the physical carriage index (Target nozzle 1) instead of material
     /// routing parameters.
-    pub fn from_config(config: &PrintJobConfig, sequence_id: u64, model: BambuModel) -> Self {
+    pub fn from_config(
+        config: &PrintJobConfig,
+        sequence_id: impl Into<ClampedTaskId>,
+        model: BambuModel,
+    ) -> Self {
         let url = format!("ftp://{}", config.job_filename);
 
         let is_single_nozzle = model.quirks().physical_nozzle_count() == 1;
@@ -235,7 +239,7 @@ impl ProjectFileRequest {
         Self {
             print: ProjectFilePayload {
                 command: "project_file",
-                sequence_id: clamp_task_id(sequence_id).to_string(),
+                sequence_id: sequence_id.into().to_string(),
                 param: config.plate_gcode_path.clone(),
                 subtask_name: config.subtask_name.clone(),
                 subtask_id: clamp_task_id(config.raw_subtask_id).to_string(),
