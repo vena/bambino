@@ -213,8 +213,6 @@ This is a full-crate deep code review of **bambino**, a multi-platform async Rus
 
 Findings below look real but couldn't be fully verified by the reviewing agent — no `BUG-ID` assigned yet; flagged here for manual triage.
 
-### Unit 1 — ams/
-**src/ams/mapping.rs:166-175** — `validate_external_spool_safety`'s "external/unmapped" detection only matches `ams_id == AMS_EXTERNAL_SPOOL_ALT_ID` (255), never `AMS_EXTERNAL_SPOOL_ID` (254) — asymmetric with its own doc-claimed flat-array equivalent, `validate_external_spool_safety_flat`, which treats both uniformly. Likely unreachable today (254 is IDEX-only per the reference doc, and nothing structurally prevents a caller mismatch between `is_single_nozzle` and the `mapping2` slice), but if it ever triggers, this safety interlock (preventing printer error `07FF_8012`) would silently fail to force `use_ams=false`.
 
 ### Unit 2 — camera/
 **src/camera/binary.rs:238-253** — An oversized-frame `ProtocolViolation` resets `read_state` to `Idle` without draining the declared `size` payload bytes still pending on the wire, permanently desyncing the stream for any caller that retries on the same instance instead of reconnecting (contrast with the JPEG-marker-validation failure path, which is safe because the payload was already consumed).

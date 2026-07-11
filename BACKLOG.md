@@ -53,6 +53,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-036 | Sev3 | types/telemetry/mod.rs | `decode_nozzle_temperatures()` has zero test coverage | 2026-07-10 | 2026-07-10 | src/types/telemetry/tests.rs — added tests for all three branches (composite `device.extruder.info`, single-nozzle flat fallback, IDEX swapped-fallback quirk) |
 | BUG-037 | Sev3 | types/telemetry/report.rs | `is_220v_power()` has zero test coverage despite gating a safety ceiling | 2026-07-10 | 2026-07-10 | src/types/telemetry/tests.rs — added `test_is_220v_power_from_home_flag` (set/clear/missing), mirroring `test_door_open_from_home_flag` |
 | BUG-038 | Sev3 | tests/common/mock_ftps.rs | `read_cmd`'s single read can't detect a `write_command` framing regression | 2026-07-10 | 2026-07-10 | tests/common/mock_ftps.rs — documented that `read_cmd` isn't a safety net for this invariant (tokio duplex coalesces split writes before it's ever polled); the real guard is `protocol.rs`'s `WriteRecorder`-based unit test |
+| BUG-039 | Sev2 | ams/mapping.rs | `validate_external_spool_safety`'s external-spool check misses `ams_id` 254 | 2026-07-10 | 2026-07-10 | src/ams/mapping.rs:184-196 — `is_external` now checks `ams_id` 254 or 255 (was 255 only); `AmsMapping2Entry`'s fields are public so a caller can hand-build a 254 entry on single-nozzle, previously leaving `use_ams:true` on a non-physical channel — reproduces the `07FF_8012` lockup class; found while manually triaging `07-10-REVIEW.md`'s Plausible Findings (Unit 1) |
 
 ## Wontfix
 

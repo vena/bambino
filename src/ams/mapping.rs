@@ -185,7 +185,15 @@ pub fn validate_external_spool_safety(
     for entry in mapping2 {
         let is_unmapped =
             entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID && entry.slot_id == AMS_EXTERNAL_SPOOL_ALT_ID;
-        let is_external = entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID && entry.slot_id == 0;
+        // Checks both external-spool IDs (254 and 255), matching validate_external_spool_safety_flat's
+        // uniform treatment — AmsMapping2Entry's fields are public, so a caller can hand-build
+        // an entry with ams_id 254 (normally IDEX-only, via MaterialSource::ExternalSpoolLeft)
+        // on a single-nozzle printer; checking only 255 here let that case slip through and
+        // dispatch use_ams:true for a non-physical channel, reproducing the 07FF_8012 lockup
+        // this function exists to prevent.
+        let is_external = (entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID
+            || entry.ams_id == AMS_EXTERNAL_SPOOL_ID)
+            && entry.slot_id == 0;
         if !is_unmapped && !is_external {
             has_physical_ams = true;
             break;
@@ -304,6 +312,20 @@ mod tests {
         ];
         let use_ams_ok = validate_external_spool_safety(true, &mapping_with_ams);
         assert!(use_ams_ok);
+    }
+
+    #[test]
+    fn test_validate_external_spool_safety_single_nozzle_ams_id_254() {
+        // ams_id 254 (AMS_EXTERNAL_SPOOL_ID) is normally only produced by
+        // MaterialSource::ExternalSpoolLeft on IDEX builds, but AmsMapping2Entry's fields are
+        // public — a caller can hand-build one with 254 on a single-nozzle printer too. Must be
+        // treated as external the same as 255, or use_ams would stay true for a non-physical
+        // channel and reproduce the 07FF_8012 firmware lockup this function exists to prevent.
+        let mapping_all_external = vec![AmsMapping2Entry {
+            ams_id: 254,
+            slot_id: 0,
+        }];
+        assert!(!validate_external_spool_safety(true, &mapping_all_external));
     }
 
     #[test]
