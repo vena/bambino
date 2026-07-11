@@ -215,8 +215,6 @@ Findings below look real but couldn't be fully verified by the reviewing agent �
 
 
 
-### Unit 3 — bin/bambino-cli core
-**src/bin/bambino-cli/storage.rs:40-49** — `current_date_utc()` feeds `list_directory`'s year-rollover disambiguation with UTC time; if the printer's `LIST` mtimes are actually in local (non-UTC) time, a timezone offset near a year boundary could flip a recently-modified file's inferred year. Reference doc doesn't specify which convention the printer uses.
 
 ### Unit 4 — bin/bambino-cli control/probe/monitor
 **src/bin/bambino-cli/monitor/mod.rs:52-58** — `TerminalGuard::enter()` enables raw mode before constructing the guard; if the subsequent alt-screen/cursor-hide write fails, `Drop` never runs and the terminal is left stuck in raw mode.

@@ -33,6 +33,11 @@ pub enum FilesAction {
     },
     /// Remove a file from the remote filesystem path
     Delete { remote_path: String },
+    /// Uploads a tiny probe file, diffs its printer-reported mtime against host wall-clock
+    /// time, then deletes it — checks whether the printer's onboard clock is usably accurate
+    /// (LAN-mode NTP sync is unreliable; needs-verification for the TZ convention this feeds
+    /// into `list_directory`'s year-rollover math [BUG-042] hinges on having a synced clock).
+    ClockCheck,
     /// Query available MicroSD card capacity
     Space,
 }
@@ -153,6 +158,9 @@ pub async fn run(
             client.delete_file(&remote_path).await?;
             println!("Success: Target file successfully removed.");
         }
+        FilesAction::ClockCheck => {
+            run_clock_check(client).await?;
+        }
         FilesAction::Space => {
             println!("Querying hardware storage space evaluations...");
             let space_bytes = client.get_available_space().await?;
@@ -168,6 +176,134 @@ pub async fn run(
 
     client.disconnect().await;
     Ok(())
+}
+
+/// Uploads a tiny probe file, diffs its printer-reported mtime against host UTC wall-clock
+/// time, then deletes it. Factored out of `run()`'s `ClockCheck` arm to keep that match
+/// readable — see `FilesAction::ClockCheck`'s doc comment for why this exists (BUG-042:
+/// LAN-mode NTP sync is unreliable, so `list_directory`'s year-rollover math can't be trusted
+/// without checking the printer's clock first).
+async fn run_clock_check<RawIO, Tls, Factory, FtpsTimer>(
+    client: &mut bambino::ftps::BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>,
+) -> Result<(), BambuError>
+where
+    RawIO: bambino::io::AsyncIo,
+    Tls: bambino::io::TlsConnector<RawIO>,
+    Factory: bambino::io::RawStreamFactory<RawIO>,
+    FtpsTimer: bambino::io::TimerProvider,
+{
+    const PROBE_PATH: &str = "/bambino_clock_probe.txt";
+    let payload = b"bambino clock probe";
+
+    println!("Uploading clock probe file to '{}'...", PROBE_PATH);
+    let before = time::OffsetDateTime::now_utc();
+    client.upload_file(PROBE_PATH, payload).await?;
+    let after = time::OffsetDateTime::now_utc();
+
+    let (year, month, day, hour, min) = current_date_utc();
+    let listing = client.list_directory("/", year, month, day, hour, min).await;
+
+    // Always attempt cleanup, even if the listing failed — don't leave the probe file behind
+    // on the printer's storage.
+    let delete_result = client.delete_file(PROBE_PATH).await;
+
+    let files = listing?;
+    let probe = files.iter().find(|f| f.name == "bambino_clock_probe.txt");
+
+    println!("\nHost UTC time before upload : {}", format_utc(before));
+    println!("Host UTC time after upload   : {}", format_utc(after));
+
+    match probe {
+        Some(f) => {
+            println!(
+                "Printer-reported mtime       : {:04}-{:02}-{:02} {:02}:{:02}",
+                f.year, f.month, f.day, f.hour, f.minute
+            );
+            report_clock_delta(after, f.year, f.month, f.day, f.hour, f.minute);
+        }
+        None => println!(
+            "\nCould not locate the probe file in the directory listing — upload may have \
+             failed, or the listing raced the SD card flush."
+        ),
+    }
+
+    delete_result?;
+    println!("\nProbe file removed.");
+    Ok(())
+}
+
+/// Prints the delta between `after` (host UTC at upload completion) and the printer's
+/// reported mtime, plus a warning if it exceeds a day (see `run_clock_check`).
+fn report_clock_delta(
+    after: time::OffsetDateTime,
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+) {
+    let Some(printer_dt) = printer_mtime_as_utc(year, month, day, hour, minute) else {
+        println!("\nCould not interpret the printer-reported mtime as a valid date.");
+        return;
+    };
+    let delta = after - printer_dt;
+    let (days, hours, minutes) = split_duration(delta);
+    println!(
+        "\nDelta (host UTC - printer)   : {} day(s), {} hour(s), {} minute(s) {}",
+        days.abs(),
+        hours.abs(),
+        minutes.abs(),
+        if delta.is_negative() {
+            "behind host"
+        } else {
+            "ahead of host"
+        }
+    );
+    if days.abs() > 0 {
+        println!(
+            "Printer clock is off by more than a day — its onboard clock is not usably \
+             synced (see BUG-042 in BACKLOG.md); don't trust `list_directory`'s inferred \
+             year near a calendar boundary."
+        );
+    }
+}
+
+/// Formats an `OffsetDateTime` as `YYYY-MM-DD HH:MM:SS UTC` for `run_clock_check`'s output.
+fn format_utc(dt: time::OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+        dt.year(),
+        dt.month() as u8,
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second()
+    )
+}
+
+/// Interprets a `list_directory`-reported `(year, month, day, hour, minute)` tuple as a UTC
+/// `OffsetDateTime`, returning `None` if the components don't form a valid calendar date
+/// (e.g. an out-of-range month from a malformed/corrupted `LIST` reply).
+fn printer_mtime_as_utc(
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+) -> Option<time::OffsetDateTime> {
+    let month = time::Month::try_from(month).ok()?;
+    let date = time::Date::from_calendar_date(year, month, day).ok()?;
+    let time = time::Time::from_hms(hour, minute, 0).ok()?;
+    Some(date.with_time(time).assume_utc())
+}
+
+/// Splits a `time::Duration` into whole days/hours/minutes components (each signed, matching
+/// the sign of `duration`) for `run_clock_check`'s human-readable delta report.
+fn split_duration(duration: time::Duration) -> (i64, i64, i64) {
+    let days = duration.whole_days();
+    let hours = duration.whole_hours() % 24;
+    let minutes = duration.whole_minutes() % 60;
+    (days, hours, minutes)
 }
 
 fn format_size(bytes: u64) -> String {

@@ -10,6 +10,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
+| BUG-042 | needs-verification | bin/bambino-cli/storage.rs | `list_directory`'s year-rollover math assumes host UTC ≈ printer clock; unverified whether printer's raw `LIST` mtimes are UTC or local | 2026-07-10 | src/bin/bambino-cli/storage.rs:40-49 → `07-10-REVIEW.md` Plausible Findings (Unit 3). Live-tested against a real P1S (2026-07-10/11): its onboard clock is ~5 months stale (not NTP-synced in LAN mode), so no hours-scale TZ offset could be isolated — need a printer with an NTP-synced clock, tested near a real year boundary. `files clock-check` subcommand added (upload/list/delete a probe file, diff mtimes) so this can be re-tested once available. |
 
 ## Fixed
 

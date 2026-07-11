@@ -50,7 +50,7 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   gcode-raw prompts for interactive confirmation unless --unsafe is
                   passed, and bypasses all model safety checks — see its --help.
                   ams (dry | dry-stop)
-Files actions:    list  upload  delete  space
+Files actions:    list  upload  delete  space  clock-check
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests"
 )]
