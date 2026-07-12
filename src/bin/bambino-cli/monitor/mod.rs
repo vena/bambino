@@ -33,12 +33,27 @@ pub async fn dump(
 
     if follow {
         eprintln!("Following telemetry pushes as NDJSON — Ctrl+C to stop.");
+
+        // BUG-092: MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
+        // the broker resets the connection once that elapses with no packet from the client.
+        // Mirrors run()'s PING_TICK_SECS/ping_timer below.
+        const PING_TICK_SECS: u64 = 15;
+        let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
+        ping_timer.tick().await;
+
         loop {
-            let msg = printer.poll_raw().await?;
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
-                && v.get("print").is_some()
-            {
-                println!("{}", serde_json::to_string(&v).unwrap_or_default());
+            tokio::select! {
+                res = printer.poll_raw() => {
+                    let msg = res?;
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+                        && v.get("print").is_some()
+                    {
+                        println!("{}", serde_json::to_string(&v).unwrap_or_default());
+                    }
+                }
+                _ = ping_timer.tick() => {
+                    printer.send_ping().await?;
+                }
             }
         }
     }
