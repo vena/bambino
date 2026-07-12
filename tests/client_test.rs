@@ -801,6 +801,9 @@ async fn test_start_print_wire_payload() {
         assert_eq!(json["print"]["layer_inspect"], true);
         // P1S: single nozzle → nozzle_offset_cali defaults to 0
         assert_eq!(json["print"]["nozzle_offset_cali"], 0);
+        // BUG-059: PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
+        // default), which from_config() serializes as extrude_cali_flag: 1.
+        assert_eq!(json["print"]["extrude_cali_flag"], 1);
     });
 
     let mqtt_client =
