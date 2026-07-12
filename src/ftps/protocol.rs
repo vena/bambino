@@ -27,6 +27,18 @@ pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
 pub(crate) const FTPS_PASV_PORT_MULTIPLIER: u16 = 256;
 pub(crate) const FTP_MAX_RESPONSE_LINE_BYTES: usize = 4096;
 pub(crate) const FTP_MAX_RESPONSE_LINES: usize = 100;
+/// Reply-code prefix width in an FTP response line (e.g. `"200"`, `"550"`) — RFC 959 §4.2.
+pub(crate) const FTP_REPLY_CODE_LEN: usize = 3;
+/// Byte offset immediately after the reply code, where the separator (`' '` or `'-'`) sits.
+pub(crate) const FTP_REPLY_SEPARATOR_OFFSET: usize = FTP_REPLY_CODE_LEN;
+/// Byte offset where the reply text begins, after the code and its separator.
+pub(crate) const FTP_REPLY_TEXT_OFFSET: usize = FTP_REPLY_CODE_LEN + 1;
+/// Exclusive upper bound of the ASCII control-character range (space, `0x20`) rejected by
+/// `validate_ftp_path` — anything below this is a control character.
+pub(crate) const FTP_PATH_CONTROL_CHAR_MAX: u8 = 0x20;
+/// The DEL control character (`0x7F`), rejected by `validate_ftp_path` alongside the
+/// low control-character range above it.
+pub(crate) const FTP_PATH_DEL_CHAR: u8 = 0x7F;
 /// Size of each buffered socket read `read_line_raw` issues while scanning for `\n`.
 /// Control responses are short ASCII text, so this comfortably holds several lines per read while
 /// staying well under `FTP_MAX_RESPONSE_LINE_BYTES`.
@@ -234,14 +246,14 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
             // No header established yet — this line must establish one (single-line reply,
             // or the opening line of a multi-line reply). A line that can't be parsed as
             // such is skipped rather than treated as body text, matching the prior behavior.
-            if line_buf.len() < 4 {
+            if line_buf.len() < FTP_REPLY_TEXT_OFFSET {
                 log::debug!(
                     "skipping malformed FTP response line ({} bytes)",
                     line_buf.len()
                 );
                 continue;
             }
-            let code_str = match core::str::from_utf8(&line_buf[0..3]) {
+            let code_str = match core::str::from_utf8(&line_buf[0..FTP_REPLY_CODE_LEN]) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -249,14 +261,14 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            let separator = line_buf[3];
+            let separator = line_buf[FTP_REPLY_SEPARATOR_OFFSET];
 
             if separator == b' ' {
-                let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
                 return Ok((code, text.to_string()));
             } else if separator == b'-' {
                 header_code = Some(code);
-                let line_text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                let line_text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
                 accumulated.push_str(line_text);
             } else {
                 // BUG-062: a header line whose 4th byte is neither ' ' nor '-' (e.g. "200\r\n",
@@ -276,8 +288,8 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
         // stripped like the header line's. Anything else (wrong code, or plain free text with
         // no code prefix at all) is body content appended verbatim, per RFC 959 §4.2's warning
         // that intermediate lines aren't required to carry any code prefix.
-        let prefix_code = if line_buf.len() >= 4 {
-            core::str::from_utf8(&line_buf[0..3])
+        let prefix_code = if line_buf.len() >= FTP_REPLY_TEXT_OFFSET {
+            core::str::from_utf8(&line_buf[0..FTP_REPLY_CODE_LEN])
                 .ok()
                 .and_then(|s| s.parse::<u16>().ok())
                 .filter(|c| *c == code)
@@ -285,9 +297,9 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
             None
         };
 
-        match (prefix_code, line_buf.get(3)) {
+        match (prefix_code, line_buf.get(FTP_REPLY_SEPARATOR_OFFSET)) {
             (Some(_), Some(b' ')) => {
-                let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
                 if !text.is_empty() {
                     accumulated.push('\n');
                     accumulated.push_str(text);
@@ -295,7 +307,7 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
                 return Ok((code, accumulated));
             }
             (Some(_), Some(b'-')) => {
-                let text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
+                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
                 accumulated.push('\n');
                 accumulated.push_str(text);
             }
@@ -365,7 +377,7 @@ pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
     // Covers CR/LF/NUL (the original command-injection hazard this function guards
     // against) plus every other C0 control byte and DEL — non-CR/LF control characters can
     // smuggle ANSI escapes into a filename a caller later prints/logs.
-    if path.bytes().any(|b| b < 0x20 || b == 0x7F) {
+    if path.bytes().any(|b| b < FTP_PATH_CONTROL_CHAR_MAX || b == FTP_PATH_DEL_CHAR) {
         return Err(BambuError::ProtocolViolation(
             "FTP path contains an illegal control character".into(),
         ));
