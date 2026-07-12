@@ -32,6 +32,31 @@ impl<W: Write> Write for RawWriter<W> {
     }
 }
 
+/// Recursively merges `incoming` into `target`: object keys merge key-by-key, everything else
+/// (arrays, scalars, a type change) is replaced wholesale.
+///
+/// BUG-090: Bambu MQTT pushes are incremental — a push may update one sub-field of a nested
+/// object (e.g. `print.ams.tray_now`) without resending the rest of that object (e.g.
+/// `print.ams.ams`, the actual AMS unit/tray array). A flat `state.insert(key, value)` per
+/// top-level key treated every nested object as an atomic value, so a partial `ams` push wiped
+/// out the previously-accumulated `ams` array, hiding the whole AMS section on the dashboard
+/// until the next full push resent it.
+fn deep_merge(target: &mut serde_json::Value, incoming: &serde_json::Value) {
+    match (target, incoming) {
+        (serde_json::Value::Object(target_map), serde_json::Value::Object(incoming_map)) => {
+            for (key, value) in incoming_map {
+                deep_merge(
+                    target_map.entry(key.clone()).or_insert(serde_json::Value::Null),
+                    value,
+                );
+            }
+        }
+        (target, incoming) => {
+            *target = incoming.clone();
+        }
+    }
+}
+
 /// Merges a partial telemetry update into accumulated state and redraws the dashboard.
 pub(super) fn render_dashboard(
     payload: &[u8],
@@ -44,13 +69,21 @@ pub(super) fn render_dashboard(
 
     if let Some(serde_json::Value::Object(print_obj)) = v.get("print") {
         for (key, value) in print_obj {
-            state.insert(key.clone(), value.clone());
+            deep_merge(
+                state.entry(key.clone()).or_insert(serde_json::Value::Null),
+                value,
+            );
         }
         had_update = true;
     }
 
     if let Some(device_obj) = v.get("device") {
-        state.insert("_device".to_string(), device_obj.clone());
+        deep_merge(
+            state
+                .entry("_device".to_string())
+                .or_insert(serde_json::Value::Null),
+            device_obj,
+        );
         had_update = true;
     }
 
@@ -536,6 +569,41 @@ fn format_color_swatch(hex_color: &str) -> String {
     format!("\x1B[48;2;{};{};{}m  \x1B[0m", r, g, b)
 }
 
+
+#[cfg(test)]
+mod deep_merge_tests {
+    use super::deep_merge;
+
+    #[test]
+    fn test_deep_merge_preserves_sibling_object_keys() {
+        // BUG-090: a partial `ams` push (only `tray_now` changed) must not wipe the
+        // previously-accumulated `ams` array sitting alongside it in the same object.
+        let mut target = serde_json::json!({
+            "ams": { "ams": [{"id": "0"}], "tray_now": "0" }
+        });
+        let incoming = serde_json::json!({ "ams": { "tray_now": "1" } });
+        deep_merge(&mut target, &incoming);
+        assert_eq!(target["ams"]["ams"], serde_json::json!([{"id": "0"}]));
+        assert_eq!(target["ams"]["tray_now"], "1");
+    }
+
+    #[test]
+    fn test_deep_merge_replaces_arrays_wholesale() {
+        // A resent array is authoritative — element-wise merging would be wrong here.
+        let mut target = serde_json::json!({ "hms": [1, 2, 3] });
+        let incoming = serde_json::json!({ "hms": [4] });
+        deep_merge(&mut target, &incoming);
+        assert_eq!(target["hms"], serde_json::json!([4]));
+    }
+
+    #[test]
+    fn test_deep_merge_adds_new_keys() {
+        let mut target = serde_json::json!({ "a": 1 });
+        let incoming = serde_json::json!({ "b": 2 });
+        deep_merge(&mut target, &incoming);
+        assert_eq!(target, serde_json::json!({ "a": 1, "b": 2 }));
+    }
+}
 #[cfg(test)]
 mod format_color_swatch_tests {
     use super::format_color_swatch;
