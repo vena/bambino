@@ -99,7 +99,7 @@ pub trait ModelQuirks {
 
     /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
     fn z_max(&self) -> f32 {
-        256.0
+        DEFAULT_Z_MAX_MM
     }
 
     /// Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
@@ -268,6 +268,9 @@ pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> S
 }
 
 pub(crate) const FAN_STEP_MAX: u8 = 15;
+/// Default `z_max()` (mm) for models without a documented Z-travel ceiling of their own —
+/// used by every bed-slinger (P1/A1 series) and the base X1C/X1E/X2D/H2S CoreXY chassis size.
+pub(crate) const DEFAULT_Z_MAX_MM: f32 = 256.0;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
 
 /// Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
