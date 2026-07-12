@@ -527,6 +527,22 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   `None` means no telemetry carrying `print.ams` has been observed yet.
 
+- <span id="superprinterclient-sanitized-ams"></span>`fn sanitized_ams(&self) -> Option<AmsStatusReport>` — [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport)
+
+  Returns a cloned copy of the cached AMS status report with every tray's stale material
+
+  fields cleared via [`clean_stale_tray_data`](../ams/parser/index.md#clean-stale-tray-data)
+
+  (mirrors [`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache-decode-on-access
+
+  shape). `None` under the same condition as [`ams()`](Self::ams) — no telemetry carrying
+
+  `print.ams` observed yet. Does not mutate the underlying cache — [`ams()`](Self::ams)
+
+  keeps returning the raw values; see its doc comment for why the raw cache is never
+
+  proactively scrubbed.
+
 - <span id="superprinterclient-vt-tray"></span>`fn vt_tray(&self) -> Option<&VirtualTray>` — [`VirtualTray`](../types/telemetry/ams/index.md#virtualtray)
 
   Returns the cached virtual/external spool holder state (single-nozzle models) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

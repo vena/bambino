@@ -2575,6 +2575,63 @@ async fn test_hms_cache_and_active_alerts() {
 }
 
 #[tokio::test]
+async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // A tray in state 9 (empty) that still carries stale material fields from a
+        // previously loaded spool — the exact case `ams()`'s doc comment says stays raw
+        // and `sanitized_ams()` scrubs.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5705,
+            br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25.0","humidity":"3","tray":[{"id":"0","state":9,"tray_type":"PLA","tray_color":"FF0000FF","remain":42}]}]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert!(client.ams().is_none());
+    assert!(client.sanitized_ams().is_none());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse AMS report");
+
+    let raw_tray = &client.ams().unwrap().ams[0].tray.as_ref().unwrap()[0];
+    assert_eq!(
+        raw_tray.tray_type.as_deref(),
+        Some("PLA"),
+        "ams() must stay raw — stale material fields are never proactively scrubbed"
+    );
+    assert_eq!(raw_tray.remain, Some(42));
+
+    let sanitized = client.sanitized_ams().unwrap();
+    let sanitized_tray = &sanitized.ams[0].tray.as_ref().unwrap()[0];
+    assert_eq!(
+        sanitized_tray.tray_type, None,
+        "sanitized_ams() must clear stale material fields for an empty-state tray"
+    );
+    assert_eq!(sanitized_tray.remain, Some(-1));
+
+    // Confirm sanitized_ams() didn't mutate the cache it read from.
+    let raw_tray_again = &client.ams().unwrap().ams[0].tray.as_ref().unwrap()[0];
+    assert_eq!(raw_tray_again.tray_type.as_deref(), Some("PLA"));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_fan_speed_cache_from_telemetry() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");

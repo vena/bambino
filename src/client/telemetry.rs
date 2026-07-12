@@ -5,6 +5,7 @@ use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::ams::clean_stale_tray_data;
 use crate::diagnostics::{
     DecodedHmsAlert, DecodedPrintError, decode_hms_alert, decode_print_error,
 };
@@ -301,8 +302,48 @@ where
 
     /// Returns the cached AMS/tray status report as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// `None` means no telemetry carrying `print.ams` has been observed yet.
+    ///
+    /// This is the **raw** merged cache — every field independently keeps its most recently
+    /// observed value ([`AmsStatusReport::merge_from`](crate::types::telemetry::ams::AmsStatusReport)-level
+    /// detail), but stale per-tray material fields (`tray_type`, `tray_color`, `remain`, etc.)
+    /// are **not** proactively cleared when a slot empties — confirmed against BambuStudio's
+    /// own `DevFilaSystem.cpp`, whose structural equivalent (`DevAmsTray::reset()`) is dead
+    /// code with zero call sites in its own current codebase; the shipped BambuStudio/
+    /// OrcaSlicer UI instead gates every read of a tray's material fields on
+    /// `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::get_state()` here) and
+    /// never scrubs the raw cache. This crate mirrors that design rather than
+    /// [`clean_stale_tray_data`]'s proactive-clearing
+    /// approach: wiring proactive clearing into this cache would make it *less* faithful to
+    /// on-wire state than BambuStudio's own model. Two opt-in ways to get sanitized output
+    /// without losing that raw fidelity:
+    /// - Check [`AmsTray::get_state()`](crate::types::AmsTray::get_state) (or
+    ///   [`evaluate_spool_presence`](crate::ams::evaluate_spool_presence)) before trusting a
+    ///   tray's material fields — the same check-before-trust contract BambuStudio itself
+    ///   relies on.
+    /// - Call [`sanitized_ams()`](Self::sanitized_ams) for a cloned, scrubbed copy — mirrors
+    ///   [`hms()`](Self::hms)/[`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache +
+    ///   opt-in-decoded accessor split.
     pub fn ams(&self) -> Option<&AmsStatusReport> {
         self.cache.last_ams.as_ref()
+    }
+
+    /// Returns a cloned copy of the cached AMS status report with every tray's stale material
+    /// fields cleared via [`clean_stale_tray_data`]
+    /// (mirrors [`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache-decode-on-access
+    /// shape). `None` under the same condition as [`ams()`](Self::ams) — no telemetry carrying
+    /// `print.ams` observed yet. Does not mutate the underlying cache — [`ams()`](Self::ams)
+    /// keeps returning the raw values; see its doc comment for why the raw cache is never
+    /// proactively scrubbed.
+    pub fn sanitized_ams(&self) -> Option<AmsStatusReport> {
+        let mut sanitized = self.cache.last_ams.clone()?;
+        for unit in &mut sanitized.ams {
+            if let Some(trays) = &mut unit.tray {
+                for tray in trays {
+                    clean_stale_tray_data(tray);
+                }
+            }
+        }
+        Some(sanitized)
     }
 
     /// Returns the cached virtual/external spool holder state (single-nozzle models) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
