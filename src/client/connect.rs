@@ -248,6 +248,15 @@ where
         NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
         NewFtpsTimer: TimerProvider,
     {
+        // BUG-072: `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host
+        // config was ever supplied), which would otherwise fail opaquely at actual FTPS
+        // connect time — panic here instead, at the builder call site, with a clear message
+        // pointing at the real cause.
+        assert!(
+            !self.ip.is_empty() && !self.access_code.is_empty(),
+            "with_ftps() requires a real ip/access_code — this PrinterClient was built via \
+             from_mqtt(), which leaves both empty; use .attach_storage() instead"
+        );
         PrinterClient {
             mqtt: self.mqtt,
             ftps: None,
@@ -448,6 +457,13 @@ where
         NewCameraTls: TlsConnector<NewCameraRawIO>,
         NewCameraFactory: RawStreamFactory<NewCameraRawIO>,
     {
+        // BUG-072: same guard as with_ftps() — from_mqtt()-constructed clients have empty
+        // ip/access_code, which would otherwise fail opaquely at actual camera connect time.
+        assert!(
+            !self.ip.is_empty() && !self.access_code.is_empty(),
+            "with_camera() requires a real ip/access_code — this PrinterClient was built via \
+             from_mqtt(), which leaves both empty; use .attach_camera() instead"
+        );
         PrinterClient {
             mqtt: self.mqtt,
             ftps: self.ftps,

@@ -2976,3 +2976,27 @@ async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
         "MQTT TLS connect must use the serial, not the IP, as SNI/identity"
     );
 }
+
+/// BUG-072: `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host config
+/// was ever supplied) — calling `.with_ftps()` on one used to silently succeed and only fail
+/// opaquely at actual FTPS connect time. Must now panic immediately at the builder call site.
+#[tokio::test]
+#[should_panic(expected = "with_ftps() requires a real ip/access_code")]
+async fn test_with_ftps_panics_on_from_mqtt_client() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    let _ = client.with_ftps(
+        bambino::client::dummy::DummyTls,
+        bambino::client::dummy::DummyFactory,
+        bambino::client::dummy::DummyTimer,
+    );
+
+    broker_task.await.expect("mock broker task panicked");
+}
