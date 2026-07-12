@@ -89,23 +89,56 @@ functions ever applied to it.
 
 This means BUG-012 and BUG-083 (both real, tested fixes to
 `clean_stale_tray_data`'s logic) currently have **zero effect on what a
-consumer of this crate actually observes** through `client.ams()` — the
-function they fixed is correct, but nothing in the library calls it. Same
-for `evaluate_spool_presence`: correct logic, never invoked internally.
+consumer of this crate actually observes** through `client.ams()` — nothing
+in the library calls the function they fixed. Note the deliberate wording:
+"fixed", not "correct" — a fix commit landing, and being tested, doesn't
+retroactively certify the underlying *design* as right forever, especially
+once new evidence surfaces that wasn't available when the fix landed. Both
+BUG-012 and BUG-083 were verified against pybambu/bambuddy only; BambuStudio
+wasn't consulted for either at the time, because this crate's BambuStudio
+cross-referencing only started this session (BUG-095 onward). **Re-verify
+`clean_stale_tray_data`'s own clearing logic against BambuStudio now that
+it's available as a source, don't just carry the "already fixed" status
+forward unexamined.**
 
-**This may be intentional design, not a bug** — worth taking seriously
-before assuming it needs fixing. Evidence for that reading, found while
-re-checking `ParseAmsTrayInfo` for Finding 1: BambuStudio's own tray
-parser has **no state-driven clearing branch at all**. It runs
-`DevJsonValParser::ParseVal` for `tray_color`/`remain`/etc. unconditionally
-regardless of `curr_tray`'s state — meaning BambuStudio's own internal
-cache *also* keeps stale material-field data around after a tray goes
-empty, and apparently expects **its own consumers** (the Studio UI) to
-check tray state before trusting those fields, rather than proactively
-scrubbing them at parse time. If that reading holds, bambino's existing
-design — raw merged cache via `merge_from`, plus a separate
-consumer-invokable `clean_stale_tray_data` utility for callers who want a
-scrubbed view — isn't a gap relative to BambuStudio, it's the same shape.
+Evidence gathered *this session*, after BUG-012/083 landed, cuts more
+sharply than "no clearing branch" suggests — go further than re-reading
+`ParseAmsTrayInfo`:
+- `DevAmsTray::reset()` (`DevFilaSystem.cpp:50`) exists and clears every
+  material field (`color`, `m_fila_type`, `weight`, `remain`, etc.) to
+  empty/zero — the direct structural analog of
+  `clean_stale_tray_data`. Grepping the *entire* BambuStudio source tree for
+  any call site (`tray.reset()`, `tray->reset()`, `Tray...reset()`) finds
+  **zero** — it's dead code in BambuStudio's own current codebase, same
+  shape as the finding for `clean_stale_tray_data` in bambino.
+- What BambuStudio's UI actually does instead, confirmed by grepping real
+  call sites (`AMSDryControl.cpp`, `AmsMappingPopupUpdate.cpp`,
+  `DevFilaBlackList.cpp`, `DevMapping.cpp`, the web filament manager):
+  every one of them gates on `tray->is_exists` (derived from
+  `tray_exist_bits`, `DevFilaSystem.cpp:833`) or
+  `tray->is_tray_info_ready()` (`color`/`m_fila_type` both non-empty,
+  `DevFilaSystem.cpp:77-83`) **before** trusting any material field. This
+  is a real, actively-used, multi-call-site pattern — not incidental
+  architecture. The design is: keep stale fields in the raw cache
+  indefinitely, gate *consumption* on a presence check, never proactively
+  scrub.
+- Bambino already has both BambuStudio-equivalent tools available:
+  `AmsTray::get_state()` (defaults to `AMS_TRAY_STATE_EMPTY` when `None`)
+  and `evaluate_spool_presence` (`tray_exist_bits`-driven). The open
+  question this reframes isn't just "is `clean_stale_tray_data` wired in,"
+  it's **"is `clean_stale_tray_data`'s proactive-clearing model even the
+  right design, given the officially-shipped client doesn't do that and
+  instead relies entirely on check-before-trust?"** Re-examine BUG-012 and
+  BUG-083's original fixes with this framing — it's possible the *correct*
+  fix all along was "consumers must check `state == 9/10` before trusting
+  material fields" (which bambino already supports via `get_state()`) and
+  `clean_stale_tray_data` is solving a problem BambuStudio's own design
+  shows doesn't need solving this way. It's also possible
+  `clean_stale_tray_data`'s proactive model is still the better choice for
+  a library (vs. a GUI app) precisely *because* it doesn't require every
+  consumer to remember the check-before-trust discipline. Don't assume
+  either answer — investigate and decide, and say which, with reasons, in
+  whatever commit resolves this.
 
 There's also a direct precedent already in this crate for exactly this
 raw-vs-decoded accessor split: `hms()` returns the raw cached `HmsEntry`
@@ -119,19 +152,24 @@ mutable cache (which would make bambino's cache *less* faithful to
 BambuStudio's own internal state than it is today) or leaving the
 disconnect completely undocumented.
 
-**Decide first:** is Finding 2 a real gap needing a code fix (a new
-sanitized accessor, `hms()`/`active_hms_alerts()`-shaped), or a
-documentation gap only (state plainly, in `ams()`'s doc comment and
-`README.md`, that `client.ams()` is raw and `clean_stale_tray_data`/
-`evaluate_spool_presence` are opt-in consumer utilities)? Either is
-defensible from the evidence gathered so far; this document doesn't pick
-for you because the call depends on re-verifying the "no state-driven
-clearing in BambuStudio's parse layer" claim yourself first, and on how
-this crate's maintainer wants to weigh "match BambuStudio's raw-cache
-shape" against "give consumers a working sanitized accessor out of the
-box." If undecided after investigating, ask rather than guessing quietly —
-this is exactly the kind of judgment call `.claude/skills/backlog/SKILL.md`
-rule 7 says to surface, not resolve silently.
+**Decide first, and this is now a two-part decision, not one:**
+1. Is `clean_stale_tray_data`'s proactive-clearing *design* still the right
+   one, given BambuStudio ships check-before-trust instead and its own
+   `reset()` equivalent is dead code? Re-verify against BambuStudio
+   yourself (don't trust this document's summary), and be willing to
+   conclude BUG-012/BUG-083 need revisiting, not just re-invoking as-is.
+2. Given whatever (1) concludes, is the result a real gap needing a code
+   fix (a new sanitized accessor, `hms()`/`active_hms_alerts()`-shaped, or
+   a documented check-before-trust contract using `get_state()`/
+   `evaluate_spool_presence`), or a documentation gap only (state plainly,
+   in `ams()`'s doc comment and `README.md`, what the actual contract is)?
+
+Multiple outcomes are defensible from the evidence gathered so far — this
+document doesn't pick for you, because the call depends on your own
+re-verification, not on repeating what's written here. If undecided after
+investigating, ask rather than guessing quietly — this is exactly the kind
+of judgment call `.claude/skills/backlog/SKILL.md` rule 7 says to surface,
+not resolve silently.
 
 ### Explicitly out of scope for this plan
 
@@ -144,10 +182,6 @@ rule 7 says to surface, not resolve silently.
   race) with no analog in bambino, which is a headless client library with
   no local optimistic-write cache to protect. Do not port this — flagging
   it so it isn't mistaken for an overlooked field during the audit.
-- Any change to `clean_stale_tray_data`'s own clearing *logic* — BUG-012 and
-  BUG-083 already fixed that function's internal correctness. This plan is
-  about whether/how it gets *invoked*, not about its own state-driven rules
-  a second time.
 - `BedTelemetry`/`CtcTelemetry`/`ExtToolTelemetry`/etc. — all already fixed
   this session (BUG-095/096/097/101), not in scope here.
 
