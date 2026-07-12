@@ -89,8 +89,14 @@ pub fn evaluate_spool_presence(
 /// 10 (`AMS_TRAY_STATE_SPOOL_NOT_FED`) meaning a spool is physically present but not yet fed to
 /// the extruder, both treated as absent-equivalent for stale-data cleansing (BUG-012, verified
 /// against pybambu/Bambuddy — see `AMS_TRAY_STATE_SPOOL_NOT_FED`'s doc comment) — and clears all
-/// stale config keys if either applies. It treats an empty `tray_type` string as an explicit
-/// clearing signal too.
+/// stale config keys if either applies. Treats an explicit empty `tray_type` string as a
+/// clearing signal too — but an *absent* `tray_type` (the common incremental-update case,
+/// e.g. a `state: 11` update that simply doesn't repeat `tray_type`) is not, by itself, a
+/// clearing signal (BUG-083). Confirmed against `reference/05_materials_ams.md`'s
+/// Bambuddy cross-check (`on_ams_change`'s `loaded = cur_state == 11 or (cur_state not in
+/// (9, 10) and cur_type.strip())`): state 11 is unconditionally treated as loaded regardless
+/// of whether `tray_type` was repeated in that update, so clearing on absence alone would
+/// wipe a currently-printing tray's material data.
 pub fn clean_stale_tray_data(tray: &mut AmsTray) {
     let is_absent_state = matches!(
         tray.state,
@@ -104,7 +110,7 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
         .tray_type
         .as_ref()
         .map(|t| t.is_empty() || t == "Empty")
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     if is_absent_state || is_type_cleared {
         // Enforce clean state representation by resetting optional keys
@@ -465,5 +471,26 @@ mod tests {
 
         assert_eq!(tray.state, Some(AMS_TRAY_STATE_EMPTY));
         assert_eq!(tray.remain, Some(-1));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_state_11_loaded_with_absent_type_not_cleared() {
+        // BUG-083: state 11 (Loaded) with an omitted tray_type (common in incremental
+        // updates) must NOT be treated as a clearing signal — confirmed against
+        // reference/05_materials_ams.md's Bambuddy cross-check (state 11 is
+        // unconditionally "loaded" regardless of tray_type).
+        let mut tray = AmsTray {
+            id: "0".into(),
+            state: Some(11),
+            tray_type: None,
+            tray_color: Some("FF0000FF".into()),
+            remain: Some(85),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray);
+
+        assert_eq!(tray.tray_color, Some("FF0000FF".into()));
+        assert_eq!(tray.remain, Some(85));
     }
 }
