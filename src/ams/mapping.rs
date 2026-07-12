@@ -174,6 +174,14 @@ pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
     for (id, source) in allocations {
         if *id > 0 && *id <= max_id {
             mapping[*id - 1] = source.flat_channel_id();
+        } else {
+            // BUG-070: filament_id is documented as 1-based (1 to N) — id == 0 (or > max_id,
+            // unreachable since max_id is derived from this same slice) is a caller bug, not a
+            // legitimately-skippable entry. Silently dropping it previously left that project
+            // slot permanently unmapped with no operator-visible signal.
+            log::warn!(
+                "build_ams_mapping: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
+            );
         }
     }
     mapping
@@ -199,6 +207,11 @@ pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMap
     for (id, source) in allocations {
         if *id > 0 && *id <= max_id {
             mapping2[*id - 1] = source.to_mapping2_entry();
+        } else {
+            // BUG-070: same reasoning as build_ams_mapping's else arm.
+            log::warn!(
+                "build_ams_mapping2: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
+            );
         }
     }
     mapping2
