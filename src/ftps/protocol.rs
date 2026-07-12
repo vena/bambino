@@ -377,10 +377,13 @@ pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
     }
     // Some FTP daemons interpret a leading-dash filename as a flag argument. Only the final
     // segment matters here — a leading-dash directory component earlier in the path is not
-    // the same hazard.
+    // the same hazard. BUG-075: `.next_back()` alone returns `""` for a trailing-slash path
+    // (e.g. "/cache/-dir/"), silently skipping the check on that dash-prefixed final directory
+    // component — filter out empty trailing segments first so the real final segment is checked.
     if path
         .split(['/', '\\'])
-        .next_back()
+        .rev()
+        .find(|segment| !segment.is_empty())
         .is_some_and(|segment| segment.starts_with('-'))
     {
         return Err(BambuError::ProtocolViolation(
@@ -895,6 +898,12 @@ mod tests {
         ));
         // A leading-dash directory component earlier in the path is not the same hazard.
         assert!(validate_ftp_path("/-oddly-named-dir/file.3mf").is_ok());
+        // BUG-075: a trailing slash made `.next_back()` return "" (the empty segment after
+        // the slash), silently skipping the check on the actual dash-prefixed final directory.
+        assert!(matches!(
+            validate_ftp_path("/cache/-dir/"),
+            Err(BambuError::ProtocolViolation(_))
+        ));
     }
 
     #[test]

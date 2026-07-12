@@ -20,7 +20,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-072 | Sev3 | client/mod.rs | `from_mqtt()` hardcodes empty `ip`/`access_code` with no compile-time block on later `.with_ftps()`/`.with_camera()`, which then fail opaquely | 2026-07-11 | See `07-11-REVIEW.md` §6 |
 | BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | See `07-11-REVIEW.md` §7 |
 | BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | See `07-11-REVIEW.md` §7 |
-| BUG-075 | Sev3 | ftps/protocol.rs | `validate_ftp_path`'s leading-dash check returns `""` via `next_back()` on a trailing-slash path, missing a dash-prefixed final directory component | 2026-07-11 | See `07-11-REVIEW.md` §12 |
 | BUG-076 | Sev3 | io/esp_idf.rs | 3 more `EspIdfTimer::new()` sites (UDP pacing, TCP connect, TLS connect timers) discard the real `EspError` with no `log::debug!`, same shape as BUG-064 | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-077 | Sev3 | io/esp_idf.rs | `EspIdfTlsConnector::with_connect_timeout(Duration::ZERO)` fails immediately instead of disabling the timeout, same class as already-fixed BUG-007 | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearms the 10s write-zombie timer on every call regardless of already-in-flight commands | 2026-07-11 | See `07-11-REVIEW.md` §15 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-059 | Sev3 | tests/client_test.rs | No test asserted the `extrude_cali_flag` wire field | 2026-07-11 | 2026-07-11 | tests/client_test.rs:806 — `test_start_print_wire_payload` now asserts `extrude_cali_flag: 1`, matching `PrintJobConfig::new()`'s README-documented `run_flow_calibration: true` default |
 | BUG-061 | Sev3 | ftps/parser.rs | `parse_unix_listing` didn't range-validate `day`/`hour`/`minute` | 2026-07-11 | 2026-07-11 | src/ftps/parser.rs:144-171 — `day` now rejected outside `1..=31`, `hour`/`minute` outside `0..=23`/`0..=59` (skipping the entry, matching the file's existing silent-skip convention), unlike `month`'s already-validated lookup table |
 | BUG-062 | Sev3 | ftps/protocol.rs | `read_response`'s header-establishing branch silently dropped a non-conformant reply line | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:254-268 — a header line whose 4th byte is neither `' '` nor `'-'` (e.g. `"200\r\n"`, code immediately followed by CRLF) now returns a terminal reply with empty text instead of falling through to `continue` and being silently discarded |
+| BUG-075 | Sev3 | ftps/protocol.rs | `validate_ftp_path`'s leading-dash check missed a trailing-slash path | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:381-386 — `.next_back()` alone returned `""` for a trailing-slash path (e.g. `/cache/-dir/`), silently skipping the check; now `.rev().find(|s| !s.is_empty())` finds the real final segment first |
 
 ## Wontfix
 
