@@ -5,14 +5,17 @@
 //! variable-width column padding and embeds robust temporal rollover heuristics.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 /// Standardized representation of an entry retrieved from physical printer storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtpFile {
-    /// The parsed file or directory name, preserving single spaces between words.
+    /// The parsed file or directory name, exactly as reported by the raw `LIST` line
+    /// (BUG-088) — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
+    /// and rejoining with a single space, so internal runs of multiple consecutive spaces
+    /// round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
     pub name: String,
     /// Identifies directory nodes versus standard data payloads.
     pub is_dir: bool,
@@ -57,13 +60,31 @@ fn parse_month(month: &str) -> Option<u8> {
     }
 }
 
+/// Splits the next whitespace-delimited token off the front of `s`, returning
+/// `(token, remainder)`. Unlike `str::split_whitespace()`, callers retain a real `&str`
+/// slice into the original string at every step, so the untouched tail (e.g. everything
+/// after the Nth column) can be sliced out verbatim — preserving any internal multi-space
+/// runs — instead of losing that spacing by re-tokenizing and rejoining with `.join(" ")`
+/// (BUG-088).
+fn next_token(s: &str) -> Option<(&str, &str)> {
+    let trimmed = s.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let end = trimmed
+        .find(|c: char| c.is_whitespace())
+        .unwrap_or(trimmed.len());
+    Some((&trimmed[..end], &trimmed[end..]))
+}
+
 /// Parses a line-separated UNIX directory listing payload returned by `LIST`.
 ///
 /// **Whitespace-Insensitive Delimiting:**
 /// Embedded systems typically insert arbitrary, variable-width spacing gaps to line up listings.
 /// Rather than relying on rigid column indexes, this implementation tokenizes columns by splitting
-/// on contiguous whitespace sequences, collecting the initial 8 protocol columns, and rebuilding
-/// the rest as the filename.
+/// on contiguous whitespace sequences, collecting the initial 8 protocol columns, and slicing
+/// the untouched remainder verbatim as the filename (BUG-088 — preserves internal multi-space
+/// runs exactly, rather than re-tokenizing and rejoining with a single space).
 ///
 /// **Temporal Rollover Mitigation:**
 /// UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
@@ -88,43 +109,74 @@ pub fn parse_unix_listing(
             continue;
         }
 
-        let mut tokens = trimmed.split_whitespace();
+        let mut rest = trimmed;
 
         // Standard UNIX listings contain exactly 9 base columns:
         // [0:Perms] [1:Links] [2:Owner] [3:Group] [4:Size] [5:Month] [6:Day] [7:TimeOrYear] [8+:Name]
-        let perms = match tokens.next() {
-            Some(p) => p,
+        let perms = match next_token(rest) {
+            Some((tok, r)) => {
+                rest = r;
+                tok
+            }
             None => continue,
         };
-        let _links = tokens.next();
-        let _owner = tokens.next();
-        let _group = tokens.next();
+        if let Some((_, r)) = next_token(rest) {
+            rest = r;
+        }
+        if let Some((_, r)) = next_token(rest) {
+            rest = r;
+        }
+        if let Some((_, r)) = next_token(rest) {
+            rest = r;
+        }
 
-        let size = match tokens.next().and_then(|s| s.parse::<u64>().ok()) {
-            Some(sz) => sz,
+        let size = match next_token(rest) {
+            Some((tok, r)) => match tok.parse::<u64>() {
+                Ok(sz) => {
+                    rest = r;
+                    sz
+                }
+                Err(_) => continue,
+            },
             None => continue,
         };
-        let month_str = match tokens.next() {
-            Some(m) => m,
+        let month_str = match next_token(rest) {
+            Some((tok, r)) => {
+                rest = r;
+                tok
+            }
             None => continue,
         };
-        let day_str = match tokens.next() {
-            Some(d) => d,
+        let day_str = match next_token(rest) {
+            Some((tok, r)) => {
+                rest = r;
+                tok
+            }
             None => continue,
         };
-        let time_or_year = match tokens.next() {
-            Some(t) => t,
+        let time_or_year = match next_token(rest) {
+            Some((tok, r)) => {
+                rest = r;
+                tok
+            }
             None => continue,
         };
 
-        // Standardized UNIX specifications mandate that everything following the 8th
-        // whitespace-delimited block constitutes the filename. Rebuilding via spacing
-        // joins ensures we safely support file names containing space characters.
-        let name_tokens = tokens.collect::<Vec<&str>>();
-        if name_tokens.is_empty() {
+        // BUG-088: everything following the 8th whitespace-delimited block is the filename.
+        // `rest` is a real slice into `trimmed` at this point (see `next_token`'s doc comment),
+        // so it's sliced out verbatim rather than re-tokenized and rejoined with `.join(" ")`
+        // — that used to collapse any run of multiple consecutive spaces in the real filename
+        // down to one, confirmed on real hardware (a P1S) to desync the reported name from the
+        // printer's actual on-disk name and make `delete_file`/`download_file` silently no-op
+        // (masked by `delete_file`'s intentional idempotent "already gone" 550 handling) when
+        // called with the reported name. `trim_start()` only strips the whitespace run
+        // *before* the filename (the 8/9-column separator); the whole line was already
+        // `.trim()`-med above, so there's no trailing whitespace to strip.
+        let name = rest.trim_start();
+        if name.is_empty() {
             continue;
         }
-        let name = name_tokens.join(" ");
+        let name = name.to_string();
 
         // Defense in depth: reject filenames containing the same command-injection-capable
         // control characters `validate_ftp_path` rejects on the way out. A caller might
@@ -240,14 +292,18 @@ mod tests {
     }
 
     #[test]
-    fn test_weird_spacing_handling() {
+    fn test_multiple_internal_spaces_preserved_exactly() {
+        // BUG-088: internal multi-space runs in the filename must round-trip exactly —
+        // confirmed on real P1S hardware that collapsing them (the old `.join(" ")`
+        // behavior) desyncs the reported name from the printer's actual on-disk name,
+        // silently breaking delete_file/download_file for that file.
         let payload =
             "-rwxrwxrwx   1 root     root           12 Jan  1  2030  weird_spacing   name.3mf";
         let files = parse_unix_listing(payload, 2026, 6, 17, 12, 0);
 
         assert_eq!(files.len(), 1);
         let f = &files[0];
-        assert_eq!(f.name, "weird_spacing name.3mf");
+        assert_eq!(f.name, "weird_spacing   name.3mf");
         assert_eq!(f.size, 12);
         assert_eq!(f.year, 2030);
     }
