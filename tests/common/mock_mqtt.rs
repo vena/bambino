@@ -11,7 +11,7 @@
 //!    the test suite pushes a JSON payload into the channel, the mock broker wraps it
 //!    in a QoS 1 `PUBLISH` frame and transmits it to the client.
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::{mpsc, oneshot};
 
 // MQTT v3.1.1 packet type codes (upper 4 bits of fixed header byte)
@@ -49,7 +49,15 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 }
 
 /// Reads a single, complete MQTT frame from an asynchronous stream.
-pub async fn read_packet(stream: &mut DuplexStream) -> Result<(u8, Vec<u8>), std::io::Error> {
+///
+/// **Not cancellation-safe** (BUG-079): internally awaits across several sequential reads
+/// (header, variable-length remaining-length bytes, payload). If this future is dropped
+/// mid-flight — e.g. as a losing branch of `tokio::select!` — bytes already consumed from
+/// `stream` are gone for good, desyncing any subsequent read from that same stream. A caller
+/// racing this in `select!` must keep the same in-flight call alive across loop iterations
+/// (e.g. via `tokio::pin!` + `.set()`, as `run_mock_mqtt_broker` does) rather than
+/// reconstructing the future on every iteration.
+pub async fn read_packet<R: AsyncRead + Unpin>(stream: &mut R) -> Result<(u8, Vec<u8>), std::io::Error> {
     let mut header = [0u8; 1];
     stream.read_exact(&mut header).await?;
 
@@ -181,6 +189,14 @@ pub async fn send_publish_payload(
 /// * `inject_rx`: Channel receiver used by the test suite to push mock telemetry payloads.
 /// * `ack_tx`: A oneshot channel used to signal the test suite the exact moment a `PUBACK`
 ///   is flushed to the client socket, preventing race conditions.
+///
+/// BUG-079: `read_packet` isn't cancellation-safe (see its doc comment), so it must never be
+/// raced directly inside the `select!` loop below — a losing race on a fresh call every
+/// iteration would silently discard header/length bytes already read off the wire, desyncing
+/// every later packet parse. Instead, a dedicated task owns the read half exclusively and
+/// forwards each complete packet through an `mpsc` channel; both `packet_rx.recv()` and
+/// `inject_rx.recv()` in the `select!` below are inherently cancellation-safe, so racing them
+/// against each other is always safe regardless of which one resolves first.
 pub async fn run_mock_mqtt_broker(
     mut stream: DuplexStream,
     serial: String,
@@ -189,6 +205,19 @@ pub async fn run_mock_mqtt_broker(
 ) {
     handle_mqtt_handshake(&mut stream).await;
 
+    let (mut read_half, mut write_half) = tokio::io::split(stream);
+
+    let (packet_tx, mut packet_rx) = mpsc::channel::<std::io::Result<(u8, Vec<u8>)>>(1);
+    tokio::spawn(async move {
+        loop {
+            let result = read_packet(&mut read_half).await;
+            let is_err = result.is_err();
+            if packet_tx.send(result).await.is_err() || is_err {
+                break;
+            }
+        }
+    });
+
     // Enter Multiplexing Event Loop
     let mut server_packet_id: u16 = 1000;
     let topic = format!("device/{}/report", serial);
@@ -196,8 +225,13 @@ pub async fn run_mock_mqtt_broker(
 
     loop {
         tokio::select! {
-            // A: Listen for incoming client packets
-            result = read_packet(&mut stream) => {
+            // A: Listen for incoming client packets, forwarded by the reader task above
+            result = packet_rx.recv() => {
+                let Some(result) = result else {
+                    // Reader task ended (its own read errored and it exited) — nothing more
+                    // will ever arrive on this channel.
+                    break;
+                };
                 match result {
                     Ok((header, payload)) => {
                         let packet_type = header >> 4;
@@ -209,11 +243,11 @@ pub async fn run_mock_mqtt_broker(
                                     let id_msb = payload[2 + topic_len];
                                     let id_lsb = payload[3 + topic_len];
 
-                                    stream
+                                    write_half
                                         .write_all(&[HEADER_PUBACK, 0x02, id_msb, id_lsb])
                                         .await
                                         .expect("Failed to write PUBACK");
-                                    stream.flush().await.expect("Failed to flush PUBACK");
+                                    write_half.flush().await.expect("Failed to flush PUBACK");
 
                                     if let Some(tx) = ack_sender.take() {
                                         let _ = tx.send(());
@@ -221,7 +255,7 @@ pub async fn run_mock_mqtt_broker(
                                 }
                             }
                             PACKET_TYPE_PINGREQ => {
-                                stream
+                                write_half
                                     .write_all(&[HEADER_PINGRESP, 0x00])
                                     .await
                                     .expect("Failed to write PINGRESP");
@@ -255,8 +289,8 @@ pub async fn run_mock_mqtt_broker(
                 packet.extend(var_header);
                 packet.extend_from_slice(&injection_payload);
 
-                stream.write_all(&packet).await.expect("Failed to write injected PUBLISH");
-                stream.flush().await.expect("Failed to flush injected PUBLISH");
+                write_half.write_all(&packet).await.expect("Failed to write injected PUBLISH");
+                write_half.flush().await.expect("Failed to flush injected PUBLISH");
             }
         }
     }
