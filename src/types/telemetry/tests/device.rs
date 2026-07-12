@@ -547,3 +547,60 @@ fn test_airduct_collection_merge_from_preserves_fields_independently() {
     assert_eq!(cached.mode_list.len(), 1, "mode_list must survive a mode_cur-only push");
     assert_eq!(cached.mode_cur, Some(1), "new field applies");
 }
+
+#[test]
+fn test_ctc_telemetry_merge_from_preserves_info_on_absence() {
+    // BUG-096: confirmed via BambuStudio's DevChamber::ParseChamberV2_0 — device.ctc.info can
+    // be absent while device.ctc.state is present (and changes) in the same push.
+    let mut cached = CtcTelemetry {
+        info: Some(CtcInfo {
+            temp: Some(1900000),
+            target: Some(30),
+        }),
+        state: Some(0),
+    };
+
+    let partial = CtcTelemetry {
+        info: None,
+        state: Some(2),
+    };
+
+    cached.merge_from(&partial);
+
+    assert!(cached.info.is_some(), "info must survive a state-only push");
+    assert_eq!(cached.info.unwrap().target, Some(30));
+    assert_eq!(cached.state, Some(2), "new field applies");
+}
+
+#[test]
+fn test_ext_tool_telemetry_merge_from_preserves_fields_independently() {
+    // BUG-097: confirmed via BambuStudio's DevExtensionToolParser::ParseV2_0 — mount_3d/calib
+    // (ParseVal with current-value default) and type/tool_type (unrecognized/absent falls
+    // through without writing) all preserve on absence.
+    let mut cached = ExtToolTelemetry {
+        mount: Some(1),
+        tool_type: Some("LB00".into()),
+        calib: Some(1),
+        low_prec: Some(false),
+        th_temp: Some(45),
+        mount_3d: Some(0),
+    };
+
+    let partial = ExtToolTelemetry {
+        mount: None,
+        tool_type: None,
+        calib: None,
+        low_prec: None,
+        th_temp: Some(50),
+        mount_3d: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.mount, Some(1), "mount must survive a th_temp-only push");
+    assert_eq!(cached.tool_type.as_deref(), Some("LB00"));
+    assert_eq!(cached.calib, Some(1));
+    assert_eq!(cached.low_prec, Some(false));
+    assert_eq!(cached.th_temp, Some(50), "new field applies");
+    assert_eq!(cached.mount_3d, Some(0));
+}

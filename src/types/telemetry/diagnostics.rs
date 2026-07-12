@@ -16,6 +16,26 @@ pub struct CtcTelemetry {
     pub state: Option<u32>,
 }
 
+impl CtcTelemetry {
+    /// Merges a freshly-parsed `CtcTelemetry` into `self` field-by-field.
+    ///
+    /// BUG-096: confirmed against BambuStudio's own `DevChamber::ParseChamberV2_0`
+    /// (`src/slic3r/GUI/DeviceCore/DevChamber.cpp`) — it reads `device.ctc.state`
+    /// unconditionally the moment `device.ctc` itself is present (no absence guard,
+    /// i.e. the official client never expects `state` to arrive independently absent),
+    /// but reads `device.ctc.info` behind its own `.contains()` check, i.e. `info` *can*
+    /// arrive absent while `state` is present. `self.info` must not be cleared just
+    /// because a push carries `ctc.state` without repeating `ctc.info`.
+    pub(crate) fn merge_from(&mut self, incoming: &CtcTelemetry) {
+        if incoming.info.is_some() {
+            self.info = incoming.info.clone();
+        }
+        if incoming.state.is_some() {
+            self.state = incoming.state;
+        }
+    }
+}
+
 /// Controller information segment detailing current temperature coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtcInfo {

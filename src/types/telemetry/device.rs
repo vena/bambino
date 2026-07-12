@@ -64,8 +64,16 @@ impl DeviceTelemetry {
     /// wholesale when both sides have `Some(_)` — confirmed via `pybambu` and `bambuddy`
     /// (see each collection's own `merge_from`) that `device.nozzle.info`,
     /// `device.extruder.info`, and `device.airduct.modeCur`/`modeList`/`parts` can each be
-    /// absent independent of their parent sub-object arriving. `ctc`/`bed`/`ext_tool` are not
-    /// recursed into — no evidence at that finer grain from either source.
+    /// absent independent of their parent sub-object arriving.
+    ///
+    /// BUG-096: recurses into `ctc` too — confirmed via BambuStudio's own
+    /// `DevChamber::ParseChamberV2_0` (see `CtcTelemetry::merge_from`).
+    ///
+    /// BUG-097: recurses into `ext_tool` too — confirmed via BambuStudio's own
+    /// `DevExtensionToolParser::ParseV2_0` (see `ExtToolTelemetry::merge_from`).
+    ///
+    /// `bed` is still not recursed into — no client (pybambu, bambuddy, BambuStudio,
+    /// OrcaSlicer) parses `device.bed` as a nested object at all; see BUG-095.
     pub(crate) fn merge_from(&mut self, incoming: &DeviceTelemetry) {
         match (&mut self.nozzle, &incoming.nozzle) {
             (Some(cached), Some(new)) => cached.merge_from(new),
@@ -82,14 +90,18 @@ impl DeviceTelemetry {
             (None, Some(new)) => self.airduct = Some(new.clone()),
             _ => {}
         }
-        if incoming.ctc.is_some() {
-            self.ctc = incoming.ctc.clone();
+        match (&mut self.ctc, &incoming.ctc) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.ctc = Some(new.clone()),
+            _ => {}
         }
         if incoming.bed.is_some() {
             self.bed = incoming.bed.clone();
         }
-        if incoming.ext_tool.is_some() {
-            self.ext_tool = incoming.ext_tool.clone();
+        match (&mut self.ext_tool, &incoming.ext_tool) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.ext_tool = Some(new.clone()),
+            _ => {}
         }
         if incoming.fire_ext.is_some() {
             self.fire_ext = incoming.fire_ext.clone();
@@ -140,6 +152,39 @@ pub struct ExtToolTelemetry {
     /// 3D mount state.
     #[serde(default)]
     pub mount_3d: Option<i32>,
+}
+
+impl ExtToolTelemetry {
+    /// Merges a freshly-parsed `ExtToolTelemetry` into `self` field-by-field.
+    ///
+    /// BUG-097: confirmed against BambuStudio's own `DevExtensionToolParser::ParseV2_0`
+    /// (`src/slic3r/GUI/DeviceCore/DevExtensionTool.cpp`) for `mount_3d`/`calib` (both parsed
+    /// via `DevJsonValParser::ParseVal`'s current-value-as-default overload — absent leaves
+    /// the previous value untouched) and `type`/`tool_type` (absent/unrecognized falls
+    /// through the type-map lookup without writing `m_tool_type` at all). `mount`/`low_prec`/
+    /// `th_temp` aren't modeled by BambuStudio at all — extended uniformly here for
+    /// consistency with every other `merge_from` in this file, same as BUG-094 extending
+    /// nozzle/extruder/airduct together once the pattern was established for one.
+    pub(crate) fn merge_from(&mut self, incoming: &ExtToolTelemetry) {
+        if incoming.mount.is_some() {
+            self.mount = incoming.mount;
+        }
+        if incoming.tool_type.is_some() {
+            self.tool_type = incoming.tool_type.clone();
+        }
+        if incoming.calib.is_some() {
+            self.calib = incoming.calib;
+        }
+        if incoming.low_prec.is_some() {
+            self.low_prec = incoming.low_prec;
+        }
+        if incoming.th_temp.is_some() {
+            self.th_temp = incoming.th_temp;
+        }
+        if incoming.mount_3d.is_some() {
+            self.mount_3d = incoming.mount_3d;
+        }
+    }
 }
 
 /// Wrap block holding nozzle characteristics.
