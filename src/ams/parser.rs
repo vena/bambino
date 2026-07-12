@@ -9,7 +9,12 @@ use crate::types::AmsTray;
 use crate::types::telemetry::ams::{AMS_TRAY_STATE_EMPTY, AMS_TRAY_STATE_SPOOL_NOT_FED};
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
-pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
+/// Confirmed against `bambuddy/backend/app/models/spoolman_slot_assignment.py`'s
+/// `ck_ams_id_range` CHECK constraint (0-7, 8 units) — widened there in bambuddy's own
+/// issue #1274 because real H2C/H2D hardware exceeded a 4-unit cap. `pybambu`'s
+/// `tray_now >> 2` decode derives the AMS index dynamically with no hardcoded cap.
+/// Previously `3` (4 units), which silently misclassified units 4-7 as non-standard/external.
+pub(crate) const AMS_MAX_STANDARD_ID: u8 = 7;
 pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
 pub(crate) const AMS_EXTERNAL_SPOOL_ID: u8 = 254;
@@ -313,7 +318,7 @@ mod tests {
     #[test]
     fn test_resolve_global_tray_id_invalid() {
         // ams_id outside valid ranges
-        assert_eq!(resolve_global_tray_id(4, 0), None);
+        assert_eq!(resolve_global_tray_id(8, 0), None);
         assert_eq!(resolve_global_tray_id(64, 0), None);
         assert_eq!(resolve_global_tray_id(127, 0), None);
         assert_eq!(resolve_global_tray_id(136, 0), None);
@@ -362,10 +367,10 @@ mod tests {
 
     #[test]
     fn test_evaluate_spool_presence_ams_id_out_of_range() {
-        // ams_id outside both the standard (0-3) and AMS-HT (128-135) ranges must not
+        // ams_id outside both the standard (0-7) and AMS-HT (128-135) ranges must not
         // panic or wrap into a bogus shift amount — it should cleanly report None.
         assert_eq!(evaluate_spool_presence("f", 200, 0, true), None);
-        assert_eq!(evaluate_spool_presence("f", 4, 0, true), None);
+        assert_eq!(evaluate_spool_presence("f", 8, 0, true), None);
         assert_eq!(evaluate_spool_presence("f", 127, 0, true), None);
         assert_eq!(evaluate_spool_presence("f", 255, 0, true), None);
     }
