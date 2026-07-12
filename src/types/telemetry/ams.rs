@@ -76,9 +76,24 @@ impl AmsStatusReport {
     /// unit array and other fields on every such partial push. Mirrors the "each field
     /// independently keeps its most recently observed value" staleness policy `TelemetryCache`
     /// already documents at the `PrinterTelemetry` level, one layer deeper.
+    ///
+    /// BUG-098: `ams` itself is now a keyed per-unit merge, not a wholesale array replace —
+    /// see the loop body below and `AmsUnit::merge_from`.
     pub(crate) fn merge_from(&mut self, incoming: &AmsStatusReport) {
         if !incoming.ams.is_empty() {
-            self.ams = incoming.ams.clone();
+            // BUG-098: keyed per-unit merge, not wholesale replace — confirmed against
+            // BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`), which looks up each
+            // unit by `ams_id` in a persistent `amsList` map (`system->amsList.find(ams_id)`)
+            // that's never pruned by a push's contents; a unit not mentioned in a given
+            // `print.ams.ams` push stays cached exactly as last observed, and a mentioned
+            // unit's own fields merge in via `AmsUnit::merge_from` rather than replacing the
+            // whole unit.
+            for incoming_unit in &incoming.ams {
+                match self.ams.iter_mut().find(|u| u.id == incoming_unit.id) {
+                    Some(cached_unit) => cached_unit.merge_from(incoming_unit),
+                    None => self.ams.push(incoming_unit.clone()),
+                }
+            }
         }
         if incoming.ams_exist_bits.is_some() {
             self.ams_exist_bits = incoming.ams_exist_bits.clone();
@@ -156,6 +171,46 @@ pub struct AmsUnit {
     /// Drying failure reason codes per slot (X2D).
     #[serde(default)]
     pub dry_sf_reason: Option<Vec<i32>>,
+}
+
+impl AmsUnit {
+    /// Merges a freshly-parsed `AmsUnit` into `self` field-by-field, instead of replacing
+    /// `self` wholesale.
+    ///
+    /// BUG-098: confirmed against BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`,
+    /// ~L590-720) — every field here (`humidity_raw`, `dry_time` via `ParseVal`'s no-default
+    /// overload, `dry_setting`, `dry_sf_reason`, `tray`) is gated behind `.contains()` or
+    /// `ParseVal`'s no-default overload against a persistent per-unit object, i.e.
+    /// preserve-on-absence. `temp`/`humidity` aren't `Option` in this crate's model (they
+    /// deserialize as required — a unit object omitting them entirely wouldn't parse as
+    /// `AmsUnit` at all), so they always take the incoming value with no merge needed.
+    /// `dry_time` specifically: `pybambu`'s own git history (`c517861` "Fix AMS2 updates")
+    /// shows a hard `KeyError` on absence was replaced with a naive `.get(..., 0)` default to
+    /// fix a real crash — confirming the field can be absent, but its own fix is the same
+    /// naive-default class `bambuddy`'s `#1462` documents and corrects; 2 of 3 sources
+    /// (BambuStudio, `bambuddy`) agree on preserve-on-absence as the correct handling.
+    pub(crate) fn merge_from(&mut self, incoming: &AmsUnit) {
+        self.temp = incoming.temp.clone();
+        self.humidity = incoming.humidity.clone();
+        if incoming.humidity_raw.is_some() {
+            self.humidity_raw = incoming.humidity_raw.clone();
+        }
+        if incoming.dry_time.is_some() {
+            self.dry_time = incoming.dry_time;
+        }
+        if incoming.dry_setting.is_some() {
+            self.dry_setting = incoming.dry_setting.clone();
+        }
+        if !incoming.tray.is_empty() {
+            self.tray = incoming.tray.clone();
+        }
+        if incoming.info.is_some() {
+            self.info = incoming.info.clone();
+        }
+        if incoming.dry_sf_reason.is_some() {
+            self.dry_sf_reason = incoming.dry_sf_reason.clone();
+        }
+    }
 }
 
 /// Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].

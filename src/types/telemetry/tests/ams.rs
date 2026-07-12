@@ -473,7 +473,13 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
 }
 
 #[test]
-fn test_ams_status_report_merge_from_replaces_array_on_full_update() {
+fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
+    // BUG-098: was test_..._replaces_array_on_full_update, asserting the opposite of this —
+    // rewritten once BambuStudio's DevFilaSystem.cpp confirmed a keyed persistent per-unit
+    // map (system->amsList.find(ams_id), never pruned by a push's contents) is the real
+    // behavior, not whole-array replacement. A push mentioning only unit "1" must not drop
+    // previously-cached unit "0" — it's the same wire-economy principle BUG-091 already
+    // confirmed one level up (the ams key itself can be absent), applied one level deeper.
     let mut cached = AmsStatusReport {
         ams: vec![AmsUnit {
             id: "0".into(),
@@ -501,7 +507,7 @@ fn test_ams_status_report_merge_from_replaces_array_on_full_update() {
         cali_stat: None,
     };
 
-    let full = AmsStatusReport {
+    let partial = AmsStatusReport {
         ams: vec![AmsUnit {
             id: "1".into(),
             temp: "27.0".into(),
@@ -528,10 +534,59 @@ fn test_ams_status_report_merge_from_replaces_array_on_full_update() {
         cali_stat: None,
     };
 
-    cached.merge_from(&full);
+    cached.merge_from(&partial);
 
-    assert_eq!(cached.ams.len(), 1);
-    assert_eq!(cached.ams[0].id, "1", "a non-empty incoming array is authoritative");
+    assert_eq!(cached.ams.len(), 2, "unit 0 must survive a unit-1-only push");
+    assert!(cached.ams.iter().any(|u| u.id == "0"));
+    assert!(cached.ams.iter().any(|u| u.id == "1"));
+}
+
+#[test]
+fn test_ams_unit_merge_from_preserves_fields_on_absence() {
+    // BUG-098: confirmed against BambuStudio's DevFilaSystem.cpp — dry_time/humidity_raw/
+    // dry_sf_reason (and temp/humidity/dry_setting/tray) all preserve on absence within a
+    // matched unit, rather than a partial per-unit push nulling out previously-known values.
+    let mut cached = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: Some("42".into()),
+        dry_time: Some(120),
+        dry_setting: Some(AmsDrySetting {
+            dry_temperature: Some(55),
+            dry_duration: Some(240),
+            dry_filament: Some("PA-CF".into()),
+        }),
+        tray: vec![],
+        info: Some("10001003".into()),
+        dry_sf_reason: Some(vec![1, 2]),
+    };
+
+    let partial = AmsUnit {
+        id: "0".into(),
+        temp: "27.0".into(),
+        humidity: "4".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: vec![],
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.temp, "27.0", "temp always takes the incoming value");
+    assert_eq!(cached.humidity, "4", "humidity always takes the incoming value");
+    assert_eq!(
+        cached.humidity_raw.as_deref(),
+        Some("42"),
+        "humidity_raw must survive a temp/humidity-only push"
+    );
+    assert_eq!(cached.dry_time, Some(120), "dry_time must survive");
+    assert!(cached.dry_setting.is_some(), "dry_setting must survive");
+    assert_eq!(cached.info.as_deref(), Some("10001003"));
+    assert_eq!(cached.dry_sf_reason, Some(vec![1, 2]), "dry_sf_reason must survive");
 }
 
 #[test]
