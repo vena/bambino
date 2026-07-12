@@ -1530,7 +1530,11 @@ fn test_kprofile_ams_fields_absent() {
 
 #[test]
 fn test_progress_field_removed() {
-    let json = r#"{ "print": { "mc_percent": 75 } }"#;
+    // BUG-067: the legacy "progress" wire field was removed from PrintTelemetry — assert a
+    // stray "progress" key in incoming JSON is silently ignored on deserialize rather than
+    // erroring, instead of the previous verbatim duplicate of test_mc_percent_deserialization,
+    // which asserted nothing about "progress" at all.
+    let json = r#"{ "print": { "mc_percent": 75, "progress": 75 } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json)
         .unwrap()
         .print
