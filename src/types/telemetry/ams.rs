@@ -64,6 +64,64 @@ pub struct AmsStatusReport {
     pub cali_stat: Option<i32>,
 }
 
+impl AmsStatusReport {
+    /// Merges a freshly-parsed `AmsStatusReport` into `self` field-by-field, instead of
+    /// replacing `self` wholesale.
+    ///
+    /// BUG-091: confirmed via a real P1S wire capture — an incremental `print.ams` push may
+    /// carry only a subset of fields (e.g. `{"ams":{"tray_tar":"3"}}` during a tray-switch
+    /// sequence), with `ams` (the unit/tray array, `#[serde(default)]`) and every other field
+    /// simply absent rather than explicitly emptied. A caller that replaces its cached
+    /// `AmsStatusReport` wholesale on any `print.ams: Some(_)` push loses the previously-known
+    /// unit array and other fields on every such partial push. Mirrors the "each field
+    /// independently keeps its most recently observed value" staleness policy `TelemetryCache`
+    /// already documents at the `PrinterTelemetry` level, one layer deeper.
+    pub(crate) fn merge_from(&mut self, incoming: &AmsStatusReport) {
+        if !incoming.ams.is_empty() {
+            self.ams = incoming.ams.clone();
+        }
+        if incoming.ams_exist_bits.is_some() {
+            self.ams_exist_bits = incoming.ams_exist_bits.clone();
+        }
+        if incoming.tray_exist_bits.is_some() {
+            self.tray_exist_bits = incoming.tray_exist_bits.clone();
+        }
+        if incoming.tray_is_bbl_bits.is_some() {
+            self.tray_is_bbl_bits = incoming.tray_is_bbl_bits.clone();
+        }
+        if incoming.tray_now.is_some() {
+            self.tray_now = incoming.tray_now.clone();
+        }
+        if incoming.tray_pre.is_some() {
+            self.tray_pre = incoming.tray_pre.clone();
+        }
+        if incoming.tray_tar.is_some() {
+            self.tray_tar = incoming.tray_tar.clone();
+        }
+        if incoming.version.is_some() {
+            self.version = incoming.version;
+        }
+        if incoming.tray_read_done_bits.is_some() {
+            self.tray_read_done_bits = incoming.tray_read_done_bits.clone();
+        }
+        if incoming.tray_reading_bits.is_some() {
+            self.tray_reading_bits = incoming.tray_reading_bits.clone();
+        }
+        if incoming.insert_flag.is_some() {
+            self.insert_flag = incoming.insert_flag;
+        }
+        if incoming.power_on_flag.is_some() {
+            self.power_on_flag = incoming.power_on_flag;
+        }
+        if incoming.cali_id.is_some() {
+            self.cali_id = incoming.cali_id;
+        }
+        if incoming.cali_stat.is_some() {
+            self.cali_stat = incoming.cali_stat;
+        }
+    }
+}
+
 /// Modular standard expansion unit managing up to 4 physical spool slots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AmsUnit {

@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-091 | needs-verification | client/telemetry.rs | `update_ams_cache` may wipe cached AMS array on a partial `print.ams` push | 2026-07-12 | `AmsStatusReport.ams: Vec<AmsUnit>` has `#[serde(default)]`; `update_ams_cache` replaces `last_ams` wholesale whenever `print.ams` is `Some`. If firmware ever sends `print.ams` with sibling keys (`tray_now` etc) but omits the inner `ams` array, the cache silently loses tray data. Unlike BUG-083 (confirmed per-tray field omission via reference/05_materials_ams.md), no wire evidence confirms this specific granularity — needs a `dump`-style capture during a live tray-load to confirm or rule out. |
 
 ## Fixed
 
@@ -105,6 +104,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-088 | Sev2 | ftps/parser.rs | `parse_unix_listing` collapsed multi-space filenames to single spaces via `.join(" ")`, desyncing `FtpFile::name` from the printer's actual on-disk name | 2026-07-12 | 2026-07-12 | confirmed on real P1S hardware — uploading a 3-space filename then listing showed 1 space, and `delete_file` silently no-op'd (masked by its idempotent 550 handling) when called with the reported name. Fixed by slicing the untouched line remainder verbatim (new `next_token` helper) instead of re-tokenizing/rejoining — fixed in `bd7cb15` |
 | BUG-090 | Sev2 | bin/bambino-cli/monitor/dashboard.rs | AMS section vanishes on partial incremental push | 2026-07-12 | 2026-07-12 | dashboard.rs's `render_dashboard` did `state.insert(key, value)` per top-level `print` key — a flat overwrite, not a recursive merge. A partial MQTT push updating `ams` sub-fields without resending the nested `ams` array wiped the array from accumulated state, hiding the whole AMS section until the next full push. Fixed via a generic `deep_merge` helper applied to both `print` and `device` keys. |
 | BUG-092 | Sev2 | bin/bambino-cli/monitor/mod.rs | `dump --follow` drops connection after ~30s, no keep-alive ping | 2026-07-12 | 2026-07-12 | `dump`'s follow loop only called `printer.poll_raw()`, never `send_ping()`; `MQTT_KEEP_ALIVE_SECS` is 30, so the broker reset the connection once that elapsed with no packet from the client. Fixed by racing `poll_raw()` against a 15s ping tick, same pattern as `monitor::run`. |
+| BUG-091 | Sev2 | client/telemetry.rs, types/telemetry/ams.rs | `update_ams_cache` wiped cached AMS array on a partial `print.ams` push | 2026-07-12 | 2026-07-12 | Confirmed via real P1S wire capture (`dump --follow` during a tray-load): `print.ams` arrives as `{"tray_tar":"3"}`-only pushes, array and every other field absent. `update_ams_cache` replaced the cached `AmsStatusReport` wholesale on any `print.ams: Some(_)`, losing the previously-known tray/unit array on each such push. Fixed via new `AmsStatusReport::merge_from`, field-by-field merge instead of wholesale replace. |
 
 ## Wontfix
 

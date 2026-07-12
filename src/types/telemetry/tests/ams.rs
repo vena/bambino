@@ -412,3 +412,124 @@ fn test_ams_unit_info_with_dry_status() {
     assert_eq!(unit.dry_status(), Some(5));
     assert_eq!(unit.extruder_assignment(), Some(0));
 }
+
+#[test]
+fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
+    // BUG-091: confirmed via a real P1S wire capture — an incremental `print.ams` push during
+    // a tray-switch can carry only `{"tray_tar": "3"}`, with the unit/tray array (and every
+    // other field) entirely absent rather than explicitly emptied.
+    let mut cached = AmsStatusReport {
+        ams: vec![AmsUnit {
+            id: "0".into(),
+            temp: "26.0".into(),
+            humidity: "3".into(),
+            humidity_raw: None,
+            dry_time: None,
+            dry_setting: None,
+            tray: vec![],
+            info: None,
+            dry_sf_reason: None,
+        }],
+        ams_exist_bits: Some("1".into()),
+        tray_exist_bits: Some("b".into()),
+        tray_is_bbl_bits: None,
+        tray_now: Some("3".into()),
+        tray_pre: None,
+        tray_tar: None,
+        version: Some(20),
+        tray_read_done_bits: None,
+        tray_reading_bits: None,
+        insert_flag: None,
+        power_on_flag: None,
+        cali_id: None,
+        cali_stat: None,
+    };
+
+    let partial = AmsStatusReport {
+        ams: vec![],
+        ams_exist_bits: None,
+        tray_exist_bits: None,
+        tray_is_bbl_bits: None,
+        tray_now: None,
+        tray_pre: None,
+        tray_tar: Some("3".into()),
+        version: None,
+        tray_read_done_bits: None,
+        tray_reading_bits: None,
+        insert_flag: None,
+        power_on_flag: None,
+        cali_id: None,
+        cali_stat: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.ams.len(), 1, "unit array must survive a partial push");
+    assert_eq!(cached.ams[0].id, "0");
+    assert_eq!(cached.tray_tar.as_deref(), Some("3"), "new field applies");
+    assert_eq!(cached.tray_now.as_deref(), Some("3"), "untouched field stays cached");
+    assert_eq!(cached.ams_exist_bits.as_deref(), Some("1"));
+    assert_eq!(cached.version, Some(20));
+}
+
+#[test]
+fn test_ams_status_report_merge_from_replaces_array_on_full_update() {
+    let mut cached = AmsStatusReport {
+        ams: vec![AmsUnit {
+            id: "0".into(),
+            temp: "26.0".into(),
+            humidity: "3".into(),
+            humidity_raw: None,
+            dry_time: None,
+            dry_setting: None,
+            tray: vec![],
+            info: None,
+            dry_sf_reason: None,
+        }],
+        ams_exist_bits: None,
+        tray_exist_bits: None,
+        tray_is_bbl_bits: None,
+        tray_now: None,
+        tray_pre: None,
+        tray_tar: None,
+        version: None,
+        tray_read_done_bits: None,
+        tray_reading_bits: None,
+        insert_flag: None,
+        power_on_flag: None,
+        cali_id: None,
+        cali_stat: None,
+    };
+
+    let full = AmsStatusReport {
+        ams: vec![AmsUnit {
+            id: "1".into(),
+            temp: "27.0".into(),
+            humidity: "4".into(),
+            humidity_raw: None,
+            dry_time: None,
+            dry_setting: None,
+            tray: vec![],
+            info: None,
+            dry_sf_reason: None,
+        }],
+        ams_exist_bits: None,
+        tray_exist_bits: None,
+        tray_is_bbl_bits: None,
+        tray_now: None,
+        tray_pre: None,
+        tray_tar: None,
+        version: None,
+        tray_read_done_bits: None,
+        tray_reading_bits: None,
+        insert_flag: None,
+        power_on_flag: None,
+        cali_id: None,
+        cali_stat: None,
+    };
+
+    cached.merge_from(&full);
+
+    assert_eq!(cached.ams.len(), 1);
+    assert_eq!(cached.ams[0].id, "1", "a non-empty incoming array is authoritative");
+}

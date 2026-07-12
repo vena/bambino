@@ -199,7 +199,13 @@ where
 
     fn update_ams_cache(&mut self, print: &PrinterTelemetry) {
         if let Some(ams) = &print.ams {
-            self.cache.last_ams = Some(ams.clone());
+            // BUG-091: merge field-by-field rather than replacing wholesale — a partial
+            // `print.ams` push (confirmed via wire capture) can carry only a few fields with
+            // the unit/tray array omitted entirely; see `AmsStatusReport::merge_from`.
+            match &mut self.cache.last_ams {
+                Some(cached) => cached.merge_from(ams),
+                None => self.cache.last_ams = Some(ams.clone()),
+            }
         }
         if let Some(vt_tray) = &print.vt_tray {
             self.cache.last_vt_tray = Some(vt_tray.clone());
