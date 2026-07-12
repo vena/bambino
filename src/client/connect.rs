@@ -149,6 +149,7 @@ where
     /// own lazy dial.
     pub async fn disconnect_mqtt(&mut self) -> Result<(), BambuError> {
         self.mqtt = None;
+        self.k_profile_primed = false;
         Ok(())
     }
 
