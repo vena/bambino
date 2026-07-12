@@ -57,7 +57,9 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 /// racing this in `select!` must keep the same in-flight call alive across loop iterations
 /// (e.g. via `tokio::pin!` + `.set()`, as `run_mock_mqtt_broker` does) rather than
 /// reconstructing the future on every iteration.
-pub async fn read_packet<R: AsyncRead + Unpin>(stream: &mut R) -> Result<(u8, Vec<u8>), std::io::Error> {
+pub async fn read_packet<R: AsyncRead + Unpin>(
+    stream: &mut R,
+) -> Result<(u8, Vec<u8>), std::io::Error> {
     let mut header = [0u8; 1];
     stream.read_exact(&mut header).await?;
 
