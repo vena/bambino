@@ -64,10 +64,12 @@ fn parse_location(loc: &str) -> Option<(&str, u16)> {
 
     let mut parts = host_port.split(':');
     let host = parts.next()?;
-    let port = if let Some(port_str) = parts.next() {
-        port_str.parse::<u16>().ok().unwrap_or(80)
-    } else {
-        80
+    // BUG-084: a present-but-unparseable port string (e.g. a corrupt/truncated LOCATION
+    // header) must reject the packet, not silently coerce to 80 — that's indistinguishable
+    // from "no port specified" and would route to the wrong port on a real device.
+    let port = match parts.next() {
+        Some(port_str) => port_str.parse::<u16>().ok()?,
+        None => 80,
     };
 
     Some((host, port))
@@ -175,15 +177,28 @@ fn extract_model_from_nt_st(value: &str) -> Option<&str> {
 pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
 
-    let is_response = buf.starts_with(b"HTTP/") || buf.starts_with(b"http/");
+    // BUG-085: case-insensitive, consistent with this file's otherwise-thorough
+    // case-insensitive header handling (eq_case_insensitive) — a non-canonical-case status
+    // line must route to the response parser, not fall through to the request parser and
+    // fail there instead. Note `httparse::Response::parse` itself still requires an
+    // exact-case "HTTP/" token and rejects a non-canonical-case status line regardless, so
+    // this only fixes which parser rejects it — see test_lowercase_status_line_routes_to_response_parser.
+    let is_response = buf.len() >= 5 && buf[..5].eq_ignore_ascii_case(b"HTTP/");
 
     let raw = if is_response {
         let mut response = httparse::Response::new(&mut headers);
-        response.parse(buf).ok()?;
+        // BUG-086: httparse::Status::Partial means the buffer ended mid-header —
+        // a truncated UDP datagram must be rejected, not treated the same as a
+        // successfully fully-parsed packet.
+        if !matches!(response.parse(buf).ok()?, httparse::Status::Complete(_)) {
+            return None;
+        }
         extract_headers(response.headers)?
     } else {
         let mut request = httparse::Request::new(&mut headers);
-        request.parse(buf).ok()?;
+        if !matches!(request.parse(buf).ok()?, httparse::Status::Complete(_)) {
+            return None;
+        }
         extract_headers(request.headers)?
     };
 
@@ -457,5 +472,45 @@ mod tests {
                         NT: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n";
 
         assert!(parse_ssdp_payload(payload).is_none());
+    }
+
+    #[test]
+    fn test_lowercase_status_line_routes_to_response_parser() {
+        // BUG-085: is_response's classification is now case-insensitive, matching this
+        // file's otherwise-thorough case-insensitive handling elsewhere. Note this only
+        // fixes *classification* — httparse::Response::parse itself requires an exact-case
+        // "HTTP/" token in the status line and rejects "Http/1.1" regardless of which
+        // parser it's routed to, so the packet is still correctly rejected end-to-end
+        // (None), just no longer via the wrong parser. Real firmware has never been
+        // observed emitting non-canonical case (per 07-11-REVIEW.md finding #10), so this
+        // is a defense-in-depth correctness fix, not a behavior change for real traffic.
+        let payload = b"Http/1.1 200 OK\r\n\
+                        LOCATION: http://10.0.0.5:80/\r\n\
+                        USN: 01P06A521703222\r\n\
+                        DevModel.bambu.com: C12\r\n\r\n";
+
+        assert!(parse_ssdp_payload(payload).is_none());
+    }
+
+    #[test]
+    fn test_truncated_packet_rejected() {
+        // BUG-086: httparse::Status::Partial (buffer ends mid-header) must be rejected,
+        // not treated the same as Status::Complete — a truncated UDP datagram shouldn't
+        // parse into a seemingly-valid device record.
+        let payload = b"HTTP/1.1 200 OK\r\n\
+                        LOCATION: http://10.0.0.5:80/\r\n\
+                        USN: 01P06A521703222\r\n\
+                        DevModel.bambu.com: C12\r\n";
+
+        assert!(parse_ssdp_payload(payload).is_none());
+    }
+
+    #[test]
+    fn test_unparseable_port_rejected() {
+        // BUG-084: a present-but-unparseable port string must reject the packet, not
+        // silently coerce to 80 — that's indistinguishable from "no port specified."
+        assert_eq!(parse_location("192.168.1.158:notaport"), None);
+        // Absent port still defaults to 80.
+        assert_eq!(parse_location("192.168.1.158"), Some(("192.168.1.158", 80)));
     }
 }
