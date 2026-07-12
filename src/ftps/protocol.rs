@@ -258,6 +258,14 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
                 header_code = Some(code);
                 let line_text = core::str::from_utf8(&line_buf[4..]).unwrap_or("").trim();
                 accumulated.push_str(line_text);
+            } else {
+                // BUG-062: a header line whose 4th byte is neither ' ' nor '-' (e.g. "200\r\n",
+                // code immediately followed by CRLF with no separator) previously fell through
+                // to `continue` and was silently discarded, burning a line out of
+                // FTP_MAX_RESPONSE_LINES and eventually surfacing as a generic "exceeded maximum
+                // line count" error that obscures the real reply. Treat it as a terminal
+                // single-line reply with empty text instead.
+                return Ok((code, String::new()));
             }
             continue;
         };
@@ -605,6 +613,24 @@ mod tests {
                 .expect("multi-line response");
         assert_eq!(code, 213);
         assert_eq!(text, "Header\nplain free text, no code\nEnd");
+    }
+
+    #[tokio::test]
+    async fn test_read_response_header_with_no_separator_treated_as_terminal() {
+        // BUG-062: a header line whose 4th byte is neither ' ' nor '-' (e.g. code immediately
+        // followed by CRLF, no separator at all) used to fall through and be silently discarded
+        // instead of surfacing as a reply.
+        let reader = ChunkedReader::with_chunks(&[b"200\r\n"]);
+        let mut stream = TokioIo(reader);
+        let mut line_buf = Vec::new();
+        let mut fill_buf = Vec::new();
+
+        let (code, text) =
+            read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+                .await
+                .expect("non-conformant header line should still produce a reply");
+        assert_eq!(code, 200);
+        assert_eq!(text, "");
     }
 
     #[tokio::test]

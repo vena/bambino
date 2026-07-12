@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-062 | Sev3 | ftps/protocol.rs | `read_response`'s header-establishing branch silently drops a reply line whose 4th byte is neither space nor hyphen, instead of surfacing it | 2026-07-11 | See `07-11-REVIEW.md` §12 |
 | BUG-063 | Sev3 | io/embassy.rs | `EmbassyTlsConnector::connect` collapses every mbedtls-rs failure into `ConnectionAborted` with no `log::debug!` of the real error at any of 3 sites | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-064 | Sev3 | io/esp_idf.rs | `EspTls::adopt()` failure mapped to a fixed string with the real `EspError` discarded, unlike every other FFI error site in the file | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-066 | Sev3 | quirks/mod.rs | Default `z_max()` hardcodes `256.0` instead of a named `pub(crate) const`, unlike this same file's `FAN_STEP_MAX`/`FAN_ROUNDING_OFFSET` convention | 2026-07-11 | See `07-11-REVIEW.md` §17 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-058 | Sev3 | bin/bambino-cli/main.rs | `control ams` usage lines omitted `<IP> <SERIAL> [ACCESS_CODE]` | 2026-07-11 | 2026-07-11 | src/bin/bambino-cli/main.rs:116 — the 3 `control ams ...` `override_usage` lines now include `<IP> <SERIAL> [ACCESS_CODE]`, matching every other subcommand line, same class as BUG-016 |
 | BUG-059 | Sev3 | tests/client_test.rs | No test asserted the `extrude_cali_flag` wire field | 2026-07-11 | 2026-07-11 | tests/client_test.rs:806 — `test_start_print_wire_payload` now asserts `extrude_cali_flag: 1`, matching `PrintJobConfig::new()`'s README-documented `run_flow_calibration: true` default |
 | BUG-061 | Sev3 | ftps/parser.rs | `parse_unix_listing` didn't range-validate `day`/`hour`/`minute` | 2026-07-11 | 2026-07-11 | src/ftps/parser.rs:144-171 — `day` now rejected outside `1..=31`, `hour`/`minute` outside `0..=23`/`0..=59` (skipping the entry, matching the file's existing silent-skip convention), unlike `month`'s already-validated lookup table |
+| BUG-062 | Sev3 | ftps/protocol.rs | `read_response`'s header-establishing branch silently dropped a non-conformant reply line | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:254-268 — a header line whose 4th byte is neither `' '` nor `'-'` (e.g. `"200\r\n"`, code immediately followed by CRLF) now returns a terminal reply with empty text instead of falling through to `continue` and being silently discarded |
 
 ## Wontfix
 
