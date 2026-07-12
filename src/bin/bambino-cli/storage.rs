@@ -203,7 +203,21 @@ where
     // on the printer's storage.
     let delete_result = client.delete_file(PROBE_PATH).await;
 
-    let files = listing?;
+    let files = match listing {
+        Ok(files) => files,
+        Err(listing_err) => {
+            // BUG-057: the listing error takes priority (it's why the check failed), but
+            // don't let a simultaneous cleanup-delete failure go completely unreported —
+            // the probe file would otherwise be silently left behind on the printer's
+            // storage with no operator-visible signal.
+            if let Err(delete_err) = delete_result {
+                eprintln!(
+                    "Warning: failed to clean up probe file after listing error: {delete_err}"
+                );
+            }
+            return Err(listing_err);
+        }
+    };
     let probe = files.iter().find(|f| f.name == "bambino_clock_probe.txt");
 
     println!("\nHost UTC time before upload : {}", format_utc(before));

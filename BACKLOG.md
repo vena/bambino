@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-057 | Sev3 | bin/bambino-cli/storage.rs | `run_clock_check` silently drops the cleanup-delete's error when the preceding directory listing also fails | 2026-07-11 | See `07-11-REVIEW.md` §2 |
 | BUG-058 | Sev3 | bin/bambino-cli/main.rs | `control ams` usage lines omit `<IP> <SERIAL> [ACCESS_CODE]`, same class as BUG-016 | 2026-07-11 | See `07-11-REVIEW.md` §3 |
 | BUG-059 | Sev3 | tests/client_test.rs | No test asserts the `extrude_cali_flag` wire field despite README documenting flow calibration as a `PrintJobConfig` default | 2026-07-11 | See `07-11-REVIEW.md` §7 |
 | BUG-061 | Sev3 | ftps/parser.rs | `parse_unix_listing` doesn't range-validate `day`/`hour`/`minute` (unlike `month`), so garbage timestamps can reach `FtpFile` | 2026-07-11 | See `07-11-REVIEW.md` §12 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-065 | Sev1 | quirks/mod.rs | `format_z_move_gcode` doesn't reject `NaN` distance | 2026-07-11 | 2026-07-11 | src/quirks/mod.rs:261 — `NaN` failed both the `== 0.0` and `.abs() > z_max` guards (both false for `NaN`), letting a malformed `G0 ZNaN` reach the printer; now gated on `!distance.is_finite()` first, also rejecting `±INFINITY` |
 | BUG-060 | Sev2 | discovery/parser.rs | `parse_ssdp_payload` accepted non-Bambu SSDP devices | 2026-07-11 | 2026-07-11 | src/discovery/parser.rs:213-224 — now rejects packets with neither a recognized `model` (serial prefix or `DevModel`) nor an NT/ST urn containing `bambulab-com`; previously any USN+LOCATION SSDP packet (routers, TVs, other vendors' printers) parsed successfully and could appear in `discover_devices()` results |
 | BUG-068 | Sev2 | ams/parser.rs, ams/mapping.rs | `AMS_MAX_STANDARD_ID = 3` (4 units) too low | 2026-07-11 | 2026-07-11 | src/ams/parser.rs:12 — raised to `7` (8 units), confirmed against bambuddy's `ck_ams_id_range` CHECK constraint (widened in bambuddy issue #1274 for real H2C/H2D hardware) and pybambu's uncapped `tray_now >> 2` decode; previously silently misclassified units 4-7 as non-standard/external in `evaluate_spool_presence`/`resolve_global_tray_id`/`flat_channel_id_for_entry` |
+| BUG-057 | Sev3 | bin/bambino-cli/storage.rs | `run_clock_check` silently drops the cleanup-delete's error when listing also fails | 2026-07-11 | 2026-07-11 | src/bin/bambino-cli/storage.rs:206-219 — when `listing` fails, `delete_result`'s error (if any) is now printed via `eprintln!` before propagating the listing error, instead of being silently discarded |
 
 ## Wontfix
 
