@@ -450,3 +450,100 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
     assert_eq!(cached.nozzle.as_ref().unwrap().info.len(), 1);
     assert_eq!(cached.ctc.unwrap().state, Some(2), "new field applies");
 }
+
+#[test]
+fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
+    // BUG-094: confirmed via pybambu/bambuddy — device.nozzle.info can be absent while
+    // sibling nozzle fields (e.g. exist) change.
+    let mut cached = NozzleCollection {
+        info: vec![NozzleInfo {
+            id: 0,
+            diameter: Some(0.4),
+            tm: None,
+            max_temp: None,
+            nozzle_type: None,
+            wear: None,
+            serial_number: None,
+            sn: None,
+            filament_colour: None,
+            color_m: None,
+            filament_id: None,
+            fila_id: None,
+            stat: None,
+        }],
+        exist: Some(1),
+        state: None,
+        src_id: None,
+        tar_id: None,
+    };
+
+    let partial = NozzleCollection {
+        info: vec![],
+        exist: Some(3),
+        state: None,
+        src_id: None,
+        tar_id: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.info.len(), 1, "info array must survive a partial push");
+    assert_eq!(cached.exist, Some(3), "new field applies");
+}
+
+#[test]
+fn test_extruder_collection_merge_from_preserves_info_on_absence() {
+    let mut cached = ExtruderCollection {
+        info: vec![ExtruderInfo {
+            id: 0,
+            temp: Some(16056565),
+            snow: None,
+            spre: None,
+            star: None,
+            hnow: None,
+            hpre: None,
+            htar: None,
+            stat: None,
+            info: None,
+            filam_bak: vec![],
+            z_bias: None,
+        }],
+        state: Some(2),
+    };
+
+    let partial = ExtruderCollection {
+        info: vec![],
+        state: Some(3),
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.info.len(), 1, "info array must survive a partial push");
+    assert_eq!(cached.state, Some(3), "new field applies");
+}
+
+#[test]
+fn test_airduct_collection_merge_from_preserves_fields_independently() {
+    // BUG-094: confirmed via bambuddy — device.airduct.modeCur can change while parts/modeList
+    // are absent from that same push, and vice versa.
+    let mut cached = AirductCollection {
+        parts: vec![AirductPart {
+            id: 160,
+            state: Some(50),
+        }],
+        mode_cur: Some(0),
+        mode_list: vec![AirductModeListEntry { mode_id: 0 }],
+    };
+
+    let partial = AirductCollection {
+        parts: vec![],
+        mode_cur: Some(1),
+        mode_list: vec![],
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.parts.len(), 1, "parts must survive a mode_cur-only push");
+    assert_eq!(cached.mode_list.len(), 1, "mode_list must survive a mode_cur-only push");
+    assert_eq!(cached.mode_cur, Some(1), "new field applies");
+}

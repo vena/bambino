@@ -60,21 +60,27 @@ impl DeviceTelemetry {
     /// `Some(_)` push wiped the other cached sub-objects (`nozzle`, `extruder`, `airduct`,
     /// `bed`, `ext_tool`) back to `None`.
     ///
-    /// Scope: does not recurse into `NozzleCollection`/`ExtruderCollection`/`AirductCollection`
-    /// — their own `Vec` fields (`info`/`parts`) have the identical `#[serde(default)]` shape
-    /// as `AmsStatusReport.ams`, so the same failure mode is structurally possible one level
-    /// deeper, but no wire capture yet confirms it happens independently of the parent
-    /// sub-object arriving at all (P1S, this crate's only capture so far, never sends
-    /// top-level `device`). See `TELEMETRY_TEST_PLAN.md`.
+    /// BUG-094: recurses into `nozzle`/`extruder`/`airduct` rather than replacing them
+    /// wholesale when both sides have `Some(_)` — confirmed via `pybambu` and `bambuddy`
+    /// (see each collection's own `merge_from`) that `device.nozzle.info`,
+    /// `device.extruder.info`, and `device.airduct.modeCur`/`modeList`/`parts` can each be
+    /// absent independent of their parent sub-object arriving. `ctc`/`bed`/`ext_tool` are not
+    /// recursed into — no evidence at that finer grain from either source.
     pub(crate) fn merge_from(&mut self, incoming: &DeviceTelemetry) {
-        if incoming.nozzle.is_some() {
-            self.nozzle = incoming.nozzle.clone();
+        match (&mut self.nozzle, &incoming.nozzle) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.nozzle = Some(new.clone()),
+            _ => {}
         }
-        if incoming.extruder.is_some() {
-            self.extruder = incoming.extruder.clone();
+        match (&mut self.extruder, &incoming.extruder) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.extruder = Some(new.clone()),
+            _ => {}
         }
-        if incoming.airduct.is_some() {
-            self.airduct = incoming.airduct.clone();
+        match (&mut self.airduct, &incoming.airduct) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.airduct = Some(new.clone()),
+            _ => {}
         }
         if incoming.ctc.is_some() {
             self.ctc = incoming.ctc.clone();
@@ -160,6 +166,31 @@ pub struct NozzleCollection {
     pub tar_id: Option<u32>,
 }
 
+impl NozzleCollection {
+    /// Merges a freshly-parsed `NozzleCollection` into `self` field-by-field.
+    ///
+    /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
+    /// `device.nozzle.info` can be absent from a push while sibling `device.nozzle` fields
+    /// change, and must not be treated as "nozzle info cleared."
+    pub(crate) fn merge_from(&mut self, incoming: &NozzleCollection) {
+        if !incoming.info.is_empty() {
+            self.info = incoming.info.clone();
+        }
+        if incoming.exist.is_some() {
+            self.exist = incoming.exist;
+        }
+        if incoming.state.is_some() {
+            self.state = incoming.state;
+        }
+        if incoming.src_id.is_some() {
+            self.src_id = incoming.src_id;
+        }
+        if incoming.tar_id.is_some() {
+            self.tar_id = incoming.tar_id;
+        }
+    }
+}
+
 /// Dynamic extruder nozzle details.
 ///
 /// Integrates both legacy abbreviated keys (standard platforms) and descriptive keys
@@ -228,6 +259,20 @@ impl ExtruderCollection {
     /// Returns the extruder count extracted from the `state` bitmask.
     pub fn extruder_count(&self) -> u8 {
         self.state.map(|s| (s & 0xF) as u8).unwrap_or(0)
+    }
+
+    /// Merges a freshly-parsed `ExtruderCollection` into `self` field-by-field.
+    ///
+    /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
+    /// `device.extruder.info` can be absent from a push while sibling `device.extruder`
+    /// fields change, and must not be treated as "extruder info cleared."
+    pub(crate) fn merge_from(&mut self, incoming: &ExtruderCollection) {
+        if !incoming.info.is_empty() {
+            self.info = incoming.info.clone();
+        }
+        if incoming.state.is_some() {
+            self.state = incoming.state;
+        }
     }
 }
 
@@ -298,6 +343,25 @@ pub struct AirductCollection {
     /// List of airduct modes available on this model.
     #[serde(rename = "modeList", default)]
     pub mode_list: Vec<AirductModeListEntry>,
+}
+
+impl AirductCollection {
+    /// Merges a freshly-parsed `AirductCollection` into `self` field-by-field.
+    ///
+    /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
+    /// `device.airduct.parts`/`modeCur`/`modeList` can each independently be absent from a
+    /// push, and must not be treated as "cleared."
+    pub(crate) fn merge_from(&mut self, incoming: &AirductCollection) {
+        if !incoming.parts.is_empty() {
+            self.parts = incoming.parts.clone();
+        }
+        if incoming.mode_cur.is_some() {
+            self.mode_cur = incoming.mode_cur;
+        }
+        if !incoming.mode_list.is_empty() {
+            self.mode_list = incoming.mode_list.clone();
+        }
+    }
 }
 
 /// Entry in the airduct mode availability list reported by the printer.
