@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-080 | Sev3 | mqtt/commands/print_job.rs | `subtask_id` clamped via ad hoc `clamp_task_id()` call instead of the `ClampedTaskId` newtype `sequence_id` uses in the same constructor | 2026-07-11 | See `07-11-REVIEW.md` §16 |
 | BUG-081 | Sev3 | types/telemetry/tests.rs | No test verifies `bed_temperatures()` ignores `device.bed_temp` (confirmed-redundant per BUG-054) rather than falling back to it | 2026-07-11 | See `07-11-REVIEW.md` §20 |
 | BUG-082 | Sev3 | types/telemetry/tests.rs | No test exercises a composite-packed (`>500`) `chamber_temper` value through `unpack_temperature()` | 2026-07-11 | See `07-11-REVIEW.md` §20 |
 
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | 2026-07-11 | tests/client_test.rs — added `test_set_fan_speed_clamps_above_100_percent`, asserting `150%` clamps to the same `255` PWM value as `100%` |
 | BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearmed the 10s write-zombie timer | 2026-07-11 | 2026-07-11 | src/mqtt/client/mod.rs:310-317 — now only arms `write_pending_secs` on the *first* unanswered command (`if self.write_pending_secs.is_none()`); previously a steady stream of new commands could reset the timer to 0 on every call, masking an earlier command's zombie state forever |
 | BUG-079 | Sev3 | tests/common/mock_mqtt.rs | `read_packet` raced inside `tokio::select!` despite not being cancellation-safe | 2026-07-11 | 2026-07-11 | tests/common/mock_mqtt.rs — `run_mock_mqtt_broker` now runs `read_packet` in a dedicated task forwarding complete packets through an `mpsc` channel, instead of racing the raw (non-cancellation-safe) multi-await read directly against `inject_rx.recv()`; a losing race previously discarded already-consumed header/length bytes, desyncing later parses |
+| BUG-080 | Sev3 | mqtt/commands/print_job.rs | `subtask_id` clamped via ad hoc `clamp_task_id()` instead of `ClampedTaskId` | 2026-07-11 | 2026-07-11 | src/mqtt/commands/print_job.rs:245 — now uses `ClampedTaskId::from(config.raw_subtask_id)`, matching `sequence_id`'s type-safe clamping in the same constructor; leftover `clamp_task_id` import and doc reference removed |
 
 ## Wontfix
 

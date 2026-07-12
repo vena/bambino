@@ -13,7 +13,7 @@ use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
 use crate::ams::{validate_external_spool_safety, validate_external_spool_safety_flat};
 use crate::models::BambuModel;
 
-use super::{ClampedTaskId, clamp_task_id};
+use super::ClampedTaskId;
 
 /// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 ///
@@ -27,7 +27,7 @@ pub struct PrintJobConfig {
     pub plate_gcode_path: String,
     /// User-friendly label for the print queue task.
     pub subtask_name: String,
-    /// Unique 32-bit tracking identifier before clamping (see `clamp_task_id`).
+    /// Unique 32-bit tracking identifier before clamping (see `ClampedTaskId`).
     pub raw_subtask_id: u64,
     /// Bed plate type (e.g. "textured", "smooth").
     pub bed_type: String,
@@ -242,7 +242,7 @@ impl ProjectFileRequest {
                 sequence_id: sequence_id.into().to_string(),
                 param: config.plate_gcode_path.clone(),
                 subtask_name: config.subtask_name.clone(),
-                subtask_id: clamp_task_id(config.raw_subtask_id).to_string(),
+                subtask_id: ClampedTaskId::from(config.raw_subtask_id).to_string(),
                 file: config.job_filename.clone(),
                 url,
                 timelapse: config.timelapse,
