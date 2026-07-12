@@ -133,7 +133,12 @@ where
     /// the struct).
     fn update_telemetry_cache(&mut self, report: &TelemetryReport) {
         if let Some(device) = report.device() {
-            self.cache.last_device = Some(device.clone());
+            // BUG-093: merge field-by-field rather than replacing wholesale — see
+            // `DeviceTelemetry::merge_from`.
+            match &mut self.cache.last_device {
+                Some(cached) => cached.merge_from(device),
+                None => self.cache.last_device = Some(device.clone()),
+            }
         }
         let Some(print) = report.print.as_ref() else {
             return;

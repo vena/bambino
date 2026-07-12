@@ -50,6 +50,50 @@ pub struct DeviceTelemetry {
     pub bed_temp: Option<u32>,
 }
 
+impl DeviceTelemetry {
+    /// Merges a freshly-parsed `DeviceTelemetry` into `self` field-by-field, instead of
+    /// replacing `self` wholesale.
+    ///
+    /// BUG-093: same shape as `AmsStatusReport::merge_from` (BUG-091) one struct up — a
+    /// `device` push touching only one sub-object (e.g. `ctc`) has every other field simply
+    /// absent from that message, not explicitly cleared. Replacing `self` wholesale on any
+    /// `Some(_)` push wiped the other cached sub-objects (`nozzle`, `extruder`, `airduct`,
+    /// `bed`, `ext_tool`) back to `None`.
+    ///
+    /// Scope: does not recurse into `NozzleCollection`/`ExtruderCollection`/`AirductCollection`
+    /// — their own `Vec` fields (`info`/`parts`) have the identical `#[serde(default)]` shape
+    /// as `AmsStatusReport.ams`, so the same failure mode is structurally possible one level
+    /// deeper, but no wire capture yet confirms it happens independently of the parent
+    /// sub-object arriving at all (P1S, this crate's only capture so far, never sends
+    /// top-level `device`). See `TELEMETRY_TEST_PLAN.md`.
+    pub(crate) fn merge_from(&mut self, incoming: &DeviceTelemetry) {
+        if incoming.nozzle.is_some() {
+            self.nozzle = incoming.nozzle.clone();
+        }
+        if incoming.extruder.is_some() {
+            self.extruder = incoming.extruder.clone();
+        }
+        if incoming.airduct.is_some() {
+            self.airduct = incoming.airduct.clone();
+        }
+        if incoming.ctc.is_some() {
+            self.ctc = incoming.ctc.clone();
+        }
+        if incoming.bed.is_some() {
+            self.bed = incoming.bed.clone();
+        }
+        if incoming.ext_tool.is_some() {
+            self.ext_tool = incoming.ext_tool.clone();
+        }
+        if incoming.fire_ext.is_some() {
+            self.fire_ext = incoming.fire_ext.clone();
+        }
+        if incoming.bed_temp.is_some() {
+            self.bed_temp = incoming.bed_temp;
+        }
+    }
+}
+
 /// Bed telemetry sub-object from `device.bed` on new-protocol printers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedTelemetry {

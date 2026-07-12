@@ -391,3 +391,62 @@ fn test_device_empty_report() {
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     assert!(report.device().is_none());
 }
+
+#[test]
+fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
+    // BUG-093: a `device` push touching only `ctc` must not wipe the previously-cached
+    // `nozzle`/`extruder`/`airduct` sub-objects sitting alongside it.
+    let mut cached = DeviceTelemetry {
+        nozzle: Some(NozzleCollection {
+            info: vec![NozzleInfo {
+                id: 0,
+                diameter: Some(0.4),
+                tm: None,
+                max_temp: None,
+                nozzle_type: None,
+                wear: None,
+                serial_number: None,
+                sn: None,
+                filament_colour: None,
+                color_m: None,
+                filament_id: None,
+                fila_id: None,
+                stat: None,
+            }],
+            exist: Some(1),
+            state: None,
+            src_id: None,
+            tar_id: None,
+        }),
+        extruder: None,
+        airduct: None,
+        ctc: None,
+        bed: None,
+        ext_tool: None,
+        fire_ext: None,
+        bed_temp: None,
+    };
+
+    let partial = DeviceTelemetry {
+        nozzle: None,
+        extruder: None,
+        airduct: None,
+        ctc: Some(CtcTelemetry {
+            info: None,
+            state: Some(2),
+        }),
+        bed: None,
+        ext_tool: None,
+        fire_ext: None,
+        bed_temp: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert!(
+        cached.nozzle.is_some(),
+        "nozzle must survive a ctc-only partial push"
+    );
+    assert_eq!(cached.nozzle.as_ref().unwrap().info.len(), 1);
+    assert_eq!(cached.ctc.unwrap().state, Some(2), "new field applies");
+}
