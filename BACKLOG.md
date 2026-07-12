@@ -10,6 +10,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
+| BUG-089 | needs-verification | ftps/client.rs | `list_directory` rejects `426` unconditionally (unlike `upload_file`/`download_file`'s TLS-1.3-close-race tolerance + `SIZE` recheck); README/reference doc's "safe despite fail-open" justification doesn't cover this path | 2026-07-12 | 07-11-REVIEW.md findings #12/#13; `reference/02_ftps.md` §2.3 documents the TCP-close-vs-`226` race as general ("not only P2S/X2D"), so `list_directory` may hit it too, but a `LIST` payload has no `SIZE`-equivalent integrity recheck — accepting `426` there risks silently returning a truncated listing instead of failing loudly. Needs a real wire capture of a `LIST` racing a `426` (P1S is a valid target: the race is TLS/timing-general per the reference doc, not the P2S-specific TLS-1.3 vsFTPd bug) to determine whether tolerating `426` here is safe or whether the current strict rejection is actually correct as-is |
 
 ## Fixed
 
