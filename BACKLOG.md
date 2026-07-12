@@ -10,6 +10,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
+| BUG-091 | needs-verification | client/telemetry.rs | `update_ams_cache` may wipe cached AMS array on a partial `print.ams` push | 2026-07-12 | `AmsStatusReport.ams: Vec<AmsUnit>` has `#[serde(default)]`; `update_ams_cache` replaces `last_ams` wholesale whenever `print.ams` is `Some`. If firmware ever sends `print.ams` with sibling keys (`tray_now` etc) but omits the inner `ams` array, the cache silently loses tray data. Unlike BUG-083 (confirmed per-tray field omission via reference/05_materials_ams.md), no wire evidence confirms this specific granularity — needs a `dump`-style capture during a live tray-load to confirm or rule out. |
 
 ## Fixed
 
