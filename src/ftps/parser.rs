@@ -142,8 +142,8 @@ pub fn parse_unix_listing(
             None => continue,
         };
         let day = match day_str.parse::<u8>().ok() {
-            Some(d) => d,
-            None => continue,
+            Some(d) if (1..=31).contains(&d) => d,
+            _ => continue,
         };
 
         let mut hour = 0;
@@ -163,6 +163,9 @@ pub fn parse_unix_listing(
                 .and_then(|m| m.parse::<u8>().ok())
                 .unwrap_or(0);
 
+            if parsed_hour > 23 || parsed_minute > 59 {
+                continue;
+            }
             hour = parsed_hour;
             minute = parsed_minute;
 
@@ -269,6 +272,19 @@ mod tests {
         let files = parse_unix_listing(payload, 2026, 6, 17, 15, 0);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "valid.3mf");
+    }
+
+    #[test]
+    fn test_garbage_timestamp_rejected() {
+        // BUG-061: day/hour/minute weren't range-validated (unlike month), so a malformed
+        // "Jun 99 88:70 file.gcode" entry would previously reach FtpFile verbatim.
+        let payload = "-rw-r--r--    1 1000     1000      1024 Jun 99 12:00 bad_day.gcode\n\
+                       -rw-r--r--    1 1000     1000      1024 Jun 17 88:00 bad_hour.gcode\n\
+                       -rw-r--r--    1 1000     1000      1024 Jun 17 12:70 bad_minute.gcode\n\
+                       -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 valid.gcode\n";
+        let files = parse_unix_listing(payload, 2026, 6, 17, 15, 0);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "valid.gcode");
     }
 
     #[test]
