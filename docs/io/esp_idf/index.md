@@ -208,7 +208,13 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 
 - <span id="espidftlsconnector-with-connect-timeout"></span>`fn with_connect_timeout(self, connect_timeout: core::time::Duration) -> Self`
 
-  Overrides the default handshake deadline.
+  Overrides the default handshake deadline. Passing `Duration::ZERO` disables the
+
+  deadline entirely (BUG-077), matching `set_command_timeout`'s "0 disables" convention
+
+  and `client::connect::with_connect_timeout`'s precedent (BUG-007) — otherwise the very
+
+  first would-block poll would immediately exceed a zero-length budget.
 
   Non-consuming — chain onto `new()`/`with_certs()`.
 

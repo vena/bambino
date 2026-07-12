@@ -580,7 +580,7 @@ with named fields and sensible defaults for calibration flags.
 
 - **`raw_subtask_id`**: `u64`
 
-  Unique 32-bit tracking identifier before clamping (see `clamp_task_id`).
+  Unique 32-bit tracking identifier before clamping (see `ClampedTaskId`).
 
 - **`bed_type`**: `String`
 
