@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-071 | Sev3 | bin/bambino-cli/storage.rs | Every `FilesAction` arm using `?` bypasses `client.disconnect()` at the bottom of `run()` on error, skipping FTPS's graceful `QUIT` | 2026-07-11 | See `07-11-REVIEW.md` §2 |
 | BUG-072 | Sev3 | client/mod.rs | `from_mqtt()` hardcodes empty `ip`/`access_code` with no compile-time block on later `.with_ftps()`/`.with_camera()`, which then fail opaquely | 2026-07-11 | See `07-11-REVIEW.md` §6 |
 | BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | See `07-11-REVIEW.md` §7 |
 | BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | See `07-11-REVIEW.md` §7 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-067 | Sev3 | types/telemetry/tests.rs | `test_progress_field_removed` was a verbatim duplicate asserting nothing about `progress` | 2026-07-11 | 2026-07-11 | src/types/telemetry/tests.rs:1531-1539 — rewritten to include a stray `"progress"` key in the input JSON and assert it's silently ignored on deserialize, instead of duplicating `test_mc_percent_deserialization` |
 | BUG-069 | Sev3 | ams/mapping.rs | `MaterialSource::StandardAms`/`AmsHt` fields unvalidated in `flat_channel_id()`/`to_mapping2_entry()` | 2026-07-11 | 2026-07-11 | src/ams/mapping.rs:49-105 — both methods now range-validate `ams_id`/`slot_id`, falling back to the `-1`/unmapped sentinel on an out-of-range value instead of producing a bogus channel/entry; `MaterialSource`'s fields are public so a caller can hand-build an invalid one |
 | BUG-070 | Sev3 | ams/mapping.rs | `build_ams_mapping`/`build_ams_mapping2` silently dropped `filament_id == 0` | 2026-07-11 | 2026-07-11 | src/ams/mapping.rs:174-186,207-216 — both now `log::warn!` when an allocation's `filament_id` falls outside the documented `1..=N` range, instead of silently leaving that project slot unmapped with no operator-visible signal |
+| BUG-071 | Sev3 | bin/bambino-cli/storage.rs | Every `FilesAction` arm bypassed `client.disconnect()` on error | 2026-07-11 | 2026-07-11 | src/bin/bambino-cli/storage.rs:97-173 — `run()`'s dispatch now runs inside an inner `async` block whose `Result` is captured; `client.disconnect()` runs unconditionally before propagating that result, instead of every arm's `?` skipping it and FTPS's graceful `QUIT` on any failure path |
 
 ## Wontfix
 

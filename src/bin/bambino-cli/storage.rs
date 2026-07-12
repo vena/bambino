@@ -94,84 +94,93 @@ pub async fn run(
 
     println!("FTPS connection authenticated. Executing operational action...\n");
 
-    match action {
-        FilesAction::List { remote_path } => {
-            let (year, month, day, hour, min) = current_date_utc();
+    // BUG-071: every arm below used to propagate via `?` directly out of `run()`, bypassing
+    // the `client.disconnect()` at the bottom on any error — skipping FTPS's graceful `QUIT`
+    // on every failure path except the empty-listing early return. Capturing the dispatch
+    // result in a variable instead lets `disconnect()` run unconditionally before the error
+    // (if any) is propagated.
+    let result: Result<(), BambuError> = async {
+        match action {
+            FilesAction::List { remote_path } => {
+                let (year, month, day, hour, min) = current_date_utc();
 
-            println!("Traversing remote files on directory '{}'...", remote_path);
-            let files = client
-                .list_directory(&remote_path, year, month, day, hour, min)
-                .await?;
+                println!("Traversing remote files on directory '{}'...", remote_path);
+                let files = client
+                    .list_directory(&remote_path, year, month, day, hour, min)
+                    .await?;
 
-            if files.is_empty() {
-                println!("Directory is empty or path does not exist.");
-                client.disconnect().await;
-                return Ok(());
+                if files.is_empty() {
+                    println!("Directory is empty or path does not exist.");
+                } else {
+                    print_file_listing_table(&remote_path, &files);
+                }
             }
+            FilesAction::Upload {
+                local_path,
+                remote_path,
+            } => {
+                let local = Path::new(&local_path);
+                let metadata = fs::metadata(local).map_err(|_| {
+                    BambuError::ProtocolViolation("Target local file does not exist".into())
+                })?;
 
-            print_file_listing_table(&remote_path, &files);
-        }
-        FilesAction::Upload {
-            local_path,
-            remote_path,
-        } => {
-            let local = Path::new(&local_path);
-            let metadata = fs::metadata(local).map_err(|_| {
-                BambuError::ProtocolViolation("Target local file does not exist".into())
-            })?;
+                const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
+                if metadata.len() > MAX_UPLOAD_BYTES {
+                    return Err(BambuError::ProtocolViolation(
+                        format!(
+                            "File too large for upload: {} bytes (max {} MB)",
+                            metadata.len(),
+                            MAX_UPLOAD_BYTES / (1024 * 1024)
+                        )
+                        .into(),
+                    ));
+                }
 
-            const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
-            if metadata.len() > MAX_UPLOAD_BYTES {
-                return Err(BambuError::ProtocolViolation(
-                    format!(
-                        "File too large for upload: {} bytes (max {} MB)",
-                        metadata.len(),
-                        MAX_UPLOAD_BYTES / (1024 * 1024)
-                    )
-                    .into(),
-                ));
+                println!("Reading source file '{}' into buffer...", local_path);
+                let payload = fs::read(local).map_err(|_| {
+                    BambuError::ProtocolViolation("Failed to read local target file".into())
+                })?;
+
+                println!(
+                    "Uploading file ({} bytes) to remote path '{}'...",
+                    payload.len(),
+                    remote_path
+                );
+                println!(
+                    "Note: Under heavy write latency, standard SD card flushing may require up to 300 seconds [REF-FTPS-FLUSH]."
+                );
+                client.upload_file(&remote_path, &payload).await?;
+
+                println!(
+                    "Success: File uploaded and non-volatile write-buffers successfully flushed."
+                );
             }
+            FilesAction::Delete { remote_path } => {
+                println!("Deleting file from remote path '{}'...", remote_path);
+                client.delete_file(&remote_path).await?;
+                println!("Success: Target file successfully removed.");
+            }
+            FilesAction::ClockCheck => {
+                run_clock_check(client).await?;
+            }
+            FilesAction::Space => {
+                println!("Querying hardware storage space evaluations...");
+                let space_bytes = client.get_available_space().await?;
+                let space_mb = space_bytes as f64 / (1024.0 * 1024.0);
+                let space_gb = space_mb / 1024.0;
 
-            println!("Reading source file '{}' into buffer...", local_path);
-            let payload = fs::read(local).map_err(|_| {
-                BambuError::ProtocolViolation("Failed to read local target file".into())
-            })?;
-
-            println!(
-                "Uploading file ({} bytes) to remote path '{}'...",
-                payload.len(),
-                remote_path
-            );
-            println!(
-                "Note: Under heavy write latency, standard SD card flushing may require up to 300 seconds [REF-FTPS-FLUSH]."
-            );
-            client.upload_file(&remote_path, &payload).await?;
-
-            println!("Success: File uploaded and non-volatile write-buffers successfully flushed.");
+                println!("\nStorage Capacity Status:");
+                println!("  - Free Space (Bytes) : {}", space_bytes);
+                println!("  - Free Space (MB)    : {:.2} MB", space_mb);
+                println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
+            }
         }
-        FilesAction::Delete { remote_path } => {
-            println!("Deleting file from remote path '{}'...", remote_path);
-            client.delete_file(&remote_path).await?;
-            println!("Success: Target file successfully removed.");
-        }
-        FilesAction::ClockCheck => {
-            run_clock_check(client).await?;
-        }
-        FilesAction::Space => {
-            println!("Querying hardware storage space evaluations...");
-            let space_bytes = client.get_available_space().await?;
-            let space_mb = space_bytes as f64 / (1024.0 * 1024.0);
-            let space_gb = space_mb / 1024.0;
-
-            println!("\nStorage Capacity Status:");
-            println!("  - Free Space (Bytes) : {}", space_bytes);
-            println!("  - Free Space (MB)    : {:.2} MB", space_mb);
-            println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
-        }
+        Ok(())
     }
+    .await;
 
     client.disconnect().await;
-    Ok(())
+    result
 }
 
 /// Uploads a tiny probe file, diffs its printer-reported mtime against host UTC wall-clock
