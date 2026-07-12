@@ -533,3 +533,48 @@ fn test_ams_status_report_merge_from_replaces_array_on_full_update() {
     assert_eq!(cached.ams.len(), 1);
     assert_eq!(cached.ams[0].id, "1", "a non-empty incoming array is authoritative");
 }
+
+#[test]
+fn test_p1s_print_sequence_ams_merge_never_regresses() {
+    // BUG-091 regression test: replays a real P1S wire capture (342 incremental pushes across
+    // a full print — start through finish — including the exact partial `{"tray_tar":"3"}`-only
+    // pushes that proved the bug) through `AmsStatusReport::merge_from` and asserts the merged
+    // unit array never drops from non-empty back to empty mid-sequence, the failure mode
+    // `merge_from` fixes. Captured via `bambino-cli dump --follow` (BUG-092's fix) during a
+    // real tray-load on a P1S.
+    let capture = include_str!("../../../../tests/mocks/P1S_print_sequence.ndjson");
+
+    let mut merged: Option<AmsStatusReport> = None;
+    let mut saw_non_empty = false;
+
+    for line in capture.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let report: TelemetryReport = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("failed to parse capture line: {e}\n{line}"));
+        let Some(ams) = report.print.and_then(|p| p.ams) else {
+            continue;
+        };
+
+        match &mut merged {
+            Some(cached) => cached.merge_from(&ams),
+            None => merged = Some(ams),
+        }
+
+        let unit_count = merged.as_ref().unwrap().ams.len();
+        if unit_count > 0 {
+            saw_non_empty = true;
+        } else if saw_non_empty {
+            panic!(
+                "AMS unit array regressed to empty after being non-empty earlier in the \
+                 sequence — merge_from must preserve it across a partial push"
+            );
+        }
+    }
+
+    assert!(
+        saw_non_empty,
+        "capture never reported a non-empty AMS unit array — fixture may be stale"
+    );
+}
