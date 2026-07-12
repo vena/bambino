@@ -258,7 +258,7 @@ fn is_g28_prefix(bytes: &[u8], i: usize) -> bool {
 ///
 /// Returns an empty string if `distance` is zero or exceeds the model's Z bounds.
 pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> String {
-    if distance == 0.0 || distance.abs() > z_max {
+    if !distance.is_finite() || distance == 0.0 || distance.abs() > z_max {
         return String::new();
     }
     format!(
@@ -711,6 +711,15 @@ mod tests {
     fn test_z_move_gcode_exceeds_bounds() {
         assert!(format_z_move_gcode(300.0, 3000, 256.0).is_empty());
         assert!(format_z_move_gcode(-300.0, 3000, 256.0).is_empty());
+    }
+
+    #[test]
+    fn test_z_move_gcode_rejects_non_finite() {
+        // Regression: NaN failed both the `== 0.0` and `.abs() > z_max` guards,
+        // so a malformed G0 ZNaN command would have reached the printer (BUG-065).
+        assert!(format_z_move_gcode(f32::NAN, 3000, 256.0).is_empty());
+        assert!(format_z_move_gcode(f32::INFINITY, 3000, 256.0).is_empty());
+        assert!(format_z_move_gcode(f32::NEG_INFINITY, 3000, 256.0).is_empty());
     }
 
     #[test]
