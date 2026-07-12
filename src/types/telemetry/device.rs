@@ -72,8 +72,9 @@ impl DeviceTelemetry {
     /// BUG-097: recurses into `ext_tool` too — confirmed via BambuStudio's own
     /// `DevExtensionToolParser::ParseV2_0` (see `ExtToolTelemetry::merge_from`).
     ///
-    /// `bed` is still not recursed into — no client (pybambu, bambuddy, BambuStudio,
-    /// OrcaSlicer) parses `device.bed` as a nested object at all; see BUG-095.
+    /// BUG-095: recurses into `bed` too — confirmed via BambuStudio's
+    /// `json_diff::restore_objects` generic reconstruction layer (see `BedTelemetry::merge_from`
+    /// for the full trace).
     pub(crate) fn merge_from(&mut self, incoming: &DeviceTelemetry) {
         match (&mut self.nozzle, &incoming.nozzle) {
             (Some(cached), Some(new)) => cached.merge_from(new),
@@ -95,8 +96,10 @@ impl DeviceTelemetry {
             (None, Some(new)) => self.ctc = Some(new.clone()),
             _ => {}
         }
-        if incoming.bed.is_some() {
-            self.bed = incoming.bed.clone();
+        match (&mut self.bed, &incoming.bed) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.bed = Some(new.clone()),
+            _ => {}
         }
         match (&mut self.ext_tool, &incoming.ext_tool) {
             (Some(cached), Some(new)) => cached.merge_from(new),
@@ -121,6 +124,34 @@ pub struct BedTelemetry {
     /// Bed heating state (2 = heating).
     #[serde(default)]
     pub state: Option<u32>,
+}
+
+impl BedTelemetry {
+    /// Merges a freshly-parsed `BedTelemetry` into `self` field-by-field.
+    ///
+    /// BUG-095: confirmed against BambuStudio's `json_diff::restore_objects`
+    /// (`src/slic3r/Utils/json_diff.cpp`), wired into `MachineObject::parse_json` for any
+    /// message tagged `print.msg == 1` ("diff message" — confirmed live in real P1S traffic
+    /// via `tests/mocks/P1S_print_sequence.ndjson`'s `print.msg` values `0`/`1`). Before any
+    /// field-specific parser runs, `restore_objects` recursively reconstructs the entire
+    /// payload against the last-known full state: for every nested object at every depth,
+    /// each leaf field independently takes the incoming value if present, otherwise the
+    /// cached one. Traced end-to-end in both BambuStudio and OrcaSlicer (identical, not
+    /// diverged): `parse_json` → `diff2all` → `jj = j["print"]` → `parse_new_info(jj)` →
+    /// `device = print["device"]` → `DevBed::ParseV2_0(device, m_bed)` all operate on the
+    /// already-reconstructed tree — so `device.bed.info`/`device.bed.state` each survive a
+    /// partial push independently of each other, the same as BUG-096's `ctc.info`/`.state`,
+    /// even though no field-specific parser (`DevBed.cpp`) ever reads the nested object at
+    /// all — the reconstruction layer preserves it regardless of whether anything downstream
+    /// consumes it.
+    pub(crate) fn merge_from(&mut self, incoming: &BedTelemetry) {
+        if incoming.info.is_some() {
+            self.info = incoming.info.clone();
+        }
+        if incoming.state.is_some() {
+            self.state = incoming.state;
+        }
+    }
 }
 
 /// Bed info segment with composite-packed temperature.

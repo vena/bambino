@@ -27,8 +27,10 @@ impl CtcTelemetry {
     /// arrive absent while `state` is present. `self.info` must not be cleared just
     /// because a push carries `ctc.state` without repeating `ctc.info`.
     pub(crate) fn merge_from(&mut self, incoming: &CtcTelemetry) {
-        if incoming.info.is_some() {
-            self.info = incoming.info.clone();
+        match (&mut self.info, &incoming.info) {
+            (Some(cached), Some(new)) => cached.merge_from(new),
+            (None, Some(new)) => self.info = Some(new.clone()),
+            _ => {}
         }
         if incoming.state.is_some() {
             self.state = incoming.state;
@@ -46,6 +48,26 @@ pub struct CtcInfo {
     /// Explicit CTC target temperature (authoritative on new-gen models).
     #[serde(default)]
     pub target: Option<u32>,
+}
+
+impl CtcInfo {
+    /// Merges a freshly-parsed `CtcInfo` into `self` field-by-field.
+    ///
+    /// `target` is a real, independently-arriving wire key — `bambuddy`
+    /// (`bambu_mqtt.py:2652`, `if "target" in ctc_info:`) explicitly guards it separately
+    /// from `temp`. BambuStudio's `DevChamber.cpp` never reads `target` at all (it derives
+    /// both actual and target from the single bit-packed `temp` value instead), so it offers
+    /// no counter-evidence, but doesn't need to: `self.info` was previously cloned wholesale
+    /// whenever `ctc.info` was present at all, which would silently drop a cached `target` on
+    /// any push whose `ctc.info` repeats only `temp`.
+    pub(crate) fn merge_from(&mut self, incoming: &CtcInfo) {
+        if incoming.temp.is_some() {
+            self.temp = incoming.temp;
+        }
+        if incoming.target.is_some() {
+            self.target = incoming.target;
+        }
+    }
 }
 
 /// Camera and recording state telemetry, nested as `print.ipcam` on the wire.

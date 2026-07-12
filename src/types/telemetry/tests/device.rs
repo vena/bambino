@@ -573,6 +573,49 @@ fn test_ctc_telemetry_merge_from_preserves_info_on_absence() {
 }
 
 #[test]
+fn test_ctc_info_merge_from_preserves_target_on_absence() {
+    // target is a real, independently-arriving wire key per bambuddy's own
+    // `if "target" in ctc_info:` guard — a ctc.info push repeating only temp must not wipe
+    // a previously-cached target.
+    let mut cached = CtcInfo {
+        temp: Some(1900000),
+        target: Some(30),
+    };
+
+    let partial = CtcInfo {
+        temp: Some(2000000),
+        target: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.temp, Some(2000000), "new field applies");
+    assert_eq!(cached.target, Some(30), "target must survive a temp-only push");
+}
+
+#[test]
+fn test_bed_telemetry_merge_from_preserves_info_on_absence() {
+    // BUG-095: confirmed via BambuStudio's json_diff::restore_objects generic reconstruction
+    // layer — device.bed.info can be absent while device.bed.state is present (and changes)
+    // in the same push, same shape as BUG-096's device.ctc.info/.state.
+    let mut cached = BedTelemetry {
+        info: Some(BedInfo { temp: Some(1900000) }),
+        state: Some(0),
+    };
+
+    let partial = BedTelemetry {
+        info: None,
+        state: Some(2),
+    };
+
+    cached.merge_from(&partial);
+
+    assert!(cached.info.is_some(), "info must survive a state-only push");
+    assert_eq!(cached.info.unwrap().temp, Some(1900000));
+    assert_eq!(cached.state, Some(2), "new field applies");
+}
+
+#[test]
 fn test_ext_tool_telemetry_merge_from_preserves_fields_independently() {
     // BUG-097: confirmed via BambuStudio's DevExtensionToolParser::ParseV2_0 — mount_3d/calib
     // (ParseVal with current-value default) and type/tool_type (unrecognized/absent falls
