@@ -212,9 +212,10 @@ fn test_p1s_wire_capture_end_to_end() {
     assert_eq!(ams.ams.len(), 1);
     let unit = &ams.ams[0];
     assert_eq!(unit.id, "0");
-    assert_eq!(unit.tray.len(), 4);
-    assert_eq!(unit.tray[0].id, "0");
-    assert_eq!(unit.tray[3].id, "3");
+    let unit_tray = unit.tray.as_ref().unwrap();
+    assert_eq!(unit_tray.len(), 4);
+    assert_eq!(unit_tray[0].id, "0");
+    assert_eq!(unit_tray[3].id, "3");
 
     // Fix D: vt_tray
     let vt = print.vt_tray.expect("vt_tray present");

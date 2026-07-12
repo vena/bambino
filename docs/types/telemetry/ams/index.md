@@ -358,7 +358,7 @@ struct AmsUnit {
     pub humidity_raw: Option<String>,
     pub dry_time: Option<u32>,
     pub dry_setting: Option<AmsDrySetting>,
-    pub tray: Vec<AmsTray>,
+    pub tray: Option<Vec<AmsTray>>,
     pub info: Option<String>,
     pub dry_sf_reason: Option<Vec<i32>>,
 }
@@ -394,9 +394,18 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Drying configuration settings (target temperature, duration, filament type).
 
-- **`tray`**: `Vec<AmsTray>`
+- **`tray`**: `Option<Vec<AmsTray>>`
 
   Trays / spool slots configured inside the designated unit.
+  
+  `None` means this push's `tray` key was absent from the wire — leave previously
+  cached trays untouched. `Some(vec![])` means the key was present but empty, which
+  (per `AmsUnit::merge_from`) prunes every cached tray for this unit — bambino's
+  `#[serde(default)]` on `Option<Vec<_>>` gives exactly this absent-vs-present-empty
+  distinction for free (absent key -> `None` via `Default`, present key -> `Some(_)`
+  however short), confirmed against BambuStudio's `DevFilaSystem.cpp`
+  (`ParseAmsInfo`'s `if (j_ams.contains("tray"))` gate around both the per-tray parse
+  loop and the prune-absent-ids loop).
 
 - **`info`**: `Option<String>`
 

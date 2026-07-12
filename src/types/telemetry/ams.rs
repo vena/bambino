@@ -161,8 +161,17 @@ pub struct AmsUnit {
     pub dry_setting: Option<AmsDrySetting>,
 
     /// Trays / spool slots configured inside the designated unit.
+    ///
+    /// `None` means this push's `tray` key was absent from the wire — leave previously
+    /// cached trays untouched. `Some(vec![])` means the key was present but empty, which
+    /// (per `AmsUnit::merge_from`) prunes every cached tray for this unit — bambino's
+    /// `#[serde(default)]` on `Option<Vec<_>>` gives exactly this absent-vs-present-empty
+    /// distinction for free (absent key -> `None` via `Default`, present key -> `Some(_)`
+    /// however short), confirmed against BambuStudio's `DevFilaSystem.cpp`
+    /// (`ParseAmsInfo`'s `if (j_ams.contains("tray"))` gate around both the per-tray parse
+    /// loop and the prune-absent-ids loop).
     #[serde(default)]
-    pub tray: Vec<AmsTray>,
+    pub tray: Option<Vec<AmsTray>>,
 
     /// Hex-encoded bitmask: bits 0–3 = AMS type, bits 4–7 = dry_status, bits 8–11 = extruder assignment (IDEX routing).
     #[serde(default)]
@@ -179,16 +188,24 @@ impl AmsUnit {
     ///
     /// BUG-098: confirmed against BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`,
     /// ~L590-720) — every field here (`humidity_raw`, `dry_time` via `ParseVal`'s no-default
-    /// overload, `dry_setting`, `dry_sf_reason`, `tray`) is gated behind `.contains()` or
-    /// `ParseVal`'s no-default overload against a persistent per-unit object, i.e.
-    /// preserve-on-absence. `temp`/`humidity` aren't `Option` in this crate's model (they
-    /// deserialize as required — a unit object omitting them entirely wouldn't parse as
-    /// `AmsUnit` at all), so they always take the incoming value with no merge needed.
-    /// `dry_time` specifically: `pybambu`'s own git history (`c517861` "Fix AMS2 updates")
-    /// shows a hard `KeyError` on absence was replaced with a naive `.get(..., 0)` default to
-    /// fix a real crash — confirming the field can be absent, but its own fix is the same
-    /// naive-default class `bambuddy`'s `#1462` documents and corrects; 2 of 3 sources
-    /// (BambuStudio, `bambuddy`) agree on preserve-on-absence as the correct handling.
+    /// overload, `dry_setting`, `dry_sf_reason`) is gated behind `.contains()` or `ParseVal`'s
+    /// no-default overload against a persistent per-unit object, i.e. preserve-on-absence.
+    /// `temp`/`humidity` aren't `Option` in this crate's model (they deserialize as required —
+    /// a unit object omitting them entirely wouldn't parse as `AmsUnit` at all), so they
+    /// always take the incoming value with no merge needed. `dry_time` specifically:
+    /// `pybambu`'s own git history (`c517861` "Fix AMS2 updates") shows a hard `KeyError` on
+    /// absence was replaced with a naive `.get(..., 0)` default to fix a real crash —
+    /// confirming the field can be absent, but its own fix is the same naive-default class
+    /// `bambuddy`'s `#1462` documents and corrects; 2 of 3 sources (BambuStudio, `bambuddy`)
+    /// agree on preserve-on-absence as the correct handling.
+    ///
+    /// `tray` is now a keyed per-tray merge (not wholesale array replace), with pruning of
+    /// cached tray ids absent from a *present* incoming array — confirmed against
+    /// `ParseAmsInfo`'s `if (j_ams.contains("tray"))` block, which both keyed-merges
+    /// (`curr_ams->GetTray(tray_id)`, create-or-reuse, field merge via `ParseAmsTrayInfo`) and
+    /// prunes any previously-cached `tray_id` not present in `existing_tray_set` after the
+    /// loop — but *only* when the `tray` key itself was present in this push (`tray: None`
+    /// leaves the cached trays untouched entirely, matching every other field here).
     pub(crate) fn merge_from(&mut self, incoming: &AmsUnit) {
         self.temp = incoming.temp.clone();
         self.humidity = incoming.humidity.clone();
@@ -201,8 +218,15 @@ impl AmsUnit {
         if incoming.dry_setting.is_some() {
             self.dry_setting = incoming.dry_setting.clone();
         }
-        if !incoming.tray.is_empty() {
-            self.tray = incoming.tray.clone();
+        if let Some(incoming_trays) = &incoming.tray {
+            let cached_trays = self.tray.get_or_insert_with(Vec::new);
+            for incoming_tray in incoming_trays {
+                match cached_trays.iter_mut().find(|t| t.id == incoming_tray.id) {
+                    Some(cached_tray) => cached_tray.merge_from(incoming_tray),
+                    None => cached_trays.push(incoming_tray.clone()),
+                }
+            }
+            cached_trays.retain(|t| incoming_trays.iter().any(|it| it.id == t.id));
         }
         if incoming.info.is_some() {
             self.info = incoming.info.clone();
@@ -457,5 +481,109 @@ impl AmsTray {
     /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
     pub fn get_state(&self) -> u8 {
         self.state.unwrap_or(AMS_TRAY_STATE_EMPTY)
+    }
+}
+
+impl AmsTray {
+    /// Merges a freshly-parsed `AmsTray` into `self` field-by-field, instead of replacing
+    /// `self` wholesale.
+    ///
+    /// Confirmed against BambuStudio's `DevFilaSystem.cpp` (`ParseAmsTrayInfo`, ~L743-848) —
+    /// every field is gated behind `DevJsonValParser::ParseVal`'s 3-arg (preserve-on-absence)
+    /// overload, **except** `tag_uid`, `tray_uuid` (4-arg `ParseVal` with a `"0"` default) and
+    /// `remain` (4-arg with a `-1` default), which BambuStudio resets to a fixed default
+    /// whenever a push omits them. This merge deliberately does **not** replicate that
+    /// reset-on-absence behavior for those three fields: a real P1S wire capture
+    /// (`tests/mocks/P1S_print_sequence.ndjson`) shows minimal `{"id":"N"}`-only tray pushes
+    /// are routine in normal incremental telemetry (no `tag_uid`/`remain`/anything else
+    /// repeated), and applying BambuStudio's literal reset there would wipe a tray's RFID tag
+    /// and remaining-percent on every such push — the exact "wholesale clobber on a partial
+    /// push" staleness class already fixed at other levels of this tree (BUG-091/097/098).
+    /// `tray_info_idx`/`tray_type` are similarly not coupled the way BambuStudio couples them
+    /// (both-or-neither, tied to its own `setting_id`-driven `m_fila_type` resolution) — that
+    /// coupling is BambuStudio-internal derived-field logic, not a raw preserve/reset merge
+    /// rule, so it's out of scope for this intentionally "dumb" field-level merge. `state` has
+    /// no BambuStudio counterpart at all (grepped, zero matches in `DevFilaSystem.cpp` for a
+    /// tray-level `state` field) — preserved on absence like every field with no confirmed
+    /// counterpart elsewhere in this codebase (BUG-097's precedent).
+    pub(crate) fn merge_from(&mut self, incoming: &AmsTray) {
+        if incoming.state.is_some() {
+            self.state = incoming.state;
+        }
+        if incoming.tray_type.is_some() {
+            self.tray_type = incoming.tray_type.clone();
+        }
+        if incoming.tray_color.is_some() {
+            self.tray_color = incoming.tray_color.clone();
+        }
+        if incoming.tray_info_idx.is_some() {
+            self.tray_info_idx = incoming.tray_info_idx.clone();
+        }
+        if incoming.tag_uid.is_some() {
+            self.tag_uid = incoming.tag_uid.clone();
+        }
+        if incoming.tray_uuid.is_some() {
+            self.tray_uuid = incoming.tray_uuid.clone();
+        }
+        if incoming.remain.is_some() {
+            self.remain = incoming.remain;
+        }
+        if incoming.tray_sub_brands.is_some() {
+            self.tray_sub_brands = incoming.tray_sub_brands.clone();
+        }
+        if incoming.nozzle_temp_max.is_some() {
+            self.nozzle_temp_max = incoming.nozzle_temp_max.clone();
+        }
+        if incoming.nozzle_temp_min.is_some() {
+            self.nozzle_temp_min = incoming.nozzle_temp_min.clone();
+        }
+        if incoming.tray_diameter.is_some() {
+            self.tray_diameter = incoming.tray_diameter.clone();
+        }
+        if incoming.tray_weight.is_some() {
+            self.tray_weight = incoming.tray_weight.clone();
+        }
+        if incoming.tray_id_name.is_some() {
+            self.tray_id_name = incoming.tray_id_name.clone();
+        }
+        if incoming.tray_temp.is_some() {
+            self.tray_temp = incoming.tray_temp.clone();
+        }
+        if incoming.tray_time.is_some() {
+            self.tray_time = incoming.tray_time.clone();
+        }
+        if incoming.drying_temp.is_some() {
+            self.drying_temp = incoming.drying_temp.clone();
+        }
+        if incoming.drying_time.is_some() {
+            self.drying_time = incoming.drying_time.clone();
+        }
+        if incoming.bed_temp.is_some() {
+            self.bed_temp = incoming.bed_temp.clone();
+        }
+        if incoming.bed_temp_type.is_some() {
+            self.bed_temp_type = incoming.bed_temp_type.clone();
+        }
+        if incoming.xcam_info.is_some() {
+            self.xcam_info = incoming.xcam_info.clone();
+        }
+        if incoming.k.is_some() {
+            self.k = incoming.k;
+        }
+        if incoming.n.is_some() {
+            self.n = incoming.n;
+        }
+        if incoming.cali_idx.is_some() {
+            self.cali_idx = incoming.cali_idx;
+        }
+        if incoming.cols.is_some() {
+            self.cols = incoming.cols.clone();
+        }
+        if incoming.ctype.is_some() {
+            self.ctype = incoming.ctype;
+        }
+        if incoming.total_len.is_some() {
+            self.total_len = incoming.total_len;
+        }
     }
 }

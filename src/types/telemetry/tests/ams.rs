@@ -39,15 +39,16 @@ fn test_ams_nested_wire_format() {
     assert_eq!(unit.id, "0");
     assert_eq!(unit.temp, "26.0");
     assert_eq!(unit.humidity, "3");
-    assert_eq!(unit.tray.len(), 4);
+    let unit_tray = unit.tray.as_ref().unwrap();
+    assert_eq!(unit_tray.len(), 4);
 
-    assert_eq!(unit.tray[0].tray_type.as_deref(), Some("PLA"));
-    assert_eq!(unit.tray[0].state, Some(10));
-    assert_eq!(unit.tray[1].state, Some(11));
-    assert_eq!(unit.tray[1].tray_type.as_deref(), Some("PETG"));
+    assert_eq!(unit_tray[0].tray_type.as_deref(), Some("PLA"));
+    assert_eq!(unit_tray[0].state, Some(10));
+    assert_eq!(unit_tray[1].state, Some(11));
+    assert_eq!(unit_tray[1].tray_type.as_deref(), Some("PETG"));
     // Slot 2: empty (truncated JSON — P1S firmware behavior)
-    assert_eq!(unit.tray[2].state, None);
-    assert_eq!(unit.tray[2].get_state(), 9);
+    assert_eq!(unit_tray[2].state, None);
+    assert_eq!(unit_tray[2].get_state(), 9);
 }
 
 #[test]
@@ -304,7 +305,7 @@ fn test_ams_unit_info_accessors_full_bitmask() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: Some("11002103".into()),
         dry_sf_reason: None,
     };
@@ -325,7 +326,7 @@ fn test_ams_unit_info_accessors_short_bitmask() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: Some("2103".into()),
         dry_sf_reason: None,
     };
@@ -346,7 +347,7 @@ fn test_ams_unit_info_accessors_right_extruder() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: Some("2003".into()),
         dry_sf_reason: None,
     };
@@ -366,7 +367,7 @@ fn test_ams_unit_info_uninitialized_extruder() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: Some("E03".into()),
         dry_sf_reason: None,
     };
@@ -383,7 +384,7 @@ fn test_ams_unit_info_absent() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: None,
         dry_sf_reason: None,
     };
@@ -404,7 +405,7 @@ fn test_ams_unit_info_with_dry_status() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: Some("2053".into()),
         dry_sf_reason: None,
     };
@@ -426,7 +427,7 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
             humidity_raw: None,
             dry_time: None,
             dry_setting: None,
-            tray: vec![],
+            tray: None,
             info: None,
             dry_sf_reason: None,
         }],
@@ -488,7 +489,7 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
             humidity_raw: None,
             dry_time: None,
             dry_setting: None,
-            tray: vec![],
+            tray: None,
             info: None,
             dry_sf_reason: None,
         }],
@@ -515,7 +516,7 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
             humidity_raw: None,
             dry_time: None,
             dry_setting: None,
-            tray: vec![],
+            tray: None,
             info: None,
             dry_sf_reason: None,
         }],
@@ -557,7 +558,7 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
             dry_duration: Some(240),
             dry_filament: Some("PA-CF".into()),
         }),
-        tray: vec![],
+        tray: None,
         info: Some("10001003".into()),
         dry_sf_reason: Some(vec![1, 2]),
     };
@@ -569,7 +570,7 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
-        tray: vec![],
+        tray: None,
         info: None,
         dry_sf_reason: None,
     };
@@ -631,5 +632,220 @@ fn test_p1s_print_sequence_ams_merge_never_regresses() {
     assert!(
         saw_non_empty,
         "capture never reported a non-empty AMS unit array — fixture may be stale"
+    );
+}
+
+#[test]
+fn test_ams_tray_merge_from_preserves_fields_on_absence() {
+    // Confirmed against BambuStudio's `ParseAmsTrayInfo` — a partial per-tray push (e.g. just
+    // `state` changing) must not clobber previously-known fields the push didn't repeat.
+    let mut cached = AmsTray {
+        id: "0".into(),
+        state: Some(11),
+        tray_type: Some("PLA".into()),
+        tray_color: Some("FF0000FF".into()),
+        tag_uid: Some("ABCDEF1234567890".into()),
+        tray_uuid: Some("UUID_MOCK".into()),
+        remain: Some(80),
+        nozzle_temp_max: Some("220".into()),
+        nozzle_temp_min: Some("190".into()),
+        k: Some(0.02),
+        n: Some(1),
+        ..Default::default()
+    };
+
+    let partial = AmsTray {
+        id: "0".into(),
+        state: Some(10),
+        ..Default::default()
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.state, Some(10), "state always takes the incoming value");
+    assert_eq!(
+        cached.tray_type.as_deref(),
+        Some("PLA"),
+        "tray_type must survive a state-only push"
+    );
+    assert_eq!(cached.tray_color.as_deref(), Some("FF0000FF"));
+    assert_eq!(
+        cached.tag_uid.as_deref(),
+        Some("ABCDEF1234567890"),
+        "tag_uid must survive absence — deliberately diverges from BambuStudio's literal \
+         reset-to-default, see AmsTray::merge_from's doc comment"
+    );
+    assert_eq!(cached.tray_uuid.as_deref(), Some("UUID_MOCK"));
+    assert_eq!(
+        cached.remain,
+        Some(80),
+        "remain must survive absence — same deliberate divergence as tag_uid"
+    );
+    assert_eq!(cached.nozzle_temp_max.as_deref(), Some("220"));
+    assert_eq!(cached.k, Some(0.02));
+    assert_eq!(cached.n, Some(1));
+}
+
+#[test]
+fn test_ams_unit_merge_from_keys_and_prunes_trays() {
+    // Finding 1: a tray_id present in both cached and incoming arrays must field-merge (not
+    // get wholesale-replaced by whatever subset of fields the incoming push repeats), a new
+    // tray_id must be added, and a cached tray_id absent from a *present* incoming array must
+    // be pruned — confirmed against `ParseAmsInfo`'s `existing_tray_set`-gated erase loop.
+    let mut cached = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: Some(vec![
+            AmsTray {
+                id: "0".into(),
+                state: Some(11),
+                tray_type: Some("PLA".into()),
+                tray_color: Some("FF0000FF".into()),
+                remain: Some(85),
+                ..Default::default()
+            },
+            AmsTray {
+                id: "1".into(),
+                state: Some(9),
+                ..Default::default()
+            },
+        ]),
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    // Incoming push: tray 0 gets a partial field update (remain only), tray 1 is absent
+    // (pruned), tray 2 is new (added).
+    let partial = AmsUnit {
+        id: "0".into(),
+        temp: "27.0".into(),
+        humidity: "4".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: Some(vec![
+            AmsTray {
+                id: "0".into(),
+                remain: Some(70),
+                ..Default::default()
+            },
+            AmsTray {
+                id: "2".into(),
+                state: Some(11),
+                tray_type: Some("PETG".into()),
+                ..Default::default()
+            },
+        ]),
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    cached.merge_from(&partial);
+
+    let trays = cached.tray.as_ref().unwrap();
+    assert_eq!(trays.len(), 2, "tray 1 must be pruned, tray 2 must be added");
+    assert!(
+        !trays.iter().any(|t| t.id == "1"),
+        "tray absent from a present incoming array must be pruned"
+    );
+
+    let tray0 = trays.iter().find(|t| t.id == "0").unwrap();
+    assert_eq!(tray0.remain, Some(70), "new field applies");
+    assert_eq!(
+        tray0.tray_type.as_deref(),
+        Some("PLA"),
+        "fields absent from the incoming partial tray push must survive"
+    );
+    assert_eq!(tray0.tray_color.as_deref(), Some("FF0000FF"));
+
+    let tray2 = trays.iter().find(|t| t.id == "2").unwrap();
+    assert_eq!(tray2.tray_type.as_deref(), Some("PETG"));
+}
+
+#[test]
+fn test_ams_unit_merge_from_absent_tray_key_leaves_cache_untouched() {
+    // `tray: None` (the wire's `tray` key entirely absent from this push) must leave the
+    // cached trays untouched — distinct from `tray: Some(vec![])` (key present but empty),
+    // which prunes every cached tray. See AmsUnit::tray's doc comment.
+    let mut cached = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: Some(vec![AmsTray {
+            id: "0".into(),
+            tray_type: Some("PLA".into()),
+            ..Default::default()
+        }]),
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    let partial = AmsUnit {
+        id: "0".into(),
+        temp: "27.0".into(),
+        humidity: "4".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: None,
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(
+        cached.tray.as_ref().unwrap().len(),
+        1,
+        "absent tray key must not touch cached trays"
+    );
+}
+
+#[test]
+fn test_ams_unit_merge_from_present_empty_tray_prunes_all() {
+    // `tray: Some(vec![])` — key present but empty — must prune every cached tray, matching
+    // `ParseAmsInfo`'s prune loop running (with an empty existing_tray_set) whenever the
+    // `tray` key is present at all, even with zero elements.
+    let mut cached = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: Some(vec![AmsTray {
+            id: "0".into(),
+            tray_type: Some("PLA".into()),
+            ..Default::default()
+        }]),
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    let partial = AmsUnit {
+        id: "0".into(),
+        temp: "27.0".into(),
+        humidity: "4".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: Some(vec![]),
+        info: None,
+        dry_sf_reason: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(
+        cached.tray.as_ref().unwrap().len(),
+        0,
+        "a present-but-empty tray array must prune every cached tray"
     );
 }
