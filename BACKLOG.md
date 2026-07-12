@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearms the 10s write-zombie timer on every call regardless of already-in-flight commands | 2026-07-11 | See `07-11-REVIEW.md` §15 |
 | BUG-079 | Sev3 | tests/common/mock_mqtt.rs | `read_packet` is not cancellation-safe yet is raced inside `tokio::select!` in `run_mock_mqtt_broker` | 2026-07-11 | See `07-11-REVIEW.md` §15 |
 | BUG-080 | Sev3 | mqtt/commands/print_job.rs | `subtask_id` clamped via ad hoc `clamp_task_id()` call instead of the `ClampedTaskId` newtype `sequence_id` uses in the same constructor | 2026-07-11 | See `07-11-REVIEW.md` §16 |
 | BUG-081 | Sev3 | types/telemetry/tests.rs | No test verifies `bed_temperatures()` ignores `device.bed_temp` (confirmed-redundant per BUG-054) rather than falling back to it | 2026-07-11 | See `07-11-REVIEW.md` §20 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-072 | Sev3 | client/connect.rs | `from_mqtt()`'s empty `ip`/`access_code` reachable via later `.with_ftps()`/`.with_camera()` | 2026-07-11 | 2026-07-11 | src/client/connect.rs — both builders now `assert!` at the call site that `ip`/`access_code` are non-empty, panicking immediately with a clear message instead of failing opaquely at actual connect time; user chose a runtime guard over a full type-state refactor (`PrinterClient` already carries 11 generic params) given Sev3 scope |
 | BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | 2026-07-11 | tests/camera_test.rs — added `test_attach_and_disconnect_camera`, asserting `attach_camera()` leaves an immediately-usable connected stream and `disconnect_camera()` clears `camera_connected()` |
 | BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | 2026-07-11 | tests/client_test.rs — added `test_set_fan_speed_clamps_above_100_percent`, asserting `150%` clamps to the same `255` PWM value as `100%` |
+| BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearmed the 10s write-zombie timer | 2026-07-11 | 2026-07-11 | src/mqtt/client/mod.rs:310-317 — now only arms `write_pending_secs` on the *first* unanswered command (`if self.write_pending_secs.is_none()`); previously a steady stream of new commands could reset the timer to 0 on every call, masking an earlier command's zombie state forever |
 
 ## Wontfix
 

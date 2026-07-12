@@ -307,8 +307,14 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         self.in_flight.insert(packet_id);
 
-        // Arm/reset write-channel zombie detection tracking [REF-MQTT-ZOMBIE]
-        self.write_pending_secs = Some(0);
+        // Arm write-channel zombie detection tracking [REF-MQTT-ZOMBIE] — BUG-078: only on
+        // the *first* unanswered command, not unconditionally on every call. Resetting to 0
+        // on each publish_command() while an earlier command is still awaiting a response
+        // would let a steady stream of new commands mask that earlier one's zombie state
+        // indefinitely, since the counter never reaches MQTT_ZOMBIE_TIMEOUT_SECS.
+        if self.write_pending_secs.is_none() {
+            self.write_pending_secs = Some(0);
+        }
 
         Ok(packet_id)
     }
@@ -662,6 +668,57 @@ mod tests {
                 err
             );
             server_task.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn test_publish_command_does_not_reset_zombie_timer_while_pending() {
+            // BUG-078: publish_command() used to unconditionally set write_pending_secs to
+            // Some(0) on every call, even while an earlier command's response was still
+            // outstanding. A steady stream of new commands would then mask that earlier
+            // command's zombie state forever, since the counter never reached
+            // MQTT_ZOMBIE_TIMEOUT_SECS. It must only arm on the *first* unanswered command.
+            //
+            // Constructs the client directly (bypassing the CONNECT/SUBSCRIBE handshake
+            // entirely, permitted since this test lives in the same module as the private
+            // fields) rather than draining publish_command's writes with hand-rolled
+            // one-shot `.read()` calls on a mock server: two publish_command calls in a row
+            // have no read round-trip between them (unlike CONNECT->SUBSCRIBE, which the
+            // client's own handshake await naturally serializes), so both writes can land in
+            // the duplex buffer before a mock reader ever polls it — coalescing into a single
+            // `.read()` and leaving a second one-shot `.read()` blocked forever. Just holding
+            // `_server_stream` open (never reading it) sidesteps that hazard entirely.
+            let (client_stream, _server_stream) = tokio::io::duplex(8192);
+            let mut client = BambuMqttClient {
+                stream: TokioIo(client_stream),
+                request_topic: "device/01P000000000000/request".to_string(),
+                next_packet_id: 2,
+                in_flight: BTreeSet::new(),
+                pending_messages: VecDeque::new(),
+                pending_bytes: 0,
+                write_pending_secs: None,
+                ping_outstanding: false,
+                secs_since_last_message: 0,
+                read_state: FrameReadState::default(),
+            };
+
+            client
+                .publish_command(b"{}")
+                .await
+                .expect("first publish failed");
+            assert_eq!(client.write_pending_secs, Some(0));
+
+            client.tick_zombie_check(5).expect("tick should not error");
+            assert_eq!(client.write_pending_secs, Some(5));
+
+            client
+                .publish_command(b"{}")
+                .await
+                .expect("second publish failed");
+            assert_eq!(
+                client.write_pending_secs,
+                Some(5),
+                "a second publish while the first is still unanswered must not reset the zombie timer"
+            );
         }
     }
 }
