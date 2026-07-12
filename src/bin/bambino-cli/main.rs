@@ -86,13 +86,18 @@ enum Command {
         access_code: String,
     },
 
-    /// Dump the raw pushall JSON response and exit
+    /// Dump the raw pushall JSON response and exit (or every subsequent push, with --follow)
     Dump {
         ip: String,
         serial: String,
         /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
         #[arg(default_value = "")]
         access_code: String,
+        /// Keep printing every subsequent `print`-bearing push as one compact NDJSON line
+        /// until interrupted (Ctrl+C), instead of exiting after the first pushall response —
+        /// for capturing a sequence of incremental pushes (e.g. across a tray-load event).
+        #[arg(short = 'f', long)]
+        follow: bool,
     },
 
     /// Run command response capture suite and write report
@@ -216,7 +221,8 @@ async fn main() {
             ip,
             serial,
             access_code,
-        } => monitor::dump(&ip, &serial, &resolve_access_code(access_code)).await,
+            follow,
+        } => monitor::dump(&ip, &serial, &resolve_access_code(access_code), follow).await,
         Command::Probe {
             ip,
             serial,

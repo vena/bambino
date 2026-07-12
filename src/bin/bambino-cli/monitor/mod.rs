@@ -16,12 +16,32 @@ use bambino::error::BambuError;
 
 use crate::connection::create_printer;
 
-/// Connects, sends `pushall`, and dumps the first response containing a `print` object as pretty JSON.
-pub async fn dump(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
+/// Connects, sends `pushall`, and either dumps the first response containing a `print` object
+/// as pretty JSON (default) or, with `follow`, keeps printing every subsequent `print`-bearing
+/// push as one compact NDJSON line until interrupted (Ctrl+C) — for capturing a sequence of
+/// incremental pushes (e.g. across a tray-load event) rather than a single snapshot.
+pub async fn dump(
+    ip: &str,
+    serial: &str,
+    access_code: &str,
+    follow: bool,
+) -> Result<(), BambuError> {
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
     printer.request_pushall().await?;
+
+    if follow {
+        eprintln!("Following telemetry pushes as NDJSON — Ctrl+C to stop.");
+        loop {
+            let msg = printer.poll_raw().await?;
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+                && v.get("print").is_some()
+            {
+                println!("{}", serde_json::to_string(&v).unwrap_or_default());
+            }
+        }
+    }
 
     let timeout = tokio::time::sleep(Duration::from_secs(10));
     tokio::pin!(timeout);
