@@ -210,6 +210,20 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let (ip, port) = raw.location.and_then(parse_location)?;
     let model = resolve_model(&serial, effective_dev_model);
 
+    // BUG-060: require a positive Bambu-specific signal before accepting the packet as a
+    // printer record — USN+LOCATION alone is standard SSDP boilerplate any UPnP device
+    // (routers, TVs, other vendors' printers) can supply. `model != Unknown` covers a
+    // recognized serial prefix or `DevModel`; the NT/ST urn check also catches a genuine
+    // Bambu device advertising only via that field with a serial prefix `resolve_model`
+    // doesn't recognize (e.g. the generic `urn:bambulab-com:device:3dprinter:1` case).
+    let is_bambu_device = model != BambuModel::Unknown
+        || raw
+            .nt_or_st
+            .is_some_and(|v| v.to_ascii_lowercase().contains("bambulab-com"));
+    if !is_bambu_device {
+        return None;
+    }
+
     let signal_dbm = raw.dev_signal.and_then(|s| s.parse::<i32>().ok());
 
     Some(SsdpDevice {
@@ -429,5 +443,19 @@ mod tests {
         assert_eq!(device.security_link, "secure");
         assert_eq!(device.version, "01.10.00.00");
         assert_eq!(device.connect_type, "lan");
+    }
+
+    #[test]
+    fn test_non_bambu_device_rejected() {
+        // BUG-060: ordinary UPnP devices (routers, TVs, other vendors' printers) can supply a
+        // USN+LOCATION SSDP packet with no Bambu-specific header at all — must not be accepted
+        // as a printer record.
+        let payload = b"NOTIFY * HTTP/1.1\r\n\
+                        HOST: 239.255.255.250:1900\r\n\
+                        LOCATION: http://192.168.1.99:80/description.xml\r\n\
+                        USN: uuid:12345678-1234-1234-1234-123456789012\r\n\
+                        NT: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n";
+
+        assert!(parse_ssdp_payload(payload).is_none());
     }
 }
