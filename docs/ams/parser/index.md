@@ -42,8 +42,14 @@ This routine inspects the tray's state — 9 (`AMS_TRAY_STATE_EMPTY`) meaning Em
 10 (`AMS_TRAY_STATE_SPOOL_NOT_FED`) meaning a spool is physically present but not yet fed to
 the extruder, both treated as absent-equivalent for stale-data cleansing (BUG-012, verified
 against pybambu/Bambuddy — see `AMS_TRAY_STATE_SPOOL_NOT_FED`'s doc comment) — and clears all
-stale config keys if either applies. It treats an empty `tray_type` string as an explicit
-clearing signal too.
+stale config keys if either applies. Treats an explicit empty `tray_type` string as a
+clearing signal too — but an *absent* `tray_type` (the common incremental-update case,
+e.g. a `state: 11` update that simply doesn't repeat `tray_type`) is not, by itself, a
+clearing signal (BUG-083). Confirmed against `reference/05_materials_ams.md`'s
+Bambuddy cross-check (`on_ams_change`'s `loaded = cur_state == 11 or (cur_state not in
+(9, 10) and cur_type.strip())`): state 11 is unconditionally treated as loaded regardless
+of whether `tray_type` was repeated in that update, so clearing on absence alone would
+wipe a currently-printing tray's material data.
 
 ### `evaluate_spool_presence`
 

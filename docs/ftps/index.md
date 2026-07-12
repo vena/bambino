@@ -136,7 +136,10 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 - **`name`**: `String`
 
-  The parsed file or directory name, preserving single spaces between words.
+  The parsed file or directory name, exactly as reported by the raw `LIST` line
+  (BUG-088) — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
+  and rejoining with a single space, so internal runs of multiple consecutive spaces
+  round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
 
 - **`is_dir`**: `bool`
 
@@ -210,8 +213,9 @@ Parses a line-separated UNIX directory listing payload returned by `LIST`.
 **Whitespace-Insensitive Delimiting:**
 Embedded systems typically insert arbitrary, variable-width spacing gaps to line up listings.
 Rather than relying on rigid column indexes, this implementation tokenizes columns by splitting
-on contiguous whitespace sequences, collecting the initial 8 protocol columns, and rebuilding
-the rest as the filename.
+on contiguous whitespace sequences, collecting the initial 8 protocol columns, and slicing
+the untouched remainder verbatim as the filename (BUG-088 — preserves internal multi-space
+runs exactly, rather than re-tokenizing and rejoining with a single space).
 
 **Temporal Rollover Mitigation:**
 UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
