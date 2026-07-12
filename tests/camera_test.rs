@@ -285,3 +285,55 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
         .await
         .expect("Background mock camera server panicked");
 }
+
+/// BUG-073: `attach_camera()`/`disconnect_camera()` were never exercised by any test. Verifies
+/// attach makes the client immediately usable for frame reads, and disconnect clears the slot.
+#[tokio::test]
+async fn test_attach_and_disconnect_camera() {
+    let access_code = "87654321";
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
+
+    let mut camera_stream: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
+        BambuBinaryCameraStream::new(TokioIo(client_stream));
+    camera_stream
+        .authenticate(access_code)
+        .await
+        .expect("Failed to negotiate binary stream authentication handshake");
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        DummyFactory,
+        "127.0.0.1",
+        SERIAL,
+        access_code,
+        BambuModel::P1S,
+    )
+    .with_camera(
+        DummyTlsConnector,
+        MockDataStreamFactory {
+            active_stream: Arc::new(Mutex::new(None)),
+        },
+    );
+    assert!(!client.camera_connected());
+
+    client.attach_camera(camera_stream);
+    assert!(client.camera_connected());
+
+    let mut frame_buf = Vec::new();
+    client
+        .read_camera_frame(&mut frame_buf)
+        .await
+        .expect("attach_camera should leave an immediately-usable connected stream");
+    assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
+
+    client
+        .disconnect_camera()
+        .await
+        .expect("disconnect_camera should succeed");
+    assert!(!client.camera_connected(), "disconnect_camera must clear self.camera");
+
+    server_handle
+        .await
+        .expect("Background mock camera server panicked");
+}

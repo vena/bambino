@@ -10,8 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | See `07-11-REVIEW.md` §7 |
-| BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | See `07-11-REVIEW.md` §7 |
 | BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearms the 10s write-zombie timer on every call regardless of already-in-flight commands | 2026-07-11 | See `07-11-REVIEW.md` §15 |
 | BUG-079 | Sev3 | tests/common/mock_mqtt.rs | `read_packet` is not cancellation-safe yet is raced inside `tokio::select!` in `run_mock_mqtt_broker` | 2026-07-11 | See `07-11-REVIEW.md` §15 |
 | BUG-080 | Sev3 | mqtt/commands/print_job.rs | `subtask_id` clamped via ad hoc `clamp_task_id()` call instead of the `ClampedTaskId` newtype `sequence_id` uses in the same constructor | 2026-07-11 | See `07-11-REVIEW.md` §16 |
@@ -96,6 +94,8 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-070 | Sev3 | ams/mapping.rs | `build_ams_mapping`/`build_ams_mapping2` silently dropped `filament_id == 0` | 2026-07-11 | 2026-07-11 | src/ams/mapping.rs:174-186,207-216 — both now `log::warn!` when an allocation's `filament_id` falls outside the documented `1..=N` range, instead of silently leaving that project slot unmapped with no operator-visible signal |
 | BUG-071 | Sev3 | bin/bambino-cli/storage.rs | Every `FilesAction` arm bypassed `client.disconnect()` on error | 2026-07-11 | 2026-07-11 | src/bin/bambino-cli/storage.rs:97-173 — `run()`'s dispatch now runs inside an inner `async` block whose `Result` is captured; `client.disconnect()` runs unconditionally before propagating that result, instead of every arm's `?` skipping it and FTPS's graceful `QUIT` on any failure path |
 | BUG-072 | Sev3 | client/connect.rs | `from_mqtt()`'s empty `ip`/`access_code` reachable via later `.with_ftps()`/`.with_camera()` | 2026-07-11 | 2026-07-11 | src/client/connect.rs — both builders now `assert!` at the call site that `ip`/`access_code` are non-empty, panicking immediately with a clear message instead of failing opaquely at actual connect time; user chose a runtime guard over a full type-state refactor (`PrinterClient` already carries 11 generic params) given Sev3 scope |
+| BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | 2026-07-11 | tests/camera_test.rs — added `test_attach_and_disconnect_camera`, asserting `attach_camera()` leaves an immediately-usable connected stream and `disconnect_camera()` clears `camera_connected()` |
+| BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | 2026-07-11 | tests/client_test.rs — added `test_set_fan_speed_clamps_above_100_percent`, asserting `150%` clamps to the same `255` PWM value as `100%` |
 
 ## Wontfix
 

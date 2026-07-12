@@ -431,6 +431,33 @@ async fn test_cooling_fans_and_peripheral_switches() {
 }
 
 #[tokio::test]
+async fn test_set_fan_speed_clamps_above_100_percent() {
+    // BUG-074: set_fan_speed's speed_percent > 100 clamp path was never exercised — every
+    // existing call in this file used values <= 100. 150% must clamp to the same 255 PWM
+    // value 100% produces, not overflow or wrap.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "M106 P1 S255\n"); // clamped to 100% PWM
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    client
+        .set_fan_speed(FanTarget::PartCooling, 150)
+        .await
+        .expect("Part cooling fan set failed");
+
+    broker_task.await.expect("broker task panicked");
+}
+
+#[tokio::test]
 async fn test_queue_lifecycle_control_blocks() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
