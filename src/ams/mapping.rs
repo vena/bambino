@@ -46,12 +46,30 @@ impl MaterialSource {
     /// 254 or 255) if passed inside the flat `ams_mapping` array, throwing a `0700_8012`
     /// "Failed to get AMS mapping table" error. Virtual external spools and unused slots
     /// must strictly be mapped to the `-1` (unmapped) sentinel in the flat array.
+    ///
+    /// BUG-069: `StandardAms`/`AmsHt` fields are public `u8`s a caller can hand-build with an
+    /// out-of-range `ams_id`/`slot_id` (unlike `parser.rs`'s inbound-side bounds-checking on
+    /// wire data) — validated here the same way, falling back to the `-1` sentinel rather than
+    /// producing a bogus flat channel value.
     pub fn flat_channel_id(&self) -> i32 {
         match self {
             MaterialSource::StandardAms { ams_id, slot_id } => {
-                ((*ams_id as i32) * 4) + (*slot_id as i32)
+                if *ams_id <= super::parser::AMS_MAX_STANDARD_ID
+                    && *slot_id < super::parser::AMS_SLOTS_PER_UNIT
+                {
+                    ((*ams_id as i32) * super::parser::AMS_SLOTS_PER_UNIT as i32)
+                        + (*slot_id as i32)
+                } else {
+                    -1
+                }
             }
-            MaterialSource::AmsHt { ams_id } => *ams_id as i32,
+            MaterialSource::AmsHt { ams_id } => {
+                if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(ams_id) {
+                    *ams_id as i32
+                } else {
+                    -1
+                }
+            }
             _ => -1, // External and unmapped slots are strictly mapped to -1
         }
     }
@@ -59,14 +77,37 @@ impl MaterialSource {
     /// Converts this source location into a structured `ams_mapping2` JSON entry.
     pub fn to_mapping2_entry(&self) -> AmsMapping2Entry {
         match self {
-            MaterialSource::StandardAms { ams_id, slot_id } => AmsMapping2Entry {
-                ams_id: *ams_id,
-                slot_id: *slot_id,
-            },
-            MaterialSource::AmsHt { ams_id } => AmsMapping2Entry {
-                ams_id: *ams_id,
-                slot_id: 0,
-            },
+            // BUG-069: same out-of-range validation as flat_channel_id() — an invalid
+            // ams_id/slot_id falls back to the same unmapped sentinel entry as
+            // MaterialSource::Unmapped, rather than serializing a bogus StandardAms/AmsHt entry.
+            MaterialSource::StandardAms { ams_id, slot_id } => {
+                if *ams_id <= super::parser::AMS_MAX_STANDARD_ID
+                    && *slot_id < super::parser::AMS_SLOTS_PER_UNIT
+                {
+                    AmsMapping2Entry {
+                        ams_id: *ams_id,
+                        slot_id: *slot_id,
+                    }
+                } else {
+                    AmsMapping2Entry {
+                        ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                        slot_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                    }
+                }
+            }
+            MaterialSource::AmsHt { ams_id } => {
+                if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(ams_id) {
+                    AmsMapping2Entry {
+                        ams_id: *ams_id,
+                        slot_id: 0,
+                    }
+                } else {
+                    AmsMapping2Entry {
+                        ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                        slot_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                    }
+                }
+            }
             MaterialSource::ExternalSpool => AmsMapping2Entry {
                 ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
                 slot_id: 0,
@@ -368,6 +409,41 @@ mod tests {
         let allocations = [(1, MaterialSource::AmsHt { ams_id: 128 })];
         let flat_map = build_ams_mapping(&allocations);
         assert_eq!(flat_map, vec![128]);
+    }
+
+    #[test]
+    fn test_material_source_out_of_range_rejected() {
+        // BUG-069: MaterialSource::StandardAms/AmsHt fields are public u8s a caller can
+        // hand-build with an out-of-range value — must fall back to the -1/unmapped sentinel
+        // rather than producing a bogus flat channel or wire entry.
+        let bad_standard = MaterialSource::StandardAms {
+            ams_id: 200,
+            slot_id: 0,
+        };
+        assert_eq!(bad_standard.flat_channel_id(), -1);
+        assert_eq!(
+            bad_standard.to_mapping2_entry(),
+            AmsMapping2Entry {
+                ams_id: 255,
+                slot_id: 255
+            }
+        );
+
+        let bad_slot = MaterialSource::StandardAms {
+            ams_id: 0,
+            slot_id: 200,
+        };
+        assert_eq!(bad_slot.flat_channel_id(), -1);
+
+        let bad_ht = MaterialSource::AmsHt { ams_id: 50 };
+        assert_eq!(bad_ht.flat_channel_id(), -1);
+        assert_eq!(
+            bad_ht.to_mapping2_entry(),
+            AmsMapping2Entry {
+                ams_id: 255,
+                slot_id: 255
+            }
+        );
     }
 
     #[test]

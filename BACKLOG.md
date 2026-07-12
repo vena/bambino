@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-069 | Sev3 | ams/mapping.rs | `MaterialSource::StandardAms`/`AmsHt` fields are public `u8`s never range-validated in `flat_channel_id()`/`to_mapping2_entry()`, unlike `parser.rs`'s inbound-side bounds-checking | 2026-07-11 | See `07-11-REVIEW.md` §1 |
 | BUG-070 | Sev3 | ams/mapping.rs | `build_ams_mapping`/`build_ams_mapping2` (both `pub`) silently drop any allocation with `filament_id == 0` instead of erroring | 2026-07-11 | See `07-11-REVIEW.md` §1 |
 | BUG-071 | Sev3 | bin/bambino-cli/storage.rs | Every `FilesAction` arm using `?` bypasses `client.disconnect()` at the bottom of `run()` on error, skipping FTPS's graceful `QUIT` | 2026-07-11 | See `07-11-REVIEW.md` §2 |
 | BUG-072 | Sev3 | client/mod.rs | `from_mqtt()` hardcodes empty `ip`/`access_code` with no compile-time block on later `.with_ftps()`/`.with_camera()`, which then fail opaquely | 2026-07-11 | See `07-11-REVIEW.md` §6 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-077 | Sev3 | io/esp_idf.rs | `EspIdfTlsConnector::with_connect_timeout(Duration::ZERO)` failed immediately | 2026-07-11 | 2026-07-11 | src/io/esp_idf.rs:716-721 — the elapsed check is now skipped entirely when `connect_timeout.is_zero()`, matching `set_command_timeout`'s "0 disables" convention and BUG-007's precedent; verified via `scripts/check-esp-idf.sh esp32c6` |
 | BUG-066 | Sev3 | quirks/mod.rs | Default `z_max()` hardcoded `256.0` instead of a named const | 2026-07-11 | 2026-07-11 | src/quirks/mod.rs:270-272 — extracted to `pub(crate) const DEFAULT_Z_MAX_MM`, matching this file's `FAN_STEP_MAX`/`FAN_ROUNDING_OFFSET` convention |
 | BUG-067 | Sev3 | types/telemetry/tests.rs | `test_progress_field_removed` was a verbatim duplicate asserting nothing about `progress` | 2026-07-11 | 2026-07-11 | src/types/telemetry/tests.rs:1531-1539 — rewritten to include a stray `"progress"` key in the input JSON and assert it's silently ignored on deserialize, instead of duplicating `test_mc_percent_deserialization` |
+| BUG-069 | Sev3 | ams/mapping.rs | `MaterialSource::StandardAms`/`AmsHt` fields unvalidated in `flat_channel_id()`/`to_mapping2_entry()` | 2026-07-11 | 2026-07-11 | src/ams/mapping.rs:49-105 — both methods now range-validate `ams_id`/`slot_id`, falling back to the `-1`/unmapped sentinel on an out-of-range value instead of producing a bogus channel/entry; `MaterialSource`'s fields are public so a caller can hand-build an invalid one |
 
 ## Wontfix
 
