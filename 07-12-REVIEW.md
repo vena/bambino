@@ -117,7 +117,7 @@ Severity is derived from `attr` (`(attr >> 8) & 0x0F`) but the printer's real se
 
 `client/ams.rs`'s AMS-HT/standard dry-temp clamps (cite Bambu's own wiki directly, already strongest available source), IDEX `ams_id` 254/255 addressing (re-confirmed against `DevDefs.h`), and `kprofile.rs`'s outbound-only construction/client-side `setting_id` validation all check out with no BambuStudio contradiction. `client/telemetry.rs`'s `sanitized_ams()` stale-tray design and `is_ethernet_active_via_wifi_signal()`'s existing "disputed" caveat were both re-verified as already accurate — the latter corroborated further by `SideTools.cpp`/`DeviceManager.cpp:3053` showing BambuStudio derives wired-Ethernet from an unrelated `net.conf` bit, not a `wifi_signal` sentinel, but that's out of this unit's scope (lives in `report.rs`, unit 4) so not filed here.
 
-## 6. ams/{mapping.rs, parser.rs, mod.rs} — 1 CONFIRMED, 1 NEEDS-VERIFICATION, 1 PLAUSIBLE (cross-unit)
+## 6. ams/{mapping.rs, parser.rs, mod.rs} — 1 CONFIRMED, 1 PLAUSIBLE (cross-unit); AMS-HT bit-offset question closed post-sweep, see addendum
 
 Context check: `AMS_TRAY_MERGE_PLAN.md` is deleted (commit `bb4fbd3`) — both phases already shipped (BUG-102/103), neither touched this unit's files directly. `clean_stale_tray_data`'s same-day BUG-083 fix and `build_ams_mapping[2]`'s BUG-070 fix already reflected in current source, not re-litigated.
 
@@ -125,9 +125,11 @@ Context check: `AMS_TRAY_MERGE_PLAN.md` is deleted (commit `bb4fbd3`) — both p
 
 See BACKLOG.md row — BambuStudio's `GetTrayId`'s N3S branch shows AMS-HT does have a `tray_exist_bits` bit (`16 + (ams_id-128) + slot_id`), confirmed independently in OrcaSlicer. bambuddy's skip of `ams_id >= 128` traced via its own git history to "never wired up," not a competing wire-behavior claim.
 
-### Exact AMS-HT bit-offset formula — BUG-115 (needs-verification)
+### AMS-HT bit-offset collision risk — CLOSED, not a bug (BUG-115, moved to Wontfix)
 
-BambuStudio hardcodes base offset `16` (assumes ≤4 standard units); bambino's own `AMS_MAX_STANDARD_ID=7` (8 units) could theoretically collide with that offset on 8-standard-unit+AMS-HT hardware. No source settles whether that configuration exists; P1S (only hardware here) is well under the threshold either way.
+Fully resolved post-sweep, not merely narrowed as first recorded here. User-supplied official Bambu Lab documentation confirms standard (non-HT) AMS units cap at 4 on every product line (H2/X2D, P2S, X1/P1, A1, A2L) — no exceptions. BambuStudio's own `DevAms::GetTrayId` hardcodes AMS-HT's base offset at `16`, which is only correct if standard units never exceed id 3 — i.e. BambuStudio's own protocol implementation assumes the same 4-unit cap. Collision was never possible.
+
+This closure directly reopened **BUG-068** (previously Fixed, widened `AMS_MAX_STANDARD_ID` 3→7) as **BUG-125** (Open): re-checking bambuddy's actual commit history showed the `0-7` range predates the issue BUG-068 cited as justification by a month, with no observed evidence for a standard unit above id 3 — that issue (#1274) only confirms `ams_id=128` (AMS-HT). `AMS_MAX_STANDARD_ID` should revert to `3`. Not a `ModelQuirks` case (the ID boundary is protocol-wide) — see BUG-122 for the separate, genuinely model-dependent concern (outbound config validation against each model's actual AMS/AMS-HT pool structure).
 
 ### `ams_extruder_map` construction — PLAUSIBLE, cross-unit, not filed
 
@@ -169,7 +171,7 @@ All 3 PLAUSIBLE findings and all 5 needs-verification findings from the sweep ab
 - **BUG-109** (`is_status_step` threshold): CONFIRMED real bug — BambuStudio's own bundled HMS fault catalog (`resources/hms/hms_en_093.json`, not checked in the first pass) shows 4591/4592 real cataloged faults have `code_low < 0x4000`, meaning bambino's `decode_hms_alert` check misclassifies nearly every real fault as a non-fault. Fix: compare full `code`, not `code_low` — the analogous `decode_print_error` check is separately confirmed correct as-is.
 - **BUG-111** (nozzle-rack IDEX heuristic): CONFIRMED and elevated to Sev2 — BambuStudio's `DevNozzleSystem.cpp` confirms rack-stored spares share `nozzle.info` with installed nozzles; H2C is a currently-modeled printer in `MODEL_MATRIX.csv` with existing rack-aware code elsewhere in bambino (`client/thermal.rs:75-99`), so this is reachable on real supported hardware, not hypothetical.
 - **BUG-113** (bed-temp value source): re-closed as **not a bug** — pybambu's own source contains a literal captured real payload with `device.bed_temp` and `device.bed.info.temp` both present with identical values; BambuStudio's `DevBed.cpp` (read in full) has no fallback path reading the nested field. Re-confirms BUG-054/081's original conclusion with primary-source evidence instead of inference. Moved to `Wontfix`.
-- **BUG-115** (AMS-HT bit-offset collision): still needs-verification, but narrowed — BambuStudio's `GetTrayId` has a 3-tier bit-range allocation baked into the protocol itself, implying a collision would break BambuStudio's own client too, not just bambino. Still genuinely capture-blocked.
+- **BUG-115** (AMS-HT bit-offset collision): fully CLOSED as not-a-bug (moved to Wontfix), and its own closing evidence directly reopened **BUG-068** (Fixed, `AMS_MAX_STANDARD_ID` 3→7) as **BUG-125** (Open, revert to 3) — see the unit 6 section above and BACKLOG.md for the full chain. **BUG-122** was independently reframed from "widen `AMS_HT_ID_MAX`" (that constant was already correct) to the real gap: outbound config construction doesn't validate against each model's actual pool structure.
 - **Unit 1 plausible findings**: `dry_fan1_status`/`dry_fan2_status` and `calibrate_remain_flag`/`.cfs` all CONFIRMED via a second independent source (`bambu-printer-manager`, plus `OpenBambuAPI`'s community protocol spec for `calibrate_remain_flag`) — promoted to BUG-120/BUG-121. `remain_g`/`setting_id` remain genuinely single-sourced (BambuStudio only) — checked bambino's own test fixtures, no corroborating capture found; stays PLAUSIBLE, unresolved without a real capture from a Bambu-Cloud-linked spool.
 - **Unit 4's `sdcard` plausible finding**: original theory (string-form decoder gap) was wrong — BambuStudio's `DevStorage::ParseV1_0` parses `sdcard` strictly as bool, never a string. But surfaced a real, differently-shaped bug: bambino has no accessor for `home_flag` bits 8-9 (the actual first-party mechanism for degraded SD-card states), confirmed by BambuStudio + pybambu. Promoted to BUG-123.
 - **Unit 6's `ams_extruder_map` plausible finding**: CONFIRMED and reframed — `resolve_printing_global_id` has zero callers anywhere in the crate (dead code), and the preferred resolution fields it should consult (`ExtruderInfo::snow`/`spre`/`star`) have no decoder at all. A half-finished feature, not a false alarm. Promoted to BUG-124.
@@ -177,7 +179,7 @@ All 3 PLAUSIBLE findings and all 5 needs-verification findings from the sweep ab
 
 ### Remaining genuinely unresolved (hardware/capture-blocked, no further local verification possible)
 
-- **BUG-115** — AMS-HT bit-offset collision risk on hypothetical 8-standard-unit+AMS-HT hardware.
+- (none remaining in this category — the AMS-HT collision question above closed with a definitive answer, not a hardware-blocked one; see BUG-115/BUG-125.)
 - **`AmsTray.remain_g`/`setting_id`** (unit 1, still PLAUSIBLE, no BUG-ID) — single-sourced to BambuStudio, no second source or capture found anywhere checked.
 
 
@@ -204,6 +206,7 @@ All 3 PLAUSIBLE findings and all 5 needs-verification findings from the sweep ab
 | BUG-119 | Sev2 | mqtt/commands/print_job.rs | print_job.rs | `ProjectFilePayload` missing calibration/identity fields |
 | BUG-120 | Sev3 | types/telemetry/ams.rs | ams.rs | Missing `dry_fan1_status`/`dry_fan2_status` accessors |
 | BUG-121 | Sev3 | types/telemetry/ams.rs | ams.rs | Missing `calibrate_remain_flag`/`.cfs` |
-| BUG-122 | Sev2 | ams/parser.rs | parser.rs | `AMS_HT_ID_MAX=135` too narrow vs. real H2C range (128-191) |
+| BUG-122 | Sev3 | ams/mapping.rs | mapping.rs | Outbound AMS config not validated against per-model pool structure |
 | BUG-123 | Sev3 | types/telemetry/mod.rs | mod.rs | No accessor for `home_flag` bits 8-9 (SD-card degraded states) |
 | BUG-124 | Sev3 | ams/parser.rs, types/telemetry/device.rs | parser.rs, device.rs | `resolve_printing_global_id` dead code; `snow`/`spre`/`star` undecoded |
+| BUG-125 | Sev2 | ams/parser.rs, ams/mapping.rs | parser.rs, mapping.rs | `AMS_MAX_STANDARD_ID=7` wrong, reopens/reverses BUG-068, revert to 3 |
