@@ -63,12 +63,11 @@ impl MaterialSource {
                     -1
                 }
             }
-            MaterialSource::AmsHt { ams_id } => {
-                if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(ams_id) {
-                    *ams_id as i32
-                } else {
-                    -1
-                }
+            MaterialSource::AmsHt { ams_id }
+                if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
+                    .contains(ams_id) =>
+            {
+                *ams_id as i32
             }
             _ => -1, // External and unmapped slots are strictly mapped to -1
         }
