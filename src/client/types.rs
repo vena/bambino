@@ -164,6 +164,9 @@ pub struct PrintProgress {
 pub enum PrintStatus {
     /// No print job active or loaded (wire: `"IDLE"`).
     Idle,
+    /// Print preparing to start — homing, bed leveling, or priming, physical
+    /// motion in progress (wire: `"PREPARE"`).
+    Preparing,
     /// Print job actively executing (wire: `"RUNNING"`).
     Running,
     /// Print job paused, resumable (wire: `"PAUSE"`).
@@ -177,10 +180,11 @@ pub enum PrintStatus {
 }
 
 impl PrintStatus {
-    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
+    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
     pub fn from_gcode_state(state: &str) -> Self {
         match state {
             "IDLE" => PrintStatus::Idle,
+            "PREPARE" => PrintStatus::Preparing,
             "RUNNING" => PrintStatus::Running,
             "PAUSE" => PrintStatus::Paused,
             "FINISH" => PrintStatus::Finished,
@@ -209,7 +213,7 @@ mod tests {
         assert_eq!(PrintStatus::from_gcode_state("FAILED"), PrintStatus::Failed);
         assert_eq!(
             PrintStatus::from_gcode_state("PREPARE"),
-            PrintStatus::Unknown
+            PrintStatus::Preparing
         );
         assert_eq!(PrintStatus::from_gcode_state(""), PrintStatus::Unknown);
     }

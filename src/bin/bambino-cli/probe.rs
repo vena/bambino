@@ -246,11 +246,16 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Bambu
     Ok(())
 }
 
-/// Returns whether the printer is actively printing or paused — the one verified busy signal ([REF-MQTT-IDLEBUG]: `gcode_state` is the only field this codebase treats as authoritative for busy/idle classification).
+/// Returns whether the printer is actively printing, preparing to print, or paused —
+/// the one verified busy signal ([REF-MQTT-IDLEBUG]: `gcode_state` is the only field
+/// this codebase treats as authoritative for busy/idle classification). `Preparing`
+/// (wire `"PREPARE"`) covers homing/bed-leveling/priming motion before `RUNNING` —
+/// BUG-099: previously fell through to `Unknown` and was not recognized as busy here,
+/// letting this function's self-triggered `home_axes()` fire during that motion.
 fn printer_is_busy(client: &Printer) -> bool {
     matches!(
         client.print_status(),
-        Some(PrintStatus::Running) | Some(PrintStatus::Paused)
+        Some(PrintStatus::Preparing) | Some(PrintStatus::Running) | Some(PrintStatus::Paused)
     )
 }
 
