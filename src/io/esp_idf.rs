@@ -80,7 +80,8 @@ impl BindableUdpSocket for EspIdfUdpSocket {
 
         crate::io::configure_std_udp_socket(&inner)?;
 
-        let timer = EspIdfTimer::new().map_err(|_| {
+        let timer = EspIdfTimer::new().map_err(|e| {
+            log::debug!("failed to create ESP-IDF async timer for UDP recv pacing: {e}");
             SocketError::Other("failed to create ESP-IDF async timer for UDP recv pacing".into())
         })?;
 
@@ -494,7 +495,8 @@ impl EspIdfTcpStream {
             Err(e) => return Err(to_esp_socket_error(e)),
         }
 
-        let timer = EspIdfTimer::new().map_err(|_| {
+        let timer = EspIdfTimer::new().map_err(|e| {
+            log::debug!("failed to create ESP-IDF async timer for TCP connect: {e}");
             SocketError::Other("failed to create ESP-IDF async timer for TCP connect".into())
         })?;
 
@@ -657,7 +659,10 @@ impl EspIdfTlsConnector {
         }
     }
 
-    /// Overrides the default handshake deadline.
+    /// Overrides the default handshake deadline. Passing `Duration::ZERO` disables the
+    /// deadline entirely (BUG-077), matching `set_command_timeout`'s "0 disables" convention
+    /// and `client::connect::with_connect_timeout`'s precedent (BUG-007) — otherwise the very
+    /// first would-block poll would immediately exceed a zero-length budget.
     /// Non-consuming — chain onto `new()`/`with_certs()`.
     pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
         self.connect_timeout = connect_timeout;
@@ -694,12 +699,16 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
 
         let cfg = self.certs.build_config();
 
-        let timer = EspIdfTimer::new().map_err(|_| {
+        let timer = EspIdfTimer::new().map_err(|e| {
+            log::debug!("failed to create ESP-IDF async timer for TLS: {e}");
             SocketError::Other("failed to create ESP-IDF async timer for TLS".into())
         })?;
 
         let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream)
-            .map_err(|_| SocketError::Other("ESP-TLS adopt of raw socket failed".into()))?;
+            .map_err(|e| {
+                log::debug!("ESP-TLS adopt of raw socket failed: {e}");
+                SocketError::Other("ESP-TLS adopt of raw socket failed".into())
+            })?;
 
         let start = timer.now_millis();
 
@@ -707,8 +716,13 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             match tls.negotiate(host, &cfg) {
                 Ok(_) => break,
                 Err(e) if is_would_block(&e) => {
-                    if timer.now_millis().saturating_sub(start)
-                        >= self.connect_timeout.as_millis() as u64
+                    // BUG-077: connect_timeout == 0 means "disabled" (matching
+                    // with_connect_timeout's doc comment and BUG-007's precedent elsewhere in
+                    // this crate), not "expire on the very first would-block poll" — skip the
+                    // deadline check entirely in that case.
+                    if !self.connect_timeout.is_zero()
+                        && timer.now_millis().saturating_sub(start)
+                            >= self.connect_timeout.as_millis() as u64
                     {
                         return Err(SocketError::TimedOut);
                     }

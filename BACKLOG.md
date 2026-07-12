@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-064 | Sev3 | io/esp_idf.rs | `EspTls::adopt()` failure mapped to a fixed string with the real `EspError` discarded, unlike every other FFI error site in the file | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-066 | Sev3 | quirks/mod.rs | Default `z_max()` hardcodes `256.0` instead of a named `pub(crate) const`, unlike this same file's `FAN_STEP_MAX`/`FAN_ROUNDING_OFFSET` convention | 2026-07-11 | See `07-11-REVIEW.md` §17 |
 | BUG-067 | Sev3 | types/telemetry/tests.rs | `test_progress_field_removed` is a verbatim duplicate of `test_mc_percent_deserialization` and asserts nothing about a removed `progress` field | 2026-07-11 | See `07-11-REVIEW.md` §20 |
 | BUG-069 | Sev3 | ams/mapping.rs | `MaterialSource::StandardAms`/`AmsHt` fields are public `u8`s never range-validated in `flat_channel_id()`/`to_mapping2_entry()`, unlike `parser.rs`'s inbound-side bounds-checking | 2026-07-11 | See `07-11-REVIEW.md` §1 |
@@ -19,8 +18,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-072 | Sev3 | client/mod.rs | `from_mqtt()` hardcodes empty `ip`/`access_code` with no compile-time block on later `.with_ftps()`/`.with_camera()`, which then fail opaquely | 2026-07-11 | See `07-11-REVIEW.md` §6 |
 | BUG-073 | Sev3 | tests/client_test.rs | `attach_camera()`/`disconnect_camera()` never exercised by any test | 2026-07-11 | See `07-11-REVIEW.md` §7 |
 | BUG-074 | Sev3 | tests/client_test.rs | `set_fan_speed`'s `speed_percent > 100` clamp path never tested | 2026-07-11 | See `07-11-REVIEW.md` §7 |
-| BUG-076 | Sev3 | io/esp_idf.rs | 3 more `EspIdfTimer::new()` sites (UDP pacing, TCP connect, TLS connect timers) discard the real `EspError` with no `log::debug!`, same shape as BUG-064 | 2026-07-11 | See `07-11-REVIEW.md` §14 |
-| BUG-077 | Sev3 | io/esp_idf.rs | `EspIdfTlsConnector::with_connect_timeout(Duration::ZERO)` fails immediately instead of disabling the timeout, same class as already-fixed BUG-007 | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-078 | Sev3 | mqtt/client/mod.rs | `publish_command` unconditionally rearms the 10s write-zombie timer on every call regardless of already-in-flight commands | 2026-07-11 | See `07-11-REVIEW.md` §15 |
 | BUG-079 | Sev3 | tests/common/mock_mqtt.rs | `read_packet` is not cancellation-safe yet is raced inside `tokio::select!` in `run_mock_mqtt_broker` | 2026-07-11 | See `07-11-REVIEW.md` §15 |
 | BUG-080 | Sev3 | mqtt/commands/print_job.rs | `subtask_id` clamped via ad hoc `clamp_task_id()` call instead of the `ClampedTaskId` newtype `sequence_id` uses in the same constructor | 2026-07-11 | See `07-11-REVIEW.md` §16 |
@@ -96,6 +93,9 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-062 | Sev3 | ftps/protocol.rs | `read_response`'s header-establishing branch silently dropped a non-conformant reply line | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:254-268 — a header line whose 4th byte is neither `' '` nor `'-'` (e.g. `"200\r\n"`, code immediately followed by CRLF) now returns a terminal reply with empty text instead of falling through to `continue` and being silently discarded |
 | BUG-075 | Sev3 | ftps/protocol.rs | `validate_ftp_path`'s leading-dash check missed a trailing-slash path | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:381-386 — `.next_back()` alone returned `""` for a trailing-slash path (e.g. `/cache/-dir/`), silently skipping the check; now `.rev().find(|s| !s.is_empty())` finds the real final segment first |
 | BUG-063 | Sev3 | io/embassy.rs | `EmbassyTlsConnector::connect` collapsed every mbedtls-rs failure with no logging | 2026-07-11 | 2026-07-11 | src/io/embassy.rs:196-224 — all 3 sites (`Session::new`, `set_server_name`, `Session::connect`) now `log::debug!` the real mbedtls-rs error before mapping to `SocketError::ConnectionAborted` |
+| BUG-064 | Sev3 | io/esp_idf.rs | `EspTls::adopt()` failure discarded the real `EspError`, no logging | 2026-07-11 | 2026-07-11 | src/io/esp_idf.rs:701-708 — now `log::debug!`s the real `EspError` before mapping to `SocketError::Other`, consistent with `map_esp_tls_connect_error` and every other FFI error site in the file |
+| BUG-076 | Sev3 | io/esp_idf.rs | 3 more `EspIdfTimer::new()` sites discarded the real `EspError`, no logging | 2026-07-11 | 2026-07-11 | src/io/esp_idf.rs:83-85,498-500,699-701 (UDP pacing, TCP connect, TLS connect timers) — same fix as BUG-064, same commit |
+| BUG-077 | Sev3 | io/esp_idf.rs | `EspIdfTlsConnector::with_connect_timeout(Duration::ZERO)` failed immediately | 2026-07-11 | 2026-07-11 | src/io/esp_idf.rs:716-721 — the elapsed check is now skipped entirely when `connect_timeout.is_zero()`, matching `set_command_timeout`'s "0 disables" convention and BUG-007's precedent; verified via `scripts/check-esp-idf.sh esp32c6` |
 
 ## Wontfix
 
