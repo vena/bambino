@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-063 | Sev3 | io/embassy.rs | `EmbassyTlsConnector::connect` collapses every mbedtls-rs failure into `ConnectionAborted` with no `log::debug!` of the real error at any of 3 sites | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-064 | Sev3 | io/esp_idf.rs | `EspTls::adopt()` failure mapped to a fixed string with the real `EspError` discarded, unlike every other FFI error site in the file | 2026-07-11 | See `07-11-REVIEW.md` §14 |
 | BUG-066 | Sev3 | quirks/mod.rs | Default `z_max()` hardcodes `256.0` instead of a named `pub(crate) const`, unlike this same file's `FAN_STEP_MAX`/`FAN_ROUNDING_OFFSET` convention | 2026-07-11 | See `07-11-REVIEW.md` §17 |
 | BUG-067 | Sev3 | types/telemetry/tests.rs | `test_progress_field_removed` is a verbatim duplicate of `test_mc_percent_deserialization` and asserts nothing about a removed `progress` field | 2026-07-11 | See `07-11-REVIEW.md` §20 |
@@ -96,6 +95,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 | BUG-061 | Sev3 | ftps/parser.rs | `parse_unix_listing` didn't range-validate `day`/`hour`/`minute` | 2026-07-11 | 2026-07-11 | src/ftps/parser.rs:144-171 — `day` now rejected outside `1..=31`, `hour`/`minute` outside `0..=23`/`0..=59` (skipping the entry, matching the file's existing silent-skip convention), unlike `month`'s already-validated lookup table |
 | BUG-062 | Sev3 | ftps/protocol.rs | `read_response`'s header-establishing branch silently dropped a non-conformant reply line | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:254-268 — a header line whose 4th byte is neither `' '` nor `'-'` (e.g. `"200\r\n"`, code immediately followed by CRLF) now returns a terminal reply with empty text instead of falling through to `continue` and being silently discarded |
 | BUG-075 | Sev3 | ftps/protocol.rs | `validate_ftp_path`'s leading-dash check missed a trailing-slash path | 2026-07-11 | 2026-07-11 | src/ftps/protocol.rs:381-386 — `.next_back()` alone returned `""` for a trailing-slash path (e.g. `/cache/-dir/`), silently skipping the check; now `.rev().find(|s| !s.is_empty())` finds the real final segment first |
+| BUG-063 | Sev3 | io/embassy.rs | `EmbassyTlsConnector::connect` collapsed every mbedtls-rs failure with no logging | 2026-07-11 | 2026-07-11 | src/io/embassy.rs:196-224 — all 3 sites (`Session::new`, `set_server_name`, `Session::connect`) now `log::debug!` the real mbedtls-rs error before mapping to `SocketError::ConnectionAborted` |
 
 ## Wontfix
 

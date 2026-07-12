@@ -198,7 +198,10 @@ where
             raw_stream,
             &::mbedtls_rs::SessionConfig::Client(config),
         )
-        .map_err(|_| SocketError::ConnectionAborted)?;
+        .map_err(|e| {
+            log::debug!("mbedtls-rs Session::new failed: {e:?}");
+            SocketError::ConnectionAborted
+        })?;
 
         // `ClientSessionConfig.server_name` can't hold `host` directly: its lifetime is
         // pinned to this connector's `'a` (the same `'a` as the returned `Self::Stream`), but
@@ -209,12 +212,18 @@ where
         let host_cstring = alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
         session
             .set_server_name(&host_cstring)
-            .map_err(|_| SocketError::ConnectionAborted)?;
+            .map_err(|e| {
+                log::debug!("mbedtls-rs set_server_name failed: {e:?}");
+                SocketError::ConnectionAborted
+            })?;
 
         session
             .connect()
             .await
-            .map_err(|_| SocketError::ConnectionAborted)?;
+            .map_err(|e| {
+                log::debug!("mbedtls-rs Session::connect failed: {e:?}");
+                SocketError::ConnectionAborted
+            })?;
 
         Ok(session)
     }
