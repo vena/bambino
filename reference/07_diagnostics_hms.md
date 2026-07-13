@@ -57,10 +57,12 @@ To facilitate local lookup of error descriptions without querying remote wiki se
     *(Example: `attr = 50331904` (0x03000100) and `code = 65543` (0x00010007) -> `"0300_0007"`)*
 
 #### Severity Scale & Module Identification
-The severity level of the diagnostic alert is extracted from the second byte of the `attr` parameter:
+The severity level of the diagnostic alert is extracted from the high 16 bits of the `code`
+parameter (BUG-108 — not `attr`; confirmed against BambuStudio's `parse_hms_info`,
+`DevHMS.cpp:7-25`, identical in OrcaSlicer, and pybambu's `get_HMS_severity`):
 
 ```python
-severity = (attr >> 8) & 0x0F
+severity = (code >> 16) & 0xFFFF
 ```
 
 *   **`1`**: Fatal Error (Immediate execution halt required).
@@ -75,7 +77,7 @@ module_id = (attr >> 24) & 0xFF
 ```
 
 #### Real Hardware Faults vs. Non-Error Status Codes
-The printer publishes both hardware failures and non-error state indications (such as axis homing progress) within the `print_error` and `hms` registers. Non-error state indications are represented by low-word values less than `0x4000` (16384 decimal). Only codes with a low 16-bit value $\ge 0x4000$ represent actual faults.
+The printer publishes both hardware failures and non-error state indications (such as axis homing progress) within the `print_error` and `hms` registers. For `print_error`, non-error state indications are represented by low-word values less than `0x4000` (16384 decimal); only codes with a low 16-bit value $\ge 0x4000$ represent actual faults. For `hms` entries specifically, the check must compare the **full 32-bit `code`** against `0x4000`, not just its low 16 bits (BUG-109 — confirmed against BambuStudio's bundled `resources/hms/hms_en_093.json` fault catalog: 4591/4592 cataloged genuine `hms[]` faults have `code_low < 0x4000`, so a low-word-only check misclassifies nearly every real fault as a non-fault status step).
 
 ##### User-Action Echoes
 During user-initiated print cancellations, the firmware raises specific confirmation codes (such as `0300_400C` and `0500_400E`) to confirm cancellation has completed. These are status confirmations, not active faults, and must not be treated as actual system errors.
