@@ -433,7 +433,7 @@ The directory parameters inside `"ams_filament_setting"` behave polymorphically 
 *   **Standard AMS Units (`0` to `3`)**: `tray_id` strictly represents the local slot index (`0` to `3`) within the designated unit.
 *   **Virtual External Spool (`255` / `254`)**:
     *   **Single-Nozzle Printers (X1, P1, A1 series)**: When targeting the virtual external spool, `ams_id` must be set to `255` and `tray_id` must be set to `254`. Transmitting a local slot index (such as `0`) alongside an `ams_id` of `255` causes the printer's local broker (most notably on the `P1S` track) to reject the payload and return a failure response (`result: "fail"`).
-    *   **Dual-Nozzle IDEX Printers (H2D, X2D, H2C series)**: The external spools are mapped as independent virtual units. The left external spool (Ext-L) must be configured with `ams_id: 254` and `tray_id: 0`, while the right external spool (Ext-R) must be configured with `ams_id: 255` and `tray_id: 0`.
+    *   **Dual-Nozzle IDEX Printers (H2D, X2D, H2C series)**: The external spools are mapped as independent virtual units. Both the left external spool (Ext-L, `ams_id: 254`) and the right external spool (Ext-R, `ams_id: 255`) must be configured with `tray_id: 254` (BUG-117; confirmed against BambuStudio's `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id` `254` or `255` both map to `tag_tray_id = 254`, never `0`).
 
 ##### AMS Physical Control (ams_control)
 Resumes, pauses, or resets material changes and active physical operations inside the expansion bus feed system.

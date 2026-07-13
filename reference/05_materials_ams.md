@@ -191,6 +191,8 @@ Single-nozzle printers report `tray_now = 254` for the external spool on the tel
 #### Filament Load & Unload Commands (ams_change_filament)
 Filament loading and unloading sequences are triggered directly by publishing an `"ams_change_filament"` command payload to the request topic.
 
+**`target` derivation (BUG-116)**, confirmed against BambuStudio's `command_ams_change_filament` (`DeviceManager.cpp:1602-1638`): `255` on unload; the `ams_id` itself for any AMS-HT/external-spool unit (`ams_id >= 16`, covers `128`-`135` and `254`/`255`); otherwise the flat global tray ID `(ams_id * 4) + slot_id` for a standard unit. `target` only coincidentally equals `slot_id` when `ams_id == 0` (example 1 below) — the earlier version of this doc generalized that coincidence into a wrong rule, and examples 2/3's `target` values below were wrong for the same reason (both should be `255`, the external-spool `ams_id`, not `slot_id`).
+
 ##### 1. Load Filament from standard AMS Slot
 Instructs the printer to heat the hotend and feed filament from the designated physical AMS tray to the toolhead.
 ```json
@@ -215,7 +217,7 @@ Instructs single-nozzle printers to load from the virtual external spool.
     "command": "ams_change_filament",
     "ams_id": 255,
     "slot_id": 254,
-    "target": 254,
+    "target": 255,
     "curr_temp": -1,
     "tar_temp": -1,
     "sequence_id": "40006"
@@ -231,7 +233,7 @@ Instructs dual-nozzle IDEX printers to heat the designated nozzle carriage and t
     "command": "ams_change_filament",
     "ams_id": 255,
     "slot_id": 0,
-    "target": 0,
+    "target": 255,
     "curr_temp": 215,
     "tar_temp": 215,
     "sequence_id": "40007"

@@ -148,7 +148,7 @@ printer.start_calibration(
 ### AMS filament control
 
 ```rust
-printer.change_filament(0, 1, 1, -1, -1).await?;           // load AMS 0, slot 1
+printer.change_filament(0, 1, -1, -1).await?;               // load AMS 0, slot 1
 printer.start_drying(0, 55, 480, true, "PA-CF").await?;     // dry at 55°C for 8h
 printer.stop_drying(0).await?;
 ```

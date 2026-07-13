@@ -60,17 +60,22 @@ where
     /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or `254`/`255`
     ///   for external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
     /// * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
-    ///   load, or `255` for an unload/retract (see `ams_change_filament` examples in
+    ///   load, or `255` to unload/retract (see `ams_change_filament` examples in
     ///   `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
-    /// * `target`: Load/unload destination. Confirmed wire values (§5.3): `0` (IDEX Ext-R
-    ///   external-spool load), `1` (standard AMS slot load), `254` (single-nozzle
-    ///   external-spool load), `255` (unload/retract, any source).
     /// * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
+    ///
+    /// The wire's `target` field is derived internally rather than caller-supplied (BUG-116):
+    /// confirmed against BambuStudio's `command_ams_change_filament`
+    /// (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
+    /// any AMS-HT/external-spool unit (`ams_id >= 16`), or the flat global tray ID
+    /// (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
+    /// match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
+    /// class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
+    /// `ams_id: 0`, the sole worked example in the reference doc.
     pub async fn change_filament(
         &mut self,
         ams_id: i32,
         slot_id: i32,
-        target: i32,
         curr_temp: i32,
         tar_temp: i32,
     ) -> Result<u16, BambuError> {
@@ -79,12 +84,19 @@ where
             || ams_id == 254
             || ams_id == 255;
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
-        let target_valid = matches!(target, 0 | 1 | 254 | 255);
-        if !ams_valid || !slot_valid || !target_valid {
+        if !ams_valid || !slot_valid {
             return Err(BambuError::ProtocolViolation(
                 "invalid AMS addressing parameters for change_filament".into(),
             ));
         }
+
+        let target = if slot_id == 255 {
+            255
+        } else if ams_id >= 16 {
+            ams_id
+        } else {
+            ams_id * i32::from(crate::ams::parser::AMS_SLOTS_PER_UNIT) + slot_id
+        };
 
         self.dispatch(|seq| {
             crate::mqtt::AmsChangeFilamentRequest::new(
@@ -188,8 +200,8 @@ where
     ///   the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     ///   uncalibrated.
     /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
-    ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`; Ext-R requires
-    ///   `ams_id: 255` / `tray_id: 0`.
+    ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
+    ///   `tray_id: 254` (BUG-117).
     ///
     /// **Validation note:** the cheat-sheet above documents only the *external-spool* case.
     /// `reference/05_materials_ams.md` §5.3's own primary `extrusion_cali_sel` example binds a

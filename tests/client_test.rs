@@ -1085,7 +1085,68 @@ async fn test_change_filament_load_wire_payload() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
-        .change_filament(0, 1, 1, -1, -1)
+        .change_filament(0, 1, -1, -1)
+        .await
+        .expect("change_filament failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
+    // BUG-116: for any standard AMS unit other than 0, target is the flat global tray ID
+    // (ams_id*4 + slot_id), not slot_id — ams_id 0 previously masked this since the two
+    // values coincide there.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["ams_id"], 1);
+        assert_eq!(json["print"]["slot_id"], 2);
+        assert_eq!(json["print"]["target"], 6); // 1*4 + 2, not 2
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    client
+        .change_filament(1, 2, -1, -1)
+        .await
+        .expect("change_filament failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_change_filament_derives_target_for_external_spool() {
+    // BUG-116: an external-spool load's target is the ams_id itself (255), not slot_id
+    // (254) — the reference doc's worked examples for this case were previously wrong too.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["ams_id"], 255);
+        assert_eq!(json["print"]["slot_id"], 254);
+        assert_eq!(json["print"]["target"], 255);
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    client
+        .change_filament(255, 254, -1, -1)
         .await
         .expect("change_filament failed");
 
@@ -1105,7 +1166,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
             .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
-    let result = client.change_filament(99, 1, 1, -1, -1).await;
+    let result = client.change_filament(99, 1, -1, -1).await;
     assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");

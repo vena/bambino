@@ -54,8 +54,11 @@ impl AmsFilamentSettingRequest {
     /// `extrusion_cali_sel` (K-profile binding, see
     /// [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
     /// * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
-    ///   `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`;
-    ///   Ext-R requires `ams_id: 255` / `tray_id: 0`.
+    ///   `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
+    ///   (`ams_id: 255`) require `tray_id: 254` (BUG-117; confirmed against
+    ///   `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
+    ///   VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
+    ///   `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
     /// * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
     ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
     ///   `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
@@ -169,7 +172,12 @@ pub struct AmsChangeFilamentPayload {
     pub ams_id: i32,
     /// Target slot index within the AMS unit.
     pub slot_id: i32,
-    /// Load/unload destination slot — mirrors `slot_id` in every documented wire example (standard slot, external spool, or `255` for unload/retract), not a fixed enum code [REF-AMS-MAP].
+    /// Load/unload destination slot (BUG-116; confirmed against BambuStudio's
+    /// `command_ams_change_filament`, `DeviceManager.cpp:1602-1638`): `255` on unload, the
+    /// `ams_id` itself for AMS-HT/external-spool units (`ams_id >= 16`), or the flat global
+    /// tray ID (`ams_id*4 + slot_id`) for a standard unit. Only coincidentally mirrors
+    /// `slot_id` when `ams_id == 0` — see `PrinterClient::change_filament()`, which derives
+    /// this field so callers can't misconfigure it.
     pub target: i32,
     /// Current nozzle temperature (-1 = let firmware decide).
     pub curr_temp: i32,
