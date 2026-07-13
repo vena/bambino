@@ -2506,6 +2506,48 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
 }
 
 #[tokio::test]
+async fn test_printing_tray_global_id_prefers_snow_field() {
+    // BUG-124: printing_tray_global_id() decodes device.extruder.info[active].snow directly,
+    // no ams_extruder_map needed.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Extruder 0 (right/main): state selects active_extruder_index()=1 (left), snow
+        // routes it to ams_id=2, slot_id=1 (raw = (2<<8)|1 = 513).
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5700,
+            br#"{"device":{"extruder":{"info":[
+                {"id":0,"snow":65535},
+                {"id":1,"snow":513}
+            ],"state":18}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+
+    assert_eq!(client.printing_tray_global_id(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse extruder report");
+    // ams_id=2, slot_id=1 -> global tray id = 2*4 + 1 = 9
+    assert_eq!(client.printing_tray_global_id(), Some(9));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");

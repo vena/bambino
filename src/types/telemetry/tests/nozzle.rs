@@ -164,6 +164,17 @@ fn test_extruder_info_x2d_mock() {
     let (left_actual, left_target) = left.temperatures();
     assert_eq!(left_target, 250);
     assert_eq!(left_actual, 250);
+
+    // BUG-124: id 0's snow/spre/star are all the unmapped sentinel 0xFFFF (65535) — this
+    // extruder isn't routed to any AMS slot.
+    assert_eq!(right.current_ams_slot(), None);
+    assert_eq!(right.previous_ams_slot(), None);
+    assert_eq!(right.target_ams_slot(), None);
+
+    // id 1's snow/spre/star are all 1: slot_id=1 (low byte), ams_id=0 (high byte).
+    assert_eq!(left.current_ams_slot(), Some((0, 1)));
+    assert_eq!(left.previous_ams_slot(), Some((0, 1)));
+    assert_eq!(left.target_ams_slot(), Some((0, 1)));
 }
 
 #[test]

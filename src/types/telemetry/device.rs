@@ -424,6 +424,40 @@ impl ExtruderInfo {
             .map(|t| super::report::PrinterTelemetry::unpack_temperature(t as f64))
             .unwrap_or((0, 0))
     }
+
+    /// Decodes an AMS-routing field (`snow`/`spre`/`star`) into `(ams_id, slot_id)` (BUG-112,
+    /// BUG-124). Confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`
+    /// (`DevExtruderSystem.cpp:369-372`): low 8 bits = slot_id, next 8 bits = ams_id. The
+    /// sentinel `0xFFFF` (single-extruder system, unmapped) decodes to `None`.
+    fn decode_ams_slot_field(raw: Option<u32>) -> Option<(u8, u8)> {
+        let raw = raw?;
+        if raw == 0xFFFF {
+            return None;
+        }
+        let slot_id = (raw & 0xFF) as u8;
+        let ams_id = ((raw >> 8) & 0xFF) as u8;
+        Some((ams_id, slot_id))
+    }
+
+    /// Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
+    /// resolving which physical tray is feeding this extruder right now (BUG-124), confirmed
+    /// against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
+    /// decodes `snow` directly with no extruder-map inversion needed.
+    pub fn current_ams_slot(&self) -> Option<(u8, u8)> {
+        Self::decode_ams_slot_field(self.snow)
+    }
+
+    /// Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
+    /// [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+    pub fn previous_ams_slot(&self) -> Option<(u8, u8)> {
+        Self::decode_ams_slot_field(self.spre)
+    }
+
+    /// Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
+    /// [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+    pub fn target_ams_slot(&self) -> Option<(u8, u8)> {
+        Self::decode_ams_slot_field(self.star)
+    }
 }
 
 /// Climate parts collection nested within `device` parameters.

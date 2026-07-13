@@ -341,6 +341,23 @@ where
         self.cache.last_ams.as_ref()
     }
 
+    /// Returns the global tray ID of the spool currently feeding the active extruder, as of
+    /// the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) (BUG-124).
+    ///
+    /// Prefers `device.extruder.info[active].snow`, BambuStudio's own preferred resolution
+    /// method (`DevExterSystem::ParseV2_0`, `DevExtderSystem.cpp:318-386`) — no
+    /// `ams_extruder_map` inversion needed, since `snow` self-identifies both the AMS unit and
+    /// slot directly. `None` when `device.extruder` telemetry hasn't been observed yet (common
+    /// on single-nozzle models, which may not populate this sub-object at all) or the active
+    /// extruder's `snow` is the unmapped sentinel.
+    pub fn printing_tray_global_id(&self) -> Option<u8> {
+        let extruder = self.cache.last_device.as_ref()?.extruder.as_ref()?;
+        let active_idx = extruder.active_extruder_index();
+        let info = extruder.info.iter().find(|e| e.id == active_idx)?;
+        let (ams_id, slot_id) = info.current_ams_slot()?;
+        crate::ams::resolve_global_tray_id(ams_id, slot_id)
+    }
+
     /// Returns a cloned copy of the cached AMS status report with every tray's stale material
     /// fields cleared via [`clean_stale_tray_data`]
     /// (mirrors [`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache-decode-on-access

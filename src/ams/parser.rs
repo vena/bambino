@@ -181,12 +181,22 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     }
 }
 
-/// Resolves the currently printing tray's global ID, accounting for IDEX map translations.
+/// Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map`
+/// inversion, accounting for IDEX map translations.
 ///
 /// **Multi-AMS Local Index Resolution [REF-AMS-DECODE]:**
 /// Multi-extruder platforms (such as the H2D series) emit local slot indexes (0 to 3) inside
 /// their `tray_now` telemetry parameter. To resolve this back to a global index, the client must
 /// inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
+///
+/// BUG-124: this is the *fallback* path — prefer
+/// [`crate::client::PrinterClient::printing_tray_global_id`], which decodes
+/// `ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
+/// This function remains unwired in the crate's own client code: `ams_extruder_map`'s
+/// construction from real wire data is itself an unresolved, unconfirmed design question
+/// (no field in this crate's telemetry types currently sources it), and the map can be
+/// genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
+/// a caller with its own confirmed `ams_extruder_map` source may still use this directly.
 pub fn resolve_printing_global_id(
     tray_now: u8,
     active_extruder: Option<u8>,

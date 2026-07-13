@@ -49,7 +49,7 @@ Additionally, some models (such as `H2D`) only emit `{id, state}` in incremental
 #### Multi-AMS Local Index Resolution (`tray_now`)
 When multiple standard AMS units or virtual slots are connected, the printer's status stream may report only the local slot ID (0-3) in `tray_now` rather than a global ID.
 
-*   **IDEX / Dual-Nozzle Printers (H2D series)**: Reports only slot numbers `0-3` representing the active tray position on the active extruder's linked AMS. State trackers must evaluate the `active_extruder` (0 = Right/Main, 1 = Left/Deputy) alongside the `ams_extruder_map` to determine which physical AMS unit has loaded the filament, then calculate the global ID accordingly.
+*   **IDEX / Dual-Nozzle Printers (H2D series)**: Reports only slot numbers `0-3` representing the active tray position on the active extruder's linked AMS. **Preferred resolution (BUG-124)**: decode `device.extruder.info[active].snow` directly — low 8 bits = slot_id, next 8 bits = ams_id (see `ExtruderInfo::current_ams_slot()`) — confirmed as BambuStudio's own preferred method (`DevExterSystem::ParseV2_0`), no extruder-map inversion needed. The `active_extruder` + `ams_extruder_map` inversion described below is a fallback only; `ams_extruder_map`'s own construction from wire data is unconfirmed in this crate.
 *   **Single-Nozzle Printers (P2S series)**: Multi-AMS configurations on single-nozzle printers may also report local slot indices in `tray_now`. State trackers must evaluate the MQTT `mapping` array field (refer to Section 5.3) to match the local slot position to the active physical AMS unit.
 
 #### AMS Unit Info Bitmask (`info` Field)
