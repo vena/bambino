@@ -26,6 +26,16 @@ This file is rules, not a self-driving procedure — unlike `deep-review`, it do
 7. **If applying these rules hits a genuine conflict or an undefined case, stop and flag it — don't resolve it silently and move on.** Rule 6 and the `needs-verification` severity entry below both exist because a real conflict/gap got resolved silently instead of surfaced, once each, before this rule existed. Treat any judgment call in this file the same weight as a design tradeoff on the actual code: surface it, don't guess and stay quiet about it.
 8. **`Fixed` = what the commit changed, not a permanent guarantee.** Re-verify a cited `BUG-ID` if a stronger source has since appeared (happened once: commit `925a739` caught BUG-012/083 called "already correct" from `pybambu`/`bambuddy` only, before BambuStudio was consulted — cite commits here, not `*_PLAN.md` filenames, which get deleted once their plan lands). Cheap to recheck, costly to carry forward stale.
 
+## Batching fixes to save verification cost
+
+When fixing multiple `Open` bugs in one sitting (e.g. "fix everything in `Open`"), batch bugs that touch the same file or tightly-related files into **one commit** running `make check-fast` **once**, instead of one commit-and-verify cycle per bug. `check-fast` is expensive (multi-target build/test/clippy) and mostly redundant between two tiny adjacent fixes in the same file — paying that cost per-bug instead of per-batch is the same waste rule 6/Docs-regen/Review-file-lifecycle already reject elsewhere in this file.
+
+This doesn't relax rule 6: every `BUG-ID` in the batch still gets its row moved `Open` → `Fixed` in that same commit's diff, and the commit message lists all of them (`Closes BUG-116, BUG-117`). A batch is just a wider atomic unit — resuming after an interruption is still "whatever's left in `Open` is what's left," since a batch that didn't finish committing leaves every one of its bugs' rows still in `Open`.
+
+Don't fold in a bug that's paused mid-sitting (blocked on a decide-first question, or waiting on user input) just because its edits happen to be sitting in the working tree at commit time — `git add -A` will silently sweep up unrelated in-progress changes. Stage only the batch's own files explicitly, or `git reset` the paused bug's files first. This happened once (a paused bug's draft fix nearly got bundled into an unrelated batch's commit before it was caught) — treat it as a real footgun, not a hypothetical.
+
+Group by what's naturally already being read/edited together, not by an artificial cap — one file touched by 3 unrelated bugs is one batch; two files each touched by one bug you happen to be doing back-to-back is two batches (verifying twice there is cheap to skip, but not worth forcing a same-commit merge that makes the diff harder to review).
+
 ## Next BUG-ID
 
 Scan `Open` + `Fixed` + `Wontfix` for the current highest `BUG-NNN`, use `NNN+1`. Never reuse a retired number, never restart numbering because a section looks short.
