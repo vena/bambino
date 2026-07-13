@@ -21,7 +21,7 @@ With the shift index determined, the existence of the physical spool in the slot
 
 $$\text{slot\_exists} = (\text{tray\_exist\_bits} \gg \text{shift\_standard}) \ \& \ 1$$
 
-*   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate addressing scheme. They do not register on the standard `tray_exist_bits` bitmask. Their presence is evaluated directly through their reported slot state parameters in the status payload.
+*   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': $\text{shift\_ht} = 16 + (\text{ams\_id} - 128) + \text{slot\_id}$ (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp:833`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
 
 ##### The Printer-Shutdown Telemetry Exception
 During printer shutdown routines, the firmware emits a final status update where `tray_exist_bits` evaluates to `0` and the `power_on_flag` boolean is set to `false`. To prevent telemetry parsers from falsely interpreting this final update as a physical spool-removal event, updates where `tray_exist_bits = 0` must be ignored strictly when `power_on_flag` is `false`. Conversely, if `power_on_flag` is `false` but `tray_exist_bits` is non-zero, this represents a valid idle-printer state and changes must be processed normally.

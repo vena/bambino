@@ -9,12 +9,17 @@ use crate::types::AmsTray;
 use crate::types::telemetry::ams::{AMS_TRAY_STATE_EMPTY, AMS_TRAY_STATE_SPOOL_NOT_FED};
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
-/// Confirmed against `bambuddy/backend/app/models/spoolman_slot_assignment.py`'s
-/// `ck_ams_id_range` CHECK constraint (0-7, 8 units) — widened there in bambuddy's own
-/// issue #1274 because real H2C/H2D hardware exceeded a 4-unit cap. `pybambu`'s
-/// `tray_now >> 2` decode derives the AMS index dynamically with no hardcoded cap.
-/// Previously `3` (4 units), which silently misclassified units 4-7 as non-standard/external.
-pub(crate) const AMS_MAX_STANDARD_ID: u8 = 7;
+/// BUG-125: reverted from `7` back to `3` — the widening to `7` (BUG-068) relied on
+/// bambuddy's `ck_ams_id_range` CHECK constraint (0-7), but that range predates bambuddy's
+/// own issue #1274 by a month with no cited evidence of a standard unit above id 3; #1274
+/// itself only confirms `ams_id=128` (AMS-HT). Three independent sources now agree `3` is
+/// correct: user-supplied official Bambu Lab documentation caps standard AMS 2 Pro units at
+/// 4 on every product line; BambuStudio's own `DevAms::GetTrayId` (`DevFilaSystem.cpp:247-269`)
+/// hardcodes AMS-HT's bit-index base offset at `16`, which is only correct if standard units
+/// never reach bits 16+ (i.e. never exceed id 3); and pybambu's uncapped `tray_now >> 2`
+/// decode doesn't corroborate 8 units either — it's simply unbounded, not evidence of an
+/// observed 8th unit.
+pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
 pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
 pub(crate) const AMS_EXTERNAL_SPOOL_ID: u8 = 254;
@@ -34,9 +39,12 @@ pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
 /// is `false` but the parsed bitmask is non-zero, this represents a valid offline state
 /// and is processed normally.
 ///
-/// **AMS-HT units (IDs 128-135) don't participate in `tray_exist_bits` at all**
-/// (per `reference/05_materials_ams.md` §5.1) — this function returns `None` for that
-/// range rather than guessing, so callers must consult the tray's `state` field instead.
+/// **AMS-HT units (IDs 128-135) do participate in `tray_exist_bits`, at a fixed offset**
+/// (BUG-114) — BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
+/// branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed independently
+/// in OrcaSlicer with an equivalent formula. This reopens and reverses BUG-015's "AMS-HT
+/// doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
+/// source.
 pub fn evaluate_spool_presence(
     tray_exist_bits: &str,
     ams_id: u8,
@@ -56,11 +64,15 @@ pub fn evaluate_spool_presence(
         return None;
     }
 
-    // High-temperature AMS-HT units (IDs 128-135) reside on their own bus addresses
-    // and do not participate in standard bitwise exists strings — presence must come
-    // from tray state instead, so report unknown rather than hardcoding a guess.
+    // BUG-114: AMS-HT units (IDs 128-135) reside on their own bus addresses but still have a
+    // dedicated bit range in tray_exist_bits, starting right after the standard units'
+    // (base offset 16, since AMS_MAX_STANDARD_ID=3 caps the standard range at bits 0-15).
     if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
-        return None;
+        let shift_ht = 16u32 + (ams_id - AMS_HT_ID_MIN) as u32 + tray_id as u32;
+        if shift_ht >= 32 {
+            return None;
+        }
+        return Some(((parsed_mask >> shift_ht) & 1) == 1);
     }
 
     // Reject ams_id values outside the standard AMS range before computing the shift
@@ -201,13 +213,21 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_spool_presence_ams_ht_returns_none() {
-        // BUG-015: AMS-HT units (128-135) don't participate in tray_exist_bits — this
-        // must report unknown (None), not hardcode Some(true), so callers fall back to
-        // consulting the tray's own `state` field for real presence.
-        assert_eq!(evaluate_spool_presence("f", 128, 0, true), None);
-        assert_eq!(evaluate_spool_presence("f", 135, 0, true), None);
-        assert_eq!(evaluate_spool_presence("0", 130, 0, true), None);
+    fn test_evaluate_spool_presence_ams_ht() {
+        // BUG-114: reopens and reverses BUG-015 — AMS-HT units (128-135) do participate in
+        // tray_exist_bits, at bit index 16 + (ams_id - 128) + slot_id, per BambuStudio's
+        // DevAms::GetTrayId N3S branch.
+        // bit 16 set (0x10000) -> ams_id 128 (offset 0) present
+        assert_eq!(evaluate_spool_presence("10000", 128, 0, true), Some(true));
+        // bit 16 clear, other bits set -> ams_id 128 absent
+        assert_eq!(evaluate_spool_presence("f", 128, 0, true), Some(false));
+        // bit 23 set (16 + (135-128)) -> ams_id 135 (offset 7) present
+        assert_eq!(evaluate_spool_presence("800000", 135, 0, true), Some(true));
+        // bit 18 set (16 + (130-128)) -> ams_id 130 present
+        assert_eq!(evaluate_spool_presence("40000", 130, 0, true), Some(true));
+        assert_eq!(evaluate_spool_presence("0", 130, 0, true), Some(false));
+        // shift_ht >= 32 (out-of-range slot_id) must not panic or wrap — reports None.
+        assert_eq!(evaluate_spool_presence("f", 135, 9, true), None);
     }
 
     #[test]
@@ -373,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_spool_presence_ams_id_out_of_range() {
-        // ams_id outside both the standard (0-7) and AMS-HT (128-135) ranges must not
+        // ams_id outside both the standard (0-3) and AMS-HT (128-135) ranges must not
         // panic or wrap into a bogus shift amount — it should cleanly report None.
         assert_eq!(evaluate_spool_presence("f", 200, 0, true), None);
         assert_eq!(evaluate_spool_presence("f", 8, 0, true), None);
