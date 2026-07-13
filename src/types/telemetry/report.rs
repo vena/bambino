@@ -281,6 +281,40 @@ pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
 pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
 pub(crate) const NET_CONF_WIRED_BITMASK: u32 = 0x1;
 pub(crate) const POWER_220V_BITMASK: u32 = 0x0000_0008;
+pub(crate) const SDCARD_STATE_SHIFT: u32 = 8;
+pub(crate) const SDCARD_STATE_MASK: u32 = 0x3;
+
+/// SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123).
+///
+/// Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
+/// `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
+/// `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard` boolean field can never
+/// report a degraded state — only this bitmask distinguishes "no card," "normal," "abnormal,"
+/// and "read-only."
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SdcardState {
+    /// No SD card physically present.
+    NoSdcard,
+    /// SD card present and functioning normally.
+    Normal,
+    /// SD card present but reporting an abnormal/error condition.
+    Abnormal,
+    /// SD card present but mounted read-only.
+    ReadOnly,
+}
+
+impl SdcardState {
+    fn from_bits(bits: u32) -> Self {
+        match bits {
+            0 => Self::NoSdcard,
+            1 => Self::Normal,
+            2 => Self::Abnormal,
+            3 => Self::ReadOnly,
+            _ => unreachable!("bits masked to 2 bits, only 0-3 possible"),
+        }
+    }
+}
+
 
 impl PrinterTelemetry {
     /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
@@ -335,6 +369,14 @@ impl PrinterTelemetry {
         self.home_flag
             .map(|flag| (flag & POWER_220V_BITMASK) != 0)
             .unwrap_or(false)
+    }
+
+    /// Evaluates the SD-card presence/health state from `home_flag` bits 8–9 (BUG-123). See
+    /// [`SdcardState`]'s doc comment for verification sources. Returns `None` before any
+    /// telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
+    pub fn sdcard_state(&self) -> Option<SdcardState> {
+        self.home_flag
+            .map(|flag| SdcardState::from_bits((flag >> SDCARD_STATE_SHIFT) & SDCARD_STATE_MASK))
     }
 
     /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].

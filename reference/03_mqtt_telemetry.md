@@ -92,7 +92,7 @@ The `home_flag` integer field is a packed bitmask encoding printer hardware stat
 | 4 | `0x00000010` | XCam auto-recovery step loss | XCam step-loss auto-recovery enabled |
 | 5 | `0x00000020` | Camera recording | Timelapse/recording is active |
 | 7 | `0x00000080` | AMS calibrate remaining | AMS remaining filament calibration enabled |
-| 8–9 | `0x00000300` | SD card state | 2-bit field: bit 8 = present, bit 9 = abnormal (unreliable — see §3.2 item 7) |
+| 8–9 | `0x00000300` | SD card state | 2-bit value (`get_flag_bits(flag, 8, 2)`): `0`=no card, `1`=normal, `2`=abnormal, `3`=read-only (BUG-123; confirmed against BambuStudio's `DeviceManager.cpp:1092` and pybambu's `const.py:265-266`/`models.py:3408-3412` — the top-level `sdcard` boolean can never report a degraded state, only this bitmask can) |
 | 10 | `0x00000400` | AMS auto-switch | AMS automatic filament switching enabled |
 | 15 | `0x00008000` | Supports flow calibration | Hardware supports flow calibration (false on H2D despite firmware reporting — OrcaSlicer overrides) |
 | 16 | `0x00010000` | Supports PA calibration | Hardware supports pressure advance calibration (false on P1 series despite firmware reporting — OrcaSlicer overrides) |

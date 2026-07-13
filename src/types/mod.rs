@@ -12,8 +12,8 @@ pub use telemetry::{
     AirductCollection, AirductModeListEntry, AirductPart, AmsDrySetting, AmsFilamentStep,
     AmsStatusReport, AmsTray, AmsUnit, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry,
     DeviceTelemetry, ExtToolTelemetry, ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry,
-    LightReport, NozzleCollection,
-    NozzleInfo, PrinterTelemetry, TelemetryReport, VirtualTray, decode_nozzle_temperatures,
+    LightReport, NetInfo, NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState,
+    TelemetryReport, VirtualTray, decode_nozzle_temperatures,
     is_developer_mode,
 };
 pub use version::{VersionInfo, VersionModule};

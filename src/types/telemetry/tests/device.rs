@@ -140,6 +140,33 @@ fn test_ethernet_active_net_conf_bitmask() {
 }
 
 #[test]
+fn test_sdcard_state_bitmask() {
+    // BUG-123: home_flag bits 8-9 decode the real SD-card state; sdcard bool alone can
+    // never distinguish a degraded card.
+    let cases = [
+        (0u32 << 8, SdcardState::NoSdcard),
+        (1u32 << 8, SdcardState::Normal),
+        (2u32 << 8, SdcardState::Abnormal),
+        (3u32 << 8, SdcardState::ReadOnly),
+    ];
+    for (home_flag, expected) in cases {
+        let json = format!(r#"{{ "print": {{ "home_flag": {home_flag} }} }}"#);
+        let print = serde_json::from_str::<TelemetryReport>(&json)
+            .unwrap()
+            .print
+            .unwrap();
+        assert_eq!(print.sdcard_state(), Some(expected));
+    }
+
+    let json_missing = r#"{ "print": {} }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json_missing)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.sdcard_state(), None);
+}
+
+#[test]
 fn test_ethernet_active_via_wifi_signal() {
     let json = r#"{ "print": { "wifi_signal": "-90dBm" } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json)
