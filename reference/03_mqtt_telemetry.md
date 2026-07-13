@@ -114,6 +114,15 @@ The "supports" vs "enabled" bit pairs (e.g., 19/20, 25/24, 29/28) follow a patte
 
 **Axis homing state (bits 0–2):** During a `G28` homing sequence, bits are set progressively as each axis completes. On a P1S the observed sequence is: all three bits clear (unhomed) → bits 0–1 set (X and Y homed, Z pending) → all three bits set (fully homed). The firmware does not reject motion gcode when axes are unhomed — the motion controller executes regardless. Clients must check bits 0–2 before dispatching motion commands and block or warn at the application layer (matching OrcaSlicer's behavior). See [REF-MOTO-GCODE] for homing safety constraints.
 
+#### Wired Ethernet Detection (`net.conf`) [REF-NET-CONF]
+The confirmed-authoritative source for wired-Ethernet state is bit 0 of `print.net.conf` — confirmed directly against BambuStudio source (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`; identical in OrcaSlicer):
+
+```json
+"net": { "conf": 1 }
+```
+
+`conf & 0x1 != 0` means wired Ethernet is the active connection. See the Wi-Fi signal sentinel below for a fallback when `net.conf` isn't present.
+
 #### Wired Ethernet Wi-Fi Signal Sentinel [REF-NET-PORTS]
 For Ethernet-equipped models (`X1E`, `X2D`, `P2S`, or `H2D Pro`), when the machine is connected via a physical Ethernet cable and Wi-Fi is disabled, the printer transmits a static sentinel value:
 
@@ -121,7 +130,7 @@ For Ethernet-equipped models (`X1E`, `X2D`, `P2S`, or `H2D Pro`), when the machi
 "wifi_signal": "-90dBm"
 ```
 
-This represents an active Wired Ethernet Mode rather than a degraded Wi-Fi link. Note: pybambu attributes this to `home_flag` bit 18 (`0x00040000`), but OrcaSlicer maps bit 18 to `is_support_prompt_sound`. The wired network sentinel detection should rely on the `-90dBm` wifi_signal value rather than `home_flag` bits. See [REF-HOMEFLAG] for the full bitmask reference.
+This represents an active Wired Ethernet Mode rather than a degraded Wi-Fi link. This sentinel is a fallback signal only — the confirmed-authoritative source is `print.net.conf` bit 0 (`network_wired = (net.conf & 0x1) != 0`, see [REF-NET-CONF]); pybambu's `home_flag` bit 18 (`0x00040000`) attribution was checked directly against both BambuStudio and OrcaSlicer source (BUG-110) and confirmed wrong — that bit is `is_support_prompt_sound_detection`, unrelated to networking.
 
 #### Enclosure Door Open Sensor Routing [REF-NET-DOOR]
 The active state of the front enclosure door is tracked via bit 23 (`0x00800000`) of a telemetry status field. This diagnostic function is physically restricted to enclosed models equipped with an electronic door sensor switch (`X1`, `X1C`, `X1E`, `X2D`, `P2S`, `H2C`, `H2D`, `H2D Pro`, `H2S`). Open-frame bed-slingers and non-sensor models (`P1P`, `P1S`, `A1`, `A1 Mini`) do not support physical door sensing on the hardware bus. For supported sensor-equipped models, routing is model-dependent:

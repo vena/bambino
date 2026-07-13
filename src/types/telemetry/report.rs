@@ -89,6 +89,10 @@ pub struct PrinterTelemetry {
     /// Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
     pub wifi_signal: Option<String>,
 
+    /// Network interface state, nested as `print.net` on the wire (BUG-110).
+    #[serde(default)]
+    pub net: Option<NetInfo>,
+
     /// On-board part cooling fan speed (represented as discrete steps 0 to 15) [REF-CLIM-FANS].
     pub cooling_fan_speed: Option<String>,
 
@@ -265,9 +269,17 @@ pub struct PrinterTelemetry {
     pub batch_id: Option<String>,
 }
 
+/// Network interface state from `print.net` [REF-NET-PORTS].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetInfo {
+    /// Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
+    #[serde(default)]
+    pub conf: Option<u32>,
+}
+
 pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
 pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
-pub(crate) const ETHERNET_ACTIVE_BITMASK: u32 = 0x00040000;
+pub(crate) const NET_CONF_WIRED_BITMASK: u32 = 0x1;
 pub(crate) const POWER_220V_BITMASK: u32 = 0x0000_0008;
 
 impl PrinterTelemetry {
@@ -289,24 +301,27 @@ impl PrinterTelemetry {
 
     /// Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
     ///
-    /// Inspects bit 18 (`0x00040000`) of the `home_flag` register. **This is the disputed
-    /// pybambu-sourced heuristic** — OrcaSlicer maps the same bit to `is_support_prompt_sound`
-    /// rather than Ethernet status, and the two reverse-engineering sources disagree on what bit
-    /// 18 means. Not confirmed authoritative. See `reference/03_mqtt_telemetry.md`
-    /// `[REF-NET-PORTS]`, which recommends `is_ethernet_active_via_wifi_signal()` instead. Both
-    /// methods are kept since neither source is proven correct — consider cross-checking both on
-    /// unfamiliar firmware.
+    /// BUG-110: previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
+    /// pybambu-sourced heuristic. Both first-party clients (BambuStudio's
+    /// `DevPrintOptions.cpp:26`, OrcaSlicer identically) actually decode that bit as
+    /// `is_support_prompt_sound_detection`, unrelated to networking — confirmed wrong, not
+    /// merely disputed. Real wired-ethernet state comes from `print.net.conf` bit 0
+    /// (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
+    /// (not `None`) when `net`/`net.conf` haven't been observed yet, matching
+    /// `is_ethernet_active_via_wifi_signal()`'s existing no-signal-observed convention.
     pub fn is_ethernet_active(&self) -> bool {
-        self.home_flag
-            .map(|flag| (flag & ETHERNET_ACTIVE_BITMASK) != 0)
+        self.net
+            .as_ref()
+            .and_then(|net| net.conf)
+            .map(|conf| (conf & NET_CONF_WIRED_BITMASK) != 0)
             .unwrap_or(false)
     }
 
-    /// Evaluates whether the physical printer is connected via wired Ethernet using the doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
+    /// Evaluates whether the physical printer is connected via wired Ethernet using the `wifi_signal` sentinel value [REF-NET-PORTS], as a fallback for firmware that doesn't populate `print.net.conf`.
     ///
     /// A printer with no wifi signal to report (i.e. running wired-only) sends a fixed
-    /// `wifi_signal` of `"-90dBm"`. Not confirmed authoritative either — consider cross-checking
-    /// both methods on unfamiliar firmware.
+    /// `wifi_signal` of `"-90dBm"`. Prefer `is_ethernet_active()` — this heuristic is kept
+    /// only as a fallback for firmware that doesn't send `net.conf`.
     pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
         self.wifi_signal.as_deref() == Some("-90dBm")
     }
@@ -315,8 +330,7 @@ impl PrinterTelemetry {
     ///
     /// Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
     /// temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
-    /// official spec sheet — confirmed, not disputed, unlike the bit-18 ethernet heuristic in
-    /// `is_ethernet_active()`).
+    /// official spec sheet.
     pub fn is_220v_power(&self) -> bool {
         self.home_flag
             .map(|flag| (flag & POWER_220V_BITMASK) != 0)

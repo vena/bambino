@@ -114,15 +114,17 @@ fn test_device_incremental_top_level() {
 }
 
 #[test]
-fn test_ethernet_active_bitmask() {
-    let json = r#"{ "print": { "home_flag": 262144 } }"#;
+fn test_ethernet_active_net_conf_bitmask() {
+    // BUG-110: is_ethernet_active() now reads print.net.conf bit 0, not the confirmed-wrong
+    // home_flag bit 18.
+    let json = r#"{ "print": { "net": { "conf": 1 } } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json)
         .unwrap()
         .print
         .unwrap();
     assert!(print.is_ethernet_active());
 
-    let json_off = r#"{ "print": { "home_flag": 0 } }"#;
+    let json_off = r#"{ "print": { "net": { "conf": 0 } } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json_off)
         .unwrap()
         .print
