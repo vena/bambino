@@ -432,7 +432,7 @@ const AMS_UNIT_INFO_EXTRUDER_SHIFT: u32 = 8;
 const AMS_UNIT_INFO_EXTRUDER_MASK: u64 = 0xF;
 const AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED: u8 = 0xE;
 const AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT: u32 = 22;
-const AMS_UNIT_INFO_DRY_SUB_STATUS_MASK: u64 = 0xF;
+const AMS_UNIT_INFO_DRY_SUB_STATUS_MASK: u64 = 0x3;
 
 impl AmsUnit {
     /// Parses the hex-encoded `info` bitmask string into an integer.
@@ -467,7 +467,7 @@ impl AmsUnit {
         })
     }
 
-    /// Drying sub-status from bits 22–25.
+    /// Drying sub-status from bits 22–23. Bits 24–25 belong to the unrelated `bind_switch_in` field.
     pub fn dry_sub_status(&self) -> Option<u8> {
         self.parse_info().map(|v| {
             ((v >> AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_SUB_STATUS_MASK) as u8

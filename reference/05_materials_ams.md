@@ -60,7 +60,7 @@ Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` fiel
 | **0–3** | `0xF` | AMS unit type | e.g. `3` = AMS Lite |
 | **4–7** | `0xF0` | Dry status | Drying cycle state |
 | **8–11** | `0xF00` | Extruder assignment | `0` = right/main, `1` = left/deputy, `0xE` = uninitialized |
-| **22–25** | `0x3C00000` | Dry sub-status | Drying sub-state detail |
+| **22–23** | `0xC00000` | Dry sub-status | Drying sub-state detail (bits 24–25 belong to the unrelated `bind_switch_in` field) |
 
 The extruder assignment field is used on IDEX platforms to track which extruder carriage an AMS unit is physically wired to. A value of `0xE` indicates the assignment has not been initialized by the firmware.
 

@@ -297,7 +297,7 @@ fn test_kprofile_ams_fields_absent() {
 
 #[test]
 fn test_ams_unit_info_accessors_full_bitmask() {
-    // "11002103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-25 = 4
+    // "11002103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-23 = 0
     let unit = AmsUnit {
         id: "0".into(),
         temp: "26.0".into(),
@@ -313,7 +313,7 @@ fn test_ams_unit_info_accessors_full_bitmask() {
     assert_eq!(unit.ams_type(), Some(3));
     assert_eq!(unit.dry_status(), Some(0));
     assert_eq!(unit.extruder_assignment(), Some(1));
-    assert_eq!(unit.dry_sub_status(), Some(4));
+    assert_eq!(unit.dry_sub_status(), Some(0));
 }
 
 #[test]
