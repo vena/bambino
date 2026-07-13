@@ -158,6 +158,25 @@ pub struct ProjectFilePayload {
     pub subtask_name: String,
     /// Unique 32-bit tracking identifier (Clamped to prevent overflow lockups).
     pub subtask_id: String,
+    /// Dynamic flow (pressure advance) calibration flag, duplicating `extrude_cali_flag` under
+    /// its own key (BUG-119). bambuddy cites a real production incident (#1478) where a
+    /// consumer relying on the wrong one of these two calibration flags silently skipped
+    /// calibration — both are sent so no observer can pick the wrong field.
+    pub flow_cali: bool,
+    /// Slicer preset profile ID. Always `"0"` — confirmed against bambuddy and pybambu, both
+    /// of which hardcode this value; no observed non-zero case.
+    pub profile_id: String,
+    /// Per-submission project tracking ID. Set equal to `subtask_id` (BUG-119) — bambuddy's
+    /// `send_start_print_command` (`bambu_mqtt.py:3721-3781`) mints one fresh ID per
+    /// submission and reuses it for `subtask_id`/`project_id`/`task_id` alike; bambino's
+    /// `subtask_id` already carries the same "fresh per submission" contract via its own doc
+    /// comment, so reusing it here satisfies the same invariant bambuddy's fix relies on
+    /// (avoiding the task-continuation firmware bug, #1042/#1011) without inventing a second
+    /// ID-minting mechanism.
+    pub project_id: String,
+    /// Per-submission task tracking ID. See `project_id`'s doc comment — same value, same
+    /// reasoning.
+    pub task_id: String,
     /// Sliced compilation container file path residing on the SD card (e.g., "job.3mf").
     pub file: String,
     /// Connection endpoint directory scheme (Must use `ftp://` for local loopback parsing) [REF-MQTT-LIFECYCLE].
@@ -236,13 +255,22 @@ impl ProjectFileRequest {
             .nozzle_offset_cali
             .unwrap_or_else(|| model.quirks().supports_nozzle_offset_calibration());
 
+        // BUG-119: subtask_id/project_id/task_id all share one value — bambuddy mints a
+        // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's
+        // `project_id` doc comment for why reusing bambino's own subtask_id here is equivalent.
+        let submission_id = ClampedTaskId::from(config.raw_subtask_id).to_string();
+
         Self {
             print: ProjectFilePayload {
                 command: "project_file",
                 sequence_id: sequence_id.into().to_string(),
                 param: config.plate_gcode_path.clone(),
                 subtask_name: config.subtask_name.clone(),
-                subtask_id: ClampedTaskId::from(config.raw_subtask_id).to_string(),
+                subtask_id: submission_id.clone(),
+                flow_cali: config.run_flow_calibration,
+                profile_id: String::from("0"),
+                project_id: submission_id.clone(),
+                task_id: submission_id,
                 file: config.job_filename.clone(),
                 url,
                 timelapse: config.timelapse,

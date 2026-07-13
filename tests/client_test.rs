@@ -831,6 +831,14 @@ async fn test_start_print_wire_payload() {
         // BUG-059: PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
         // default), which from_config() serializes as extrude_cali_flag: 1.
         assert_eq!(json["print"]["extrude_cali_flag"], 1);
+        // BUG-119: flow_cali/profile_id/project_id/task_id, previously missing entirely.
+        // subtask_id/project_id/task_id all share one value (see ProjectFilePayload's
+        // project_id doc comment for why).
+        assert_eq!(json["print"]["flow_cali"], true);
+        assert_eq!(json["print"]["profile_id"], "0");
+        let subtask_id = json["print"]["subtask_id"].clone();
+        assert_eq!(json["print"]["project_id"], subtask_id);
+        assert_eq!(json["print"]["task_id"], subtask_id);
     });
 
     let mqtt_client =

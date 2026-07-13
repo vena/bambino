@@ -291,6 +291,8 @@ Queues a raw G-code string directly to the printer's motion-controller execution
 
 ##### Submit Print Job (project_file)
 Initiates print execution of a sliced `.3mf` file currently residing on the MicroSD card.
+
+**BUG-119**: `flow_cali`/`profile_id`/`project_id`/`task_id` below were previously missing from bambino's payload entirely — bambuddy cites a real production incident (#1478) where a consumer relying on the wrong one of `flow_cali`/`extrude_cali_flag` silently skipped calibration, and a task-continuation firmware bug (#1042/#1011) requiring a fresh `project_id`/`task_id` per submission (not hardcoded `"0"`). `subtask_id`/`project_id`/`task_id` share one value, minted fresh per submission.
 ```json
 {
   "print": {
@@ -299,6 +301,10 @@ Initiates print execution of a sliced `.3mf` file currently residing on the Micr
     "param": "Metadata/plate_1.gcode",
     "subtask_name": "My Print Job",
     "subtask_id": "14852932",
+    "flow_cali": true,
+    "profile_id": "0",
+    "project_id": "14852932",
+    "task_id": "14852932",
     "file": "job.3mf",
     "url": "ftp://job.3mf",
     "timelapse": true,
