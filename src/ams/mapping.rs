@@ -256,6 +256,71 @@ pub fn validate_external_spool_safety(
     has_physical_ams
 }
 
+/// Per-model AMS unit pool structure (BUG-122), confirmed against `MODEL_MATRIX.csv`'s
+/// "AMS Unit Limits" row (user-supplied official Bambu documentation).
+///
+/// **Known limitation**: AMS Lite units are not independently addressable in this model —
+/// they use the same `ams_id` space as standard AMS units — so A1/A1 Mini's "shared pool OR
+/// 1 AMS Lite, not combinable" exclusivity and A2L's "shared pool + 1 AMS Lite simultaneously"
+/// additive capacity can't be validated from `ams_id`/`slot_id` alone. Both are conservatively
+/// modeled as `Shared { max_units: 4 }`, the same as the plain shared-pool models — this may
+/// under-count A2L's true capacity by one unit, but never accepts a config that's actually
+/// invalid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmsPoolComposition {
+    /// Standard AMS and AMS-HT units draw from one combined pool of `max_units` total
+    /// (X1C, X1E, P1P, P1S, A1, A1 Mini, A2L).
+    Shared {
+        /// Maximum combined standard + AMS-HT unit count.
+        max_units: u8,
+    },
+    /// Standard AMS and AMS-HT units draw from independent pools, each with its own cap
+    /// (H2C, H2D, H2D Pro, H2S, X2D, P2S).
+    Independent {
+        /// Maximum standard AMS unit count.
+        max_standard: u8,
+        /// Maximum AMS-HT unit count.
+        max_ht: u8,
+    },
+}
+
+/// Validates a constructed `ams_mapping2` against the model's actual AMS pool structure
+/// (BUG-122). Rejects configs no real hardware combination could serve — e.g. 4 standard +
+/// 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4.
+///
+/// Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing the same
+/// unit across multiple slots isn't an extra unit. External-spool and unmapped sentinel
+/// entries are ignored, since they don't occupy a physical AMS unit slot.
+pub fn validate_ams_pool_composition(
+    mapping2: &[AmsMapping2Entry],
+    composition: AmsPoolComposition,
+) -> bool {
+    let mut standard_ids = Vec::new();
+    let mut ht_ids = Vec::new();
+    for entry in mapping2 {
+        if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
+            if !standard_ids.contains(&entry.ams_id) {
+                standard_ids.push(entry.ams_id);
+            }
+        } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
+            .contains(&entry.ams_id)
+            && !ht_ids.contains(&entry.ams_id)
+        {
+            ht_ids.push(entry.ams_id);
+        }
+    }
+
+    match composition {
+        AmsPoolComposition::Shared { max_units } => {
+            (standard_ids.len() + ht_ids.len()) as u8 <= max_units
+        }
+        AmsPoolComposition::Independent {
+            max_standard,
+            max_ht,
+        } => standard_ids.len() as u8 <= max_standard && ht_ids.len() as u8 <= max_ht,
+    }
+}
+
 /// Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
 pub fn validate_external_spool_safety_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool {
     if !is_single_nozzle {
@@ -389,6 +454,118 @@ mod tests {
             slot_id: 0,
         }];
         assert!(validate_external_spool_safety(true, &mapping));
+    }
+
+    #[test]
+    fn test_validate_ams_pool_composition_shared_within_limit() {
+        // X1C/P1S/A1-style: 4 standard + HT share one pool. 2 standard + 1 HT = 3, within 4.
+        let mapping = vec![
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 1,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 128,
+                slot_id: 0,
+            },
+        ];
+        assert!(validate_ams_pool_composition(
+            &mapping,
+            AmsPoolComposition::Shared { max_units: 4 }
+        ));
+    }
+
+    #[test]
+    fn test_validate_ams_pool_composition_shared_over_limit() {
+        // 4 standard + 1 HT = 5, exceeds a shared pool of 4.
+        let mapping = vec![
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 1,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 2,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 3,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 128,
+                slot_id: 0,
+            },
+        ];
+        assert!(!validate_ams_pool_composition(
+            &mapping,
+            AmsPoolComposition::Shared { max_units: 4 }
+        ));
+    }
+
+    #[test]
+    fn test_validate_ams_pool_composition_independent_pools() {
+        // P2S-style: independent pools of 4 standard + 4 HT. 4 standard + 4 HT is valid;
+        // an unbuildable config (4 standard + 8 HT, this bug's motivating example) is not.
+        let valid = vec![
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 128,
+                slot_id: 0,
+            },
+        ];
+        assert!(validate_ams_pool_composition(
+            &valid,
+            AmsPoolComposition::Independent {
+                max_standard: 4,
+                max_ht: 4,
+            }
+        ));
+
+        let too_many_ht: Vec<AmsMapping2Entry> = (128..=135)
+            .map(|ams_id| AmsMapping2Entry { ams_id, slot_id: 0 })
+            .collect();
+        assert!(!validate_ams_pool_composition(
+            &too_many_ht,
+            AmsPoolComposition::Independent {
+                max_standard: 4,
+                max_ht: 4,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_validate_ams_pool_composition_ignores_external_and_repeated_units() {
+        // External spool entries and duplicate ams_ids (multiple slots on the same unit)
+        // don't count against the pool.
+        let mapping = vec![
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 0,
+            },
+            AmsMapping2Entry {
+                ams_id: 0,
+                slot_id: 1,
+            },
+            AmsMapping2Entry {
+                ams_id: 255,
+                slot_id: 255,
+            },
+        ];
+        assert!(validate_ams_pool_composition(
+            &mapping,
+            AmsPoolComposition::Shared { max_units: 1 }
+        ));
     }
 
     #[test]

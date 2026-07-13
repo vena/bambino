@@ -65,6 +65,10 @@ macro_rules! impl_a1_shared {
                 1
             }
 
+            fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
+                crate::ams::AmsPoolComposition::Shared { max_units: 4 }
+            }
+
             fn supports_nozzle_offset_calibration(&self) -> bool {
                 false
             }

@@ -6,6 +6,15 @@
 
 The physical printer monitors modular material expansion units connected to its hardware expansion bus. Telemetry updates are broadcast within the `"print"` root envelope under the `"ams"` and `"ams_status"` keys.
 
+#### Per-Model AMS Pool Composition (BUG-122)
+The wire-decode boundary constants (`AMS_MAX_STANDARD_ID`, `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX`) are protocol-wide, not model-dependent — every model uses the same bit addressing. What *is* model-dependent is how many units of each type a given machine physically supports, confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row (user-supplied official Bambu documentation):
+
+*   **Shared pool** (X1C, X1E, P1P, P1S, A1, A1 Mini, A2L): standard AMS and AMS-HT units draw from one combined pool of up to 4 units total.
+*   **Independent pools** (H2C, H2D, H2D Pro, H2S, X2D): up to 4 standard AMS units *and* up to 8 AMS-HT units simultaneously, capped separately.
+*   **Independent pools, narrower HT cap** (P2S): up to 4 standard AMS units *and* up to 4 AMS-HT units simultaneously (8 units / 20 slots total).
+
+`ModelQuirks::ams_pool_composition()` exposes this per model; `ams::validate_ams_pool_composition()` checks a constructed `ams_mapping2` against it, rejecting configs no real hardware combination could serve (e.g. 4 standard + 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4). AMS Lite units aren't independently addressable — they share the standard `ams_id` space — so A1/A1 Mini's "shared pool OR 1 AMS Lite, not combinable" exclusivity and A2L's "+1 AMS Lite simultaneously" additive capacity aren't modeled precisely; both are conservatively treated as the plain 4-unit shared pool.
+
 #### Spool Presence Masking
 The physical presence of loaded spools across standard expansion units is tracked via a hexadecimal bitmask string:
 *   `tray_exist_bits`: A hexadecimal string representing which physical slots contain a spool.

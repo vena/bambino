@@ -74,6 +74,13 @@ pub trait ModelQuirks {
     /// * `7` for automatic tool changer storage racks (1 dedicated + 6 interchangeable).
     fn physical_nozzle_count(&self) -> u8;
 
+    /// Returns this model's physical AMS unit pool structure (BUG-122) — whether standard AMS
+    /// and AMS-HT units share one combined pool or draw from independent pools, and each
+    /// pool's unit-count ceiling. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
+    /// See [`crate::ams::AmsPoolComposition`]'s doc comment for the AMS-lite modeling
+    /// limitation.
+    fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition;
+
     /// Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.
     fn supports_nozzle_offset_calibration(&self) -> bool;
 

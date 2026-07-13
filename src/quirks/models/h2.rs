@@ -87,6 +87,13 @@ macro_rules! impl_h2_shared {
                 $nozzle_count
             }
 
+            fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
+                crate::ams::AmsPoolComposition::Independent {
+                    max_standard: 4,
+                    max_ht: 8,
+                }
+            }
+
             fn supports_nozzle_offset_calibration(&self) -> bool {
                 $offset_cal
             }
