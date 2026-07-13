@@ -225,6 +225,78 @@ fn test_ams_status_report_extra_fields() {
 }
 
 #[test]
+fn test_ams_status_report_calibrate_remain_flag_and_cfs() {
+    // BUG-121: calibrate_remain_flag (bool) and cfs (typed Vec<AmsFilamentStep>).
+    let json = r#"{
+            "print": {
+                "ams": {
+                    "ams": [],
+                    "calibrate_remain_flag": true,
+                    "cfs": [2, 9, 5, 7]
+                }
+            }
+        }"#;
+    let ams = serde_json::from_str::<TelemetryReport>(json)
+        .unwrap()
+        .print
+        .unwrap()
+        .ams
+        .unwrap();
+    assert_eq!(ams.calibrate_remain_flag, Some(true));
+    assert_eq!(
+        ams.cfs,
+        Some(vec![
+            AmsFilamentStep::HeatNozzle,
+            AmsFilamentStep::SwitchExtruder,
+            AmsFilamentStep::PushNewFilament,
+            AmsFilamentStep::PurgeOldFilament,
+        ])
+    );
+}
+
+#[test]
+fn test_ams_filament_step_unknown_value_preserved() {
+    let json = r#"{
+            "print": {
+                "ams": { "ams": [], "cfs": [99] }
+            }
+        }"#;
+    let ams = serde_json::from_str::<TelemetryReport>(json)
+        .unwrap()
+        .print
+        .unwrap()
+        .ams
+        .unwrap();
+    assert_eq!(ams.cfs, Some(vec![AmsFilamentStep::Unknown(99)]));
+}
+
+#[test]
+fn test_ams_unit_dry_fan_status() {
+    // BUG-120: bits 18-19 = dry_fan1_status, bits 20-21 = dry_fan2_status.
+    // "3c0000" = 0b0011_1100 at bits 16-23: fan1 (bits18-19) = 0b11 = 3, fan2 (bits20-21) = 0b11 = 3.
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: None,
+        info: Some("3c0000".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.dry_fan1_status(), Some(3));
+    assert_eq!(unit.dry_fan2_status(), Some(3));
+
+    let unit_off = AmsUnit {
+        info: Some("0".into()),
+        ..unit
+    };
+    assert_eq!(unit_off.dry_fan1_status(), Some(0));
+    assert_eq!(unit_off.dry_fan2_status(), Some(0));
+}
+
+#[test]
 fn test_ams_unit_info_bitmask() {
     let json = r#"{
             "print": {
@@ -444,6 +516,8 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
         power_on_flag: None,
         cali_id: None,
         cali_stat: None,
+        calibrate_remain_flag: None,
+        cfs: None,
     };
 
     let partial = AmsStatusReport {
@@ -461,6 +535,8 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
         power_on_flag: None,
         cali_id: None,
         cali_stat: None,
+        calibrate_remain_flag: None,
+        cfs: None,
     };
 
     cached.merge_from(&partial);
@@ -506,6 +582,8 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
         power_on_flag: None,
         cali_id: None,
         cali_stat: None,
+        calibrate_remain_flag: None,
+        cfs: None,
     };
 
     let partial = AmsStatusReport {
@@ -533,6 +611,8 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
         power_on_flag: None,
         cali_id: None,
         cali_stat: None,
+        calibrate_remain_flag: None,
+        cfs: None,
     };
 
     cached.merge_from(&partial);

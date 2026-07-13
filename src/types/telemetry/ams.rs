@@ -7,6 +7,110 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
+/// Per-slot filament-change step code (BUG-121). Mirrors BambuStudio's `DevFilamentStep` enum
+/// (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
+/// wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
+/// the source enum). `Unknown` preserves any other raw value rather than failing to decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AmsFilamentStep {
+    /// No filament-change activity in progress.
+    Idle,
+    /// Change sequence paused.
+    Pause,
+    /// Heating the nozzle before the change.
+    HeatNozzle,
+    /// Cutting the current filament.
+    CutFilament,
+    /// Retracting the current filament out of the toolhead.
+    PullCurrFilament,
+    /// Feeding the new filament toward the toolhead.
+    PushNewFilament,
+    /// Grabbing the new filament at the AMS slot.
+    GrabNewFilament,
+    /// Purging leftover old filament from the nozzle.
+    PurgeOldFilament,
+    /// Verifying filament position (wire value `0x08`, shared with `STEP_CONFIRM_EXTRUDED`).
+    CheckPosition,
+    /// Switching to a different extruder (IDEX).
+    SwitchExtruder,
+    /// Switching to a different hotend (tool-changer).
+    SwitchHotend,
+    /// Cooling the filament inside the AMS unit.
+    AmsFilaCooling,
+    /// Pushing filament into the tool-changer switcher.
+    PushSwitcherFila,
+    /// Pulling filament out of the tool-changer switcher.
+    PullSwitcherFila,
+    /// Switching the tool-changer's active position.
+    SwitcherSwitch,
+    /// Any wire value not covered by a named variant, preserved verbatim.
+    Unknown(i64),
+}
+
+impl From<i64> for AmsFilamentStep {
+    fn from(raw: i64) -> Self {
+        match raw {
+            0x00 => Self::Idle,
+            0x01 => Self::Pause,
+            0x02 => Self::HeatNozzle,
+            0x03 => Self::CutFilament,
+            0x04 => Self::PullCurrFilament,
+            0x05 => Self::PushNewFilament,
+            0x06 => Self::GrabNewFilament,
+            0x07 => Self::PurgeOldFilament,
+            0x08 => Self::CheckPosition,
+            0x09 => Self::SwitchExtruder,
+            0x0A => Self::SwitchHotend,
+            0x0B => Self::AmsFilaCooling,
+            0x0C => Self::PushSwitcherFila,
+            0x0D => Self::PullSwitcherFila,
+            0x0E => Self::SwitcherSwitch,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+impl From<AmsFilamentStep> for i64 {
+    fn from(step: AmsFilamentStep) -> Self {
+        match step {
+            AmsFilamentStep::Idle => 0x00,
+            AmsFilamentStep::Pause => 0x01,
+            AmsFilamentStep::HeatNozzle => 0x02,
+            AmsFilamentStep::CutFilament => 0x03,
+            AmsFilamentStep::PullCurrFilament => 0x04,
+            AmsFilamentStep::PushNewFilament => 0x05,
+            AmsFilamentStep::GrabNewFilament => 0x06,
+            AmsFilamentStep::PurgeOldFilament => 0x07,
+            AmsFilamentStep::CheckPosition => 0x08,
+            AmsFilamentStep::SwitchExtruder => 0x09,
+            AmsFilamentStep::SwitchHotend => 0x0A,
+            AmsFilamentStep::AmsFilaCooling => 0x0B,
+            AmsFilamentStep::PushSwitcherFila => 0x0C,
+            AmsFilamentStep::PullSwitcherFila => 0x0D,
+            AmsFilamentStep::SwitcherSwitch => 0x0E,
+            AmsFilamentStep::Unknown(other) => other,
+        }
+    }
+}
+
+impl Serialize for AmsFilamentStep {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_i64(i64::from(*self))
+    }
+}
+
+impl<'de> Deserialize<'de> for AmsFilamentStep {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        i64::deserialize(deserializer).map(AmsFilamentStep::from)
+    }
+}
+
 /// Top-level AMS status wrapper containing the units array and bus-wide metadata [REF-AMS-DECODE].
 ///
 /// On the wire, AMS telemetry is nested as `print.ams.ams[...]` — this struct represents
@@ -62,6 +166,18 @@ pub struct AmsStatusReport {
     /// Calibration tracking status.
     #[serde(default)]
     pub cali_stat: Option<i32>,
+
+    /// Whether AMS-side remaining-filament detection is enabled (BUG-121). Confirmed
+    /// independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
+    /// and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
+    #[serde(default)]
+    pub calibrate_remain_flag: Option<bool>,
+
+    /// Per-slot filament-change step codes (BUG-121). Confirmed against BambuStudio's
+    /// `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
+    /// consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
+    #[serde(default)]
+    pub cfs: Option<Vec<AmsFilamentStep>>,
 }
 
 impl AmsStatusReport {
@@ -133,6 +249,12 @@ impl AmsStatusReport {
         }
         if incoming.cali_stat.is_some() {
             self.cali_stat = incoming.cali_stat;
+        }
+        if incoming.calibrate_remain_flag.is_some() {
+            self.calibrate_remain_flag = incoming.calibrate_remain_flag;
+        }
+        if incoming.cfs.is_some() {
+            self.cfs = incoming.cfs.clone();
         }
     }
 }
@@ -433,6 +555,9 @@ const AMS_UNIT_INFO_EXTRUDER_MASK: u64 = 0xF;
 const AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED: u8 = 0xE;
 const AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT: u32 = 22;
 const AMS_UNIT_INFO_DRY_SUB_STATUS_MASK: u64 = 0x3;
+const AMS_UNIT_INFO_DRY_FAN1_STATUS_SHIFT: u32 = 18;
+const AMS_UNIT_INFO_DRY_FAN2_STATUS_SHIFT: u32 = 20;
+const AMS_UNIT_INFO_DRY_FAN_STATUS_MASK: u64 = 0x3;
 
 impl AmsUnit {
     /// Parses the hex-encoded `info` bitmask string into an integer.
@@ -471,6 +596,24 @@ impl AmsUnit {
     pub fn dry_sub_status(&self) -> Option<u8> {
         self.parse_info().map(|v| {
             ((v >> AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_SUB_STATUS_MASK) as u8
+        })
+    }
+
+    /// Dry-fan 1 status from bits 18–19 (BUG-120). Confirmed against BambuStudio's
+    /// `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
+    /// `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
+    pub fn dry_fan1_status(&self) -> Option<u8> {
+        self.parse_info().map(|v| {
+            ((v >> AMS_UNIT_INFO_DRY_FAN1_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_FAN_STATUS_MASK) as u8
+        })
+    }
+
+    /// Dry-fan 2 status from bits 20–21 (BUG-120). Confirmed against BambuStudio's
+    /// `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
+    /// `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
+    pub fn dry_fan2_status(&self) -> Option<u8> {
+        self.parse_info().map(|v| {
+            ((v >> AMS_UNIT_INFO_DRY_FAN2_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_FAN_STATUS_MASK) as u8
         })
     }
 }

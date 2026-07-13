@@ -24,7 +24,7 @@ use alloc::{vec, vec::Vec};
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use ams::{AmsDrySetting, AmsStatusReport, AmsTray, AmsUnit, VirtualTray};
+pub use ams::{AmsDrySetting, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit, VirtualTray};
 pub use device::{
     AirductCollection, AirductModeListEntry, AirductPart, BedInfo, BedTelemetry, DeviceTelemetry,
     ExtToolTelemetry, ExtruderCollection, ExtruderInfo, NozzleCollection, NozzleInfo,
