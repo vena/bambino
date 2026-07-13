@@ -15,7 +15,8 @@ use crate::mqtt::MqttMessage;
 use crate::quirks::decode_fan_percentage;
 use crate::types::telemetry::{decode_bed_temperatures, decode_nozzle_temperatures};
 use crate::types::{
-    AmsStatusReport, DeviceTelemetry, HmsEntry, PrinterTelemetry, TelemetryReport, VirtualTray,
+    AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, TelemetryReport,
+    VirtualTray,
 };
 
 use super::PrinterClient;
@@ -49,6 +50,7 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_spd_lvl: Option<u8>,
     pub(crate) last_spd_mag: Option<u16>,
     pub(crate) last_wifi_signal: Option<String>,
+    pub(crate) last_ipcam: Option<IpcamTelemetry>,
 }
 
 impl<
@@ -150,6 +152,7 @@ where
         self.update_ams_cache(print);
         self.update_fan_cache(print);
         self.update_speed_and_signal_cache(print);
+        self.update_ipcam_cache(print);
     }
 
     fn update_state_cache(&mut self, print: &PrinterTelemetry) {
@@ -245,6 +248,17 @@ where
         }
         if let Some(wifi_signal) = &print.wifi_signal {
             self.cache.last_wifi_signal = Some(wifi_signal.clone());
+        }
+    }
+
+    fn update_ipcam_cache(&mut self, print: &PrinterTelemetry) {
+        if let Some(ipcam) = &print.ipcam {
+            // BUG-105: merge field-by-field rather than replacing wholesale — see
+            // `IpcamTelemetry::merge_from`.
+            match &mut self.cache.last_ipcam {
+                Some(cached) => cached.merge_from(ipcam),
+                None => self.cache.last_ipcam = Some(ipcam.clone()),
+            }
         }
     }
 
@@ -390,6 +404,12 @@ where
     /// `None` means no telemetry carrying `print.hms` has been observed yet.
     pub fn hms(&self) -> Option<&[HmsEntry]> {
         self.cache.last_hms.as_deref()
+    }
+
+    /// Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// `None` means no telemetry carrying `print.ipcam` has been observed yet.
+    pub fn ipcam(&self) -> Option<&IpcamTelemetry> {
+        self.cache.last_ipcam.as_ref()
     }
 
     /// Returns every cached HMS entry decoded and filtered to genuine faults (mirrors `active_fault()`'s raw-cache-decode-on-access shape).

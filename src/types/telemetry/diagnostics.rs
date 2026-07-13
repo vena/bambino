@@ -96,6 +96,38 @@ pub struct IpcamTelemetry {
     pub rtsp_url: Option<String>,
 }
 
+impl IpcamTelemetry {
+    /// Merges a freshly-parsed `IpcamTelemetry` into `self` field-by-field, instead of
+    /// replacing `self` wholesale.
+    ///
+    /// BUG-105: BambuStudio's `parse_json` (`DeviceManager.cpp:3338-3399`) gates every
+    /// `ipcam` field behind its own `.contains()` check, same preserve-on-absence pattern
+    /// as `CtcTelemetry`/`BedTelemetry`/`ExtToolTelemetry` (BUG-096/095/097).
+    pub(crate) fn merge_from(&mut self, incoming: &IpcamTelemetry) {
+        if incoming.ipcam_dev.is_some() {
+            self.ipcam_dev = incoming.ipcam_dev.clone();
+        }
+        if incoming.ipcam_record.is_some() {
+            self.ipcam_record = incoming.ipcam_record.clone();
+        }
+        if incoming.timelapse.is_some() {
+            self.timelapse = incoming.timelapse.clone();
+        }
+        if incoming.mode_bits.is_some() {
+            self.mode_bits = incoming.mode_bits;
+        }
+        if incoming.resolution.is_some() {
+            self.resolution = incoming.resolution.clone();
+        }
+        if incoming.tutk_server.is_some() {
+            self.tutk_server = incoming.tutk_server.clone();
+        }
+        if incoming.rtsp_url.is_some() {
+            self.rtsp_url = incoming.rtsp_url.clone();
+        }
+    }
+}
+
 /// Raw telemetry entry from the `hms` diagnostic array [REF-DIAG-HMS].
 ///
 /// Each entry represents an active hardware fault or status indication. Use
@@ -103,13 +135,43 @@ pub struct IpcamTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HmsEntry {
     /// Packed attribute word encoding module ID, severity, and subsystem address.
+    #[serde(deserialize_with = "deserialize_permissive_hms_u32")]
     pub attr: u32,
     /// Packed code word encoding fault category and error index.
+    #[serde(deserialize_with = "deserialize_permissive_hms_u32")]
     pub code: u32,
-    /// Seconds since boot when the alert was raised (present on X2/H2/P2 models).
+    /// Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2 — see BUG-107).
     #[serde(default)]
     pub ts_boot: Option<u64>,
     /// UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
     #[serde(default)]
     pub ts_unix: Option<String>,
+}
+
+/// Permissively decodes an `HmsEntry.attr`/`.code` wire value.
+///
+/// BUG-106: BambuStudio's `ParseHMSItems` (`DevHMS.cpp:42-61`) pushes a default-zeroed
+/// item on a malformed entry rather than aborting the whole message; bambuddy
+/// (`bambu_mqtt.py:2756-2761`) additionally tolerates hex-string `attr`/`code` values.
+/// Accepts a plain integer or a hex string (with or without a `0x` prefix); any other
+/// shape defaults to `0` instead of failing the entire telemetry message's deserialize.
+fn deserialize_permissive_hms_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawHmsValue {
+        Int(u32),
+        Str(String),
+    }
+
+    Ok(match RawHmsValue::deserialize(deserializer) {
+        Ok(RawHmsValue::Int(i)) => i,
+        Ok(RawHmsValue::Str(s)) => {
+            let trimmed = s.trim_start_matches("0x").trim_start_matches("0X");
+            u32::from_str_radix(trimmed, 16).unwrap_or(0)
+        }
+        Err(_) => 0,
+    })
 }

@@ -71,6 +71,31 @@ fn test_hms_array_deserialization() {
 }
 
 #[test]
+fn test_hms_entry_tolerates_hex_string_attr_and_code() {
+    // BUG-106: a hex-string attr/code (or any other malformed shape) must default to 0
+    // instead of failing the whole telemetry message's deserialize.
+    let json_data = r#"{
+            "print": {
+                "hms": [
+                    { "attr": "0x03000005", "code": "0x00010002" },
+                    { "attr": 50331904, "code": 65543 },
+                    { "attr": null, "code": true }
+                ]
+            }
+        }"#;
+
+    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let hms = report.print.unwrap().hms.unwrap();
+    assert_eq!(hms.len(), 3);
+    assert_eq!(hms[0].attr, 0x03000005);
+    assert_eq!(hms[0].code, 0x00010002);
+    assert_eq!(hms[1].attr, 50331904);
+    assert_eq!(hms[1].code, 65543);
+    assert_eq!(hms[2].attr, 0);
+    assert_eq!(hms[2].code, 0);
+}
+
+#[test]
 fn test_hms_absent_vs_empty() {
     let absent = r#"{ "print": {} }"#;
     let report: TelemetryReport = serde_json::from_str(absent).unwrap();
@@ -104,6 +129,42 @@ fn test_camera_fields_deserialization() {
     assert_eq!(ipcam.timelapse.as_deref(), Some("enable"));
     assert_eq!(ipcam.mode_bits, Some(3));
     assert_eq!(ipcam.tutk_server.as_deref(), Some("disable"));
+}
+
+#[test]
+fn test_ipcam_telemetry_merge_from_preserves_fields_on_absence() {
+    // BUG-105: a partial `print.ipcam` push (e.g. just `ipcam_record` toggling) must not
+    // clobber previously-known fields the push didn't repeat.
+    let mut cached = IpcamTelemetry {
+        ipcam_dev: Some("1".into()),
+        ipcam_record: Some("enable".into()),
+        timelapse: Some("enable".into()),
+        mode_bits: Some(3),
+        resolution: Some("1080p".into()),
+        tutk_server: Some("disable".into()),
+        rtsp_url: Some("rtsps://192.168.1.64/streaming/live/1".into()),
+    };
+
+    let partial = IpcamTelemetry {
+        ipcam_dev: None,
+        ipcam_record: Some("disable".into()),
+        timelapse: None,
+        mode_bits: None,
+        resolution: None,
+        tutk_server: None,
+        rtsp_url: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert_eq!(cached.ipcam_record.as_deref(), Some("disable"), "new field applies");
+    assert_eq!(
+        cached.ipcam_dev.as_deref(),
+        Some("1"),
+        "ipcam_dev must survive an ipcam_record-only push"
+    );
+    assert_eq!(cached.mode_bits, Some(3));
+    assert_eq!(cached.resolution.as_deref(), Some("1080p"));
 }
 
 #[test]
