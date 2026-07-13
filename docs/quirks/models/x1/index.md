@@ -71,6 +71,8 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 - <span id="x1cquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
+- <span id="x1cquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
+
 - <span id="x1cquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
 - <span id="x1cquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
@@ -114,6 +116,8 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 - <span id="x1equirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
 
 - <span id="x1equirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
+
+- <span id="x1equirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="x1equirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 

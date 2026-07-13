@@ -15,6 +15,7 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
 | [`AmsTray`](#amstray) | struct | Material spool state descriptor representing a single physical tray slot. |
 | [`AmsUnit`](#amsunit) | struct | Modular standard expansion unit managing up to 4 physical spool slots. |
 | [`VirtualTray`](#virtualtray) | struct | Virtual/external spool holder telemetry. |
+| [`AmsFilamentStep`](#amsfilamentstep) | enum | Per-slot filament-change step code (BUG-121). |
 
 ## Types
 
@@ -82,6 +83,8 @@ struct AmsStatusReport {
     pub power_on_flag: Option<bool>,
     pub cali_id: Option<i32>,
     pub cali_stat: Option<i32>,
+    pub calibrate_remain_flag: Option<bool>,
+    pub cfs: Option<Vec<AmsFilamentStep>>,
 }
 ```
 
@@ -147,6 +150,18 @@ the intermediate `print.ams` object.
 - **`cali_stat`**: `Option<i32>`
 
   Calibration tracking status.
+
+- **`calibrate_remain_flag`**: `Option<bool>`
+
+  Whether AMS-side remaining-filament detection is enabled (BUG-121). Confirmed
+  independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
+  and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
+
+- **`cfs`**: `Option<Vec<AmsFilamentStep>>`
+
+  Per-slot filament-change step codes (BUG-121). Confirmed against BambuStudio's
+  `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
+  consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
 #### Trait Implementations
 
@@ -437,7 +452,23 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
 
-  Drying sub-status from bits 22–25.
+  Drying sub-status from bits 22–23. Bits 24–25 belong to the unrelated `bind_switch_in` field.
+
+- <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
+
+  Dry-fan 1 status from bits 18–19 (BUG-120). Confirmed against BambuStudio's
+
+  `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
+
+  `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
+
+- <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
+
+  Dry-fan 2 status from bits 20–21 (BUG-120). Confirmed against BambuStudio's
+
+  `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
+
+  `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
 
 #### Trait Implementations
 
@@ -598,4 +629,130 @@ and virtual/external spool holders use the same field set.
 ##### `impl Serialize for VirtualTray`
 
 - <span id="virtualtray-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `AmsFilamentStep`
+
+```rust
+enum AmsFilamentStep {
+    Idle,
+    Pause,
+    HeatNozzle,
+    CutFilament,
+    PullCurrFilament,
+    PushNewFilament,
+    GrabNewFilament,
+    PurgeOldFilament,
+    CheckPosition,
+    SwitchExtruder,
+    SwitchHotend,
+    AmsFilaCooling,
+    PushSwitcherFila,
+    PullSwitcherFila,
+    SwitcherSwitch,
+    Unknown(i64),
+}
+```
+
+Per-slot filament-change step code (BUG-121). Mirrors BambuStudio's `DevFilamentStep` enum
+(`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
+wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
+the source enum). `Unknown` preserves any other raw value rather than failing to decode.
+
+#### Variants
+
+- **`Idle`**
+
+  No filament-change activity in progress.
+
+- **`Pause`**
+
+  Change sequence paused.
+
+- **`HeatNozzle`**
+
+  Heating the nozzle before the change.
+
+- **`CutFilament`**
+
+  Cutting the current filament.
+
+- **`PullCurrFilament`**
+
+  Retracting the current filament out of the toolhead.
+
+- **`PushNewFilament`**
+
+  Feeding the new filament toward the toolhead.
+
+- **`GrabNewFilament`**
+
+  Grabbing the new filament at the AMS slot.
+
+- **`PurgeOldFilament`**
+
+  Purging leftover old filament from the nozzle.
+
+- **`CheckPosition`**
+
+  Verifying filament position (wire value `0x08`, shared with `STEP_CONFIRM_EXTRUDED`).
+
+- **`SwitchExtruder`**
+
+  Switching to a different extruder (IDEX).
+
+- **`SwitchHotend`**
+
+  Switching to a different hotend (tool-changer).
+
+- **`AmsFilaCooling`**
+
+  Cooling the filament inside the AMS unit.
+
+- **`PushSwitcherFila`**
+
+  Pushing filament into the tool-changer switcher.
+
+- **`PullSwitcherFila`**
+
+  Pulling filament out of the tool-changer switcher.
+
+- **`SwitcherSwitch`**
+
+  Switching the tool-changer's active position.
+
+- **`Unknown`**
+
+  Any wire value not covered by a named variant, preserved verbatim.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsFilamentStep`
+
+- <span id="amsfilamentstep-clone"></span>`fn clone(&self) -> AmsFilamentStep` — [`AmsFilamentStep`](#amsfilamentstep)
+
+##### `impl Copy for AmsFilamentStep`
+
+##### `impl Debug for AmsFilamentStep`
+
+- <span id="amsfilamentstep-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Deserialize<'de> for AmsFilamentStep`
+
+- <span id="amsfilamentstep-deserialize"></span>`fn deserialize<D>(deserializer: D) -> Result<Self, <D as >::Error>`
+
+##### `impl DeserializeOwned for AmsFilamentStep`
+
+##### `impl Eq for AmsFilamentStep`
+
+##### `impl Hash for AmsFilamentStep`
+
+- <span id="amsfilamentstep-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for AmsFilamentStep`
+
+- <span id="amsfilamentstep-partialeq-eq"></span>`fn eq(&self, other: &AmsFilamentStep) -> bool` — [`AmsFilamentStep`](#amsfilamentstep)
+
+##### `impl Serialize for AmsFilamentStep`
+
+- <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
 

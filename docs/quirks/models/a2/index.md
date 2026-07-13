@@ -49,6 +49,8 @@ Quirks for the A2L large-format open-frame bed-slinger.
 
 - <span id="a2lquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
+- <span id="a2lquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
+
 - <span id="a2lquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
 - <span id="a2lquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`

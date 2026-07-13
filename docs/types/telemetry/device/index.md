@@ -467,15 +467,15 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (low 4 bits = tray index, upper bits = AMS unit index).
+  Current AMS slot routing (BUG-112; confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
-  Previous AMS slot routing.
+  Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
 
 - **`star`**: `Option<u32>`
 
-  Target AMS slot routing.
+  Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
 
 - **`hnow`**: `Option<u8>`
 
@@ -510,6 +510,28 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - <span id="extruderinfo-temperatures"></span>`fn temperatures(&self) -> (u16, u16)`
 
   Unpacks the composite temperature into (actual, target) degrees Celsius.
+
+- <span id="extruderinfo-current-ams-slot"></span>`fn current_ams_slot(&self) -> Option<(u8, u8)>`
+
+  Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
+
+  resolving which physical tray is feeding this extruder right now (BUG-124), confirmed
+
+  against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
+
+  decodes `snow` directly with no extruder-map inversion needed.
+
+- <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
+
+  Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
+
+  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+
+- <span id="extruderinfo-target-ams-slot"></span>`fn target_ams_slot(&self) -> Option<(u8, u8)>`
+
+  Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
+
+  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
 
 #### Trait Implementations
 
@@ -616,7 +638,9 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 
 - **`id`**: `u8`
 
-  Extruder carriage index (0 = Right/Main, 1 = Left/Deputy) or storage rack index.
+  Extruder carriage index (0 = Right/Main, 1 = Left/Deputy), or on H2C, a packed rack
+  slot: high nibble (bits 4–7) `1` flags a rack-stored spare nozzle, low nibble (bits
+  0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`].
 
 - **`diameter`**: `Option<f32>`
 
@@ -665,6 +689,12 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - **`stat`**: `Option<u32>`
 
   Nozzle status bitmask.
+
+#### Implementations
+
+- <span id="nozzleinfo-is-rack-stored"></span>`fn is_rack_stored(&self) -> bool`
+
+  Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
 
 #### Trait Implementations
 

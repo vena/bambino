@@ -119,6 +119,8 @@ struct AmsStatusReport {
     pub power_on_flag: Option<bool>,
     pub cali_id: Option<i32>,
     pub cali_stat: Option<i32>,
+    pub calibrate_remain_flag: Option<bool>,
+    pub cfs: Option<Vec<AmsFilamentStep>>,
 }
 ```
 
@@ -184,6 +186,18 @@ the intermediate `print.ams` object.
 - **`cali_stat`**: `Option<i32>`
 
   Calibration tracking status.
+
+- **`calibrate_remain_flag`**: `Option<bool>`
+
+  Whether AMS-side remaining-filament detection is enabled (BUG-121). Confirmed
+  independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
+  and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
+
+- **`cfs`**: `Option<Vec<AmsFilamentStep>>`
+
+  Per-slot filament-change step codes (BUG-121). Confirmed against BambuStudio's
+  `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
+  consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
 #### Trait Implementations
 
@@ -474,7 +488,23 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
 
-  Drying sub-status from bits 22–25.
+  Drying sub-status from bits 22–23. Bits 24–25 belong to the unrelated `bind_switch_in` field.
+
+- <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
+
+  Dry-fan 1 status from bits 18–19 (BUG-120). Confirmed against BambuStudio's
+
+  `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
+
+  `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
+
+- <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
+
+  Dry-fan 2 status from bits 20–21 (BUG-120). Confirmed against BambuStudio's
+
+  `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
+
+  `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
 
 #### Trait Implementations
 
@@ -1064,15 +1094,15 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (low 4 bits = tray index, upper bits = AMS unit index).
+  Current AMS slot routing (BUG-112; confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
-  Previous AMS slot routing.
+  Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
 
 - **`star`**: `Option<u32>`
 
-  Target AMS slot routing.
+  Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
 
 - **`hnow`**: `Option<u8>`
 
@@ -1107,6 +1137,28 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - <span id="extruderinfo-temperatures"></span>`fn temperatures(&self) -> (u16, u16)`
 
   Unpacks the composite temperature into (actual, target) degrees Celsius.
+
+- <span id="extruderinfo-current-ams-slot"></span>`fn current_ams_slot(&self) -> Option<(u8, u8)>`
+
+  Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
+
+  resolving which physical tray is feeding this extruder right now (BUG-124), confirmed
+
+  against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
+
+  decodes `snow` directly with no extruder-map inversion needed.
+
+- <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
+
+  Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
+
+  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+
+- <span id="extruderinfo-target-ams-slot"></span>`fn target_ams_slot(&self) -> Option<(u8, u8)>`
+
+  Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
+
+  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
 
 #### Trait Implementations
 
@@ -1213,7 +1265,9 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 
 - **`id`**: `u8`
 
-  Extruder carriage index (0 = Right/Main, 1 = Left/Deputy) or storage rack index.
+  Extruder carriage index (0 = Right/Main, 1 = Left/Deputy), or on H2C, a packed rack
+  slot: high nibble (bits 4–7) `1` flags a rack-stored spare nozzle, low nibble (bits
+  0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`].
 
 - **`diameter`**: `Option<f32>`
 
@@ -1262,6 +1316,12 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - **`stat`**: `Option<u32>`
 
   Nozzle status bitmask.
+
+#### Implementations
+
+- <span id="nozzleinfo-is-rack-stored"></span>`fn is_rack_stored(&self) -> bool`
+
+  Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
 
 #### Trait Implementations
 
@@ -1394,7 +1454,7 @@ Each entry represents an active hardware fault or status indication. Use
 
 - **`ts_boot`**: `Option<u64>`
 
-  Seconds since boot when the alert was raised (present on X2/H2/P2 models).
+  Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2 — see BUG-107).
 
 - **`ts_unix`**: `Option<String>`
 
@@ -1527,6 +1587,42 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 - <span id="lightreport-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `NetInfo`
+
+```rust
+struct NetInfo {
+    pub conf: Option<u32>,
+}
+```
+
+Network interface state from `print.net` [REF-NET-PORTS].
+
+#### Fields
+
+- **`conf`**: `Option<u32>`
+
+  Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
+
+#### Trait Implementations
+
+##### `impl Clone for NetInfo`
+
+- <span id="netinfo-clone"></span>`fn clone(&self) -> NetInfo` — [`NetInfo`](report/index.md#netinfo)
+
+##### `impl Debug for NetInfo`
+
+- <span id="netinfo-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Deserialize<'de> for NetInfo`
+
+- <span id="netinfo-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for NetInfo`
+
+##### `impl Serialize for NetInfo`
+
+- <span id="netinfo-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
 ### `PrinterTelemetry`
 
 ```rust
@@ -1550,6 +1646,7 @@ struct PrinterTelemetry {
     pub hms: Option<Vec<super::diagnostics::HmsEntry>>,
     pub sdcard: bool,
     pub wifi_signal: Option<String>,
+    pub net: Option<NetInfo>,
     pub cooling_fan_speed: Option<String>,
     pub big_fan1_speed: Option<String>,
     pub big_fan2_speed: Option<String>,
@@ -1681,6 +1778,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`wifi_signal`**: `Option<String>`
 
   Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
+
+- **`net`**: `Option<NetInfo>`
+
+  Network interface state, nested as `print.net` on the wire (BUG-110).
 
 - **`cooling_fan_speed`**: `Option<String>`
 
@@ -1885,11 +1986,19 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - <span id="printertelemetry-is-ethernet-active-via-wifi-signal"></span>`fn is_ethernet_active_via_wifi_signal(&self) -> bool`
 
-  Evaluates whether the physical printer is connected via wired Ethernet using the doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
+  Evaluates whether the physical printer is connected via wired Ethernet using the `wifi_signal` sentinel value [REF-NET-PORTS], as a fallback for firmware that doesn't populate `print.net.conf`.
 
 - <span id="printertelemetry-is-220v-power"></span>`fn is_220v_power(&self) -> bool`
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
+
+- <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](report/index.md#sdcardstate)
+
+  Evaluates the SD-card presence/health state from `home_flag` bits 8–9 (BUG-123). See
+
+  [`SdcardState`](report/index.md#sdcardstate)'s doc comment for verification sources. Returns `None` before any
+
+  telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
 
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
@@ -2006,6 +2115,191 @@ top-level domains depending on which micro-system published the frame.
 ##### `impl Serialize for TelemetryReport`
 
 - <span id="telemetryreport-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `AmsFilamentStep`
+
+```rust
+enum AmsFilamentStep {
+    Idle,
+    Pause,
+    HeatNozzle,
+    CutFilament,
+    PullCurrFilament,
+    PushNewFilament,
+    GrabNewFilament,
+    PurgeOldFilament,
+    CheckPosition,
+    SwitchExtruder,
+    SwitchHotend,
+    AmsFilaCooling,
+    PushSwitcherFila,
+    PullSwitcherFila,
+    SwitcherSwitch,
+    Unknown(i64),
+}
+```
+
+Per-slot filament-change step code (BUG-121). Mirrors BambuStudio's `DevFilamentStep` enum
+(`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
+wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
+the source enum). `Unknown` preserves any other raw value rather than failing to decode.
+
+#### Variants
+
+- **`Idle`**
+
+  No filament-change activity in progress.
+
+- **`Pause`**
+
+  Change sequence paused.
+
+- **`HeatNozzle`**
+
+  Heating the nozzle before the change.
+
+- **`CutFilament`**
+
+  Cutting the current filament.
+
+- **`PullCurrFilament`**
+
+  Retracting the current filament out of the toolhead.
+
+- **`PushNewFilament`**
+
+  Feeding the new filament toward the toolhead.
+
+- **`GrabNewFilament`**
+
+  Grabbing the new filament at the AMS slot.
+
+- **`PurgeOldFilament`**
+
+  Purging leftover old filament from the nozzle.
+
+- **`CheckPosition`**
+
+  Verifying filament position (wire value `0x08`, shared with `STEP_CONFIRM_EXTRUDED`).
+
+- **`SwitchExtruder`**
+
+  Switching to a different extruder (IDEX).
+
+- **`SwitchHotend`**
+
+  Switching to a different hotend (tool-changer).
+
+- **`AmsFilaCooling`**
+
+  Cooling the filament inside the AMS unit.
+
+- **`PushSwitcherFila`**
+
+  Pushing filament into the tool-changer switcher.
+
+- **`PullSwitcherFila`**
+
+  Pulling filament out of the tool-changer switcher.
+
+- **`SwitcherSwitch`**
+
+  Switching the tool-changer's active position.
+
+- **`Unknown`**
+
+  Any wire value not covered by a named variant, preserved verbatim.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsFilamentStep`
+
+- <span id="amsfilamentstep-clone"></span>`fn clone(&self) -> AmsFilamentStep` — [`AmsFilamentStep`](ams/index.md#amsfilamentstep)
+
+##### `impl Copy for AmsFilamentStep`
+
+##### `impl Debug for AmsFilamentStep`
+
+- <span id="amsfilamentstep-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Deserialize<'de> for AmsFilamentStep`
+
+- <span id="amsfilamentstep-deserialize"></span>`fn deserialize<D>(deserializer: D) -> Result<Self, <D as >::Error>`
+
+##### `impl DeserializeOwned for AmsFilamentStep`
+
+##### `impl Eq for AmsFilamentStep`
+
+##### `impl Hash for AmsFilamentStep`
+
+- <span id="amsfilamentstep-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for AmsFilamentStep`
+
+- <span id="amsfilamentstep-partialeq-eq"></span>`fn eq(&self, other: &AmsFilamentStep) -> bool` — [`AmsFilamentStep`](ams/index.md#amsfilamentstep)
+
+##### `impl Serialize for AmsFilamentStep`
+
+- <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+
+### `SdcardState`
+
+```rust
+enum SdcardState {
+    NoSdcard,
+    Normal,
+    Abnormal,
+    ReadOnly,
+}
+```
+
+SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123).
+
+Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
+`m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
+`const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard` boolean field can never
+report a degraded state — only this bitmask distinguishes "no card," "normal," "abnormal,"
+and "read-only."
+
+#### Variants
+
+- **`NoSdcard`**
+
+  No SD card physically present.
+
+- **`Normal`**
+
+  SD card present and functioning normally.
+
+- **`Abnormal`**
+
+  SD card present but reporting an abnormal/error condition.
+
+- **`ReadOnly`**
+
+  SD card present but mounted read-only.
+
+#### Trait Implementations
+
+##### `impl Clone for SdcardState`
+
+- <span id="sdcardstate-clone"></span>`fn clone(&self) -> SdcardState` — [`SdcardState`](report/index.md#sdcardstate)
+
+##### `impl Copy for SdcardState`
+
+##### `impl Debug for SdcardState`
+
+- <span id="sdcardstate-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for SdcardState`
+
+##### `impl Hash for SdcardState`
+
+- <span id="sdcardstate-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for SdcardState`
+
+- <span id="sdcardstate-partialeq-eq"></span>`fn eq(&self, other: &SdcardState) -> bool` — [`SdcardState`](report/index.md#sdcardstate)
 
 
 ---

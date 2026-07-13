@@ -11,7 +11,9 @@ Top-level telemetry report envelope (`print` and `device` wire locations).
 | Item | Kind | Description |
 |------|------|-------------|
 | [`LightReport`](#lightreport) | struct | Chamber/work/heatbed light state entry from the `lights_report` array. |
+| [`NetInfo`](#netinfo) | struct | Network interface state from `print.net` [REF-NET-PORTS]. |
 | [`PrinterTelemetry`](#printertelemetry) | struct | Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays. |
+| [`SdcardState`](#sdcardstate) | enum | SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123). |
 
 ## Types
 
@@ -56,6 +58,42 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 - <span id="lightreport-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `NetInfo`
+
+```rust
+struct NetInfo {
+    pub conf: Option<u32>,
+}
+```
+
+Network interface state from `print.net` [REF-NET-PORTS].
+
+#### Fields
+
+- **`conf`**: `Option<u32>`
+
+  Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
+
+#### Trait Implementations
+
+##### `impl Clone for NetInfo`
+
+- <span id="netinfo-clone"></span>`fn clone(&self) -> NetInfo` — [`NetInfo`](#netinfo)
+
+##### `impl Debug for NetInfo`
+
+- <span id="netinfo-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Deserialize<'de> for NetInfo`
+
+- <span id="netinfo-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for NetInfo`
+
+##### `impl Serialize for NetInfo`
+
+- <span id="netinfo-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
 ### `PrinterTelemetry`
 
 ```rust
@@ -79,6 +117,7 @@ struct PrinterTelemetry {
     pub hms: Option<Vec<super::diagnostics::HmsEntry>>,
     pub sdcard: bool,
     pub wifi_signal: Option<String>,
+    pub net: Option<NetInfo>,
     pub cooling_fan_speed: Option<String>,
     pub big_fan1_speed: Option<String>,
     pub big_fan2_speed: Option<String>,
@@ -210,6 +249,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`wifi_signal`**: `Option<String>`
 
   Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
+
+- **`net`**: `Option<NetInfo>`
+
+  Network interface state, nested as `print.net` on the wire (BUG-110).
 
 - **`cooling_fan_speed`**: `Option<String>`
 
@@ -414,11 +457,19 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - <span id="printertelemetry-is-ethernet-active-via-wifi-signal"></span>`fn is_ethernet_active_via_wifi_signal(&self) -> bool`
 
-  Evaluates whether the physical printer is connected via wired Ethernet using the doc-recommended `wifi_signal` sentinel value [REF-NET-PORTS], as an alternative to the disputed `home_flag` bit-18 heuristic in `is_ethernet_active()`.
+  Evaluates whether the physical printer is connected via wired Ethernet using the `wifi_signal` sentinel value [REF-NET-PORTS], as a fallback for firmware that doesn't populate `print.net.conf`.
 
 - <span id="printertelemetry-is-220v-power"></span>`fn is_220v_power(&self) -> bool`
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
+
+- <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](#sdcardstate)
+
+  Evaluates the SD-card presence/health state from `home_flag` bits 8–9 (BUG-123). See
+
+  [`SdcardState`](#sdcardstate)'s doc comment for verification sources. Returns `None` before any
+
+  telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
 
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
@@ -447,4 +498,63 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 ##### `impl Serialize for PrinterTelemetry`
 
 - <span id="printertelemetry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `SdcardState`
+
+```rust
+enum SdcardState {
+    NoSdcard,
+    Normal,
+    Abnormal,
+    ReadOnly,
+}
+```
+
+SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123).
+
+Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
+`m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
+`const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard` boolean field can never
+report a degraded state — only this bitmask distinguishes "no card," "normal," "abnormal,"
+and "read-only."
+
+#### Variants
+
+- **`NoSdcard`**
+
+  No SD card physically present.
+
+- **`Normal`**
+
+  SD card present and functioning normally.
+
+- **`Abnormal`**
+
+  SD card present but reporting an abnormal/error condition.
+
+- **`ReadOnly`**
+
+  SD card present but mounted read-only.
+
+#### Trait Implementations
+
+##### `impl Clone for SdcardState`
+
+- <span id="sdcardstate-clone"></span>`fn clone(&self) -> SdcardState` — [`SdcardState`](#sdcardstate)
+
+##### `impl Copy for SdcardState`
+
+##### `impl Debug for SdcardState`
+
+- <span id="sdcardstate-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for SdcardState`
+
+##### `impl Hash for SdcardState`
+
+- <span id="sdcardstate-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for SdcardState`
+
+- <span id="sdcardstate-partialeq-eq"></span>`fn eq(&self, other: &SdcardState) -> bool` — [`SdcardState`](#sdcardstate)
 

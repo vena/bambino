@@ -18,7 +18,7 @@ tray data, and calculating global indexes.
 | [`clean_stale_tray_data`](#clean-stale-tray-data) | fn | Explicitly sanitizes and nullifies telemetry fields when a physical slot becomes empty. |
 | [`evaluate_spool_presence`](#evaluate-spool-presence) | fn | Evaluates if a physical spool is present in a specific standard AMS slot. |
 | [`resolve_global_tray_id`](#resolve-global-tray-id) | fn | Computes the unique global channel identifier for a given expansion unit and local tray. |
-| [`resolve_printing_global_id`](#resolve-printing-global-id) | fn | Resolves the currently printing tray's global ID, accounting for IDEX map translations. |
+| [`resolve_printing_global_id`](#resolve-printing-global-id) | fn | Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map` inversion, accounting for IDEX map translations. |
 
 ## Functions
 
@@ -70,9 +70,12 @@ this evaluator returns `None` strictly when both conditions are met. If `power_o
 is `false` but the parsed bitmask is non-zero, this represents a valid offline state
 and is processed normally.
 
-**AMS-HT units (IDs 128-135) don't participate in `tray_exist_bits` at all**
-(per `reference/05_materials_ams.md` §5.1) — this function returns `None` for that
-range rather than guessing, so callers must consult the tray's `state` field instead.
+**AMS-HT units (IDs 128-135) do participate in `tray_exist_bits`, at a fixed offset**
+(BUG-114) — BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
+branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed independently
+in OrcaSlicer with an equivalent formula. This reopens and reverses BUG-015's "AMS-HT
+doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
+source.
 
 ### `resolve_global_tray_id`
 
@@ -96,10 +99,20 @@ The physical mapping aligns as:
 fn resolve_printing_global_id(tray_now: u8, active_extruder: Option<u8>, ams_extruder_map: &[u8]) -> Option<u8>
 ```
 
-Resolves the currently printing tray's global ID, accounting for IDEX map translations.
+Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map`
+inversion, accounting for IDEX map translations.
 
 **Multi-AMS Local Index Resolution [REF-AMS-DECODE]:**
 Multi-extruder platforms (such as the H2D series) emit local slot indexes (0 to 3) inside
 their `tray_now` telemetry parameter. To resolve this back to a global index, the client must
 inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
+
+BUG-124: this is the *fallback* path — prefer
+[`crate::client::PrinterClient::printing_tray_global_id`], which decodes
+`ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
+This function remains unwired in the crate's own client code: `ams_extruder_map`'s
+construction from real wire data is itself an unresolved, unconfirmed design question
+(no field in this crate's telemetry types currently sources it), and the map can be
+genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
+a caller with its own confirmed `ams_extruder_map` source may still use this directly.
 

@@ -171,9 +171,9 @@ Numerical classification of the severity level of an HMS diagnostic alert.
 
 #### Implementations
 
-- <span id="hmsseverity-from-attr"></span>`fn from_attr(attr: u32) -> Self`
+- <span id="hmsseverity-from-code"></span>`fn from_code(code: u32) -> Self`
 
-  Extracts the severity level from the second byte of the 32-bit `attr` value.
+  Extracts the severity level from the high 16 bits of the 32-bit `code` value.
 
 #### Trait Implementations
 

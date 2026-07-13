@@ -183,11 +183,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 #### Implementations
 
-- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
-- <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
 
   Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
 
@@ -527,6 +527,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   `None` means no telemetry carrying `print.ams` has been observed yet.
 
+- <span id="superprinterclient-printing-tray-global-id"></span>`fn printing_tray_global_id(&self) -> Option<u8>`
+
+  Returns the global tray ID of the spool currently feeding the active extruder, as of
+
+  the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) (BUG-124).
+
 - <span id="superprinterclient-sanitized-ams"></span>`fn sanitized_ams(&self) -> Option<AmsStatusReport>` — [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport)
 
   Returns a cloned copy of the cached AMS status report with every tray's stale material
@@ -578,6 +584,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Returns the cached active hardware-alert (HMS) entries as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 
   `None` means no telemetry carrying `print.hms` has been observed yet.
+
+- <span id="superprinterclient-ipcam"></span>`fn ipcam(&self) -> Option<&IpcamTelemetry>` — [`IpcamTelemetry`](../types/telemetry/diagnostics/index.md#ipcamtelemetry)
+
+  Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+
+  `None` means no telemetry carrying `print.ipcam` has been observed yet.
 
 - <span id="superprinterclient-active-hms-alerts"></span>`fn active_hms_alerts(&self) -> Vec<DecodedHmsAlert>` — [`DecodedHmsAlert`](../diagnostics/hms/index.md#decodedhmsalert)
 

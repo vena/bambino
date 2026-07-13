@@ -158,6 +158,10 @@ struct ProjectFilePayload {
     pub param: String,
     pub subtask_name: String,
     pub subtask_id: String,
+    pub flow_cali: bool,
+    pub profile_id: String,
+    pub project_id: String,
+    pub task_id: String,
     pub file: String,
     pub url: String,
     pub timelapse: bool,
@@ -196,6 +200,33 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 - **`subtask_id`**: `String`
 
   Unique 32-bit tracking identifier (Clamped to prevent overflow lockups).
+
+- **`flow_cali`**: `bool`
+
+  Dynamic flow (pressure advance) calibration flag, duplicating `extrude_cali_flag` under
+  its own key (BUG-119). bambuddy cites a real production incident (#1478) where a
+  consumer relying on the wrong one of these two calibration flags silently skipped
+  calibration — both are sent so no observer can pick the wrong field.
+
+- **`profile_id`**: `String`
+
+  Slicer preset profile ID. Always `"0"` — confirmed against bambuddy and pybambu, both
+  of which hardcode this value; no observed non-zero case.
+
+- **`project_id`**: `String`
+
+  Per-submission project tracking ID. Set equal to `subtask_id` (BUG-119) — bambuddy's
+  `send_start_print_command` (`bambu_mqtt.py:3721-3781`) mints one fresh ID per
+  submission and reuses it for `subtask_id`/`project_id`/`task_id` alike; bambino's
+  `subtask_id` already carries the same "fresh per submission" contract via its own doc
+  comment, so reusing it here satisfies the same invariant bambuddy's fix relies on
+  (avoiding the task-continuation firmware bug, #1042/#1011) without inventing a second
+  ID-minting mechanism.
+
+- **`task_id`**: `String`
+
+  Per-submission task tracking ID. See `project_id`'s doc comment — same value, same
+  reasoning.
 
 - **`file`**: `String`
 

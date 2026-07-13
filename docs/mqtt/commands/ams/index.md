@@ -69,7 +69,12 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 
 - **`target`**: `i32`
 
-  Load/unload destination slot — mirrors `slot_id` in every documented wire example (standard slot, external spool, or `255` for unload/retract), not a fixed enum code [REF-AMS-MAP].
+  Load/unload destination slot (BUG-116; confirmed against BambuStudio's
+  `command_ams_change_filament`, `DeviceManager.cpp:1602-1638`): `255` on unload, the
+  `ams_id` itself for AMS-HT/external-spool units (`ams_id >= 16`), or the flat global
+  tray ID (`ams_id*4 + slot_id`) for a standard unit. Only coincidentally mirrors
+  `slot_id` when `ams_id == 0` — see `PrinterClient::change_filament()`, which derives
+  this field so callers can't misconfigure it.
 
 - **`curr_temp`**: `i32`
 
@@ -216,15 +221,26 @@ struct AmsFilamentDryingPayload {
     pub command: &'static str,
     pub ams_id: i32,
     pub mode: i32,
-    pub dry_temp: u32,
-    pub dry_time: u32,
-    pub rotate_tray: bool,
     pub filament: String,
+    pub temp: u32,
+    pub duration: u32,
+    pub humidity: u32,
+    pub rotate_tray: bool,
+    pub cooling_temp: i32,
+    pub close_power_conflict: bool,
     pub sequence_id: String,
 }
 ```
 
 Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
+
+BUG-118: field set and shapes rewritten to match the real wire protocol — confirmed
+against BambuStudio's `DevFilaSystem::CtrlAmsStartDryingHour`/`CtrlAmsStopDrying`
+(`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the
+tree) and independently corroborated by bambuddy's `send_drying_command`
+(`bambu_mqtt.py:4141-4171`, whose own comment cites real-hardware silent-rejection
+incident #1447). The previous schema (`dry_temp`/`dry_time` in minutes, no
+`humidity`/`cooling_temp`/`close_power_conflict`) shared no field name with either source.
 
 #### Fields
 
@@ -238,23 +254,36 @@ Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units
 
 - **`mode`**: `i32`
 
-  1 = start drying, 0 = stop drying.
+  1 = start drying (`OnTime`), 0 = stop drying (`Off`) — `DevAms::DryCtrlMode`.
 
-- **`dry_temp`**: `u32`
+- **`filament`**: `String`
+
+  Filament material type being dried (e.g. "PA-CF").
+
+- **`temp`**: `u32`
 
   Drying temperature (°C).
 
-- **`dry_time`**: `u32`
+- **`duration`**: `u32`
 
-  Duration in **minutes** (e.g., 8-hour cycle = 480).
+  Drying duration in **hours** (e.g., an 8-hour cycle = 8) — the wire field, unlike the
+  old `dry_time`, is not in minutes.
+
+- **`humidity`**: `u32`
+
+  Target humidity (0 = firmware default / no target).
 
 - **`rotate_tray`**: `bool`
 
   Whether to periodically rotate the tray during drying.
 
-- **`filament`**: `String`
+- **`cooling_temp`**: `i32`
 
-  Filament material type being dried (e.g. "PA-CF").
+  Cooling temperature applied after the drying cycle completes.
+
+- **`close_power_conflict`**: `bool`
+
+  Whether to override the AMS unit's power-conflict interlock.
 
 - **`sequence_id`**: `String`
 
@@ -292,7 +321,7 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 #### Implementations
 
-- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, dry_temp: u32, dry_time: u32, rotate_tray: bool, filament: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
+- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, filament: &str, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Builds an `ams_filament_drying` request.
 

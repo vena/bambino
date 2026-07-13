@@ -76,6 +76,61 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - <span id="amsmapping2entry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `AmsPoolComposition`
+
+```rust
+enum AmsPoolComposition {
+    Shared {
+        max_units: u8,
+    },
+    Independent {
+        max_standard: u8,
+        max_ht: u8,
+    },
+}
+```
+
+Per-model AMS unit pool structure (BUG-122), confirmed against `MODEL_MATRIX.csv`'s
+"AMS Unit Limits" row (user-supplied official Bambu documentation).
+
+**Known limitation**: AMS Lite units are not independently addressable in this model —
+they use the same `ams_id` space as standard AMS units — so A1/A1 Mini's "shared pool OR
+1 AMS Lite, not combinable" exclusivity and A2L's "shared pool + 1 AMS Lite simultaneously"
+additive capacity can't be validated from `ams_id`/`slot_id` alone. Both are conservatively
+modeled as `Shared { max_units: 4 }`, the same as the plain shared-pool models — this may
+under-count A2L's true capacity by one unit, but never accepts a config that's actually
+invalid.
+
+#### Variants
+
+- **`Shared`**
+
+  Standard AMS and AMS-HT units draw from one combined pool of `max_units` total
+  (X1C, X1E, P1P, P1S, A1, A1 Mini, A2L).
+
+- **`Independent`**
+
+  Standard AMS and AMS-HT units draw from independent pools, each with its own cap
+  (H2C, H2D, H2D Pro, H2S, X2D, P2S).
+
+#### Trait Implementations
+
+##### `impl Clone for AmsPoolComposition`
+
+- <span id="amspoolcomposition-clone"></span>`fn clone(&self) -> AmsPoolComposition` — [`AmsPoolComposition`](mapping/index.md#amspoolcomposition)
+
+##### `impl Copy for AmsPoolComposition`
+
+##### `impl Debug for AmsPoolComposition`
+
+- <span id="amspoolcomposition-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsPoolComposition`
+
+##### `impl PartialEq for AmsPoolComposition`
+
+- <span id="amspoolcomposition-partialeq-eq"></span>`fn eq(&self, other: &AmsPoolComposition) -> bool` — [`AmsPoolComposition`](mapping/index.md#amspoolcomposition)
+
 ### `MaterialSource`
 
 ```rust
@@ -187,6 +242,22 @@ Builds the structured `ams_mapping2` object array from raw project allocations.
 Symmetrical to `build_ams_mapping`, this array provides detailed physical unit routing
 parameters to ensure correct material transitions on multi-AMS and IDEX platforms.
 
+### `validate_ams_pool_composition`
+
+```rust
+fn validate_ams_pool_composition(mapping2: &[AmsMapping2Entry], composition: AmsPoolComposition) -> bool
+```
+
+**Types:** [`AmsMapping2Entry`](mapping/index.md#amsmapping2entry), [`AmsPoolComposition`](mapping/index.md#amspoolcomposition)
+
+Validates a constructed `ams_mapping2` against the model's actual AMS pool structure
+(BUG-122). Rejects configs no real hardware combination could serve — e.g. 4 standard +
+8 AMS-HT units on a P2S, which only has independent pools of 4 and 4.
+
+Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing the same
+unit across multiple slots isn't an extra unit. External-spool and unmapped sentinel
+entries are ignored, since they don't occupy a physical AMS unit slot.
+
 ### `validate_external_spool_safety`
 
 ```rust
@@ -259,9 +330,12 @@ this evaluator returns `None` strictly when both conditions are met. If `power_o
 is `false` but the parsed bitmask is non-zero, this represents a valid offline state
 and is processed normally.
 
-**AMS-HT units (IDs 128-135) don't participate in `tray_exist_bits` at all**
-(per `reference/05_materials_ams.md` §5.1) — this function returns `None` for that
-range rather than guessing, so callers must consult the tray's `state` field instead.
+**AMS-HT units (IDs 128-135) do participate in `tray_exist_bits`, at a fixed offset**
+(BUG-114) — BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
+branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed independently
+in OrcaSlicer with an equivalent formula. This reopens and reverses BUG-015's "AMS-HT
+doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
+source.
 
 ### `resolve_global_tray_id`
 
@@ -285,10 +359,20 @@ The physical mapping aligns as:
 fn resolve_printing_global_id(tray_now: u8, active_extruder: Option<u8>, ams_extruder_map: &[u8]) -> Option<u8>
 ```
 
-Resolves the currently printing tray's global ID, accounting for IDEX map translations.
+Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map`
+inversion, accounting for IDEX map translations.
 
 **Multi-AMS Local Index Resolution [REF-AMS-DECODE]:**
 Multi-extruder platforms (such as the H2D series) emit local slot indexes (0 to 3) inside
 their `tray_now` telemetry parameter. To resolve this back to a global index, the client must
 inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
+
+BUG-124: this is the *fallback* path — prefer
+[`crate::client::PrinterClient::printing_tray_global_id`], which decodes
+`ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
+This function remains unwired in the crate's own client code: `ams_extruder_map`'s
+construction from real wire data is itself an unresolved, unconfirmed design question
+(no field in this crate's telemetry types currently sources it), and the map can be
+genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
+a caller with its own confirmed `ams_extruder_map` source may still use this directly.
 

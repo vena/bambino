@@ -127,6 +127,10 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns the number of physical extruder carriages present on the machine carriage bus.
 
+- `fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition`
+
+  Returns this model's physical AMS unit pool structure (BUG-122) — whether standard AMS
+
 - `fn supports_nozzle_offset_calibration(&self) -> bool`
 
   Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.
