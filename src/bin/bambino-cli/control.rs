@@ -88,14 +88,20 @@ pub enum CalibrationArg {
 
 #[derive(Subcommand, Debug)]
 pub enum AmsAction {
-    /// Start AMS drying cycle (time in minutes)
+    /// Start AMS drying cycle (BUG-118: duration is in hours, not minutes)
     Dry {
         id: i32,
         temp: u32,
-        time: u32,
+        duration_hours: u32,
         #[arg(action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
         rotate: bool,
         filament: String,
+        #[arg(long, default_value_t = 0)]
+        humidity: u32,
+        #[arg(long, default_value_t = 0)]
+        cooling_temp: i32,
+        #[arg(long, default_value_t = false)]
+        close_power_conflict: bool,
     },
     /// Stop AMS drying cycle
     DryStop { id: i32 },
@@ -459,17 +465,29 @@ pub async fn run(
             AmsAction::Dry {
                 id,
                 temp,
-                time,
+                duration_hours,
                 rotate,
                 filament,
+                humidity,
+                cooling_temp,
+                close_power_conflict,
             } => {
                 dispatch(
                     &format!(
-                        "Starting AMS {} drying cycle at {}°C for {} minutes...",
-                        id, temp, time
+                        "Starting AMS {} drying cycle at {}°C for {} hours...",
+                        id, temp, duration_hours
                     ),
                     "AMS drying command published successfully.",
-                    client.start_drying(id, temp, time, rotate, &filament),
+                    client.start_drying(
+                        id,
+                        temp,
+                        duration_hours,
+                        humidity,
+                        rotate,
+                        cooling_temp,
+                        close_power_conflict,
+                        &filament,
+                    ),
                 )
                 .await?;
             }

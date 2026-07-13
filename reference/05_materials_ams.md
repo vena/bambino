@@ -263,16 +263,21 @@ Initiates the filament cutting and physical extraction sequence, returning the a
 
 Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-recirculation systems to perform in-enclosure filament drying. Operations are initiated by publishing an `ams_filament_drying` payload to the request topic.
 
+**BUG-118**: the field set and shapes below were rewritten to match the real wire protocol — confirmed against BambuStudio's `DevFilaSystem::CtrlAmsStartDryingHour`/`CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the tree) and independently corroborated by bambuddy's `send_drying_command` (`bambu_mqtt.py:4141-4171`). The earlier version of this doc used `dry_temp`/`dry_time` (minutes) and omitted `humidity`/`cooling_temp`/`close_power_conflict` entirely — none of that matched either source.
+
 ```json
 {
   "print": {
     "command": "ams_filament_drying",
     "ams_id": 128,
     "mode": 1,
-    "dry_temp": 55,
-    "dry_time": 480,
-    "rotate_tray": true,
     "filament": "PA-CF",
+    "temp": 55,
+    "duration": 8,
+    "humidity": 0,
+    "rotate_tray": true,
+    "cooling_temp": 20,
+    "close_power_conflict": false,
     "sequence_id": "40004"
   }
 }
@@ -283,7 +288,7 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
 *   **`dry_sf_reason` Flags**: The hardware control board returns a bitmask error list if safety conditions are not met:
     *   `1`: Insufficient input voltage (unable to drive the heater element safely).
     *   `8`: Secondary power plug is disconnected (for dual-plug auxiliary units).
-*   **Dry Duration Unit (`dry_time`)**: The `dry_time` parameter specifies the drying duration and **must be expressed in minutes** on the wire (e.g., an 8-hour cycle is serialized as `480`). Transmitting the value in hours (e.g., `8`) will result in the hardware executing an 8-minute cycle.
+*   **Dry Duration Unit (`duration`)**: The command's `duration` parameter specifies the drying duration and is expressed in **hours** (e.g., an 8-hour cycle is serialized as `8`) — distinct from the *telemetry* `dry_time` field described below, which counts down in minutes.
 
 ##### Telemetry Edge-Triggering and Omitted Fields Quirk
 Drying completion is monitored by tracking the falling edge of the `dry_time` parameter (transitioning from a positive integer value representing remaining minutes down to `0`). However, standard status payloads emitted outside of an active drying cycle or during incremental tray updates frequently omit the `dry_time` key entirely. Telemetry parsers must evaluate transitions strictly when `dry_time` is explicitly present in the JSON payload; treating a missing key as a literal `0` value will trigger false "drying complete" events.

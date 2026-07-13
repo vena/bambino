@@ -1183,8 +1183,8 @@ async fn test_drying_lifecycle_wire_payload() {
         assert_eq!(json_start["print"]["command"], "ams_filament_drying");
         assert_eq!(json_start["print"]["ams_id"], 128);
         assert_eq!(json_start["print"]["mode"], 1);
-        assert_eq!(json_start["print"]["dry_temp"], 55);
-        assert_eq!(json_start["print"]["dry_time"], 480);
+        assert_eq!(json_start["print"]["temp"], 55);
+        assert_eq!(json_start["print"]["duration"], 8);
         assert_eq!(json_start["print"]["filament"], "PA-CF");
 
         let json_stop = read_publish_payload(&mut server_stream).await;
@@ -1200,7 +1200,7 @@ async fn test_drying_lifecycle_wire_payload() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
-        .start_drying(128, 55, 480, true, "PA-CF")
+        .start_drying(128, 55, 8, 0, true, 20, false, "PA-CF")
         .await
         .expect("start_drying failed");
     client.stop_drying(128).await.expect("stop_drying failed");
@@ -1218,12 +1218,12 @@ async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
         // AMS-HT (ams_id 128) is rated to 85°C — a requested 200°C must clamp to 85, not
         // the AMS 2 Pro / standard-AMS ceiling of 65°C.
         let json_ht = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_ht["print"]["dry_temp"], 85);
+        assert_eq!(json_ht["print"]["temp"], 85);
 
         // A standard AMS unit (ams_id 0) is rated to 65°C — a requested 200°C must clamp
         // to 65.
         let json_standard = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_standard["print"]["dry_temp"], 65);
+        assert_eq!(json_standard["print"]["temp"], 65);
     });
 
     let mqtt_client =
@@ -1234,11 +1234,11 @@ async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     client
-        .start_drying(128, 200, 480, true, "PA-CF")
+        .start_drying(128, 200, 8, 0, true, 20, false, "PA-CF")
         .await
         .expect("start_drying (AMS-HT) failed");
     client
-        .start_drying(0, 200, 480, true, "PLA")
+        .start_drying(0, 200, 8, 0, true, 20, false, "PLA")
         .await
         .expect("start_drying (standard AMS) failed");
 

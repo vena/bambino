@@ -219,22 +219,37 @@ impl AmsChangeFilamentRequest {
 }
 
 /// Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
+///
+/// BUG-118: field set and shapes rewritten to match the real wire protocol — confirmed
+/// against BambuStudio's `DevFilaSystem::CtrlAmsStartDryingHour`/`CtrlAmsStopDrying`
+/// (`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the
+/// tree) and independently corroborated by bambuddy's `send_drying_command`
+/// (`bambu_mqtt.py:4141-4171`, whose own comment cites real-hardware silent-rejection
+/// incident #1447). The previous schema (`dry_temp`/`dry_time` in minutes, no
+/// `humidity`/`cooling_temp`/`close_power_conflict`) shared no field name with either source.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentDryingPayload {
     /// Wire command name, always `"ams_filament_drying"`.
     pub command: &'static str,
     /// Target AMS unit index.
     pub ams_id: i32,
-    /// 1 = start drying, 0 = stop drying.
+    /// 1 = start drying (`OnTime`), 0 = stop drying (`Off`) — `DevAms::DryCtrlMode`.
     pub mode: i32,
-    /// Drying temperature (°C).
-    pub dry_temp: u32,
-    /// Duration in **minutes** (e.g., 8-hour cycle = 480).
-    pub dry_time: u32,
-    /// Whether to periodically rotate the tray during drying.
-    pub rotate_tray: bool,
     /// Filament material type being dried (e.g. "PA-CF").
     pub filament: String,
+    /// Drying temperature (°C).
+    pub temp: u32,
+    /// Drying duration in **hours** (e.g., an 8-hour cycle = 8) — the wire field, unlike the
+    /// old `dry_time`, is not in minutes.
+    pub duration: u32,
+    /// Target humidity (0 = firmware default / no target).
+    pub humidity: u32,
+    /// Whether to periodically rotate the tray during drying.
+    pub rotate_tray: bool,
+    /// Cooling temperature applied after the drying cycle completes.
+    pub cooling_temp: i32,
+    /// Whether to override the AMS unit's power-conflict interlock.
+    pub close_power_conflict: bool,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
@@ -248,13 +263,17 @@ pub struct AmsFilamentDryingRequest {
 
 impl AmsFilamentDryingRequest {
     /// Builds an `ams_filament_drying` request.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ams_id: i32,
         mode: i32,
-        dry_temp: u32,
-        dry_time: u32,
-        rotate_tray: bool,
         filament: &str,
+        temp: u32,
+        duration_hours: u32,
+        humidity: u32,
+        rotate_tray: bool,
+        cooling_temp: i32,
+        close_power_conflict: bool,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
@@ -262,10 +281,13 @@ impl AmsFilamentDryingRequest {
                 command: "ams_filament_drying",
                 ams_id,
                 mode,
-                dry_temp,
-                dry_time,
-                rotate_tray,
                 filament: String::from(filament),
+                temp,
+                duration: duration_hours,
+                humidity,
+                rotate_tray,
+                cooling_temp,
+                close_power_conflict,
                 sequence_id: sequence_id.into().to_string(),
             },
         }

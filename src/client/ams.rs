@@ -111,23 +111,30 @@ where
     /// * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
     ///   `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`); anything else is treated as
     ///   an AMS 2 Pro / standard-AMS drying unit.
-    /// * `dry_temp`: Drying temperature in degrees Celsius. Clamped to this AMS unit's
+    /// * `temp`: Drying temperature in degrees Celsius. Clamped to this AMS unit's
     ///   documented ceiling — this is a property of the *attached AMS unit*, not the host
     ///   printer model: AMS-HT's built-in heater is rated to 85°C, AMS 2 Pro's to 65°C
     ///   (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
     ///   `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
     ///   variation is documented, so this does not go through `ModelQuirks`).
-    /// * `dry_time`: Duration in minutes (e.g., 480 for an 8-hour cycle). No documented
-    ///   maximum duration was found to validate against — drying time appears to be
-    ///   user-configurable with no firmware-enforced ceiling.
+    /// * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) — BUG-118:
+    ///   the wire field is `duration` in hours, not the old `dry_time` in minutes. No
+    ///   documented maximum duration was found to validate against.
+    /// * `humidity`: Target humidity (`0` = firmware default / no target).
     /// * `rotate_tray`: Whether to rotate trays during the cycle.
+    /// * `cooling_temp`: Cooling temperature applied after the drying cycle completes.
+    /// * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
     /// * `filament`: Filament type string (e.g., "PA-CF").
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_drying(
         &mut self,
         ams_id: i32,
-        dry_temp: u32,
-        dry_time: u32,
+        temp: u32,
+        duration_hours: u32,
+        humidity: u32,
         rotate_tray: bool,
+        cooling_temp: i32,
+        close_power_conflict: bool,
         filament: &str,
     ) -> Result<u16, BambuError> {
         let max_temp: u32 = if (128..=135).contains(&ams_id) {
@@ -135,25 +142,28 @@ where
         } else {
             AMS_STANDARD_DRY_TEMP_MAX
         };
-        let dry_temp = if dry_temp > max_temp {
+        let temp = if temp > max_temp {
             log::warn!(
                 "AMS dry temperature {}°C exceeds maximum {}°C, clamping",
-                dry_temp,
+                temp,
                 max_temp
             );
             max_temp
         } else {
-            dry_temp
+            temp
         };
 
         self.dispatch(|seq| {
             crate::mqtt::AmsFilamentDryingRequest::new(
                 ams_id,
                 1,
-                dry_temp,
-                dry_time,
-                rotate_tray,
                 filament,
+                temp,
+                duration_hours,
+                humidity,
+                rotate_tray,
+                cooling_temp,
+                close_power_conflict,
                 seq,
             )
         })
@@ -161,9 +171,14 @@ where
     }
 
     /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
+    ///
+    /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
+    /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
     pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, BambuError> {
         self.dispatch(|seq| {
-            crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, 0, 0, false, "", seq)
+            crate::mqtt::AmsFilamentDryingRequest::new(
+                ams_id, 0, "", 0, 0, 0, false, 0, false, seq,
+            )
         })
         .await
     }

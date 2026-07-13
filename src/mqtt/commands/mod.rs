@@ -337,14 +337,18 @@ mod tests {
 
     #[test]
     fn test_ams_filament_drying_json() {
-        let req = AmsFilamentDryingRequest::new(128, 1, 55, 480, true, "PA-CF", 40004);
+        // BUG-118: field names/shapes rewritten to match the real wire protocol.
+        let req = AmsFilamentDryingRequest::new(128, 1, "PA-CF", 55, 8, 0, true, 20, false, 40004);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_filament_drying"#));
         assert!(json.contains(r#""ams_id":128"#));
         assert!(json.contains(r#""mode":1"#));
-        assert!(json.contains(r#""dry_temp":55"#));
-        assert!(json.contains(r#""dry_time":480"#));
+        assert!(json.contains(r#""temp":55"#));
+        assert!(json.contains(r#""duration":8"#));
+        assert!(json.contains(r#""humidity":0"#));
         assert!(json.contains(r#""rotate_tray":true"#));
+        assert!(json.contains(r#""cooling_temp":20"#));
+        assert!(json.contains(r#""close_power_conflict":false"#));
         assert!(json.contains(r#""filament":"PA-CF""#));
     }
 
