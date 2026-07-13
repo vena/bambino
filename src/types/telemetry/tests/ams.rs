@@ -767,6 +767,59 @@ fn test_ams_tray_merge_from_preserves_fields_on_absence() {
 }
 
 #[test]
+fn test_ams_tray_remain_g_and_filament_setting_id() {
+    // BUG-126: wire keys are `remain_g` and `setting_id` (the latter renamed to
+    // `filament_setting_id` in this crate to avoid confusion with `tray_info_idx`).
+    let json = r#"{
+            "print": {
+                "ams": {
+                    "ams": [
+                        {
+                            "id": "0",
+                            "temp": "26.0",
+                            "humidity": "3",
+                            "tray": [
+                                { "id": "0", "remain_g": 420, "setting_id": "GFL99" },
+                                { "id": "1", "remain_g": -1 },
+                                { "id": "2", "remain_g": 0 }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }"#;
+    let unit = &serde_json::from_str::<TelemetryReport>(json)
+        .unwrap()
+        .print
+        .unwrap()
+        .ams
+        .unwrap()
+        .ams[0];
+    let trays = unit.tray.as_ref().unwrap();
+
+    assert_eq!(trays[0].remain_g, Some(420));
+    assert_eq!(trays[0].filament_setting_id.as_deref(), Some("GFL99"));
+    assert_eq!(trays[0].remaining_weight_grams(), Some(420));
+
+    // -1 sentinel ("not provided by firmware") translates to None via the accessor.
+    assert_eq!(trays[1].remain_g, Some(-1));
+    assert_eq!(trays[1].remaining_weight_grams(), None);
+
+    // 0 ("confirmed empty") also translates to None, matching BambuStudio's
+    // get_filament_remain_weight().
+    assert_eq!(trays[2].remain_g, Some(0));
+    assert_eq!(trays[2].remaining_weight_grams(), None);
+}
+
+#[test]
+fn test_ams_tray_remain_g_absent() {
+    let tray = AmsTray::default();
+    assert_eq!(tray.remain_g, None);
+    assert_eq!(tray.remaining_weight_grams(), None);
+    assert_eq!(tray.filament_setting_id, None);
+}
+
+#[test]
 fn test_ams_unit_merge_from_keys_and_prunes_trays() {
     // Finding 1: a tray_id present in both cached and incoming arrays must field-merge (not
     // get wholesale-replaced by whatever subset of fields the incoming push repeats), a new

@@ -180,7 +180,7 @@ All 3 PLAUSIBLE findings and all 5 needs-verification findings from the sweep ab
 ### Remaining genuinely unresolved (hardware/capture-blocked, no further local verification possible)
 
 - (none remaining in this category — the AMS-HT collision question above closed with a definitive answer, not a hardware-blocked one; see BUG-115/BUG-125.)
-- **`AmsTray.remain_g`/`setting_id`** (unit 1, still PLAUSIBLE, no BUG-ID) — single-sourced to BambuStudio, no second source or capture found anywhere checked.
+- **`AmsTray.remain_g`/`setting_id`**: resolved 2026-07-13 as **BUG-126** (Fixed, Sev3) — GitHub API history on `bambulab/BambuStudio` (beyond this session's shallow clone) found the introducing commits (`31637e013`/`d1f121d26`, 2026-06-09/12), confirming both fields are real and actively used, not vestigial. Decoded directly from confirmed source rather than waiting on a capture (both fields are `Option`, safe regardless of whether firmware sends them yet). See BACKLOG.md.
 
 
 ---

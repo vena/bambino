@@ -545,6 +545,23 @@ pub struct AmsTray {
 
     /// Total filament spool length in mm.
     pub total_len: Option<u32>,
+
+    /// Accurate remaining weight in grams, when firmware can resolve it (BUG-126). Distinct
+    /// from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
+    /// `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
+    /// "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
+    /// "not provided", preserved here as the raw wire value; use `remaining_weight_grams()`
+    /// for the sentinel-translated `Option<u32>`.
+    pub remain_g: Option<i32>,
+
+    /// Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching
+    /// (BUG-126), distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
+    /// avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
+    /// BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
+    /// (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
+    /// `filament_id` when auto-matching a spool to a slicer preset.
+    #[serde(rename = "setting_id")]
+    pub filament_setting_id: Option<String>,
 }
 
 const AMS_UNIT_INFO_TYPE_MASK: u64 = 0xF;
@@ -628,6 +645,19 @@ impl AmsTray {
 }
 
 impl AmsTray {
+    /// Accurate remaining weight in grams (BUG-126), translating `remain_g`'s raw wire
+    /// sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
+    /// (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
+    /// `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
+    /// returned. Does not replicate BambuStudio's percentage-based fallback (`weight * remain
+    /// / 100`) when `remain_g` is absent — callers needing that estimate already have
+    /// `tray_weight`/`remain` to compute it themselves.
+    pub fn remaining_weight_grams(&self) -> Option<u32> {
+        self.remain_g.filter(|g| *g > 0).map(|g| g as u32)
+    }
+}
+
+impl AmsTray {
     /// Merges a freshly-parsed `AmsTray` into `self` field-by-field, instead of replacing
     /// `self` wholesale.
     ///
@@ -648,7 +678,9 @@ impl AmsTray {
     /// rule, so it's out of scope for this intentionally "dumb" field-level merge. `state` has
     /// no BambuStudio counterpart at all (grepped, zero matches in `DevFilaSystem.cpp` for a
     /// tray-level `state` field) — preserved on absence like every field with no confirmed
-    /// counterpart elsewhere in this codebase (BUG-097's precedent).
+    /// counterpart elsewhere in this codebase (BUG-097's precedent). `remain_g`/
+    /// `filament_setting_id` (BUG-126) preserve-on-absence like every other field with a
+    /// confirmed 3-arg `ParseVal` counterpart (`DevFilaSystem.cpp:800-801`).
     pub(crate) fn merge_from(&mut self, incoming: &AmsTray) {
         if incoming.state.is_some() {
             self.state = incoming.state;
@@ -727,6 +759,12 @@ impl AmsTray {
         }
         if incoming.total_len.is_some() {
             self.total_len = incoming.total_len;
+        }
+        if incoming.remain_g.is_some() {
+            self.remain_g = incoming.remain_g;
+        }
+        if incoming.filament_setting_id.is_some() {
+            self.filament_setting_id = incoming.filament_setting_id.clone();
         }
     }
 }

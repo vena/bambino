@@ -346,6 +346,8 @@ struct AmsTray {
     pub cols: Option<Vec<String>>,
     pub ctype: Option<i32>,
     pub total_len: Option<u32>,
+    pub remain_g: Option<i32>,
+    pub filament_setting_id: Option<String>,
 }
 ```
 
@@ -465,11 +467,45 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
   Total filament spool length in mm.
 
+- **`remain_g`**: `Option<i32>`
+
+  Accurate remaining weight in grams, when firmware can resolve it (BUG-126). Distinct
+  from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
+  `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
+  "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
+  "not provided", preserved here as the raw wire value; use `remaining_weight_grams()`
+  for the sentinel-translated `Option<u32>`.
+
+- **`filament_setting_id`**: `Option<String>`
+
+  Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching
+  (BUG-126), distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
+  avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
+  BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
+  (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
+  `filament_id` when auto-matching a spool to a slicer preset.
+
 #### Implementations
 
 - <span id="amstray-get-state"></span>`fn get_state(&self) -> u8`
 
   Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
+
+- <span id="amstray-remaining-weight-grams"></span>`fn remaining_weight_grams(&self) -> Option<u32>`
+
+  Accurate remaining weight in grams (BUG-126), translating `remain_g`'s raw wire
+
+  sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
+
+  (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
+
+  `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
+
+  returned. Does not replicate BambuStudio's percentage-based fallback (`weight * remain
+
+  / 100`) when `remain_g` is absent — callers needing that estimate already have
+
+  `tray_weight`/`remain` to compute it themselves.
 
 #### Trait Implementations
 
