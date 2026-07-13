@@ -9,7 +9,7 @@ Full-crate correctness review via parallel subagents, one per module. Designed t
 
 **Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_shell,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_tree,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_compose,mcp__lean-ctx__ctx_explore,mcp__lean-ctx__ctx_call,mcp__lean-ctx__ctx_graph,mcp__lean-ctx__ctx_callgraph")` first and use those tools throughout — `ctx_graph`(action=impact/diff/diagram) for blast-radius/stale-glob checks and `ctx_callgraph`(action=callers/callees/risk) for auditing cross-cutting invariants (e.g. Key Invariant #1's no-raw-platform-I/O-outside-`src/io/`, #2's no-`BambuModel`-variant-matching-outside-quirks) — in addition to the rest — for this session's own orchestration work (discovery, `BACKLOG.md` edits) _and_ as a mandatory Step 0 inside every spawned agent's prompt (see Step 3's requirements below — there's no literal fill-in-the-blank template, just a checklist each prompt needs to satisfy). This is restated here on purpose, redundant with the global lean-ctx rule — a mandate stated once at session start and not repeated near the point of use gets lost across a long multi-step task.
 
-Also read `CLAUDE.md` and `README.md` in full before starting — the module-boundary and scope decisions below depend on understanding this crate's actual architecture, not just its file layout.
+Also read `README.md` in full before starting — the module-boundary and scope decisions below depend on understanding this crate's actual architecture, not just its file layout. (Root `CLAUDE.md` is already auto-loaded into this session's context by cwd — no explicit read needed for it.)
 
 ## Step 1 — Discover current structure
 
@@ -20,10 +20,9 @@ Run `date +%m-%d` first — don't infer today's date from context. Step 4 uses i
 Starting fresh (no in-progress file for today): don't reuse a module list from a prior *day's* run of this skill — that's genuinely stale. Walk the tree fresh:
 
 ```
-ctx_tree(path="src", depth=3)
-ctx_tree(path="tests", depth=2)
-find src tests -name '*.rs' 2>/dev/null | xargs wc -l | sort -rn
+ctx_compose(task="src/tests module structure discovery, file sizes, boundaries")
 ```
+Falls back to `ctx_tree(path="src", depth=3)` + `ctx_tree(path="tests", depth=2)` + `find src tests -name '*.rs' | xargs wc -l | sort -rn` only if `ctx_compose` doesn't surface file sizes clearly enough to weight Step 2's partition.
 
 Also note, while discovering:
 - `src/bin/*/` (CLI binaries, if any — currently `bambino-cli`).
@@ -50,9 +49,9 @@ Record the resulting partition (unit name → file list) — this is the actual 
 Every spawned agent needs, at minimum:
 
 1. **Step 0 mandate** (verbatim, adapted): run the lean-ctx ToolSearch bootstrap before any other tool call, per this skill's own Step 0 above.
-2. **Read `CLAUDE.md` and `README.md` in full first** — a fresh agent has no context beyond what it reads; these define the architectural invariants that make a "bug" actually a bug and not intentional design.
+2. **README.md context, embedded in the prompt** — root `CLAUDE.md` auto-loads into every session/subagent's context by cwd already, so don't tell the agent to read it explicitly (that'd be a second, wasted read of content it already has). `README.md` is NOT auto-loaded — orchestrator reads it once and pastes the excerpt relevant to this unit (e.g. Safety Notice for scope rule 5, architecture overview) directly into the prompt. Add one line telling the agent to `ctx_read(mode="map")` README.md itself only if something in its findings seems to contradict the excerpt — a cheap backstop, not a default full read.
 3. **Its file list from Step 2**, and instruction to review _only_ those files — this is what keeps the sweep parallelizable without agents duplicating or stepping on each other.
-4. **Any invariants you (the orchestrator) can identify as relevant to this specific unit** — most invariant detail now lives outside root `CLAUDE.md` (see its own "Where Other Invariants Live" section): grep `.claude/rules/*.md` for `paths:` globs matching this unit's files, and check for a nested `<dir>/CLAUDE.md` in any directory the unit covers, in addition to skimming root `CLAUDE.md`'s own remaining (now much shorter) content. Call out whatever's relevant in the prompt. Judgment call made fresh each run, not a fixed mapping to hardcode — all three locations' content will change as the crate does.
+4. **Any invariants relevant to this specific unit, pre-matched and embedded** — most invariant detail now lives outside root `CLAUDE.md` (see its own "Where Other Invariants Live" section). Do this matching once, for all units together, right after Step 2's partition is recorded: one `ctx_search` pass over `.claude/rules/*.md` for `paths:` globs, one check for a nested `<dir>/CLAUDE.md` under each unit's directories — then paste each unit's matched excerpt into its own prompt. Don't have each spawned agent re-grep `.claude/rules/` independently; the mapping is the same work N times over. Judgment call made fresh each run, not a fixed mapping to hardcode — all locations' content will change as the crate does.
 5. **Scope rules** (bambino-specific policy, keep these unless the project's stated design changes):
    - Correctness bugs, invariant violations vs. `CLAUDE.md`/`.claude/rules/`/nested `CLAUDE.md` (see item 4 above), missed error handling at real boundaries (network I/O, FFI) — not hypothetical internal-invariant validation.
    - Skip minor security issues — this crate is explicitly LAN-only by design (see `README.md`'s Safety Notice); don't flag cert-verification bypass, plaintext fallback, etc. unless implemented incorrectly vs. its _own_ stated behavior.
@@ -78,7 +77,7 @@ Starting fresh: write `MM-DD-REVIEW.md`'s skeleton to disk *before* spawning any
 Spawn all remaining units' agents in parallel — single message, multiple `Agent` tool calls, `subagent_type: general-purpose`, background (default).
 
 As each agent reports back — don't wait for the rest — immediately, for that one unit:
-1. **Dedupe** — check `BACKLOG.md`'s existing rows for the same file/topic before treating a finding as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
+1. **Dedupe** — `ctx_search` `BACKLOG.md` for the finding's file/topic keyword (not a full read — the file only grows across sweeps) to check for existing rows on the same file/topic before treating a finding as new (a finding that resurfaces from a prior sweep is a regression, not a new bug — note that distinction in the review file rather than silently double-counting).
 2. **Assign severity** to `CONFIRMED` findings only, per the `backlog` skill's rubric (Sev1/Sev2/Sev3/needs-verification) — don't re-derive or duplicate those definitions here, invoke that skill's rules directly. `PLAUSIBLE` findings don't get a severity yet; that happens if/when a human triages one into a real `BUG-ID` later.
 3. **Promote `CONFIRMED` findings to `BACKLOG.md`'s `Open` table now**, using only the `backlog` skill's Entry rules, Next BUG-ID logic, and Severity section — don't wait until every unit finishes. Nothing else from that skill applies mid-sweep: not its Review-file lifecycle (the file it'd delete is the one this sweep is actively writing), not Docs regen, not Wontfix triage — those are separate, human-triggered concerns, out of scope for this step.
 4. **Replace that unit's `PENDING` placeholder** in `MM-DD-REVIEW.md` with its real content: `CONFIRMED` findings in Step 3's Issue/Detail/Suggested-fix format, each linked to its new `BUG-ID`; or `NO ISSUES FOUND in <unit>` if it came back clean of both tiers. Append any `PLAUSIBLE` findings to a `## Plausible, Unverified Findings` section (create it on the first one) — these don't get a `BUG-ID`, flag the section for the user to manually triage. Update the `Status` line's count.
