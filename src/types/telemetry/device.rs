@@ -273,7 +273,9 @@ impl NozzleCollection {
 /// (IDEX platforms) to provide unified schema matching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NozzleInfo {
-    /// Extruder carriage index (0 = Right/Main, 1 = Left/Deputy) or storage rack index.
+    /// Extruder carriage index (0 = Right/Main, 1 = Left/Deputy), or on H2C, a packed rack
+    /// slot: high nibble (bits 4–7) `1` flags a rack-stored spare nozzle, low nibble (bits
+    /// 0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`].
     pub id: u8,
 
     /// Nozzle orifice diameter in millimeters (e.g. 0.4).
@@ -313,6 +315,25 @@ pub struct NozzleInfo {
     /// Nozzle status bitmask.
     #[serde(default)]
     pub stat: Option<u32>,
+}
+
+impl NozzleInfo {
+    /// Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
+    ///
+    /// BUG-111: confirmed directly against BambuStudio's source
+    /// (`DevNozzleSystem.cpp:769`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
+    /// nozzles are appended to the *same* `nozzle.info` array as installed ones, distinguished
+    /// by `DevUtil::get_hex_bits(id, 1) == 1`. `get_hex_bits(num, pos, base=10)` extracts the
+    /// 4-bit **nibble** at `pos*4` (`(num >> (pos*4)) & 0xF`), not a single bit — so this
+    /// checks the *high* nibble (bits 4–7) of `id`, matching `reference/04_toolhead_thermal_
+    /// motion.md`'s independently-documented H2C rack range of ids `16`-`21` (all of which
+    /// have high nibble `1`; the low nibble `id & 0xF` is the rack slot index). Reachable on
+    /// real hardware: H2C ("2 Slots, up to 7 active nozzles" per `MODEL_MATRIX.csv`) is a
+    /// currently-modeled printer with existing rack-aware code elsewhere
+    /// (`src/client/thermal.rs`'s H2C nozzle-ID validation, `src/quirks/mod.rs`).
+    pub fn is_rack_stored(&self) -> bool {
+        (self.id >> 4) & 0xF == 1
+    }
 }
 
 /// IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder].

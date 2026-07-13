@@ -304,3 +304,26 @@ fn test_decode_nozzle_temperatures_idex_swapped_fallback() {
     );
     assert_eq!(temps, vec![(0, 0, 220), (1, 210, 0)]);
 }
+
+#[test]
+fn test_decode_nozzle_temperatures_h2c_rack_nozzle_not_misclassified_as_idex() {
+    // BUG-111: a single installed nozzle (id 0) plus a rack-stored spare (id 16 — high
+    // nibble 1 flags rack storage per BambuStudio's get_hex_bits(id, 1) == 1) must not be
+    // misclassified as IDEX — H2C has one hotend and a spare-nozzle rack.
+    let json = r#"{
+            "device": {
+                "nozzle": { "info": [{ "id": 0 }, { "id": 16 }] }
+            },
+            "print": {
+                "nozzle_temper": 210.0,
+                "nozzle_target_temper": 220.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let temps = decode_nozzle_temperatures(
+        report.device(),
+        report.print.as_ref().unwrap().nozzle_temper,
+        report.print.as_ref().unwrap().nozzle_target_temper,
+    );
+    assert_eq!(temps, vec![(0, 210, 220)], "must resolve as single-nozzle, not IDEX");
+}
