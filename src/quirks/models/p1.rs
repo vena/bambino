@@ -61,6 +61,10 @@ impl ModelQuirks for P1Quirks {
         false
     }
 
+    fn supports_ams_remote_drying(&self) -> bool {
+        false
+    }
+
     fn is_bed_on_z(&self) -> bool {
         true
     }

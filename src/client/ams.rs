@@ -125,6 +125,10 @@ where
     /// * `cooling_temp`: Cooling temperature applied after the drying cycle completes.
     /// * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
     /// * `filament`: Filament type string (e.g., "PA-CF").
+    ///
+    /// Returns `BambuError::ModelMismatch` on hosts where `ModelQuirks::supports_ams_remote_drying()`
+    /// is `false` (P1P/P1S) — the firmware acks this command `result: success` and silently
+    /// discards it rather than actually driving the AMS heater; see `[REF-AMS-DRYER]`.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_drying(
         &mut self,
@@ -137,6 +141,11 @@ where
         close_power_conflict: bool,
         filament: &str,
     ) -> Result<u16, BambuError> {
+        if !self.model.quirks().supports_ams_remote_drying() {
+            return Err(BambuError::ModelMismatch(
+                "AMS drying is screen-only on this host printer model — firmware acks this command but does not act on it".into(),
+            ));
+        }
         let max_temp: u32 = if (128..=135).contains(&ams_id) {
             AMS_HT_DRY_TEMP_MAX
         } else {

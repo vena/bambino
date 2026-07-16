@@ -1205,7 +1205,7 @@ async fn test_drying_lifecycle_wire_payload() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::X1C);
 
     client
         .start_drying(128, 55, 8, 0, true, 20, false, "PA-CF")
@@ -1239,7 +1239,7 @@ async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
             .await
             .expect("MQTT connect handshake failed");
 
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::X1C);
 
     client
         .start_drying(128, 200, 8, 0, true, 20, false, "PA-CF")
@@ -1250,6 +1250,35 @@ async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
         .await
         .expect("start_drying (standard AMS) failed");
 
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    // P1S firmware acks ams_filament_drying with `result: success` and then silently
+    // discards it — no heater/fan activation, dry_status stays 0 — confirmed against real
+    // hardware. start_drying() must reject before dispatch rather than send a command the
+    // printer will accept-then-drop.
+    let err = client
+        .start_drying(0, 55, 8, 0, true, 20, false, "PA-CF")
+        .await
+        .expect_err("start_drying must reject on P1 (screen-only AMS drying)");
+    assert!(matches!(err, BambuError::ModelMismatch(_)));
+
+    drop(client);
     broker_task.await.expect("Broker task panicked");
 }
 

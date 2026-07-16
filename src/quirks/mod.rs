@@ -168,6 +168,18 @@ pub trait ModelQuirks {
         false
     }
 
+    /// Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
+    /// printer's firmware, rather than acked `result: success` and silently discarded.
+    ///
+    /// Default `true` (AMS 2 Pro / AMS-HT drying is remote-controllable on every other host).
+    /// `false` on P1P/P1S: confirmed by Bambu's own P1 manual ("P1S connected AMS drying
+    /// functions may only be controlled from the P1S screen"), by bambuddy (`fix(drying)`,
+    /// #2533 — reporter saw `dry_status` stay `0` after three acked commands), and by direct
+    /// hardware testing against this crate's `start_drying()` on a P1S.
+    fn supports_ams_remote_drying(&self) -> bool {
+        true
+    }
+
     /// Returns the maximum safe nozzle/hotend temperature in °C for this model.
     fn nozzle_temp_max(&self) -> u16;
 
