@@ -68,25 +68,23 @@ authoritative "spool physically present" signal (same one BambuStudio uses). bam
 
 ## Plausible, Unverified Findings
 
-### P1/A1 camera (port 6000) reconnect-timing footgun — PLAUSIBLE, not yet investigated
+### P1/A1 camera (port 6000) reconnect-timing footgun — RESOLVED as `BUG-161` (Open)
 
-bambuddy's `Fix P1/A1 camera black screen from fan-out churn on single-connection cams` (#2521)
-found that port 6000 (binary JPEG chamber-image stream, P1/A1 series) is a single-connection
-socket: reopening it before the previous connection's TCP FIN completes leaves the printer
-serving an orphaned socket until TCP keepalive reaps it (~20 min stall observed). bambino's
-`src/camera/binary.rs` implements the client side of this same port-6000 protocol. Not yet
-checked whether `bambino`'s camera reconnect path (if any exists at the client level — bambino
-is a library, not a long-lived multi-subscriber service like bambuddy, so the failure shape may
-not transfer directly) has, or needs, any doc note warning callers not to redial port 6000
-before the prior connection is confirmed closed. Needs a read of `src/camera/binary.rs`'s and
-`src/camera/mod.rs`'s reconnect/redial surface before this can be triaged CONFIRMED or
-Wontfix-as-caller-responsibility.
+This lead was picked up and investigated by the later `07-16-MODULE-REVIEW.md` full-crate sweep
+(§5, camera unit). Resolution: `BambuBinaryCameraStream` doesn't own dial/redial logic (only
+wraps an already-connected stream), so there's no code defect to fix — but the underlying
+printer-side single-connection behavior bambuddy found is real, so a caller-facing doc warning
+against fast port-6000 redial is tracked as a real (doc-only) fix, not dismissed. See
+`BACKLOG.md`'s `Open` table, `BUG-161`.
 
 ## Still to review
 
 - Remaining bambuddy commits not yet individually checked (non-protocol-keyword-matched ones —
-  cloud sign-in state, library-tag response model, non-0.4mm-nozzle AMS slot config — initial
-  pass judged these app/UI-layer, not bambino-relevant, but not exhaustively confirmed).
+  library-tag response model, non-0.4mm-nozzle AMS slot config — initial pass judged these
+  app/UI-layer, not bambino-relevant, but not exhaustively confirmed). `fix(cloud): stop
+  reporting an expired Bambu Cloud sign-in as connected` is explicitly out of scope — bambino is
+  LAN-only by design (`README.md`'s opening paragraph), no Bambu Cloud code path exists to check
+  against.
 - ha-bambulab: pulled, but no commits matched protocol-relevant keywords in the initial grep
   pass — worth a second look at the full unfiltered log in case the keyword filter missed
   something (e.g. a fix described without mentioning "mqtt"/"ams"/etc. by name).
