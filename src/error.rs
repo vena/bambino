@@ -1,6 +1,6 @@
 //! # Error Types
 //!
-//! [`BambuError`] is the single error type returned by all fallible operations in the
+//! [`enum@Error`] is the single error type returned by all fallible operations in the
 //! crate. It covers network failures, TLS handshake issues, protocol violations,
 //! authentication rejections, timeouts, and model capability mismatches.
 //!
@@ -26,7 +26,7 @@ use alloc::borrow::Cow;
 /// and source error tracing are derived automatically via `thiserror`.
 #[cfg_attr(feature = "std", derive(Error))]
 #[derive(Debug, Clone)]
-pub enum BambuError {
+pub enum Error {
     /// Encapsulates direct socket-level failures on TCP, UDP, or TLS streams.
     #[cfg_attr(feature = "std", error("Network transport failure: {0:?}"))]
     NetworkError(crate::io::SocketError),
@@ -84,38 +84,38 @@ pub enum BambuError {
     ModelMismatch(&'static str),
 }
 
-impl From<crate::io::SocketError> for BambuError {
+impl From<crate::io::SocketError> for Error {
     fn from(e: crate::io::SocketError) -> Self {
-        BambuError::NetworkError(e)
+        Error::NetworkError(e)
     }
 }
 
-impl From<crate::io::TimerError> for BambuError {
+impl From<crate::io::TimerError> for Error {
     fn from(e: crate::io::TimerError) -> Self {
-        BambuError::TimerFailure(e)
+        Error::TimerFailure(e)
     }
 }
 
 #[cfg(not(feature = "std"))]
-impl core::fmt::Display for BambuError {
+impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            BambuError::NetworkError(e) => write!(f, "Network transport failure: {:?}", e),
-            BambuError::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),
-            BambuError::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
-            BambuError::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
-            BambuError::SerializationError => {
+            Error::NetworkError(e) => write!(f, "Network transport failure: {:?}", e),
+            Error::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),
+            Error::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
+            Error::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
+            Error::SerializationError => {
                 write!(f, "JSON payload serialization or deserialization failure")
             }
-            BambuError::AccessDenied => {
+            Error::AccessDenied => {
                 write!(f, "Authentication credentials rejected (access denied)")
             }
-            BambuError::Timeout => write!(f, "Operational transaction timed out"),
-            BambuError::DiskWriteFailure => write!(
+            Error::Timeout => write!(f, "Operational transaction timed out"),
+            Error::DiskWriteFailure => write!(
                 f,
                 "File upload verification failed (possible SD card write error)"
             ),
-            BambuError::ModelMismatch(s) => {
+            Error::ModelMismatch(s) => {
                 write!(f, "Model capability mismatch: {}", s)
             }
         }
@@ -127,59 +127,59 @@ mod tests {
     use super::*;
 
     /// Compile-time exhaustiveness guard, never called at runtime.
-    /// A `match` with no wildcard arm over every `BambuError` variant: if a future variant is added
+    /// A `match` with no wildcard arm over every `Error` variant: if a future variant is added
     /// without adding an arm here, this fails to *compile* rather than silently passing — a reminder to
     /// also add the new variant to `test_display_consistency`'s `variants` vec below, which only guards
     /// variants it's told about and won't catch a forgotten one on its own.
     #[allow(dead_code)]
-    fn assert_all_variants_covered(e: &BambuError) {
+    fn assert_all_variants_covered(e: &Error) {
         match e {
-            BambuError::NetworkError(_) => {}
-            BambuError::TimerFailure(_) => {}
-            BambuError::TlsHandshakeFailed => {}
-            BambuError::ProtocolViolation(_) => {}
-            BambuError::SerializationError => {}
-            BambuError::AccessDenied => {}
-            BambuError::Timeout => {}
-            BambuError::DiskWriteFailure => {}
-            BambuError::ModelMismatch(_) => {}
+            Error::NetworkError(_) => {}
+            Error::TimerFailure(_) => {}
+            Error::TlsHandshakeFailed => {}
+            Error::ProtocolViolation(_) => {}
+            Error::SerializationError => {}
+            Error::AccessDenied => {}
+            Error::Timeout => {}
+            Error::DiskWriteFailure => {}
+            Error::ModelMismatch(_) => {}
         }
     }
 
     #[test]
     fn test_display_consistency() {
-        let variants: Vec<(BambuError, &str)> = vec![
+        let variants: Vec<(Error, &str)> = vec![
             (
-                BambuError::NetworkError(crate::io::SocketError::TimedOut),
+                Error::NetworkError(crate::io::SocketError::TimedOut),
                 "Network transport failure: TimedOut",
             ),
             (
-                BambuError::TimerFailure(crate::io::TimerError::Other("scheduling failed")),
+                Error::TimerFailure(crate::io::TimerError::Other("scheduling failed")),
                 "Timer scheduling failure: Other(\"scheduling failed\")",
             ),
             (
-                BambuError::TlsHandshakeFailed,
+                Error::TlsHandshakeFailed,
                 "TLS secure channel handshake failed",
             ),
             (
-                BambuError::ProtocolViolation("test message".into()),
+                Error::ProtocolViolation("test message".into()),
                 "Protocol violation: test message",
             ),
             (
-                BambuError::SerializationError,
+                Error::SerializationError,
                 "JSON payload serialization or deserialization failure",
             ),
             (
-                BambuError::AccessDenied,
+                Error::AccessDenied,
                 "Authentication credentials rejected (access denied)",
             ),
-            (BambuError::Timeout, "Operational transaction timed out"),
+            (Error::Timeout, "Operational transaction timed out"),
             (
-                BambuError::DiskWriteFailure,
+                Error::DiskWriteFailure,
                 "File upload verification failed (possible SD card write error)",
             ),
             (
-                BambuError::ModelMismatch("test capability".into()),
+                Error::ModelMismatch("test capability".into()),
                 "Model capability mismatch: test capability",
             ),
         ];
@@ -197,39 +197,39 @@ mod tests {
     #[test]
     fn test_from_socket_error() {
         let socket_err = crate::io::SocketError::ConnectionReset;
-        let bambu_err: BambuError = socket_err.into();
+        let bambu_err: Error = socket_err.into();
         assert!(matches!(
             bambu_err,
-            BambuError::NetworkError(crate::io::SocketError::ConnectionReset)
+            Error::NetworkError(crate::io::SocketError::ConnectionReset)
         ));
     }
 
     #[test]
     fn test_from_timer_error() {
         let timer_err = crate::io::TimerError::Other("timer failed");
-        let bambu_err: BambuError = timer_err.into();
+        let bambu_err: Error = timer_err.into();
         assert!(matches!(
             bambu_err,
-            BambuError::TimerFailure(crate::io::TimerError::Other("timer failed"))
+            Error::TimerFailure(crate::io::TimerError::Other("timer failed"))
         ));
     }
 
     #[test]
     fn test_protocol_violation_from_static_str() {
-        let err = BambuError::ProtocolViolation("static message".into());
-        assert!(matches!(err, BambuError::ProtocolViolation(_)));
+        let err = Error::ProtocolViolation("static message".into());
+        assert!(matches!(err, Error::ProtocolViolation(_)));
     }
 
     #[test]
     fn test_protocol_violation_from_dynamic_string() {
         let msg = format!("dynamic error: {}", 42);
-        let err = BambuError::ProtocolViolation(msg.into());
+        let err = Error::ProtocolViolation(msg.into());
         assert_eq!(format!("{}", err), "Protocol violation: dynamic error: 42");
     }
 
     #[test]
     fn test_bambu_error_is_clone() {
-        let err = BambuError::Timeout;
+        let err = Error::Timeout;
         let cloned = err.clone();
         assert_eq!(format!("{}", err), format!("{}", cloned));
     }

@@ -183,31 +183,31 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 #### Implementations
 
-- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
-- <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
 
-- <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
 
-- <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
 
-- <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
 
-- <span id="superprinterclient-get-version"></span>`async fn get_version(&mut self) -> Result<VersionInfo, BambuError>` — [`VersionInfo`](../types/version/index.md#versioninfo), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-get-version"></span>`async fn get_version(&mut self) -> Result<VersionInfo, Error>` — [`VersionInfo`](../types/version/index.md#versioninfo), [`Error`](../error/index.md#error)
 
   Queries the printer's expansion bus version database and returns typed module info.
 
-- <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, BambuError>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
 
   Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
 
@@ -219,19 +219,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Injects a pre-connected [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream) directly.
 
-- <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BambuBinaryCameraStream<<CameraTls as >::Stream>, BambuError>` — [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BambuBinaryCameraStream<<CameraTls as >::Stream>, Error>` — [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream), auto-connecting if needed.
 
-- <span id="superprinterclient-read-camera-frame"></span>`async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-read-camera-frame"></span>`async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Reads the next camera frame, auto-connecting (and authenticating) if needed.
 
-- <span id="superprinterclient-disconnect-camera"></span>`async fn disconnect_camera(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-disconnect-camera"></span>`async fn disconnect_camera(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Disconnects the camera session, if one exists, and clears it from the client.
 
-- <span id="superprinterclient-connect-mqtt"></span>`async fn connect_mqtt(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-connect-mqtt"></span>`async fn connect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Eagerly establishes the MQTT connection.
 
@@ -243,7 +243,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Injects a pre-connected [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient) directly.
 
-- <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Disconnects the MQTT session, if one exists, and clears it from the client.
 
@@ -275,7 +275,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Overrides the default `false` for `BambuFtpsClient`'s TLS-1.2-enforcement bypass.
 
-- <span id="superprinterclient-connect-ftps"></span>`async fn connect_ftps(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-connect-ftps"></span>`async fn connect_ftps(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Eagerly establishes the FTPS connection.
 
@@ -283,7 +283,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns whether the FTPS session is currently established.
 
-- <span id="superprinterclient-connect-camera"></span>`async fn connect_camera(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-connect-camera"></span>`async fn connect_camera(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Eagerly establishes the camera connection.
 
@@ -303,23 +303,23 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Overrides the default maximum accepted camera frame size (see `BambuBinaryCameraStream::with_max_frame_size`).
 
-- <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<u16, BambuError>` — [`FanTarget`](types/index.md#fantarget), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<u16, Error>` — [`FanTarget`](types/index.md#fantarget), [`Error`](../error/index.md#error)
 
   Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
 
-- <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: crate::mqtt::commands::AirductMode) -> Result<u16, BambuError>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: crate::mqtt::commands::AirductMode) -> Result<u16, Error>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`Error`](../error/index.md#error)
 
   Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, BambuError>` — [`BuzzerMode`](types/index.md#buzzermode), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, Error>` — [`BuzzerMode`](types/index.md#buzzermode), [`Error`](../error/index.md#error)
 
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
 
@@ -339,7 +339,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   `None` means no telemetry carrying `home_flag` has been observed yet.
 
-- <span id="superprinterclient-send-gcode"></span>`async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-send-gcode"></span>`async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sends a G-code command with model-aware safety validation.
 
@@ -371,51 +371,51 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   ```
 
-- <span id="superprinterclient-send-gcode-raw"></span>`async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-send-gcode-raw"></span>`async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a raw G-code string without model safety checks [REF-MOTO-GCODE].
 
-- <span id="superprinterclient-home-axes"></span>`async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-home-axes"></span>`async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches safe homing operations to prevent hardware collisions.
 
-- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: char, distance: f32, feedrate: u32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: char, distance: f32, feedrate: u32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a manual relative axis movement block.
 
-- <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a manual relative extrusion command sequence [REF-GCODE-EXTRUDE].
 
-- <span id="superprinterclient-wait-for-homing"></span>`async fn wait_for_homing(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-wait-for-homing"></span>`async fn wait_for_homing(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Blocks until a `G28` homing cycle observed via telemetry has completed.
 
-- <span id="superprinterclient-pause-print"></span>`async fn pause_print(&mut self) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-pause-print"></span>`async fn pause_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Pauses the currently active print job [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-resume-print"></span>`async fn resume_print(&mut self) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-resume-print"></span>`async fn resume_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Resumes a paused print job [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-stop-print"></span>`async fn stop_print(&mut self) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-stop-print"></span>`async fn stop_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-clear-print-error"></span>`async fn clear_print_error(&mut self) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-clear-print-error"></span>`async fn clear_print_error(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<u16, BambuError>` — [`PrintSpeed`](types/index.md#printspeed), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<u16, Error>` — [`PrintSpeed`](types/index.md#printspeed), [`Error`](../error/index.md#error)
 
   Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-skip-objects"></span>`async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-skip-objects"></span>`async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Bypasses rendering of specific objects within an active multi-model print job [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, BambuError>` — [`CalibrationOption`](types/index.md#calibrationoption), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error>` — [`CalibrationOption`](types/index.md#calibrationoption), [`Error`](../error/index.md#error)
 
   Triggers automated physical calibration routines on the printer chassis [REF-MQTT-LIFECYCLE].
 
@@ -433,7 +433,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   ```
 
-- <span id="superprinterclient-start-print"></span>`async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, BambuError>` — [`PrintJobConfig`](../mqtt/commands/print_job/index.md#printjobconfig), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-start-print"></span>`async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error>` — [`PrintJobConfig`](../mqtt/commands/print_job/index.md#printjobconfig), [`Error`](../error/index.md#error)
 
   Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
 
@@ -441,15 +441,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Injects a pre-connected [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient) directly.
 
-- <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, BambuError>` — [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient), auto-connecting if needed.
 
-- <span id="superprinterclient-disconnect-storage"></span>`async fn disconnect_storage(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-disconnect-storage"></span>`async fn disconnect_storage(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Disconnects the FTPS session, if one exists, and clears it from the client.
 
-- <span id="superprinterclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError>` — [`TelemetryEvent`](types/index.md#telemetryevent), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error>` — [`TelemetryEvent`](types/index.md#telemetryevent), [`Error`](../error/index.md#error)
 
   Pulls the next telemetry event from the MQTT channel.
 
@@ -663,11 +663,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   (BUG-135).
 
-- <span id="superprinterclient-poll-raw"></span>`async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage), [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-poll-raw"></span>`async fn poll_raw(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage), [`Error`](../error/index.md#error)
 
   Pulls the next raw MQTT message without deserialization.
 
-- <span id="superprinterclient-set-bed-temperature"></span>`async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-bed-temperature"></span>`async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sets the heated bed target temperature.
 
@@ -699,11 +699,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   ```
 
-- <span id="superprinterclient-set-nozzle-temperature"></span>`async fn set_nozzle_temperature(&mut self, nozzle_id: u8, target_temp: u16) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-nozzle-temperature"></span>`async fn set_nozzle_temperature(&mut self, nozzle_id: u8, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
 
-- <span id="superprinterclient-set-chamber-temperature"></span>`async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="superprinterclient-set-chamber-temperature"></span>`async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
 
@@ -723,11 +723,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets the timeout (in seconds) used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
 
-- <span id="printerclient-request-pushall"></span>`async fn request_pushall(&mut self) -> Result<u16, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="printerclient-request-pushall"></span>`async fn request_pushall(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
 
-- <span id="printerclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="printerclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
 
@@ -739,7 +739,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns the resolved printer hardware model.
 
-- <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<<MqttTls as >::Stream>, BambuError>` — [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`BambuError`](../error/index.md#bambuerror)
+- <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<<MqttTls as >::Stream>, Error>` — [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), auto-connecting if needed.
 

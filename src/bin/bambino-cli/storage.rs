@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::Path;
 
-use bambino::error::BambuError;
+use bambino::error::Error;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config_with_options,
 };
@@ -73,7 +73,7 @@ pub async fn run(
     access_code: &str,
     action: FilesAction,
     allow_unverified_tls_1_2: bool,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     let printer = create_printer(ip, serial, access_code)?;
     let model = printer.model();
 
@@ -99,7 +99,7 @@ pub async fn run(
     // on every failure path except the empty-listing early return. Capturing the dispatch
     // result in a variable instead lets `disconnect()` run unconditionally before the error
     // (if any) is propagated.
-    let result: Result<(), BambuError> = async {
+    let result: Result<(), Error> = async {
         match action {
             FilesAction::List { remote_path } => {
                 let (year, month, day, hour, min) = current_date_utc();
@@ -121,12 +121,12 @@ pub async fn run(
             } => {
                 let local = Path::new(&local_path);
                 let metadata = fs::metadata(local).map_err(|_| {
-                    BambuError::ProtocolViolation("Target local file does not exist".into())
+                    Error::ProtocolViolation("Target local file does not exist".into())
                 })?;
 
                 const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
                 if metadata.len() > MAX_UPLOAD_BYTES {
-                    return Err(BambuError::ProtocolViolation(
+                    return Err(Error::ProtocolViolation(
                         format!(
                             "File too large for upload: {} bytes (max {} MB)",
                             metadata.len(),
@@ -138,7 +138,7 @@ pub async fn run(
 
                 println!("Reading source file '{}' into buffer...", local_path);
                 let payload = fs::read(local).map_err(|_| {
-                    BambuError::ProtocolViolation("Failed to read local target file".into())
+                    Error::ProtocolViolation("Failed to read local target file".into())
                 })?;
 
                 println!(
@@ -190,7 +190,7 @@ pub async fn run(
 /// without checking the printer's clock first).
 async fn run_clock_check<RawIO, Tls, Factory, FtpsTimer>(
     client: &mut bambino::ftps::BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>,
-) -> Result<(), BambuError>
+) -> Result<(), Error>
 where
     RawIO: bambino::io::AsyncIo,
     Tls: bambino::io::TlsConnector<RawIO>,

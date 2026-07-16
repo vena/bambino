@@ -24,7 +24,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::client::dummy::DummyTimer;
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 
 pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
@@ -60,7 +60,7 @@ pub(crate) const CAMERA_DISCARD_CHUNK_SIZE: usize = 512;
 /// * Offset 48-79 (32 bytes): Null-padded ASCII LAN access code
 pub fn build_handshake_packet(
     access_code: &str,
-) -> Result<[u8; CAMERA_HANDSHAKE_SIZE], BambuError> {
+) -> Result<[u8; CAMERA_HANDSHAKE_SIZE], Error> {
     let mut packet = [0u8; CAMERA_HANDSHAKE_SIZE];
 
     packet[0..4].copy_from_slice(&CAMERA_HANDSHAKE_MAGIC.to_le_bytes());
@@ -71,13 +71,13 @@ pub fn build_handshake_packet(
         .copy_from_slice(username);
 
     if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "access_code must be a non-empty ASCII alphanumeric string".into(),
         ));
     }
     let code_bytes = access_code.as_bytes();
     if code_bytes.len() > CAMERA_PASSWORD_MAX_LEN {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "Access code length exceeds maximum 32-byte authorization boundary".into(),
         ));
     }
@@ -165,11 +165,11 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// means the packet was written and flushed to the socket, **not** that the printer accepted
     /// the access code. If the code is wrong, the printer's real-world response (closing the
     /// socket, or simply never sending a frame) only surfaces later, on the *next*
-    /// [`Self::read_next_frame`] call, as `BambuError::NetworkError(SocketError::ConnectionReset)`
+    /// [`Self::read_next_frame`] call, as `Error::NetworkError(SocketError::ConnectionReset)`
     /// — the same error variant a mid-stream network blip would produce. Callers that need to
     /// distinguish "wrong access code" from "transient network hiccup" cannot do so from this
     /// API alone.
-    pub async fn authenticate(&mut self, access_code: &str) -> Result<(), BambuError> {
+    pub async fn authenticate(&mut self, access_code: &str) -> Result<(), Error> {
         self.authenticate_with_timer(access_code, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
             .await
     }
@@ -186,18 +186,18 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         access_code: &str,
         timer: &T,
         budget_ms: u64,
-    ) -> Result<(), BambuError> {
+    ) -> Result<(), Error> {
         let handshake = build_handshake_packet(access_code)?;
 
         let write_fut = async {
             self.stream
                 .write_all(&handshake)
                 .await
-                .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+                .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))?;
             self.stream
                 .flush()
                 .await
-                .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))
+                .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))
         };
 
         if !timer.has_real_clock() {
@@ -211,7 +211,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         .await
         {
             crate::io::Raced::Left(result) => result,
-            crate::io::Raced::Right(_) => Err(BambuError::NetworkError(SocketError::TimedOut)),
+            crate::io::Raced::Right(_) => Err(Error::NetworkError(SocketError::TimedOut)),
         }
     }
 
@@ -231,7 +231,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         frame_buf: &mut Vec<u8>,
         timer: &T,
         budget_ms: u64,
-    ) -> Result<(), BambuError> {
+    ) -> Result<(), Error> {
         let deadline_ms = if timer.has_real_clock() {
             Some(timer.now_millis().saturating_add(budget_ms))
         } else {
@@ -261,7 +261,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             while *filled < buf.len() {
                 let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
                     .await
-                    .map_err(BambuError::NetworkError)?;
+                    .map_err(Error::NetworkError)?;
                 *filled += n;
             }
 
@@ -271,7 +271,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             // the frame-size sanity check below even runs.
             let raw_size = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
             let size = usize::try_from(raw_size).map_err(|_| {
-                BambuError::ProtocolViolation(
+                Error::ProtocolViolation(
                     "Frame size descriptor does not fit in this platform's usize".into(),
                 )
             })?;
@@ -289,7 +289,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             }
             if size == 0 {
                 self.read_state = CameraFrameReadState::Idle;
-                return Err(BambuError::ProtocolViolation(
+                return Err(Error::ProtocolViolation(
                     "Acquired empty frame payload descriptor".into(),
                 ));
             }
@@ -306,7 +306,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             while *filled < buf.len() {
                 let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
                     .await
-                    .map_err(BambuError::NetworkError)?;
+                    .map_err(Error::NetworkError)?;
                 *filled += n;
             }
 
@@ -323,7 +323,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
                 || payload[size - 2] != JPEG_MARKER_EOI_HIGH
                 || payload[size - 1] != JPEG_MARKER_EOI_LOW
             {
-                return Err(BambuError::ProtocolViolation(
+                return Err(Error::ProtocolViolation(
                     "Acquired stream packet lacks valid JPEG magic marker boundaries".into(),
                 ));
             }
@@ -348,7 +348,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         &mut self,
         timer: &T,
         deadline_ms: Option<u64>,
-    ) -> Result<(), BambuError> {
+    ) -> Result<(), Error> {
         if let CameraFrameReadState::DiscardingOversizedPayload { remaining } = &mut self.read_state
         {
             let mut scratch = [0u8; CAMERA_DISCARD_CHUNK_SIZE];
@@ -356,12 +356,12 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
                 let want = core::cmp::min(*remaining, scratch.len());
                 let n = read_chunk(&mut self.stream, &mut scratch[..want], timer, deadline_ms)
                     .await
-                    .map_err(BambuError::NetworkError)?;
+                    .map_err(Error::NetworkError)?;
                 *remaining -= n;
             }
         }
         self.read_state = CameraFrameReadState::Idle;
-        Err(BambuError::ProtocolViolation(
+        Err(Error::ProtocolViolation(
             "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
         ))
     }
@@ -372,7 +372,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// (`*frame_buf = payload`) — no buffer reuse. Delegates to `read_next_frame_with_timer` under
     /// [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
     /// every existing caller not going through `PrinterClient`.
-    pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError> {
+    pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error> {
         self.read_next_frame_with_timer(frame_buf, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
             .await
     }
@@ -408,7 +408,7 @@ mod tests {
     fn test_handshake_oversized_access_code() {
         let code = "A".repeat(CAMERA_PASSWORD_MAX_LEN + 1);
         let result = build_handshake_packet(&code);
-        assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+        assert!(matches!(result, Err(Error::ProtocolViolation(_))));
     }
 
     #[test]
@@ -426,7 +426,7 @@ mod tests {
         // explicit empty-string guard for the same copy-paste-mistake reason.
         assert!(matches!(
             build_handshake_packet(""),
-            Err(BambuError::ProtocolViolation(_))
+            Err(Error::ProtocolViolation(_))
         ));
     }
 
@@ -449,7 +449,7 @@ mod tests {
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(result, Err(BambuError::NetworkError(_))));
+            assert!(matches!(result, Err(Error::NetworkError(_))));
             // Cursor has no more bytes after the header, so draining the (never-sent) declared
             // payload hits EOF — confirms the drain path is actually exercised (BUG: this used
             // to bail straight to Idle without draining at all, which this test's mere
@@ -470,7 +470,7 @@ mod tests {
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+            assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
 
         #[tokio::test]
@@ -495,7 +495,7 @@ mod tests {
             let oversized_result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(
                 oversized_result,
-                Err(BambuError::ProtocolViolation(_))
+                Err(Error::ProtocolViolation(_))
             ));
 
             let resynced_result = camera.read_next_frame(&mut buf).await;
@@ -514,7 +514,7 @@ mod tests {
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+            assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
 
         #[tokio::test]
@@ -525,7 +525,7 @@ mod tests {
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+            assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
 
         /// Regression test mirroring `test_read_exact_packet_stalled_connection_times_out` (`src/mqtt/client/frame.rs`): a connection that stalls with zero incoming bytes must not hang `read_next_frame_with_timer` forever.
@@ -557,7 +557,7 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    Err(BambuError::NetworkError(crate::io::SocketError::TimedOut))
+                    Err(Error::NetworkError(crate::io::SocketError::TimedOut))
                 ),
                 "Expected TimedOut for a stalled connection, got {:?}",
                 result
@@ -597,7 +597,7 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    Err(BambuError::NetworkError(crate::io::SocketError::TimedOut))
+                    Err(Error::NetworkError(crate::io::SocketError::TimedOut))
                 ),
                 "Expected TimedOut for a stalled connection, got {:?}",
                 result
@@ -638,7 +638,7 @@ mod tests {
             assert!(
                 matches!(
                     first_attempt,
-                    Err(BambuError::NetworkError(crate::io::SocketError::TimedOut))
+                    Err(Error::NetworkError(crate::io::SocketError::TimedOut))
                 ),
                 "Expected the first attempt to time out waiting on the missing payload bytes, \
                  got {:?}",

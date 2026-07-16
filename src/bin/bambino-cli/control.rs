@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
-use bambino::error::BambuError;
+use bambino::error::Error;
 use bambino::mqtt::AirductMode;
 use clap::{Subcommand, ValueEnum};
 
@@ -197,7 +197,7 @@ pub enum ControlAction {
 }
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
-pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
+pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), Error> {
     let is_verbose = crate::is_verbose();
     let mut printer = create_printer(ip, serial, access_code)?;
 
@@ -245,8 +245,8 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), B
 async fn dispatch<T>(
     before_msg: &str,
     after_msg: &str,
-    fut: impl std::future::Future<Output = Result<T, BambuError>>,
-) -> Result<T, BambuError> {
+    fut: impl std::future::Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
     println!("{before_msg}");
     let result = fut.await?;
     println!("{after_msg}");
@@ -259,7 +259,7 @@ pub async fn run(
     serial: &str,
     access_code: &str,
     action: ControlAction,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     log::debug!("Running control subcommand action: '{:?}'", action);
 
     let mut client = create_printer(ip, serial, access_code)?;
@@ -399,7 +399,7 @@ pub async fn run(
                 io::stderr().flush().unwrap_or(());
                 let mut confirmation = String::new();
                 io::stdin().read_line(&mut confirmation).map_err(|_| {
-                    BambuError::ProtocolViolation("Failed to read confirmation".into())
+                    Error::ProtocolViolation("Failed to read confirmation".into())
                 })?;
                 if confirmation.trim().to_lowercase() != "yes" {
                     println!("Aborted.");

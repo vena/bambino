@@ -153,11 +153,11 @@ Asynchronous Discovery Engine providing search orchestration and passive monitor
 
   Creates a new Discovery Engine bound to a specific SSDP port.
 
-- <span id="discoveryengine-broadcast-search"></span>`async fn broadcast_search(&self) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="discoveryengine-broadcast-search"></span>`async fn broadcast_search(&self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches active search queries to trigger local printer reports.
 
-- <span id="discoveryengine-poll-next-device"></span>`async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, BambuError>` — [`SsdpDevice`](parser/index.md#ssdpdevice), [`BambuError`](../error/index.md#bambuerror)
+- <span id="discoveryengine-poll-next-device"></span>`async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, Error>` — [`SsdpDevice`](parser/index.md#ssdpdevice), [`Error`](../error/index.md#error)
 
   Listens on the bound socket interface and processes the next incoming SSDP packet.
 
@@ -185,13 +185,13 @@ and routes the payload buffer to the appropriate parsing schema of `httparse`.
 ### `discover_devices`
 
 ```rust
-async fn discover_devices<U, T>(timeout: core::time::Duration, timer: &T) -> Result<Vec<SsdpDevice>, crate::error::BambuError>
+async fn discover_devices<U, T>(timeout: core::time::Duration, timer: &T) -> Result<Vec<SsdpDevice>, crate::error::Error>
 where
     U: BindableUdpSocket,
     T: TimerProvider
 ```
 
-**Types:** [`SsdpDevice`](parser/index.md#ssdpdevice), [`BambuError`](../error/index.md#bambuerror)
+**Types:** [`SsdpDevice`](parser/index.md#ssdpdevice), [`Error`](../error/index.md#error)
 
 Broadcasts SSDP search queries and listens for printer responses for the given duration.
 

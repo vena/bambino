@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 
 use crate::camera::CameraProtocol;
 use crate::camera::binary::BambuBinaryCameraStream;
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, race};
 use crate::mqtt::BambuMqttClient;
@@ -89,7 +89,7 @@ where
     /// `self.mqtt_factory.dial()`, wraps it in TLS via `self.mqtt_tls.connect()`, then calls
     /// `BambuMqttClient::connect()` — the whole dial+TLS+handshake sequence is raced against
     /// `self.connect_timeout_secs`.
-    pub(super) async fn ensure_mqtt(&mut self) -> Result<(), BambuError> {
+    pub(super) async fn ensure_mqtt(&mut self) -> Result<(), Error> {
         if self.mqtt.is_some() {
             return Ok(());
         }
@@ -117,7 +117,7 @@ where
     /// Eagerly establishes the MQTT connection.
     ///
     /// Idempotent — returns `Ok(())` if already connected.
-    pub async fn connect_mqtt(&mut self) -> Result<(), BambuError> {
+    pub async fn connect_mqtt(&mut self) -> Result<(), Error> {
         self.ensure_mqtt().await
     }
 
@@ -148,7 +148,7 @@ where
     /// `BambuMqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
     /// `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
     /// only recovers a `connect()`-built client, never one built via `from_mqtt()`.
-    pub async fn disconnect_mqtt(&mut self) -> Result<(), BambuError> {
+    pub async fn disconnect_mqtt(&mut self) -> Result<(), Error> {
         self.mqtt = None;
         self.k_profile_primed = false;
         Ok(())
@@ -315,12 +315,12 @@ where
     /// including a `connect_timeout_secs` timeout on a slow LAN, leaves it intact so the
     /// next call retries instead of permanently reporting "not configured". Reconnecting
     /// after a *successful* connect still requires a new `PrinterClient`.
-    pub(super) async fn ensure_ftps(&mut self) -> Result<(), BambuError> {
+    pub(super) async fn ensure_ftps(&mut self) -> Result<(), Error> {
         if self.ftps.is_some() {
             return Ok(());
         }
         let (tls, factory, timer) = self.ftps_config.as_ref().ok_or_else(|| {
-            BambuError::ProtocolViolation(
+            Error::ProtocolViolation(
                 "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
             )
         })?;
@@ -364,7 +364,7 @@ where
     /// Eagerly establishes the FTPS connection.
     ///
     /// Idempotent — returns `Ok(())` if already connected.
-    pub async fn connect_ftps(&mut self) -> Result<(), BambuError> {
+    pub async fn connect_ftps(&mut self) -> Result<(), Error> {
         self.ensure_ftps().await
     }
 
@@ -375,14 +375,14 @@ where
 
     /// Establishes the camera connection if not already connected.
     ///
-    /// Returns `BambuError::ProtocolViolation` immediately for RTSPS models — those use
+    /// Returns `Error::ProtocolViolation` immediately for RTSPS models — those use
     /// `camera::rtsps::build_rtsps_url()` instead and have no `PrinterClient`-managed
     /// connection state. Otherwise dials a raw stream via the camera factory, wraps it in
     /// TLS, constructs a `BambuBinaryCameraStream`, and authenticates — the whole sequence is
     /// raced against `self.connect_timeout_secs`, mirroring `ensure_ftps()`.
-    pub(super) async fn ensure_camera(&mut self) -> Result<(), BambuError> {
+    pub(super) async fn ensure_camera(&mut self) -> Result<(), Error> {
         if self.model.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "This model uses RTSPS for its camera feed — use camera::rtsps::build_rtsps_url() instead"
                     .into(),
             ));
@@ -391,7 +391,7 @@ where
             return Ok(());
         }
         let (tls, factory) = self.camera_config.as_ref().ok_or_else(|| {
-            BambuError::ProtocolViolation(
+            Error::ProtocolViolation(
                 "Camera not configured — call .with_camera() or .attach_camera()".into(),
             )
         })?;
@@ -409,7 +409,7 @@ where
                     cam = cam.with_max_frame_size(max);
                 }
                 cam.authenticate(access_code).await?;
-                Ok::<_, BambuError>(cam)
+                Ok::<_, Error>(cam)
             })
             .await?;
         // Only clear camera_config once the connection has actually succeeded — a failed
@@ -423,7 +423,7 @@ where
     /// Eagerly establishes the camera connection.
     ///
     /// Idempotent — returns `Ok(())` if already connected.
-    pub async fn connect_camera(&mut self) -> Result<(), BambuError> {
+    pub async fn connect_camera(&mut self) -> Result<(), Error> {
         self.ensure_camera().await
     }
 

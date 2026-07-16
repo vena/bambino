@@ -59,7 +59,7 @@ Non-obvious type decisions and behavioral invariants live close to the code they
 
 - `serde_json` is used with `default-features = false` — always use `serde_json::to_vec` (not `to_string`) for payloads.
 - Library code uses the `log` crate facade (`log::debug!`, `log::trace!`, `log::warn!`) — never `println!`.
-- `BambuError` has dual `Display` impls: `thiserror` under `std`, manual under `no_std` (kept in sync by `test_display_consistency`). `ProtocolViolation` uses `Cow<'static, str>`.
+- `Error` has dual `Display` impls: `thiserror` under `std`, manual under `no_std` (kept in sync by `test_display_consistency`). `ProtocolViolation` uses `Cow<'static, str>`.
 - Magic numbers are extracted into named `pub(crate) const` blocks in each module. Use existing constants rather than introducing new literals.
 - Protocol specs live in `reference/` as numbered markdown files. Always verify field names and types against reference docs when adding or modifying commands — use `ctx_compose` for this cross-file check (reference doc + command file together) rather than reading each in full. When external sources (pybambu, Bambuddy, Bambu Studio, wire captures) contradict a reference doc, update the reference doc with the correction and note the verification source.
 - Use MODEL_MATRIX.csv to track physical characteristics of printer models. When new information is **confirmed** about a printer model, update MODEL_MATRIX.csv

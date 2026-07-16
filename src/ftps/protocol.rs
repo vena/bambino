@@ -3,7 +3,7 @@ use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race, read_chunk};
 
 // FTP response codes (RFC 959)
@@ -122,7 +122,7 @@ async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
 pub(crate) async fn write_command<IO: AsyncIo>(
     stream: &mut IO,
     cmd: &str,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     // Single write_all call for "cmd\r\n" together — some embedded FTP servers (confirmed live
     // against a P1S) don't correctly reassemble a command line split across two separate writes.
     let mut payload = String::from(cmd);
@@ -131,11 +131,11 @@ pub(crate) async fn write_command<IO: AsyncIo>(
     stream
         .write_all(payload.as_bytes())
         .await
-        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))?;
     stream
         .flush()
         .await
-        .map_err(|_| BambuError::NetworkError(SocketError::ConnectionAborted))?;
+        .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))?;
 
     Ok(())
 }
@@ -169,7 +169,7 @@ async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
     fill_buf: &mut Vec<u8>,
     timer: &T,
     deadline_ms: Option<u64>,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     line_buf.clear();
     loop {
         if let Some(pos) = fill_buf.iter().position(|&b| b == b'\n') {
@@ -184,7 +184,7 @@ async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
         line_buf.append(fill_buf);
 
         if line_buf.len() >= FTP_MAX_RESPONSE_LINE_BYTES {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "FTP response line exceeds maximum length".into(),
             ));
         }
@@ -192,7 +192,7 @@ async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
         let mut chunk = [0u8; FTP_LINE_READ_CHUNK_SIZE];
         let n = read_chunk(stream, &mut chunk, timer, deadline_ms)
             .await
-            .map_err(BambuError::NetworkError)?;
+            .map_err(Error::NetworkError)?;
         fill_buf.extend_from_slice(&chunk[..n]);
     }
 }
@@ -229,7 +229,7 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
     fill_buf: &mut Vec<u8>,
     timer: &T,
     deadline_ms: Option<u64>,
-) -> Result<(u16, String), BambuError> {
+) -> Result<(u16, String), Error> {
     let mut accumulated = String::new();
     let mut lines_read: usize = 0;
     // BUG-028: RFC 959 §4.2 requires tracking the reply's opening code and only treating a
@@ -243,7 +243,7 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
         read_line_raw(stream, line_buf, fill_buf, timer, deadline_ms).await?;
         lines_read += 1;
         if lines_read > FTP_MAX_RESPONSE_LINES {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "FTP response exceeded maximum line count".into(),
             ));
         }
@@ -330,14 +330,14 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
 ///
 /// Parses the `(IP_1,IP_2,IP_3,IP_4,PORT_1,PORT_2)` tuple and computes
 /// the port as `PORT_1 * 256 + PORT_2`.
-pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
+pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, Error> {
     let start = text
         .find('(')
-        .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
+        .ok_or(Error::ProtocolViolation("Invalid PASV format".into()))?;
     let end = text[start + 1..]
         .find(')')
         .map(|e| e + start + 1)
-        .ok_or(BambuError::ProtocolViolation("Invalid PASV format".into()))?;
+        .ok_or(Error::ProtocolViolation("Invalid PASV format".into()))?;
     let inner = &text[start + 1..end];
     let mut parts = inner.split(',');
 
@@ -350,20 +350,20 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
         parts
             .next()
             .and_then(|p| p.parse::<u16>().ok())
-            .ok_or(BambuError::ProtocolViolation(
+            .ok_or(Error::ProtocolViolation(
                 "Failed to parse PORT_1 in PASV".into(),
             ))?;
     let p2 =
         parts
             .next()
             .and_then(|p| p.parse::<u16>().ok())
-            .ok_or(BambuError::ProtocolViolation(
+            .ok_or(Error::ProtocolViolation(
                 "Failed to parse PORT_2 in PASV".into(),
             ))?;
 
     let port = (p1 as u32) * (FTPS_PASV_PORT_MULTIPLIER as u32) + (p2 as u32);
     if port > u16::MAX as u32 {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "PASV port value out of range".into(),
         ));
     }
@@ -379,17 +379,17 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, BambuError> {
 /// a *second*, caller/attacker-controlled command — invisible to whoever called the original
 /// method. Also rejects NUL (`\0`), which some FTP daemons treat as a string terminator, for
 /// the same class of confusion.
-pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
+pub(crate) fn validate_ftp_path(path: &str) -> Result<(), Error> {
     // Covers CR/LF/NUL (the original command-injection hazard this function guards
     // against) plus every other C0 control byte and DEL — non-CR/LF control characters can
     // smuggle ANSI escapes into a filename a caller later prints/logs.
     if path.bytes().any(|b| b < FTP_PATH_CONTROL_CHAR_MAX || b == FTP_PATH_DEL_CHAR) {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "FTP path contains an illegal control character".into(),
         ));
     }
     if path.split(['/', '\\']).any(|segment| segment == "..") {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "FTP path contains a '..' path traversal segment".into(),
         ));
     }
@@ -404,7 +404,7 @@ pub(crate) fn validate_ftp_path(path: &str) -> Result<(), BambuError> {
         .find(|segment| !segment.is_empty())
         .is_some_and(|segment| segment.starts_with('-'))
     {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "FTP path's final segment must not start with '-'".into(),
         ));
     }
@@ -427,7 +427,7 @@ pub(crate) async fn read_to_eof<IO: AsyncIo, T: TimerProvider>(
     out: &mut Vec<u8>,
     timer: &T,
     budget_ms: u64,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
     loop {
         let deadline_ms = if timer.has_real_clock() {
@@ -439,13 +439,13 @@ pub(crate) async fn read_to_eof<IO: AsyncIo, T: TimerProvider>(
             Ok(0) => break,
             Ok(n) => {
                 if out.len() + n > FTPS_MAX_TRANSFER_BYTES {
-                    return Err(BambuError::ProtocolViolation(
+                    return Err(Error::ProtocolViolation(
                         "FTPS transfer exceeds maximum accepted size".into(),
                     ));
                 }
                 out.extend_from_slice(&chunk[..n]);
             }
-            Err(e) => return Err(BambuError::NetworkError(e)),
+            Err(e) => return Err(Error::NetworkError(e)),
         }
     }
     Ok(())

@@ -27,7 +27,7 @@ use bambino::io::tokio::{
     build_unsafe_client_config,
 };
 
-async fn example() -> Result<(), bambino::BambuError> {
+async fn example() -> Result<(), bambino::Error> {
     // Printers use self-signed certs, so we skip verification
     let tls_config = build_unsafe_client_config();
     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
@@ -79,7 +79,7 @@ async fn example() -> Result<(), bambino::BambuError> {
 - [`ams`](ams/index.md#ams) — AMS filament system helpers (slot mapping, presence detection).
 - [`camera`](camera/index.md#camera) — Camera streaming protocols (binary JPEG on port 6000, RTSPS on port 322).
 - [`diagnostics`](diagnostics/index.md#diagnostics) — HMS alert decoding and K-profile (Linear Advance) management.
-- [`error`](error/index.md#error) — The unified [`BambuError`](error/index.md#bambuerror) type.
+- [`error`](error/index.md#error) — The unified [`Error`](https://docs.rs/asn1_rs/latest/asn1_rs/error/enum.Error.html) type.
 
 ## Contents
 
@@ -135,10 +135,10 @@ async fn example() -> Result<(), bambino::BambuError> {
 
 ## Types
 
-### `BambuError`
+### `Error`
 
 ```rust
-enum BambuError {
+enum Error {
     NetworkError(crate::io::SocketError),
     TimerFailure(crate::io::TimerError),
     TlsHandshakeFailed,
@@ -198,23 +198,23 @@ and source error tracing are derived automatically via `thiserror`.
 
 #### Trait Implementations
 
-##### `impl Clone for BambuError`
+##### `impl Clone for Error`
 
-- <span id="bambuerror-clone"></span>`fn clone(&self) -> BambuError` — [`BambuError`](error/index.md#bambuerror)
+- <span id="error-clone"></span>`fn clone(&self) -> Error` — [`Error`](error/index.md#error)
 
-##### `impl Debug for BambuError`
+##### `impl Debug for Error`
 
-- <span id="bambuerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+- <span id="error-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-##### `impl Display for BambuError`
+##### `impl Display for Error`
 
-- <span id="bambuerror-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
+- <span id="error-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
 
-##### `impl Error for BambuError`
+##### `impl Error for Error`
 
-##### `impl ToString for BambuError`
+##### `impl ToString for Error`
 
-- <span id="bambuerror-tostring-to-string"></span>`fn to_string(&self) -> String`
+- <span id="error-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `BambuModel`
 

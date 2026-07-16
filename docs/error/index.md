@@ -6,7 +6,7 @@
 
 # Error Types
 
-[`BambuError`](#bambuerror) is the single error type returned by all fallible operations in the
+[`enum@Error`] is the single error type returned by all fallible operations in the
 crate. It covers network failures, TLS handshake issues, protocol violations,
 authentication rejections, timeouts, and model capability mismatches.
 
@@ -20,14 +20,14 @@ there is currently no automated check that the two stay in sync (BUG-013).
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`BambuError`](#bambuerror) | enum | Unified error type for the `bambino` crate. |
+| [`Error`](#error) | enum | Unified error type for the `bambino` crate. |
 
 ## Types
 
-### `BambuError`
+### `Error`
 
 ```rust
-enum BambuError {
+enum Error {
     NetworkError(crate::io::SocketError),
     TimerFailure(crate::io::TimerError),
     TlsHandshakeFailed,
@@ -87,21 +87,21 @@ and source error tracing are derived automatically via `thiserror`.
 
 #### Trait Implementations
 
-##### `impl Clone for BambuError`
+##### `impl Clone for Error`
 
-- <span id="bambuerror-clone"></span>`fn clone(&self) -> BambuError` — [`BambuError`](#bambuerror)
+- <span id="error-clone"></span>`fn clone(&self) -> Error` — [`Error`](#error)
 
-##### `impl Debug for BambuError`
+##### `impl Debug for Error`
 
-- <span id="bambuerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+- <span id="error-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-##### `impl Display for BambuError`
+##### `impl Display for Error`
 
-- <span id="bambuerror-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
+- <span id="error-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
 
-##### `impl Error for BambuError`
+##### `impl Error for Error`
 
-##### `impl ToString for BambuError`
+##### `impl ToString for Error`
 
-- <span id="bambuerror-tostring-to-string"></span>`fn to_string(&self) -> String`
+- <span id="error-tostring-to-string"></span>`fn to_string(&self) -> String`
 

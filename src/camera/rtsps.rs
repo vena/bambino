@@ -45,7 +45,7 @@ use alloc::format;
 use alloc::string::String;
 
 use crate::camera::CAMERA_PORT_RTSPS;
-use crate::error::BambuError;
+use crate::error::Error;
 
 pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 
@@ -57,26 +57,26 @@ pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 ///
 /// # Errors
 ///
-/// Returns [`BambuError::ProtocolViolation`] if `access_code` is empty or contains any
+/// Returns [`Error::ProtocolViolation`] if `access_code` is empty or contains any
 /// character outside ASCII letters/digits. Genuine printer-issued LAN access codes are
 /// always 8 uppercase ASCII alphanumeric characters, so a rejection here almost always
 /// means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
 /// valid-but-unusual code — surfacing it as an error catches that mistake instead of
 /// silently building a malformed URL.
 ///
-/// Also returns [`BambuError::ProtocolViolation`] if `ip` does not parse as a valid IPv4 or
+/// Also returns [`Error::ProtocolViolation`] if `ip` does not parse as a valid IPv4 or
 /// IPv6 address. Without this check, an `ip` containing an embedded `@` (e.g.
 /// `"1.2.3.4@attacker.example.com"`, spoofable by any device on the LAN via SSDP/mDNS
 /// discovery) would place everything up to the last `@` into the URL's userinfo component,
 /// redirecting the connection — and the LAN access code — to an attacker-controlled host.
-pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError> {
+pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, Error> {
     if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "access_code must be a non-empty ASCII alphanumeric string".into(),
         ));
     }
     let Ok(ip_addr) = ip.parse::<core::net::IpAddr>() else {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "ip must be a valid IPv4 or IPv6 address".into(),
         ));
     };
@@ -118,7 +118,7 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError
 ///
 /// # Errors
 ///
-/// Returns [`BambuError::ProtocolViolation`] if `printer_ip` does not parse as a valid IPv4 or
+/// Returns [`Error::ProtocolViolation`] if `printer_ip` does not parse as a valid IPv4 or
 /// IPv6 address — the same check [`build_rtsps_url`] applies to its own `ip` parameter, and
 /// for the same reason: a `printer_ip` containing `@` or `/` (e.g. sourced from a
 /// spoofable SSDP/mDNS discovery response, same as [`build_rtsps_url`]'s hazard) could
@@ -126,9 +126,9 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, BambuError
 /// function has no other caller in this crate to rely on for pre-validation — it's called
 /// once per incoming request in a proxy's hot path, but IP-string parsing is cheap enough
 /// that re-validating here is not a meaningful cost.
-pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<String, BambuError> {
+pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<String, Error> {
     let Ok(printer_ip_addr) = printer_ip.parse::<core::net::IpAddr>() else {
-        return Err(BambuError::ProtocolViolation(
+        return Err(Error::ProtocolViolation(
             "printer_ip must be a valid IPv4 or IPv6 address".into(),
         ));
     };

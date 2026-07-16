@@ -43,7 +43,7 @@ use alloc::borrow::Cow;
 /// rather than a fixed `&'static str` so platform backends can attach dynamic content —
 /// e.g. ESP-IDF's error mapping (`src/io/esp_idf.rs::map_esp_tls_connect_error`) formats
 /// the actual numeric `EspError` code into the message instead of a fixed compile-time
-/// string. Mirrors `BambuError::ProtocolViolation`'s existing use of the same type for the
+/// string. Mirrors `Error::ProtocolViolation`'s existing use of the same type for the
 /// same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketError {

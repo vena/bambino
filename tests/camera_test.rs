@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 
 use bambino::camera::binary::BambuBinaryCameraStream;
 use bambino::client::{DummyFactory, DummyTls, PrinterClient};
-use bambino::error::BambuError;
+use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 
@@ -168,7 +168,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
     let result = printer.read_camera_frame(&mut frame_buf).await;
 
     assert!(
-        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        matches!(result, Err(Error::ProtocolViolation(_))),
         "expected ProtocolViolation for an RTSPS model, got {:?}",
         result.map(|_| ())
     );
@@ -203,7 +203,7 @@ async fn test_ensure_camera_retries_after_failed_dial() {
     for attempt in 1..=2 {
         let result = printer.read_camera_frame(&mut frame_buf).await;
         assert!(
-            matches!(result, Err(BambuError::NetworkError(_))),
+            matches!(result, Err(Error::NetworkError(_))),
             "attempt {attempt}: expected the dial failure to surface as NetworkError, not \
              degrade into \"Camera not configured\" from a config consumed on a prior failed \
              attempt, got {:?}",

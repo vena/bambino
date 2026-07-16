@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::telemetry::report::POWER_220V_BITMASK;
 
@@ -61,7 +61,7 @@ where
     /// ```ignore
     /// printer.set_bed_temperature(60).await?;
     /// ```
-    pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
+    pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
         let mains_220v = self
             .cache
             .last_home_flag
@@ -89,7 +89,7 @@ where
         &mut self,
         nozzle_id: u8,
         target_temp: u16,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         let nozzle_count = self.model.quirks().physical_nozzle_count();
         let nozzle_valid = if nozzle_count == 7 {
             // H2C tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
@@ -98,7 +98,7 @@ where
             nozzle_id < nozzle_count
         };
         if !nozzle_valid {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "nozzle_id exceeds this model's physical nozzle count".into(),
             ));
         }
@@ -115,9 +115,9 @@ where
     /// Only supported on models with active PTC chamber heaters (X1E, X2D, H2 series).
     /// Models with passive chamber sensors but no heater (X1C, P2S) will return a capability
     /// mismatch error — their firmware silently ignores M141.
-    pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, BambuError> {
+    pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
         if !self.model.quirks().has_active_chamber_heater() {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "active chamber heater not available on this model".into(),
             ));
         }

@@ -43,7 +43,7 @@ use core::marker::PhantomData;
 
 use crate::camera::CameraProtocol;
 use crate::camera::binary::BambuBinaryCameraStream;
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::models::BambuModel;
@@ -329,7 +329,7 @@ where
     /// for a match before reading from the wire — a leftover message from a prior
     /// request-response round-trip may already satisfy this call's `matcher`.
     ///
-    /// Returns `BambuError::Timeout` if the wall-clock timeout (`command_timeout_secs`)
+    /// Returns `Error::Timeout` if the wall-clock timeout (`command_timeout_secs`)
     /// or message-count safety valve (`POLL_UNTIL_MAX_MESSAGES`) is exceeded. Neither of
     /// these protects against a fully-stalled read on the wire itself: both only run
     /// *after* `poll_wire().await` below has already returned, so a connection that
@@ -341,7 +341,7 @@ where
     /// this function's own loop does. See `read_exact_packet`'s doc comment for the
     /// mechanism and the resumability invariant that keeps a timed-out read from
     /// desyncing the stream for the next attempt.
-    pub(crate) async fn poll_until<F, T>(&mut self, mut matcher: F) -> Result<T, BambuError>
+    pub(crate) async fn poll_until<F, T>(&mut self, mut matcher: F) -> Result<T, Error>
     where
         F: FnMut(&MqttMessage) -> Option<T>,
     {
@@ -369,11 +369,11 @@ where
             count += 1;
 
             if count >= POLL_UNTIL_MAX_MESSAGES {
-                return Err(BambuError::Timeout);
+                return Err(Error::Timeout);
             }
             let elapsed = self.timer.now_millis().wrapping_sub(start);
             if timeout_ms > 0 && elapsed >= timeout_ms {
-                return Err(BambuError::Timeout);
+                return Err(Error::Timeout);
             }
         }
     }
@@ -382,9 +382,9 @@ where
     pub(crate) async fn publish_request<T: Serialize>(
         &mut self,
         request: &T,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         self.ensure_mqtt().await?;
-        let payload = serde_json::to_vec(request).map_err(|_| BambuError::SerializationError)?;
+        let payload = serde_json::to_vec(request).map_err(|_| Error::SerializationError)?;
         self.mqtt
             .as_mut()
             .unwrap()
@@ -398,19 +398,19 @@ where
     pub(crate) async fn dispatch<T: Serialize>(
         &mut self,
         build: impl FnOnce(u64) -> T,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         let seq = self.next_sequence_id();
         let req = build(seq);
         self.publish_request(&req).await
     }
 
     /// Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
-    pub async fn request_pushall(&mut self) -> Result<u16, BambuError> {
+    pub async fn request_pushall(&mut self) -> Result<u16, Error> {
         self.dispatch(crate::mqtt::PushAllRequest::new).await
     }
 
     /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
-    pub async fn send_ping(&mut self) -> Result<(), BambuError> {
+    pub async fn send_ping(&mut self) -> Result<(), Error> {
         self.ensure_mqtt().await?;
         self.mqtt.as_mut().unwrap().send_ping_with_timer(&self.timer).await
     }
@@ -430,7 +430,7 @@ where
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
     /// in-flight state — anything that [`PrinterClient`] doesn't expose directly.
-    pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<MqttTls::Stream>, BambuError> {
+    pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<MqttTls::Stream>, Error> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())
     }

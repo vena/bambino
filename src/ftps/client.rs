@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 
 use embedded_io_async::{Error as _, Write};
 
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
 use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::BambuModel;
@@ -81,7 +81,7 @@ impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
 /// widest such window; now on every `write_command`/`read_response` failure in every method,
 /// including the single-reply metadata/filesystem commands, and unconditionally in
 /// `disconnect()`); every public method checks the flag first and returns
-/// [`BambuError::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
+/// [`Error::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
 /// reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.
 ///
 /// **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
@@ -153,7 +153,7 @@ where
         access_code: &str,
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
-    ) -> Result<Self, BambuError> {
+    ) -> Result<Self, Error> {
         let (control_stream, fill_buf) = Self::connect_control_stream(
             raw_control,
             &tls_connector,
@@ -198,7 +198,7 @@ where
         access_code: &str,
         timer: &FtpsTimer,
         allow_unverified_tls_1_2: bool,
-    ) -> Result<(Tls::Stream, Vec<u8>), BambuError> {
+    ) -> Result<(Tls::Stream, Vec<u8>), Error> {
         let mut control_stream = tls_connector.connect(serial, raw_control).await?;
 
         Self::require_tls_1_2_if_enforced(
@@ -223,7 +223,7 @@ where
         )
         .await?;
         if code != FTP_GREETING {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "Unexpected greeting from FTP server".into(),
             ));
         }
@@ -239,7 +239,7 @@ where
         .await?;
         log::debug!("FTPS USER response: code={code} text={text:?}");
         if code != FTP_PASSWORD_NEEDED {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "USER authentication phase rejected".into(),
             ));
         }
@@ -257,7 +257,7 @@ where
         log::debug!("FTPS PASS response: code={code} text={text:?}");
 
         if code != FTP_LOGIN_OK {
-            return Err(BambuError::AccessDenied);
+            return Err(Error::AccessDenied);
         }
 
         write_command(&mut control_stream, "PBSZ 0").await?;
@@ -271,7 +271,7 @@ where
         .await?;
         log::debug!("FTPS PBSZ response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "PBSZ protection sizing configuration failed".into(),
             ));
         }
@@ -289,7 +289,7 @@ where
             .await?;
             log::debug!("FTPS PROT P response: code={code} text={text:?}");
             if code != FTP_COMMAND_OK {
-                return Err(BambuError::ProtocolViolation(
+                return Err(Error::ProtocolViolation(
                     "Failed to enable TLS data channel protection".into(),
                 ));
             }
@@ -307,7 +307,7 @@ where
         .await?;
         log::debug!("FTPS TYPE I response: code={code} text={text:?}");
         if code != FTP_COMMAND_OK {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "TYPE I binary mode configuration failed".into(),
             ));
         }
@@ -349,9 +349,9 @@ where
     ///
     /// See the struct-level doc comment for the invariant this enforces. Called first by every
     /// public method on this client.
-    fn check_poisoned(&self) -> Result<(), BambuError> {
+    fn check_poisoned(&self) -> Result<(), Error> {
         if self.poisoned {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "FTPS client is poisoned after a previous control-channel desync — this \
                  instance must be discarded; reconnect with a new BambuFtpsClient::connect() \
                  call instead of reusing it"
@@ -378,7 +378,7 @@ where
         stream: &Tls::Stream,
         model: BambuModel,
         allow_unverified: bool,
-    ) -> Result<(), BambuError> {
+    ) -> Result<(), Error> {
         if allow_unverified {
             log::warn!(
                 "FTPS TLS 1.2 enforcement bypassed by caller configuration \
@@ -389,7 +389,7 @@ where
         if model.quirks().enforce_ftps_tls_1_2()
             && tls_connector.negotiated_version(stream) != Some(TlsVersion::Tls12)
         {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "This model requires TLS 1.2 for FTPS but either a different version was \
                  negotiated or the negotiated version could not be determined \
                  — configure the TlsConnector with force_tls_1_2 enabled"
@@ -406,7 +406,7 @@ where
     async fn open_data_channel(
         &mut self,
         raw_data_socket: RawIO,
-    ) -> Result<DataChannel<RawIO, Tls::Stream>, BambuError> {
+    ) -> Result<DataChannel<RawIO, Tls::Stream>, Error> {
         if self.model.quirks().uses_plaintext_ftps_data_channel() {
             return Ok(DataChannel::Plain(raw_data_socket));
         }
@@ -442,7 +442,7 @@ where
         current_day: u8,
         current_hour: u8,
         current_minute: u8,
-    ) -> Result<Vec<FtpFile>, BambuError> {
+    ) -> Result<Vec<FtpFile>, Error> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
 
@@ -477,7 +477,7 @@ where
             }
         };
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "LIST transfer initialization failed".into(),
             ));
         }
@@ -522,13 +522,13 @@ where
         // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN] can arrive after read_to_eof has already
         // drained the listing to EOF, so 426 must be accepted alongside 226 here too.
         if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "LIST transfer confirmation aborted".into(),
             ));
         }
 
         let payload_str = core::str::from_utf8(&listing_payload).map_err(|_| {
-            BambuError::ProtocolViolation("Non-UTF8 directory listings response".into())
+            Error::ProtocolViolation("Non-UTF8 directory listings response".into())
         })?;
 
         Ok(parse_unix_listing(
@@ -542,7 +542,7 @@ where
     }
 
     /// Queries the exact size of a file stored on the printer's MicroSD card.
-    pub async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, BambuError> {
+    pub async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, Error> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
 
@@ -570,18 +570,18 @@ where
             }
         };
         if code != FTP_SIZE_OK {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "SIZE query rejected by storage server".into(),
             ));
         }
 
         text.parse::<u64>().map_err(|_| {
-            BambuError::ProtocolViolation("Invalid file size parameter returned".into())
+            Error::ProtocolViolation("Invalid file size parameter returned".into())
         })
     }
 
     /// Removes a targeted file from non-volatile storage.
-    pub async fn delete_file(&mut self, remote_path: &str) -> Result<(), BambuError> {
+    pub async fn delete_file(&mut self, remote_path: &str) -> Result<(), Error> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
 
@@ -612,7 +612,7 @@ where
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
-            Err(BambuError::ProtocolViolation(
+            Err(Error::ProtocolViolation(
                 "DELE file removal request failed".into(),
             ))
         }
@@ -628,7 +628,7 @@ where
     /// 3. Unconditionally verify the uploaded size via the `SIZE` command on both a `226` and a
     ///    transient `426` reply — this guards against silent SD card write truncation on every
     ///    model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN].
-    pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), BambuError> {
+    pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
 
@@ -661,7 +661,7 @@ where
             }
         };
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "STOR upload negotiation rejected".into(),
             ));
         }
@@ -685,7 +685,7 @@ where
                     crate::io::Raced::Left(r) => r,
                     crate::io::Raced::Right(_) => {
                         self.poisoned = true;
-                        return Err(BambuError::NetworkError(SocketError::TimedOut));
+                        return Err(Error::NetworkError(SocketError::TimedOut));
                     }
                 }
             } else {
@@ -695,7 +695,7 @@ where
             };
             if let Err(_e) = write_result {
                 self.poisoned = true;
-                return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+                return Err(Error::NetworkError(SocketError::ConnectionAborted));
             }
             offset += chunk_size;
         }
@@ -708,7 +708,7 @@ where
                 crate::io::Raced::Left(r) => r,
                 crate::io::Raced::Right(_) => {
                     self.poisoned = true;
-                    return Err(BambuError::NetworkError(SocketError::TimedOut));
+                    return Err(Error::NetworkError(SocketError::TimedOut));
                 }
             }
         } else {
@@ -716,7 +716,7 @@ where
         };
         if let Err(_e) = flush_result {
             self.poisoned = true;
-            return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
+            return Err(Error::NetworkError(SocketError::ConnectionAborted));
         }
         drop(data_channel);
 
@@ -735,10 +735,10 @@ where
                 if remote_size == data.len() as u64 {
                     Ok(())
                 } else {
-                    Err(BambuError::DiskWriteFailure)
+                    Err(Error::DiskWriteFailure)
                 }
             }
-            Ok((_, _)) => Err(BambuError::DiskWriteFailure),
+            Ok((_, _)) => Err(Error::DiskWriteFailure),
             Err(e) => {
                 self.poisoned = true;
                 Err(e)
@@ -752,7 +752,7 @@ where
     /// bytes. Unconditionally verifies the downloaded length against the `SIZE` command after
     /// transfer completes — a clean `226` reply alone doesn't prove the data channel didn't
     /// close early [REF-FTPS-CONN].
-    pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, BambuError> {
+    pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
 
@@ -785,7 +785,7 @@ where
             }
         };
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "RETR transfer initialization failed".into(),
             ));
         }
@@ -832,7 +832,7 @@ where
         // discarding an already-fully-received payload on exactly the race this recheck
         // exists to catch.
         if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "RETR transfer confirmation aborted".into(),
             ));
         }
@@ -844,7 +844,7 @@ where
         // not a poisoning path.
         let remote_size = self.get_file_size(remote_path).await?;
         if remote_size != file_payload.len() as u64 {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "Downloaded file size does not match remote SIZE (possible truncated transfer)"
                     .into(),
             ));
@@ -854,7 +854,7 @@ where
     }
 
     /// Creates a directory on the printer's MicroSD storage.
-    pub async fn create_directory(&mut self, path: &str) -> Result<(), BambuError> {
+    pub async fn create_directory(&mut self, path: &str) -> Result<(), Error> {
         self.check_poisoned()?;
         validate_ftp_path(path)?;
 
@@ -882,7 +882,7 @@ where
             }
         };
         if code != FTP_PATHNAME_CREATED {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "MKD directory creation failed".into(),
             ));
         }
@@ -893,7 +893,7 @@ where
     ///
     /// Returns success for both `250` (deleted) and `550` (already absent),
     /// matching the idempotent cleanup semantics of `delete_file`.
-    pub async fn remove_directory(&mut self, path: &str) -> Result<(), BambuError> {
+    pub async fn remove_directory(&mut self, path: &str) -> Result<(), Error> {
         self.check_poisoned()?;
         validate_ftp_path(path)?;
 
@@ -923,7 +923,7 @@ where
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
-            Err(BambuError::ProtocolViolation(
+            Err(Error::ProtocolViolation(
                 "RMD directory removal request failed".into(),
             ))
         }
@@ -933,7 +933,7 @@ where
     ///
     /// Executes the standard FTP two-step rename sequence: `RNFR` (rename from)
     /// followed by `RNTO` (rename to).
-    pub async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), BambuError> {
+    pub async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), Error> {
         self.check_poisoned()?;
         validate_ftp_path(from)?;
         validate_ftp_path(to)?;
@@ -962,7 +962,7 @@ where
             }
         };
         if code != FTP_RENAME_PENDING {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "RNFR rename source path rejected".into(),
             ));
         }
@@ -990,7 +990,7 @@ where
             }
         };
         if code != FTP_FILE_ACTION_OK {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "RNTO rename destination path rejected".into(),
             ));
         }
@@ -998,7 +998,7 @@ where
     }
 
     /// Queries the available capacity of the MicroSD card, in bytes.
-    pub async fn get_available_space(&mut self) -> Result<u64, BambuError> {
+    pub async fn get_available_space(&mut self) -> Result<u64, Error> {
         self.check_poisoned()?;
 
         if let Err(e) = write_command(&mut self.control_stream, "AVBL").await {
@@ -1026,17 +1026,17 @@ where
 
         if code == FTP_SIZE_OK {
             text.parse::<u64>().map_err(|_| {
-                BambuError::ProtocolViolation("Malformed AVBL numeric response".into())
+                Error::ProtocolViolation("Malformed AVBL numeric response".into())
             })
         } else {
-            Err(BambuError::ProtocolViolation(
+            Err(Error::ProtocolViolation(
                 "Hardware capacity queries rejected".into(),
             ))
         }
     }
 
     /// Issues `PASV` over control channel and extracts passive connection port details.
-    async fn negotiate_passive_port(&mut self) -> Result<u16, BambuError> {
+    async fn negotiate_passive_port(&mut self) -> Result<u16, Error> {
         if let Err(e) = write_command(&mut self.control_stream, "PASV").await {
             self.poisoned = true;
             return Err(e);
@@ -1060,7 +1060,7 @@ where
             }
         };
         if code != FTP_PASSIVE_MODE {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "PASV port negotiation rejected".into(),
             ));
         }

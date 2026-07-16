@@ -2,7 +2,7 @@
 use alloc::string::ToString;
 
 use crate::diagnostics::ExtrusionCaliGetResponse;
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::VersionInfo;
 
@@ -78,14 +78,14 @@ where
         slot_id: i32,
         curr_temp: i32,
         tar_temp: i32,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         let ams_valid = (0..=3).contains(&ams_id)
             || (128..=135).contains(&ams_id)
             || ams_id == 254
             || ams_id == 255;
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
         if !ams_valid || !slot_valid {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for change_filament".into(),
             ));
         }
@@ -126,7 +126,7 @@ where
     /// * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
     /// * `filament`: Filament type string (e.g., "PA-CF").
     ///
-    /// Returns `BambuError::ModelMismatch` on hosts where `ModelQuirks::supports_ams_remote_drying()`
+    /// Returns `Error::ModelMismatch` on hosts where `ModelQuirks::supports_ams_remote_drying()`
     /// is `false` (P1P/P1S) — the firmware acks this command `result: success` and silently
     /// discards it rather than actually driving the AMS heater; see `[REF-AMS-DRYER]`.
     #[allow(clippy::too_many_arguments)]
@@ -140,9 +140,9 @@ where
         cooling_temp: i32,
         close_power_conflict: bool,
         filament: &str,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         if !self.model.quirks().supports_ams_remote_drying() {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "AMS drying is screen-only on this host printer model — firmware acks this command but does not act on it".into(),
             ));
         }
@@ -183,7 +183,7 @@ where
     ///
     /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
     /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
-    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, BambuError> {
+    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error> {
         self.dispatch(|seq| {
             crate::mqtt::AmsFilamentDryingRequest::new(
                 ams_id, 0, "", 0, 0, 0, false, 0, false, seq,
@@ -199,11 +199,11 @@ where
     ///   `ams_get_rfid` example) — external spools have no RFID reader node, so no
     ///   external-spool sentinel value applies here.
     /// * `slot_id`: Slot within the AMS (`0..=3`).
-    pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, BambuError> {
+    pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error> {
         let ams_valid = (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id);
         let slot_valid = (0..=3).contains(&slot_id);
         if !ams_valid || !slot_valid {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for scan_rfid".into(),
             ));
         }
@@ -243,7 +243,7 @@ where
         cali_idx: i32,
         filament_id: &str,
         nozzle_diameter: &str,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         let ams_valid = (0..=3).contains(&ams_id)
             || (128..=135).contains(&ams_id)
             || ams_id == 254
@@ -253,7 +253,7 @@ where
             || tray_id == 254
             || tray_id == 255;
         if !ams_valid || !tray_valid {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "invalid ams_id/tray_id parameters for select_k_profile".into(),
             ));
         }
@@ -276,7 +276,7 @@ where
     /// Sends a `get_version` command and waits for the response, buffering any
     /// telemetry messages that arrive in the interim. Wrap in a platform-specific
     /// timeout if you need a shorter deadline than `command_timeout_secs`.
-    pub async fn get_version(&mut self) -> Result<VersionInfo, BambuError> {
+    pub async fn get_version(&mut self) -> Result<VersionInfo, Error> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::GetVersionRequest::new(seq);
         self.publish_request(&req).await?;
@@ -304,7 +304,7 @@ where
     /// Automatically sends a priming request on the first call after connection, because the
     /// firmware silently ignores the initial `extrusion_cali_get` command. Use
     /// `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
-    pub async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, BambuError> {
+    pub async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, Error> {
         if !self.k_profile_primed {
             let prime_seq = self.next_sequence_id();
             let prime_req = crate::diagnostics::ExtrusionCaliGetRequest::new(prime_seq);

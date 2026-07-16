@@ -10,7 +10,7 @@ mod common;
 
 use tokio::sync::{mpsc, oneshot};
 
-use bambino::error::BambuError;
+use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::mqtt::BambuMqttClient;
 
@@ -111,8 +111,8 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     // Tick forward another 6 seconds (Total = 11s). This must trigger a timeout error.
     let timeout_err = client.tick_zombie_check(6).unwrap_err();
     assert!(
-        matches!(timeout_err, BambuError::Timeout),
-        "Expected BambuError::Timeout, got {:?}",
+        matches!(timeout_err, Error::Timeout),
+        "Expected Error::Timeout, got {:?}",
         timeout_err
     );
 

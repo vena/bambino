@@ -272,7 +272,7 @@ JSON request wrapper to create or overwrite calibration profile allocations.
 
 #### Implementations
 
-- <span id="extrusioncalisetrequest-new"></span>`fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, BambuError>` — [`KProfileEntry`](kprofile/index.md#kprofileentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid), [`BambuError`](../error/index.md#bambuerror)
+- <span id="extrusioncalisetrequest-new"></span>`fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`KProfileEntry`](kprofile/index.md#kprofileentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid), [`Error`](../error/index.md#error)
 
   Builds a secure write-transaction payload targeting physical EEPROM slots.
 
@@ -544,7 +544,7 @@ JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-D
 
 #### Implementations
 
-- <span id="standardcalidelrequest-new"></span>`fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, BambuError>` — [`StandardCaliDelEntry`](kprofile/index.md#standardcalidelentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid), [`BambuError`](../error/index.md#bambuerror)
+- <span id="standardcalidelrequest-new"></span>`fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`StandardCaliDelEntry`](kprofile/index.md#standardcalidelentry), [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid), [`Error`](../error/index.md#error)
 
   Builds a single-nozzle deletion transaction keyed on the setting identifier.
 

@@ -35,23 +35,23 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 #### Implementations
 
-- <span id="bambumqttclient-connect"></span>`async fn connect(stream: IO, serial: &str, access_code: &str) -> Result<Self, BambuError>` — [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambumqttclient-connect"></span>`async fn connect(stream: IO, serial: &str, access_code: &str) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
 
   Executes a secure local network connection handshake and subscription loop with the printer.
 
-- <span id="bambumqttclient-publish-command"></span>`async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, BambuError>` — [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambumqttclient-publish-command"></span>`async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error>` — [`Error`](../../error/index.md#error)
 
   Submits a serialized JSON command payload to the printer's request channel.
 
-- <span id="bambumqttclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError>` — [`MqttMessage`](#mqttmessage), [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambumqttclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](#mqttmessage), [`Error`](../../error/index.md#error)
 
   Returns the next MQTT message, draining any buffered messages first.
 
-- <span id="bambumqttclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), BambuError>` — [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambumqttclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
 
-- <span id="bambumqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), BambuError>` — [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambumqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Platform-agnostic timer tick update.
 

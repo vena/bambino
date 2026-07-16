@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bambino::error::BambuError;
+use bambino::error::Error;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
@@ -80,10 +80,10 @@ impl ServerCertVerifier for CapturingVerifier {
 /// (matching what a real fix would send), and writes the leaf certificate's raw DER bytes to
 /// `output`. No FTPS/MQTT protocol traffic is exchanged beyond the handshake itself — the
 /// connection is dropped as soon as it completes.
-pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), BambuError> {
+pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), Error> {
     let addr = format!("{ip}:{port}");
     let stream = ::tokio::net::TcpStream::connect(&addr).await.map_err(|e| {
-        BambuError::ProtocolViolation(format!("TCP connect to {addr} failed: {e}").into())
+        Error::ProtocolViolation(format!("TCP connect to {addr} failed: {e}").into())
     })?;
 
     let verifier = Arc::new(CapturingVerifier::default());
@@ -97,11 +97,11 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
     let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
 
     let server_name = ServerName::try_from(serial.to_string()).map_err(|_| {
-        BambuError::ProtocolViolation(format!("invalid serial for SNI: '{serial}'").into())
+        Error::ProtocolViolation(format!("invalid serial for SNI: '{serial}'").into())
     })?;
 
     let tls_stream = connector.connect(server_name, stream).await.map_err(|e| {
-        BambuError::ProtocolViolation(format!("TLS handshake with {addr} failed: {e}").into())
+        Error::ProtocolViolation(format!("TLS handshake with {addr} failed: {e}").into())
     })?;
     drop(tls_stream);
 
@@ -113,7 +113,7 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
         .expect("handshake succeeded but no certificate was captured");
 
     std::fs::write(output, &der).map_err(|e| {
-        BambuError::ProtocolViolation(format!("failed to write {output}: {e}").into())
+        Error::ProtocolViolation(format!("failed to write {output}: {e}").into())
     })?;
 
     println!(

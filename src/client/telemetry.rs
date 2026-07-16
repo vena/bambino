@@ -9,7 +9,7 @@ use crate::ams::clean_stale_tray_data;
 use crate::diagnostics::{
     DecodedHmsAlert, DecodedPrintError, decode_hms_alert, decode_print_error,
 };
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::MqttMessage;
 use crate::quirks::decode_fan_percentage;
@@ -117,7 +117,7 @@ where
     ///     }
     /// }
     /// ```
-    pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, BambuError> {
+    pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error> {
         self.ensure_mqtt().await?;
         let msg = self
             .mqtt
@@ -531,7 +531,7 @@ where
     }
 
     /// Pulls the next raw MQTT message without deserialization.
-    pub async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError> {
+    pub async fn poll_raw(&mut self) -> Result<MqttMessage, Error> {
         self.ensure_mqtt().await?;
         self.mqtt
             .as_mut()

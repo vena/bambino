@@ -61,11 +61,11 @@ to fully close before redialing.
 
   Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
 
-- <span id="bambubinarycamerastream-authenticate"></span>`async fn authenticate(&mut self, access_code: &str) -> Result<(), BambuError>` — [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambubinarycamerastream-authenticate"></span>`async fn authenticate(&mut self, access_code: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Transmits the 80-byte authentication handshake to activate the continuous frame-push process.
 
-- <span id="bambubinarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError>` — [`BambuError`](../../error/index.md#bambuerror)
+- <span id="bambubinarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Asynchronously extracts the next complete frame from the stream.
 
@@ -79,10 +79,10 @@ to fully close before redialing.
 ### `build_handshake_packet`
 
 ```rust
-fn build_handshake_packet(access_code: &str) -> Result<[u8; 80], crate::error::BambuError>
+fn build_handshake_packet(access_code: &str) -> Result<[u8; 80], crate::error::Error>
 ```
 
-**Types:** [`BambuError`](../../error/index.md#bambuerror)
+**Types:** [`Error`](../../error/index.md#error)
 
 Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY].
 

@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::GCodeRequest;
 
@@ -92,9 +92,9 @@ where
     /// // This will be rejected on CoreXY printers (unsafe partial homing):
     /// // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
     /// ```
-    pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
+    pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error> {
         if self.model.quirks().is_unsafe_homing_command(gcode_line) {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "partial-axis homing unsafe on bed-on-Z model".into(),
             ));
         }
@@ -104,7 +104,7 @@ where
     /// Dispatches a raw G-code string without model safety checks [REF-MOTO-GCODE].
     ///
     /// Returns the MQTT packet identifier assigned to track publication delivery status.
-    pub async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, BambuError> {
+    pub async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, Error> {
         self.dispatch(|seq| GCodeRequest::new(gcode_line, seq))
             .await
     }
@@ -117,12 +117,12 @@ where
     ///   (such as `G28 Z`) bypasses this and risks driving the bed directly into a misplaced toolhead.
     /// * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
     ///   highly recommended for standard configurations.
-    pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, BambuError> {
+    pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, Error> {
         let is_bed_on_z = self.model.quirks().is_bed_on_z();
 
         let gcode = if is_bed_on_z {
             if home_z_only_danger {
-                return Err(BambuError::ModelMismatch(
+                return Err(Error::ModelMismatch(
                     "Z-only homing unsafe on bed-on-Z model".into(),
                 ));
             }
@@ -158,7 +158,7 @@ where
         axis: char,
         distance: f32,
         feedrate: u32,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         let axis_upper = axis.to_ascii_uppercase();
         if self.is_axis_homed(axis_upper) == Some(false) {
             log::warn!(
@@ -181,7 +181,7 @@ where
                 .quirks()
                 .relative_z_move_gcode(distance, feedrate);
             if gcode.is_empty() {
-                return Err(BambuError::ModelMismatch(
+                return Err(Error::ModelMismatch(
                     "Z-axis move exceeds model travel limits".into(),
                 ));
             }
@@ -192,7 +192,7 @@ where
                 .quirks()
                 .relative_xy_move_gcode(axis_upper, distance, feedrate);
             if gcode.is_empty() {
-                return Err(BambuError::ModelMismatch(
+                return Err(Error::ModelMismatch(
                     format!("{axis_upper}-axis move exceeds model travel limits").into(),
                 ));
             }
@@ -204,7 +204,7 @@ where
     ///
     /// Configures the active extruder drive gear to relative mode (`M83`) and feeds
     /// the specified length of filament (in mm) at the designated feedrate (in mm/min).
-    pub async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, BambuError> {
+    pub async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, Error> {
         if self.is_all_axes_homed() == Some(false) {
             log::warn!("not all axes are homed (last-known state) — extrude proceeding anyway");
         }
@@ -233,7 +233,7 @@ where
     /// `BambuMqttClient::poll_wire()` (`src/mqtt/client/mod.rs`) races each low-level read
     /// step against `self.timer` internally, bounding a single call regardless of what
     /// this loop does above it.
-    pub async fn wait_for_homing(&mut self) -> Result<(), BambuError> {
+    pub async fn wait_for_homing(&mut self) -> Result<(), Error> {
         let original_timeout = self.command_timeout_secs;
         self.command_timeout_secs = HOMING_WAIT_TIMEOUT_SECS;
 
@@ -243,7 +243,7 @@ where
         result
     }
 
-    async fn wait_for_homing_inner(&mut self) -> Result<(), BambuError> {
+    async fn wait_for_homing_inner(&mut self) -> Result<(), Error> {
         let start = self.timer.now_millis();
         let timeout_ms = self.command_timeout_secs * 1000;
         let mut count: usize = 0;
@@ -263,11 +263,11 @@ where
 
             count += 1;
             if count >= POLL_UNTIL_MAX_MESSAGES {
-                return Err(BambuError::Timeout);
+                return Err(Error::Timeout);
             }
             let elapsed = self.timer.now_millis().wrapping_sub(start);
             if timeout_ms > 0 && elapsed >= timeout_ms {
-                return Err(BambuError::Timeout);
+                return Err(Error::Timeout);
             }
         }
     }

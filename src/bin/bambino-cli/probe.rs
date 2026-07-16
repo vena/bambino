@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bambino::client::{FanTarget, PrintStatus};
-use bambino::error::BambuError;
+use bambino::error::Error;
 use serde::Serialize;
 
 use crate::connection::{Printer, create_printer};
@@ -181,7 +181,7 @@ struct ProbeReport {
 async fn capture_pushall(
     client: &mut Printer,
     timeout: Duration,
-) -> Result<Option<serde_json::Value>, BambuError> {
+) -> Result<Option<serde_json::Value>, Error> {
     let deadline = Instant::now() + timeout;
 
     // Goes through poll_telemetry() (not poll_raw()) so this also warms
@@ -203,7 +203,7 @@ async fn capture_pushall(
     Ok(None)
 }
 
-async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), BambuError> {
+async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error> {
     match test {
         ProbeTest::MoveZUnhomed => {
             client.move_relative('Z', 1.0, 500).await?;
@@ -280,7 +280,7 @@ fn printer_is_busy(client: &Printer) -> bool {
 ///    in-progress home no matter how long it's been running before we connected.
 /// 4. If the join times out (nothing ever resolved within ~90s), re-check the safety
 ///    gate once more, then self-trigger `home_axes()` and wait.
-async fn run_holistic_homing(client: &mut Printer) -> Result<String, BambuError> {
+async fn run_holistic_homing(client: &mut Printer) -> Result<String, Error> {
     // Warm up the home_flag/gcode_state cache (a single poll may land on a partial
     // telemetry delta carrying neither). mc_print_sub_stage is recorded opportunistically
     // for context only — it does not gate any branch below, see the doc comment.
@@ -314,7 +314,7 @@ async fn run_holistic_homing(client: &mut Printer) -> Result<String, BambuError>
             "joined in-progress home, resolved (mc_print_sub_stage was {:?} at start)",
             sub_stage_at_start
         )),
-        Err(BambuError::Timeout) => {
+        Err(Error::Timeout) => {
             // Nothing resolved during the wait. Re-check the safety gate before
             // self-triggering — printing state may have changed during the ~90s wait.
             client.poll_telemetry().await?;
@@ -337,7 +337,7 @@ async fn run_holistic_homing(client: &mut Printer) -> Result<String, BambuError>
 async fn capture_responses(
     client: &mut Printer,
     window: Duration,
-) -> Result<Vec<CapturedMessage>, BambuError> {
+) -> Result<Vec<CapturedMessage>, Error> {
     let mut responses = Vec::new();
     let start = Instant::now();
     let deadline = start + window;
@@ -368,7 +368,7 @@ pub async fn run(
     access_code: &str,
     output: &str,
     tests_arg: Option<&str>,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     let output_path = output;
     let test_filter: Option<Vec<String>> =
         tests_arg.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
@@ -388,7 +388,7 @@ pub async fn run(
                         };
                         eprintln!("  {} — {}{}", t.name(), t.description(), manual);
                     }
-                    return Err(BambuError::ProtocolViolation(
+                    return Err(Error::ProtocolViolation(
                         format!("Unknown test name: '{}'", name).into(),
                     ));
                 }
@@ -416,7 +416,7 @@ pub async fn run(
     let mut confirmation = String::new();
     io::stdin()
         .read_line(&mut confirmation)
-        .map_err(|_| BambuError::ProtocolViolation("Failed to read user confirmation".into()))?;
+        .map_err(|_| Error::ProtocolViolation("Failed to read user confirmation".into()))?;
     if confirmation.trim().to_lowercase() != "yes" {
         eprintln!("Aborted (expected 'yes').");
         return Ok(());
@@ -590,10 +590,10 @@ pub async fn run(
         tests: entries,
     };
 
-    let json = serde_json::to_string_pretty(&report).map_err(|_| BambuError::SerializationError)?;
+    let json = serde_json::to_string_pretty(&report).map_err(|_| Error::SerializationError)?;
 
     std::fs::write(output_path, json.as_bytes()).map_err(|e| {
-        BambuError::ProtocolViolation(
+        Error::ProtocolViolation(
             format!("Failed to write report to '{}': {}", output_path, e).into(),
         )
     })?;

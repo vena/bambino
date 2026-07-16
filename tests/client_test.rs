@@ -16,7 +16,7 @@ use bambino::client::{
     PrintSpeed, PrintStatus, PrinterClient,
 };
 use bambino::diagnostics::DecodedPrintError;
-use bambino::error::BambuError;
+use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
 use bambino::mqtt::{BambuMqttClient, PrintJobConfig};
@@ -58,7 +58,7 @@ async fn test_homing_safety_interlocks() {
 
     // Bed-on-Z Safety Guard Verification: home_z_only_danger must return ModelMismatch
     let err_res = client_x1c.home_axes(true).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     // Standard homing should succeed with bare G28
     client_x1c
@@ -204,7 +204,7 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
     // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
     // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
     let result = client.move_relative('z', 300.0, 3000).await;
-    assert!(matches!(result, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(result, Err(Error::ModelMismatch(_))));
 
     drop(client);
     broker_task.await.expect("Broker task panicked");
@@ -229,7 +229,7 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     let result = client.move_relative('x', 300.0, 3000).await;
-    assert!(matches!(result, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(result, Err(Error::ModelMismatch(_))));
 
     drop(client);
     broker_task.await.expect("Broker task panicked");
@@ -292,7 +292,7 @@ async fn test_thermal_guards_and_temperatures() {
         PrinterClient::from_mqtt(mqtt_client_x1c, "00M000000000000", BambuModel::X1C);
 
     let err_res = client_x1c.set_chamber_temperature(40).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     // Open-frame model check (A1 — no sensor, no heater)
     let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
@@ -308,7 +308,7 @@ async fn test_thermal_guards_and_temperatures() {
     let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", BambuModel::A1);
 
     let err_res = client_a1.set_chamber_temperature(40).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     broker_task.await.expect("X1E broker task panicked");
     broker_task_x1c.await.expect("X1C broker task panicked");
@@ -428,7 +428,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     let err_res = client_p1s
         .set_fan_speed(FanTarget::AuxiliaryRight, 80)
         .await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     // Verify right auxiliary cooling fan is supported on X2D model (using Port 10)
     let (client_stream_x2, mut server_stream_x2) = tokio::io::duplex(8192);
@@ -524,7 +524,7 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
         PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
 
     let err_res = client_p1s.set_fan_speed(FanTarget::ChamberExhaust, 80).await;
-    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     broker_task_p1s.await.expect("P1S broker task panicked");
 }
@@ -638,15 +638,15 @@ async fn test_peripheral_signals_and_climate_controls() {
         client_p1s
             .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
             .await,
-        Err(BambuError::ModelMismatch(_))
+        Err(Error::ModelMismatch(_))
     ));
     assert!(matches!(
         client_p1s.set_prompt_sound(true).await,
-        Err(BambuError::ModelMismatch(_))
+        Err(Error::ModelMismatch(_))
     ));
     assert!(matches!(
         client_p1s.set_buzzer_mode(BuzzerMode::Alarm).await,
-        Err(BambuError::ModelMismatch(_))
+        Err(Error::ModelMismatch(_))
     ));
 
     broker_task_p1s.await.expect("P1S broker task panicked");
@@ -677,7 +677,7 @@ async fn test_send_gcode_rejects_unsafe_homing() {
 
     // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
     let err = client.send_gcode("G28 Z").await;
-    assert!(matches!(err, Err(BambuError::ModelMismatch(_))));
+    assert!(matches!(err, Err(Error::ModelMismatch(_))));
 
     // Safe bare G28 must pass
     client
@@ -778,7 +778,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
         PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
     assert!(matches!(
         client_p1s.set_nozzle_temperature(1, 220).await,
-        Err(BambuError::ModelMismatch(_))
+        Err(Error::ModelMismatch(_))
     ));
     broker_task_p1s.await.expect("P1S broker task panicked");
 
@@ -836,7 +836,7 @@ async fn test_in_flight_saturation() {
     assert!(
         matches!(
             err,
-            Err(BambuError::NetworkError(bambino::io::SocketError::TimedOut))
+            Err(Error::NetworkError(bambino::io::SocketError::TimedOut))
         ),
         "Expected NetworkError(TimedOut) on command 201 (BambuMqttClient::publish_command's \
          documented in-flight-saturation response), got {:?}",
@@ -870,8 +870,8 @@ async fn test_connection_drop_during_operation() {
         "Expected network error after connection drop"
     );
     assert!(
-        matches!(result, Err(BambuError::NetworkError(_))),
-        "Expected BambuError::NetworkError, got {:?}",
+        matches!(result, Err(Error::NetworkError(_))),
+        "Expected Error::NetworkError, got {:?}",
         result
     );
 }
@@ -1247,7 +1247,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     let result = client.change_filament(99, 1, -1, -1).await;
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1348,7 +1348,7 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
         .start_drying(0, 55, 8, 0, true, 20, false, "PA-CF")
         .await
         .expect_err("start_drying must reject on P1 (screen-only AMS drying)");
-    assert!(matches!(err, BambuError::ModelMismatch(_)));
+    assert!(matches!(err, Error::ModelMismatch(_)));
 
     drop(client);
     broker_task.await.expect("Broker task panicked");
@@ -1393,7 +1393,7 @@ async fn test_scan_rfid_rejects_invalid_ams_id() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     let result = client.scan_rfid(255, 2).await;
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1443,7 +1443,7 @@ async fn test_select_k_profile_rejects_invalid_combo() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
 
     let result = client.select_k_profile(200, 200, 4, "GFA01", "0.4").await;
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1812,7 +1812,7 @@ async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
 
     let result = client.get_version().await;
     assert!(
-        matches!(result, Err(BambuError::Timeout)),
+        matches!(result, Err(Error::Timeout)),
         "expected timeout when only a mismatched-sequence decoy is ever sent, got {:?}",
         result
     );
@@ -2089,7 +2089,7 @@ async fn test_wait_for_homing_times_out_without_dip() {
 
     let result = client.wait_for_homing().await;
     assert!(
-        matches!(result, Err(BambuError::Timeout)),
+        matches!(result, Err(Error::Timeout)),
         "expected timeout when no dip is ever observed, got {:?}",
         result
     );
@@ -3099,7 +3099,7 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
     for attempt in 1..=2 {
         let result = client.storage().await;
         assert!(
-            matches!(result, Err(BambuError::NetworkError(_))),
+            matches!(result, Err(Error::NetworkError(_))),
             "attempt {attempt}: expected the dial failure to surface as NetworkError, not \
              degrade into \"FTPS not configured\" from a config consumed on a prior failed \
              attempt, got {:?}",
@@ -3157,7 +3157,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     // the clear "not configured" error, not a stale/poisoned reconnect.
     let result = client.storage().await;
     assert!(
-        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        matches!(result, Err(Error::ProtocolViolation(_))),
         "expected ProtocolViolation (\"FTPS not configured\") after disconnect_storage, got {:?}",
         result.map(|_| ())
     );
@@ -3185,7 +3185,7 @@ async fn test_camera_trio_unconfigured_error() {
     let mut frame_buf = Vec::new();
     let result = client.read_camera_frame(&mut frame_buf).await;
     assert!(
-        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        matches!(result, Err(Error::ProtocolViolation(_))),
         "expected ProtocolViolation (\"Camera not configured\") on an unconfigured client, got {:?}",
         result.map(|_| ())
     );
@@ -3221,7 +3221,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
         .expect("connect_mqtt() must return within the 5s test safety margin, not hang forever");
 
     assert!(
-        matches!(result, Err(BambuError::NetworkError(_))),
+        matches!(result, Err(Error::NetworkError(_))),
         "expected a bounded NetworkError(TimedOut) once connect_timeout_secs elapses \
          mid-CONNACK-handshake, got {:?}",
         result.map(|_| ())

@@ -2,7 +2,7 @@
 use alloc::vec::Vec;
 
 use crate::camera::binary::BambuBinaryCameraStream;
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
@@ -58,12 +58,12 @@ where
     /// Returns direct access to the underlying [`BambuBinaryCameraStream`], auto-connecting if needed.
     ///
     /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
-    /// [`.attach_camera()`](Self::attach_camera). Returns `BambuError::ProtocolViolation`
+    /// [`.attach_camera()`](Self::attach_camera). Returns `Error::ProtocolViolation`
     /// immediately for RTSPS models — see `ensure_camera()`'s doc
     /// comment.
     pub async fn camera(
         &mut self,
-    ) -> Result<&mut BambuBinaryCameraStream<CameraTls::Stream>, BambuError> {
+    ) -> Result<&mut BambuBinaryCameraStream<CameraTls::Stream>, Error> {
         self.ensure_camera().await?;
         Ok(self.camera.as_mut().unwrap())
     }
@@ -74,7 +74,7 @@ where
     /// `BambuBinaryCameraStream::read_next_frame_with_timer`), mirroring
     /// [`poll_telemetry()`](Self::poll_telemetry)'s relationship to
     /// [`.mqtt()`](Self::mqtt).
-    pub async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError> {
+    pub async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error> {
         self.ensure_camera().await?;
         self.camera
             .as_mut()
@@ -94,7 +94,7 @@ where
     /// Idempotent. Reconnecting requires a fresh [`.with_camera()`](Self::with_camera) on a
     /// new `PrinterClient`, the same caveat FTPS already documents for
     /// [`disconnect_storage()`](Self::disconnect_storage).
-    pub async fn disconnect_camera(&mut self) -> Result<(), BambuError> {
+    pub async fn disconnect_camera(&mut self) -> Result<(), Error> {
         self.camera = None;
         Ok(())
     }

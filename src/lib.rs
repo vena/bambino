@@ -28,7 +28,7 @@
 //!     build_unsafe_client_config,
 //! };
 //!
-//! async fn example() -> Result<(), bambino::BambuError> {
+//! async fn example() -> Result<(), bambino::Error> {
 //!     // Printers use self-signed certs, so we skip verification
 //!     let tls_config = build_unsafe_client_config();
 //!     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
@@ -80,7 +80,7 @@
 //! - [`ams`] — AMS filament system helpers (slot mapping, presence detection).
 //! - [`camera`] — Camera streaming protocols (binary JPEG on port 6000, RTSPS on port 322).
 //! - [`diagnostics`] — HMS alert decoding and K-profile (Linear Advance) management.
-//! - [`error`] — The unified [`BambuError`] type.
+//! - [`error`] — The unified [`Error`] type.
 
 #[cfg(all(not(feature = "std"), feature = "alloc"))]
 extern crate alloc;
@@ -100,6 +100,6 @@ pub mod quirks;
 pub mod types;
 
 #[doc(inline)]
-pub use error::BambuError;
+pub use error::Error;
 #[doc(inline)]
 pub use models::BambuModel;

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use bambino::client::DummyTimer;
-use bambino::error::BambuError;
+use bambino::error::Error;
 use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
@@ -238,7 +238,7 @@ async fn test_ftps_download_size_mismatch_returns_protocol_violation() {
 
     let result = client.download_file("/model/job.3mf").await;
     assert!(
-        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        matches!(result, Err(Error::ProtocolViolation(_))),
         "Expected ProtocolViolation on a downloaded-size/SIZE mismatch, got {:?}",
         result.map(|data| data.len())
     );
@@ -298,7 +298,7 @@ async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
 
     let result = client.get_available_space().await;
     assert!(
-        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        matches!(result, Err(Error::ProtocolViolation(_))),
         "expected ProtocolViolation on a non-success AVBL reply, got {:?}",
         result.map(|_| ())
     );
@@ -335,7 +335,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
 
     let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
     assert!(
-        matches!(result, Err(bambino::error::BambuError::NetworkError(_))),
+        matches!(result, Err(bambino::error::Error::NetworkError(_))),
         "Expected the data-channel TLS connect failure to surface as NetworkError, got {:?}",
         result
     );
@@ -347,7 +347,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
     assert!(
         matches!(
             next_result,
-            Err(bambino::error::BambuError::ProtocolViolation(_))
+            Err(bambino::error::Error::ProtocolViolation(_))
         ),
         "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
         next_result
@@ -374,14 +374,14 @@ async fn test_ftps_single_reply_command_failure_poisons_client() {
 
     let result = client.delete_file("/model/job.3mf").await;
     assert!(
-        matches!(result, Err(BambuError::NetworkError(_))),
+        matches!(result, Err(Error::NetworkError(_))),
         "Expected the dropped connection to surface as NetworkError, got {:?}",
         result
     );
 
     let next_result = client.get_available_space().await;
     assert!(
-        matches!(next_result, Err(BambuError::ProtocolViolation(_))),
+        matches!(next_result, Err(Error::ProtocolViolation(_))),
         "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
         next_result
     );
@@ -421,7 +421,7 @@ async fn test_ftps_upload_size_mismatch_returns_disk_failure() {
 
     let result = client.upload_file("/model/job.3mf", b"TEST_DATA").await;
     assert!(
-        matches!(result, Err(bambino::error::BambuError::DiskWriteFailure)),
+        matches!(result, Err(bambino::error::Error::DiskWriteFailure)),
         "Expected DiskWriteFailure on SIZE mismatch, got {:?}",
         result
     );
@@ -446,14 +446,14 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
 
     let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
     assert!(
-        matches!(result, Err(BambuError::NetworkError(_))),
+        matches!(result, Err(Error::NetworkError(_))),
         "Expected the dropped connection to surface as NetworkError, got {:?}",
         result
     );
 
     let next_result = client.get_available_space().await;
     assert!(
-        matches!(next_result, Err(BambuError::ProtocolViolation(_))),
+        matches!(next_result, Err(Error::ProtocolViolation(_))),
         "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
         next_result
     );
@@ -519,7 +519,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
     .await;
 
     match result {
-        Err(bambino::error::BambuError::ProtocolViolation(_)) => {}
+        Err(bambino::error::Error::ProtocolViolation(_)) => {}
         Err(e) => panic!("Expected ProtocolViolation for TLS 1.3 on P2S, got {:?}", e),
         Ok(_) => panic!("Expected error for TLS 1.3 on P2S, but connect succeeded"),
     }
@@ -543,7 +543,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
     .await;
 
     match result {
-        Err(bambino::error::BambuError::ProtocolViolation(_)) => {}
+        Err(bambino::error::Error::ProtocolViolation(_)) => {}
         Err(e) => panic!("Expected ProtocolViolation for TLS 1.3 on X2D, got {:?}", e),
         Ok(_) => panic!("Expected error for TLS 1.3 on X2D, but connect succeeded"),
     }
@@ -621,7 +621,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
     .await;
 
     match result {
-        Err(bambino::error::BambuError::ProtocolViolation(_)) => {}
+        Err(bambino::error::Error::ProtocolViolation(_)) => {}
         Err(e) => panic!(
             "Expected ProtocolViolation for undetermined TLS version on P2S, got {:?}",
             e

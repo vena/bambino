@@ -27,7 +27,7 @@ use std::collections::VecDeque;
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use crate::client::dummy::DummyTimer;
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race};
 
 mod codec;
@@ -118,16 +118,16 @@ fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError
 
 /// Writes and flushes a complete packet to `stream`, mapping I/O failures via `map_embedded_io_error_kind` instead of collapsing everything to a fixed `ConnectionAborted` (the previous behavior).
 /// A free function (not a method) so `connect()` can call it before `Self` exists.
-async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), BambuError> {
+async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), Error> {
     use embedded_io_async::Error as _;
     stream
         .write_all(packet)
         .await
-        .map_err(|e| BambuError::NetworkError(map_embedded_io_error_kind(e.kind())))?;
+        .map_err(|e| Error::NetworkError(map_embedded_io_error_kind(e.kind())))?;
     stream
         .flush()
         .await
-        .map_err(|e| BambuError::NetworkError(map_embedded_io_error_kind(e.kind())))
+        .map_err(|e| Error::NetworkError(map_embedded_io_error_kind(e.kind())))
 }
 
 /// Same as [`write_frame`], but races the write against `MQTT_WRITE_TIMEOUT_SECS` when `timer`
@@ -141,7 +141,7 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     packet: &[u8],
     timer: &T,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     if !timer.has_real_clock() {
         return write_frame(stream, packet).await;
     }
@@ -149,7 +149,7 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
     let sleep_fut = timer.sleep(core::time::Duration::from_secs(MQTT_WRITE_TIMEOUT_SECS));
     match race(write_fut, sleep_fut).await {
         Raced::Left(result) => result,
-        Raced::Right(_) => Err(BambuError::NetworkError(SocketError::TimedOut)),
+        Raced::Right(_) => Err(Error::NetworkError(SocketError::TimedOut)),
     }
 }
 
@@ -157,12 +157,12 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// Executes a secure local network connection handshake and subscription loop with the printer.
     ///
     /// **Authentication Note:** If the printer's physical broker rejects credentials due to
-    /// an invalid access code, this function returns `BambuError::AccessDenied`.
+    /// an invalid access code, this function returns `Error::AccessDenied`.
     pub async fn connect(
         mut stream: IO,
         serial: &str,
         access_code: &str,
-    ) -> Result<Self, BambuError> {
+    ) -> Result<Self, Error> {
         let conn_id = CONNECTION_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let client_id = format!("bambino_{}_{}", serial, conn_id);
         let connect_pkt = encode_connect(&client_id, "bblp", access_code);
@@ -203,12 +203,12 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         );
 
         if packet_type != PACKET_TYPE_CONNACK {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "Expected CONNACK frame".into(),
             ));
         }
         if payload_buf.len() < 2 {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "Short CONNACK payload".into(),
             ));
         }
@@ -228,14 +228,14 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                     "Broker rejected connection with CONNACK return code: {} (access denied)",
                     connack_code
                 );
-                return Err(BambuError::AccessDenied);
+                return Err(Error::AccessDenied);
             }
             other => {
                 log::warn!(
                     "Broker rejected connection with CONNACK return code: {} (not an access-code rejection)",
                     other
                 );
-                return Err(BambuError::ProtocolViolation(
+                return Err(Error::ProtocolViolation(
                     format!("Broker rejected connection with CONNACK return code {other}").into(),
                 ));
             }
@@ -269,19 +269,19 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         log::debug!("Received raw packet header type: {}", sub_type);
 
         if sub_type != PACKET_TYPE_SUBACK {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "Expected SUBACK frame".into(),
             ));
         }
         if payload_buf.len() < 3 {
-            return Err(BambuError::ProtocolViolation("Short SUBACK payload".into()));
+            return Err(Error::ProtocolViolation("Short SUBACK payload".into()));
         }
         let return_code = payload_buf[2];
 
         log::debug!("SUBACK response status granted: 0x{:02X}", return_code);
 
         if return_code == 0x80 {
-            return Err(BambuError::ProtocolViolation(
+            return Err(Error::ProtocolViolation(
                 "Subscription rejected by physical broker".into(),
             ));
         }
@@ -310,7 +310,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// identical to this crate's pre-existing behavior. `PrinterClient` callers get the new
     /// stalled-write protection via `publish_command_with_timer()` instead, since they have a
     /// real `Timer` available (BUG-159).
-    pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, BambuError> {
+    pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error> {
         self.publish_command_with_timer(payload, &DummyTimer).await
     }
 
@@ -320,13 +320,13 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         &mut self,
         payload: &[u8],
         timer: &T,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         if self.in_flight.len() >= MQTT_IN_FLIGHT_LIMIT {
             log::warn!(
                 "In-flight command backlog saturated ({} items)",
                 self.in_flight.len()
             );
-            return Err(BambuError::NetworkError(SocketError::TimedOut));
+            return Err(Error::NetworkError(SocketError::TimedOut));
         }
 
         let packet_id = self.next_packet_id;
@@ -368,7 +368,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// publishes, clears matching packet IDs from the in-flight tracker on `PUBACK`,
     /// and acknowledges `PINGRESP` — only application-level `PUBLISH` payloads are
     /// returned.
-    pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, BambuError> {
+    pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error> {
         // `DummyTimer` has no real wall-clock (`has_real_clock() == false`), so
         // `poll_wire()` falls back to its pre-existing unbounded read here — this public,
         // timer-less entry point (used directly by e.g. `tests/mqtt_test.rs` and any
@@ -386,7 +386,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     pub(crate) async fn poll_telemetry_with_timer<T: TimerProvider>(
         &mut self,
         timer: &T,
-    ) -> Result<MqttMessage, BambuError> {
+    ) -> Result<MqttMessage, Error> {
         if let Some(buffered) = self.pending_messages.pop_front() {
             self.pending_bytes = self
                 .pending_bytes
@@ -412,7 +412,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     pub(crate) async fn poll_wire<T: TimerProvider>(
         &mut self,
         timer: &T,
-    ) -> Result<MqttMessage, BambuError> {
+    ) -> Result<MqttMessage, Error> {
         loop {
             let (header, payload_buf) = read_exact_packet(
                 &mut self.stream,
@@ -437,26 +437,26 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                     let qos = (header & 0x06) >> 1;
 
                     if payload_buf.len() < 2 {
-                        return Err(BambuError::ProtocolViolation(
+                        return Err(Error::ProtocolViolation(
                             "Short publish payload".into(),
                         ));
                     }
                     let topic_len = u16::from_be_bytes([payload_buf[0], payload_buf[1]]) as usize;
                     if payload_buf.len() < 2 + topic_len {
-                        return Err(BambuError::ProtocolViolation(
+                        return Err(Error::ProtocolViolation(
                             "Invalid topic length bounds".into(),
                         ));
                     }
 
                     let topic = core::str::from_utf8(&payload_buf[2..2 + topic_len])
-                        .map_err(|_| BambuError::ProtocolViolation("Non-UTF8 topic name".into()))?
+                        .map_err(|_| Error::ProtocolViolation("Non-UTF8 topic name".into()))?
                         .to_string();
 
                     let mut payload_start = 2 + topic_len;
                     let mut packet_id = None;
                     if qos >= 1 {
                         if payload_buf.len() < payload_start + 2 {
-                            return Err(BambuError::ProtocolViolation(
+                            return Err(Error::ProtocolViolation(
                                 "Missing packet ID in QoS 1+".into(),
                             ));
                         }
@@ -506,7 +506,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                 }
                 PACKET_TYPE_PUBACK => {
                     if payload_buf.len() < 2 {
-                        return Err(BambuError::ProtocolViolation(
+                        return Err(Error::ProtocolViolation(
                             "Invalid PUBACK length".into(),
                         ));
                     }
@@ -535,7 +535,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// `DummyTimer` makes the underlying write unbounded here, mirroring `publish_command()`.
     /// `PrinterClient` callers get stalled-write protection via `send_ping_with_timer()`
     /// instead (BUG-159).
-    pub async fn send_ping(&mut self) -> Result<(), BambuError> {
+    pub async fn send_ping(&mut self) -> Result<(), Error> {
         self.send_ping_with_timer(&DummyTimer).await
     }
 
@@ -544,7 +544,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     pub(crate) async fn send_ping_with_timer<T: TimerProvider>(
         &mut self,
         timer: &T,
-    ) -> Result<(), BambuError> {
+    ) -> Result<(), Error> {
         log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
@@ -560,7 +560,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     ///    [REF-MQTT-ZOMBIE].
     /// 2. **Connection staleness**: No packets of any kind received for 60+ seconds,
     ///    indicating a silently dropped connection — independent of (1) [REF-MQTT-CONN].
-    pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), BambuError> {
+    pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error> {
         if let Some(ref mut secs) = self.write_pending_secs {
             *secs += elapsed_secs;
             if *secs >= MQTT_ZOMBIE_TIMEOUT_SECS {
@@ -568,7 +568,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                     "Zombie state detected: command issued but zero telemetry updates received for >= {}s",
                     MQTT_ZOMBIE_TIMEOUT_SECS
                 );
-                return Err(BambuError::Timeout);
+                return Err(Error::Timeout);
             }
         }
 
@@ -578,7 +578,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                 "Connection stale: no packets received for >= {}s",
                 MQTT_STALE_CONNECTION_SECS
             );
-            return Err(BambuError::Timeout);
+            return Err(Error::Timeout);
         }
 
         Ok(())
@@ -645,7 +645,7 @@ mod tests {
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
-                matches!(err, crate::error::BambuError::AccessDenied),
+                matches!(err, crate::error::Error::AccessDenied),
                 "Expected AccessDenied, got {:?}",
                 err
             );
@@ -677,7 +677,7 @@ mod tests {
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
-                matches!(err, crate::error::BambuError::ProtocolViolation(_)),
+                matches!(err, crate::error::Error::ProtocolViolation(_)),
                 "Expected ProtocolViolation, got {:?}",
                 err
             );
@@ -714,7 +714,7 @@ mod tests {
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
-                matches!(err, crate::error::BambuError::ProtocolViolation(_)),
+                matches!(err, crate::error::Error::ProtocolViolation(_)),
                 "Expected ProtocolViolation for SUBACK rejection, got {:?}",
                 err
             );

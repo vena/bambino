@@ -55,7 +55,7 @@ To make this safe, the client sets `poisoned = true` (BUG-004: originally only o
 widest such window; now on every `write_command`/`read_response` failure in every method,
 including the single-reply metadata/filesystem commands, and unconditionally in
 `disconnect()`); every public method checks the flag first and returns
-[`BambuError::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
+[`Error::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
 reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.
 
 **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
@@ -68,43 +68,43 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 #### Implementations
 
-- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: BambuModel, ip: &str, serial: &str, access_code: &str, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, BambuError>` — [`BambuModel`](../models/index.md#bambumodel), [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: BambuModel, ip: &str, serial: &str, access_code: &str, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`BambuModel`](../models/index.md#bambumodel), [`Error`](../error/index.md#error)
 
   Establishes the secure control channel, performs login handshakes, and configures security properties.
 
-- <span id="bambuftpsclient-list-directory"></span>`async fn list_directory(&mut self, remote_path: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Result<Vec<FtpFile>, BambuError>` — [`FtpFile`](parser/index.md#ftpfile), [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-list-directory"></span>`async fn list_directory(&mut self, remote_path: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Result<Vec<FtpFile>, Error>` — [`FtpFile`](parser/index.md#ftpfile), [`Error`](../error/index.md#error)
 
   Queries the storage server for raw directory listings and parses their structures.
 
-- <span id="bambuftpsclient-get-file-size"></span>`async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-get-file-size"></span>`async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, Error>` — [`Error`](../error/index.md#error)
 
   Queries the exact size of a file stored on the printer's MicroSD card.
 
-- <span id="bambuftpsclient-delete-file"></span>`async fn delete_file(&mut self, remote_path: &str) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-delete-file"></span>`async fn delete_file(&mut self, remote_path: &str) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Removes a targeted file from non-volatile storage.
 
-- <span id="bambuftpsclient-upload-file"></span>`async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-upload-file"></span>`async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Uploads a binary payload directly to MicroSD card storage.
 
-- <span id="bambuftpsclient-download-file"></span>`async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-download-file"></span>`async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error>` — [`Error`](../error/index.md#error)
 
   Downloads the contents of a remote file from MicroSD storage via the RETR command.
 
-- <span id="bambuftpsclient-create-directory"></span>`async fn create_directory(&mut self, path: &str) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-create-directory"></span>`async fn create_directory(&mut self, path: &str) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Creates a directory on the printer's MicroSD storage.
 
-- <span id="bambuftpsclient-remove-directory"></span>`async fn remove_directory(&mut self, path: &str) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-remove-directory"></span>`async fn remove_directory(&mut self, path: &str) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Removes a directory from the printer's MicroSD storage.
 
-- <span id="bambuftpsclient-rename-file"></span>`async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-rename-file"></span>`async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Renames a file or directory on the printer's MicroSD storage.
 
-- <span id="bambuftpsclient-get-available-space"></span>`async fn get_available_space(&mut self) -> Result<u64, BambuError>` — [`BambuError`](../error/index.md#bambuerror)
+- <span id="bambuftpsclient-get-available-space"></span>`async fn get_available_space(&mut self) -> Result<u64, Error>` — [`Error`](../error/index.md#error)
 
   Queries the available capacity of the MicroSD card, in bytes.
 

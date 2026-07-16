@@ -1,4 +1,4 @@
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
@@ -60,7 +60,7 @@ where
     /// [`.attach_storage()`](Self::attach_storage).
     pub async fn storage(
         &mut self,
-    ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, BambuError> {
+    ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error> {
         self.ensure_ftps().await?;
         Ok(self.ftps.as_mut().unwrap())
     }
@@ -85,7 +85,7 @@ where
     /// Idempotent — a no-op if no FTPS session is active. Always returns `Ok(())`; kept
     /// fallible for API symmetry with [`connect_ftps()`](Self::connect_ftps) and to leave room
     /// for a fallible teardown step in the future without a breaking signature change.
-    pub async fn disconnect_storage(&mut self) -> Result<(), BambuError> {
+    pub async fn disconnect_storage(&mut self) -> Result<(), Error> {
         if let Some(mut client) = self.ftps.take() {
             client.disconnect().await;
         }

@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
@@ -55,7 +55,7 @@ where
         &mut self,
         fan_type: FanTarget,
         speed_percent: u8,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         if speed_percent > 100 {
             log::warn!(
                 "Fan speed {}% exceeds maximum 100%, clamping",
@@ -69,7 +69,7 @@ where
             FanTarget::PartCooling => super::types::FAN_WRITE_PORT_PART_COOLING,
             FanTarget::AuxiliaryLeft => {
                 if !self.model.quirks().supports_auxiliary_left_fan() {
-                    return Err(BambuError::ModelMismatch(
+                    return Err(Error::ModelMismatch(
                         "auxiliary left fan not available on this model".into(),
                     ));
                 }
@@ -77,7 +77,7 @@ where
             }
             FanTarget::ChamberExhaust => {
                 if !self.model.quirks().has_chamber_exhaust_fan() {
-                    return Err(BambuError::ModelMismatch(
+                    return Err(Error::ModelMismatch(
                         "chamber exhaust fan not available on this model".into(),
                     ));
                 }
@@ -85,7 +85,7 @@ where
             }
             FanTarget::AuxiliaryRight => {
                 if !self.model.quirks().supports_auxiliary_right_fan() {
-                    return Err(BambuError::ModelMismatch(
+                    return Err(Error::ModelMismatch(
                         "auxiliary right fan not available on this model".into(),
                     ));
                 }
@@ -98,7 +98,7 @@ where
     }
 
     /// Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
-    pub async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, BambuError> {
+    pub async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, Error> {
         self.dispatch(|seq| crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq))
             .await
     }
@@ -109,9 +109,9 @@ where
     pub async fn set_airduct_mode(
         &mut self,
         mode: crate::mqtt::commands::AirductMode,
-    ) -> Result<u16, BambuError> {
+    ) -> Result<u16, Error> {
         if !self.model.quirks().supports_airduct_mode() {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "airduct damper control not available on this model".into(),
             ));
         }
@@ -122,9 +122,9 @@ where
     /// Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
     ///
     /// Supported on models with onboard speakers (A1, A1 Mini, A2L).
-    pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, BambuError> {
+    pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, Error> {
         if !self.model.quirks().supports_prompt_sound() {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "prompt sound not available on this model".into(),
             ));
         }
@@ -135,9 +135,9 @@ where
     /// Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
     ///
     /// Supported on models with a physical fire alarm buzzer (H2 series).
-    pub async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, BambuError> {
+    pub async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, Error> {
         if !self.model.quirks().supports_buzzer() {
-            return Err(BambuError::ModelMismatch(
+            return Err(Error::ModelMismatch(
                 "buzzer control not available on this model".into(),
             ));
         }

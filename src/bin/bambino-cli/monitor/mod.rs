@@ -12,7 +12,7 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use bambino::error::BambuError;
+use bambino::error::Error;
 
 use crate::connection::create_printer;
 
@@ -25,7 +25,7 @@ pub async fn dump(
     serial: &str,
     access_code: &str,
     follow: bool,
-) -> Result<(), BambuError> {
+) -> Result<(), Error> {
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
@@ -114,7 +114,7 @@ impl Drop for TerminalGuard {
 }
 
 /// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
-pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuError> {
+pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), Error> {
     eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
@@ -127,7 +127,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), BambuE
     ping_timer.tick().await;
 
     let _guard = TerminalGuard::enter().map_err(|_| {
-        BambuError::ProtocolViolation("failed to initialize terminal raw mode".into())
+        Error::ProtocolViolation("failed to initialize terminal raw mode".into())
     })?;
 
     let shutdown = Arc::new(AtomicBool::new(false));

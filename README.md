@@ -222,7 +222,7 @@ let url = build_rtsps_url(ip, access_code)?;
 
 `build_rtsps_url` validates that `access_code` is a non-empty ASCII alphanumeric string
 (matching the documented 8-character LAN access code format) and returns
-`Result<String, BambuError>`.
+`Result<String, Error>`.
 
 Since the printer uses self-signed TLS, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to rewrite the request-line URI in transit:
 

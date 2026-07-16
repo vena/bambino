@@ -13,7 +13,7 @@
 
 pub mod parser;
 
-use crate::error::BambuError;
+use crate::error::Error;
 use crate::io::AsyncUdpSocket;
 #[cfg(feature = "std")]
 use crate::io::{BindableUdpSocket, TimerProvider};
@@ -90,7 +90,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     /// broadcast (`255.255.255.255`). This ensures that even if local routers filter IGMP multicast,
     /// or if OS network interface routing routes multicast to inactive adapters, the query is
     /// successfully broadcast across all active local interfaces.
-    pub async fn broadcast_search(&self) -> Result<(), BambuError> {
+    pub async fn broadcast_search(&self) -> Result<(), Error> {
         let query = self.m_search_query();
 
         let multicast_target = SocketAddr::from((IpAddr::V4(MULTICAST_ADDR), self.port));
@@ -108,7 +108,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
         let bcast_result = self.socket.send_to(query, broadcast_target).await;
 
         match (mcast_result, bcast_result) {
-            (Err(_), Err(e)) => Err(BambuError::NetworkError(e)),
+            (Err(_), Err(e)) => Err(Error::NetworkError(e)),
             _ => Ok(()),
         }
     }
@@ -117,8 +117,8 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
     ///
     /// Returns `Ok(Some(SsdpDevice))` if a valid printer signature was parsed,
     /// `Ok(None)` if a timeout occurred or a non-printer packet was received,
-    /// and `Err(BambuError)` for terminal network socket faults.
-    pub async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, BambuError> {
+    /// and `Err(Error)` for terminal network socket faults.
+    pub async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, Error> {
         match self.socket.recv_from(buf).await {
             Ok((len, from_addr)) => {
                 log::trace!(
@@ -152,7 +152,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
             }
             // Catch-all transient socket timeout. Returns None to allow retry loop cycles.
             Err(crate::io::SocketError::TimedOut) => Ok(None),
-            Err(e) => Err(BambuError::NetworkError(e)),
+            Err(e) => Err(Error::NetworkError(e)),
         }
     }
 }
@@ -182,7 +182,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 pub async fn discover_devices<U, T>(
     timeout: core::time::Duration,
     timer: &T,
-) -> Result<Vec<SsdpDevice>, BambuError>
+) -> Result<Vec<SsdpDevice>, Error>
 where
     U: BindableUdpSocket,
     T: TimerProvider,
@@ -211,7 +211,7 @@ where
     }
 
     if engines.is_empty() {
-        return Err(BambuError::NetworkError(last_bind_err.expect(
+        return Err(Error::NetworkError(last_bind_err.expect(
             "ports is non-empty, so an empty engines list means every bind attempt recorded an error",
         )));
     }

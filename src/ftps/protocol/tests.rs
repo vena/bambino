@@ -271,7 +271,7 @@ async fn test_read_to_eof_rejects_oversized_transfer() {
     let mut out = Vec::new();
 
     let result = read_to_eof(&mut stream, &mut out, &DummyTimer, 30_000).await;
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
     assert!(out.len() <= FTPS_MAX_TRANSFER_BYTES);
 }
 
@@ -300,7 +300,7 @@ async fn test_read_to_eof_stalled_connection_times_out() {
     let elapsed = started.elapsed();
 
     assert!(
-        matches!(result, Err(BambuError::NetworkError(SocketError::TimedOut))),
+        matches!(result, Err(Error::NetworkError(SocketError::TimedOut))),
         "Expected TimedOut for a stalled connection, got {:?}",
         result
     );
@@ -341,7 +341,7 @@ async fn test_read_response_stalled_connection_times_out() {
     let elapsed = started.elapsed();
 
     assert!(
-        matches!(result, Err(BambuError::NetworkError(SocketError::TimedOut))),
+        matches!(result, Err(Error::NetworkError(SocketError::TimedOut))),
         "Expected TimedOut for a stalled connection, got {:?}",
         result
     );
@@ -390,31 +390,31 @@ fn test_pasv_port_zero() {
 #[test]
 fn test_pasv_missing_parentheses() {
     let result = parse_pasv_port("227 No parentheses here");
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 }
 
 #[test]
 fn test_pasv_non_numeric_port() {
     let result = parse_pasv_port("(127,0,0,1,abc,168)");
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 }
 
 #[test]
 fn test_pasv_incomplete_components() {
     let result = parse_pasv_port("(127,0,0,1,192)");
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 }
 
 #[test]
 fn test_pasv_empty_parens() {
     let result = parse_pasv_port("()");
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 }
 
 #[test]
 fn test_pasv_port_overflow() {
     let result = parse_pasv_port("(127,0,0,1,256,0)");
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 }
 
 #[test]
@@ -422,22 +422,22 @@ fn test_pasv_reversed_parentheses_does_not_panic() {
     // Regression test: a ')' appearing before a '(' used to make `start + 1..end` a
     // reversed range, which panics. Must return a clean error instead of crashing.
     let result = parse_pasv_port("227 Response ) some text ( more");
-    assert!(matches!(result, Err(BambuError::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 }
 
 #[test]
 fn test_validate_ftp_path_rejects_traversal_segment() {
     assert!(matches!(
         validate_ftp_path("../../etc/passwd"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
     assert!(matches!(
         validate_ftp_path("foo/../bar"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
     assert!(matches!(
         validate_ftp_path("foo\\..\\bar"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
 }
 
@@ -453,11 +453,11 @@ fn test_validate_ftp_path_allows_literal_dots_in_filename() {
 fn test_validate_ftp_path_rejects_leading_dash_in_final_segment() {
     assert!(matches!(
         validate_ftp_path("-rf"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
     assert!(matches!(
         validate_ftp_path("/cache/-file.3mf"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
     // A leading-dash directory component earlier in the path is not the same hazard.
     assert!(validate_ftp_path("/-oddly-named-dir/file.3mf").is_ok());
@@ -465,7 +465,7 @@ fn test_validate_ftp_path_rejects_leading_dash_in_final_segment() {
     // the slash), silently skipping the check on the actual dash-prefixed final directory.
     assert!(matches!(
         validate_ftp_path("/cache/-dir/"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
 }
 
@@ -473,10 +473,10 @@ fn test_validate_ftp_path_rejects_leading_dash_in_final_segment() {
 fn test_validate_ftp_path_rejects_non_crlf_control_chars() {
     assert!(matches!(
         validate_ftp_path("/cache/\x01file.3mf"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
     assert!(matches!(
         validate_ftp_path("/cache/file\x7f.3mf"),
-        Err(BambuError::ProtocolViolation(_))
+        Err(Error::ProtocolViolation(_))
     ));
 }
