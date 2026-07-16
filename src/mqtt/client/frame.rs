@@ -22,6 +22,12 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 /// or coordinated.
 pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
 
+/// Per-call deadline for `write_frame_with_timer` when a genuine wall-clock [`TimerProvider`]
+/// is available — the write-side counterpart to [`MQTT_READ_TIMEOUT_SECS`]. A stalled write
+/// (e.g. the peer stopped reading its socket buffer) would otherwise block `write_all()`/
+/// `flush()` forever, unlike the read path which already had this protection (BUG-159).
+pub(crate) const MQTT_WRITE_TIMEOUT_SECS: u64 = 30;
+
 /// Byte-level progress of an in-flight MQTT frame read, preserved across a timed-out `read_exact_packet` call so a subsequent call resumes exactly where the previous one left off instead of misinterpreting still-arriving bytes of the *same* frame as a new frame's header — see `read_exact_packet`'s doc comment for why losing this state would permanently desync the stream parser.
 #[derive(Default)]
 pub(crate) enum FrameReadState {

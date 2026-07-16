@@ -385,7 +385,11 @@ where
     ) -> Result<u16, BambuError> {
         self.ensure_mqtt().await?;
         let payload = serde_json::to_vec(request).map_err(|_| BambuError::SerializationError)?;
-        self.mqtt.as_mut().unwrap().publish_command(&payload).await
+        self.mqtt
+            .as_mut()
+            .unwrap()
+            .publish_command_with_timer(&payload, &self.timer)
+            .await
     }
 
     /// Collapses the repeated `next_sequence_id()` → build request → `publish_request()` triplet used by nearly every command-dispatching method in this module.
@@ -408,7 +412,7 @@ where
     /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
     pub async fn send_ping(&mut self) -> Result<(), BambuError> {
         self.ensure_mqtt().await?;
-        self.mqtt.as_mut().unwrap().send_ping().await
+        self.mqtt.as_mut().unwrap().send_ping_with_timer(&self.timer).await
     }
 
     /// Returns a reference to the printer's unique hardware serial number.

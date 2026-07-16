@@ -518,7 +518,10 @@ where
                 return Err(e);
             }
         };
-        if code != FTP_TRANSFER_COMPLETE {
+        // BUG-150: sibling gap to BUG-030's upload_file/download_file handling — the same
+        // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN] can arrive after read_to_eof has already
+        // drained the listing to EOF, so 426 must be accepted alongside 226 here too.
+        if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
             return Err(BambuError::ProtocolViolation(
                 "LIST transfer confirmation aborted".into(),
             ));

@@ -1,6 +1,7 @@
 #![cfg(feature = "cli")]
 
 use std::io::{self, Write};
+use unicode_width::UnicodeWidthStr;
 
 pub struct Table {
     headers: Vec<String>,
@@ -26,11 +27,11 @@ impl Table {
 
     pub fn write_to(&self, w: &mut impl Write) {
         let col_count = self.headers.len();
-        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.len()).collect();
+        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.width()).collect();
         for row in &self.rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < col_count {
-                    widths[i] = widths[i].max(cell.len());
+                    widths[i] = widths[i].max(cell.width());
                 }
             }
         }
@@ -50,8 +51,9 @@ fn write_row(w: &mut impl Write, cells: &[String], widths: &[usize]) {
         .iter()
         .enumerate()
         .map(|(i, cell)| {
-            let w = widths.get(i).copied().unwrap_or(0);
-            format!("{:<width$}", cell, width = w)
+            let target_width = widths.get(i).copied().unwrap_or(0);
+            let pad = target_width.saturating_sub(cell.width());
+            format!("{cell}{:pad$}", "", pad = pad)
         })
         .collect();
     let _ = writeln!(w, "{}", formatted.join(" │ "));

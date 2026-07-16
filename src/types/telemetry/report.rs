@@ -107,8 +107,8 @@ pub struct PrinterTelemetry {
 
     /// Hotend target temperature register.
     ///
-    /// Wire sends both integers and floats depending on model. Use `unpack_temperature()`
-    /// to extract actual/target from composite-packed values [REF-THER-DECODE].
+    /// Wire sends both integers and floats depending on model. Never composite-packed —
+    /// unlike `chamber_temper`, no `unpack_temperature()` call is needed here.
     pub nozzle_target_temper: Option<f64>,
 
     /// Hotend actual temperature register.
@@ -116,7 +116,7 @@ pub struct PrinterTelemetry {
     /// Wire sends both integers and floats depending on model [REF-THER-DECODE].
     pub nozzle_temper: Option<f64>,
 
-    /// Heated build-plate temperature register (actual, target, or composite packed).
+    /// Heated build-plate temperature register (actual value; never composite-packed).
     pub bed_temper: Option<f64>,
 
     /// Explicit bed target temperature. Separate from composite-packed `bed_temper`.

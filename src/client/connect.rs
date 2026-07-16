@@ -144,9 +144,10 @@ where
     /// `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken
     /// connection with no supported redial path.
     ///
-    /// Idempotent. Reconnecting requires either [`.attach_mqtt()`](Self::attach_mqtt) with a
-    /// fresh `BambuMqttClient`, or letting the next call fall through to `ensure_mqtt()`'s
-    /// own lazy dial.
+    /// Idempotent. Reconnecting requires [`.attach_mqtt()`](Self::attach_mqtt) with a fresh
+    /// `BambuMqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
+    /// `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
+    /// only recovers a `connect()`-built client, never one built via `from_mqtt()`.
     pub async fn disconnect_mqtt(&mut self) -> Result<(), BambuError> {
         self.mqtt = None;
         self.k_profile_primed = false;

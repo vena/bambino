@@ -119,6 +119,13 @@ enum CameraFrameReadState {
 }
 
 /// Abstract state controller parsing incoming frame buffers from raw Port 6000 streams.
+///
+/// Does not own dial/redial logic itself — a caller writing its own reconnect loop against
+/// port 6000 must not redial immediately after a disconnect. The printer's port-6000 socket
+/// accepts only one connection at a time; reopening before the prior TCP FIN completes can
+/// orphan the old socket server-side until keepalive reaps it (~20 min stall). Confirmed
+/// printer behavior (bambuddy `fix(camera) #2521`); add a delay or wait for the old socket
+/// to fully close before redialing.
 pub struct BambuBinaryCameraStream<IO: AsyncIo> {
     stream: IO,
     max_frame_size: usize,
@@ -361,8 +368,8 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
 
     /// Asynchronously extracts the next complete frame from the stream.
     ///
-    /// Refills the user-supplied `Vec<u8>` to minimize memory churn during high-frequency
-    /// image extraction operations. Delegates to `read_next_frame_with_timer` under
+    /// Wholesale-replaces the user-supplied `Vec<u8>` with the decoded frame each call
+    /// (`*frame_buf = payload`) — no buffer reuse. Delegates to `read_next_frame_with_timer` under
     /// [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
     /// every existing caller not going through `PrinterClient`.
     pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), BambuError> {

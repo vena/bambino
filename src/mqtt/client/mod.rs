@@ -28,7 +28,7 @@ use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use crate::client::dummy::DummyTimer;
 use crate::error::BambuError;
-use crate::io::{AsyncIo, SocketError, TimerProvider};
+use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race};
 
 mod codec;
 use codec::{
@@ -38,7 +38,7 @@ use codec::{
 };
 
 mod frame;
-use frame::{FrameReadState, MQTT_READ_TIMEOUT_SECS, read_exact_packet};
+use frame::{FrameReadState, MQTT_READ_TIMEOUT_SECS, MQTT_WRITE_TIMEOUT_SECS, read_exact_packet};
 
 mod pending;
 
@@ -128,6 +128,29 @@ async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), 
         .flush()
         .await
         .map_err(|e| BambuError::NetworkError(map_embedded_io_error_kind(e.kind())))
+}
+
+/// Same as [`write_frame`], but races the write against `MQTT_WRITE_TIMEOUT_SECS` when `timer`
+/// has a real wall-clock (BUG-159) — without this, a stalled peer that stops draining its
+/// socket buffer (or a dead connection with no RST yet) blocks `write_all()`/`flush()`
+/// forever, unlike the read path's existing `MQTT_READ_TIMEOUT_SECS` protection. Unlike
+/// `read_chunk`'s single-step racing (needed for resumability across partial reads), a timed-
+/// out write has no partial-progress state worth preserving — the caller treats the whole
+/// frame as unsent and fails the operation.
+async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    packet: &[u8],
+    timer: &T,
+) -> Result<(), BambuError> {
+    if !timer.has_real_clock() {
+        return write_frame(stream, packet).await;
+    }
+    let write_fut = write_frame(stream, packet);
+    let sleep_fut = timer.sleep(core::time::Duration::from_secs(MQTT_WRITE_TIMEOUT_SECS));
+    match race(write_fut, sleep_fut).await {
+        Raced::Left(result) => result,
+        Raced::Right(_) => Err(BambuError::NetworkError(SocketError::TimedOut)),
+    }
 }
 
 impl<IO: AsyncIo> BambuMqttClient<IO> {
@@ -282,7 +305,22 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     /// **In-flight Bounds Verification:**
     /// If the unacknowledged queue size equals or exceeds 200, this function returns a
     /// network timeout error to protect memory space and prevent packet drift [REF-MQTT-CONN].
+    ///
+    /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here —
+    /// identical to this crate's pre-existing behavior. `PrinterClient` callers get the new
+    /// stalled-write protection via `publish_command_with_timer()` instead, since they have a
+    /// real `Timer` available (BUG-159).
     pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, BambuError> {
+        self.publish_command_with_timer(payload, &DummyTimer).await
+    }
+
+    /// Same as [`publish_command()`](Self::publish_command), but honors `timer` for the
+    /// underlying write's per-call deadline (see `write_frame_with_timer`).
+    pub(crate) async fn publish_command_with_timer<T: TimerProvider>(
+        &mut self,
+        payload: &[u8],
+        timer: &T,
+    ) -> Result<u16, BambuError> {
         if self.in_flight.len() >= MQTT_IN_FLIGHT_LIMIT {
             log::warn!(
                 "In-flight command backlog saturated ({} items)",
@@ -303,7 +341,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
 
         let packet = encode_publish_qos1(packet_id, &self.request_topic, payload);
 
-        write_frame(&mut self.stream, &packet).await?;
+        write_frame_with_timer(&mut self.stream, &packet, timer).await?;
 
         self.in_flight.insert(packet_id);
 
@@ -451,7 +489,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         let ack = encode_puback(id);
-                        write_frame(&mut self.stream, &ack).await?;
+                        write_frame_with_timer(&mut self.stream, &ack, timer).await?;
                     } else if qos >= 2 {
                         log::warn!(
                             "Received QoS {} PUBLISH (packet_id: {:?}) — QoS 2 handshake \
@@ -493,11 +531,24 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     }
 
     /// Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
+    ///
+    /// `DummyTimer` makes the underlying write unbounded here, mirroring `publish_command()`.
+    /// `PrinterClient` callers get stalled-write protection via `send_ping_with_timer()`
+    /// instead (BUG-159).
     pub async fn send_ping(&mut self) -> Result<(), BambuError> {
+        self.send_ping_with_timer(&DummyTimer).await
+    }
+
+    /// Same as [`send_ping()`](Self::send_ping), but honors `timer` for the underlying write's
+    /// per-call deadline (see `write_frame_with_timer`).
+    pub(crate) async fn send_ping_with_timer<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+    ) -> Result<(), BambuError> {
         log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
-        write_frame(&mut self.stream, &ping).await?;
+        write_frame_with_timer(&mut self.stream, &ping, timer).await?;
         self.ping_outstanding = true;
         Ok(())
     }

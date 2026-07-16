@@ -287,8 +287,11 @@ pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> S
 }
 
 pub(crate) const FAN_STEP_MAX: u8 = 15;
-/// Default `z_max()` (mm) for models without a documented Z-travel ceiling of their own —
-/// used by every bed-slinger (P1/A1 series) and the base X1C/X1E/X2D/H2S CoreXY chassis size.
+/// Fallback `z_max()` (mm) for a model with no dedicated quirks strategy override.
+///
+/// Unreachable in practice: every currently-shipped model's quirks strategy overrides
+/// `z_max()` with its own value (see `MODEL_MATRIX.csv`) — e.g. A1 Mini is 180mm and H2S is
+/// 340mm, not this constant's 256mm.
 pub(crate) const DEFAULT_Z_MAX_MM: f32 = 256.0;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
 

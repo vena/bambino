@@ -243,7 +243,13 @@ pub fn parse_unix_listing(
             }
         } else {
             // Field contains direct YYYY calendar year representation.
-            year = time_or_year.parse::<i32>().ok().unwrap_or(current_year);
+            // BUG-149: sibling gap to BUG-061's day/hour/minute range checks — a parse failure
+            // must reject the line, not silently default to current_year, and a parsed value
+            // still needs a sanity range (printer filesystems don't predate 2000).
+            match time_or_year.parse::<i32>() {
+                Ok(y) if (2000..=9999).contains(&y) => year = y,
+                _ => continue,
+            }
         }
 
         // BUG-133: sibling gap to BUG-061's flat 1..=31 day range check — validate against the

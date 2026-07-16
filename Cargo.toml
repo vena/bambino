@@ -20,7 +20,7 @@ tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "dep:x509-pars
 # bambino-cli only: terminal manipulation and a concrete log sink. Not implied by
 # `tokio` so library consumers depending on `bambino` with default features don't
 # pull in a terminal UI crate and a log sink they never asked for.
-cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "tokio"]
+cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "dep:unicode-width", "tokio"]
 
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
 esp-idf = ["dep:esp-idf-svc", "dep:socket2", "std"]
@@ -136,6 +136,9 @@ clap = { version = "4", features = ["derive"], optional = true }
 
 # Calendar date/time handling for CLI binary (replaces hand-rolled UTC decomposition)
 time = { version = "0.3", features = ["std"], optional = true }
+
+# Terminal display-width (not byte/char count) for CLI table column alignment — CJK/emoji rows (BUG-153)
+unicode-width = { version = "0.2", optional = true }
 
 [dev-dependencies]
 # Standard testing runtime components

@@ -64,6 +64,9 @@ fn parse_location(loc: &str) -> Option<(&str, u16)> {
 
     let mut parts = host_port.split(':');
     let host = parts.next()?;
+    if host.is_empty() {
+        return None;
+    }
     // BUG-084: a present-but-unparseable port string (e.g. a corrupt/truncated LOCATION
     // header) must reject the packet, not silently coerce to 80 — that's indistinguishable
     // from "no port specified" and would route to the wrong port on a real device.
@@ -203,6 +206,9 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     };
 
     let raw_usn_str = raw.usn?;
+    if raw_usn_str.is_empty() {
+        return None;
+    }
     // BUG-011: uppercase the serial to make the SsdpDevice::serial doc comment's "uppercase"
     // promise true. SSDP USN casing varies by firmware compile target, but MQTT broker
     // subscriptions and TLS SNI/identity route strictly on exact casing as printed on the

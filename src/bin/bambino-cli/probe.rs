@@ -187,7 +187,12 @@ async fn capture_pushall(
     // Goes through poll_telemetry() (not poll_raw()) so this also warms
     // PrinterClient's home_flag/gcode_state cache from the very first response.
     while Instant::now() < deadline {
-        let event = client.poll_telemetry().await?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let event = match tokio::time::timeout(remaining, client.poll_telemetry()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => break,
+        };
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload)
             && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
         {
@@ -340,7 +345,12 @@ async fn capture_responses(
     // Goes through poll_telemetry() (not poll_raw()) so every test's capture window
     // also warms PrinterClient's home_flag/gcode_state cache as a side effect.
     while Instant::now() < deadline {
-        let event = client.poll_telemetry().await?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let event = match tokio::time::timeout(remaining, client.poll_telemetry()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => break,
+        };
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload) {
             responses.push(CapturedMessage {
                 elapsed_ms: start.elapsed().as_millis() as u64,
@@ -419,16 +429,29 @@ pub async fn run(
 
     eprint!("Requesting pushall state dump... ");
     io::stderr().flush().unwrap_or(());
-    client.request_pushall().await?;
-    let pushall = capture_pushall(&mut client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await?;
-    if pushall.is_some() {
-        eprintln!("captured.");
-    } else {
-        eprintln!(
-            "timed out ({}s). Continuing without pushall.",
-            PUSHALL_TIMEOUT_SECS
-        );
-    }
+    let pushall = match client.request_pushall().await {
+        Ok(_) => match capture_pushall(&mut client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await {
+            Ok(Some(p)) => {
+                eprintln!("captured.");
+                Some(p)
+            }
+            Ok(None) => {
+                eprintln!(
+                    "timed out ({}s). Continuing without pushall.",
+                    PUSHALL_TIMEOUT_SECS
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!("capture failed: {e}. Continuing without pushall.");
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("request failed: {e}. Continuing without pushall.");
+            None
+        }
+    };
 
     eprintln!("Running {} tests...\n", tests.len());
 

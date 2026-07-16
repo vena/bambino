@@ -393,8 +393,20 @@ fn test_cn_fallback_verifier_accepts_real_v1_shaped_cert_with_cn_match() {
 
 #[test]
 fn test_build_verified_client_config_bad_key_returns_error() {
-    let _bogus_cert = CertificateDer::from(vec![0u8; 10]);
-    let bogus_key = PrivateKeyDer::try_from(vec![0u8; 10]);
-    // Invalid DER key bytes should fail to parse
-    assert!(bogus_key.is_err());
+    // BUG-157: exercise this crate's build_verified_client_config, not just
+    // rustls_pki_types::PrivateKeyDer::try_from's own parsing (a fact about that crate, not
+    // this one). A well-typed-but-garbage PKCS#8 key bypasses try_from's format sniffing so
+    // the bogus bytes reach rustls' own key validation inside with_client_auth_cert.
+    let (ca_der, ..) = test_support::generate_test_ca();
+    let bogus_key =
+        PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(vec![0u8; 10]));
+    let bogus_cert = CertificateDer::from(vec![0u8; 10]);
+
+    let result =
+        build_verified_client_config([ca_der], Some((vec![bogus_cert], bogus_key)));
+
+    assert!(
+        result.is_err(),
+        "garbage PKCS#8 key bytes must fail client config construction"
+    );
 }

@@ -458,6 +458,53 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
 }
 
 #[tokio::test]
+async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
+    // BUG-148: FanTarget::ChamberExhaust was never exercised through set_fan_speed, unlike its
+    // 3 sibling fan targets above (PartCooling, AuxiliaryLeft, AuxiliaryRight). Mirrors the
+    // AuxiliaryRight success (X2D)/mismatch (P1S) pair in
+    // test_cooling_fans_and_peripheral_switches, using H2D for the success case since chamber
+    // exhaust is an H2-series/X2D feature.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "M106 P3 S204\n"); // 80% PWM
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "09P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed for H2D");
+    let mut client_h2d =
+        PrinterClient::from_mqtt(mqtt_client, "09P000000000000", BambuModel::H2D);
+
+    client_h2d
+        .set_fan_speed(FanTarget::ChamberExhaust, 80)
+        .await
+        .expect("H2D chamber exhaust fan set failed");
+
+    broker_task.await.expect("H2D broker task panicked");
+
+    // Verify chamber exhaust fan is restricted on a model without one (P1S).
+    let (client_stream_p1s, mut server_stream_p1s) = tokio::io::duplex(8192);
+    let broker_task_p1s = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_p1s).await;
+    });
+    let mqtt_client_p1s =
+        BambuMqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed for P1S");
+    let mut client_p1s =
+        PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", BambuModel::P1S);
+
+    let err_res = client_p1s.set_fan_speed(FanTarget::ChamberExhaust, 80).await;
+    assert!(matches!(err_res, Err(BambuError::ModelMismatch(_))));
+
+    broker_task_p1s.await.expect("P1S broker task panicked");
+}
+
+#[tokio::test]
 async fn test_queue_lifecycle_control_blocks() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
@@ -3091,6 +3138,33 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     );
 
     server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_camera_trio_unconfigured_error() {
+    // BUG-147: no test exercised the camera trio's "not configured" branch — the same case
+    // FTPS's disconnect_storage/re-storage() test above covers for the FTPS trio
+    // (see "FTPS not configured" a few tests up). A PrinterClient that never called
+    // .with_camera()/.attach_camera() must fail read_camera_frame()/camera() with a clear
+    // ProtocolViolation, not a panic or a misleading dial-level error.
+    let mut client = PrinterClient::new(
+        DummyTls,
+        DummyFactory,
+        "127.0.0.1",
+        SERIAL,
+        "12345678",
+        BambuModel::P1S,
+    );
+    assert!(!client.camera_connected());
+
+    let mut frame_buf = Vec::new();
+    let result = client.read_camera_frame(&mut frame_buf).await;
+    assert!(
+        matches!(result, Err(BambuError::ProtocolViolation(_))),
+        "expected ProtocolViolation (\"Camera not configured\") on an unconfigured client, got {:?}",
+        result.map(|_| ())
+    );
+    assert!(!client.camera_connected());
 }
 
 #[tokio::test]
