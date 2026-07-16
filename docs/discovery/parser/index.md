@@ -78,7 +78,7 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 - **`raw_model_str`**: `String`
 
-  Unmodified hardware identifier returned by the network card.
+  Hardware identifier from the `DevModel.bambu.com` header, or the NT/ST URN-derived fallback string when that header is absent/empty (see `effective_dev_model`).
 
 - **`signal_dbm`**: `Option<i32>`
 

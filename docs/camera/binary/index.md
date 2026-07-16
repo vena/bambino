@@ -30,6 +30,7 @@ a standard 16-byte length descriptor.
 |------|------|-------------|
 | [`BambuBinaryCameraStream`](#bambubinarycamerastream) | struct | Abstract state controller parsing incoming frame buffers from raw Port 6000 streams. |
 | [`build_handshake_packet`](#build-handshake-packet) | fn | Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY]. |
+| [`CAMERA_PASSWORD_MAX_LEN`](#camera-password-max-len) | const | Maximum accepted access-code length for the camera handshake and RTSPS auth, in bytes. |
 
 ## Types
 
@@ -84,4 +85,16 @@ Constructs the static 80-byte binary authentication packet required by the print
 * Offset 8-15 (8 bytes): Zero-padding block
 * Offset 16-47 (32 bytes): Null-padded ASCII username (`"bblp"`)
 * Offset 48-79 (32 bytes): Null-padded ASCII LAN access code
+
+
+---
+
+## Constants
+
+### `CAMERA_PASSWORD_MAX_LEN`
+```rust
+const CAMERA_PASSWORD_MAX_LEN: usize = 32usize;
+```
+
+Maximum accepted access-code length for the camera handshake and RTSPS auth, in bytes.
 

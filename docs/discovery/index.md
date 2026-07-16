@@ -26,7 +26,7 @@ directly instead.
 - [Functions](#functions)
   - [`discover_devices`](#discover-devices)
 - [Constants](#constants)
-  - [`MULTICAST_IP`](#multicast-ip)
+  - [`MULTICAST_ADDR`](#multicast-addr)
   - [`SSDP_PORT`](#ssdp-port)
   - [`SSDP_PORT_ALT`](#ssdp-port-alt)
 
@@ -37,7 +37,7 @@ directly instead.
 | [`parser`](#parser) | mod | # Zero-Copy HTTP-style SSDP Parsing Engine |
 | [`DiscoveryEngine`](#discoveryengine) | struct | Asynchronous Discovery Engine providing search orchestration and passive monitoring. |
 | [`discover_devices`](#discover-devices) | fn | Broadcasts SSDP search queries and listens for printer responses for the given duration. |
-| [`MULTICAST_IP`](#multicast-ip) | const | Standard Bambu Lab multicast group target for SSDP operations. |
+| [`MULTICAST_ADDR`](#multicast-addr) | const | Standard Bambu Lab multicast group target for SSDP operations. |
 | [`SSDP_PORT`](#ssdp-port) | const | Primary UDP port allocated to physical Bambu Lab printer local services [REF-NET-PORTS]. |
 | [`SSDP_PORT_ALT`](#ssdp-port-alt) | const | Alternative SSDP port listed in Bambu Lab documentation [REF-NET-PORTS]. |
 
@@ -107,7 +107,7 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 - **`raw_model_str`**: `String`
 
-  Unmodified hardware identifier returned by the network card.
+  Hardware identifier from the `DevModel.bambu.com` header, or the NT/ST URN-derived fallback string when that header is absent/empty (see `effective_dev_model`).
 
 - **`signal_dbm`**: `Option<i32>`
 
@@ -220,9 +220,9 @@ for printer in &printers {
 
 ## Constants
 
-### `MULTICAST_IP`
+### `MULTICAST_ADDR`
 ```rust
-const MULTICAST_IP: &str;
+const MULTICAST_ADDR: core::net::Ipv4Addr;
 ```
 
 Standard Bambu Lab multicast group target for SSDP operations.

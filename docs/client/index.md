@@ -649,6 +649,20 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works off cached `home_flag`).
 
+- <span id="superprinterclient-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
+
+  Returns whether the printer is on wired Ethernet, per the cached `print.net.conf` bit 0
+
+  (mirrors `PrinterTelemetry::is_ethernet_active()`, the documented-preferred,
+
+  confirmed-authoritative source — see BUG-110) but works between polls off the cached
+
+  value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
+
+  `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it
+
+  (BUG-135).
+
 - <span id="superprinterclient-poll-raw"></span>`async fn poll_raw(&mut self) -> Result<MqttMessage, BambuError>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage), [`BambuError`](../error/index.md#bambuerror)
 
   Pulls the next raw MQTT message without deserialization.
