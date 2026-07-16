@@ -79,6 +79,10 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 - <span id="x1cquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
+- <span id="x1cquirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="x1cquirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
+
 - <span id="x1cquirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
 - <span id="x1cquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16`
@@ -124,6 +128,10 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 - <span id="x1equirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="x1equirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
+
+- <span id="x1equirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="x1equirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
 
 - <span id="x1equirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 

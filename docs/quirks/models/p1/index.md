@@ -59,6 +59,10 @@ Quirks shared by the P1P and P1S CoreXY platforms.
 
 - <span id="p1quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
+- <span id="p1quirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="p1quirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
+
 - <span id="p1quirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
 - <span id="p1quirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`

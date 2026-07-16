@@ -64,6 +64,10 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
 - <span id="a1miniquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
+- <span id="a1miniquirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="a1miniquirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
+
 - <span id="a1miniquirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
 - <span id="a1miniquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
@@ -109,6 +113,10 @@ Quirks for the full-size A1 bed-slinger.
 - <span id="a1quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="a1quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
+
+- <span id="a1quirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="a1quirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
 
 - <span id="a1quirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 

@@ -75,6 +75,10 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
+- <span id="p2quirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="p2quirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
+
 - <span id="p2quirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
 - <span id="p2quirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`

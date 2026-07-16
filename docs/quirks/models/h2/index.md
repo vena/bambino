@@ -26,9 +26,13 @@ O1C and O1C2 are hardware revisions with identical quirks.
   - [`H2DQuirks`](#h2dquirks)
   - [`H2SQuirks`](#h2squirks)
 - [Constants](#constants)
+  - [`H2S_X_MAX`](#h2s-x-max)
+  - [`H2S_Y_MAX`](#h2s-y-max)
   - [`H2S_Z_MAX`](#h2s-z-max)
   - [`H2_BED_TEMP_MAX`](#h2-bed-temp-max)
   - [`H2_CHAMBER_TEMP_MAX`](#h2-chamber-temp-max)
+  - [`H2_DUAL_X_MAX`](#h2-dual-x-max)
+  - [`H2_DUAL_Y_MAX`](#h2-dual-y-max)
   - [`H2_DUAL_Z_MAX`](#h2-dual-z-max)
   - [`H2_NOZZLE_TEMP_MAX`](#h2-nozzle-temp-max)
 
@@ -40,9 +44,13 @@ O1C and O1C2 are hardware revisions with identical quirks.
 | [`H2DProQuirks`](#h2dproquirks) | struct | Quirks for the H2D Pro — same kinematics as H2D. |
 | [`H2DQuirks`](#h2dquirks) | struct | Quirks for the H2D — dual-nozzle (IDEX) CoreXY. |
 | [`H2SQuirks`](#h2squirks) | struct | Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family. |
+| [`H2S_X_MAX`](#h2s-x-max) | const | H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row (340×320×340mm) (BUG-163). |
+| [`H2S_Y_MAX`](#h2s-y-max) | const | See `H2S_X_MAX`'s doc comment. |
 | [`H2S_Z_MAX`](#h2s-z-max) | const | H2S build volume Z depth (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row. |
 | [`H2_BED_TEMP_MAX`](#h2-bed-temp-max) | const | Bed temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row. |
 | [`H2_CHAMBER_TEMP_MAX`](#h2-chamber-temp-max) | const | Chamber temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Chamber Temperature row. |
+| [`H2_DUAL_X_MAX`](#h2-dual-x-max) | const | X/Y (mm) shared by H2D, H2D Pro, and H2C — conservative dual-nozzle value (the smaller of each model's single/dual-nozzle profiles), same approach as `H2_DUAL_Z_MAX` (BUG-163). |
+| [`H2_DUAL_Y_MAX`](#h2-dual-y-max) | const | See `H2_DUAL_X_MAX`'s doc comment. |
 | [`H2_DUAL_Z_MAX`](#h2-dual-z-max) | const | Z depth (mm) shared by H2D, H2D Pro, and H2C — does not vary by active nozzle, per `MODEL_MATRIX.csv`'s Build Volume row. |
 | [`H2_NOZZLE_TEMP_MAX`](#h2-nozzle-temp-max) | const | Nozzle temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Hot End Temperature row. |
 
@@ -87,6 +95,10 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 - <span id="h2cquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="h2cquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
+
+- <span id="h2cquirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="h2cquirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
 
 - <span id="h2cquirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
@@ -140,6 +152,10 @@ Quirks for the H2D Pro — same kinematics as H2D.
 
 - <span id="h2dproquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
+- <span id="h2dproquirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="h2dproquirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
+
 - <span id="h2dproquirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
 - <span id="h2dproquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
@@ -191,6 +207,10 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 - <span id="h2dquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="h2dquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
+
+- <span id="h2dquirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="h2dquirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
 
 - <span id="h2dquirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
@@ -244,6 +264,10 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 - <span id="h2squirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
+- <span id="h2squirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
+
+- <span id="h2squirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
+
 - <span id="h2squirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
 
 - <span id="h2squirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
@@ -260,6 +284,21 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 ---
 
 ## Constants
+
+### `H2S_X_MAX`
+```rust
+const H2S_X_MAX: f32 = 340f32;
+```
+
+H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build
+Volume row (340×320×340mm) (BUG-163).
+
+### `H2S_Y_MAX`
+```rust
+const H2S_Y_MAX: f32 = 320f32;
+```
+
+See `H2S_X_MAX`'s doc comment.
 
 ### `H2S_Z_MAX`
 ```rust
@@ -281,6 +320,21 @@ const H2_CHAMBER_TEMP_MAX: u16 = 65u16;
 ```
 
 Chamber temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Chamber Temperature row.
+
+### `H2_DUAL_X_MAX`
+```rust
+const H2_DUAL_X_MAX: f32 = 300f32;
+```
+
+X/Y (mm) shared by H2D, H2D Pro, and H2C — conservative dual-nozzle value (the smaller of
+each model's single/dual-nozzle profiles), same approach as `H2_DUAL_Z_MAX` (BUG-163).
+
+### `H2_DUAL_Y_MAX`
+```rust
+const H2_DUAL_Y_MAX: f32 = 320f32;
+```
+
+See `H2_DUAL_X_MAX`'s doc comment.
 
 ### `H2_DUAL_Z_MAX`
 ```rust

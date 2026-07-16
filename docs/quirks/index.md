@@ -161,9 +161,21 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns the maximum safe Z-axis travel distance in millimeters for this model.
 
+- `fn x_max(&self) -> f32`
+
+  Returns the maximum safe X-axis travel distance in millimeters for this model (BUG-163).
+
+- `fn y_max(&self) -> f32`
+
+  Returns the maximum safe Y-axis travel distance in millimeters for this model (BUG-163).
+
 - `fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String`
 
   Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
+
+- `fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String`
+
+  Generates a bounded relative X/Y-axis movement G-code command (BUG-163) — the same
 
 - `fn requires_wallclock_rtsp_timestamps(&self) -> bool`
 
