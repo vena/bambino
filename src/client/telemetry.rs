@@ -50,6 +50,10 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_spd_lvl: Option<u8>,
     pub(crate) last_spd_mag: Option<u16>,
     pub(crate) last_wifi_signal: Option<String>,
+    // BUG-135: caches print.net.conf so PrinterClient::is_ethernet_active() (the confirmed-
+    // authoritative source, per BUG-110) is reachable through the cached client pipeline, not
+    // only via a raw TelemetryReport parse.
+    pub(crate) last_net_conf: Option<u32>,
     pub(crate) last_ipcam: Option<IpcamTelemetry>,
 }
 
@@ -248,6 +252,11 @@ where
         }
         if let Some(wifi_signal) = &print.wifi_signal {
             self.cache.last_wifi_signal = Some(wifi_signal.clone());
+        }
+        if let Some(net) = &print.net
+            && let Some(conf) = net.conf
+        {
+            self.cache.last_net_conf = Some(conf);
         }
     }
 
@@ -507,6 +516,16 @@ where
     /// Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works off cached `home_flag`).
     pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
         self.cache.last_wifi_signal.as_deref() == Some("-90dBm")
+    }
+
+    /// Returns whether the printer is on wired Ethernet, per the cached `print.net.conf` bit 0
+    /// (mirrors `PrinterTelemetry::is_ethernet_active()`, the documented-preferred,
+    /// confirmed-authoritative source — see BUG-110) but works between polls off the cached
+    /// value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
+    /// `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it
+    /// (BUG-135).
+    pub fn is_ethernet_active(&self) -> bool {
+        self.cache.last_net_conf.is_some_and(|conf| conf & 0x1 != 0)
     }
 
     /// Pulls the next raw MQTT message without deserialization.

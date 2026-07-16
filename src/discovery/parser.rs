@@ -32,7 +32,7 @@ pub struct SsdpDevice {
     pub version: String,
     /// Network connection medium (e.g. "lan", "wlan").
     pub connect_type: String,
-    /// Unmodified hardware identifier returned by the network card.
+    /// Hardware identifier from the `DevModel.bambu.com` header, or the NT/ST URN-derived fallback string when that header is absent/empty (see `effective_dev_model`).
     pub raw_model_str: String,
     /// WiFi signal strength in dBm (e.g. -43), if reported by the device.
     pub signal_dbm: Option<i32>,

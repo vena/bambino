@@ -45,6 +45,13 @@ pub(crate) fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 pub(crate) fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
     let mut payload = Vec::with_capacity(16 + client_id.len() + username.len() + password.len());
 
+    // BUG-134: string length prefixes below are u16 wire fields; these `as u16` casts
+    // silently truncate/wrap past 65535 bytes instead of erroring. Not reachable today (all
+    // values derive from short serials/fixed strings) — debug_assert as insurance.
+    debug_assert!(client_id.len() <= u16::MAX as usize, "client_id exceeds u16::MAX");
+    debug_assert!(username.len() <= u16::MAX as usize, "username exceeds u16::MAX");
+    debug_assert!(password.len() <= u16::MAX as usize, "password exceeds u16::MAX");
+
     // Protocol Name length prefix and string
     payload.extend_from_slice(&[0x00, 0x04]);
     payload.extend_from_slice(b"MQTT");
@@ -78,6 +85,7 @@ pub(crate) fn encode_connect(client_id: &str, username: &str, password: &str) ->
 /// Encodes an MQTT SUBSCRIBE packet with QoS 1 flags.
 pub(crate) fn encode_subscribe(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> {
     let mut payload = Vec::with_capacity(5 + topic.len());
+    debug_assert!(topic.len() <= u16::MAX as usize, "topic exceeds u16::MAX");
 
     // Packet ID
     payload.extend_from_slice(&packet_id.to_be_bytes());
@@ -98,6 +106,7 @@ pub(crate) fn encode_subscribe(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> 
 /// Encodes an MQTT PUBLISH packet with QoS 1 flags.
 pub(crate) fn encode_publish_qos1(packet_id: u16, topic: &str, payload: &[u8]) -> Vec<u8> {
     let mut var_header = Vec::with_capacity(4 + topic.len());
+    debug_assert!(topic.len() <= u16::MAX as usize, "topic exceeds u16::MAX");
 
     // Topic string length prefix and bytes
     var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());

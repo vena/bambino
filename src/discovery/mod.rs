@@ -24,10 +24,7 @@ pub use parser::{SsdpDevice, parse_ssdp_payload};
 use std::collections::BTreeSet;
 
 /// Standard Bambu Lab multicast group target for SSDP operations.
-pub const MULTICAST_IP: &str = "239.255.255.250";
-
-/// Typed form of [`MULTICAST_IP`], used for socket operations.
-const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
+pub const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 
 /// IPv4 limited broadcast address, used as a fallback when multicast is filtered locally.
 const BROADCAST_ADDR: Ipv4Addr = Ipv4Addr::new(255, 255, 255, 255);

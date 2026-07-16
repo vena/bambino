@@ -671,6 +671,69 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_poll_telemetry_with_timer_resumes_split_frame_through_persistent_client() {
+            // BUG-140: the resumable-frame-read invariant (.claude/rules/wire-read-deadline.md)
+            // was previously only unit-tested against a bare `FrameReadState`/`read_exact_packet`
+            // call (frame.rs) — never through a live, persistent `BambuMqttClient::read_state`
+            // field with a real (non-Dummy) timer, the exact combination `PrinterClient` uses via
+            // `poll_telemetry_with_timer`. A regression reconstructing a fresh `FrameReadState`
+            // per `poll_wire()` call (instead of reusing `self.read_state`) would go uncaught
+            // without this.
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+            let server_task = tokio::spawn(async move {
+                let mut discard = vec![0u8; 256];
+                // Read CONNECT, reply CONNACK accepted.
+                let _ = server_stream.read(&mut discard).await;
+                server_stream
+                    .write_all(&[0x20, 0x02, 0x00, 0x00])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+                // Read SUBSCRIBE, reply SUBACK accepted (QoS 1 granted).
+                let _ = server_stream.read(&mut discard).await;
+                server_stream
+                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x01])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+
+                // Split a real PUBLISH QoS 1 frame across two write_all calls with a real sleep
+                // between them, so the client's first poll attempt reads a partial frame,
+                // stashes it in self.read_state, and the second attempt must resume from there.
+                let frame = encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
+                let split = frame.len() / 2;
+                server_stream.write_all(&frame[..split]).await.unwrap();
+                server_stream.flush().await.unwrap();
+                tokio::time::sleep(core::time::Duration::from_millis(200)).await;
+                server_stream.write_all(&frame[split..]).await.unwrap();
+                server_stream.flush().await.unwrap();
+
+                // Drain the automatic PUBACK the client sends back for the QoS 1 PUBLISH.
+                let _ = server_stream.read(&mut discard).await;
+            });
+
+            let mut client =
+                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                    .await
+                    .expect("connect should succeed");
+
+            let timer = crate::io::tokio::TokioTimer::new();
+            let msg = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                client.poll_telemetry_with_timer(&timer),
+            )
+            .await
+            .expect("poll_telemetry_with_timer hung past the meta-safety timeout")
+            .expect("split PUBLISH frame should reassemble successfully");
+
+            assert_eq!(msg.topic, "device/01P000000000000/report");
+            assert_eq!(msg.payload, b"{\"print\":{}}");
+
+            server_task.await.unwrap();
+        }
+
+        #[tokio::test]
         async fn test_publish_command_does_not_reset_zombie_timer_while_pending() {
             // BUG-078: publish_command() used to unconditionally set write_pending_secs to
             // Some(0) on every call, even while an earlier command's response was still

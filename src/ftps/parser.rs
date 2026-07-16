@@ -60,6 +60,19 @@ fn parse_month(month: &str) -> Option<u8> {
     }
 }
 
+/// Returns the number of days in a given calendar month, leap-year-aware for February.
+fn days_in_month(month: u8, year: i32) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+            if is_leap { 29 } else { 28 }
+        }
+        _ => 31,
+    }
+}
+
 /// Splits the next whitespace-delimited token off the front of `s`, returning
 /// `(token, remainder)`. Unlike `str::split_whitespace()`, callers retain a real `&str`
 /// slice into the original string at every step, so the untouched tail (e.g. everything
@@ -231,6 +244,14 @@ pub fn parse_unix_listing(
         } else {
             // Field contains direct YYYY calendar year representation.
             year = time_or_year.parse::<i32>().ok().unwrap_or(current_year);
+        }
+
+        // BUG-133: sibling gap to BUG-061's flat 1..=31 day range check — validate against the
+        // actual month length (leap-year-aware, using the now-finalized `year`) so a
+        // calendar-invalid line (e.g. "Feb 30") from the untrusted printer LIST output is
+        // rejected instead of silently accepted.
+        if day > days_in_month(month, year) {
+            continue;
         }
 
         files.push(FtpFile {

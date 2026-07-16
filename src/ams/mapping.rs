@@ -144,7 +144,9 @@ pub struct AmsMapping2Entry {
 /// from `ams_mapping2` when the caller only supplied the latter via
 /// `PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
 pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
-    if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
+    if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
+        && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
+    {
         (entry.ams_id as i32) * (super::parser::AMS_SLOTS_PER_UNIT as i32) + entry.slot_id as i32
     } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id)
     {
@@ -247,7 +249,15 @@ pub fn validate_external_spool_safety(
         let is_external = (entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID
             || entry.ams_id == AMS_EXTERNAL_SPOOL_ID)
             && entry.slot_id == 0;
-        if !is_unmapped && !is_external {
+        // BUG-128: an entry that's neither the unmapped sentinel nor a recognized external id
+        // previously fell through to has_physical_ams = true unconditionally, even when
+        // ams_id/slot_id don't correspond to any real standard/AMS-HT hardware — reproducing
+        // the 07FF_8012 lockup class for garbage ids generally. Require a validly-ranged
+        // standard or AMS-HT entry before counting it as physical.
+        let is_valid_physical = (entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
+            && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT)
+            || (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id);
+        if !is_unmapped && !is_external && is_valid_physical {
             has_physical_ams = true;
             break;
         }

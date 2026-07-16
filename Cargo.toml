@@ -25,9 +25,6 @@ cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "tokio"]
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
 esp-idf = ["dep:esp-idf-svc", "dep:socket2", "std"]
 
-# Bare-metal / restricted environment support (no standard library)
-no_std = []
-
 # Dynamic allocation support flag (enables string manipulation on bare-metal environments)
 # Propagates the required allocation features to both serde and serde_json core libraries.
 alloc = ["serde/alloc", "serde_json/alloc"]
@@ -41,7 +38,6 @@ embassy = [
     "dep:mbedtls-rs",
     "dep:embedded-nal-async",
     "dep:rand_core",
-    "no_std",
     "alloc",
 ]
 
