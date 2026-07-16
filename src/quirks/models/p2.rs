@@ -103,6 +103,14 @@ impl ModelQuirks for P2Quirks {
         P2S_Z_MAX
     }
 
+    fn x_max(&self) -> f32 {
+        P2S_Z_MAX
+    }
+
+    fn y_max(&self) -> f32 {
+        P2S_Z_MAX
+    }
+
     fn nozzle_temp_max(&self) -> u16 {
         P2S_NOZZLE_TEMP_MAX
     }

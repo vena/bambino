@@ -61,6 +61,12 @@ pub(crate) const FTPS_MAX_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
 /// allowance for entirely different reasons.
 pub(crate) const FTPS_READ_TIMEOUT_SECS: u64 = 30;
 
+/// Per-chunk wall-clock budget for `upload_file`'s data-write loop (BUG-164) — the write-side
+/// counterpart to `FTPS_READ_TIMEOUT_SECS`. The write loop and final `flush()` had no deadline
+/// at all, unlike the STOR negotiation and post-transfer confirmation reads immediately around
+/// them; a stalled write would hang forever.
+pub(crate) const FTPS_WRITE_TIMEOUT_SECS: u64 = 30;
+
 /// Wall-clock budget specifically for the post-transfer confirmation `read_response` call in `list_directory`/`upload_file`/`download_file` (the one waiting for `226`/`426` after the data channel closes).
 /// `upload_file`'s own doc comment already documents waiting "up to 300 seconds for the `226`
 /// transfer confirmation to print" due to microSD flush latency — that wait is a genuine, entirely

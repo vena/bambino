@@ -676,16 +676,45 @@ where
         let mut offset = 0;
         while offset < data.len() {
             let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
-            if let Err(_e) = data_channel
-                .write_all(&data[offset..offset + chunk_size])
-                .await
-            {
+            let write_result = if self.timer.has_real_clock() {
+                let write_fut = data_channel.write_all(&data[offset..offset + chunk_size]);
+                let sleep_fut = self
+                    .timer
+                    .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
+                match crate::io::race(write_fut, sleep_fut).await {
+                    crate::io::Raced::Left(r) => r,
+                    crate::io::Raced::Right(_) => {
+                        self.poisoned = true;
+                        return Err(BambuError::NetworkError(SocketError::TimedOut));
+                    }
+                }
+            } else {
+                data_channel
+                    .write_all(&data[offset..offset + chunk_size])
+                    .await
+            };
+            if let Err(_e) = write_result {
                 self.poisoned = true;
                 return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
             }
             offset += chunk_size;
         }
-        if let Err(_e) = data_channel.flush().await {
+        let flush_result = if self.timer.has_real_clock() {
+            let flush_fut = data_channel.flush();
+            let sleep_fut = self
+                .timer
+                .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
+            match crate::io::race(flush_fut, sleep_fut).await {
+                crate::io::Raced::Left(r) => r,
+                crate::io::Raced::Right(_) => {
+                    self.poisoned = true;
+                    return Err(BambuError::NetworkError(SocketError::TimedOut));
+                }
+            }
+        } else {
+            data_channel.flush().await
+        };
+        if let Err(_e) = flush_result {
             self.poisoned = true;
             return Err(BambuError::NetworkError(SocketError::ConnectionAborted));
         }

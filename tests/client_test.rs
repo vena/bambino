@@ -211,6 +211,31 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
 }
 
 #[tokio::test]
+async fn test_move_relative_x_rejects_out_of_range_distance() {
+    // BUG-163: X/Y moves previously had no distance cap at all, unlike Z. P1S x_max is
+    // 256.0mm — a distance exceeding that must be rejected the same way Z's out-of-range
+    // case already is.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mqtt_client =
+        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+            .await
+            .expect("MQTT connect handshake failed");
+
+    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
+
+    let result = client.move_relative('x', 300.0, 3000).await;
+    assert!(matches!(result, Err(BambuError::ModelMismatch(_))));
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_thermal_guards_and_temperatures() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 

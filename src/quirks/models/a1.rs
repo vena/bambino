@@ -81,6 +81,14 @@ macro_rules! impl_a1_shared {
                 $z_max
             }
 
+            fn x_max(&self) -> f32 {
+                $z_max
+            }
+
+            fn y_max(&self) -> f32 {
+                $z_max
+            }
+
             fn nozzle_temp_max(&self) -> u16 {
                 A1_NOZZLE_TEMP_MAX
             }

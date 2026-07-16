@@ -109,12 +109,36 @@ pub trait ModelQuirks {
         DEFAULT_Z_MAX_MM
     }
 
+    /// Returns the maximum safe X-axis travel distance in millimeters for this model (BUG-163).
+    fn x_max(&self) -> f32 {
+        DEFAULT_X_MAX_MM
+    }
+
+    /// Returns the maximum safe Y-axis travel distance in millimeters for this model (BUG-163).
+    fn y_max(&self) -> f32 {
+        DEFAULT_Y_MAX_MM
+    }
+
     /// Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
     ///
     /// Evaluates travel limits specific to Bed-Slinger or CoreXY build envelopes. Returns an empty
     /// string if commanded relative distances exceed mechanical bounds.
     fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String {
         format_z_move_gcode(distance, feedrate, self.z_max())
+    }
+
+    /// Generates a bounded relative X/Y-axis movement G-code command (BUG-163) — the same
+    /// single-command distance-cap pattern `relative_z_move_gcode` uses for Z (see its doc
+    /// comment for why this isn't true position-aware crash prevention). Returns an empty
+    /// string if `distance` is zero, non-finite, exceeds the axis's `x_max()`/`y_max()` bound,
+    /// or `axis` is neither `'X'` nor `'Y'`.
+    fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String {
+        let axis_max = match axis {
+            'X' => self.x_max(),
+            'Y' => self.y_max(),
+            _ => return String::new(),
+        };
+        format_xy_move_gcode(axis, distance, feedrate, axis_max)
     }
 
     /// Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
@@ -293,6 +317,20 @@ pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> S
     )
 }
 
+/// Generates a relative X/Y-axis movement G-code block, bounded by a client-side `axis_max`
+/// distance cap on the single move (BUG-163) — same limitation as `format_z_move_gcode`'s
+/// `z_max` cap (not position-aware crash prevention; see its doc comment). No `M211`/reference-
+/// mode wrapping here: that's specific to Z's frame-shifting risk (see `format_z_move_gcode`),
+/// not applicable to X/Y.
+///
+/// Returns an empty string if `distance` is zero, non-finite, or exceeds `axis_max`.
+pub(crate) fn format_xy_move_gcode(axis: char, distance: f32, feedrate: u32, axis_max: f32) -> String {
+    if !distance.is_finite() || distance == 0.0 || distance.abs() > axis_max {
+        return String::new();
+    }
+    format!("G91\nG0 {axis}{distance:.2} F{feedrate}\nG90")
+}
+
 pub(crate) const FAN_STEP_MAX: u8 = 15;
 /// Fallback `z_max()` (mm) for a model with no dedicated quirks strategy override.
 ///
@@ -300,6 +338,12 @@ pub(crate) const FAN_STEP_MAX: u8 = 15;
 /// `z_max()` with its own value (see `MODEL_MATRIX.csv`) — e.g. A1 Mini is 180mm and H2S is
 /// 340mm, not this constant's 256mm.
 pub(crate) const DEFAULT_Z_MAX_MM: f32 = 256.0;
+/// Fallback `x_max()`/`y_max()` (mm) for a model with no dedicated quirks strategy override
+/// (BUG-163). Unreachable in practice: every currently-shipped model's quirks strategy
+/// overrides both (see `MODEL_MATRIX.csv`'s Build Volume row).
+pub(crate) const DEFAULT_X_MAX_MM: f32 = 256.0;
+/// See `DEFAULT_X_MAX_MM`'s doc comment.
+pub(crate) const DEFAULT_Y_MAX_MM: f32 = 256.0;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
 
 /// Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
@@ -771,6 +815,52 @@ mod tests {
         let gcode = q.relative_z_move_gcode(15.0, 2000);
         assert!(gcode.contains("Z15.00"));
         assert!(gcode.contains("F2000"));
+    }
+
+    // X/Y-move gcode parameterization tests (BUG-163)
+
+    #[test]
+    fn test_xy_move_gcode_parameterized() {
+        let gcode = format_xy_move_gcode('X', 10.0, 3000, 256.0);
+        assert!(gcode.contains("G0 X10.00"));
+        assert!(gcode.contains("F3000"));
+        assert!(!gcode.contains("M211"), "X/Y moves don't need Z's M211/reference-mode wrapping");
+    }
+
+    #[test]
+    fn test_xy_move_gcode_exceeds_bounds() {
+        assert!(format_xy_move_gcode('X', 300.0, 3000, 256.0).is_empty());
+        assert!(format_xy_move_gcode('Y', -300.0, 3000, 256.0).is_empty());
+    }
+
+    #[test]
+    fn test_xy_move_gcode_rejects_non_finite() {
+        assert!(format_xy_move_gcode('X', f32::NAN, 3000, 256.0).is_empty());
+        assert!(format_xy_move_gcode('Y', f32::INFINITY, 3000, 256.0).is_empty());
+    }
+
+    #[test]
+    fn test_xy_move_gcode_zero_distance() {
+        assert!(format_xy_move_gcode('X', 0.0, 3000, 256.0).is_empty());
+    }
+
+    #[test]
+    fn test_xy_move_via_trait_rejects_non_xy_axis() {
+        // format_xy_move_gcode itself is axis-agnostic (just formats whatever char it's given,
+        // same as format_z_move_gcode is Z-only by construction) — the 'X'/'Y'-only restriction
+        // lives in relative_xy_move_gcode's axis match, so test it there.
+        let q = BambuModel::P1P.quirks();
+        assert!(q.relative_xy_move_gcode('Z', 10.0, 3000).is_empty());
+    }
+
+    #[test]
+    fn test_xy_move_via_trait_uses_model_specific_bounds() {
+        // A1 Mini's x_max/y_max is 180mm, unlike the 256mm default — confirms the trait method
+        // routes through the model's own x_max()/y_max(), not a shared constant.
+        let q = BambuModel::A1Mini.quirks();
+        assert!(q.relative_xy_move_gcode('X', 200.0, 2000).is_empty());
+        let gcode = q.relative_xy_move_gcode('X', 100.0, 2000);
+        assert!(gcode.contains("X100.00"));
     }
 
     // Homing safety tests

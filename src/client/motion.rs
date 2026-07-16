@@ -146,8 +146,8 @@ where
     /// `M1002 pop_ref_mode`) to prevent frame shifting. `M211 S1` is also sent, but per real
     /// H2D hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
     /// software travel limits on G-code received over MQTT regardless of `M211` state — it is
-    /// not a source of crash protection here. X/Y moves have no distance cap at all
-    /// (BUG-163).
+    /// not a source of crash protection here. X/Y moves get the same kind of client-side
+    /// `x_max()`/`y_max()` distance cap (BUG-163) — same limitation, not position-aware.
     ///
     /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
     /// returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a
@@ -187,7 +187,15 @@ where
             }
             self.send_gcode_raw(&gcode).await
         } else {
-            let gcode = format!("G91\nG0 {}{:.2} F{}\nG90", axis_upper, distance, feedrate);
+            let gcode = self
+                .model
+                .quirks()
+                .relative_xy_move_gcode(axis_upper, distance, feedrate);
+            if gcode.is_empty() {
+                return Err(BambuError::ModelMismatch(
+                    format!("{axis_upper}-axis move exceeds model travel limits").into(),
+                ));
+            }
             self.send_gcode_raw(&gcode).await
         }
     }

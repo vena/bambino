@@ -20,6 +20,16 @@ use crate::types::PrinterTelemetry;
 pub const H2S_Z_MAX: f32 = 340.0;
 /// Z depth (mm) shared by H2D, H2D Pro, and H2C — does not vary by active nozzle, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const H2_DUAL_Z_MAX: f32 = 325.0;
+/// H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build
+/// Volume row (340×320×340mm) (BUG-163).
+pub const H2S_X_MAX: f32 = 340.0;
+/// See `H2S_X_MAX`'s doc comment.
+pub const H2S_Y_MAX: f32 = 320.0;
+/// X/Y (mm) shared by H2D, H2D Pro, and H2C — conservative dual-nozzle value (the smaller of
+/// each model's single/dual-nozzle profiles), same approach as `H2_DUAL_Z_MAX` (BUG-163).
+pub const H2_DUAL_X_MAX: f32 = 300.0;
+/// See `H2_DUAL_X_MAX`'s doc comment.
+pub const H2_DUAL_Y_MAX: f32 = 320.0;
 /// Nozzle temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const H2_NOZZLE_TEMP_MAX: u16 = 350;
 /// Bed temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
@@ -45,7 +55,7 @@ fn h2_door_sensor_field_present(telemetry: &PrinterTelemetry) -> bool {
 }
 
 macro_rules! impl_h2_shared {
-    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr) => {
+    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -106,6 +116,14 @@ macro_rules! impl_h2_shared {
                 $z_max
             }
 
+            fn x_max(&self) -> f32 {
+                $x_max
+            }
+
+            fn y_max(&self) -> f32 {
+                $y_max
+            }
+
             fn nozzle_temp_max(&self) -> u16 {
                 H2_NOZZLE_TEMP_MAX
             }
@@ -133,7 +151,7 @@ macro_rules! impl_h2_shared {
     };
 }
 
-impl_h2_shared!(H2SQuirks, 1, false, H2S_Z_MAX);
-impl_h2_shared!(H2DQuirks, 2, true, H2_DUAL_Z_MAX);
-impl_h2_shared!(H2DProQuirks, 2, true, H2_DUAL_Z_MAX);
-impl_h2_shared!(H2CQuirks, 7, true, H2_DUAL_Z_MAX);
+impl_h2_shared!(H2SQuirks, 1, false, H2S_Z_MAX, H2S_X_MAX, H2S_Y_MAX);
+impl_h2_shared!(H2DQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX);
+impl_h2_shared!(H2DProQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX);
+impl_h2_shared!(H2CQuirks, 7, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX);
