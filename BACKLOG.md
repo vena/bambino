@@ -10,6 +10,8 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
+| BUG-163 | Sev3 | client/motion.rs | X/Y relative moves have no distance cap, unlike Z's `z_max` | 2026-07-16 | `motion.rs:183` (`move_relative`'s non-Z branch) sends a raw `G91\nG0 {axis}{distance} F{feedrate}\nG90` with zero client-side bound — unlike the Z branch's `relative_z_move_gcode`/`z_max` check. Confirmed via bambuddy #2579 (real H2D hardware test, 2026-07-16) that firmware doesn't enforce travel limits over MQTT either, so this isn't full crash prevention (no absolute position telemetry exists to clamp from) — it's parity with the same limited single-command distance bound Z already has, not currently applied to X/Y. |
+| BUG-164 | Sev3 | ftps/client.rs | `upload_file`'s data-write loop has no stall-timeout protection, unlike everything around it | 2026-07-16 | `client.rs:674-687` — the `while offset < data.len() { data_channel.write_all(...) }` loop has no deadline; the STOR negotiation read and post-transfer confirmation read on either side of it both use `read_deadline_ms`. A stalled write hangs forever. Found while cross-checking bambuddy #2529 (`fix(ftp): stop a slow upload from being retried on top of itself`) — different failure mode (their bug was a too-short flat timeout on a healthy slow transfer; this is no timeout at all on a dead one) but same class of gap BUG-159 just fixed for MQTT's `write_frame`. |
 
 ## Fixed
 

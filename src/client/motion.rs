@@ -139,9 +139,15 @@ where
     /// Dispatches a manual relative axis movement block.
     ///
     /// **Relative Axis Movement Safety [REF-MOTO-GCODE]:**
-    /// For relative movements on the Z-axis, this method automatically wraps the move
-    /// in software travel limits (`M211 S1`) and safe reference-mode push/pop blocks
-    /// (`M1002 push_ref_mode` / `M1002 pop_ref_mode`) to prevent frame shifting and endstop crashes.
+    /// For relative movements on the Z-axis, this method wraps the move in a client-side
+    /// `z_max` distance cap (bounding how far a single command can travel — not true
+    /// position-aware crash prevention, since the printer reports no absolute axis position
+    /// over MQTT) and safe reference-mode push/pop blocks (`M1002 push_ref_mode` /
+    /// `M1002 pop_ref_mode`) to prevent frame shifting. `M211 S1` is also sent, but per real
+    /// H2D hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
+    /// software travel limits on G-code received over MQTT regardless of `M211` state — it is
+    /// not a source of crash protection here. X/Y moves have no distance cap at all
+    /// (BUG-163).
     ///
     /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
     /// returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a

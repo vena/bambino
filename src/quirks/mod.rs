@@ -273,7 +273,14 @@ fn is_g28_prefix(bytes: &[u8], i: usize) -> bool {
         && bytes[i + 2] == b'8'
 }
 
-/// Generates a safe relative Z-axis movement G-code block with travel limit guards.
+/// Generates a relative Z-axis movement G-code block, bounded by a client-side `z_max` distance
+/// cap on the single move (not true position-aware crash prevention — the printer reports no
+/// absolute axis position over MQTT, so neither firmware nor client can clamp from actual
+/// position; this only bounds how far one relative command can travel). `M211 S1` is sent for
+/// parity with the touchscreen's own G-code sequence, but per real H2D hardware testing
+/// (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce software travel limits on
+/// G-code received over MQTT regardless of `M211` state — it provides no actual crash
+/// protection here, unlike what earlier revisions of this doc comment claimed.
 ///
 /// Returns an empty string if `distance` is zero or exceeds the model's Z bounds.
 pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> String {

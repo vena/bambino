@@ -1,6 +1,6 @@
 # bambino — Third-Party Cross-Verification Review (2026-07-16)
 
-**Status:** IN PROGRESS
+**Status:** COMPLETE (2026-07-16) — all findings resolved into `BUG-ID`s, zero left in `BACKLOG.md`'s `Open` table for this review; see §4 below for the "still to review" follow-up.
 
 This review is not a full-crate module sweep (see the `deep-review` skill for that). It's a
 targeted cross-verification: pull the latest commits from three third-party projects that
@@ -77,20 +77,53 @@ printer-side single-connection behavior bambuddy found is real, so a caller-faci
 against fast port-6000 redial is tracked as a real (doc-only) fix, not dismissed. See
 `BACKLOG.md`'s `Open` table, `BUG-161`.
 
-## Still to review
+## 4. Full unfiltered commit-range re-check (resolves the original "still to review" note)
 
-- Remaining bambuddy commits not yet individually checked (non-protocol-keyword-matched ones —
-  library-tag response model, non-0.4mm-nozzle AMS slot config — initial pass judged these
-  app/UI-layer, not bambino-relevant, but not exhaustively confirmed). `fix(cloud): stop
-  reporting an expired Bambu Cloud sign-in as connected` is explicitly out of scope — bambino is
-  LAN-only by design (`README.md`'s opening paragraph), no Bambu Cloud code path exists to check
-  against.
-- ha-bambulab: pulled, but no commits matched protocol-relevant keywords in the initial grep
-  pass — worth a second look at the full unfiltered log in case the keyword filter missed
-  something (e.g. a fix described without mentioning "mqtt"/"ams"/etc. by name).
-- BambuStudio: ~180 commits pulled, dominated by CI/translation-file/UI churn; only 2 matched
-  protocol-relevant keywords (`chamber/bed temp popup trigger removal`, `thumbnail camera angle`
-  — both judged UI-only on first pass, not re-verified in depth).
+The original keyword-grep pass over each repo's pulled range was re-done as a full unfiltered
+read of every commit subject (not just keyword matches), per this follow-up:
+
+- **bambuddy** (`a1a0cbdf..a6e7d671`, 51 commits, not ~35 — original count was off): every
+  commit read. `fix(jog): stop disabling firmware endstops; warn that limits aren't enforced`
+  (#2579, landed after the original pull) found a real gap — see §5 below. `fix(ftp): stop a
+  slow upload from being retried on top of itself` (#2529) found a second real gap — see §6.
+  `fix(diagnostic): skip external-storage check on P1S/P1P` (#2524) is bambuddy's own
+  diagnostic-UI feature, no bambino equivalent. `Support non-0.4mm nozzles in AMS Slot config`
+  (#1899) needs 3MF slice-metadata parsing bambino doesn't do (FTPS only moves raw bytes) — out
+  of scope, not a gap. Everything else confirmed app/UI/DB/deploy-layer (inventory, queue,
+  camwall, backup, currency, smart-plugs, cloud sign-in status — explicitly out of scope,
+  bambino is LAN-only).
+- **ha-bambulab**: `git fetch origin` confirms `origin/main` is still at `f7e52909`, unchanged
+  since 2026-06-28 — zero new commits exist to check. The original "worth a second look" note
+  was based on a false premise (implied unreviewed commits existed); there were none.
+- **BambuStudio** (`ba4f27b1..ba049f6`, 138 commits, not ~180): every commit subject read.
+  Confirms the original 2 keyword matches (chamber/bed popup removal, thumbnail camera angle)
+  are both UI-only, no gap. Nothing else in the range is wire-protocol relevant — rest is
+  filament-preset/color-management/assembly-view/CI churn. E3D high-flow nozzle support
+  (`ba968b0` and siblings) adds a new `nozzle_type` wire string bambino already handles as an
+  opaque `Option<String>` (BambuStudio's `_str2_nozzle_flow_type` classification is display-only,
+  operating on a separate slice_info field bambino never parses) — no bambino change needed.
+
+## 5. X/Y relative moves have no distance cap — CONFIRMED, tracked
+
+bambuddy's #2579 is from direct H2D hardware instrumentation: a clean relative move ran straight
+past the travel limit on real hardware, with firmware ignoring `M211` state entirely for
+MQTT-received G-code. bambino's Z-axis path (`client/motion.rs`, `quirks::format_z_move_gcode`)
+never had bambuddy's specific bug (always sends `M211 S1`, never `S0`, so no toggle-and-leave-
+disabled failure mode) and has its own real (if partial — distance-only, not position-aware)
+protection via a client-side `z_max` bound. Doc comments overstating `M211`'s actual protection
+have been corrected (`quirks/mod.rs`, `client/motion.rs`, `reference/04_toolhead_thermal_
+motion.md`). The X/Y branch of `move_relative` has no distance bound at all, unlike Z — tracked
+as `BUG-163` (`BACKLOG.md`, `Open`, Sev3; not Sev1, since neither bambino nor bambuddy can
+implement true crash prevention without absolute position telemetry the printer doesn't send).
+
+## 6. FTPS `upload_file` write path has no stall-timeout — CONFIRMED, tracked
+
+While cross-checking bambuddy's #2529 (a too-short flat upload timeout killing healthy slow
+transfers), found the opposite gap in bambino: `upload_file`'s data-write loop
+(`ftps/client.rs:674-687`) has no deadline at all, unlike the STOR negotiation and
+post-transfer confirmation reads immediately around it, which both use `read_deadline_ms`. A
+stalled write hangs forever. Same class of gap `BUG-159` just fixed for MQTT's `write_frame`.
+Tracked as `BUG-164` (`BACKLOG.md`, `Open`, Sev3).
 
 ---
 

@@ -156,7 +156,7 @@ G0 Z10.00 F3000
 G90
 M1002 pop_ref_mode
 ```
-*   `M211 S1`: Re-enables software travel limits to protect against physical endstop crashes.
+*   `M211 S1`: Sent for parity with the touchscreen's own G-code sequence. **Does not actually protect against crashes** — confirmed via real H2D hardware testing (bambuddy #2579, 2026-07-16) that firmware does not enforce software travel limits on G-code received over MQTT, regardless of `M211` state. The only real protection here is bambino's own client-side `z_max` distance cap on the single relative move (bounds how far one command can travel, not true position-aware crash prevention — the printer reports no absolute axis position over MQTT).
 *   `M1002 push_ref_mode` / `pop_ref_mode`: Isolates and restores coordinate references to prevent frame shifting.
 *   `G91` / `G90`: Switches to relative positioning for the move, then restores absolute mode.
 
