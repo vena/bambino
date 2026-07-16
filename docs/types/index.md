@@ -1672,8 +1672,8 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Hotend target temperature register.
   
-  Wire sends both integers and floats depending on model. Use `unpack_temperature()`
-  to extract actual/target from composite-packed values [REF-THER-DECODE].
+  Wire sends both integers and floats depending on model. Never composite-packed —
+  unlike `chamber_temper`, no `unpack_temperature()` call is needed here.
 
 - **`nozzle_temper`**: `Option<f64>`
 
@@ -1683,7 +1683,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`bed_temper`**: `Option<f64>`
 
-  Heated build-plate temperature register (actual, target, or composite packed).
+  Heated build-plate temperature register (actual value; never composite-packed).
 
 - **`bed_target_temper`**: `Option<f64>`
 

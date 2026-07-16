@@ -44,6 +44,13 @@ struct BambuBinaryCameraStream<IO: AsyncIo> {
 
 Abstract state controller parsing incoming frame buffers from raw Port 6000 streams.
 
+Does not own dial/redial logic itself — a caller writing its own reconnect loop against
+port 6000 must not redial immediately after a disconnect. The printer's port-6000 socket
+accepts only one connection at a time; reopening before the prior TCP FIN completes can
+orphan the old socket server-side until keepalive reaps it (~20 min stall). Confirmed
+printer behavior (bambuddy `fix(camera) #2521`); add a delay or wait for the old socket
+to fully close before redialing.
+
 #### Implementations
 
 - <span id="bambubinarycamerastream-new"></span>`fn new(stream: IO) -> Self`

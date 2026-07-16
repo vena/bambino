@@ -56,7 +56,7 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`ams_id`**: `u8`
 
-  AMS unit index (0-3 for standard, 128+ for AMS-HT, 254/255 for external/unmapped).
+  AMS unit index (0-3 for standard, 128-135 for AMS-HT, 254/255 for external/unmapped).
 
 - **`slot_id`**: `u8`
 

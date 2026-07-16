@@ -197,6 +197,10 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model has a physical fire alarm buzzer module.
 
+- `fn supports_ams_remote_drying(&self) -> bool`
+
+  Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
+
 - `fn chamber_temp_max(&self) -> u16`
 
   Returns the maximum active chamber heater temperature in °C for this model.

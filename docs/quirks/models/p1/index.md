@@ -53,6 +53,8 @@ Quirks shared by the P1P and P1S CoreXY platforms.
 
 - <span id="p1quirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
+- <span id="p1quirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self) -> bool`
+
 - <span id="p1quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="p1quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`

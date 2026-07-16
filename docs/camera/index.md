@@ -99,6 +99,11 @@ const CAMERA_PORT_BINARY_JPEG: u16 = 6_000u16;
 
 Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series).
 
+The printer accepts only one connection to this port at a time. A caller redialing it
+immediately after disconnecting can orphan the prior socket server-side until keepalive
+reaps it (~20 min stall) — wait for the old connection to fully close, or add a delay,
+before reconnecting. See [`BambuBinaryCameraStream`](binary/index.md#bambubinarycamerastream)'s doc comment.
+
 ### `CAMERA_PORT_RTSPS`
 ```rust
 const CAMERA_PORT_RTSPS: u16 = 322u16;
