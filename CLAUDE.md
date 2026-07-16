@@ -28,7 +28,7 @@ The `embassy` feature is not implied by `alloc` alone — `io/embassy.rs` and `#
 
 **Mock tests cannot verify wire-level write/read framing changes — see `.claude/rules/wire-framing-hardware-verification.md`.**
 
-Run `make check-fast`/`make check-all`/`git commit` through `ctx_shell`, not `Bash`, when lean-ctx is connected — their output (multi-target cargo build/test/clippy, ESP-IDF check) is large and repetitive, and global CLAUDE.md's lean-ctx section routes all shell commands through `ctx_shell` — `git commit` firing the pre-commit hook is just the case where forgetting this is costliest, not a special exception to some other rule.
+Run `make check-fast`/`make check-all`/`git commit`/ALL shell commands through `ctx_shell`, not `Bash`, when lean-ctx is connected — their output (multi-target cargo build/test/clippy, ESP-IDF check) is large and repetitive, and global CLAUDE.md's lean-ctx section routes all shell commands through `ctx_shell` — `git commit` firing the pre-commit hook is just the case where forgetting this is costliest, not a special exception to some other rule.
 
 This section is likely to change once this repo lands on GitHub and CI actually runs — kept separate from the raw command list above so that change doesn't tangle the two back together.
 
