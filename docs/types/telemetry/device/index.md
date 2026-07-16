@@ -43,9 +43,9 @@ Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, ca
 
 ```rust
 struct AirductCollection {
-    pub parts: Vec<AirductPart>,
+    pub parts: Option<Vec<AirductPart>>,
     pub mode_cur: Option<i32>,
-    pub mode_list: Vec<AirductModeListEntry>,
+    pub mode_list: Option<Vec<AirductModeListEntry>>,
 }
 ```
 
@@ -53,17 +53,23 @@ Climate parts collection nested within `device` parameters.
 
 #### Fields
 
-- **`parts`**: `Vec<AirductPart>`
+- **`parts`**: `Option<Vec<AirductPart>>`
 
   Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
+  
+  `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
+  (BUG-158) — see its doc comment.
 
 - **`mode_cur`**: `Option<i32>`
 
   Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
 
-- **`mode_list`**: `Vec<AirductModeListEntry>`
+- **`mode_list`**: `Option<Vec<AirductModeListEntry>>`
 
   List of airduct modes available on this model.
+  
+  `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
+  (BUG-158) — see its doc comment.
 
 #### Trait Implementations
 
@@ -384,7 +390,7 @@ Laser/cutter external tool telemetry from `device.ext_tool`.
 
 ```rust
 struct ExtruderCollection {
-    pub info: Vec<ExtruderInfo>,
+    pub info: Option<Vec<ExtruderInfo>>,
     pub state: Option<u32>,
 }
 ```
@@ -393,9 +399,12 @@ IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder
 
 #### Fields
 
-- **`info`**: `Vec<ExtruderInfo>`
+- **`info`**: `Option<Vec<ExtruderInfo>>`
 
   Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
+  
+  `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
+  (BUG-158) — see its doc comment.
 
 - **`state`**: `Option<u32>`
 
@@ -557,7 +566,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 ```rust
 struct NozzleCollection {
-    pub info: Vec<NozzleInfo>,
+    pub info: Option<Vec<NozzleInfo>>,
     pub exist: Option<u32>,
     pub state: Option<u32>,
     pub src_id: Option<u32>,
@@ -569,9 +578,20 @@ Wrap block holding nozzle characteristics.
 
 #### Fields
 
-- **`info`**: `Vec<NozzleInfo>`
+- **`info`**: `Option<Vec<NozzleInfo>>`
 
   Polymorphic array representing active carriages and tool configurations.
+  
+  `None` means this push's `info` key was absent from the wire — leave previously cached
+  entries untouched. `Some(vec![])` means the key was present but empty, which (per
+  `NozzleCollection::merge_from`) replaces the cached entries with an empty list.
+  Confirmed against BambuStudio's `json_diff::restore_objects` (`src/slic3r/Utils/
+  json_diff.cpp`) — its generic recursive JSON-delta merge treats a present array
+  differing from the last-known value as the new authoritative value (including an empty
+  array replacing a non-empty one), and only an absent key as "carry the old value
+  forward." `#[serde(default)]` on `Option<Vec<_>>` gives this distinction for free
+  (absent key -> `None`, present key -> `Some(_)` however short) — previously both
+  collapsed to the same empty `Vec` (BUG-158, same shape as BUG-102's `AmsTray` fix).
 
 - **`exist`**: `Option<u32>`
 
