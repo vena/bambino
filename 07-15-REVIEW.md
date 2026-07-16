@@ -15,13 +15,13 @@
 | BUG-135 | Sev3 | client | src/client/telemetry.rs:507-508 | BUG-110-corrected `is_ethernet_active()` is unreachable through `PrinterClient` |
 | BUG-136 | Sev3 | docs | src/ftps/CLAUDE.md | Nested CLAUDE.md invariant text stale re: `download_file`'s accepted reply codes (226 vs 226/426) |
 | BUG-137 | Sev3 | docs | src/types/telemetry/CLAUDE.md | Nested CLAUDE.md invariant text incompletely lists `unpack_temperature()`'s use sites |
+| BUG-138 | Sev3 | discovery | src/discovery/mod.rs:27,30 | `MULTICAST_IP`/`MULTICAST_ADDR` duplicate the same address as two independent literals |
+| BUG-139 | Sev3 | build | Cargo.toml, src/lib.rs | `no_std` Cargo feature is vestigial — declared, never read anywhere |
+| BUG-140 | Sev3 | mqtt | src/mqtt/client/mod.rs, frame.rs | Stalled-connection/partial-frame resumability untested through the persistent `BambuMqttClient` |
 
-### Verified real but not promoted (no concrete defect found)
-- **bambino-cli control+monitor** (`monitor/mod.rs:55` vs `167-172`): confirmed real asymmetry — `dump()` propagates a failed `send_ping()` as fatal via `?`, `run()` logs and continues. Not a defect: `dump()`'s fail-fast is arguably the safer of the two (exits loudly instead of risking a silent hang), and the two functions have no stated contract requiring identical ping-failure handling.
-- **discovery** (`mod.rs:30-34`): confirmed `MULTICAST_IP` (str) and `MULTICAST_ADDR` (typed `Ipv4Addr`) are independently-maintained literals for the same address. Currently consistent, no drift exists today — a real defect would require someone to edit one without the other, which hasn't happened. Not promoted; flagged here in case a future editor should double-check both.
-- **ftps protocol** (`parser.rs:120-215`, symlink `LIST` entries): confirmed `perms.starts_with('l')` isn't special-cased, so a symlink's `" -> target"` suffix folds into `FtpFile.name` verbatim. Not promoted — Bambu's embedded SD card/vsftpd setup has no realistic path to producing a symlink entry, so there's no concrete failure scenario against real hardware, only a theoretical gap in parsing logic that would trigger on input this device class never produces.
-- **core loose files** (`lib.rs:1`, vestigial `no_std` Cargo feature): confirmed the `no_std = []` feature (Cargo.toml:29) is never read anywhere (`lib.rs` gates on `not(feature = "std")`); it exists only as an inert entry pulled in by `embassy`'s feature list. Misleading name, but not promoted — nothing reads it, so there's no behavioral defect, just a name that invites a wrong assumption.
-- **mqtt/client** (stall/resume integration coverage): confirmed the resumable-frame-read invariant is unit-tested only against a bare `FrameReadState`, never through a live `BambuMqttClient`'s persistent `self.read_state`. Code inspection shows the wiring is structurally correct today — this is a regression-coverage gap, not a current defect, so not promoted as a bug; worth a future test addition but no `BUG-ID` needed for something that isn't broken.
+**Confirmed real but not a defect (`BUG-141`, `BUG-142` — logged in `BACKLOG.md`'s Wontfix section, not left unlogged in prose):**
+- `BUG-141`: `monitor/mod.rs:55` vs `167-172` — `dump()`/`run()` ping-failure handling asymmetry. `dump()`'s fail-fast is arguably the safer of the two; no stated contract requires identical handling.
+- `BUG-142`: `ftps/parser.rs:120-215` — UNIX `LIST` symlink entries not special-cased. No realistic path to a symlink entry on Bambu's embedded SD card/vsftpd setup.
 
 # bambino Deep Review — 2026-07-15
 
