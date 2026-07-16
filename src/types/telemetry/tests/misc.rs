@@ -31,9 +31,10 @@ fn test_airduct_deserialization() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let device = report.device.unwrap();
     let airduct = device.airduct.unwrap();
-    assert_eq!(airduct.parts.len(), 1);
-    assert_eq!(airduct.parts[0].id, 160);
-    assert_eq!(airduct.parts[0].state, Some(85));
+    let parts = airduct.parts.unwrap();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].id, 160);
+    assert_eq!(parts[0].state, Some(85));
 }
 
 #[test]
@@ -442,9 +443,10 @@ fn test_airduct_mode_telemetry() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let airduct = report.device.unwrap().airduct.unwrap();
     assert_eq!(airduct.mode_cur, Some(1));
-    assert_eq!(airduct.mode_list.len(), 2);
-    assert_eq!(airduct.mode_list[0].mode_id, 0);
-    assert_eq!(airduct.mode_list[1].mode_id, 1);
+    let mode_list = airduct.mode_list.as_ref().unwrap();
+    assert_eq!(mode_list.len(), 2);
+    assert_eq!(mode_list[0].mode_id, 0);
+    assert_eq!(mode_list[1].mode_id, 1);
 }
 
 #[test]
@@ -465,8 +467,9 @@ fn test_airduct_mode_telemetry_with_laser() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let airduct = report.device.unwrap().airduct.unwrap();
     assert_eq!(airduct.mode_cur, Some(0));
-    assert_eq!(airduct.mode_list.len(), 3);
-    assert_eq!(airduct.mode_list[2].mode_id, 2);
+    let mode_list = airduct.mode_list.as_ref().unwrap();
+    assert_eq!(mode_list.len(), 3);
+    assert_eq!(mode_list[2].mode_id, 2);
 }
 
 #[test]
@@ -481,7 +484,7 @@ fn test_airduct_mode_absent() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let airduct = report.device.unwrap().airduct.unwrap();
     assert_eq!(airduct.mode_cur, None);
-    assert!(airduct.mode_list.is_empty());
+    assert!(airduct.mode_list.is_none());
 }
 
 #[test]

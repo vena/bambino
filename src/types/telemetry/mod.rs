@@ -134,10 +134,10 @@ pub fn decode_nozzle_temperatures(
     nozzle_target_temper: Option<f64>,
 ) -> Vec<(u8, u16, u16)> {
     if let Some(extruder) = device.and_then(|d| d.extruder.as_ref())
-        && !extruder.info.is_empty()
+        && let Some(info) = extruder.info.as_deref()
+        && !info.is_empty()
     {
-        return extruder
-            .info
+        return info
             .iter()
             .map(|entry| {
                 let (actual, target) = entry.temperatures();
@@ -152,7 +152,7 @@ pub fn decode_nozzle_temperatures(
     // rack) misclassifies as IDEX.
     let is_idex = device
         .and_then(|d| d.nozzle.as_ref())
-        .map(|n| n.info.iter().filter(|nz| !nz.is_rack_stored()).count() >= 2)
+        .map(|n| n.info.iter().flatten().filter(|nz| !nz.is_rack_stored()).count() >= 2)
         .unwrap_or(false);
 
     let actual = nozzle_temper.unwrap_or(0.0) as u16;

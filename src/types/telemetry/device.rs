@@ -222,8 +222,19 @@ impl ExtToolTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NozzleCollection {
     /// Polymorphic array representing active carriages and tool configurations.
+    ///
+    /// `None` means this push's `info` key was absent from the wire — leave previously cached
+    /// entries untouched. `Some(vec![])` means the key was present but empty, which (per
+    /// `NozzleCollection::merge_from`) replaces the cached entries with an empty list.
+    /// Confirmed against BambuStudio's `json_diff::restore_objects` (`src/slic3r/Utils/
+    /// json_diff.cpp`) — its generic recursive JSON-delta merge treats a present array
+    /// differing from the last-known value as the new authoritative value (including an empty
+    /// array replacing a non-empty one), and only an absent key as "carry the old value
+    /// forward." `#[serde(default)]` on `Option<Vec<_>>` gives this distinction for free
+    /// (absent key -> `None`, present key -> `Some(_)` however short) — previously both
+    /// collapsed to the same empty `Vec` (BUG-158, same shape as BUG-102's `AmsTray` fix).
     #[serde(default)]
-    pub info: Vec<NozzleInfo>,
+    pub info: Option<Vec<NozzleInfo>>,
 
     /// Bitmask of physically present nozzle IDs (HotendRack).
     #[serde(default)]
@@ -247,10 +258,14 @@ impl NozzleCollection {
     ///
     /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.nozzle.info` can be absent from a push while sibling `device.nozzle` fields
-    /// change, and must not be treated as "nozzle info cleared."
+    /// change, and must not be treated as "nozzle info cleared." BUG-158: `info` is now
+    /// `Option<Vec<_>>` (see its doc comment) so a present-but-empty push actually clears —
+    /// wholesale replace, not a keyed per-entry merge, matching BambuStudio's own
+    /// `DevNozzleSystemParser::ParseV2_0` (`system->ClearNozzles()` + full rebuild whenever
+    /// `nozzle.info` is present in the already-reconstructed snapshot).
     pub(crate) fn merge_from(&mut self, incoming: &NozzleCollection) {
-        if !incoming.info.is_empty() {
-            self.info = incoming.info.clone();
+        if let Some(info) = &incoming.info {
+            self.info = Some(info.clone());
         }
         if incoming.exist.is_some() {
             self.exist = incoming.exist;
@@ -340,8 +355,11 @@ impl NozzleInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtruderCollection {
     /// Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
+    ///
+    /// `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
+    /// (BUG-158) — see its doc comment.
     #[serde(default)]
-    pub info: Vec<ExtruderInfo>,
+    pub info: Option<Vec<ExtruderInfo>>,
 
     /// Bitmask: low 4 bits = extruder count, bits 4–7 = active extruder index.
     pub state: Option<u32>,
@@ -362,10 +380,13 @@ impl ExtruderCollection {
     ///
     /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.extruder.info` can be absent from a push while sibling `device.extruder`
-    /// fields change, and must not be treated as "extruder info cleared."
+    /// fields change, and must not be treated as "extruder info cleared." BUG-158: `info` is
+    /// now `Option<Vec<_>>` (see its doc comment) so a present-but-empty push actually clears
+    /// — wholesale replace, matching BambuStudio's own `ExtderSystemParser::ParseV2_0`
+    /// (`system->m_extders.clear()` + full rebuild).
     pub(crate) fn merge_from(&mut self, incoming: &ExtruderCollection) {
-        if !incoming.info.is_empty() {
-            self.info = incoming.info.clone();
+        if let Some(info) = &incoming.info {
+            self.info = Some(info.clone());
         }
         if incoming.state.is_some() {
             self.state = incoming.state;
@@ -464,16 +485,22 @@ impl ExtruderInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AirductCollection {
     /// Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
+    ///
+    /// `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
+    /// (BUG-158) — see its doc comment.
     #[serde(default)]
-    pub parts: Vec<AirductPart>,
+    pub parts: Option<Vec<AirductPart>>,
 
     /// Currently active airduct damper mode (0=cooling, 1=heating, 2=laser).
     #[serde(rename = "modeCur")]
     pub mode_cur: Option<i32>,
 
     /// List of airduct modes available on this model.
+    ///
+    /// `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
+    /// (BUG-158) — see its doc comment.
     #[serde(rename = "modeList", default)]
-    pub mode_list: Vec<AirductModeListEntry>,
+    pub mode_list: Option<Vec<AirductModeListEntry>>,
 }
 
 impl AirductCollection {
@@ -481,16 +508,20 @@ impl AirductCollection {
     ///
     /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.airduct.parts`/`modeCur`/`modeList` can each independently be absent from a
-    /// push, and must not be treated as "cleared."
+    /// push, and must not be treated as "cleared." BUG-158: `parts`/`mode_list` are now
+    /// `Option<Vec<_>>` (see their doc comments) so a present-but-empty push actually clears —
+    /// wholesale replace, matching BambuStudio's `json_diff::restore_objects` (which fully
+    /// reconstructs `device.airduct` before `DevFan.cpp`'s own parser unconditionally clears
+    /// and rebuilds `parts`/`modeList` from that already-correct snapshot).
     pub(crate) fn merge_from(&mut self, incoming: &AirductCollection) {
-        if !incoming.parts.is_empty() {
-            self.parts = incoming.parts.clone();
+        if let Some(parts) = &incoming.parts {
+            self.parts = Some(parts.clone());
         }
         if incoming.mode_cur.is_some() {
             self.mode_cur = incoming.mode_cur;
         }
-        if !incoming.mode_list.is_empty() {
-            self.mode_list = incoming.mode_list.clone();
+        if let Some(mode_list) = &incoming.mode_list {
+            self.mode_list = Some(mode_list.clone());
         }
     }
 }

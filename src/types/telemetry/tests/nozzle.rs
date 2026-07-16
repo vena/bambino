@@ -23,7 +23,8 @@ fn test_nozzle_info_standard_keys() {
         .unwrap()
         .nozzle
         .unwrap()
-        .info[0];
+        .info
+        .unwrap()[0];
     assert_eq!(nozzle.id, 0);
     assert_eq!(nozzle.tm, Some(300));
     assert_eq!(nozzle.nozzle_type.as_deref(), Some("hardened_steel"));
@@ -53,7 +54,8 @@ fn test_nozzle_info_idex_keys() {
         .unwrap()
         .nozzle
         .unwrap()
-        .info[0];
+        .info
+        .unwrap()[0];
     assert_eq!(nozzle.id, 1);
     assert_eq!(nozzle.max_temp, Some(350));
     assert_eq!(nozzle.serial_number.as_deref(), Some("IDEX-SN-456"));
@@ -91,12 +93,13 @@ fn test_extruder_info_h2d_mock() {
         }"#;
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let extruder = report.device.unwrap().extruder.unwrap();
-    assert_eq!(extruder.info.len(), 2);
+    let info = extruder.info.as_ref().unwrap();
+    assert_eq!(info.len(), 2);
     assert_eq!(extruder.extruder_count(), 2);
     assert_eq!(extruder.active_extruder_index(), 0);
 
     // id 0 (right/main): temp 16056565 = 0x00F500F5 → composite packed
-    let right = &extruder.info[0];
+    let right = &info[0];
     assert_eq!(right.id, 0);
     let (right_actual, right_target) = right.temperatures();
     assert_eq!(right_actual, 245);
@@ -105,7 +108,7 @@ fn test_extruder_info_h2d_mock() {
     assert_eq!(right.stat, Some(197376));
 
     // id 1 (left/deputy): temp 47 → direct (≤ 500)
-    let left = &extruder.info[1];
+    let left = &info[1];
     assert_eq!(left.id, 1);
     let (left_actual, left_target) = left.temperatures();
     assert_eq!(left_actual, 47);
@@ -145,14 +148,15 @@ fn test_extruder_info_x2d_mock() {
         }"#;
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let extruder = report.device.unwrap().extruder.unwrap();
-    assert_eq!(extruder.info.len(), 2);
+    let info = extruder.info.as_ref().unwrap();
+    assert_eq!(info.len(), 2);
 
     // state 33042: low 4 bits = 2 (count), bits 4-7 = 1 (active = left)
     assert_eq!(extruder.extruder_count(), 2);
     assert_eq!(extruder.active_extruder_index(), 1);
 
     // id 0: temp 50 (direct, ≤ 500)
-    let right = &extruder.info[0];
+    let right = &info[0];
     let (right_actual, right_target) = right.temperatures();
     assert_eq!(right_actual, 50);
     assert_eq!(right_target, 0);
@@ -160,7 +164,7 @@ fn test_extruder_info_x2d_mock() {
 
     // id 1: temp 16384250 (composite packed, > 500)
     // 16384250 = 0xFA00FA → target = 250, actual = 250
-    let left = &extruder.info[1];
+    let left = &info[1];
     let (left_actual, left_target) = left.temperatures();
     assert_eq!(left_target, 250);
     assert_eq!(left_actual, 250);
@@ -246,7 +250,8 @@ fn test_nozzle_info_stat_field() {
         .unwrap()
         .nozzle
         .unwrap()
-        .info[0];
+        .info
+        .unwrap()[0];
     assert_eq!(nozzle.stat, Some(256));
 }
 

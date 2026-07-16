@@ -92,8 +92,8 @@ fn test_device_nesting_in_pushall() {
     let device = print.device.expect("device nested in print");
     let ctc_temp = device.ctc.unwrap().info.unwrap().temp.unwrap();
     assert_eq!(ctc_temp, 3932208);
-    assert_eq!(device.nozzle.unwrap().info[0].id, 0);
-    assert_eq!(device.airduct.unwrap().parts[0].state, Some(50));
+    assert_eq!(device.nozzle.unwrap().info.unwrap()[0].id, 0);
+    assert_eq!(device.airduct.unwrap().parts.unwrap()[0].state, Some(50));
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn test_device_incremental_top_level() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     assert!(report.print.is_none());
     let device = report.device.unwrap();
-    let nozzles = &device.nozzle.unwrap().info;
+    let nozzles = device.nozzle.unwrap().info.unwrap();
     assert_eq!(nozzles.len(), 2);
     assert_eq!(nozzles[1].id, 1);
 }
@@ -404,7 +404,7 @@ fn test_device_both_present_top_level_wins() {
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     let device = report.device().unwrap();
-    assert_eq!(device.airduct.as_ref().unwrap().parts[0].id, 1);
+    assert_eq!(device.airduct.as_ref().unwrap().parts.as_ref().unwrap()[0].id, 1);
 }
 
 #[test]
@@ -427,7 +427,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
     // `nozzle`/`extruder`/`airduct` sub-objects sitting alongside it.
     let mut cached = DeviceTelemetry {
         nozzle: Some(NozzleCollection {
-            info: vec![NozzleInfo {
+            info: Some(vec![NozzleInfo {
                 id: 0,
                 diameter: Some(0.4),
                 tm: None,
@@ -441,7 +441,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
                 filament_id: None,
                 fila_id: None,
                 stat: None,
-            }],
+            }]),
             exist: Some(1),
             state: None,
             src_id: None,
@@ -476,7 +476,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
         cached.nozzle.is_some(),
         "nozzle must survive a ctc-only partial push"
     );
-    assert_eq!(cached.nozzle.as_ref().unwrap().info.len(), 1);
+    assert_eq!(cached.nozzle.as_ref().unwrap().info.as_ref().unwrap().len(), 1);
     assert_eq!(cached.ctc.unwrap().state, Some(2), "new field applies");
 }
 
@@ -485,7 +485,7 @@ fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
     // BUG-094: confirmed via pybambu/bambuddy — device.nozzle.info can be absent while
     // sibling nozzle fields (e.g. exist) change.
     let mut cached = NozzleCollection {
-        info: vec![NozzleInfo {
+        info: Some(vec![NozzleInfo {
             id: 0,
             diameter: Some(0.4),
             tm: None,
@@ -499,7 +499,7 @@ fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
             filament_id: None,
             fila_id: None,
             stat: None,
-        }],
+        }]),
         exist: Some(1),
         state: None,
         src_id: None,
@@ -507,7 +507,7 @@ fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
     };
 
     let partial = NozzleCollection {
-        info: vec![],
+        info: None,
         exist: Some(3),
         state: None,
         src_id: None,
@@ -516,14 +516,64 @@ fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.info.len(), 1, "info array must survive a partial push");
+    assert_eq!(
+        cached.info.as_ref().unwrap().len(),
+        1,
+        "info array must survive an absent-key push"
+    );
     assert_eq!(cached.exist, Some(3), "new field applies");
+}
+
+#[test]
+fn test_nozzle_collection_merge_from_clears_info_on_present_empty() {
+    // BUG-158: confirmed against BambuStudio's json_diff::restore_objects (generic recursive
+    // JSON-delta merge, verified live via BUG-095's P1S_print_sequence.ndjson capture for a
+    // sibling field) — a present-but-empty array in the delta must replace the cached value,
+    // not be treated the same as an absent key. `info: Some(vec![])` (key present, empty) is
+    // distinguishable from `info: None` (key absent) only because `info` is `Option<Vec<_>>`.
+    let mut cached = NozzleCollection {
+        info: Some(vec![NozzleInfo {
+            id: 0,
+            diameter: Some(0.4),
+            tm: None,
+            max_temp: None,
+            nozzle_type: None,
+            wear: None,
+            serial_number: None,
+            sn: None,
+            filament_colour: None,
+            color_m: None,
+            filament_id: None,
+            fila_id: None,
+            stat: None,
+        }]),
+        exist: Some(1),
+        state: None,
+        src_id: None,
+        tar_id: None,
+    };
+
+    let partial = NozzleCollection {
+        info: Some(vec![]),
+        exist: None,
+        state: None,
+        src_id: None,
+        tar_id: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert!(
+        cached.info.as_ref().is_some_and(Vec::is_empty),
+        "a present-but-empty info array must clear the cached entries, got {:?}",
+        cached.info
+    );
 }
 
 #[test]
 fn test_extruder_collection_merge_from_preserves_info_on_absence() {
     let mut cached = ExtruderCollection {
-        info: vec![ExtruderInfo {
+        info: Some(vec![ExtruderInfo {
             id: 0,
             temp: Some(16056565),
             snow: None,
@@ -536,19 +586,59 @@ fn test_extruder_collection_merge_from_preserves_info_on_absence() {
             info: None,
             filam_bak: vec![],
             z_bias: None,
-        }],
+        }]),
         state: Some(2),
     };
 
     let partial = ExtruderCollection {
-        info: vec![],
+        info: None,
         state: Some(3),
     };
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.info.len(), 1, "info array must survive a partial push");
+    assert_eq!(
+        cached.info.as_ref().unwrap().len(),
+        1,
+        "info array must survive an absent-key push"
+    );
     assert_eq!(cached.state, Some(3), "new field applies");
+}
+
+#[test]
+fn test_extruder_collection_merge_from_clears_info_on_present_empty() {
+    // BUG-158: same present-empty-clears rule as NozzleCollection.info — see
+    // test_nozzle_collection_merge_from_clears_info_on_present_empty.
+    let mut cached = ExtruderCollection {
+        info: Some(vec![ExtruderInfo {
+            id: 0,
+            temp: Some(16056565),
+            snow: None,
+            spre: None,
+            star: None,
+            hnow: None,
+            hpre: None,
+            htar: None,
+            stat: None,
+            info: None,
+            filam_bak: vec![],
+            z_bias: None,
+        }]),
+        state: None,
+    };
+
+    let partial = ExtruderCollection {
+        info: Some(vec![]),
+        state: None,
+    };
+
+    cached.merge_from(&partial);
+
+    assert!(
+        cached.info.as_ref().is_some_and(Vec::is_empty),
+        "a present-but-empty info array must clear the cached entries, got {:?}",
+        cached.info
+    );
 }
 
 #[test]
@@ -556,25 +646,67 @@ fn test_airduct_collection_merge_from_preserves_fields_independently() {
     // BUG-094: confirmed via bambuddy — device.airduct.modeCur can change while parts/modeList
     // are absent from that same push, and vice versa.
     let mut cached = AirductCollection {
-        parts: vec![AirductPart {
+        parts: Some(vec![AirductPart {
             id: 160,
             state: Some(50),
-        }],
+        }]),
         mode_cur: Some(0),
-        mode_list: vec![AirductModeListEntry { mode_id: 0 }],
+        mode_list: Some(vec![AirductModeListEntry { mode_id: 0 }]),
     };
 
     let partial = AirductCollection {
-        parts: vec![],
+        parts: None,
         mode_cur: Some(1),
-        mode_list: vec![],
+        mode_list: None,
     };
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.parts.len(), 1, "parts must survive a mode_cur-only push");
-    assert_eq!(cached.mode_list.len(), 1, "mode_list must survive a mode_cur-only push");
+    assert_eq!(
+        cached.parts.as_ref().unwrap().len(),
+        1,
+        "parts must survive a mode_cur-only push"
+    );
+    assert_eq!(
+        cached.mode_list.as_ref().unwrap().len(),
+        1,
+        "mode_list must survive a mode_cur-only push"
+    );
     assert_eq!(cached.mode_cur, Some(1), "new field applies");
+}
+
+#[test]
+fn test_airduct_collection_merge_from_clears_parts_and_mode_list_on_present_empty() {
+    // BUG-158: same present-empty-clears rule as NozzleCollection.info, confirmed against
+    // BambuStudio's json_diff::restore_objects for these two fields specifically — see
+    // AirductCollection::merge_from's doc comment.
+    let mut cached = AirductCollection {
+        parts: Some(vec![AirductPart {
+            id: 160,
+            state: Some(50),
+        }]),
+        mode_cur: None,
+        mode_list: Some(vec![AirductModeListEntry { mode_id: 0 }]),
+    };
+
+    let partial = AirductCollection {
+        parts: Some(vec![]),
+        mode_cur: None,
+        mode_list: Some(vec![]),
+    };
+
+    cached.merge_from(&partial);
+
+    assert!(
+        cached.parts.as_ref().is_some_and(Vec::is_empty),
+        "a present-but-empty parts array must clear the cached entries, got {:?}",
+        cached.parts
+    );
+    assert!(
+        cached.mode_list.as_ref().is_some_and(Vec::is_empty),
+        "a present-but-empty mode_list array must clear the cached entries, got {:?}",
+        cached.mode_list
+    );
 }
 
 #[test]
