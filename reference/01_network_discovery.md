@@ -123,7 +123,7 @@ The physical printer exposes a dedicated set of network interfaces on the local 
 
 \*Note: For the H2 series (H2S, H2D, H2C, H2D Pro), Port 322 is closed by default (`ECONNREFUSED`) in factory firmware. Telemetry reports `"rtsp_url": "disable"` until manually enabled via the physical touchscreen interface.
 
-\*\*Note: A2L added to the port 6000 model list above — this table originally predated the A2L's release. Corrected per `src/quirks/models/a2.rs`'s `A2LQuirks::camera_protocol()`, which returns `CameraProtocol::BinaryJpeg`, and `MODEL_MATRIX.csv`, both confirming A2L uses the same binary-JPEG protocol as A1/A1 Mini/P1P/P1S.
+\*\*Note: A2L added to the port 6000 model list above — this table originally predated the A2L's release. No independent wire capture exists for this printer yet; the binary-JPEG classification is inferred from OrcaSlicer's A2L machine profile, which groups its camera handling with A1/A1 Mini/P1P/P1S rather than the RTSPS-series models. Treat as unconfirmed until verified against real A2L traffic.
 
 ---
 
