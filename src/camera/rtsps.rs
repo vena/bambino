@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_build_rtsps_url_accepts_ipv6() {
-        // BUG-005: an unbracketed IPv6 literal is malformed per RFC 3986 §3.2.2 — its colons
+        // An unbracketed IPv6 literal is malformed per RFC 3986 §3.2.2 — its colons
         // are indistinguishable from the port separator to a conforming URI parser.
         let url = build_rtsps_url("fe80::1", "12345678").unwrap();
         assert_eq!(url, "rtsps://bblp:12345678@[fe80::1]:322/streaming/live/1");
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_uri_brackets_ipv6_printer_ip() {
-        // BUG-005: same RFC 3986 §3.2.2 bracketing requirement as build_rtsps_url.
+        // Same RFC 3986 §3.2.2 bracketing requirement as build_rtsps_url.
         let uri = "rtsp://127.0.0.1:8554/streaming/live/1";
         let rewritten = rewrite_rtsp_request_uri(uri, "fe80::1").unwrap();
         assert_eq!(rewritten, "rtsps://[fe80::1]:322/streaming/live/1");

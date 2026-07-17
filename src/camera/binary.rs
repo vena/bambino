@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn test_handshake_rejects_empty_access_code() {
-        // BUG-006: `.all()` on an empty string's char iterator vacuously returns true, so the
+        // `.all()` on an empty string's char iterator vacuously returns true, so the
         // alphanumeric check alone let an empty access_code silently build a handshake packet
         // with a zero-length password field. rtsps.rs's build_rtsps_url already has this
         // explicit empty-string guard for the same copy-paste-mistake reason.

@@ -72,7 +72,7 @@ where
     ///   `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
     /// * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
     ///
-    /// The wire's `target` field is derived internally rather than caller-supplied (BUG-116):
+    /// The wire's `target` field is derived internally rather than caller-supplied —
     /// confirmed against BambuStudio's `command_ams_change_filament`
     /// (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
     /// any AMS-HT/external-spool unit (`ams_id >= 16`), or the flat global tray ID
@@ -122,7 +122,7 @@ where
     ///   (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
     ///   `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
     ///   variation is documented, so this does not go through `ModelQuirks`).
-    /// * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) — BUG-118:
+    /// * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) —
     ///   the wire field is `duration` in hours, not the old `dry_time` in minutes. No
     ///   documented maximum duration was found to validate against.
     /// * `humidity`: Target humidity (`0` = firmware default / no target).
@@ -230,7 +230,7 @@ where
     ///   uncalibrated.
     /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
     ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
-    ///   `tray_id: 254` (BUG-117).
+    ///   `tray_id: 254`.
     ///
     /// **Validation note:** the cheat-sheet above documents only the *external-spool* case.
     /// `reference/05_materials_ams.md` §5.3's own primary `extrusion_cali_sel` example binds a

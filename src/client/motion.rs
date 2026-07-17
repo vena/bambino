@@ -147,7 +147,7 @@ where
     /// H2D hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
     /// software travel limits on G-code received over MQTT regardless of `M211` state — it is
     /// not a source of crash protection here. X/Y moves get the same kind of client-side
-    /// `x_max()`/`y_max()` distance cap (BUG-163) — same limitation, not position-aware.
+    /// `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
     ///
     /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
     /// returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a

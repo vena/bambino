@@ -9,7 +9,7 @@ use crate::types::AmsTray;
 use crate::types::telemetry::ams::{AMS_TRAY_STATE_EMPTY, AMS_TRAY_STATE_SPOOL_NOT_FED};
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
-/// BUG-125: reverted from `7` back to `3` — the widening to `7` (BUG-068) relied on
+/// Reverted from `7` back to `3` — the widening to `7` relied on
 /// bambuddy's `ck_ams_id_range` CHECK constraint (0-7), but that range predates bambuddy's
 /// own issue #1274 by a month with no cited evidence of a standard unit above id 3; #1274
 /// itself only confirms `ams_id=128` (AMS-HT). Three independent sources now agree `3` is
@@ -40,9 +40,9 @@ pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
 /// and is processed normally.
 ///
 /// **AMS-HT units (IDs 128-135) do participate in `tray_exist_bits`, at a fixed offset**
-/// (BUG-114) — BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
+/// — BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
 /// branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed independently
-/// in OrcaSlicer with an equivalent formula. This reopens and reverses BUG-015's "AMS-HT
+/// in OrcaSlicer with an equivalent formula. This reopens and reverses the earlier "AMS-HT
 /// doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
 /// source.
 #[must_use]
@@ -65,7 +65,7 @@ pub fn evaluate_spool_presence(
         return None;
     }
 
-    // BUG-114: AMS-HT units (IDs 128-135) reside on their own bus addresses but still have a
+    // AMS-HT units (IDs 128-135) reside on their own bus addresses but still have a
     // dedicated bit range in tray_exist_bits, starting right after the standard units'
     // (base offset 16, since AMS_MAX_STANDARD_ID=3 caps the standard range at bits 0-15).
     if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
@@ -100,12 +100,12 @@ pub fn evaluate_spool_presence(
 ///
 /// This routine inspects the tray's state — 9 (`AMS_TRAY_STATE_EMPTY`) meaning Empty/Absent and
 /// 10 (`AMS_TRAY_STATE_SPOOL_NOT_FED`) meaning a spool is physically present but not yet fed to
-/// the extruder, both treated as absent-equivalent for stale-data cleansing (BUG-012, verified
+/// the extruder, both treated as absent-equivalent for stale-data cleansing (verified
 /// against pybambu/Bambuddy — see `AMS_TRAY_STATE_SPOOL_NOT_FED`'s doc comment) — and clears all
 /// stale config keys if either applies. Treats an explicit empty `tray_type` string as a
 /// clearing signal too — but an *absent* `tray_type` (the common incremental-update case,
 /// e.g. a `state: 11` update that simply doesn't repeat `tray_type`) is not, by itself, a
-/// clearing signal (BUG-083). Confirmed against `reference/05_materials_ams.md`'s
+/// clearing signal. Confirmed against `reference/05_materials_ams.md`'s
 /// Bambuddy cross-check (`on_ams_change`'s `loaded = cur_state == 11 or (cur_state not in
 /// (9, 10) and cur_type.strip())`): state 11 is unconditionally treated as loaded regardless
 /// of whether `tray_type` was repeated in that update, so clearing on absence alone would
@@ -191,7 +191,7 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
 /// their `tray_now` telemetry parameter. To resolve this back to a global index, the client must
 /// inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
 ///
-/// BUG-124: this is the *fallback* path — prefer
+/// This is the *fallback* path — prefer
 /// [`crate::client::PrinterClient::printing_tray_global_id`], which decodes
 /// `ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
 /// This function remains unwired in the crate's own client code: `ams_extruder_map`'s
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_spool_presence_ams_ht() {
-        // BUG-114: reopens and reverses BUG-015 — AMS-HT units (128-135) do participate in
+        // AMS-HT units (128-135) do participate in
         // tray_exist_bits, at bit index 16 + (ams_id - 128) + slot_id, per BambuStudio's
         // DevAms::GetTrayId N3S branch.
         // bit 16 set (0x10000) -> ams_id 128 (offset 0) present
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_spool_presence_tray_id_out_of_range() {
-        // BUG-014: a valid ams_id (0-3) with tray_id >= 4 must not reach the bit-shift —
+        // A valid ams_id (0-3) with tray_id >= 4 must not reach the bit-shift —
         // tray_id comes straight off the wire, so a malformed packet must not panic
         // (debug) or silently wrap into a bogus shift amount (release).
         assert_eq!(evaluate_spool_presence("f", 0, 4, true), None);
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_clean_stale_tray_data_state_10_with_type_clears() {
-        // BUG-012: state 10 (spool present but not yet fed to the extruder) with a populated
+        // State 10 (spool present but not yet fed to the extruder) with a populated
         // tray_type used to be treated as "keep" — this locked in the wrong behavior. Verified
         // against pybambu/Bambuddy's independent reverse-engineering (see
         // AMS_TRAY_STATE_SPOOL_NOT_FED's doc comment): state 10 is one of the firmware's two
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_clean_stale_tray_data_state_11_loaded_with_absent_type_not_cleared() {
-        // BUG-083: state 11 (Loaded) with an omitted tray_type (common in incremental
+        // State 11 (Loaded) with an omitted tray_type (common in incremental
         // updates) must NOT be treated as a clearing signal — confirmed against
         // reference/05_materials_ams.md's Bambuddy cross-check (state 11 is
         // unconditionally "loaded" regardless of tray_type).

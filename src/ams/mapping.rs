@@ -47,7 +47,7 @@ impl MaterialSource {
     /// "Failed to get AMS mapping table" error. Virtual external spools and unused slots
     /// must strictly be mapped to the `-1` (unmapped) sentinel in the flat array.
     ///
-    /// BUG-069: `StandardAms`/`AmsHt` fields are public `u8`s a caller can hand-build with an
+    /// `StandardAms`/`AmsHt` fields are public `u8`s a caller can hand-build with an
     /// out-of-range `ams_id`/`slot_id` (unlike `parser.rs`'s inbound-side bounds-checking on
     /// wire data) — validated here the same way, falling back to the `-1` sentinel rather than
     /// producing a bogus flat channel value.
@@ -78,7 +78,7 @@ impl MaterialSource {
     #[must_use]
     pub fn to_mapping2_entry(&self) -> AmsMapping2Entry {
         match self {
-            // BUG-069: same out-of-range validation as flat_channel_id() — an invalid
+            // Same out-of-range validation as flat_channel_id() — an invalid
             // ams_id/slot_id falls back to the same unmapped sentinel entry as
             // MaterialSource::Unmapped, rather than serializing a bogus StandardAms/AmsHt entry.
             MaterialSource::StandardAms { ams_id, slot_id } => {
@@ -142,7 +142,7 @@ pub struct AmsMapping2Entry {
 ///
 /// Inverse of `MaterialSource::flat_channel_id`, operating on the already-structured
 /// `ams_id`/`slot_id` pair instead of a `MaterialSource` — keeps `ams_mapping` and
-/// `ams_mapping2` from going out of sync when only the latter was supplied (BUG-033).
+/// `ams_mapping2` from going out of sync when only the latter was supplied.
 #[must_use]
 pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
     if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
@@ -179,7 +179,7 @@ pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
         if *id > 0 && *id <= max_id {
             mapping[*id - 1] = source.flat_channel_id();
         } else {
-            // BUG-070: filament_id is documented as 1-based (1 to N) — id == 0 (or > max_id,
+            // filament_id is documented as 1-based (1 to N) — id == 0 (or > max_id,
             // unreachable since max_id is derived from this same slice) is a caller bug, not a
             // legitimately-skippable entry.
             log::warn!(
@@ -212,7 +212,7 @@ pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMap
         if *id > 0 && *id <= max_id {
             mapping2[*id - 1] = source.to_mapping2_entry();
         } else {
-            // BUG-070: same reasoning as build_ams_mapping's else arm.
+            // Same reasoning as build_ams_mapping's else arm.
             log::warn!(
                 "build_ams_mapping2: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
             );
@@ -268,7 +268,7 @@ pub fn is_external_spool_safety_valid(
     has_physical_ams
 }
 
-/// Per-model AMS unit pool structure (BUG-122), confirmed against `MODEL_MATRIX.csv`'s
+/// Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
 /// "AMS Unit Limits" row (user-supplied official Bambu documentation).
 ///
 /// **Known limitation**: AMS Lite units are not independently addressable in this model —
@@ -296,8 +296,8 @@ pub enum AmsPoolComposition {
     },
 }
 
-/// Validates a constructed `ams_mapping2` against the model's actual AMS pool structure
-/// (BUG-122). Rejects configs no real hardware combination could serve — e.g. 4 standard +
+/// Validates a constructed `ams_mapping2` against the model's actual AMS pool structure.
+/// Rejects configs no real hardware combination could serve — e.g. 4 standard +
 /// 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4.
 ///
 /// Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing the same
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_material_source_out_of_range_rejected() {
-        // BUG-069: MaterialSource::StandardAms/AmsHt fields are public u8s a caller can
+        // MaterialSource::StandardAms/AmsHt fields are public u8s a caller can
         // hand-build with an out-of-range value — must fall back to the -1/unmapped sentinel
         // rather than producing a bogus flat channel or wire entry.
         let bad_standard = MaterialSource::StandardAms {

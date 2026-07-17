@@ -250,7 +250,7 @@ where
         NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
         NewFtpsTimer: TimerProvider,
     {
-        // BUG-072: `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host
+        // `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host
         // config was ever supplied), which would otherwise fail opaquely at actual FTPS
         // connect time — panic here instead, at the builder call site, with a clear message
         // pointing at the real cause.
@@ -311,7 +311,7 @@ where
     /// connector and data factory from `ftps_config`, dials a raw connection, and runs
     /// `BambuFtpsClient::connect_control_stream()` — the whole dial+connect sequence is
     /// raced against `self.connect_timeout_secs`. `ftps_config` is only consumed
-    /// (`.take()`n) once that attempt has actually succeeded (BUG-020) — a failed attempt,
+    /// (`.take()`n) once that attempt has actually succeeded — a failed attempt,
     /// including a `connect_timeout_secs` timeout on a slow LAN, leaves it intact so the
     /// next call retries instead of permanently reporting "not configured". Reconnecting
     /// after a *successful* connect still requires a new `PrinterClient`.
@@ -452,7 +452,7 @@ where
         NewCameraTls: TlsConnector<NewCameraRawIO>,
         NewCameraFactory: RawStreamFactory<NewCameraRawIO>,
     {
-        // BUG-072: same guard as with_ftps() — from_mqtt()-constructed clients have empty
+        // Same guard as with_ftps() — from_mqtt()-constructed clients have empty
         // ip/access_code, which would otherwise fail opaquely at actual camera connect time.
         assert!(
             !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),

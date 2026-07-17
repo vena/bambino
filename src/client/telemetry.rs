@@ -50,8 +50,8 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_spd_lvl: Option<u8>,
     pub(crate) last_spd_mag: Option<u16>,
     pub(crate) last_wifi_signal: Option<String>,
-    // BUG-135: caches print.net.conf so PrinterClient::is_ethernet_active() (the confirmed-
-    // authoritative source, per BUG-110) is reachable through the cached client pipeline, not
+    // Caches print.net.conf so PrinterClient::is_ethernet_active() (the confirmed-
+    // authoritative source) is reachable through the cached client pipeline, not
     // only via a raw TelemetryReport parse.
     pub(crate) last_net_conf: Option<u32>,
     pub(crate) last_ipcam: Option<IpcamTelemetry>,
@@ -140,7 +140,7 @@ where
     /// the struct).
     fn update_telemetry_cache(&mut self, report: &TelemetryReport) {
         if let Some(device) = report.device() {
-            // BUG-093: merge field-by-field rather than replacing wholesale — see
+            // Merge field-by-field rather than replacing wholesale — see
             // `DeviceTelemetry::merge_from`.
             match &mut self.cache.last_device {
                 Some(cached) => cached.merge_from(device),
@@ -212,7 +212,7 @@ where
 
     fn update_ams_cache(&mut self, print: &PrinterTelemetry) {
         if let Some(ams) = &print.ams {
-            // BUG-091: merge field-by-field rather than replacing wholesale — a partial
+            // Merge field-by-field rather than replacing wholesale — a partial
             // `print.ams` push (confirmed via wire capture) can carry only a few fields with
             // the unit/tray array omitted entirely; see `AmsStatusReport::merge_from`.
             match &mut self.cache.last_ams {
@@ -262,7 +262,7 @@ where
 
     fn update_ipcam_cache(&mut self, print: &PrinterTelemetry) {
         if let Some(ipcam) = &print.ipcam {
-            // BUG-105: merge field-by-field rather than replacing wholesale — see
+            // Merge field-by-field rather than replacing wholesale — see
             // `IpcamTelemetry::merge_from`.
             match &mut self.cache.last_ipcam {
                 Some(cached) => cached.merge_from(ipcam),
@@ -351,7 +351,7 @@ where
     }
 
     /// Returns the global tray ID of the spool currently feeding the active extruder, as of
-    /// the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) (BUG-124).
+    /// the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
     /// Prefers `device.extruder.info[active].snow`, BambuStudio's own preferred resolution
     /// method (`DevExterSystem::ParseV2_0`, `DevExtderSystem.cpp:318-386`) — no
@@ -522,10 +522,9 @@ where
 
     /// Returns whether the printer is on wired Ethernet, per the cached `print.net.conf` bit 0
     /// (mirrors `PrinterTelemetry::is_ethernet_active()`, the documented-preferred,
-    /// confirmed-authoritative source — see BUG-110) but works between polls off the cached
+    /// confirmed-authoritative source) but works between polls off the cached
     /// value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
-    /// `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it
-    /// (BUG-135).
+    /// `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it.
     pub fn is_ethernet_active(&self) -> bool {
         self.cache.last_net_conf.is_some_and(|conf| conf & 0x1 != 0)
     }
