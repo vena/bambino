@@ -363,6 +363,198 @@ async fn capture_responses(
     Ok(responses)
 }
 
+fn confirm_or_abort() -> Result<bool, CliError> {
+    eprintln!(
+        "\
+╔══════════════════════════════════════════════════════════════╗
+║  PROBE: Command Response Capture                           ║
+║                                                            ║
+║  This will send commands to your printer to capture        ║
+║  firmware response patterns.                               ║
+║                                                            ║
+║  Ensure the bed is at least 50mm from the nozzle.          ║
+║                                                            ║
+║  Type 'yes' to continue.                                   ║
+╚══════════════════════════════════════════════════════════════╝"
+    );
+
+    let mut confirmation = String::new();
+    io::stdin().read_line(&mut confirmation)?;
+    if confirmation.trim().to_lowercase() != "yes" {
+        eprintln!("Aborted (expected 'yes').");
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> {
+    eprint!("Requesting pushall state dump... ");
+    io::stderr().flush().unwrap_or(());
+    match client.request_pushall().await {
+        Ok(_) => match capture_pushall(client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await {
+            Ok(Some(p)) => {
+                eprintln!("captured.");
+                Some(p)
+            }
+            Ok(None) => {
+                eprintln!(
+                    "timed out ({}s). Continuing without pushall.",
+                    PUSHALL_TIMEOUT_SECS
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!("capture failed: {e}. Continuing without pushall.");
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("request failed: {e}. Continuing without pushall.");
+            None
+        }
+    }
+}
+
+async fn run_holistic_test(
+    client: &mut Printer,
+    idx: usize,
+    total: usize,
+    test: ProbeTest,
+) -> ProbeEntry {
+    eprint!(
+        "[{}/{}] {} — {} (holistic check, up to ~{}s)... ",
+        idx + 1,
+        total,
+        test.name(),
+        test.description(),
+        HOMING_WAIT_DISPLAY_SECS
+    );
+    io::stderr().flush().unwrap_or(());
+
+    let start = Instant::now();
+    let outcome = match run_holistic_homing(client).await {
+        Ok(outcome) => outcome,
+        Err(e) => format!("error: {e}"),
+    };
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    eprintln!("{} in {}ms", outcome, elapsed_ms);
+
+    ProbeEntry {
+        test: test.name().to_string(),
+        description: test.description().to_string(),
+        capture_window_secs: 0,
+        publish_error: None,
+        capture_error: None,
+        responses: Vec::new(),
+        elapsed_ms,
+        response_count: 0,
+        wait_outcome: Some(outcome),
+    }
+}
+
+async fn run_capture_test(
+    client: &mut Printer,
+    idx: usize,
+    total: usize,
+    test: ProbeTest,
+) -> ProbeEntry {
+    let window_secs = test.capture_window_secs();
+    let capture_window = Duration::from_secs(window_secs);
+    let window_label = if test.uses_wait_for_homing() {
+        format!("up to {}s via wait_for_homing", window_secs)
+    } else {
+        format!("{}s window", window_secs)
+    };
+
+    eprint!(
+        "[{}/{}] {} — {} ({})... ",
+        idx + 1,
+        total,
+        test.name(),
+        test.description(),
+        window_label
+    );
+    io::stderr().flush().unwrap_or(());
+
+    let start = Instant::now();
+
+    let publish_error = match send_command(client, test).await {
+        Ok(()) => None,
+        Err(e) => Some(e.to_string()),
+    };
+
+    // BUG-017: capture_responses() failures used to propagate via `?`, discarding every
+    // already-captured entry and aborting before the report was ever written. Recorded
+    // as a per-entry capture_error instead, mirroring how publish_error already handles
+    // send_command() failures — the run continues to the next test either way.
+    let (responses, wait_outcome, capture_error) = if publish_error.is_none() {
+        if test.uses_wait_for_homing() {
+            let outcome = match client.wait_for_homing().await {
+                Ok(()) => "resolved".to_string(),
+                Err(e) => format!("error: {e}"),
+            };
+            (Vec::new(), Some(outcome), None)
+        } else {
+            match capture_responses(client, capture_window).await {
+                Ok(r) => (r, None, None),
+                Err(e) => (Vec::new(), None, Some(e.to_string())),
+            }
+        }
+    } else {
+        (Vec::new(), None, None)
+    };
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let response_count = responses.len();
+
+    eprintln!(
+        "{} response{} in {}ms{}{}{}",
+        response_count,
+        if response_count == 1 { "" } else { "s" },
+        elapsed_ms,
+        if publish_error.is_some() {
+            " (publish failed)"
+        } else {
+            ""
+        },
+        if capture_error.is_some() {
+            " (capture failed)"
+        } else {
+            ""
+        },
+        wait_outcome
+            .as_deref()
+            .map(|o| format!(" [wait_for_homing: {o}]"))
+            .unwrap_or_default()
+    );
+
+    ProbeEntry {
+        test: test.name().to_string(),
+        description: test.description().to_string(),
+        capture_window_secs: window_secs,
+        publish_error,
+        capture_error,
+        responses,
+        elapsed_ms,
+        response_count,
+        wait_outcome,
+    }
+}
+
+async fn run_test_loop(client: &mut Printer, tests: &[ProbeTest]) -> Vec<ProbeEntry> {
+    let mut entries = Vec::new();
+    for (idx, test) in tests.iter().enumerate() {
+        let entry = if matches!(test, ProbeTest::HomeAxesWithBusyCheck) {
+            run_holistic_test(client, idx, tests.len(), *test).await
+        } else {
+            run_capture_test(client, idx, tests.len(), *test).await
+        };
+        entries.push(entry);
+    }
+    entries
+}
+
 pub async fn run(
     ip: &str,
     serial: &str,
@@ -398,24 +590,7 @@ pub async fn run(
         ProbeTest::default_set()
     };
 
-    eprintln!(
-        "\
-╔══════════════════════════════════════════════════════════════╗
-║  PROBE: Command Response Capture                           ║
-║                                                            ║
-║  This will send commands to your printer to capture        ║
-║  firmware response patterns.                               ║
-║                                                            ║
-║  Ensure the bed is at least 50mm from the nozzle.          ║
-║                                                            ║
-║  Type 'yes' to continue.                                   ║
-╚══════════════════════════════════════════════════════════════╝"
-    );
-
-    let mut confirmation = String::new();
-    io::stdin().read_line(&mut confirmation)?;
-    if confirmation.trim().to_lowercase() != "yes" {
-        eprintln!("Aborted (expected 'yes').");
+    if !confirm_or_abort()? {
         return Ok(());
     }
 
@@ -424,31 +599,7 @@ pub async fn run(
     client.connect_mqtt().await?;
     eprintln!("Connected.");
 
-    eprint!("Requesting pushall state dump... ");
-    io::stderr().flush().unwrap_or(());
-    let pushall = match client.request_pushall().await {
-        Ok(_) => match capture_pushall(&mut client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await {
-            Ok(Some(p)) => {
-                eprintln!("captured.");
-                Some(p)
-            }
-            Ok(None) => {
-                eprintln!(
-                    "timed out ({}s). Continuing without pushall.",
-                    PUSHALL_TIMEOUT_SECS
-                );
-                None
-            }
-            Err(e) => {
-                eprintln!("capture failed: {e}. Continuing without pushall.");
-                None
-            }
-        },
-        Err(e) => {
-            eprintln!("request failed: {e}. Continuing without pushall.");
-            None
-        }
-    };
+    let pushall = run_pushall_capture(&mut client).await;
 
     eprintln!("Running {} tests...\n", tests.len());
 
@@ -459,125 +610,7 @@ pub async fn run(
         .unwrap_or_default()
         .as_secs();
 
-    let mut entries = Vec::new();
-
-    for (idx, test) in tests.iter().enumerate() {
-        if matches!(test, ProbeTest::HomeAxesWithBusyCheck) {
-            eprint!(
-                "[{}/{}] {} — {} (holistic check, up to ~{}s)... ",
-                idx + 1,
-                tests.len(),
-                test.name(),
-                test.description(),
-                HOMING_WAIT_DISPLAY_SECS
-            );
-            io::stderr().flush().unwrap_or(());
-
-            let start = Instant::now();
-            let outcome = match run_holistic_homing(&mut client).await {
-                Ok(outcome) => outcome,
-                Err(e) => format!("error: {e}"),
-            };
-            let elapsed_ms = start.elapsed().as_millis() as u64;
-
-            eprintln!("{} in {}ms", outcome, elapsed_ms);
-
-            entries.push(ProbeEntry {
-                test: test.name().to_string(),
-                description: test.description().to_string(),
-                capture_window_secs: 0,
-                publish_error: None,
-                capture_error: None,
-                responses: Vec::new(),
-                elapsed_ms,
-                response_count: 0,
-                wait_outcome: Some(outcome),
-            });
-            continue;
-        }
-
-        let window_secs = test.capture_window_secs();
-        let capture_window = Duration::from_secs(window_secs);
-        let window_label = if test.uses_wait_for_homing() {
-            format!("up to {}s via wait_for_homing", window_secs)
-        } else {
-            format!("{}s window", window_secs)
-        };
-
-        eprint!(
-            "[{}/{}] {} — {} ({})... ",
-            idx + 1,
-            tests.len(),
-            test.name(),
-            test.description(),
-            window_label
-        );
-        io::stderr().flush().unwrap_or(());
-
-        let start = Instant::now();
-
-        let publish_error = match send_command(&mut client, *test).await {
-            Ok(()) => None,
-            Err(e) => Some(e.to_string()),
-        };
-
-        // BUG-017: capture_responses() failures used to propagate via `?`, discarding every
-        // already-captured entry and aborting before the report was ever written. Recorded
-        // as a per-entry capture_error instead, mirroring how publish_error already handles
-        // send_command() failures — the run continues to the next test either way.
-        let (responses, wait_outcome, capture_error) = if publish_error.is_none() {
-            if test.uses_wait_for_homing() {
-                let outcome = match client.wait_for_homing().await {
-                    Ok(()) => "resolved".to_string(),
-                    Err(e) => format!("error: {e}"),
-                };
-                (Vec::new(), Some(outcome), None)
-            } else {
-                match capture_responses(&mut client, capture_window).await {
-                    Ok(r) => (r, None, None),
-                    Err(e) => (Vec::new(), None, Some(e.to_string())),
-                }
-            }
-        } else {
-            (Vec::new(), None, None)
-        };
-
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-        let response_count = responses.len();
-
-        eprintln!(
-            "{} response{} in {}ms{}{}{}",
-            response_count,
-            if response_count == 1 { "" } else { "s" },
-            elapsed_ms,
-            if publish_error.is_some() {
-                " (publish failed)"
-            } else {
-                ""
-            },
-            if capture_error.is_some() {
-                " (capture failed)"
-            } else {
-                ""
-            },
-            wait_outcome
-                .as_deref()
-                .map(|o| format!(" [wait_for_homing: {o}]"))
-                .unwrap_or_default()
-        );
-
-        entries.push(ProbeEntry {
-            test: test.name().to_string(),
-            description: test.description().to_string(),
-            capture_window_secs: window_secs,
-            publish_error,
-            capture_error,
-            responses,
-            elapsed_ms,
-            response_count,
-            wait_outcome,
-        });
-    }
+    let entries = run_test_loop(&mut client, &tests).await;
 
     let report = ProbeReport {
         model: format!("{:?}", model),
