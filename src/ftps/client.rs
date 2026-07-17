@@ -368,6 +368,41 @@ where
         ftps_deadline_ms(&self.timer, budget_secs)
     }
 
+    /// Writes `cmd` to the control channel, poisoning the client (see struct doc comment) and
+    /// propagating the error on failure. Shared by every method's write-then-read-response
+    /// pattern (BUG-171) — was duplicated verbatim across 11 call sites.
+    async fn write_command_poisoning(&mut self, cmd: &str) -> Result<(), Error> {
+        if let Err(e) = write_command(&mut self.control_stream, cmd).await {
+            self.poisoned = true;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Reads one control-channel response, poisoning the client (see struct doc comment) and
+    /// propagating the error on failure. Shared sibling of `write_command_poisoning` (BUG-171)
+    /// — was duplicated verbatim across 13 call sites. Owns its own scratch `line_buf`, safe
+    /// since only `control_fill_buf` needs to persist across calls (see `read_response`'s doc
+    /// comment).
+    async fn read_response_poisoning(&mut self, deadline_ms: Option<u64>) -> Result<(u16, String), Error> {
+        let mut buf = Vec::new();
+        match read_response(
+            &mut self.control_stream,
+            &mut buf,
+            &mut self.control_fill_buf,
+            &self.timer,
+            deadline_ms,
+        )
+        .await
+        {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.poisoned = true;
+                Err(e)
+            }
+        }
+    }
+
     /// Fail-closed TLS-1.2 guard, shared by the control-channel check in `connect()` and the
     /// per-data-channel re-check in `list_directory`/`upload_file`/`download_file` (defense in
     /// depth: session resumption is expected to carry the control channel's negotiated version
@@ -454,28 +489,10 @@ where
         // operation in this file (per .claude/rules/ftps-poisoning.md) — an unpoisoned failure
         // here leaves the control channel in the same desynced state the poisoning mechanism
         // exists to prevent.
-        if let Err(e) = write_command(&mut self.control_stream, &list_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&list_cmd).await?;
 
-        let mut ctrl_buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut ctrl_buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(Error::ProtocolViolation(
                 "LIST transfer initialization failed".into(),
@@ -503,21 +520,7 @@ where
         drop(data_channel);
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut ctrl_buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         // BUG-150: sibling gap to BUG-030's upload_file/download_file handling — the same
         // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN] can arrive after read_to_eof has already
         // drained the listing to EOF, so 426 must be accepted alongside 226 here too.
@@ -549,28 +552,10 @@ where
         validate_ftp_path(remote_path)?;
 
         let size_cmd = format!("SIZE {}", remote_path);
-        if let Err(e) = write_command(&mut self.control_stream, &size_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&size_cmd).await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_SIZE_OK {
             return Err(Error::ProtocolViolation(
                 "SIZE query rejected by storage server".into(),
@@ -588,28 +573,10 @@ where
         validate_ftp_path(remote_path)?;
 
         let dele_cmd = format!("DELE {}", remote_path);
-        if let Err(e) = write_command(&mut self.control_stream, &dele_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&dele_cmd).await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
 
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
@@ -640,28 +607,11 @@ where
         let stor_cmd = format!("STOR {}", remote_path);
         // BUG-029: poison on the initial write/read too — see the matching comment in
         // list_directory() above.
-        if let Err(e) = write_command(&mut self.control_stream, &stor_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&stor_cmd).await?;
 
         let mut ctrl_buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut ctrl_buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(Error::ProtocolViolation(
                 "STOR upload negotiation rejected".into(),
@@ -675,11 +625,9 @@ where
         // silently misreading this stale reply.
         let mut data_channel = self.open_data_channel(raw_data_socket).await?;
 
-        let mut offset = 0;
-        while offset < data.len() {
-            let chunk_size = core::cmp::min(FTPS_UPLOAD_CHUNK_SIZE, data.len() - offset);
+        for chunk in data.chunks(FTPS_UPLOAD_CHUNK_SIZE) {
             let write_result = if self.timer.has_real_clock() {
-                let write_fut = data_channel.write_all(&data[offset..offset + chunk_size]);
+                let write_fut = data_channel.write_all(chunk);
                 let sleep_fut = self
                     .timer
                     .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
@@ -691,15 +639,12 @@ where
                     }
                 }
             } else {
-                data_channel
-                    .write_all(&data[offset..offset + chunk_size])
-                    .await
+                data_channel.write_all(chunk).await
             };
             if let Err(_e) = write_result {
                 self.poisoned = true;
                 return Err(Error::Network(SocketError::ConnectionAborted));
             }
-            offset += chunk_size;
         }
         let flush_result = if self.timer.has_real_clock() {
             let flush_fut = data_channel.flush();
@@ -764,28 +709,10 @@ where
         let retr_cmd = format!("RETR {}", remote_path);
         // BUG-029: poison on the initial write/read too — see the matching comment in
         // list_directory() above.
-        if let Err(e) = write_command(&mut self.control_stream, &retr_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&retr_cmd).await?;
 
-        let mut ctrl_buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut ctrl_buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
             return Err(Error::ProtocolViolation(
                 "RETR transfer initialization failed".into(),
@@ -813,21 +740,7 @@ where
         drop(data_channel);
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut ctrl_buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         // BUG-030: also attempt the SIZE recheck on 426 (transient close, e.g. the documented
         // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]), matching upload_file's symmetric
         // handling — previously this branch treated 426 as an unconditional hard failure,
@@ -861,28 +774,10 @@ where
         validate_ftp_path(path)?;
 
         let mkd_cmd = format!("MKD {}", path);
-        if let Err(e) = write_command(&mut self.control_stream, &mkd_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&mkd_cmd).await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_PATHNAME_CREATED {
             return Err(Error::ProtocolViolation(
                 "MKD directory creation failed".into(),
@@ -900,28 +795,10 @@ where
         validate_ftp_path(path)?;
 
         let rmd_cmd = format!("RMD {}", path);
-        if let Err(e) = write_command(&mut self.control_stream, &rmd_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&rmd_cmd).await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
             Ok(())
         } else {
@@ -941,28 +818,10 @@ where
         validate_ftp_path(to)?;
 
         let rnfr_cmd = format!("RNFR {}", from);
-        if let Err(e) = write_command(&mut self.control_stream, &rnfr_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&rnfr_cmd).await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_RENAME_PENDING {
             return Err(Error::ProtocolViolation(
                 "RNFR rename source path rejected".into(),
@@ -970,27 +829,10 @@ where
         }
 
         let rnto_cmd = format!("RNTO {}", to);
-        if let Err(e) = write_command(&mut self.control_stream, &rnto_cmd).await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning(&rnto_cmd).await?;
 
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_FILE_ACTION_OK {
             return Err(Error::ProtocolViolation(
                 "RNTO rename destination path rejected".into(),
@@ -1003,28 +845,10 @@ where
     pub async fn get_available_space(&mut self) -> Result<u64, Error> {
         self.check_poisoned()?;
 
-        if let Err(e) = write_command(&mut self.control_stream, "AVBL").await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning("AVBL").await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
 
         if code == FTP_SIZE_OK {
             text.parse::<u64>().map_err(|_| {
@@ -1039,28 +863,10 @@ where
 
     /// Issues `PASV` over control channel and extracts passive connection port details.
     async fn negotiate_passive_port(&mut self) -> Result<u16, Error> {
-        if let Err(e) = write_command(&mut self.control_stream, "PASV").await {
-            self.poisoned = true;
-            return Err(e);
-        }
+        self.write_command_poisoning("PASV").await?;
 
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = match read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                self.poisoned = true;
-                return Err(e);
-            }
-        };
+        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
         if code != FTP_PASSIVE_MODE {
             return Err(Error::ProtocolViolation(
                 "PASV port negotiation rejected".into(),
