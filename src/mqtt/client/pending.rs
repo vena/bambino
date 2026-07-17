@@ -127,6 +127,7 @@ mod tests {
                 ping_outstanding: false,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
+                write_poisoned: false,
             }
         }
 

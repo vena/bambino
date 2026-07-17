@@ -49,7 +49,7 @@ Once tokenized, the fields correspond to:
 *   `parts[5]`: Modification month (3-letter abbreviation).
 *   `parts[6]`: Modification day.
 *   `parts[7]`: Modification time (`HH:MM`) or calendar year (`YYYY`).
-*   `parts[8:]`: Reconstructed file or folder name (joined with single spaces to preserve spaces in filenames).
+*   `parts[8:]`: File or folder name — the raw remainder of the line after the 8th whitespace-delimited field, sliced out verbatim (not re-tokenized/rejoined) so runs of multiple consecutive spaces inside the real filename are preserved rather than collapsed to one (confirmed on a P1S).
 
 ##### Rollover Logic
 If `parts[7]` contains a time pattern (`HH:MM`), the modification year is omitted. In this scenario, the host's current calendar year is assumed. If the calculated datetime is in the future relative to the host machine's system clock (`parsed_time > current_time`), the year value must be decremented by 1 (`year = current_year - 1`) to account for rollover boundaries (e.g., parsing a December modification date in January).

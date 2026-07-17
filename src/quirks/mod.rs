@@ -154,7 +154,8 @@ pub trait ModelQuirks {
     /// Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
     ///
     /// Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan)
-    /// override this to `false`.
+    /// and P1P (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) override
+    /// this to `false`.
     fn supports_auxiliary_left_fan(&self) -> bool {
         true
     }
@@ -235,7 +236,8 @@ impl PrinterModel {
             PrinterModel::A1 => &models::a1::A1Quirks,
             PrinterModel::A2L => &models::a2::A2LQuirks,
             PrinterModel::A1Mini => &models::a1::A1MiniQuirks,
-            PrinterModel::P1P | PrinterModel::P1S => &models::p1::P1Quirks,
+            PrinterModel::P1P => &models::p1::P1PQuirks,
+            PrinterModel::P1S => &models::p1::P1SQuirks,
             PrinterModel::P2S => &models::p2::P2Quirks,
             PrinterModel::X1C => &models::x1::X1CQuirks,
             PrinterModel::X1E => &models::x1::X1EQuirks,
@@ -559,7 +561,7 @@ mod tests {
             assert!(q.is_bed_on_z());
             assert!(!q.requires_wallclock_rtsp_timestamps());
             assert!(!q.supports_auxiliary_right_fan());
-            assert!(q.supports_auxiliary_left_fan());
+            assert_eq!(q.supports_auxiliary_left_fan(), model == PrinterModel::P1S);
             assert!(!q.has_chamber_exhaust_fan());
             assert_eq!(q.z_max(), 256.0);
             assert_eq!(q.nozzle_temp_max(), 300);

@@ -410,6 +410,33 @@ fn test_ams_unit_info_accessors_short_bitmask() {
 }
 
 #[test]
+fn test_ams_unit_info_accessors_dry_sub_status_distinct_bits() {
+    // "19c0153": type=3 (bits 0-3), dry_status=5 (bits 4-7), extruder=1 (bits 8-11),
+    // fan1=3 (bits 18-19), fan2=1 (bits 20-21), dry_sub_status=2 (bits 22-23),
+    // plus a nonzero bit 24 outside every known field's mask. Every field gets a distinct
+    // nonzero value so a shift/mask regression reading a neighboring field's bits instead
+    // of its own (BUG-104's bug class) would fail here, unlike the all-zero-except-one
+    // fixtures elsewhere in this file.
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: None,
+        info: Some("19c0153".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.ams_type(), Some(3));
+    assert_eq!(unit.dry_status(), Some(5));
+    assert_eq!(unit.extruder_assignment(), Some(1));
+    assert_eq!(unit.dry_fan1_status(), Some(3));
+    assert_eq!(unit.dry_fan2_status(), Some(1));
+    assert_eq!(unit.dry_sub_status(), Some(2));
+}
+
+#[test]
 fn test_ams_unit_info_accessors_right_extruder() {
     // "2003": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 0 (right/main)
     let unit = AmsUnit {

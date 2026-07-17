@@ -88,6 +88,11 @@ pub struct MqttClient<IO: AsyncIo> {
     secs_since_last_message: u32,
     /// Byte-level progress of an in-flight frame read, preserved across a timed-out `read_exact_packet` call so `poll_wire()` resumes correctly instead of desyncing the stream — see `FrameReadState`'s doc comment.
     read_state: FrameReadState,
+    /// Set once a `write_frame_with_timer` call fails — a write timeout or I/O error may
+    /// already have put a partial frame on the wire, and unlike a read timeout (safe to
+    /// retry via `FrameReadState`), a write has no resumable partial-progress state.
+    /// Every subsequent write fails fast instead of writing again into a desynced stream.
+    write_poisoned: bool,
 }
 
 /// Advances an MQTT packet identifier, skipping 0 (reserved) on wraparound.
@@ -156,6 +161,24 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
 }
 
 impl<IO: AsyncIo> MqttClient<IO> {
+    /// Writes a frame via [`write_frame_with_timer`], poisoning the connection on failure.
+    ///
+    /// A write timeout or I/O error may already have put a partial frame on the wire, and
+    /// unlike a read timeout (safe to retry via `FrameReadState`), a write has no resumable
+    /// partial-progress state — once poisoned, every subsequent call fails immediately
+    /// without touching the stream again.
+    async fn write_frame_guarded<T: TimerProvider>(
+        &mut self,
+        packet: &[u8],
+        timer: &T,
+    ) -> Result<(), Error> {
+        if self.write_poisoned {
+            return Err(Error::Network(SocketError::ConnectionAborted));
+        }
+        write_frame_with_timer(&mut self.stream, packet, timer)
+            .await
+            .inspect_err(|_| self.write_poisoned = true)
+    }
     /// Executes a secure local network connection handshake and subscription loop with the printer.
     ///
     /// **Authentication Note:** If the printer's physical broker rejects credentials due to
@@ -299,6 +322,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             ping_outstanding: false,
             secs_since_last_message: 0,
             read_state: FrameReadState::default(),
+            write_poisoned: false,
         })
     }
 
@@ -347,7 +371,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
         let packet = encode_publish_qos1(packet_id, &self.request_topic, payload);
 
-        write_frame_with_timer(&mut self.stream, &packet, timer).await?;
+        self.write_frame_guarded(&packet, timer).await?;
 
         self.in_flight.insert(packet_id);
 
@@ -492,7 +516,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         let ack = encode_puback(id);
-                        write_frame_with_timer(&mut self.stream, &ack, timer).await?;
+                        self.write_frame_guarded(&ack, timer).await?;
                     } else if qos >= 2 {
                         log::warn!(
                             "Received QoS {} PUBLISH (packet_id: {:?}) — QoS 2 handshake \
@@ -551,7 +575,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
-        write_frame_with_timer(&mut self.stream, &ping, timer).await?;
+        self.write_frame_guarded(&ping, timer).await?;
         self.ping_outstanding = true;
         Ok(())
     }
@@ -850,6 +874,7 @@ mod tests {
                 ping_outstanding: false,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
+                write_poisoned: false,
             };
 
             client
