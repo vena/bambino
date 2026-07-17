@@ -240,7 +240,7 @@ fn build_verified_client_config(ca_certs: impl IntoIterator<Item = rustls_pki_ty
 Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs.
 
 Use `rustls_pki_types::pem::PemObject` to load PEM files:
-```ignore
+```rust,ignore
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 let ca = CertificateDer::from_pem_file("ca.pem")?;
 ```

@@ -19,7 +19,7 @@ code never touches `tokio::` or `std::net::` directly.
 
 # Quick start
 
-```ignore
+```rust,ignore
 use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;
 use bambino::io::tokio::{

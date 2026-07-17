@@ -357,7 +357,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   
 
-  ```ignore
+  ```rust,ignore
 
   // Turn on the part cooling fan at 100%
 
@@ -423,7 +423,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Use `CalibrationOption` flags combined with `|` to select routines:
 
-  ```ignore
+  ```rust,ignore
 
   client.start_calibration(
 
@@ -469,7 +469,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   
 
-  ```ignore
+  ```rust,ignore
 
   loop {
 
@@ -691,7 +691,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   
 
-  ```ignore
+  ```rust,ignore
 
   printer.set_bed_temperature(60).await?;
 

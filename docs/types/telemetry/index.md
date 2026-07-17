@@ -2134,7 +2134,7 @@ top-level domains depending on which micro-system published the frame.
 
   
 
-  ```ignore
+  ```rust,ignore
 
   let (actual, target) = report.bed_temperatures();
 
