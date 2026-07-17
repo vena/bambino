@@ -130,24 +130,30 @@ where
     control_fill_buf: Vec<u8>,
 }
 
+/// Bundles the 5 args every `send_and_expect()` call in `connect_control_stream()`'s login
+/// sequence shares (stream/buf/fill_buf/timer/deadline_ms), so each call site only spells out
+/// what actually varies: the command, its log label, the expected reply code, and the rejection.
+struct LoginCtx<'a, IO, T> {
+    stream: &'a mut IO,
+    buf: &'a mut Vec<u8>,
+    fill_buf: &'a mut Vec<u8>,
+    timer: &'a T,
+    deadline_ms: Option<u64>,
+}
+
 /// Sends `cmd`, reads the reply, and maps a non-matching code to `on_reject()` — collapses the
 /// write/read/log/check block that `connect_control_stream()`'s login sequence otherwise repeats
 /// once per command. `on_reject` is a closure (not a fixed `ProtocolViolation` message) because
 /// the PASS step needs `Error::AccessDenied` instead.
-#[allow(clippy::too_many_arguments)]
 async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
-    stream: &mut IO,
-    buf: &mut Vec<u8>,
-    fill_buf: &mut Vec<u8>,
-    timer: &T,
-    deadline_ms: Option<u64>,
+    ctx: &mut LoginCtx<'_, IO, T>,
     cmd: &str,
     log_label: &str,
     expected_code: u16,
     on_reject: F,
 ) -> Result<(), Error> {
-    write_command(stream, cmd).await?;
-    let (code, text) = read_response(stream, buf, fill_buf, timer, deadline_ms).await?;
+    write_command(ctx.stream, cmd).await?;
+    let (code, text) = read_response(ctx.stream, ctx.buf, ctx.fill_buf, ctx.timer, ctx.deadline_ms).await?;
     log::debug!("FTPS {log_label} response: code={code} text={text:?}");
     if code != expected_code {
         return Err(on_reject());
@@ -238,12 +244,20 @@ where
         let mut fill_buf = Vec::new();
         let deadline_ms = ftps_deadline_ms(timer, FTPS_READ_TIMEOUT_SECS);
 
-        let (code, _) = read_response(
-            &mut control_stream,
-            &mut buf,
-            &mut fill_buf,
+        let mut ctx = LoginCtx {
+            stream: &mut control_stream,
+            buf: &mut buf,
+            fill_buf: &mut fill_buf,
             timer,
             deadline_ms,
+        };
+
+        let (code, _) = read_response(
+            ctx.stream,
+            ctx.buf,
+            ctx.fill_buf,
+            ctx.timer,
+            ctx.deadline_ms,
         )
         .await?;
         if code != FTP_GREETING {
@@ -253,11 +267,7 @@ where
         }
 
         send_and_expect(
-            &mut control_stream,
-            &mut buf,
-            &mut fill_buf,
-            timer,
-            deadline_ms,
+            &mut ctx,
             "USER bblp",
             "USER",
             FTP_PASSWORD_NEEDED,
@@ -267,11 +277,7 @@ where
 
         let pass_cmd = format!("PASS {}", access_code);
         send_and_expect(
-            &mut control_stream,
-            &mut buf,
-            &mut fill_buf,
-            timer,
-            deadline_ms,
+            &mut ctx,
             &pass_cmd,
             "PASS",
             FTP_LOGIN_OK,
@@ -280,11 +286,7 @@ where
         .await?;
 
         send_and_expect(
-            &mut control_stream,
-            &mut buf,
-            &mut fill_buf,
-            timer,
-            deadline_ms,
+            &mut ctx,
             "PBSZ 0",
             "PBSZ",
             FTP_COMMAND_OK,
@@ -295,11 +297,7 @@ where
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !model.quirks().uses_plaintext_ftps_data_channel() {
             send_and_expect(
-                &mut control_stream,
-                &mut buf,
-                &mut fill_buf,
-                timer,
-                deadline_ms,
+                &mut ctx,
                 "PROT P",
                 "PROT P",
                 FTP_COMMAND_OK,
@@ -310,11 +308,7 @@ where
 
         // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
         send_and_expect(
-            &mut control_stream,
-            &mut buf,
-            &mut fill_buf,
-            timer,
-            deadline_ms,
+            &mut ctx,
             "TYPE I",
             "TYPE I",
             FTP_COMMAND_OK,
