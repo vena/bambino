@@ -16,7 +16,7 @@ use bambino::client::DummyTimer;
 use bambino::error::Error;
 use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
-use bambino::models::BambuModel;
+use bambino::models::PrinterModel;
 
 use bambino::io::TlsVersion;
 
@@ -48,7 +48,7 @@ fn setup() -> SetupResult {
 async fn connect_client(
     client_control: tokio::io::DuplexStream,
     factory: MockDataStreamFactory,
-    model: BambuModel,
+    model: PrinterModel,
 ) -> BambuFtpsClient<
     TokioIo<tokio::io::DuplexStream>,
     DummyTlsConnector,
@@ -87,7 +87,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
         TokioIo(client_control),
         connector,
         factory,
-        BambuModel::P1S,
+        PrinterModel::P1S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -116,7 +116,7 @@ async fn test_ftps_client_lifecycle_and_operations() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let list = client
         .list_directory("/model", 2026, 6, 17, 15, 0)
@@ -164,7 +164,7 @@ async fn test_ftps_upload_multi_chunk_reassembles_correctly() {
         payload.len(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     client
         .upload_file("/model/big.bin", &payload)
@@ -189,7 +189,7 @@ async fn test_ftps_a1_plaintext_data_channel() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::A1).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::A1).await;
 
     let list = client
         .list_directory("/", 2026, 6, 17, 15, 0)
@@ -211,7 +211,7 @@ async fn test_ftps_download_file() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let data = client
         .download_file("/model/job.3mf")
@@ -234,7 +234,7 @@ async fn test_ftps_download_size_mismatch_returns_protocol_violation() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let result = client.download_file("/model/job.3mf").await;
     assert!(
@@ -255,7 +255,7 @@ async fn test_ftps_directory_operations() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     client
         .create_directory("/model/subdir")
@@ -294,7 +294,7 @@ async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let result = client.get_available_space().await;
     assert!(
@@ -323,7 +323,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         TokioIo(client_control),
         FailingDataTlsConnector::new(),
         factory,
-        BambuModel::P1S,
+        PrinterModel::P1S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -370,7 +370,7 @@ async fn test_ftps_single_reply_command_failure_poisons_client() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let result = client.delete_file("/model/job.3mf").await;
     assert!(
@@ -398,7 +398,7 @@ async fn test_ftps_upload_426_recovery_via_size() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     client
         .upload_file("/model/job.3mf", b"TEST_DATA")
@@ -417,7 +417,7 @@ async fn test_ftps_upload_size_mismatch_returns_disk_failure() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let result = client.upload_file("/model/job.3mf", b"TEST_DATA").await;
     assert!(
@@ -442,7 +442,7 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
     assert!(
@@ -474,7 +474,7 @@ async fn test_ftps_download_426_recovery_via_size() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let data = client
         .download_file("/model/job.3mf")
@@ -494,7 +494,7 @@ async fn test_ftps_disconnect() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, BambuModel::P1S).await;
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     client.disconnect().await;
 
@@ -509,7 +509,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        BambuModel::P2S,
+        PrinterModel::P2S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -533,7 +533,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        BambuModel::X2D,
+        PrinterModel::X2D,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -562,7 +562,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
-        BambuModel::P2S,
+        PrinterModel::P2S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -589,7 +589,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        BambuModel::P1S,
+        PrinterModel::P1S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -611,7 +611,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,
-        BambuModel::P2S,
+        PrinterModel::P2S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -650,7 +650,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        BambuModel::P2S,
+        PrinterModel::P2S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",
@@ -679,7 +679,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,
-        BambuModel::P2S,
+        PrinterModel::P2S,
         "127.0.0.1",
         "TEST0000000001",
         "12345678",

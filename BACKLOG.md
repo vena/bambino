@@ -10,7 +10,6 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-165 | Sev3 | models.rs | `BambuModel` redundantly repeats the crate's own subject, same pattern as the prior `BambuError`→`Error` fix | 2026-07-16 | See `RUST-REVIEW.md` unit 1 (core). ~200 call sites across `src/`/`tests/`/`docs/`. Decided: rename to `PrinterModel` (not bare `Model` — too generic/overloaded with ORM/ML/data-model senses), re-exported as `bambino::PrinterModel`, mirroring `PrinterClient`. |
 | BUG-166 | Sev3 | ams/mapping.rs, ams/parser.rs | Pure return-value-only functions (`validate_external_spool_safety` and ~8 siblings) missing `#[must_use]` | 2026-07-16 | See `RUST-REVIEW.md` unit 2 (ams). Silent-discard risk: caller drops the corrected `use_ams`/mapping value and reproduces the `07FF_8012` lockup it exists to prevent. |
 | BUG-167 | Sev3 | diagnostics/kprofile.rs | Setting-ID validation error-construction boilerplate duplicated verbatim in two constructors | 2026-07-16 | See `RUST-REVIEW.md` unit 3 (diagnostics). `ExtrusionCaliSetRequest::new` (173-176) and `StandardCaliDelRequest::new` (315-318); extract a shared `ensure_valid_setting_id` helper. |
 | BUG-170 | Sev3 | tests/client_test.rs | Pervasive copy-pasted 3-statement MQTT connection boilerplate (~60 sites, ~3300-line file) | 2026-07-16 | See `RUST-REVIEW.md` unit 7 (client-tests). `duplex`→`BambuMqttClient::connect`→`PrinterClient::from_mqtt` repeated per test; extract a `tests/common` helper. |
@@ -36,6 +35,7 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Closed | Detail |
 |---|---|---|---|---|---|---|
+| BUG-165 | Sev3 | models.rs | `BambuModel` redundantly repeats the crate's own subject, same pattern as the prior `BambuError`→`Error` fix | 2026-07-16 | 2026-07-16 | Renamed `BambuModel`→`PrinterModel` (mirrors `PrinterClient`), re-exported as `bambino::PrinterModel`; updated ~200 call sites across src/ and tests/. |
 | BUG-168 | Sev3 | camera/rtsps.rs | `RtpTimestampCorrector::init` breaks crate-wide `new` constructor naming convention | 2026-07-16 | 2026-07-16 | Renamed `init`→`new`; sole call sites were rtsps.rs's own tests. |
 | BUG-169 | Sev3 | client/connect.rs | `mqtt_connected`/`ftps_connected`/`camera_connected` missing `is_` prefix used by every sibling bool predicate | 2026-07-16 | 2026-07-16 | Renamed to `is_mqtt_connected`/`is_ftps_connected`/`is_camera_connected`; updated all call sites in src/ and tests/. |
 | BUG-175 | Sev3 | io/esp_idf.rs | `EspTlsStream` breaks the module's own `EspIdf`-prefix naming convention | 2026-07-16 | 2026-07-16 | Renamed `EspTlsStream`→`EspIdfTlsStream`. |

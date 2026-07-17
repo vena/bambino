@@ -11,7 +11,7 @@ use alloc::borrow::ToOwned;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
-use crate::models::{BambuModel, resolve_model};
+use crate::models::{PrinterModel, resolve_model};
 
 /// Normalized device details extracted directly from SSDP UDP datagram payloads.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub struct SsdpDevice {
     /// The unique uppercase physical hardware serial number.
     pub serial: String,
     /// Resolved printer capability profile based on prefixes and headers.
-    pub model: BambuModel,
+    pub model: PrinterModel,
     /// Human-friendly printer name defined by the user.
     pub name: String,
     /// Direct network target IP address extracted from the LOCATION header.
@@ -237,7 +237,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     // recognized serial prefix or `DevModel`; the NT/ST urn check also catches a genuine
     // Bambu device advertising only via that field with a serial prefix `resolve_model`
     // doesn't recognize (e.g. the generic `urn:bambulab-com:device:3dprinter:1` case).
-    let is_bambu_device = model != BambuModel::Unknown
+    let is_bambu_device = model != PrinterModel::Unknown
         || raw
             .nt_or_st
             .is_some_and(|v| v.to_ascii_lowercase().contains("bambulab-com"));
@@ -308,7 +308,7 @@ mod tests {
 
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "09306A521703533");
-        assert_eq!(device.model, BambuModel::H2S);
+        assert_eq!(device.model, PrinterModel::H2S);
         assert_eq!(device.ip, "192.168.1.150");
         assert_eq!(device.port, 80);
         assert_eq!(device.name, "MyPrinterName");
@@ -324,7 +324,7 @@ mod tests {
 
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "01P06A521703222");
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         assert_eq!(device.ip, "10.0.0.5");
         assert_eq!(device.port, 80);
     }
@@ -341,7 +341,7 @@ mod tests {
 
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "01P06A521703222");
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
     }
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
 
         let device = parse_ssdp_payload(&payload).unwrap();
         assert_eq!(device.serial, "01P06A521703222");
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         assert!(device.signal_dbm.is_none());
     }
 
@@ -387,7 +387,7 @@ mod tests {
                         NT: urn:bambulab-com:device:C12:1\r\n\r\n";
 
         let device = parse_ssdp_payload(payload).unwrap();
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         assert_eq!(device.raw_model_str, "C12");
     }
 
@@ -405,7 +405,7 @@ mod tests {
                         NT: urn:bambulab-com:device:C12:1\r\n\r\n";
 
         let device = parse_ssdp_payload(payload).unwrap();
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         assert_eq!(device.raw_model_str, "C12");
     }
 
@@ -418,7 +418,7 @@ mod tests {
                         NT: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
 
         let device = parse_ssdp_payload(payload).unwrap();
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         assert_eq!(device.raw_model_str, "");
     }
 
@@ -455,7 +455,7 @@ mod tests {
 
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "01P00A4C2009981");
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         assert_eq!(device.ip, "192.168.1.158");
         assert_eq!(device.port, 80);
         assert_eq!(device.name, "3DP-01P-981");

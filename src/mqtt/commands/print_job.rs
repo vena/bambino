@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
 use crate::ams::{validate_external_spool_safety, validate_external_spool_safety_flat};
-use crate::models::BambuModel;
+use crate::models::PrinterModel;
 
 use super::ClampedTaskId;
 
@@ -226,7 +226,7 @@ impl ProjectFileRequest {
     pub fn from_config(
         config: &PrintJobConfig,
         sequence_id: impl Into<ClampedTaskId>,
-        model: BambuModel,
+        model: PrinterModel,
     ) -> Self {
         let url = format!("ftp://{}", config.job_filename);
 

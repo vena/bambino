@@ -77,7 +77,7 @@ impl core::fmt::Display for ClampedTaskId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::BambuModel;
+    use crate::models::PrinterModel;
 
     #[test]
     fn test_command_constructor_clamps_unclamped_sequence_id() {
@@ -102,7 +102,7 @@ mod tests {
             u64::MAX,
             "textured",
         );
-        let project_req = ProjectFileRequest::from_config(&config, u64::MAX, BambuModel::P1S);
+        let project_req = ProjectFileRequest::from_config(&config, u64::MAX, PrinterModel::P1S);
         assert!(
             project_req.print.sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
             "ProjectFileRequest sequence_id {} exceeds i32::MAX",
@@ -142,7 +142,7 @@ mod tests {
             12345,
             "textured",
         );
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_mapping":"""#));
@@ -158,7 +158,7 @@ mod tests {
             "textured",
         )
         .with_ams(vec![0, -1, 1]);
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_mapping":[0,-1,1]"#));
@@ -178,7 +178,7 @@ mod tests {
             "textured",
         )
         .with_ams(vec![-1, -1]);
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""use_ams":false"#));
@@ -203,7 +203,7 @@ mod tests {
             ams_id: 0,
             slot_id: 1,
         }]);
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""use_ams":true"#));
@@ -235,7 +235,7 @@ mod tests {
                 slot_id: 0,
             },
         ]);
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""use_ams":true"#));
@@ -262,7 +262,7 @@ mod tests {
             ams_id: 255,
             slot_id: 0,
         }]);
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
 
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""use_ams":false"#));
@@ -280,7 +280,7 @@ mod tests {
         );
         assert!(config.nozzle_offset_cali.is_none());
 
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::X2D);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::X2D);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""nozzle_offset_cali":1"#));
     }
@@ -294,7 +294,7 @@ mod tests {
             12345,
             "textured",
         );
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::P1S);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::P1S);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""nozzle_offset_cali":0"#));
     }
@@ -309,7 +309,7 @@ mod tests {
             "textured",
         )
         .nozzle_offset_calibration(false);
-        let req = ProjectFileRequest::from_config(&config, 5000, BambuModel::X2D);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::X2D);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""nozzle_offset_cali":0"#));
     }

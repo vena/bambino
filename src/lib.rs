@@ -102,4 +102,4 @@ pub mod types;
 #[doc(inline)]
 pub use error::Error;
 #[doc(inline)]
-pub use models::BambuModel;
+pub use models::PrinterModel;

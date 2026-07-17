@@ -302,7 +302,7 @@ where
 mod tests {
     use super::*;
     use crate::io::{AsyncUdpSocket, BindableUdpSocket, SocketError};
-    use crate::models::BambuModel;
+    use crate::models::PrinterModel;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -368,7 +368,7 @@ mod tests {
         let mut buf = [0u8; 1500];
         let device = engine.poll_next_device(&mut buf).await.unwrap().unwrap();
         assert_eq!(device.serial, "01P06A521703222");
-        assert_eq!(device.model, BambuModel::P1S);
+        assert_eq!(device.model, PrinterModel::P1S);
         // BUG-024: poll_next_device must stamp discovery_port itself, not rely on the
         // discover_devices() wrapper — Embassy callers use DiscoveryEngine directly.
         assert_eq!(device.discovery_port, SSDP_PORT);

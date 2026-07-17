@@ -20,7 +20,7 @@ mod common;
 
 use bambino::client::PrinterClient;
 use bambino::io::TokioIo;
-use bambino::models::BambuModel;
+use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
 use common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
@@ -66,7 +66,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
     let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
+    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
 
     for (i, _line) in lines.iter().enumerate() {
         client

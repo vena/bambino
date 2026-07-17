@@ -46,7 +46,7 @@ use crate::camera::binary::BambuBinaryCameraStream;
 use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
-use crate::models::BambuModel;
+use crate::models::PrinterModel;
 use crate::mqtt::{MqttClient, MqttMessage};
 
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
@@ -120,7 +120,7 @@ pub struct PrinterClient<
     pub(crate) serial: String,
     pub(crate) ip: String,
     pub(crate) access_code: String,
-    pub(crate) model: BambuModel,
+    pub(crate) model: PrinterModel,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
     pub(crate) cache: telemetry::TelemetryCache,
@@ -177,7 +177,7 @@ where
         ip: &str,
         serial: &str,
         access_code: &str,
-        model: BambuModel,
+        model: PrinterModel,
     ) -> Self {
         Self {
             mqtt: None,
@@ -234,7 +234,7 @@ where
     /// `PreConnected`'s `RawStreamFactory::dial` (which returns
     /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
     /// practice.
-    pub fn from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: BambuModel) -> Self {
+    pub fn from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel) -> Self {
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
@@ -421,7 +421,7 @@ where
     }
 
     /// Returns the resolved printer hardware model.
-    pub fn model(&self) -> BambuModel {
+    pub fn model(&self) -> PrinterModel {
         self.model
     }
 

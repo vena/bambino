@@ -17,7 +17,7 @@ use bambino::camera::binary::BambuBinaryCameraStream;
 use bambino::client::{DummyFactory, DummyTls, PrinterClient};
 use bambino::error::Error;
 use bambino::io::TokioIo;
-use bambino::models::BambuModel;
+use bambino::models::PrinterModel;
 
 use common::io::{DummyTlsConnector, MockDataStreamFactory};
 use common::mock_camera::{
@@ -126,7 +126,7 @@ async fn test_printer_client_camera_end_to_end() {
         "127.0.0.1",
         SERIAL,
         access_code,
-        BambuModel::P1S,
+        PrinterModel::P1S,
     )
     .with_camera(DummyTlsConnector, factory);
 
@@ -161,7 +161,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
         "127.0.0.1",
         SERIAL,
         "12345678",
-        BambuModel::X1C,
+        PrinterModel::X1C,
     );
 
     let mut frame_buf = Vec::new();
@@ -195,7 +195,7 @@ async fn test_ensure_camera_retries_after_failed_dial() {
         "127.0.0.1",
         SERIAL,
         "12345678",
-        BambuModel::P1S,
+        PrinterModel::P1S,
     )
     .with_camera(DummyTlsConnector, factory);
 
@@ -307,7 +307,7 @@ async fn test_attach_and_disconnect_camera() {
         "127.0.0.1",
         SERIAL,
         access_code,
-        BambuModel::P1S,
+        PrinterModel::P1S,
     )
     .with_camera(
         DummyTlsConnector,

@@ -17,7 +17,7 @@ use embedded_io_async::{Error as _, Write};
 use crate::error::Error;
 use crate::ftps::parser::{FtpFile, parse_unix_listing};
 use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
-use crate::models::BambuModel;
+use crate::models::PrinterModel;
 
 use super::protocol::*;
 
@@ -101,7 +101,7 @@ where
     control_stream: Tls::Stream,
     tls_connector: Tls,
     data_factory: Factory,
-    model: BambuModel,
+    model: PrinterModel,
     ip: String,
     /// The printer's serial number — carried separately from `ip` because it, not the IP, is
     /// what the printer's TLS server expects as SNI/identity (see
@@ -147,7 +147,7 @@ where
         raw_control: RawIO,
         tls_connector: Tls,
         data_factory: Factory,
-        model: BambuModel,
+        model: PrinterModel,
         ip: &str,
         serial: &str,
         access_code: &str,
@@ -193,7 +193,7 @@ where
     pub(crate) async fn connect_control_stream(
         raw_control: RawIO,
         tls_connector: &Tls,
-        model: BambuModel,
+        model: PrinterModel,
         serial: &str,
         access_code: &str,
         timer: &FtpsTimer,
@@ -324,7 +324,7 @@ where
         control_stream: Tls::Stream,
         tls_connector: Tls,
         data_factory: Factory,
-        model: BambuModel,
+        model: PrinterModel,
         ip: &str,
         serial: &str,
         timer: FtpsTimer,
@@ -376,7 +376,7 @@ where
     fn require_tls_1_2_if_enforced(
         tls_connector: &Tls,
         stream: &Tls::Stream,
-        model: BambuModel,
+        model: PrinterModel,
         allow_unverified: bool,
     ) -> Result<(), Error> {
         if allow_unverified {

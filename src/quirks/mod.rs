@@ -3,7 +3,7 @@
 //! Bambu Lab printers vary in hardware capabilities — door sensors, chamber heaters,
 //! fan step resolution, FTPS TLS requirements, camera protocols, and more. Rather than
 //! scattering `match model { ... }` blocks everywhere, the [`ModelQuirks`] trait captures
-//! all model-specific behavior in one place. Call [`BambuModel::quirks()`] to get the
+//! all model-specific behavior in one place. Call [`PrinterModel::quirks()`] to get the
 //! strategy implementation for any model.
 //!
 //! Per-model strategy structs live in the [`models`] submodule. This module also provides
@@ -18,7 +18,7 @@ use alloc::format;
 use alloc::string::String;
 
 use crate::camera::CameraProtocol;
-use crate::models::BambuModel;
+use crate::models::PrinterModel;
 use crate::types::PrinterTelemetry;
 
 /// Polymorphic interface tracking model-specific hardware variations and transport exceptions.
@@ -225,26 +225,26 @@ pub trait ModelQuirks {
     }
 }
 
-impl BambuModel {
+impl PrinterModel {
     /// Returns the [`ModelQuirks`] strategy for this model variant.
     ///
     /// This is the single dispatch point — all model-specific behavior goes through
     /// the trait object returned here, rather than match-blocks scattered across the crate.
     pub fn quirks(&self) -> &'static dyn ModelQuirks {
         match self {
-            BambuModel::A1 => &models::a1::A1Quirks,
-            BambuModel::A2L => &models::a2::A2LQuirks,
-            BambuModel::A1Mini => &models::a1::A1MiniQuirks,
-            BambuModel::P1P | BambuModel::P1S => &models::p1::P1Quirks,
-            BambuModel::P2S => &models::p2::P2Quirks,
-            BambuModel::X1C => &models::x1::X1CQuirks,
-            BambuModel::X1E => &models::x1::X1EQuirks,
-            BambuModel::X2D => &models::x2::X2Quirks,
-            BambuModel::H2S => &models::h2::H2SQuirks,
-            BambuModel::H2D => &models::h2::H2DQuirks,
-            BambuModel::H2DPro => &models::h2::H2DProQuirks,
-            BambuModel::H2C => &models::h2::H2CQuirks,
-            BambuModel::Unknown => {
+            PrinterModel::A1 => &models::a1::A1Quirks,
+            PrinterModel::A2L => &models::a2::A2LQuirks,
+            PrinterModel::A1Mini => &models::a1::A1MiniQuirks,
+            PrinterModel::P1P | PrinterModel::P1S => &models::p1::P1Quirks,
+            PrinterModel::P2S => &models::p2::P2Quirks,
+            PrinterModel::X1C => &models::x1::X1CQuirks,
+            PrinterModel::X1E => &models::x1::X1EQuirks,
+            PrinterModel::X2D => &models::x2::X2Quirks,
+            PrinterModel::H2S => &models::h2::H2SQuirks,
+            PrinterModel::H2D => &models::h2::H2DQuirks,
+            PrinterModel::H2DPro => &models::h2::H2DProQuirks,
+            PrinterModel::H2C => &models::h2::H2CQuirks,
+            PrinterModel::Unknown => {
                 log::warn!(
                     "Unrecognized printer model — applying X1C quirks as a conservative default"
                 );
@@ -439,7 +439,7 @@ impl FanSpeedDebouncer {
 mod tests {
     use super::*;
     use crate::camera::CameraProtocol;
-    use crate::models::BambuModel;
+    use crate::models::PrinterModel;
 
     #[test]
     fn test_fan_step_rounding() {
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_a1_quirks() {
-        let q = BambuModel::A1.quirks();
+        let q = PrinterModel::A1.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforces_ftps_tls_1_2());
         assert!(!q.has_door_sensor());
@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_a2l_quirks() {
-        let q = BambuModel::A2L.quirks();
+        let q = PrinterModel::A2L.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforces_ftps_tls_1_2());
         assert!(!q.has_door_sensor());
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_a1_mini_quirks() {
-        let q = BambuModel::A1Mini.quirks();
+        let q = PrinterModel::A1Mini.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforces_ftps_tls_1_2());
         assert!(!q.has_door_sensor());
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_p1_quirks() {
-        for model in [BambuModel::P1P, BambuModel::P1S] {
+        for model in [PrinterModel::P1P, PrinterModel::P1S] {
             let q = model.quirks();
             assert!(!q.uses_plaintext_ftps_data_channel());
             assert!(!q.enforces_ftps_tls_1_2());
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_p2s_quirks() {
-        let q = BambuModel::P2S.quirks();
+        let q = PrinterModel::P2S.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn test_x1c_quirks() {
-        let q = BambuModel::X1C.quirks();
+        let q = PrinterModel::X1C.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_x1e_quirks() {
-        let q = BambuModel::X1E.quirks();
+        let q = PrinterModel::X1E.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
@@ -651,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_x2d_quirks() {
-        let q = BambuModel::X2D.quirks();
+        let q = PrinterModel::X2D.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn test_h2s_quirks() {
-        let q = BambuModel::H2S.quirks();
+        let q = PrinterModel::H2S.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
         assert!(!q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
@@ -701,7 +701,7 @@ mod tests {
 
     #[test]
     fn test_h2d_quirks() {
-        let q = BambuModel::H2D.quirks();
+        let q = PrinterModel::H2D.quirks();
         assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_h2d_pro_quirks() {
-        let q = BambuModel::H2DPro.quirks();
+        let q = PrinterModel::H2DPro.quirks();
         assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
@@ -738,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_h2c_quirks() {
-        let q = BambuModel::H2C.quirks();
+        let q = PrinterModel::H2C.quirks();
         assert!(q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 7);
         assert!(q.supports_nozzle_offset_calibration());
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn test_unknown_fallback_quirks() {
-        let q = BambuModel::Unknown.quirks();
+        let q = PrinterModel::Unknown.quirks();
         assert!(!q.has_active_chamber_heater());
         assert_eq!(q.physical_nozzle_count(), 1);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_z_move_via_trait() {
-        let q = BambuModel::P1P.quirks();
+        let q = PrinterModel::P1P.quirks();
         let gcode = q.relative_z_move_gcode(15.0, 2000);
         assert!(gcode.contains("Z15.00"));
         assert!(gcode.contains("F2000"));
@@ -849,7 +849,7 @@ mod tests {
         // format_xy_move_gcode itself is axis-agnostic (just formats whatever char it's given,
         // same as format_z_move_gcode is Z-only by construction) — the 'X'/'Y'-only restriction
         // lives in relative_xy_move_gcode's axis match, so test it there.
-        let q = BambuModel::P1P.quirks();
+        let q = PrinterModel::P1P.quirks();
         assert!(q.relative_xy_move_gcode('Z', 10.0, 3000).is_empty());
     }
 
@@ -857,7 +857,7 @@ mod tests {
     fn test_xy_move_via_trait_uses_model_specific_bounds() {
         // A1 Mini's x_max/y_max is 180mm, unlike the 256mm default — confirms the trait method
         // routes through the model's own x_max()/y_max(), not a shared constant.
-        let q = BambuModel::A1Mini.quirks();
+        let q = PrinterModel::A1Mini.quirks();
         assert!(q.relative_xy_move_gcode('X', 200.0, 2000).is_empty());
         let gcode = q.relative_xy_move_gcode('X', 100.0, 2000);
         assert!(gcode.contains("X100.00"));
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_unsafe_homing_bed_on_z() {
-        let q = BambuModel::P1P.quirks();
+        let q = PrinterModel::P1P.quirks();
         assert!(q.is_unsafe_homing_command("G28 Z"));
         assert!(q.is_unsafe_homing_command("g28 x"));
         assert!(q.is_unsafe_homing_command("G28 X Y Z"));
@@ -884,7 +884,7 @@ mod tests {
         // Regression: is_unsafe_homing_command used to inspect only the first
         // whitespace-split token of the whole string, so an unsafe G28 buried on a
         // later line of a multi-statement payload passed through unchecked.
-        let q = BambuModel::P1P.quirks();
+        let q = PrinterModel::P1P.quirks();
         assert!(q.is_unsafe_homing_command("M104 S200\nG28 Z"));
     }
 
@@ -892,13 +892,13 @@ mod tests {
     fn test_unsafe_homing_glued_axis() {
         // Regression: "G28X" (no whitespace between the command and the axis
         // letter) used to fail the exact "G28" token match and pass through unchecked.
-        let q = BambuModel::P1P.quirks();
+        let q = PrinterModel::P1P.quirks();
         assert!(q.is_unsafe_homing_command("G28X"));
     }
 
     #[test]
     fn test_a1_homing_always_safe() {
-        let q = BambuModel::A1.quirks();
+        let q = PrinterModel::A1.quirks();
         assert!(!q.is_unsafe_homing_command("G28 Z"));
         assert!(!q.is_unsafe_homing_command("G28"));
     }
