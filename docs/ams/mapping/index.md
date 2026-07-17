@@ -30,12 +30,12 @@ external spools [REF-AMS-USEAMS].
 | Item | Kind | Description |
 |------|------|-------------|
 | [`AmsMapping2Entry`](#amsmapping2entry) | struct | Structured object detailing unit and slot coordinates within `ams_mapping2` arrays. |
-| [`AmsPoolComposition`](#amspoolcomposition) | enum | Per-model AMS unit pool structure (BUG-122), confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row (user-supplied official Bambu documentation). |
+| [`AmsPoolComposition`](#amspoolcomposition) | enum | Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row (user-supplied official Bambu documentation). |
 | [`MaterialSource`](#materialsource) | enum | Enumeration of possible physical feed locations for loaded spools. |
 | [`build_ams_mapping`](#build-ams-mapping) | fn | Builds the flat `ams_mapping` integer array from raw project allocations. |
 | [`build_ams_mapping2`](#build-ams-mapping2) | fn | Builds the structured `ams_mapping2` object array from raw project allocations. |
 | [`flat_channel_id_for_entry`](#flat-channel-id-for-entry) | fn | Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to. |
-| [`is_ams_pool_composition_valid`](#is-ams-pool-composition-valid) | fn | Validates a constructed `ams_mapping2` against the model's actual AMS pool structure (BUG-122). |
+| [`is_ams_pool_composition_valid`](#is-ams-pool-composition-valid) | fn | Validates a constructed `ams_mapping2` against the model's actual AMS pool structure. |
 | [`is_external_spool_safety_valid`](#is-external-spool-safety-valid) | fn | Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle. |
 | [`is_external_spool_safety_valid_flat`](#is-external-spool-safety-valid-flat) | fn | Flat-array equivalent of `is_external_spool_safety_valid`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`. |
 
@@ -102,7 +102,7 @@ enum AmsPoolComposition {
 }
 ```
 
-Per-model AMS unit pool structure (BUG-122), confirmed against `MODEL_MATRIX.csv`'s
+Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
 "AMS Unit Limits" row (user-supplied official Bambu documentation).
 
 **Known limitation**: AMS Lite units are not independently addressable in this model —
@@ -265,10 +265,8 @@ fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32
 Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to.
 
 Inverse of `MaterialSource::flat_channel_id`, operating on the already-structured
-`ams_id`/`slot_id` pair instead of a `MaterialSource` — used by
-`ProjectFileRequest::from_config` (`mqtt/commands/print_job.rs`) to derive `ams_mapping`
-from `ams_mapping2` when the caller only supplied the latter via
-`PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
+`ams_id`/`slot_id` pair instead of a `MaterialSource` — keeps `ams_mapping` and
+`ams_mapping2` from going out of sync when only the latter was supplied.
 
 ### `is_ams_pool_composition_valid`
 
@@ -278,8 +276,8 @@ fn is_ams_pool_composition_valid(mapping2: &[AmsMapping2Entry], composition: Ams
 
 **Types:** [`AmsMapping2Entry`](#amsmapping2entry), [`AmsPoolComposition`](#amspoolcomposition)
 
-Validates a constructed `ams_mapping2` against the model's actual AMS pool structure
-(BUG-122). Rejects configs no real hardware combination could serve — e.g. 4 standard +
+Validates a constructed `ams_mapping2` against the model's actual AMS pool structure.
+Rejects configs no real hardware combination could serve — e.g. 4 standard +
 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4.
 
 Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing the same

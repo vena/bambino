@@ -128,7 +128,7 @@ Each entry represents an active hardware fault or status indication. Use
 
 - **`ts_boot`**: `Option<u64>`
 
-  Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2 — see BUG-107).
+  Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
 
 - **`ts_unix`**: `Option<String>`
 

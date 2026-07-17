@@ -38,7 +38,7 @@ Lightweight, high-reliability implicit FTPS client running on top of abstract I/
 exactly one reply, and a `write_command`/`read_response` failure anywhere leaves no way to
 know whether the server's reply for that command is still coming. Reusing the client at that
 point risks a later, unrelated command silently reading the stale reply instead of its own.
-To make this safe, the client sets `poisoned = true` (BUG-004: originally only on the
+To make this safe, the client sets `poisoned = true` (originally only on the
 `list_directory`/`upload_file`/`download_file` data-transfer window between the server's
 `150`/`125` "opening data connection" reply and the matching final reply, since that's the
 widest such window; now on every `write_command`/`read_response` failure in every method,

@@ -129,7 +129,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 - `fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition`
 
-  Returns this model's physical AMS unit pool structure (BUG-122) — whether standard AMS
+  Returns this model's physical AMS unit pool structure — whether standard AMS
 
 - `fn supports_nozzle_offset_calibration(&self) -> bool`
 
@@ -163,11 +163,11 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 - `fn x_max(&self) -> f32`
 
-  Returns the maximum safe X-axis travel distance in millimeters for this model (BUG-163).
+  Returns the maximum safe X-axis travel distance in millimeters for this model.
 
 - `fn y_max(&self) -> f32`
 
-  Returns the maximum safe Y-axis travel distance in millimeters for this model (BUG-163).
+  Returns the maximum safe Y-axis travel distance in millimeters for this model.
 
 - `fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String`
 
@@ -175,7 +175,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 - `fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String`
 
-  Generates a bounded relative X/Y-axis movement G-code command (BUG-163) — the same
+  Generates a bounded relative X/Y-axis movement G-code command — the same
 
 - `fn requires_wallclock_rtsp_timestamps(&self) -> bool`
 

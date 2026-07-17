@@ -15,7 +15,7 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
 | [`AmsTray`](#amstray) | struct | Material spool state descriptor representing a single physical tray slot. |
 | [`AmsUnit`](#amsunit) | struct | Modular standard expansion unit managing up to 4 physical spool slots. |
 | [`VirtualTray`](#virtualtray) | struct | Virtual/external spool holder telemetry. |
-| [`AmsFilamentStep`](#amsfilamentstep) | enum | Per-slot filament-change step code (BUG-121). |
+| [`AmsFilamentStep`](#amsfilamentstep) | enum | Per-slot filament-change step code. |
 
 ## Types
 
@@ -153,13 +153,13 @@ the intermediate `print.ams` object.
 
 - **`calibrate_remain_flag`**: `Option<bool>`
 
-  Whether AMS-side remaining-filament detection is enabled (BUG-121). Confirmed
+  Whether AMS-side remaining-filament detection is enabled. Confirmed
   independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
   and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
 
 - **`cfs`**: `Option<Vec<AmsFilamentStep>>`
 
-  Per-slot filament-change step codes (BUG-121). Confirmed against BambuStudio's
+  Per-slot filament-change step codes. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
   consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
@@ -337,7 +337,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - **`remain_g`**: `Option<i32>`
 
-  Accurate remaining weight in grams, when firmware can resolve it (BUG-126). Distinct
+  Accurate remaining weight in grams, when firmware can resolve it. Distinct
   from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
   "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
@@ -346,8 +346,8 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - **`filament_setting_id`**: `Option<String>`
 
-  Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching
-  (BUG-126), distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
+  Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching,
+  distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
   avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
   BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
   (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
@@ -361,7 +361,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - <span id="amstray-remaining-weight-grams"></span>`fn remaining_weight_grams(&self) -> Option<u32>`
 
-  Accurate remaining weight in grams (BUG-126), translating `remain_g`'s raw wire
+  Accurate remaining weight in grams, translating `remain_g`'s raw wire
 
   sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
 
@@ -492,7 +492,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
 
-  Dry-fan 1 status from bits 18–19 (BUG-120). Confirmed against BambuStudio's
+  Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
 
   `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
 
@@ -500,7 +500,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
 
-  Dry-fan 2 status from bits 20–21 (BUG-120). Confirmed against BambuStudio's
+  Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
 
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
 
@@ -689,7 +689,7 @@ enum AmsFilamentStep {
 }
 ```
 
-Per-slot filament-change step code (BUG-121). Mirrors BambuStudio's `DevFilamentStep` enum
+Per-slot filament-change step code. Mirrors BambuStudio's `DevFilamentStep` enum
 (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
 wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
 the source enum). `Unknown` preserves any other raw value rather than failing to decode.

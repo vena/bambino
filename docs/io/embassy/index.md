@@ -109,17 +109,16 @@ storage convention below — see the README's Embassy setup example) and passes 
 into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
 control/data connectors all share the one instance concurrently.
 
-**No caller-supplied buffers, unlike the old `embedded-tls` connector.** `mbedtls-rs`
+**No caller-supplied buffers.** `mbedtls-rs`
 allocates its own SSL context/config/record buffers per `Session` (via `mbedtls_calloc`,
 16 KiB in/out by default — see `Cargo.toml`'s `mbedtls-rs` dependency comment to shrink
 this via the `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features), so `connect()`
 can be called repeatedly on the same connector — there is no one-shot buffer-consumption
-constraint to work around, unlike the old `embedded-tls`-backed connector.
+constraint to work around.
 
 **`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
 API to read back the TLS version actually negotiated (confirmed by reading its source, not
-assumed) — unlike the old `embedded-tls` connector, which hard-coded a wrong `Some(Tls13)`
-answer. This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
+assumed). This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
 closed for P2S/X2D even after this backend swap; use
 `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
 needed (see `src/ftps/CLAUDE.md` and this module's `CLAUDE.md`).
@@ -163,11 +162,7 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
   `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this
 
-  type's doc comment above. Return `None` honestly rather than hard-coding a guess
-
-  (the anti-pattern the old `embedded-tls` connector had, just wrong in the other
-
-  direction).
+  type's doc comment above. Return `None` honestly rather than hard-coding a guess.
 
 ### `EmbassyUdpSocket<'a>`
 

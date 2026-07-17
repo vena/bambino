@@ -47,7 +47,7 @@ Climate parts collection nested within `device` parameters.
   Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
   
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-  (BUG-158) — see its doc comment.
+  — see its doc comment.
 
 - **`mode_cur`**: `Option<i32>`
 
@@ -58,7 +58,7 @@ Climate parts collection nested within `device` parameters.
   List of airduct modes available on this model.
   
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-  (BUG-158) — see its doc comment.
+  — see its doc comment.
 
 #### Trait Implementations
 
@@ -291,13 +291,13 @@ the intermediate `print.ams` object.
 
 - **`calibrate_remain_flag`**: `Option<bool>`
 
-  Whether AMS-side remaining-filament detection is enabled (BUG-121). Confirmed
+  Whether AMS-side remaining-filament detection is enabled. Confirmed
   independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
   and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
 
 - **`cfs`**: `Option<Vec<AmsFilamentStep>>`
 
-  Per-slot filament-change step codes (BUG-121). Confirmed against BambuStudio's
+  Per-slot filament-change step codes. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
   consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
@@ -475,7 +475,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - **`remain_g`**: `Option<i32>`
 
-  Accurate remaining weight in grams, when firmware can resolve it (BUG-126). Distinct
+  Accurate remaining weight in grams, when firmware can resolve it. Distinct
   from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
   "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
@@ -484,8 +484,8 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - **`filament_setting_id`**: `Option<String>`
 
-  Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching
-  (BUG-126), distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
+  Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching,
+  distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
   avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
   BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
   (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
@@ -499,7 +499,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - <span id="amstray-remaining-weight-grams"></span>`fn remaining_weight_grams(&self) -> Option<u32>`
 
-  Accurate remaining weight in grams (BUG-126), translating `remain_g`'s raw wire
+  Accurate remaining weight in grams, translating `remain_g`'s raw wire
 
   sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
 
@@ -630,7 +630,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
 
-  Dry-fan 1 status from bits 18–19 (BUG-120). Confirmed against BambuStudio's
+  Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
 
   `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
 
@@ -638,7 +638,7 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
 
-  Dry-fan 2 status from bits 20–21 (BUG-120). Confirmed against BambuStudio's
+  Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
 
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
 
@@ -879,7 +879,7 @@ Appears at two locations on the wire:
 
   Composite-packed bed temperature mirroring `bed.info.temp`; confirmed redundant, not a fallback.
   
-  BUG-054: a fixture payload carries the identical value in both fields, and both
+  A fixture payload carries the identical value in both fields, and both
   pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
   never consult this field either. Parsed for wire-format completeness only —
   `decode_bed_temperatures()` deliberately does not read it.
@@ -983,7 +983,7 @@ IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder
   Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
   
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-  (BUG-158) — see its doc comment.
+  — see its doc comment.
 
 - **`state`**: `Option<u32>`
 
@@ -1055,15 +1055,15 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (BUG-112; confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
-  Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
+  Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
 
 - **`star`**: `Option<u32>`
 
-  Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
+  Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
 
 - **`hnow`**: `Option<u8>`
 
@@ -1103,7 +1103,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
   Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
 
-  resolving which physical tray is feeding this extruder right now (BUG-124), confirmed
+  resolving which physical tray is feeding this extruder right now, confirmed
 
   against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
 
@@ -1169,7 +1169,7 @@ Each entry represents an active hardware fault or status indication. Use
 
 - **`ts_boot`**: `Option<u64>`
 
-  Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2 — see BUG-107).
+  Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
 
 - **`ts_unix`**: `Option<String>`
 
@@ -1367,7 +1367,7 @@ Wrap block holding nozzle characteristics.
   array replacing a non-empty one), and only an absent key as "carry the old value
   forward." `#[serde(default)]` on `Option<Vec<_>>` gives this distinction for free
   (absent key -> `None`, present key -> `Some(_)` however short) — previously both
-  collapsed to the same empty `Vec` (BUG-158, same shape as BUG-102's `AmsTray` fix).
+  collapsed to the same empty `Vec` (same shape as the `AmsTray` fix).
 
 - **`exist`**: `Option<u32>`
 
@@ -1670,7 +1670,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`net`**: `Option<NetInfo>`
 
-  Network interface state, nested as `print.net` on the wire (BUG-110).
+  Network interface state, nested as `print.net` on the wire.
 
 - **`cooling_fan_speed`**: `Option<String>`
 
@@ -1883,7 +1883,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](telemetry/report/index.md#sdcardstate)
 
-  Evaluates the SD-card presence/health state from `home_flag` bits 8–9 (BUG-123). See
+  Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
 
   [`SdcardState`](telemetry/report/index.md#sdcardstate)'s doc comment for verification sources. Returns `None` before any
 
@@ -2287,7 +2287,7 @@ enum AmsFilamentStep {
 }
 ```
 
-Per-slot filament-change step code (BUG-121). Mirrors BambuStudio's `DevFilamentStep` enum
+Per-slot filament-change step code. Mirrors BambuStudio's `DevFilamentStep` enum
 (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
 wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
 the source enum). `Unknown` preserves any other raw value rather than failing to decode.
@@ -2401,7 +2401,7 @@ enum SdcardState {
 }
 ```
 
-SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123).
+SD-card presence/health state, decoded from `home_flag` bits 8–9.
 
 Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
 `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's

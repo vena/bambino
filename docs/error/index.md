@@ -14,7 +14,7 @@ Under `std`, variants get `Display`/`Error` impls via `thiserror`. Under `no_std
 a manual `Display` impl is kept in sync by manual inspection — `test_display_consistency`
 only runs under the default `std` feature set (`cargo test`), so it exercises the
 `thiserror`-generated `std` impl, not the `#[cfg(not(feature = "std"))]`-gated manual one;
-there is currently no automated check that the two stay in sync (BUG-013).
+there is currently no automated check that the two stay in sync.
 
 ## Quick Reference
 

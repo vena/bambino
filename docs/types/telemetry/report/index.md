@@ -13,7 +13,7 @@ Top-level telemetry report envelope (`print` and `device` wire locations).
 | [`LightReport`](#lightreport) | struct | Chamber/work/heatbed light state entry from the `lights_report` array. |
 | [`NetInfo`](#netinfo) | struct | Network interface state from `print.net` [REF-NET-PORTS]. |
 | [`PrinterTelemetry`](#printertelemetry) | struct | Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays. |
-| [`SdcardState`](#sdcardstate) | enum | SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123). |
+| [`SdcardState`](#sdcardstate) | enum | SD-card presence/health state, decoded from `home_flag` bits 8–9. |
 
 ## Types
 
@@ -252,7 +252,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`net`**: `Option<NetInfo>`
 
-  Network interface state, nested as `print.net` on the wire (BUG-110).
+  Network interface state, nested as `print.net` on the wire.
 
 - **`cooling_fan_speed`**: `Option<String>`
 
@@ -465,7 +465,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](#sdcardstate)
 
-  Evaluates the SD-card presence/health state from `home_flag` bits 8–9 (BUG-123). See
+  Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
 
   [`SdcardState`](#sdcardstate)'s doc comment for verification sources. Returns `None` before any
 
@@ -510,7 +510,7 @@ enum SdcardState {
 }
 ```
 
-SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123).
+SD-card presence/health state, decoded from `home_flag` bits 8–9.
 
 Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
 `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's

@@ -58,7 +58,7 @@ Climate parts collection nested within `device` parameters.
   Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
   
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-  (BUG-158) — see its doc comment.
+  — see its doc comment.
 
 - **`mode_cur`**: `Option<i32>`
 
@@ -69,7 +69,7 @@ Climate parts collection nested within `device` parameters.
   List of airduct modes available on this model.
   
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-  (BUG-158) — see its doc comment.
+  — see its doc comment.
 
 #### Trait Implementations
 
@@ -300,7 +300,7 @@ Appears at two locations on the wire:
 
   Composite-packed bed temperature mirroring `bed.info.temp`; confirmed redundant, not a fallback.
   
-  BUG-054: a fixture payload carries the identical value in both fields, and both
+  A fixture payload carries the identical value in both fields, and both
   pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
   never consult this field either. Parsed for wire-format completeness only —
   `decode_bed_temperatures()` deliberately does not read it.
@@ -404,7 +404,7 @@ IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder
   Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
   
   `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-  (BUG-158) — see its doc comment.
+  — see its doc comment.
 
 - **`state`**: `Option<u32>`
 
@@ -476,15 +476,15 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 - **`snow`**: `Option<u32>`
 
-  Current AMS slot routing (BUG-112; confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+  Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
 
 - **`spre`**: `Option<u32>`
 
-  Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
+  Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
 
 - **`star`**: `Option<u32>`
 
-  Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
+  Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
 
 - **`hnow`**: `Option<u8>`
 
@@ -524,7 +524,7 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
   Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
 
-  resolving which physical tray is feeding this extruder right now (BUG-124), confirmed
+  resolving which physical tray is feeding this extruder right now, confirmed
 
   against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
 
@@ -591,7 +591,7 @@ Wrap block holding nozzle characteristics.
   array replacing a non-empty one), and only an absent key as "carry the old value
   forward." `#[serde(default)]` on `Option<Vec<_>>` gives this distinction for free
   (absent key -> `None`, present key -> `Some(_)` however short) — previously both
-  collapsed to the same empty `Vec` (BUG-158, same shape as BUG-102's `AmsTray` fix).
+  collapsed to the same empty `Vec` (same shape as the `AmsTray` fix).
 
 - **`exist`**: `Option<u32>`
 

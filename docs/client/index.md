@@ -531,7 +531,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns the global tray ID of the spool currently feeding the active extruder, as of
 
-  the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) (BUG-124).
+  the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 
 - <span id="superprinterclient-sanitized-ams"></span>`fn sanitized_ams(&self) -> Option<AmsStatusReport>` — [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport)
 
@@ -655,13 +655,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   (mirrors `PrinterTelemetry::is_ethernet_active()`, the documented-preferred,
 
-  confirmed-authoritative source — see BUG-110) but works between polls off the cached
+  confirmed-authoritative source) but works between polls off the cached
 
   value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
 
-  `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it
-
-  (BUG-135).
+  `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it.
 
 - <span id="superprinterclient-poll-raw"></span>`async fn poll_raw(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage), [`Error`](../error/index.md#error)
 

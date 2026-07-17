@@ -19,8 +19,8 @@ Z-max uses the conservative aux/dual value (256mm).
 | [`X2D_BED_TEMP_MAX`](#x2d-bed-temp-max) | const | Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row. |
 | [`X2D_CHAMBER_TEMP_MAX`](#x2d-chamber-temp-max) | const | Chamber temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Chamber Temperature row. |
 | [`X2D_NOZZLE_TEMP_MAX`](#x2d-nozzle-temp-max) | const | Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row. |
-| [`X2D_X_MAX`](#x2d-x-max) | const | Build volume X width (mm) — conservative aux/dual-nozzle value (235.5mm, smaller than the main-nozzle profile's 256mm); see module docs (BUG-163). |
-| [`X2D_Y_MAX`](#x2d-y-max) | const | Build volume Y depth (mm) — 256mm across all nozzle profiles (BUG-163). |
+| [`X2D_X_MAX`](#x2d-x-max) | const | Build volume X width (mm) — conservative aux/dual-nozzle value (235.5mm, smaller than the main-nozzle profile's 256mm); see module docs. |
+| [`X2D_Y_MAX`](#x2d-y-max) | const | Build volume Y depth (mm) — 256mm across all nozzle profiles. |
 | [`X2D_Z_MAX`](#x2d-z-max) | const | Build volume Z depth (mm) — uses the conservative aux/dual-nozzle value, not the main-nozzle value; see module docs. |
 
 ## Types
@@ -129,14 +129,14 @@ const X2D_X_MAX: f32 = 235.5f32;
 ```
 
 Build volume X width (mm) — conservative aux/dual-nozzle value (235.5mm, smaller than the
-main-nozzle profile's 256mm); see module docs (BUG-163).
+main-nozzle profile's 256mm); see module docs.
 
 ### `X2D_Y_MAX`
 ```rust
 const X2D_Y_MAX: f32 = 256f32;
 ```
 
-Build volume Y depth (mm) — 256mm across all nozzle profiles (BUG-163).
+Build volume Y depth (mm) — 256mm across all nozzle profiles.
 
 ### `X2D_Z_MAX`
 ```rust

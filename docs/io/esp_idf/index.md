@@ -75,7 +75,7 @@ struct EspIdfTcpStream {
 
 Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 
-BUG-031: the underlying socket stays non-blocking for the stream's entire lifetime (not
+The underlying socket stays non-blocking for the stream's entire lifetime (not
 just during `connect()`'s own polling loop) — `read()`/`write()` below retry on
 `WouldBlock` by yielding to the async executor via `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`,
 the same pattern `EspIdfTlsStream` already uses. A genuinely blocking socket here would give a
@@ -122,7 +122,7 @@ give up ownership of the fd first or the fd would be double-closed.
 
 - <span id="espidftlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: EspIdfTcpStream) -> Result<<Self as >::Stream, SocketError>` — [`EspIdfTcpStream`](#espidftcpstream), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
-  Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
+  Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration).
 
 - <span id="espidftlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
@@ -210,9 +210,9 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 
   Overrides the default handshake deadline. Passing `Duration::ZERO` disables the
 
-  deadline entirely (BUG-077), matching `set_command_timeout`'s "0 disables" convention
+  deadline entirely, matching `set_command_timeout`'s "0 disables" convention
 
-  and `client::connect::with_connect_timeout`'s precedent (BUG-007) — otherwise the very
+  and `client::connect::with_connect_timeout`'s precedent — otherwise the very
 
   first would-block poll would immediately exceed a zero-length budget.
 
@@ -230,7 +230,7 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 
 - <span id="espidftlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: EspIdfTcpStream) -> Result<<Self as >::Stream, SocketError>` — [`EspIdfTcpStream`](#espidftcpstream), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
-  Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
+  Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration).
 
 - <span id="espidftlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 

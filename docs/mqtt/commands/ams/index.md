@@ -69,7 +69,7 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 
 - **`target`**: `i32`
 
-  Load/unload destination slot (BUG-116; confirmed against BambuStudio's
+  Load/unload destination slot (confirmed against BambuStudio's
   `command_ams_change_filament`, `DeviceManager.cpp:1602-1638`): `255` on unload, the
   `ams_id` itself for AMS-HT/external-spool units (`ams_id >= 16`), or the flat global
   tray ID (`ams_id*4 + slot_id`) for a standard unit. Only coincidentally mirrors
@@ -234,13 +234,12 @@ struct AmsFilamentDryingPayload {
 
 Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
 
-BUG-118: field set and shapes rewritten to match the real wire protocol — confirmed
+Field set and shapes rewritten to match the real wire protocol — confirmed
 against BambuStudio's `DevFilaSystem::CtrlAmsStartDryingHour`/`CtrlAmsStopDrying`
 (`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the
 tree) and independently corroborated by bambuddy's `send_drying_command`
 (`bambu_mqtt.py:4141-4171`, whose own comment cites real-hardware silent-rejection
-incident #1447). The previous schema (`dry_temp`/`dry_time` in minutes, no
-`humidity`/`cooling_temp`/`close_power_conflict`) shared no field name with either source.
+incident #1447).
 
 #### Fields
 

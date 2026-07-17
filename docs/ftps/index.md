@@ -49,7 +49,7 @@ Lightweight, high-reliability implicit FTPS client running on top of abstract I/
 exactly one reply, and a `write_command`/`read_response` failure anywhere leaves no way to
 know whether the server's reply for that command is still coming. Reusing the client at that
 point risks a later, unrelated command silently reading the stale reply instead of its own.
-To make this safe, the client sets `poisoned = true` (BUG-004: originally only on the
+To make this safe, the client sets `poisoned = true` (originally only on the
 `list_directory`/`upload_file`/`download_file` data-transfer window between the server's
 `150`/`125` "opening data connection" reply and the matching final reply, since that's the
 widest such window; now on every `write_command`/`read_response` failure in every method,
@@ -185,7 +185,7 @@ Standardized representation of an entry retrieved from physical printer storage.
 - **`name`**: `String`
 
   The parsed file or directory name, exactly as reported by the raw `LIST` line
-  (BUG-088) — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
+  — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
   and rejoining with a single space, so internal runs of multiple consecutive spaces
   round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
 
@@ -221,7 +221,7 @@ Standardized representation of an entry retrieved from physical printer storage.
 
   `true` when `year` was inferred from the host's current date (the wire's HH:MM-recent-
   file format, ambiguous by design — see this function's doc comment), `false` when the
-  wire reported an explicit `YYYY` directly. BUG-042: `year`'s rollover math always lands
+  wire reported an explicit `YYYY` directly. `year`'s rollover math always lands
   in `{current_year, current_year - 1}` for an inferred entry by construction, so it can
   never itself look implausible even when the printer's own clock (the source of the
   month/day/HH:MM this was inferred from) is wrong — this flag is the only honest signal
@@ -262,8 +262,8 @@ Parses a line-separated UNIX directory listing payload returned by `LIST`.
 Embedded systems typically insert arbitrary, variable-width spacing gaps to line up listings.
 Rather than relying on rigid column indexes, this implementation tokenizes columns by splitting
 on contiguous whitespace sequences, collecting the initial 8 protocol columns, and slicing
-the untouched remainder verbatim as the filename (BUG-088 — preserves internal multi-space
-runs exactly, rather than re-tokenizing and rejoining with a single space).
+the untouched remainder verbatim as the filename — preserves internal multi-space
+runs exactly, rather than re-tokenizing and rejoining with a single space.
 
 **Temporal Rollover Mitigation:**
 UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file

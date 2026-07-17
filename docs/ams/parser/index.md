@@ -40,12 +40,12 @@ previously loaded spool indefinitely.
 
 This routine inspects the tray's state — 9 (`AMS_TRAY_STATE_EMPTY`) meaning Empty/Absent and
 10 (`AMS_TRAY_STATE_SPOOL_NOT_FED`) meaning a spool is physically present but not yet fed to
-the extruder, both treated as absent-equivalent for stale-data cleansing (BUG-012, verified
+the extruder, both treated as absent-equivalent for stale-data cleansing (verified
 against pybambu/Bambuddy — see `AMS_TRAY_STATE_SPOOL_NOT_FED`'s doc comment) — and clears all
 stale config keys if either applies. Treats an explicit empty `tray_type` string as a
 clearing signal too — but an *absent* `tray_type` (the common incremental-update case,
 e.g. a `state: 11` update that simply doesn't repeat `tray_type`) is not, by itself, a
-clearing signal (BUG-083). Confirmed against `reference/05_materials_ams.md`'s
+clearing signal. Confirmed against `reference/05_materials_ams.md`'s
 Bambuddy cross-check (`on_ams_change`'s `loaded = cur_state == 11 or (cur_state not in
 (9, 10) and cur_type.strip())`): state 11 is unconditionally treated as loaded regardless
 of whether `tray_type` was repeated in that update, so clearing on absence alone would
@@ -71,9 +71,9 @@ is `false` but the parsed bitmask is non-zero, this represents a valid offline s
 and is processed normally.
 
 **AMS-HT units (IDs 128-135) do participate in `tray_exist_bits`, at a fixed offset**
-(BUG-114) — BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
+— BambuStudio's `DevAms::GetTrayId` (`DevFilaSystem.cpp:833`, `GetTrayId`'s N3S
 branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed independently
-in OrcaSlicer with an equivalent formula. This reopens and reverses BUG-015's "AMS-HT
+in OrcaSlicer with an equivalent formula. This reopens and reverses the earlier "AMS-HT
 doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
 source.
 
@@ -107,7 +107,7 @@ Multi-extruder platforms (such as the H2D series) emit local slot indexes (0 to 
 their `tray_now` telemetry parameter. To resolve this back to a global index, the client must
 inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
 
-BUG-124: this is the *fallback* path — prefer
+This is the *fallback* path — prefer
 [`crate::client::PrinterClient::printing_tray_global_id`], which decodes
 `ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
 This function remains unwired in the crate's own client code: `ams_extruder_map`'s
