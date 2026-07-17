@@ -14,6 +14,7 @@ mod camera;
 mod connection;
 mod control;
 mod discover;
+mod error;
 mod inspect_cert;
 mod monitor;
 mod probe;

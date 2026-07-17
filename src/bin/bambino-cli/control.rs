@@ -12,9 +12,11 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
-use bambino::error::Error;
+use bambino::Error;
 use bambino::mqtt::AirductMode;
 use clap::{Subcommand, ValueEnum};
+
+use crate::error::CliError;
 
 use crate::connection::create_printer;
 
@@ -197,7 +199,7 @@ pub enum ControlAction {
 }
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
-pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), Error> {
+pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
     let is_verbose = crate::is_verbose();
     let mut printer = create_printer(ip, serial, access_code)?;
 
@@ -225,7 +227,7 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), E
         }
         Ok(Err(e)) => {
             log::debug!("Version query generated an error: {:?}", e);
-            return Err(e);
+            return Err(e.into());
         }
         Err(_) => {
             println!("\n\x1B[1;33mNotice: Version query timed out after 10 seconds.\x1B[0m");
@@ -259,7 +261,7 @@ pub async fn run(
     serial: &str,
     access_code: &str,
     action: ControlAction,
-) -> Result<(), Error> {
+) -> Result<(), CliError> {
     log::debug!("Running control subcommand action: '{:?}'", action);
 
     let mut client = create_printer(ip, serial, access_code)?;
@@ -398,9 +400,7 @@ pub async fn run(
                 );
                 io::stderr().flush().unwrap_or(());
                 let mut confirmation = String::new();
-                io::stdin().read_line(&mut confirmation).map_err(|_| {
-                    Error::ProtocolViolation("Failed to read confirmation".into())
-                })?;
+                io::stdin().read_line(&mut confirmation)?;
                 if confirmation.trim().to_lowercase() != "yes" {
                     println!("Aborted.");
                     return Ok(());

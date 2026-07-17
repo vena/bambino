@@ -4,11 +4,11 @@ use std::fs;
 use std::path::Path;
 
 use bambino::camera::CameraProtocol;
-use bambino::error::Error;
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config};
 use clap::Subcommand;
 
 use crate::connection::create_printer;
+use crate::error::CliError;
 
 #[derive(Subcommand, Debug)]
 pub enum CameraAction {
@@ -23,7 +23,7 @@ pub async fn run(
     serial: &str,
     access_code: &str,
     action: CameraAction,
-) -> Result<(), Error> {
+) -> Result<(), CliError> {
     match action {
         CameraAction::Snapshot { output } => {
             let output_path = output.as_deref().unwrap_or("snapshot.jpg");
@@ -37,7 +37,7 @@ async fn run_snapshot(
     serial: &str,
     access_code: &str,
     output_path: &str,
-) -> Result<(), Error> {
+) -> Result<(), CliError> {
     let printer = create_printer(ip, serial, access_code)?;
 
     let protocol = printer.model().quirks().camera_protocol();
@@ -48,7 +48,7 @@ async fn run_snapshot(
             protocol.default_port()
         );
         eprintln!("The snapshot command only supports binary camera streaming (A1/P1 series).");
-        return Err(Error::ProtocolViolation(
+        return Err(CliError::InvalidArgs(
             "Model does not support binary JPEG camera protocol".into(),
         ));
     }
@@ -65,9 +65,7 @@ async fn run_snapshot(
     printer.read_camera_frame(&mut frame).await?;
 
     let path = Path::new(output_path);
-    fs::write(path, &frame).map_err(|e| {
-        Error::ProtocolViolation(format!("Failed to write {}: {}", output_path, e).into())
-    })?;
+    fs::write(path, &frame)?;
 
     println!("Saved {} bytes to {}", frame.len(), output_path);
     Ok(())

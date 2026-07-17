@@ -8,13 +8,14 @@
 use std::fs;
 use std::path::Path;
 
-use bambino::error::Error;
+use bambino::Error;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config_with_options,
 };
 use clap::Subcommand;
 
 use crate::connection::create_printer;
+use crate::error::CliError;
 
 /// Bytes per gibibyte — shared by the upload size ceiling and `format_size`'s unit conversion, which previously each hardcoded this same literal independently.
 const BYTES_PER_GIB: u64 = 1_073_741_824;
@@ -73,7 +74,7 @@ pub async fn run(
     access_code: &str,
     action: FilesAction,
     allow_unverified_tls_1_2: bool,
-) -> Result<(), Error> {
+) -> Result<(), CliError> {
     let printer = create_printer(ip, serial, access_code)?;
     let model = printer.model();
 
@@ -99,7 +100,7 @@ pub async fn run(
     // on every failure path except the empty-listing early return. Capturing the dispatch
     // result in a variable instead lets `disconnect()` run unconditionally before the error
     // (if any) is propagated.
-    let result: Result<(), Error> = async {
+    let result: Result<(), CliError> = async {
         match action {
             FilesAction::List { remote_path } => {
                 let (year, month, day, hour, min) = current_date_utc();
@@ -120,26 +121,19 @@ pub async fn run(
                 remote_path,
             } => {
                 let local = Path::new(&local_path);
-                let metadata = fs::metadata(local).map_err(|e| {
-                    Error::ProtocolViolation(format!("Target local file does not exist: {e}").into())
-                })?;
+                let metadata = fs::metadata(local)?;
 
                 const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
                 if metadata.len() > MAX_UPLOAD_BYTES {
-                    return Err(Error::ProtocolViolation(
-                        format!(
-                            "File too large for upload: {} bytes (max {} MB)",
-                            metadata.len(),
-                            MAX_UPLOAD_BYTES / (1024 * 1024)
-                        )
-                        .into(),
-                    ));
+                    return Err(CliError::InvalidArgs(format!(
+                        "File too large for upload: {} bytes (max {} MB)",
+                        metadata.len(),
+                        MAX_UPLOAD_BYTES / (1024 * 1024)
+                    )));
                 }
 
                 println!("Reading source file '{}' into buffer...", local_path);
-                let payload = fs::read(local).map_err(|_| {
-                    Error::ProtocolViolation("Failed to read local target file".into())
-                })?;
+                let payload = fs::read(local)?;
 
                 println!(
                     "Uploading file ({} bytes) to remote path '{}'...",

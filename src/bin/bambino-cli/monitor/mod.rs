@@ -12,9 +12,8 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use bambino::error::Error;
-
 use crate::connection::create_printer;
+use crate::error::CliError;
 
 /// Connects, sends `pushall`, and either dumps the first response containing a `print` object
 /// as pretty JSON (default) or, with `follow`, keeps printing every subsequent `print`-bearing
@@ -25,7 +24,7 @@ pub async fn dump(
     serial: &str,
     access_code: &str,
     follow: bool,
-) -> Result<(), Error> {
+) -> Result<(), CliError> {
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
@@ -114,7 +113,7 @@ impl Drop for TerminalGuard {
 }
 
 /// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
-pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), Error> {
+pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
     eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
@@ -126,9 +125,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), Error>
     let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
     ping_timer.tick().await;
 
-    let _guard = TerminalGuard::enter().map_err(|_| {
-        Error::ProtocolViolation("failed to initialize terminal raw mode".into())
-    })?;
+    let _guard = TerminalGuard::enter()?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_flag = shutdown.clone();
@@ -195,7 +192,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), Error>
     };
 
     shutdown.store(true, Ordering::Relaxed);
-    result
+    result.map_err(CliError::from)
 }
 
 fn should_quit(key: &KeyEvent) -> bool {

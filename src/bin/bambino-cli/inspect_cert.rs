@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bambino::error::Error;
+use crate::error::CliError;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
@@ -80,11 +80,11 @@ impl ServerCertVerifier for CapturingVerifier {
 /// (matching what a real fix would send), and writes the leaf certificate's raw DER bytes to
 /// `output`. No FTPS/MQTT protocol traffic is exchanged beyond the handshake itself — the
 /// connection is dropped as soon as it completes.
-pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), Error> {
+pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), CliError> {
     let addr = format!("{ip}:{port}");
-    let stream = ::tokio::net::TcpStream::connect(&addr).await.map_err(|e| {
-        Error::ProtocolViolation(format!("TCP connect to {addr} failed: {e}").into())
-    })?;
+    let stream = ::tokio::net::TcpStream::connect(&addr)
+        .await
+        .map_err(|e| CliError::Other(format!("TCP connect to {addr} failed: {e}")))?;
 
     let verifier = Arc::new(CapturingVerifier::default());
     let provider = rustls::crypto::ring::default_provider();
@@ -96,13 +96,13 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
         .with_no_client_auth();
     let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
 
-    let server_name = ServerName::try_from(serial.to_string()).map_err(|_| {
-        Error::ProtocolViolation(format!("invalid serial for SNI: '{serial}'").into())
-    })?;
+    let server_name = ServerName::try_from(serial.to_string())
+        .map_err(|_| CliError::InvalidArgs(format!("invalid serial for SNI: '{serial}'")))?;
 
-    let tls_stream = connector.connect(server_name, stream).await.map_err(|e| {
-        Error::ProtocolViolation(format!("TLS handshake with {addr} failed: {e}").into())
-    })?;
+    let tls_stream = connector
+        .connect(server_name, stream)
+        .await
+        .map_err(|e| CliError::Other(format!("TLS handshake with {addr} failed: {e}")))?;
     drop(tls_stream);
 
     let der = verifier
@@ -112,9 +112,7 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
         .take()
         .expect("handshake succeeded but no certificate was captured");
 
-    std::fs::write(output, &der).map_err(|e| {
-        Error::ProtocolViolation(format!("failed to write {output}: {e}").into())
-    })?;
+    std::fs::write(output, &der)?;
 
     println!(
         "Captured leaf certificate ({} bytes) written to {output}",

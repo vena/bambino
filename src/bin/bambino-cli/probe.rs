@@ -4,10 +4,11 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bambino::client::{FanTarget, PrintStatus};
-use bambino::error::Error;
+use bambino::Error;
 use serde::Serialize;
 
 use crate::connection::{Printer, create_printer};
+use crate::error::CliError;
 
 const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 3;
 const LONG_CAPTURE_WINDOW_SECS: u64 = 60;
@@ -368,7 +369,7 @@ pub async fn run(
     access_code: &str,
     output: &str,
     tests_arg: Option<&str>,
-) -> Result<(), Error> {
+) -> Result<(), CliError> {
     let output_path = output;
     let test_filter: Option<Vec<String>> =
         tests_arg.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
@@ -388,9 +389,7 @@ pub async fn run(
                         };
                         eprintln!("  {} — {}{}", t.name(), t.description(), manual);
                     }
-                    return Err(Error::ProtocolViolation(
-                        format!("Unknown test name: '{}'", name).into(),
-                    ));
+                    return Err(CliError::InvalidArgs(format!("Unknown test name: '{}'", name)));
                 }
             }
         }
@@ -414,9 +413,7 @@ pub async fn run(
     );
 
     let mut confirmation = String::new();
-    io::stdin()
-        .read_line(&mut confirmation)
-        .map_err(|_| Error::ProtocolViolation("Failed to read user confirmation".into()))?;
+    io::stdin().read_line(&mut confirmation)?;
     if confirmation.trim().to_lowercase() != "yes" {
         eprintln!("Aborted (expected 'yes').");
         return Ok(());
@@ -590,13 +587,10 @@ pub async fn run(
         tests: entries,
     };
 
-    let json = serde_json::to_string_pretty(&report).map_err(|_| Error::Serialization)?;
+    let json = serde_json::to_string_pretty(&report)
+        .map_err(|e| CliError::Other(format!("failed to serialize probe report: {e}")))?;
 
-    std::fs::write(output_path, json.as_bytes()).map_err(|e| {
-        Error::ProtocolViolation(
-            format!("Failed to write report to '{}': {}", output_path, e).into(),
-        )
-    })?;
+    std::fs::write(output_path, json.as_bytes())?;
 
     eprintln!("\nReport written to {}", output_path);
     Ok(())

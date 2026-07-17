@@ -9,11 +9,12 @@
 use std::time::Duration;
 
 use bambino::discovery::discover_devices;
-use bambino::error::Error;
 use bambino::io::tokio::{TokioTimer, TokioUdpSocket};
 
+use crate::error::CliError;
+
 /// Initiates an active multicast SSDP search sweep and displays nearby printers.
-pub async fn run() -> Result<(), Error> {
+pub async fn run() -> Result<(), CliError> {
     let is_verbose = crate::is_verbose();
     println!("Scanning for printers (20 seconds)...");
     log::debug!("Resolving network discovery sweep targets utilizing standard Tokio UDP socket");

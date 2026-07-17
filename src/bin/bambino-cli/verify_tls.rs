@@ -8,31 +8,29 @@
 //! `.claude/rules/tls-identity-sni.md`) behaves correctly against a real
 //! printer's handshake, not just against rcgen fixtures.
 
-use bambino::error::Error;
 use bambino::io::tokio::build_verified_client_config;
 use rustls_pki_types::{CertificateDer, ServerName, pem::PemObject};
+
+use crate::error::CliError;
 
 /// Connects to `ip:port`, loads `ca_cert_path` as the sole trust anchor, and attempts a
 /// verified TLS handshake sending `serial` as the SNI value. No FTPS/MQTT protocol traffic is
 /// exchanged beyond the handshake itself.
-pub async fn run(ip: &str, serial: &str, port: u16, ca_cert_path: &str) -> Result<(), Error> {
-    let ca_cert = CertificateDer::from_pem_file(ca_cert_path).map_err(|e| {
-        Error::ProtocolViolation(format!("failed to load {ca_cert_path}: {e}").into())
-    })?;
+pub async fn run(ip: &str, serial: &str, port: u16, ca_cert_path: &str) -> Result<(), CliError> {
+    let ca_cert = CertificateDer::from_pem_file(ca_cert_path)
+        .map_err(|e| CliError::Other(format!("failed to load {ca_cert_path}: {e}")))?;
 
-    let config = build_verified_client_config(vec![ca_cert], None).map_err(|e| {
-        Error::ProtocolViolation(format!("failed to build verified TLS config: {e}").into())
-    })?;
+    let config = build_verified_client_config(vec![ca_cert], None)
+        .map_err(|e| CliError::Other(format!("failed to build verified TLS config: {e}")))?;
     let connector = tokio_rustls::TlsConnector::from(config);
 
     let addr = format!("{ip}:{port}");
-    let stream = ::tokio::net::TcpStream::connect(&addr).await.map_err(|e| {
-        Error::ProtocolViolation(format!("TCP connect to {addr} failed: {e}").into())
-    })?;
+    let stream = ::tokio::net::TcpStream::connect(&addr)
+        .await
+        .map_err(|e| CliError::Other(format!("TCP connect to {addr} failed: {e}")))?;
 
-    let server_name = ServerName::try_from(serial.to_string()).map_err(|_| {
-        Error::ProtocolViolation(format!("invalid serial for SNI: '{serial}'").into())
-    })?;
+    let server_name = ServerName::try_from(serial.to_string())
+        .map_err(|_| CliError::InvalidArgs(format!("invalid serial for SNI: '{serial}'")))?;
 
     match connector.connect(server_name, stream).await {
         Ok(_) => {
@@ -42,8 +40,8 @@ pub async fn run(ip: &str, serial: &str, port: u16, ca_cert_path: &str) -> Resul
             );
             Ok(())
         }
-        Err(e) => Err(Error::ProtocolViolation(
-            format!("Verified TLS handshake with {addr} (SNI={serial}) FAILED: {e}").into(),
-        )),
+        Err(e) => Err(CliError::Other(format!(
+            "Verified TLS handshake with {addr} (SNI={serial}) FAILED: {e}"
+        ))),
     }
 }

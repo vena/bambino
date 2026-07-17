@@ -2,12 +2,13 @@
 
 use bambino::client::PrinterClient;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
-use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config,
 };
 use bambino::models::resolve_model;
+
+use crate::error::CliError;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
@@ -35,7 +36,7 @@ pub type Printer = PrinterClient<
     DummyFactory,
 >;
 
-pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, Error> {
+pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, CliError> {
     validate_params(ip, serial, access_code)?;
 
     let config = build_unsafe_client_config();
@@ -55,22 +56,17 @@ pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Print
     .with_connect_timeout(CONNECT_TIMEOUT_SECS))
 }
 
-pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), Error> {
+pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
     if ip.parse::<std::net::IpAddr>().is_err() {
-        return Err(Error::ProtocolViolation(
-            format!("Invalid IP address: '{}'", ip).into(),
-        ));
+        return Err(CliError::InvalidArgs(format!("Invalid IP address: '{}'", ip)));
     }
 
     if serial.is_empty() || serial.len() > 20 || !serial.bytes().all(|b| b.is_ascii_alphanumeric())
     {
-        return Err(Error::ProtocolViolation(
-            format!(
-                "Invalid serial number: '{}' (expected 1-20 alphanumeric characters)",
-                serial
-            )
-            .into(),
-        ));
+        return Err(CliError::InvalidArgs(format!(
+            "Invalid serial number: '{}' (expected 1-20 alphanumeric characters)",
+            serial
+        )));
     }
 
     // BUG-130: aligned with CAMERA_PASSWORD_MAX_LEN (camera/binary.rs) and the alphanumeric
@@ -80,14 +76,11 @@ pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Resu
         || access_code.len() > bambino::camera::binary::CAMERA_PASSWORD_MAX_LEN
         || !access_code.bytes().all(|b| b.is_ascii_alphanumeric())
     {
-        return Err(Error::ProtocolViolation(
-            format!(
-                "Invalid access code: expected 1-{} alphanumeric characters, got {}",
-                bambino::camera::binary::CAMERA_PASSWORD_MAX_LEN,
-                access_code.len()
-            )
-            .into(),
-        ));
+        return Err(CliError::InvalidArgs(format!(
+            "Invalid access code: expected 1-{} alphanumeric characters, got {}",
+            bambino::camera::binary::CAMERA_PASSWORD_MAX_LEN,
+            access_code.len()
+        )));
     }
 
     Ok(())
