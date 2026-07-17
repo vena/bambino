@@ -17,11 +17,10 @@ that duplicates data already implicitly present in the `mqtt_client` it's handed
 today verifies the two match, so a caller could pass the wrong printer's serial to
 `from_mqtt()` and nothing would catch it.
 
-This plan fixes both. The discussion that produced it started as a pure
-transposition-risk fix, then explicitly widened to a developer-experience question:
-should every "connect to protocol X" entry point in this crate share one calling
-convention, not just the ones where a bare risk argument forces it? The answer
-landed on "yes, with exactly one structural exception" — see rule 3.
+This plan fixes both, and establishes one shared calling convention across every
+"connect to protocol X" entry point in the crate — not just the ones where
+transposition risk alone would force it — with exactly one structural exception
+(rule 3).
 
 ## Design decisions (already made — do not re-litigate without new evidence)
 
@@ -71,9 +70,7 @@ landed on "yes, with exactly one structural exception" — see rule 3.
    caller *can* set `Some(fake_value)` and it compiles fine — nothing stops a
    fabricated placeholder from looking exactly as valid as real data. A
    rustc-caught omission traded for a silently-wrong value is a regression, not a
-   fix. (This is the same reasoning that ruled out `Option<ip>` as a way to include
-   `MqttClient::connect()` before rule 3 found the real reason that one's actually
-   fine without `Option` at all.)
+   fix.
 
 5. **`MqttClient` gains a stored `serial` field + `pub fn serial(&self) -> &str`.**
    Currently `connect()` takes `serial: &str` only to build `client_id` and
@@ -89,7 +86,7 @@ landed on "yes, with exactly one structural exception" — see rule 3.
    `Self { mqtt: Some(mqtt_client), .. }` — no borrow-check conflict). This doesn't
    just deduplicate a redundant argument, it removes a mismatch class entirely: there
    is no longer any way to hand `from_mqtt()` a `serial` that disagrees with what the
-   `MqttClient` actually connected as. Confirmed with the user: there's no legitimate
+   `MqttClient` actually connected as. There's no legitimate
    reason for `PrinterClient` to report a different serial than the one its own wire
    session used — if you need to control a second printer, you construct a second
    `PrinterClient`.
@@ -142,41 +139,34 @@ Each phase should compile and pass `make check-fast` on its own — don't batch
 phases into one giant diff. Order matters where noted; phases not depending on each
 other can be done in either order or split across sessions.
 
-### Phase 1 — Add `PrinterIdentity`, no consumers yet
+### Phase 1 — `MqttClient` stores `serial`; `from_mqtt()` drops its redundant param
+
+No dependency on `PrinterIdentity` — safe to do first, standalone, even before
+Phase 2 exists.
+
+1. Add `serial: String` field to `MqttClient` (`src/mqtt/client/mod.rs`), set from
+   the existing `serial: &str` parameter `connect()` already receives (signature
+   unchanged in this phase — the `&PrinterIdentity` switch is Phase 4).
+2. Add `pub fn serial(&self) -> &str`.
+3. Change `PrinterClient::from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel)`
+   to `from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel)` — capture
+   `mqtt_client.serial().to_string()` before moving `mqtt_client` into the returned
+   `Self`.
+4. Update the 3 `PrinterClient::from_mqtt(...)` call sites (`tests/common/client.rs`,
+   `tests/telemetry_replay_test.rs`, `README.md`).
+
+### Phase 2 — Add `PrinterIdentity`, no consumers yet
 
 Create `src/identity.rs` with the struct (rule 1), doc comments explaining the
 no-`Option` decision inline (future readers shouldn't have to find this plan doc to
 understand why `ip` isn't optional). Re-export from `lib.rs` next to `PrinterModel`.
 No existing code changes yet — this phase is additive only, trivially safe to land
-alone. Every later phase depends on this one.
-
-### Phase 2 — `MqttClient::connect()` takes `PrinterIdentity`; stores `serial`; `from_mqtt()` drops its redundant param
-
-Depends on Phase 1.
-
-1. Change `MqttClient::connect(stream, serial: &str, access_code: &str)` to
-   `connect(stream, identity: &PrinterIdentity)` — reads `identity.serial`,
-   `identity.access_code` where the old params were used; `identity.ip` is unread
-   (rule 3).
-2. Add `serial: String` field to `MqttClient` (`src/mqtt/client/mod.rs`), set from
-   `identity.serial.clone()` (or equivalent) during `connect()`.
-3. Add `pub fn serial(&self) -> &str`.
-4. Change `PrinterClient::from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel)`
-   to `from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel)` — capture
-   `mqtt_client.serial().to_string()` before moving `mqtt_client` into the returned
-   `Self`.
-5. Update `PrinterClient::ensure_mqtt()` (`src/client/connect.rs`) to pass
-   `&self.identity` (see Phase 3 — if Phase 3 hasn't landed yet in this session,
-   construct a throwaway `PrinterIdentity` from the existing loose fields here
-   instead of blocking on Phase 3's field migration; reconcile when Phase 3 lands).
-6. Update every `MqttClient::connect(...)` call site (re-counted per the Scope
-   section above) and the 3 `PrinterClient::from_mqtt(...)` call sites
-   (`tests/common/client.rs`, `tests/telemetry_replay_test.rs`, `README.md`).
+alone. Phases 3-6 depend on this one; Phase 1 does not.
 
 ### Phase 3 — `PrinterClient::new()` and internal storage switch to `PrinterIdentity`
 
-Depends on Phase 1. Do before Phase 2 step 5 and Phase 4 if doing all in one
-session, to avoid the throwaway-construction workaround noted in Phase 2 step 5.
+Depends on Phase 2. Do before Phase 4's `ensure_mqtt()` step and Phase 5 if doing
+all in one session, to avoid the throwaway-construction workaround noted below.
 
 1. Replace `PrinterClient`'s three loose `ip: String, serial: String, access_code: String`
    fields with one `identity: PrinterIdentity` field.
@@ -192,9 +182,25 @@ session, to avoid the throwaway-construction workaround noted in Phase 2 step 5.
 4. Update the 14 `PrinterClient::new(...)` call sites listed above to construct a
    `PrinterIdentity` instead of passing three loose strings.
 
-### Phase 4 — FTPS's three constructors switch to `PrinterIdentity`
+### Phase 4 — `MqttClient::connect()` switches to `PrinterIdentity`
 
-Depends on Phase 1. Independent of Phase 2/3, but touches `src/client/connect.rs`'s
+Depends on Phase 2; ideally also Phase 3 (so `ensure_mqtt()` can pass `&self.identity`
+directly — otherwise construct a throwaway `PrinterIdentity` from loose fields here
+instead of blocking on Phase 3, and reconcile when Phase 3 lands). Independent of
+Phase 1, which already landed the `serial`-storage/`from_mqtt()` half of this work.
+
+1. Change `MqttClient::connect(stream, serial: &str, access_code: &str)` to
+   `connect(stream, identity: &PrinterIdentity)` — reads `identity.serial`,
+   `identity.access_code` where the old params were used (`identity.serial` also
+   feeds the `serial` field Phase 1 added); `identity.ip` is unread (rule 3).
+2. Update `PrinterClient::ensure_mqtt()` (`src/client/connect.rs`) to pass
+   `&self.identity`.
+3. Update every `MqttClient::connect(...)` call site (re-counted per the Scope
+   section above).
+
+### Phase 5 — FTPS's three constructors switch to `PrinterIdentity`
+
+Depends on Phase 2. Independent of Phases 1/3/4, but touches `src/client/connect.rs`'s
 `ensure_ftps()` which Phase 3 also touches (same file, different function) — do
 Phase 3 first to avoid a merge headache within one file, not a hard technical
 dependency.
@@ -216,22 +222,22 @@ dependency.
 5. Update the 9 direct `BambuFtpsClient::connect(...)` call sites in
    `tests/ftps_test.rs`.
 
-### Phase 5 — Camera's `authenticate()` switches to `PrinterIdentity`
+### Phase 6 — Camera's `authenticate()` switches to `PrinterIdentity`
 
-Depends on Phase 1. Small, independent of Phases 2-4 — safe to do any time after
-Phase 1, including standalone in its own session.
+Depends on Phase 2. Small, independent of Phases 1/3/4/5 — safe to do any time
+after Phase 2, including standalone in its own session.
 
 1. `BambuBinaryCameraStream::authenticate(&mut self, identity: &PrinterIdentity)` —
    reads `identity.access_code`, `.ip`/`.serial` unread (rule 3). `new(stream)`
    itself is unaffected (still takes just the stream — identity data isn't needed
    until `authenticate()`).
 2. Update `PrinterClient::ensure_camera()` (`src/client/connect.rs`) to pass
-   `&self.identity` (same throwaway-construction note as Phase 2 step 5 if Phase 3
-   hasn't landed yet in this session).
+   `&self.identity` (same throwaway-construction note as Phase 4 if Phase 3 hasn't
+   landed yet in this session).
 3. Update every direct `.authenticate(...)` call site (re-counted per the Scope
    section above).
 
-### Phase 6 — Docs regen and BACKLOG close-out
+### Phase 7 — Docs regen and BACKLOG close-out
 
 Per this repo's `backlog` skill: run `make docs`, commit the regenerated `docs/`
 separately from the fix commits (per `CLAUDE.md`'s Docs regen convention — batch it,
