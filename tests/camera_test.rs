@@ -46,7 +46,7 @@ async fn test_binary_camera_handshake_and_streaming() {
     // This transmits the 80-byte block. The mock server will panic and fail the test
     // if the magic identifiers or access code do not match expectations.
     camera_client
-        .authenticate(access_code)
+        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string() })
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
@@ -226,7 +226,7 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
         BambuBinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
-        .authenticate(access_code)
+        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string() })
         .await
         .expect("authenticate() only confirms the handshake write, must still succeed here");
 
@@ -264,7 +264,7 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
         BambuBinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
-        .authenticate(access_code)
+        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string() })
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
@@ -292,7 +292,7 @@ async fn test_attach_and_disconnect_camera() {
     let mut camera_stream: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
         BambuBinaryCameraStream::new(TokioIo(client_stream));
     camera_stream
-        .authenticate(access_code)
+        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string() })
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 

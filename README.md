@@ -191,9 +191,10 @@ Bambu printers use two different camera protocols depending on the model. Check 
 
 ```rust
 use bambino::camera::binary::BambuBinaryCameraStream;
+use bambino::identity::PrinterIdentity;
 
 let mut cam = BambuBinaryCameraStream::new(tls_stream);
-cam.authenticate(access_code).await?;
+cam.authenticate(&PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string() }).await?;
 
 let mut frame = Vec::new();
 loop {

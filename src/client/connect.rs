@@ -393,9 +393,9 @@ where
                 "Camera not configured — call .with_camera() or .attach_camera()".into(),
             )
         })?;
-        let ip = &self.identity.ip;
-        let serial = &self.identity.serial;
-        let access_code = &self.identity.access_code;
+        let identity = &self.identity;
+        let ip = &identity.ip;
+        let serial = &identity.serial;
         let camera_port = self.camera_port;
         let max_frame_size = self.camera_max_frame_size;
         let camera_stream =
@@ -406,7 +406,7 @@ where
                 if let Some(max) = max_frame_size {
                     cam = cam.with_max_frame_size(max);
                 }
-                cam.authenticate(access_code).await?;
+                cam.authenticate(identity).await?;
                 Ok::<_, Error>(cam)
             })
             .await?;

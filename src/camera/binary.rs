@@ -25,6 +25,7 @@ use alloc::vec::Vec;
 
 use crate::client::dummy::DummyTimer;
 use crate::error::Error;
+use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 
 pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
@@ -170,9 +171,13 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// — the same error variant a mid-stream network blip would produce. Callers that need to
     /// distinguish "wrong access code" from "transient network hiccup" cannot do so from this
     /// API alone.
-    pub async fn authenticate(&mut self, access_code: &str) -> Result<(), Error> {
-        self.authenticate_with_timer(access_code, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
-            .await
+    pub async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error> {
+        self.authenticate_with_timer(
+            &identity.access_code,
+            &DummyTimer,
+            CAMERA_READ_TIMEOUT_SECS * 1000,
+        )
+        .await
     }
 
     /// Bounds the handshake write+flush against `timer` when a real wall-clock is available (see [`TimerProvider::has_real_clock`]), mirroring [`Self::read_next_frame_with_timer`]'s naming/delegation convention.
