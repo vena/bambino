@@ -90,11 +90,17 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
     Some((&trimmed[..end], &trimmed[end..]))
 }
 
-/// Bundles the 4 consecutive same-typed (`u8`) "current time" components `parse_unix_listing`
-/// needs for its rollover heuristic — replaces 4 adjacent positional `u8` params that were a
-/// transposition footgun with no compiler catch.
+/// Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs.
+/// Named for what it is ("the current date and time") rather than what an earlier version of
+/// it happened to contain — a prior revision split `year` out into a sibling `i32` param since
+/// the other 4 fields were same-typed (`u8`) and adjacent, a transposition footgun the compiler
+/// couldn't catch; that left every call site passing `year` and `CurrentDateTime` as an
+/// always-together pair anyway, which is a stronger signal than the type-uniformity that
+/// motivated splitting them.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentDateTime {
+    /// Current calendar year.
+    pub year: i32,
     /// Current month (1-12).
     pub month: u8,
     /// Current day of month (1-31).
@@ -121,7 +127,8 @@ pub struct CurrentDateTime {
 /// that the parsed datetime is in the future, the file belongs to last year's calendar cycle
 /// (e.g., parsing a December modification date in January). In this event, we decrement the
 /// calculated year by 1.
-pub fn parse_unix_listing(payload: &str, current_year: i32, now: CurrentDateTime) -> Vec<FtpFile> {
+pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
+    let current_year = now.year;
     let current_month = now.month;
     let current_day = now.day;
     let current_hour = now.hour;
@@ -294,7 +301,7 @@ mod tests {
                        drwxr-xr-x    2 1000     1000         4096 Jun 17  2025 cache\n";
 
         // Baseline: We evaluate these listings at Jun 17, 2026, 15:00
-        let files = parse_unix_listing(payload, 2026, CurrentDateTime { month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
 
         assert_eq!(files.len(), 2);
 
@@ -334,7 +341,7 @@ mod tests {
         // silently breaking delete_file/download_file for that file.
         let payload =
             "-rwxrwxrwx   1 root     root           12 Jan  1  2030  weird_spacing   name.3mf";
-        let files = parse_unix_listing(payload, 2026, CurrentDateTime { month: 6, day: 17, hour: 12, minute: 0 });
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 12, minute: 0 });
 
         assert_eq!(files.len(), 1);
         let f = &files[0];
@@ -345,13 +352,13 @@ mod tests {
 
     #[test]
     fn test_empty_listing() {
-        let files = parse_unix_listing("", 2026, CurrentDateTime { month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing("", CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
         assert!(files.is_empty());
     }
 
     #[test]
     fn test_whitespace_only_listing() {
-        let files = parse_unix_listing("   \n  \n\r\n", 2026, CurrentDateTime { month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing("   \n  \n\r\n", CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
         assert!(files.is_empty());
     }
 
@@ -360,7 +367,7 @@ mod tests {
         let payload = "not a valid listing line\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 valid.3mf\n\
                        truncated\n";
-        let files = parse_unix_listing(payload, 2026, CurrentDateTime { month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "valid.3mf");
     }
@@ -373,7 +380,7 @@ mod tests {
                        -rw-r--r--    1 1000     1000      1024 Jun 17 88:00 bad_hour.gcode\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 12:70 bad_minute.gcode\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 valid.gcode\n";
-        let files = parse_unix_listing(payload, 2026, CurrentDateTime { month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "valid.gcode");
     }
@@ -386,7 +393,7 @@ mod tests {
         // Because that datetime resides in our system's relative future, rollover math must
         // automatically correct this to December 31st, 2025.
         let payload = "-rw-r--r--    1 1000     1000          100 Dec 31 23:59 print_job.gcode";
-        let files = parse_unix_listing(payload, 2026, CurrentDateTime { month: 1, day: 2, hour: 1, minute: 15 });
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 1, day: 2, hour: 1, minute: 15 });
 
         assert_eq!(files.len(), 1);
         let file = &files[0];

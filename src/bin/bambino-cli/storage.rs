@@ -9,6 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use bambino::Error;
+use bambino::ftps::CurrentDateTime;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config_with_options,
 };
@@ -56,15 +57,15 @@ pub enum FilesAction {
 }
 
 /// Dynamic calendar epoch helper converting the current wall-clock time to calendar date parts.
-fn current_date_utc() -> (i32, u8, u8, u8, u8) {
+fn current_date_utc() -> CurrentDateTime {
     let now = time::OffsetDateTime::now_utc();
-    (
-        now.year(),
-        now.month() as u8,
-        now.day(),
-        now.hour(),
-        now.minute(),
-    )
+    CurrentDateTime {
+        year: now.year(),
+        month: now.month() as u8,
+        day: now.day(),
+        hour: now.hour(),
+        minute: now.minute(),
+    }
 }
 
 /// Dispatches a typed storage action over FTPS.
@@ -103,11 +104,11 @@ pub async fn run(
     let result: Result<(), CliError> = async {
         match action {
             FilesAction::List { remote_path } => {
-                let (year, month, day, hour, min) = current_date_utc();
+                let now = current_date_utc();
 
                 println!("Traversing remote files on directory '{}'...", remote_path);
                 let files = client
-                    .list_directory(&remote_path, year, month, day, hour, min)
+                    .list_directory(&remote_path, now)
                     .await?;
 
                 if files.is_empty() {
@@ -199,8 +200,8 @@ where
     client.upload_file(PROBE_PATH, payload).await?;
     let after = time::OffsetDateTime::now_utc();
 
-    let (year, month, day, hour, min) = current_date_utc();
-    let listing = client.list_directory("/", year, month, day, hour, min).await;
+    let now = current_date_utc();
+    let listing = client.list_directory("/", now).await;
 
     // Always attempt cleanup, even if the listing failed — don't leave the probe file behind
     // on the printer's storage.

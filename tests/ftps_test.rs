@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use bambino::client::DummyTimer;
 use bambino::error::Error;
-use bambino::ftps::BambuFtpsClient;
+use bambino::ftps::{BambuFtpsClient, CurrentDateTime};
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -116,7 +116,16 @@ async fn test_ftps_client_lifecycle_and_operations() {
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let list = client
-        .list_directory("/model", 2026, 6, 17, 15, 0)
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
         .await
         .expect("LIST failed");
     assert_eq!(list.len(), 1);
@@ -189,7 +198,16 @@ async fn test_ftps_a1_plaintext_data_channel() {
     let mut client = connect_client(client_control, factory, PrinterModel::A1).await;
 
     let list = client
-        .list_directory("/", 2026, 6, 17, 15, 0)
+        .list_directory(
+            "/",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
         .await
         .expect("LIST failed on A1 plaintext path");
     assert_eq!(list.len(), 1);
@@ -328,7 +346,18 @@ async fn test_ftps_data_channel_failure_poisons_client() {
     .await
     .expect("FTPS handshake failed");
 
-    let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
     assert!(
         matches!(result, Err(bambino::error::Error::Network(_))),
         "Expected the data-channel TLS connect failure to surface as Network, got {:?}",
@@ -439,7 +468,18 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
-    let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
     assert!(
         matches!(result, Err(Error::Network(_))),
         "Expected the dropped connection to surface as Network, got {:?}",

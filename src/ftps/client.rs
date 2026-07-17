@@ -475,11 +475,7 @@ where
     pub async fn list_directory(
         &mut self,
         remote_path: &str,
-        current_year: i32,
-        current_month: u8,
-        current_day: u8,
-        current_hour: u8,
-        current_minute: u8,
+        now: CurrentDateTime,
     ) -> Result<Vec<FtpFile>, Error> {
         self.check_poisoned()?;
         validate_ftp_path(remote_path)?;
@@ -537,16 +533,7 @@ where
             Error::ProtocolViolation("Non-UTF8 directory listings response".into())
         })?;
 
-        Ok(parse_unix_listing(
-            payload_str,
-            current_year,
-            CurrentDateTime {
-                month: current_month,
-                day: current_day,
-                hour: current_hour,
-                minute: current_minute,
-            },
-        ))
+        Ok(parse_unix_listing(payload_str, now))
     }
 
     /// Queries the exact size of a file stored on the printer's MicroSD card.
