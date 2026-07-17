@@ -5,6 +5,24 @@ use std::io::{self, Write};
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
 use bambino::quirks::{ModelQuirks, decode_fan_percentage};
 use bambino::types::{DeviceTelemetry, PrinterTelemetry, decode_nozzle_temperatures};
+use serde::Deserialize;
+
+/// `write!`, ignoring the error — every `render_*` helper below targets an in-memory or
+/// raw-mode terminal writer where a failed write means the terminal session is gone, which
+/// the render loop has no useful way to react to (BUG-194: was `write!(...).unwrap_or(())`
+/// duplicated at ~24 call sites).
+macro_rules! dwrite {
+    ($w:expr, $($arg:tt)*) => {
+        ::std::write!($w, $($arg)*).unwrap_or(())
+    };
+}
+
+/// `writeln!` sibling of [`dwrite!`].
+macro_rules! dwriteln {
+    ($w:expr, $($arg:tt)*) => {
+        ::std::writeln!($w, $($arg)*).unwrap_or(())
+    };
+}
 
 /// Write adapter that translates `\n` to `\r\n` for raw-mode terminal output.
 pub(super) struct RawWriter<W: Write>(pub W);
@@ -92,7 +110,7 @@ pub(super) fn render_dashboard(
     }
 
     let mut w = RawWriter(io::stdout());
-    write!(w, "\x1B[1;1H\x1B[2J").unwrap_or(());
+    dwrite!(w, "\x1B[1;1H\x1B[2J");
 
     render_print_status(state, &mut w);
     render_nozzles(state, &mut w);
@@ -101,15 +119,13 @@ pub(super) fn render_dashboard(
     render_ams(state, &mut w);
     render_external_spool(state, &mut w);
 
-    writeln!(
-        w,
+    dwriteln!(w,
         "======================================================================="
-    )
-    .unwrap_or(());
+    );
 
     render_diagnostics(state, &mut w);
 
-    writeln!(w, "\n\x1B[2m[q/x/Esc to quit]\x1B[0m").unwrap_or(());
+    dwriteln!(w, "\n\x1B[2m[q/x/Esc to quit]\x1B[0m");
     w.flush().unwrap_or(());
 
     Ok(())
@@ -144,20 +160,16 @@ fn render_print_status(state: &serde_json::Map<String, serde_json::Value>, w: &m
         String::from("--")
     };
 
-    writeln!(
-        w,
+    dwriteln!(w,
         "================== Bambu Lab Printer Live Dashboard ==================="
-    )
-    .unwrap_or(());
-    writeln!(w, "{:<20} : {}", "Operational State", gcode_state).unwrap_or(());
-    writeln!(w, "{:<20} : {}", "Active Job Name", subtask_name).unwrap_or(());
-    writeln!(
-        w,
+    );
+    dwriteln!(w, "{:<20} : {}", "Operational State", gcode_state);
+    dwriteln!(w, "{:<20} : {}", "Active Job Name", subtask_name);
+    dwriteln!(w,
         "{:<20} : {:.1}%  ({}/{})",
         "Print Progress", progress, layer_num, total_layers
-    )
-    .unwrap_or(());
-    writeln!(w, "{:<20} : {}", "Time Remaining", remaining_formatted).unwrap_or(());
+    );
+    dwriteln!(w, "{:<20} : {}", "Time Remaining", remaining_formatted);
 
     let spd_label = match state.get("spd_lvl").and_then(|v| v.as_u64()) {
         Some(1) => "Silent",
@@ -171,7 +183,7 @@ fn render_print_status(state: &serde_json::Map<String, serde_json::Value>, w: &m
         .and_then(|v| v.as_u64())
         .map(|m| format!("{}%", m))
         .unwrap_or_else(|| "--".to_string());
-    writeln!(w, "{:<20} : {} ({})", "Print Speed", spd_label, spd_mag).unwrap_or(());
+    dwriteln!(w, "{:<20} : {} ({})", "Print Speed", spd_label, spd_mag);
 }
 
 struct NozzleEntry {
@@ -237,11 +249,9 @@ fn render_nozzles(state: &serde_json::Map<String, serde_json::Value>, w: &mut im
     // Populate temperatures from extruder.info (IDEX) or top-level fields
     populate_nozzle_temps(state, &mut nozzles);
 
-    writeln!(
-        w,
+    dwriteln!(w,
         "\n--- Nozzles -----------------------------------------------------------"
-    )
-    .unwrap_or(());
+    );
     for row in nozzles.chunks(2) {
         let mut cols: Vec<String> = Vec::new();
         for n in row {
@@ -255,9 +265,9 @@ fn render_nozzles(state: &serde_json::Map<String, serde_json::Value>, w: &mut im
             }
         }
         if cols.len() == 2 {
-            writeln!(w, "{:<34} │ {}", cols[0], cols[1]).unwrap_or(());
+            dwriteln!(w, "{:<34} │ {}", cols[0], cols[1]);
         } else {
-            writeln!(w, "{}", cols[0]).unwrap_or(());
+            dwriteln!(w, "{}", cols[0]);
         }
     }
 }
@@ -271,7 +281,7 @@ fn populate_nozzle_temps(
     // `bambino::types::decode_nozzle_temperatures`.
     let device: Option<DeviceTelemetry> = state
         .get("_device")
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| DeviceTelemetry::deserialize(v).ok());
     let nozzle_act = state.get("nozzle_temper").and_then(|t| t.as_f64());
     let nozzle_tgt = state.get("nozzle_target_temper").and_then(|t| t.as_f64());
 
@@ -297,12 +307,10 @@ fn render_thermal(
         .and_then(|t| t.as_f64())
         .unwrap_or(0.0) as u16;
 
-    writeln!(
-        w,
+    dwriteln!(w,
         "\n--- Thermal -----------------------------------------------------------"
-    )
-    .unwrap_or(());
-    writeln!(w, "{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt).unwrap_or(());
+    );
+    dwriteln!(w, "{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt);
 
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state
@@ -310,12 +318,10 @@ fn render_thermal(
             .and_then(|t| t.as_f64())
             .unwrap_or(0.0);
         let (chamber_act, chamber_tgt) = PrinterTelemetry::unpack_temperature(chamber_temper);
-        writeln!(
-            w,
+        dwriteln!(w,
             "{:<20} : {:>3}°C / {:>3}°C",
             "Chamber", chamber_act, chamber_tgt
-        )
-        .unwrap_or(());
+        );
     }
 }
 
@@ -365,18 +371,14 @@ fn render_fans_and_system(
         ("Timelapse", timelapse),
     ];
 
-    writeln!(
-        w,
+    dwriteln!(w,
         "\n--- Fans & System -----------------------------------------------------"
-    )
-    .unwrap_or(());
+    );
     for i in 0..4 {
-        writeln!(
-            w,
+        dwriteln!(w,
             "{:<14} : {:<6} {:>3} {:<14} : {}",
             fan_values[i].0, fan_values[i].1, "│", sys_values[i].0, sys_values[i].1
-        )
-        .unwrap_or(());
+        );
     }
 }
 
@@ -421,7 +423,7 @@ fn render_ams(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl W
             unit_id, temp, humidity, dry_suffix
         );
         let pad = 71usize.saturating_sub(header.len() - 1);
-        writeln!(w, "{} {}", header, "-".repeat(pad)).unwrap_or(());
+        dwriteln!(w, "{} {}", header, "-".repeat(pad));
 
         if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
             let mut table =
@@ -469,17 +471,13 @@ fn render_external_spool(state: &serde_json::Map<String, serde_json::Value>, w: 
         .and_then(|t| t.as_str())
         .unwrap_or("--");
     let color_swatch = format_color_swatch(tray_color);
-    writeln!(
-        w,
+    dwriteln!(w,
         "\n--- External Spool ----------------------------------------------------"
-    )
-    .unwrap_or(());
-    writeln!(
-        w,
+    );
+    dwriteln!(w,
         "{:<20} : {} {} (max {}°C)",
         "Material", tray_type, color_swatch, nozzle_temp
-    )
-    .unwrap_or(());
+    );
 }
 
 fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
@@ -487,12 +485,10 @@ fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mu
         && let Some(decoded_err) = decode_print_error(err_val as u32)
         && decoded_err.is_genuine_fault
     {
-        writeln!(
-            w,
+        dwriteln!(w,
             "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
             decoded_err.short_code
-        )
-        .unwrap_or(());
+        );
     }
 
     if let Some(hms_array) = state.get("hms").and_then(|h| h.as_array()) {
@@ -510,14 +506,12 @@ fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mu
         }
 
         if !active_hms.is_empty() {
-            writeln!(w, "Active Hardware Alerts:").unwrap_or(());
+            dwriteln!(w, "Active Hardware Alerts:");
             for decoded in &active_hms {
-                writeln!(
-                    w,
+                dwriteln!(w,
                     "  \x1B[1;33m[{}] Severity: {:?} (Module: {})\x1B[0m",
                     decoded.short_code, decoded.severity, decoded.module_id
-                )
-                .unwrap_or(());
+                );
             }
         }
     }

@@ -120,8 +120,8 @@ pub async fn run(
                 remote_path,
             } => {
                 let local = Path::new(&local_path);
-                let metadata = fs::metadata(local).map_err(|_| {
-                    Error::ProtocolViolation("Target local file does not exist".into())
+                let metadata = fs::metadata(local).map_err(|e| {
+                    Error::ProtocolViolation(format!("Target local file does not exist: {e}").into())
                 })?;
 
                 const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
