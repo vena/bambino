@@ -27,7 +27,7 @@ pub async fn run(ip: &str, serial: &str, port: u16, ca_cert_path: &str) -> Resul
     let addr = format!("{ip}:{port}");
     let stream = ::tokio::net::TcpStream::connect(&addr)
         .await
-        .map_err(|e| CliError::Other(format!("TCP connect to {addr} failed: {e}")))?;
+        .map_err(|e| CliError::Network(format!("TCP connect to {addr} failed: {e}")))?;
 
     let server_name = ServerName::try_from(serial.to_string())
         .map_err(|_| CliError::InvalidArgs(format!("invalid serial for SNI: '{serial}'")))?;
@@ -40,7 +40,7 @@ pub async fn run(ip: &str, serial: &str, port: u16, ca_cert_path: &str) -> Resul
             );
             Ok(())
         }
-        Err(e) => Err(CliError::Other(format!(
+        Err(e) => Err(CliError::Network(format!(
             "Verified TLS handshake with {addr} (SNI={serial}) FAILED: {e}"
         ))),
     }

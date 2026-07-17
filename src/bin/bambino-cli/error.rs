@@ -36,10 +36,15 @@ pub(crate) enum CliError {
     #[error(transparent)]
     Library(#[from] bambino::Error),
 
-    /// Catch-all for formatted diagnostic failures that are none of the above — mainly
-    /// `inspect-cert`/`verify-tls`'s raw TLS config/handshake errors (`rustls::Error`,
-    /// `rustls_pki_types` PEM/SNI errors), which aren't `std::io::Error` and aren't
-    /// `bambino::Error` since those tools deliberately bypass `PrinterClient`.
+    /// Formatted network/TLS transport failure from `inspect-cert`/`verify-tls`, which
+    /// deliberately bypass `PrinterClient` and dial raw sockets/TLS themselves (`TcpStream`,
+    /// `rustls::Error`, SNI errors), so these aren't `std::io::Error` or `bambino::Error`.
+    #[error("{0}")]
+    Network(String),
+
+    /// Catch-all for formatted diagnostic failures that fit none of the above — PEM parse
+    /// errors, JSON serialization, and other one-off non-network/non-file library errors
+    /// (`rustls_pki_types`, `serde_json`) surfaced by the diagnostic-only commands.
     #[error("{0}")]
     Other(String),
 }

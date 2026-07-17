@@ -84,7 +84,7 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
     let addr = format!("{ip}:{port}");
     let stream = ::tokio::net::TcpStream::connect(&addr)
         .await
-        .map_err(|e| CliError::Other(format!("TCP connect to {addr} failed: {e}")))?;
+        .map_err(|e| CliError::Network(format!("TCP connect to {addr} failed: {e}")))?;
 
     let verifier = Arc::new(CapturingVerifier::default());
     let provider = rustls::crypto::ring::default_provider();
@@ -102,7 +102,7 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
     let tls_stream = connector
         .connect(server_name, stream)
         .await
-        .map_err(|e| CliError::Other(format!("TLS handshake with {addr} failed: {e}")))?;
+        .map_err(|e| CliError::Network(format!("TLS handshake with {addr} failed: {e}")))?;
     drop(tls_stream);
 
     let der = verifier
