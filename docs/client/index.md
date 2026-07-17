@@ -707,11 +707,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
 
-- <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, ip: &str, serial: &str, access_code: &str, model: PrinterModel) -> Self` — [`PrinterModel`](../models/index.md#printermodel)
+- <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity, model: PrinterModel) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity), [`PrinterModel`](../models/index.md#printermodel)
 
   Creates a lazy client that defers MQTT connection until first use.
 
-- <span id="printerclient-from-mqtt"></span>`fn from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel) -> Self` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`PrinterModel`](../models/index.md#printermodel)
+- <span id="printerclient-from-mqtt"></span>`fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`PrinterModel`](../models/index.md#printermodel)
 
   Wraps an already-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) in a `PrinterClient`.
 

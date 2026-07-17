@@ -35,9 +35,13 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 #### Implementations
 
-- <span id="mqttclient-connect"></span>`async fn connect(stream: IO, serial: &str, access_code: &str) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
+- <span id="mqttclient-connect"></span>`async fn connect(stream: IO, identity: &PrinterIdentity) -> Result<Self, Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
 
   Executes a secure local network connection handshake and subscription loop with the printer.
+
+- <span id="mqttclient-serial"></span>`fn serial(&self) -> &str`
+
+  Returns the serial number this client authenticated with (`connect()`'s `serial` argument).
 
 - <span id="mqttclient-publish-command"></span>`async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error>` — [`Error`](../../error/index.md#error)
 

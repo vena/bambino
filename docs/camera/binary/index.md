@@ -61,7 +61,7 @@ to fully close before redialing.
 
   Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
 
-- <span id="bambubinarycamerastream-authenticate"></span>`async fn authenticate(&mut self, access_code: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+- <span id="bambubinarycamerastream-authenticate"></span>`async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
 
   Transmits the 80-byte authentication handshake to activate the continuous frame-push process.
 

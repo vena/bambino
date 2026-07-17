@@ -57,7 +57,7 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 #### Implementations
 
-- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: PrinterModel, ip: &str, serial: &str, access_code: &str, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`PrinterModel`](../../models/index.md#printermodel), [`Error`](../../error/index.md#error)
+- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: PrinterModel, identity: PrinterIdentity, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`PrinterModel`](../../models/index.md#printermodel), [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
 
   Establishes the secure control channel, performs login handshakes, and configures security properties.
 

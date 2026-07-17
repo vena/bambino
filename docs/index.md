@@ -21,6 +21,7 @@ code never touches `tokio::` or `std::net::` directly.
 
 ```ignore
 use bambino::client::{PrinterClient, TelemetryEvent};
+use bambino::identity::PrinterIdentity;
 use bambino::models::resolve_model;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
@@ -35,7 +36,9 @@ async fn example() -> Result<(), bambino::Error> {
     // Create a lazy client — MQTT connects automatically on first use
     let model = resolve_model("SERIAL123456", None);
     let mut printer = PrinterClient::new(
-        tls, TokioRawStreamFactory, "192.168.1.100", "SERIAL123456", "12345678", model,
+        tls, TokioRawStreamFactory,
+        PrinterIdentity { ip: "192.168.1.100".into(), serial: "SERIAL123456".into(), access_code: "12345678".into() },
+        model,
     )
     .with_timer(TokioTimer::new());
 
@@ -91,6 +94,7 @@ async fn example() -> Result<(), bambino::Error> {
   - [`discovery`](#discovery)
   - [`error`](#error)
   - [`ftps`](#ftps)
+  - [`identity`](#identity)
   - [`io`](#io)
   - [`models`](#models)
   - [`mqtt`](#mqtt)
@@ -109,6 +113,7 @@ async fn example() -> Result<(), bambino::Error> {
 | [`discovery`](#discovery) | mod | # Printer Discovery (SSDP) |
 | [`error`](#error) | mod | # Error Types |
 | [`ftps`](#ftps) | mod | # FTPS File Transfer Client |
+| [`identity`](#identity) | mod | # Printer Identity |
 | [`io`](#io) | mod | # Transport Abstraction Layer |
 | [`models`](#models) | mod | # Printer Model Identification |
 | [`mqtt`](#mqtt) | mod | # MQTT Client & Command Serialization |
@@ -124,6 +129,7 @@ async fn example() -> Result<(), bambino::Error> {
 - [`discovery`](discovery/index.md#discovery) — # Printer Discovery (SSDP)
 - [`error`](error/index.md#error) — # Error Types
 - [`ftps`](ftps/index.md#ftps) — # FTPS File Transfer Client
+- [`identity`](identity/index.md#identity) — # Printer Identity
 - [`io`](io/index.md#io) — # Transport Abstraction Layer
 - [`models`](models/index.md#models) — # Printer Model Identification
 - [`mqtt`](mqtt/index.md#mqtt) — # MQTT Client & Command Serialization
@@ -134,6 +140,48 @@ async fn example() -> Result<(), bambino::Error> {
 ---
 
 ## Types
+
+### `PrinterIdentity`
+
+```rust
+struct PrinterIdentity {
+    pub ip: String,
+    pub serial: String,
+    pub access_code: String,
+}
+```
+
+Address, serial number, and access code identifying one printer on the LAN.
+
+#### Fields
+
+- **`ip`**: `String`
+
+  LAN IP address or hostname of the printer.
+
+- **`serial`**: `String`
+
+  Printer's serial number, used for TLS SNI and MQTT topic scoping.
+
+- **`access_code`**: `String`
+
+  Printer's local network access code (found in its LAN-only settings screen).
+
+#### Trait Implementations
+
+##### `impl Clone for PrinterIdentity`
+
+- <span id="printeridentity-clone"></span>`fn clone(&self) -> PrinterIdentity` — [`PrinterIdentity`](identity/index.md#printeridentity)
+
+##### `impl Debug for PrinterIdentity`
+
+- <span id="printeridentity-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PrinterIdentity`
+
+##### `impl PartialEq for PrinterIdentity`
+
+- <span id="printeridentity-partialeq-eq"></span>`fn eq(&self, other: &PrinterIdentity) -> bool` — [`PrinterIdentity`](identity/index.md#printeridentity)
 
 ### `Error`
 
