@@ -130,9 +130,8 @@ where
     control_fill_buf: Vec<u8>,
 }
 
-/// Bundles the 5 args every `send_and_expect()` call in `connect_control_stream()`'s login
-/// sequence shares (stream/buf/fill_buf/timer/deadline_ms), so each call site only spells out
-/// what actually varies: the command, its log label, the expected reply code, and the rejection.
+/// Bundles the args a login-step command shares across calls, so each call site only spells
+/// out what varies: the command, its log label, the expected reply code, and the rejection.
 struct LoginCtx<'a, IO, T> {
     stream: &'a mut IO,
     buf: &'a mut Vec<u8>,
@@ -141,10 +140,9 @@ struct LoginCtx<'a, IO, T> {
     deadline_ms: Option<u64>,
 }
 
-/// Sends `cmd`, reads the reply, and maps a non-matching code to `on_reject()` — collapses the
-/// write/read/log/check block that `connect_control_stream()`'s login sequence otherwise repeats
-/// once per command. `on_reject` is a closure (not a fixed `ProtocolViolation` message) because
-/// the PASS step needs `Error::AccessDenied` instead.
+/// Sends `cmd`, reads the reply, and maps a non-matching code via `on_reject()`. `on_reject` is
+/// a closure, not a fixed `ProtocolViolation` message, because a rejected PASS must return
+/// `Error::AccessDenied` instead.
 async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
     ctx: &mut LoginCtx<'_, IO, T>,
     cmd: &str,
