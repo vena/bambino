@@ -146,7 +146,7 @@ where
         close_power_conflict: bool,
         filament: &str,
     ) -> Result<u16, Error> {
-        if !self.model.quirks().supports_ams_remote_drying() {
+        if !self.identity.model.quirks().supports_ams_remote_drying() {
             return Err(Error::ModelMismatch(
                 "AMS drying is screen-only on this host printer model — firmware acks this command but does not act on it".into(),
             ));

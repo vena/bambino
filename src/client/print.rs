@@ -109,7 +109,7 @@ where
     ///
     /// When `nozzle_offset_cali` is `None`, the model's quirks engine resolves the default.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error> {
-        let model = self.model;
+        let model = self.identity.model;
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))
             .await
     }

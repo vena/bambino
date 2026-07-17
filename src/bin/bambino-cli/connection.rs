@@ -7,7 +7,6 @@ use bambino::io::TokioIo;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config,
 };
-use bambino::models::resolve_model;
 
 use crate::error::CliError;
 
@@ -43,13 +42,10 @@ pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Print
     let config = build_unsafe_client_config();
     let tls_connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
-    let model = resolve_model(serial, None);
-
     Ok(PrinterClient::new(
         tls_connector,
         TokioRawStreamFactory,
-        PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string() },
-        model,
+        PrinterIdentity::new(ip, serial, access_code),
     )
     .with_timer(TokioTimer::new())
     .with_connect_timeout(CONNECT_TIMEOUT_SECS))

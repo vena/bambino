@@ -68,7 +68,7 @@ where
         let port_id = match fan_type {
             FanTarget::PartCooling => super::types::FAN_WRITE_PORT_PART_COOLING,
             FanTarget::AuxiliaryLeft => {
-                if !self.model.quirks().supports_auxiliary_left_fan() {
+                if !self.identity.model.quirks().supports_auxiliary_left_fan() {
                     return Err(Error::ModelMismatch(
                         "auxiliary left fan not available on this model".into(),
                     ));
@@ -76,7 +76,7 @@ where
                 super::types::FAN_WRITE_PORT_AUXILIARY_LEFT
             }
             FanTarget::ChamberExhaust => {
-                if !self.model.quirks().has_chamber_exhaust_fan() {
+                if !self.identity.model.quirks().has_chamber_exhaust_fan() {
                     return Err(Error::ModelMismatch(
                         "chamber exhaust fan not available on this model".into(),
                     ));
@@ -84,7 +84,7 @@ where
                 super::types::FAN_WRITE_PORT_CHAMBER_EXHAUST
             }
             FanTarget::AuxiliaryRight => {
-                if !self.model.quirks().supports_auxiliary_right_fan() {
+                if !self.identity.model.quirks().supports_auxiliary_right_fan() {
                     return Err(Error::ModelMismatch(
                         "auxiliary right fan not available on this model".into(),
                     ));
@@ -110,7 +110,7 @@ where
         &mut self,
         mode: crate::mqtt::commands::AirductMode,
     ) -> Result<u16, Error> {
-        if !self.model.quirks().supports_airduct_mode() {
+        if !self.identity.model.quirks().supports_airduct_mode() {
             return Err(Error::ModelMismatch(
                 "airduct damper control not available on this model".into(),
             ));
@@ -123,7 +123,7 @@ where
     ///
     /// Supported on models with onboard speakers (A1, A1 Mini, A2L).
     pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, Error> {
-        if !self.model.quirks().supports_prompt_sound() {
+        if !self.identity.model.quirks().supports_prompt_sound() {
             return Err(Error::ModelMismatch(
                 "prompt sound not available on this model".into(),
             ));
@@ -136,7 +136,7 @@ where
     ///
     /// Supported on models with a physical fire alarm buzzer (H2 series).
     pub async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, Error> {
-        if !self.model.quirks().supports_buzzer() {
+        if !self.identity.model.quirks().supports_buzzer() {
             return Err(Error::ModelMismatch(
                 "buzzer control not available on this model".into(),
             ));

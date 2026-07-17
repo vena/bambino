@@ -177,7 +177,6 @@ where
         raw_control: RawIO,
         tls_connector: Tls,
         data_factory: Factory,
-        model: PrinterModel,
         identity: PrinterIdentity,
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
@@ -185,7 +184,6 @@ where
         let (control_stream, fill_buf) = Self::connect_control_stream(
             raw_control,
             &tls_connector,
-            model,
             &identity,
             &timer,
             allow_unverified_tls_1_2,
@@ -195,7 +193,7 @@ where
             control_stream,
             tls_connector,
             data_factory,
-            model,
+            model: identity.model,
             ip: identity.ip,
             serial: identity.serial,
             timer,
@@ -220,7 +218,6 @@ where
     pub(crate) async fn connect_control_stream(
         raw_control: RawIO,
         tls_connector: &Tls,
-        model: PrinterModel,
         identity: &PrinterIdentity,
         timer: &FtpsTimer,
         allow_unverified_tls_1_2: bool,
@@ -232,7 +229,7 @@ where
         Self::require_tls_1_2_if_enforced(
             tls_connector,
             &control_stream,
-            model,
+            identity.model,
             allow_unverified_tls_1_2,
         )?;
 
@@ -293,7 +290,7 @@ where
         .await?;
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
-        if !model.quirks().uses_plaintext_ftps_data_channel() {
+        if !identity.model.quirks().uses_plaintext_ftps_data_channel() {
             send_and_expect(
                 &mut ctx,
                 "PROT P",
@@ -326,7 +323,6 @@ where
         control_stream: Tls::Stream,
         tls_connector: Tls,
         data_factory: Factory,
-        model: PrinterModel,
         identity: &PrinterIdentity,
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
@@ -336,7 +332,7 @@ where
             control_stream,
             tls_connector,
             data_factory,
-            model,
+            model: identity.model,
             ip: identity.ip.clone(),
             serial: identity.serial.clone(),
             timer,

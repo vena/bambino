@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use bambino::error::Error;
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
+use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
 use common::mock_mqtt::run_mock_mqtt_broker;
@@ -35,7 +36,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     // 2. Initialize Client (Executes CONNECT -> CONNACK and SUBSCRIBE -> SUBACK)
     let mut client = MqttClient::connect(
         TokioIo(client_stream),
-        &PrinterIdentity { ip: String::new(), serial: serial.to_string(), access_code: "12345678".to_string() },
+        &PrinterIdentity { ip: String::new(), serial: serial.to_string(), access_code: "12345678".to_string(), model: PrinterModel::P1S },
     )
         .await
         .expect("Failed to execute MQTT login and subscription handshake");

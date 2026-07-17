@@ -60,8 +60,7 @@ async fn connect_client(
         TokioIo(client_control),
         DummyTlsConnector,
         factory,
-        model,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model },
         DummyTimer,
         false,
     )
@@ -86,8 +85,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
         TokioIo(client_control),
         connector,
         factory,
-        PrinterModel::P1S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P1S },
         DummyTimer,
         false,
     )
@@ -338,8 +336,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         TokioIo(client_control),
         FailingDataTlsConnector::new(),
         factory,
-        PrinterModel::P1S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P1S },
         DummyTimer,
         false,
     )
@@ -544,8 +541,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterModel::P2S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P2S },
         DummyTimer,
         false,
     )
@@ -566,8 +562,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterModel::X2D,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::X2D },
         DummyTimer,
         false,
     )
@@ -593,8 +588,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
-        PrinterModel::P2S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P2S },
         DummyTimer,
         false,
     )
@@ -618,8 +612,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterModel::P1S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P1S },
         DummyTimer,
         false,
     )
@@ -638,8 +631,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,
-        PrinterModel::P2S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P2S },
         DummyTimer,
         false,
     )
@@ -675,8 +667,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
-        PrinterModel::P2S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P2S },
         DummyTimer,
         true,
     )
@@ -702,8 +693,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,
-        PrinterModel::P2S,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P2S },
         DummyTimer,
         true,
     )

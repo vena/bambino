@@ -166,8 +166,8 @@ where
         if let Some(state) = &print.gcode_state {
             self.cache.last_gcode_state = Some(state.clone());
         }
-        if self.model.quirks().has_door_sensor_field(print) {
-            self.cache.last_door_open = Some(self.model.quirks().is_door_open(print));
+        if self.identity.model.quirks().has_door_sensor_field(print) {
+            self.cache.last_door_open = Some(self.identity.model.quirks().is_door_open(print));
         }
         if let Some(print_error) = print.print_error {
             self.cache.last_print_error = Some(print_error);
@@ -287,7 +287,7 @@ where
     /// `Some(false)`, which means a sensor-equipped model's telemetry confirms the door is
     /// closed. Also `None` before any telemetry carrying `print` has been observed.
     pub fn is_door_open(&self) -> Option<bool> {
-        if !self.model.quirks().has_door_sensor() {
+        if !self.identity.model.quirks().has_door_sensor() {
             return None;
         }
         self.cache.last_door_open
@@ -419,7 +419,7 @@ where
     /// P1S) — mirrors `is_door_open()`'s sensor-capability gate. `Some((0, 0))` before any
     /// telemetry carrying `chamber_temper` has been observed on a chamber-equipped model.
     pub fn chamber_temperature(&self) -> Option<(u16, u16)> {
-        if self.model.quirks().ignores_chamber_temperature() {
+        if self.identity.model.quirks().ignores_chamber_temperature() {
             return None;
         }
         let raw = self.cache.last_chamber_temper.unwrap_or(0.0);
@@ -495,7 +495,7 @@ where
     }
 
     fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {
-        decode_fan_percentage(raw, self.model.quirks().reports_auxiliary_fan_percentage())
+        decode_fan_percentage(raw, self.identity.model.quirks().reports_auxiliary_fan_percentage())
     }
 
     /// Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

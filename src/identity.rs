@@ -7,6 +7,8 @@
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use crate::models::{PrinterModel, resolve_model};
+
 /// Address, serial number, and access code identifying one printer on the LAN.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrinterIdentity {
@@ -16,4 +18,19 @@ pub struct PrinterIdentity {
     pub serial: String,
     /// Printer's local network access code (found in its LAN-only settings screen).
     pub access_code: String,
+    /// Printer model, used for quirks dispatch. Derivable from `serial` via
+    /// [`resolve_model`]; see [`PrinterIdentity::new`] for the common case.
+    pub model: PrinterModel,
+}
+
+impl PrinterIdentity {
+    /// Builds an identity, deriving `model` from `serial` via [`resolve_model`].
+    ///
+    /// For callers who need a specific `model` regardless of what the serial
+    /// prefix implies, construct the struct literal directly instead.
+    pub fn new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Self {
+        let serial = serial.into();
+        let model = resolve_model(&serial, None);
+        Self { ip: ip.into(), serial, access_code: access_code.into(), model }
+    }
 }

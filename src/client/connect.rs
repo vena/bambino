@@ -185,7 +185,6 @@ where
             mqtt_factory: self.mqtt_factory,
             timer,
             identity: self.identity,
-            model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
             cache: self.cache,
@@ -270,7 +269,6 @@ where
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
             identity: self.identity,
-            model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
             cache: self.cache,
@@ -327,7 +325,6 @@ where
             )
         })?;
         let identity = &self.identity;
-        let model = self.model;
         let ftps_port = self.ftps_port;
         let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
         let (control_stream, fill_buf) =
@@ -336,7 +333,6 @@ where
                 BambuFtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
                     raw_stream,
                     tls,
-                    model,
                     identity,
                     timer,
                     allow_unverified_tls_1_2,
@@ -350,7 +346,6 @@ where
             control_stream,
             tls,
             factory,
-            model,
             &self.identity,
             timer,
             allow_unverified_tls_1_2,
@@ -379,7 +374,7 @@ where
     /// TLS, constructs a `BambuBinaryCameraStream`, and authenticates — the whole sequence is
     /// raced against `self.connect_timeout_secs`, mirroring `ensure_ftps()`.
     pub(super) async fn ensure_camera(&mut self) -> Result<(), Error> {
-        if self.model.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
+        if self.identity.model.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
             return Err(Error::ProtocolViolation(
                 "This model uses RTSPS for its camera feed — use camera::rtsps::build_rtsps_url() instead"
                     .into(),
@@ -474,7 +469,6 @@ where
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
             identity: self.identity,
-            model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
             cache: self.cache,

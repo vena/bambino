@@ -66,7 +66,7 @@ where
             .cache
             .last_home_flag
             .map(|flag| flag & POWER_220V_BITMASK != 0);
-        let max = self.model.quirks().bed_temp_max(mains_220v);
+        let max = self.identity.model.quirks().bed_temp_max(mains_220v);
         let target_temp = super::clamp_temp(target_temp, max, "Bed");
         let gcode = format!("M140 S{}", target_temp);
         self.send_gcode_raw(&gcode).await
@@ -90,7 +90,7 @@ where
         nozzle_id: u8,
         target_temp: u16,
     ) -> Result<u16, Error> {
-        let nozzle_count = self.model.quirks().physical_nozzle_count();
+        let nozzle_count = self.identity.model.quirks().physical_nozzle_count();
         let nozzle_valid = if nozzle_count == 7 {
             // H2C tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
             nozzle_id == 0 || (16..=21).contains(&nozzle_id)
@@ -103,7 +103,7 @@ where
             ));
         }
 
-        let max = self.model.quirks().nozzle_temp_max();
+        let max = self.identity.model.quirks().nozzle_temp_max();
         let target_temp = super::clamp_temp(target_temp, max, "Nozzle");
         let gcode = format!("M104 T{} S{}", nozzle_id, target_temp);
         self.send_gcode_raw(&gcode).await
@@ -116,12 +116,12 @@ where
     /// Models with passive chamber sensors but no heater (X1C, P2S) will return a capability
     /// mismatch error — their firmware silently ignores M141.
     pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
-        if !self.model.quirks().has_active_chamber_heater() {
+        if !self.identity.model.quirks().has_active_chamber_heater() {
             return Err(Error::ModelMismatch(
                 "active chamber heater not available on this model".into(),
             ));
         }
-        let max = self.model.quirks().chamber_temp_max();
+        let max = self.identity.model.quirks().chamber_temp_max();
         let target_temp = super::clamp_temp(target_temp, max, "Chamber");
         let gcode = format!("M141 S{}", target_temp);
         self.send_gcode_raw(&gcode).await

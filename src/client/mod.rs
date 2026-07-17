@@ -119,7 +119,6 @@ pub struct PrinterClient<
     pub(crate) mqtt_factory: MqttFactory,
     pub(crate) timer: Timer,
     pub(crate) identity: PrinterIdentity,
-    pub(crate) model: PrinterModel,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
     pub(crate) cache: telemetry::TelemetryCache,
@@ -174,7 +173,6 @@ where
         tls: MqttTls,
         factory: MqttFactory,
         identity: PrinterIdentity,
-        model: PrinterModel,
     ) -> Self {
         Self {
             mqtt: None,
@@ -186,7 +184,6 @@ where
             mqtt_factory: factory,
             timer: DummyTimer,
             identity,
-            model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
             cache: telemetry::TelemetryCache::default(),
@@ -244,8 +241,8 @@ where
                 serial,
                 ip: String::new(),
                 access_code: String::new(),
+                model,
             },
-            model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
             cache: telemetry::TelemetryCache::default(),
@@ -420,7 +417,7 @@ where
 
     /// Returns the resolved printer hardware model.
     pub fn model(&self) -> PrinterModel {
-        self.model
+        self.identity.model
     }
 
     /// Returns direct access to the underlying [`MqttClient`], auto-connecting if needed.

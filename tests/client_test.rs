@@ -2666,8 +2666,7 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     );
 
     client.send_gcode("G28").await.expect("send_gcode failed");
@@ -2715,7 +2714,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     });
     let mqtt_client_b = MqttClient::connect(
         TokioIo(client_stream_b),
-        &PrinterIdentity { ip: String::new(), serial: SERIAL.into(), access_code: "12345678".into() },
+        &PrinterIdentity { ip: String::new(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
         .await
         .expect("second MQTT connect handshake failed");
@@ -2752,8 +2751,7 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
 
@@ -2792,8 +2790,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     let mut client = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
 
@@ -2834,8 +2831,7 @@ async fn test_camera_trio_unconfigured_error() {
     let mut client = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     );
     assert!(!client.is_camera_connected());
 
@@ -2865,8 +2861,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
     .with_connect_timeout(1);
@@ -2903,8 +2898,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
     .with_connect_timeout(0);
@@ -2936,8 +2930,7 @@ async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     let mut client = PrinterClient::new(
         connector,
         factory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
-        PrinterModel::P1S,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
     .with_connect_timeout(1);

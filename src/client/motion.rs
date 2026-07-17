@@ -93,7 +93,7 @@ where
     /// // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
     /// ```
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error> {
-        if self.model.quirks().is_unsafe_homing_command(gcode_line) {
+        if self.identity.model.quirks().is_unsafe_homing_command(gcode_line) {
             return Err(Error::ModelMismatch(
                 "partial-axis homing unsafe on bed-on-Z model".into(),
             ));
@@ -118,7 +118,7 @@ where
     /// * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
     ///   highly recommended for standard configurations.
     pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, Error> {
-        let is_bed_on_z = self.model.quirks().is_bed_on_z();
+        let is_bed_on_z = self.identity.model.quirks().is_bed_on_z();
 
         let gcode = if is_bed_on_z {
             if home_z_only_danger {
@@ -177,7 +177,7 @@ where
         }
         if axis_upper == 'Z' {
             let gcode = self
-                .model
+                .identity.model
                 .quirks()
                 .relative_z_move_gcode(distance, feedrate);
             if gcode.is_empty() {
@@ -188,7 +188,7 @@ where
             self.send_gcode_raw(&gcode).await
         } else {
             let gcode = self
-                .model
+                .identity.model
                 .quirks()
                 .relative_xy_move_gcode(axis_upper, distance, feedrate);
             if gcode.is_empty() {

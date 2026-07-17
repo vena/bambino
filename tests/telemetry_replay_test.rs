@@ -66,7 +66,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
 
     let mqtt_client = MqttClient::connect(
         TokioIo(client_stream),
-        &PrinterIdentity { ip: String::new(), serial: SERIAL.into(), access_code: "12345678".into() },
+        &PrinterIdentity { ip: String::new(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
     )
         .await
         .expect("MQTT connect handshake failed");

@@ -61,8 +61,8 @@ let config = build_unsafe_client_config();
 let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
 let model = resolve_model(serial, None);
-let identity = PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string() };
-let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity, model)
+let identity = PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string(), model };
+let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity)
     .with_timer(TokioTimer::new())
     .with_connect_timeout(5);
 
@@ -194,7 +194,7 @@ use bambino::camera::binary::BambuBinaryCameraStream;
 use bambino::identity::PrinterIdentity;
 
 let mut cam = BambuBinaryCameraStream::new(tls_stream);
-cam.authenticate(&PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string() }).await?;
+cam.authenticate(&PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string(), model: bambino::models::resolve_model(&serial, None) }).await?;
 
 let mut frame = Vec::new();
 loop {

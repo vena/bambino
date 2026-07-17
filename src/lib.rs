@@ -23,7 +23,6 @@
 //! ```ignore
 //! use bambino::client::{PrinterClient, TelemetryEvent};
 //! use bambino::identity::PrinterIdentity;
-//! use bambino::models::resolve_model;
 //! use bambino::io::tokio::{
 //!     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
 //!     build_unsafe_client_config,
@@ -35,11 +34,9 @@
 //!     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
 //!
 //!     // Create a lazy client — MQTT connects automatically on first use
-//!     let model = resolve_model("SERIAL123456", None);
 //!     let mut printer = PrinterClient::new(
 //!         tls, TokioRawStreamFactory,
-//!         PrinterIdentity { ip: "192.168.1.100".into(), serial: "SERIAL123456".into(), access_code: "12345678".into() },
-//!         model,
+//!         PrinterIdentity::new("192.168.1.100", "SERIAL123456", "12345678"),
 //!     )
 //!     .with_timer(TokioTimer::new());
 //!

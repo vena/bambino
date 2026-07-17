@@ -630,6 +630,7 @@ mod tests {
     mod async_tests {
         use super::super::*;
         use crate::io::TokioIo;
+        use crate::models::PrinterModel;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         #[tokio::test]
@@ -656,6 +657,7 @@ mod tests {
                         ip: String::new(),
                         serial: "01P000000000000".into(),
                         access_code: "12345678".into(),
+                        model: PrinterModel::P1S,
                     },
                 )
                     .await;
@@ -695,6 +697,7 @@ mod tests {
                         ip: String::new(),
                         serial: "01P000000000000".into(),
                         access_code: "12345678".into(),
+                        model: PrinterModel::P1S,
                     },
                 )
                     .await;
@@ -739,6 +742,7 @@ mod tests {
                         ip: String::new(),
                         serial: "01P000000000000".into(),
                         access_code: "12345678".into(),
+                        model: PrinterModel::P1S,
                     },
                 )
                     .await;
@@ -801,6 +805,7 @@ mod tests {
                         ip: String::new(),
                         serial: "01P000000000000".into(),
                         access_code: "12345678".into(),
+                        model: PrinterModel::P1S,
                     },
                 )
                     .await
