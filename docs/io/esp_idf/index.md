@@ -18,8 +18,8 @@ our transport-agnostic client traits under Espressif's Rust standard library.
 | [`EspIdfTcpStream`](#espidftcpstream) | struct | Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound). |
 | [`EspIdfTimer`](#espidftimer) | struct | Async timer utilizing the ESP-IDF high-resolution timer service. |
 | [`EspIdfTlsConnector`](#espidftlsconnector) | struct | TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`). |
+| [`EspIdfTlsStream`](#espidftlsstream) | struct | Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`. |
 | [`EspIdfUdpSocket`](#espidfudpsocket) | struct | UDP Socket implementation designed for ESP-IDF's BSD Socket integration. |
-| [`EspTlsStream`](#esptlsstream) | struct | Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`. |
 
 ## Types
 
@@ -78,7 +78,7 @@ Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::con
 BUG-031: the underlying socket stays non-blocking for the stream's entire lifetime (not
 just during `connect()`'s own polling loop) — `read()`/`write()` below retry on
 `WouldBlock` by yielding to the async executor via `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`,
-the same pattern `EspTlsStream` already uses. A genuinely blocking socket here would give a
+the same pattern `EspIdfTlsStream` already uses. A genuinely blocking socket here would give a
 stalled peer (network partition, printer reboot) no `.await` yield point for any outer
 timeout/cancellation to preempt, indefinitely parking the FreeRTOS task — exactly the hazard
 `connect()`'s own non-blocking dial already fixes one layer up.
@@ -118,7 +118,7 @@ give up ownership of the fd first or the fd would be double-closed.
 
 ##### `impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector`
 
-- <span id="espidftlsconnector-tlsconnector-type-stream"></span>`type Stream = EspTlsStream<EspIdfTcpStream>`
+- <span id="espidftlsconnector-tlsconnector-type-stream"></span>`type Stream = EspIdfTlsStream<EspIdfTcpStream>`
 
 - <span id="espidftlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: EspIdfTcpStream) -> Result<<Self as >::Stream, SocketError>` — [`EspIdfTcpStream`](#espidftcpstream), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
@@ -185,7 +185,7 @@ convention, so writing them directly would bypass that library's documented API 
 with no ABI stability guarantee across ESP-IDF/mbedTLS version bumps. Practical impact:
 if a printer's vsFTPd offers/prefers TLS 1.3, `require_tls_1_2_if_enforced`
 (`ftps/client.rs`) still fails closed for models where
-`model.quirks().enforce_ftps_tls_1_2()` is true — the connection is safely rejected
+`model.quirks().enforces_ftps_tls_1_2()` is true — the connection is safely rejected
 rather than silently downgraded — but there is currently no way to make it succeed on
 ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 (`embedded-tls`) have no equivalent gap; both expose a genuine max-protocol-version knob.
@@ -226,13 +226,51 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 
 ##### `impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector`
 
-- <span id="espidftlsconnector-tlsconnector-type-stream"></span>`type Stream = EspTlsStream<EspIdfTcpStream>`
+- <span id="espidftlsconnector-tlsconnector-type-stream"></span>`type Stream = EspIdfTlsStream<EspIdfTcpStream>`
 
 - <span id="espidftlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: EspIdfTcpStream) -> Result<<Self as >::Stream, SocketError>` — [`EspIdfTcpStream`](#espidftcpstream), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
   Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
 
 - <span id="espidftlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
+
+### `EspIdfTlsStream<S>`
+
+```rust
+struct EspIdfTlsStream<S>
+where
+    S: ::esp_idf_svc::tls::Socket {
+    // [REDACTED: Private Fields]
+}
+```
+
+Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
+
+`EspTls`'s own `read`/`write` are synchronous calls, but the underlying socket runs
+in non-blocking mode (`Config::non_block = true`, set by `EspIdfTlsConnector`), so
+each call returns immediately instead of blocking the FreeRTOS task. Retries happen
+by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
+
+Generic over the adopted socket type `S`: `EspIdfTlsConnector` (wrap-an-existing-stream,
+below) produces `EspIdfTlsStream<EspIdfTcpStream>`.
+
+#### Trait Implementations
+
+##### `impl AsyncIo for EspIdfTlsStream<S>`
+
+##### `impl<S: ::esp_idf_svc::tls::Socket> ErrorType for EspIdfTlsStream<S>`
+
+- <span id="espidftlsstream-errortype-type-error"></span>`type Error = ErrorKind`
+
+##### `impl<S: ::esp_idf_svc::tls::Socket> Read for EspIdfTlsStream<S>`
+
+- <span id="espidftlsstream-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
+
+##### `impl<S: ::esp_idf_svc::tls::Socket> Write for EspIdfTlsStream<S>`
+
+- <span id="espidftlsstream-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
+
+- <span id="espidftlsstream-write-flush"></span>`async fn flush(&mut self) -> Result<(), <Self as >::Error>`
 
 ### `EspIdfUdpSocket`
 
@@ -265,42 +303,4 @@ UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 ##### `impl BindableUdpSocket for EspIdfUdpSocket`
 
 - <span id="espidfudpsocket-bindableudpsocket-bind"></span>`async fn bind(addr: SocketAddr) -> Result<Self, SocketError>` — [`SocketError`](../index.md#socketerror)
-
-### `EspTlsStream<S>`
-
-```rust
-struct EspTlsStream<S>
-where
-    S: ::esp_idf_svc::tls::Socket {
-    // [REDACTED: Private Fields]
-}
-```
-
-Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
-
-`EspTls`'s own `read`/`write` are synchronous calls, but the underlying socket runs
-in non-blocking mode (`Config::non_block = true`, set by `EspIdfTlsConnector`), so
-each call returns immediately instead of blocking the FreeRTOS task. Retries happen
-by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
-
-Generic over the adopted socket type `S`: `EspIdfTlsConnector` (wrap-an-existing-stream,
-below) produces `EspTlsStream<EspIdfTcpStream>`.
-
-#### Trait Implementations
-
-##### `impl AsyncIo for EspTlsStream<S>`
-
-##### `impl<S: ::esp_idf_svc::tls::Socket> ErrorType for EspTlsStream<S>`
-
-- <span id="esptlsstream-errortype-type-error"></span>`type Error = ErrorKind`
-
-##### `impl<S: ::esp_idf_svc::tls::Socket> Read for EspTlsStream<S>`
-
-- <span id="esptlsstream-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
-
-##### `impl<S: ::esp_idf_svc::tls::Socket> Write for EspTlsStream<S>`
-
-- <span id="esptlsstream-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
-
-- <span id="esptlsstream-write-flush"></span>`async fn flush(&mut self) -> Result<(), <Self as >::Error>`
 

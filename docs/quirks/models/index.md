@@ -8,7 +8,7 @@
 
 Isolates physical constraints (such as safe homing rules, bed coordinate limits,
 and relative axis orientation guidelines) into individual, model-specific modules,
-one per `BambuModel` variant.
+one per `PrinterModel` variant.
 
 ## Quick Reference
 

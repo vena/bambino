@@ -33,7 +33,7 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
 
-- <span id="p2quirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
+- <span id="p2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
   P2S firmware `01.02.00.00`'s embedded vsFTPd can't process TLS 1.3's asynchronous session-ticket model on the FTPS data channel — transfers truncate mid-stream with `426 "Failure reading network stream"`.
 
@@ -47,7 +47,7 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
-- <span id="p2quirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+- <span id="p2quirks-modelquirks-has-door-sensor-field"></span>`fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="p2quirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
@@ -71,7 +71,7 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-supports-auxiliary-right-fan"></span>`fn supports_auxiliary_right_fan(&self) -> bool`
 
-- <span id="p2quirks-modelquirks-auxiliary-fan-uses-percentage"></span>`fn auxiliary_fan_uses_percentage(&self) -> bool`
+- <span id="p2quirks-modelquirks-reports-auxiliary-fan-percentage"></span>`fn reports_auxiliary_fan_percentage(&self) -> bool`
 
 - <span id="p2quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 

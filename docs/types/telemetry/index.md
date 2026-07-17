@@ -391,7 +391,7 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 #### Implementations
 
-- <span id="amstray-get-state"></span>`fn get_state(&self) -> u8`
+- <span id="amstray-state"></span>`fn state(&self) -> u8`
 
   Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
 

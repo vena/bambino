@@ -308,7 +308,7 @@ Submits a `.3mf` print job from the SD card for execution.
 
 #### Implementations
 
-- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: BambuModel) -> Self` — [`PrintJobConfig`](#printjobconfig), [`ClampedTaskId`](../index.md#clampedtaskid), [`BambuModel`](../../../models/index.md#bambumodel)
+- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: PrinterModel) -> Self` — [`PrintJobConfig`](#printjobconfig), [`ClampedTaskId`](../index.md#clampedtaskid), [`PrinterModel`](../../../models/index.md#printermodel)
 
   Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
 

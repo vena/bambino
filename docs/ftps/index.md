@@ -68,7 +68,7 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 #### Implementations
 
-- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: BambuModel, ip: &str, serial: &str, access_code: &str, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`BambuModel`](../models/index.md#bambumodel), [`Error`](../error/index.md#error)
+- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: PrinterModel, ip: &str, serial: &str, access_code: &str, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`PrinterModel`](../models/index.md#printermodel), [`Error`](../error/index.md#error)
 
   Establishes the secure control channel, performs login handshakes, and configures security properties.
 
@@ -113,6 +113,51 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   Sends a QUIT command and cleanly terminates the FTP session.
 
 #### Trait Implementations
+
+### `CurrentDateTime`
+
+```rust
+struct CurrentDateTime {
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+}
+```
+
+Bundles the 4 consecutive same-typed (`u8`) "current time" components `parse_unix_listing`
+needs for its rollover heuristic — replaces 4 adjacent positional `u8` params that were a
+transposition footgun with no compiler catch.
+
+#### Fields
+
+- **`month`**: `u8`
+
+  Current month (1-12).
+
+- **`day`**: `u8`
+
+  Current day of month (1-31).
+
+- **`hour`**: `u8`
+
+  Current hour (0-23).
+
+- **`minute`**: `u8`
+
+  Current minute (0-59).
+
+#### Trait Implementations
+
+##### `impl Clone for CurrentDateTime`
+
+- <span id="currentdatetime-clone"></span>`fn clone(&self) -> CurrentDateTime` — [`CurrentDateTime`](parser/index.md#currentdatetime)
+
+##### `impl Copy for CurrentDateTime`
+
+##### `impl Debug for CurrentDateTime`
+
+- <span id="currentdatetime-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
 ### `FtpFile`
 
@@ -203,10 +248,10 @@ Standardized representation of an entry retrieved from physical printer storage.
 ### `parse_unix_listing`
 
 ```rust
-fn parse_unix_listing(payload: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Vec<FtpFile>
+fn parse_unix_listing(payload: &str, current_year: i32, now: CurrentDateTime) -> Vec<FtpFile>
 ```
 
-**Types:** [`FtpFile`](parser/index.md#ftpfile)
+**Types:** [`CurrentDateTime`](parser/index.md#currentdatetime), [`FtpFile`](parser/index.md#ftpfile)
 
 Parses a line-separated UNIX directory listing payload returned by `LIST`.
 

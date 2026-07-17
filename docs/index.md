@@ -139,11 +139,11 @@ async fn example() -> Result<(), bambino::Error> {
 
 ```rust
 enum Error {
-    NetworkError(crate::io::SocketError),
+    Network(crate::io::SocketError),
     TimerFailure(crate::io::TimerError),
     TlsHandshakeFailed,
     ProtocolViolation(std::borrow::Cow<'static, str>),
-    SerializationError,
+    Serialization,
     AccessDenied,
     Timeout,
     DiskWriteFailure,
@@ -159,7 +159,7 @@ and source error tracing are derived automatically via `thiserror`.
 
 #### Variants
 
-- **`NetworkError`**
+- **`Network`**
 
   Encapsulates direct socket-level failures on TCP, UDP, or TLS streams.
 
@@ -176,7 +176,7 @@ and source error tracing are derived automatically via `thiserror`.
 
   Emitted when a printer violates expected protocol states or emits illegal data lines.
 
-- **`SerializationError`**
+- **`Serialization`**
 
   Serializer and Deserializer mismatches during telemetry JSON parsing.
 
@@ -216,10 +216,10 @@ and source error tracing are derived automatically via `thiserror`.
 
 - <span id="error-tostring-to-string"></span>`fn to_string(&self) -> String`
 
-### `BambuModel`
+### `PrinterModel`
 
 ```rust
-enum BambuModel {
+enum PrinterModel {
     X1C,
     X1E,
     X2D,
@@ -299,29 +299,29 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 #### Implementations
 
-- <span id="cratemodelsbambumodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
+- <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
 
   Returns the [`ModelQuirks`](quirks/index.md#modelquirks) strategy for this model variant.
 
 #### Trait Implementations
 
-##### `impl Clone for BambuModel`
+##### `impl Clone for PrinterModel`
 
-- <span id="bambumodel-clone"></span>`fn clone(&self) -> BambuModel` — [`BambuModel`](models/index.md#bambumodel)
+- <span id="printermodel-clone"></span>`fn clone(&self) -> PrinterModel` — [`PrinterModel`](models/index.md#printermodel)
 
-##### `impl Copy for BambuModel`
+##### `impl Copy for PrinterModel`
 
-##### `impl Debug for BambuModel`
+##### `impl Debug for PrinterModel`
 
-- <span id="bambumodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+- <span id="printermodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-##### `impl Eq for BambuModel`
+##### `impl Eq for PrinterModel`
 
-##### `impl Hash for BambuModel`
+##### `impl Hash for PrinterModel`
 
-- <span id="bambumodel-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+- <span id="printermodel-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
 
-##### `impl PartialEq for BambuModel`
+##### `impl PartialEq for PrinterModel`
 
-- <span id="bambumodel-partialeq-eq"></span>`fn eq(&self, other: &BambuModel) -> bool` — [`BambuModel`](models/index.md#bambumodel)
+- <span id="printermodel-partialeq-eq"></span>`fn eq(&self, other: &PrinterModel) -> bool` — [`PrinterModel`](models/index.md#printermodel)
 

@@ -26,7 +26,7 @@ is unrecognized (see [`resolve_model`](../../models/index.md#resolve-model)).
 ```rust
 struct SsdpDevice {
     pub serial: String,
-    pub model: crate::models::BambuModel,
+    pub model: crate::models::PrinterModel,
     pub name: String,
     pub ip: String,
     pub port: u16,
@@ -48,7 +48,7 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
   The unique uppercase physical hardware serial number.
 
-- **`model`**: `crate::models::BambuModel`
+- **`model`**: `crate::models::PrinterModel`
 
   Resolved printer capability profile based on prefixes and headers.
 

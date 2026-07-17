@@ -104,7 +104,7 @@ struct PrintProgress {
 Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
 
 Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
-`gcode_state`/`door_open`/`print_error`, which answer four independent questions) because
+`gcode_state`/`is_door_open`/`print_error`, which answer four independent questions) because
 `mc_percent`, `mc_remaining_time`, `layer_num`, and `total_layers` are always consumed
 together as one "how's the print going" question. Each field updates independently and
 keeps its last-observed value across a telemetry message that omits it — a `None` field
@@ -177,7 +177,7 @@ SD card access. `MqttRawIO`/`MqttTls`/`MqttFactory` are MQTT's [`TlsConnector`](
 [`RawStreamFactory`](../io/index.md#rawstreamfactory) pair (mandatory — every `PrinterClient` needs MQTT);
 `FtpsRawIO`/`FtpsTls`/`FtpsFactory` are FTPS's independent pair (defaulted, configured via
 [`.with_ftps()`](Self::with_ftps)). Use [`PreConnected`] for both MQTT slots when wrapping
-an already-connected [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient) (see [`from_mqtt()`](Self::from_mqtt)), or a
+an already-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) (see [`from_mqtt()`](Self::from_mqtt)), or a
 platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 `TokioRawStreamFactory`) for lazy connection via [`new()`](Self::new).
 
@@ -235,13 +235,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Eagerly establishes the MQTT connection.
 
-- <span id="superprinterclient-mqtt-connected"></span>`fn mqtt_connected(&self) -> bool`
+- <span id="superprinterclient-is-mqtt-connected"></span>`fn is_mqtt_connected(&self) -> bool`
 
   Returns whether the MQTT session is currently established.
 
-- <span id="superprinterclient-attach-mqtt"></span>`fn attach_mqtt(&mut self, mqtt: BambuMqttClient<<MqttTls as >::Stream>)` — [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), [`TlsConnector`](../io/index.md#tlsconnector)
+- <span id="superprinterclient-attach-mqtt"></span>`fn attach_mqtt(&mut self, mqtt: MqttClient<<MqttTls as >::Stream>)` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector)
 
-  Injects a pre-connected [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient) directly.
+  Injects a pre-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) directly.
 
 - <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -279,7 +279,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Eagerly establishes the FTPS connection.
 
-- <span id="superprinterclient-ftps-connected"></span>`fn ftps_connected(&self) -> bool`
+- <span id="superprinterclient-is-ftps-connected"></span>`fn is_ftps_connected(&self) -> bool`
 
   Returns whether the FTPS session is currently established.
 
@@ -287,7 +287,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Eagerly establishes the camera connection.
 
-- <span id="superprinterclient-camera-connected"></span>`fn camera_connected(&self) -> bool`
+- <span id="superprinterclient-is-camera-connected"></span>`fn is_camera_connected(&self) -> bool`
 
   Returns whether the camera session is currently established.
 
@@ -499,7 +499,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   `None` means no telemetry carrying `gcode_state` has been observed yet.
 
-- <span id="superprinterclient-door-open"></span>`fn door_open(&self) -> Option<bool>`
+- <span id="superprinterclient-is-door-open"></span>`fn is_door_open(&self) -> Option<bool>`
 
   Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 
@@ -707,13 +707,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
 
-- <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, ip: &str, serial: &str, access_code: &str, model: BambuModel) -> Self` — [`BambuModel`](../models/index.md#bambumodel)
+- <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, ip: &str, serial: &str, access_code: &str, model: PrinterModel) -> Self` — [`PrinterModel`](../models/index.md#printermodel)
 
   Creates a lazy client that defers MQTT connection until first use.
 
-- <span id="printerclient-from-mqtt"></span>`fn from_mqtt(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self` — [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), [`BambuModel`](../models/index.md#bambumodel)
+- <span id="printerclient-from-mqtt"></span>`fn from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel) -> Self` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`PrinterModel`](../models/index.md#printermodel)
 
-  Wraps an already-connected [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient) in a `PrinterClient`.
+  Wraps an already-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) in a `PrinterClient`.
 
 - <span id="printerclient-next-sequence-id"></span>`fn next_sequence_id(&mut self) -> u64`
 
@@ -735,13 +735,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns a reference to the printer's unique hardware serial number.
 
-- <span id="printerclient-model"></span>`fn model(&self) -> BambuModel` — [`BambuModel`](../models/index.md#bambumodel)
+- <span id="printerclient-model"></span>`fn model(&self) -> PrinterModel` — [`PrinterModel`](../models/index.md#printermodel)
 
   Returns the resolved printer hardware model.
 
-- <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<<MqttTls as >::Stream>, Error>` — [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
+- <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut MqttClient<<MqttTls as >::Stream>, Error>` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
-  Returns direct access to the underlying [`BambuMqttClient`](../mqtt/client/index.md#bambumqttclient), auto-connecting if needed.
+  Returns direct access to the underlying [`MqttClient`](../mqtt/client/index.md#mqttclient), auto-connecting if needed.
 
 #### Trait Implementations
 

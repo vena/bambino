@@ -35,7 +35,7 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
   - [`StandardCaliDelPayload`](#standardcalidelpayload)
   - [`StandardCaliDelRequest`](#standardcalidelrequest)
 - [Functions](#functions)
-  - [`validate_setting_id`](#validate-setting-id)
+  - [`is_setting_id_valid`](#is-setting-id-valid)
 
 ## Quick Reference
 
@@ -56,7 +56,7 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 | [`StandardCaliDelEntry`](#standardcalidelentry) | struct | Deletion data fields utilized by standard single-nozzle databases (Schema A). |
 | [`StandardCaliDelPayload`](#standardcalidelpayload) | struct | Inner payload for [`StandardCaliDelRequest`]. |
 | [`StandardCaliDelRequest`](#standardcalidelrequest) | struct | JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF]. |
-| [`validate_setting_id`](#validate-setting-id) | fn | Validates whether a provided calibration profile setting ID complies with EEPROM limits. |
+| [`is_setting_id_valid`](#is-setting-id-valid) | fn | Validates whether a provided calibration profile setting ID complies with EEPROM limits. |
 
 ## Types
 
@@ -649,7 +649,7 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 
 - **`setting_id`**: `String`
 
-  19-character setting ID of the entry being deleted, validated by [`validate_setting_id`](#validate-setting-id).
+  19-character setting ID of the entry being deleted, validated by [`is_setting_id_valid`](#is-setting-id-valid).
 
 #### Trait Implementations
 
@@ -756,10 +756,10 @@ JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-D
 
 ## Functions
 
-### `validate_setting_id`
+### `is_setting_id_valid`
 
 ```rust
-fn validate_setting_id(setting_id: &str) -> bool
+fn is_setting_id_valid(setting_id: &str) -> bool
 ```
 
 Validates whether a provided calibration profile setting ID complies with EEPROM limits.

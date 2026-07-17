@@ -53,11 +53,11 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 - <span id="x1cquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
 
-- <span id="x1cquirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
+- <span id="x1cquirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
 - <span id="x1cquirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
-- <span id="x1cquirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+- <span id="x1cquirks-modelquirks-has-door-sensor-field"></span>`fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="x1cquirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
@@ -103,11 +103,11 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 
 - <span id="x1equirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
 
-- <span id="x1equirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
+- <span id="x1equirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
 - <span id="x1equirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
-- <span id="x1equirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+- <span id="x1equirks-modelquirks-has-door-sensor-field"></span>`fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="x1equirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 

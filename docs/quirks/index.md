@@ -9,7 +9,7 @@
 Bambu Lab printers vary in hardware capabilities — door sensors, chamber heaters,
 fan step resolution, FTPS TLS requirements, camera protocols, and more. Rather than
 scattering `match model { ... }` blocks everywhere, the [`ModelQuirks`](#modelquirks) trait captures
-all model-specific behavior in one place. Call [`BambuModel::quirks()`] to get the
+all model-specific behavior in one place. Call [`PrinterModel::quirks()`] to get the
 strategy implementation for any model.
 
 Per-model strategy structs live in the [`models`](../models/index.md#models) submodule. This module also provides
@@ -95,7 +95,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if this model series requires plaintext transmissions on the FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
 
-- `fn enforce_ftps_tls_1_2(&self) -> bool`
+- `fn enforces_ftps_tls_1_2(&self) -> bool`
 
   Returns true if this model series must restrict its TLS version strictly to TLS 1.2 to prevent session resumption failure [REF-FTPS-CONN].
 
@@ -149,7 +149,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
 #### Provided Methods 
 
-- `fn door_sensor_field_present(&self, _telemetry: &PrinterTelemetry) -> bool`
+- `fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool`
 
   Returns true if `telemetry` carries the specific wire field this model's
 
@@ -193,7 +193,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model has a chamber exhaust/filtration fan (port 3) [REF-CLIM-FANS].
 
-- `fn auxiliary_fan_uses_percentage(&self) -> bool`
+- `fn reports_auxiliary_fan_percentage(&self) -> bool`
 
   Returns true if the model's auxiliary fan telemetry reports speed as a direct percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
 
@@ -245,7 +245,7 @@ fn decode_fan_percentage(raw: Option<&str>, uses_percentage: bool) -> Option<u8>
 
 Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
 
-`uses_percentage` should come from [`ModelQuirks::auxiliary_fan_uses_percentage()`] — most
+`uses_percentage` should come from [`ModelQuirks::reports_auxiliary_fan_percentage()`] — most
 models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an
 already-clamped percentage directly. Returns `None` if `raw` is absent or not a valid `u8`.
 

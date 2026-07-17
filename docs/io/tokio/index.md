@@ -24,7 +24,6 @@ and the Rustls TLS stack.
   - [`build_unsafe_client_config_with_options`](#build-unsafe-client-config-with-options)
   - [`build_verified_client_config`](#build-verified-client-config)
   - [`build_verified_client_config_with_options`](#build-verified-client-config-with-options)
-  - [`to_socket_error`](#to-socket-error)
 
 ## Quick Reference
 
@@ -40,7 +39,6 @@ and the Rustls TLS stack.
 | [`build_unsafe_client_config_with_options`](#build-unsafe-client-config-with-options) | fn | Builds an unsafe `ClientConfig` with configurable TLS version constraints. |
 | [`build_verified_client_config`](#build-verified-client-config) | fn | Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs. |
 | [`build_verified_client_config_with_options`](#build-verified-client-config-with-options) | fn | Builds a verified `ClientConfig` with configurable TLS version constraints. |
-| [`to_socket_error`](#to-socket-error) | fn | Helper mapping standard standard Rust IO errors to our runtime-agnostic SocketError enum. |
 
 ## Types
 
@@ -259,14 +257,4 @@ Builds a verified `ClientConfig` with configurable TLS version constraints.
 
 When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only (required
 for FTPS data channels on P2S/X2D models [REF-FTPS-CONN]).
-
-### `to_socket_error`
-
-```rust
-fn to_socket_error(err: std::io::Error) -> crate::io::SocketError
-```
-
-**Types:** [`SocketError`](../index.md#socketerror)
-
-Helper mapping standard standard Rust IO errors to our runtime-agnostic SocketError enum.
 

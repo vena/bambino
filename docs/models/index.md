@@ -7,7 +7,7 @@
 # Printer Model Identification
 
 Every Bambu Lab printer has a 3-character serial number prefix that identifies
-its model. [`BambuModel`](#bambumodel) enumerates all known models, and [`resolve_model()`]
+its model. [`PrinterModel`](#printermodel) enumerates all known models, and [`resolve_model()`]
 maps serial prefixes (with an SSDP `DevModel` fallback) to the right variant.
 The resolved model drives behavioral dispatch through the [`quirks`](../quirks/index.md#quirks) engine.
 
@@ -15,15 +15,15 @@ The resolved model drives behavioral dispatch through the [`quirks`](../quirks/i
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`BambuModel`](#bambumodel) | enum | Enumeration of physical Bambu Lab printer models supported on the local interface. |
+| [`PrinterModel`](#printermodel) | enum | Enumeration of physical Bambu Lab printer models supported on the local interface. |
 | [`resolve_model`](#resolve-model) | fn | Resolves the specific printer model using physical serial number prefixes combined with target SSDP model advertisements as a secondary signal. |
 
 ## Types
 
-### `BambuModel`
+### `PrinterModel`
 
 ```rust
-enum BambuModel {
+enum PrinterModel {
     X1C,
     X1E,
     X2D,
@@ -103,31 +103,31 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 #### Implementations
 
-- <span id="cratemodelsbambumodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+- <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
 
   Returns the [`ModelQuirks`](../quirks/index.md#modelquirks) strategy for this model variant.
 
 #### Trait Implementations
 
-##### `impl Clone for BambuModel`
+##### `impl Clone for PrinterModel`
 
-- <span id="bambumodel-clone"></span>`fn clone(&self) -> BambuModel` — [`BambuModel`](#bambumodel)
+- <span id="printermodel-clone"></span>`fn clone(&self) -> PrinterModel` — [`PrinterModel`](#printermodel)
 
-##### `impl Copy for BambuModel`
+##### `impl Copy for PrinterModel`
 
-##### `impl Debug for BambuModel`
+##### `impl Debug for PrinterModel`
 
-- <span id="bambumodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+- <span id="printermodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-##### `impl Eq for BambuModel`
+##### `impl Eq for PrinterModel`
 
-##### `impl Hash for BambuModel`
+##### `impl Hash for PrinterModel`
 
-- <span id="bambumodel-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+- <span id="printermodel-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
 
-##### `impl PartialEq for BambuModel`
+##### `impl PartialEq for PrinterModel`
 
-- <span id="bambumodel-partialeq-eq"></span>`fn eq(&self, other: &BambuModel) -> bool` — [`BambuModel`](#bambumodel)
+- <span id="printermodel-partialeq-eq"></span>`fn eq(&self, other: &PrinterModel) -> bool` — [`PrinterModel`](#printermodel)
 
 
 ---
@@ -137,10 +137,10 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 ### `resolve_model`
 
 ```rust
-fn resolve_model(serial: &str, dev_model: Option<&str>) -> BambuModel
+fn resolve_model(serial: &str, dev_model: Option<&str>) -> PrinterModel
 ```
 
-**Types:** [`BambuModel`](#bambumodel)
+**Types:** [`PrinterModel`](#printermodel)
 
 Resolves the specific printer model using physical serial number prefixes combined with target SSDP model advertisements as a secondary signal.
 

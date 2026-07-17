@@ -28,11 +28,11 @@ there is currently no automated check that the two stay in sync (BUG-013).
 
 ```rust
 enum Error {
-    NetworkError(crate::io::SocketError),
+    Network(crate::io::SocketError),
     TimerFailure(crate::io::TimerError),
     TlsHandshakeFailed,
     ProtocolViolation(std::borrow::Cow<'static, str>),
-    SerializationError,
+    Serialization,
     AccessDenied,
     Timeout,
     DiskWriteFailure,
@@ -48,7 +48,7 @@ and source error tracing are derived automatically via `thiserror`.
 
 #### Variants
 
-- **`NetworkError`**
+- **`Network`**
 
   Encapsulates direct socket-level failures on TCP, UDP, or TLS streams.
 
@@ -65,7 +65,7 @@ and source error tracing are derived automatically via `thiserror`.
 
   Emitted when a printer violates expected protocol states or emits illegal data lines.
 
-- **`SerializationError`**
+- **`Serialization`**
 
   Serializer and Deserializer mismatches during telemetry JSON parsing.
 

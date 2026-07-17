@@ -14,10 +14,56 @@ variable-width column padding and embeds robust temporal rollover heuristics.
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`CurrentDateTime`](#currentdatetime) | struct | Bundles the 4 consecutive same-typed (`u8`) "current time" components `parse_unix_listing` needs for its rollover heuristic — replaces 4 adjacent positional `u8` params that were a transposition footgun with no compiler catch. |
 | [`FtpFile`](#ftpfile) | struct | Standardized representation of an entry retrieved from physical printer storage. |
 | [`parse_unix_listing`](#parse-unix-listing) | fn | Parses a line-separated UNIX directory listing payload returned by `LIST`. |
 
 ## Types
+
+### `CurrentDateTime`
+
+```rust
+struct CurrentDateTime {
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+}
+```
+
+Bundles the 4 consecutive same-typed (`u8`) "current time" components `parse_unix_listing`
+needs for its rollover heuristic — replaces 4 adjacent positional `u8` params that were a
+transposition footgun with no compiler catch.
+
+#### Fields
+
+- **`month`**: `u8`
+
+  Current month (1-12).
+
+- **`day`**: `u8`
+
+  Current day of month (1-31).
+
+- **`hour`**: `u8`
+
+  Current hour (0-23).
+
+- **`minute`**: `u8`
+
+  Current minute (0-59).
+
+#### Trait Implementations
+
+##### `impl Clone for CurrentDateTime`
+
+- <span id="currentdatetime-clone"></span>`fn clone(&self) -> CurrentDateTime` — [`CurrentDateTime`](#currentdatetime)
+
+##### `impl Copy for CurrentDateTime`
+
+##### `impl Debug for CurrentDateTime`
+
+- <span id="currentdatetime-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
 ### `FtpFile`
 
@@ -108,10 +154,10 @@ Standardized representation of an entry retrieved from physical printer storage.
 ### `parse_unix_listing`
 
 ```rust
-fn parse_unix_listing(payload: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Vec<FtpFile>
+fn parse_unix_listing(payload: &str, current_year: i32, now: CurrentDateTime) -> Vec<FtpFile>
 ```
 
-**Types:** [`FtpFile`](#ftpfile)
+**Types:** [`CurrentDateTime`](#currentdatetime), [`FtpFile`](#ftpfile)
 
 Parses a line-separated UNIX directory listing payload returned by `LIST`.
 

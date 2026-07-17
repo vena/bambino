@@ -39,7 +39,7 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
 
-- <span id="x2quirks-modelquirks-enforce-ftps-tls-1-2"></span>`fn enforce_ftps_tls_1_2(&self) -> bool`
+- <span id="x2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
   X2D firmware `01.01.00.00` fails the implicit-FTPS handshake on port 990 with `[SSL: WRONG_VERSION_NUMBER]` against a TLS 1.3 `ClientHello`.
 
@@ -47,7 +47,7 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
   issue #1638) capped X2D to TLS 1.2 "by analogy" with the P2S session-ticket bug (see
 
-  `P2Quirks::enforce_ftps_tls_1_2`), explicitly noting the X2D failure could be a distinct bug
+  `P2Quirks::enforces_ftps_tls_1_2`), explicitly noting the X2D failure could be a distinct bug
 
   (different FTPS auth variant or port) rather than the same one. Treat this as
 
@@ -57,7 +57,7 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
-- <span id="x2quirks-modelquirks-door-sensor-field-present"></span>`fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
+- <span id="x2quirks-modelquirks-has-door-sensor-field"></span>`fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
 - <span id="x2quirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
 
@@ -79,7 +79,7 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-supports-auxiliary-right-fan"></span>`fn supports_auxiliary_right_fan(&self) -> bool`
 
-- <span id="x2quirks-modelquirks-auxiliary-fan-uses-percentage"></span>`fn auxiliary_fan_uses_percentage(&self) -> bool`
+- <span id="x2quirks-modelquirks-reports-auxiliary-fan-percentage"></span>`fn reports_auxiliary_fan_percentage(&self) -> bool`
 
 - <span id="x2quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 

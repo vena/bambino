@@ -500,7 +500,7 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 
 - **`setting_id`**: `String`
 
-  19-character setting ID of the entry being deleted, validated by [`validate_setting_id`](kprofile/index.md#validate-setting-id).
+  19-character setting ID of the entry being deleted, validated by [`is_setting_id_valid`](kprofile/index.md#is-setting-id-valid).
 
 #### Trait Implementations
 
@@ -659,10 +659,10 @@ Under the over-the-wire telemetry channel, the `print_error` status is passed as
 decimal integer. Reconstructing this to LCD standards requires hex-string conversion
 and formatting with an underscore separator [REF-DIAG-HMS].
 
-### `validate_setting_id`
+### `is_setting_id_valid`
 
 ```rust
-fn validate_setting_id(setting_id: &str) -> bool
+fn is_setting_id_valid(setting_id: &str) -> bool
 ```
 
 Validates whether a provided calibration profile setting ID complies with EEPROM limits.

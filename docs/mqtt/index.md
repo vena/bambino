@@ -8,13 +8,13 @@
 
 Low-level MQTT v3.1.1 implementation for talking to Bambu Lab printers.
 
-[`BambuMqttClient`](client/index.md#bambumqttclient) handles the connection handshake, QoS 1 publish/subscribe,
+[`MqttClient`](client/index.md#mqttclient) handles the connection handshake, QoS 1 publish/subscribe,
 keep-alive pings, and zombie detection. The [`commands`](commands/index.md#commands) submodule contains all
 the serializable request structs (G-code dispatch, print control, AMS operations,
 LED/fan/buzzer commands, etc.) that get published to the printer's command topic.
 
 Most users should use [`PrinterClient`](../client/index.md#printerclient) instead of this module
-directly — it wraps `BambuMqttClient` with higher-level methods and safety checks.
+directly — it wraps `MqttClient` with higher-level methods and safety checks.
 
 ## Quick Reference
 
@@ -33,10 +33,10 @@ directly — it wraps `BambuMqttClient` with higher-level methods and safety che
 
 ## Types
 
-### `BambuMqttClient<IO: AsyncIo>`
+### `MqttClient<IO: AsyncIo>`
 
 ```rust
-struct BambuMqttClient<IO: AsyncIo> {
+struct MqttClient<IO: AsyncIo> {
     // [REDACTED: Private Fields]
 }
 ```
@@ -45,27 +45,27 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 #### Implementations
 
-- <span id="bambumqttclient-connect"></span>`async fn connect(stream: IO, serial: &str, access_code: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+- <span id="mqttclient-connect"></span>`async fn connect(stream: IO, serial: &str, access_code: &str) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
 
   Executes a secure local network connection handshake and subscription loop with the printer.
 
-- <span id="bambumqttclient-publish-command"></span>`async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="mqttclient-publish-command"></span>`async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Submits a serialized JSON command payload to the printer's request channel.
 
-- <span id="bambumqttclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](client/index.md#mqttmessage), [`Error`](../error/index.md#error)
+- <span id="mqttclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](client/index.md#mqttmessage), [`Error`](../error/index.md#error)
 
   Returns the next MQTT message, draining any buffered messages first.
 
-- <span id="bambumqttclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="mqttclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
 
-- <span id="bambumqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="mqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Platform-agnostic timer tick update.
 
-- <span id="bambumqttclient-get-in-flight-count"></span>`fn get_in_flight_count(&self) -> usize`
+- <span id="mqttclient-in-flight-count"></span>`fn in_flight_count(&self) -> usize`
 
   Returns the number of current un-acknowledged QoS 1 packets.
 
@@ -724,7 +724,7 @@ Submits a `.3mf` print job from the SD card for execution.
 
 #### Implementations
 
-- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: BambuModel) -> Self` — [`PrintJobConfig`](commands/print_job/index.md#printjobconfig), [`ClampedTaskId`](commands/index.md#clampedtaskid), [`BambuModel`](../models/index.md#bambumodel)
+- <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: PrinterModel) -> Self` — [`PrintJobConfig`](commands/print_job/index.md#printjobconfig), [`ClampedTaskId`](commands/index.md#clampedtaskid), [`PrinterModel`](../models/index.md#printermodel)
 
   Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
 

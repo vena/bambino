@@ -21,9 +21,9 @@ external spools [REF-AMS-USEAMS].
   - [`build_ams_mapping`](#build-ams-mapping)
   - [`build_ams_mapping2`](#build-ams-mapping2)
   - [`flat_channel_id_for_entry`](#flat-channel-id-for-entry)
-  - [`validate_ams_pool_composition`](#validate-ams-pool-composition)
-  - [`validate_external_spool_safety`](#validate-external-spool-safety)
-  - [`validate_external_spool_safety_flat`](#validate-external-spool-safety-flat)
+  - [`is_ams_pool_composition_valid`](#is-ams-pool-composition-valid)
+  - [`is_external_spool_safety_valid`](#is-external-spool-safety-valid)
+  - [`is_external_spool_safety_valid_flat`](#is-external-spool-safety-valid-flat)
 
 ## Quick Reference
 
@@ -35,9 +35,9 @@ external spools [REF-AMS-USEAMS].
 | [`build_ams_mapping`](#build-ams-mapping) | fn | Builds the flat `ams_mapping` integer array from raw project allocations. |
 | [`build_ams_mapping2`](#build-ams-mapping2) | fn | Builds the structured `ams_mapping2` object array from raw project allocations. |
 | [`flat_channel_id_for_entry`](#flat-channel-id-for-entry) | fn | Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to. |
-| [`validate_ams_pool_composition`](#validate-ams-pool-composition) | fn | Validates a constructed `ams_mapping2` against the model's actual AMS pool structure (BUG-122). |
-| [`validate_external_spool_safety`](#validate-external-spool-safety) | fn | Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle. |
-| [`validate_external_spool_safety_flat`](#validate-external-spool-safety-flat) | fn | Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`. |
+| [`is_ams_pool_composition_valid`](#is-ams-pool-composition-valid) | fn | Validates a constructed `ams_mapping2` against the model's actual AMS pool structure (BUG-122). |
+| [`is_external_spool_safety_valid`](#is-external-spool-safety-valid) | fn | Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle. |
+| [`is_external_spool_safety_valid_flat`](#is-external-spool-safety-valid-flat) | fn | Flat-array equivalent of `is_external_spool_safety_valid`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`. |
 
 ## Types
 
@@ -270,10 +270,10 @@ Inverse of `MaterialSource::flat_channel_id`, operating on the already-structure
 from `ams_mapping2` when the caller only supplied the latter via
 `PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
 
-### `validate_ams_pool_composition`
+### `is_ams_pool_composition_valid`
 
 ```rust
-fn validate_ams_pool_composition(mapping2: &[AmsMapping2Entry], composition: AmsPoolComposition) -> bool
+fn is_ams_pool_composition_valid(mapping2: &[AmsMapping2Entry], composition: AmsPoolComposition) -> bool
 ```
 
 **Types:** [`AmsMapping2Entry`](#amsmapping2entry), [`AmsPoolComposition`](#amspoolcomposition)
@@ -286,10 +286,10 @@ Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing
 unit across multiple slots isn't an extra unit. External-spool and unmapped sentinel
 entries are ignored, since they don't occupy a physical AMS unit slot.
 
-### `validate_external_spool_safety`
+### `is_external_spool_safety_valid`
 
 ```rust
-fn validate_external_spool_safety(is_single_nozzle: bool, mapping2: &[AmsMapping2Entry]) -> bool
+fn is_external_spool_safety_valid(is_single_nozzle: bool, mapping2: &[AmsMapping2Entry]) -> bool
 ```
 
 **Types:** [`AmsMapping2Entry`](#amsmapping2entry)
@@ -302,11 +302,11 @@ filaments map to `ExternalSpool` or are left `Unmapped`), single-nozzle printers
 `use_ams` command parameter be configured strictly to `false`. Failing to override this parameter
 causes the printer's execution processor to reject the print task with error `07FF_8012`.
 
-### `validate_external_spool_safety_flat`
+### `is_external_spool_safety_valid_flat`
 
 ```rust
-fn validate_external_spool_safety_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool
+fn is_external_spool_safety_valid_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool
 ```
 
-Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
+Flat-array equivalent of `is_external_spool_safety_valid`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
 
