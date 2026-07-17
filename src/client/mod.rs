@@ -46,6 +46,7 @@ use crate::camera::binary::BambuBinaryCameraStream;
 use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::identity::PrinterIdentity;
 use crate::models::PrinterModel;
 use crate::mqtt::{MqttClient, MqttMessage};
 
@@ -117,9 +118,7 @@ pub struct PrinterClient<
     pub(crate) mqtt_tls: MqttTls,
     pub(crate) mqtt_factory: MqttFactory,
     pub(crate) timer: Timer,
-    pub(crate) serial: String,
-    pub(crate) ip: String,
-    pub(crate) access_code: String,
+    pub(crate) identity: PrinterIdentity,
     pub(crate) model: PrinterModel,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
@@ -174,9 +173,7 @@ where
     pub fn new(
         tls: MqttTls,
         factory: MqttFactory,
-        ip: &str,
-        serial: &str,
-        access_code: &str,
+        identity: PrinterIdentity,
         model: PrinterModel,
     ) -> Self {
         Self {
@@ -188,9 +185,7 @@ where
             mqtt_tls: tls,
             mqtt_factory: factory,
             timer: DummyTimer,
-            serial: String::from(serial),
-            ip: String::from(ip),
-            access_code: String::from(access_code),
+            identity,
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
@@ -234,7 +229,8 @@ where
     /// `PreConnected`'s `RawStreamFactory::dial` (which returns
     /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
     /// practice.
-    pub fn from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel) -> Self {
+    pub fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self {
+        let serial = String::from(mqtt_client.serial());
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
@@ -244,9 +240,11 @@ where
             mqtt_tls: PreConnected(PhantomData),
             mqtt_factory: PreConnected(PhantomData),
             timer: DummyTimer,
-            serial: String::from(serial),
-            ip: String::new(),
-            access_code: String::new(),
+            identity: PrinterIdentity {
+                serial,
+                ip: String::new(),
+                access_code: String::new(),
+            },
             model,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
@@ -417,7 +415,7 @@ where
 
     /// Returns a reference to the printer's unique hardware serial number.
     pub fn serial(&self) -> &str {
-        &self.serial
+        &self.identity.serial
     }
 
     /// Returns the resolved printer hardware model.

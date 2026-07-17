@@ -1,6 +1,7 @@
 #![cfg(feature = "cli")]
 
 use bambino::client::PrinterClient;
+use bambino::identity::PrinterIdentity;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
 use bambino::io::TokioIo;
 use bambino::io::tokio::{
@@ -47,9 +48,7 @@ pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Print
     Ok(PrinterClient::new(
         tls_connector,
         TokioRawStreamFactory,
-        ip,
-        serial,
-        access_code,
+        PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string() },
         model,
     )
     .with_timer(TokioTimer::new())

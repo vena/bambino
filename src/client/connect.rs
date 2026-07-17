@@ -95,9 +95,9 @@ where
         }
         let mqtt_client =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-                let raw = self.mqtt_factory.dial(&self.ip, self.mqtt_port).await?;
-                let stream = self.mqtt_tls.connect(&self.serial, raw).await?;
-                MqttClient::connect(stream, &self.serial, &self.access_code).await
+                let raw = self.mqtt_factory.dial(&self.identity.ip, self.mqtt_port).await?;
+                let stream = self.mqtt_tls.connect(&self.identity.serial, raw).await?;
+                MqttClient::connect(stream, &self.identity.serial, &self.identity.access_code).await
             })
             .await?;
         self.mqtt = Some(mqtt_client);
@@ -184,9 +184,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer,
-            serial: self.serial,
-            ip: self.ip,
-            access_code: self.access_code,
+            identity: self.identity,
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
@@ -258,7 +256,7 @@ where
         // connect time — panic here instead, at the builder call site, with a clear message
         // pointing at the real cause.
         assert!(
-            !self.ip.is_empty() && !self.access_code.is_empty(),
+            !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
             "with_ftps() requires a real ip/access_code — this PrinterClient was built via \
              from_mqtt(), which leaves both empty; use .attach_storage() instead"
         );
@@ -271,9 +269,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
-            serial: self.serial,
-            ip: self.ip,
-            access_code: self.access_code,
+            identity: self.identity,
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
@@ -330,9 +326,9 @@ where
                 "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
             )
         })?;
-        let ip = &self.ip;
-        let serial = &self.serial;
-        let access_code = &self.access_code;
+        let ip = &self.identity.ip;
+        let serial = &self.identity.serial;
+        let access_code = &self.identity.access_code;
         let model = self.model;
         let ftps_port = self.ftps_port;
         let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
@@ -401,9 +397,9 @@ where
                 "Camera not configured — call .with_camera() or .attach_camera()".into(),
             )
         })?;
-        let ip = &self.ip;
-        let serial = &self.serial;
-        let access_code = &self.access_code;
+        let ip = &self.identity.ip;
+        let serial = &self.identity.serial;
+        let access_code = &self.identity.access_code;
         let camera_port = self.camera_port;
         let max_frame_size = self.camera_max_frame_size;
         let camera_stream =
@@ -468,7 +464,7 @@ where
         // BUG-072: same guard as with_ftps() — from_mqtt()-constructed clients have empty
         // ip/access_code, which would otherwise fail opaquely at actual camera connect time.
         assert!(
-            !self.ip.is_empty() && !self.access_code.is_empty(),
+            !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
             "with_camera() requires a real ip/access_code — this PrinterClient was built via \
              from_mqtt(), which leaves both empty; use .attach_camera() instead"
         );
@@ -481,9 +477,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
-            serial: self.serial,
-            ip: self.ip,
-            access_code: self.access_code,
+            identity: self.identity,
             model: self.model,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,

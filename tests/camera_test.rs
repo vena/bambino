@@ -17,6 +17,7 @@ use bambino::camera::binary::BambuBinaryCameraStream;
 use bambino::client::{DummyFactory, DummyTls, PrinterClient};
 use bambino::error::Error;
 use bambino::io::TokioIo;
+use bambino::identity::PrinterIdentity;
 use bambino::models::PrinterModel;
 
 use common::io::{DummyTlsConnector, MockDataStreamFactory};
@@ -123,9 +124,7 @@ async fn test_printer_client_camera_end_to_end() {
     let mut printer = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        access_code,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: access_code.to_string() },
         PrinterModel::P1S,
     )
     .with_camera(DummyTlsConnector, factory);
@@ -158,9 +157,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
     let mut printer = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::X1C,
     );
 
@@ -192,9 +189,7 @@ async fn test_ensure_camera_retries_after_failed_dial() {
     let mut printer = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     )
     .with_camera(DummyTlsConnector, factory);
@@ -304,9 +299,7 @@ async fn test_attach_and_disconnect_camera() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        access_code,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: access_code.to_string() },
         PrinterModel::P1S,
     )
     .with_camera(

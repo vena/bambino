@@ -18,6 +18,7 @@ use bambino::client::{
 use bambino::diagnostics::DecodedPrintError;
 use bambino::error::Error;
 use bambino::io::TokioIo;
+use bambino::identity::PrinterIdentity;
 use bambino::models::PrinterModel;
 use bambino::mqtt::{MqttClient, PrintJobConfig};
 
@@ -2665,9 +2666,7 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     );
 
@@ -2750,9 +2749,7 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     )
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
@@ -2792,9 +2789,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     let mut client = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     )
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
@@ -2836,9 +2831,7 @@ async fn test_camera_trio_unconfigured_error() {
     let mut client = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     );
     assert!(!client.is_camera_connected());
@@ -2869,9 +2862,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
@@ -2909,9 +2900,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
@@ -2944,9 +2933,7 @@ async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     let mut client = PrinterClient::new(
         connector,
         factory,
-        "127.0.0.1",
-        SERIAL,
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into() },
         PrinterModel::P1S,
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())

@@ -49,6 +49,7 @@ for p in &printers {
 
 ```rust
 use bambino::client::PrinterClient;
+use bambino::identity::PrinterIdentity;
 use bambino::models::resolve_model;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
@@ -60,7 +61,8 @@ let config = build_unsafe_client_config();
 let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
 let model = resolve_model(serial, None);
-let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, ip, serial, access_code, model)
+let identity = PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string() };
+let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity, model)
     .with_timer(TokioTimer::new())
     .with_connect_timeout(5);
 
@@ -73,7 +75,7 @@ If you already have a connected `BambuMqttClient` (tests, Embassy), wrap it dire
 ```rust
 use bambino::client::PrinterClient;
 
-let mut printer = PrinterClient::from_mqtt(mqtt_client, serial, model);
+let mut printer = PrinterClient::from_mqtt(mqtt_client, model);
 ```
 
 ### Send commands
