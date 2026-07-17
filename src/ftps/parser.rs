@@ -91,12 +91,6 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
 }
 
 /// Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs.
-/// Named for what it is ("the current date and time") rather than what an earlier version of
-/// it happened to contain — a prior revision split `year` out into a sibling `i32` param since
-/// the other 4 fields were same-typed (`u8`) and adjacent, a transposition footgun the compiler
-/// couldn't catch; that left every call site passing `year` and `CurrentDateTime` as an
-/// always-together pair anyway, which is a stronger signal than the type-uniformity that
-/// motivated splitting them.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentDateTime {
     /// Current calendar year.
