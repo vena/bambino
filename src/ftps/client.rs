@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use embedded_io_async::{Error as _, Write};
 
 use crate::error::Error;
-use crate::ftps::parser::{FtpFile, parse_unix_listing};
+use crate::ftps::parser::{CurrentDateTime, FtpFile, parse_unix_listing};
 use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::PrinterModel;
 
@@ -534,10 +534,12 @@ where
         Ok(parse_unix_listing(
             payload_str,
             current_year,
-            current_month,
-            current_day,
-            current_hour,
-            current_minute,
+            CurrentDateTime {
+                month: current_month,
+                day: current_day,
+                hour: current_hour,
+                minute: current_minute,
+            },
         ))
     }
 

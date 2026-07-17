@@ -339,12 +339,9 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, Error> {
         .map(|e| e + start + 1)
         .ok_or(Error::ProtocolViolation("Invalid PASV format".into()))?;
     let inner = &text[start + 1..end];
-    let mut parts = inner.split(',');
+    let parts = inner.split(',');
 
-    let _ = parts.next();
-    let _ = parts.next();
-    let _ = parts.next();
-    let _ = parts.next();
+    let mut parts = parts.skip(4);
 
     let p1 =
         parts
