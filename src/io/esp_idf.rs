@@ -302,9 +302,9 @@ fn build_tls_config<'a>(
 /// by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
 ///
 /// Generic over the adopted socket type `S`: `EspIdfTlsConnector` (wrap-an-existing-stream,
-/// below) produces `EspTlsStream<EspIdfTcpStream>`.
+/// below) produces `EspIdfTlsStream<EspIdfTcpStream>`.
 #[cfg(feature = "esp-idf")]
-pub struct EspTlsStream<S>
+pub struct EspIdfTlsStream<S>
 where
     S: ::esp_idf_svc::tls::Socket,
 {
@@ -313,12 +313,12 @@ where
 }
 
 #[cfg(feature = "esp-idf")]
-impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::ErrorType for EspTlsStream<S> {
+impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::ErrorType for EspIdfTlsStream<S> {
     type Error = embedded_io_async::ErrorKind;
 }
 
 #[cfg(feature = "esp-idf")]
-impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspTlsStream<S> {
+impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspIdfTlsStream<S> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         let tls = &mut self.tls;
         retry_on_would_block(&self.timer, "read", || tls.read(buf)).await
@@ -326,7 +326,7 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspTlsStream<S> 
 }
 
 #[cfg(feature = "esp-idf")]
-impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S> {
+impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspIdfTlsStream<S> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         let tls = &mut self.tls;
         retry_on_would_block(&self.timer, "write", || tls.write(buf)).await
@@ -341,10 +341,10 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspTlsStream<S>
     }
 }
 
-/// Shared `WouldBlock` retry loop for `EspTlsStream::read`/`write` — both wrap a single `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on `is_would_block`, differing only in which `EspTls` method is invoked and the log message text.
+/// Shared `WouldBlock` retry loop for `EspIdfTlsStream::read`/`write` — both wrap a single `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on `is_would_block`, differing only in which `EspTls` method is invoked and the log message text.
 /// Takes `timer`/`op` separately rather than `&mut self` so the caller can borrow `self.tls` (via
 /// the closure) and `self.timer` (via this argument) as disjoint fields — see call sites in
-/// `EspTlsStream::read`/`write` above.
+/// `EspIdfTlsStream::read`/`write` above.
 #[cfg(feature = "esp-idf")]
 async fn retry_on_would_block<F>(
     timer: &EspIdfTimer,
@@ -431,7 +431,7 @@ impl embedded_io_async::Error for EspIdfIoError {
 /// BUG-031: the underlying socket stays non-blocking for the stream's entire lifetime (not
 /// just during `connect()`'s own polling loop) — `read()`/`write()` below retry on
 /// `WouldBlock` by yielding to the async executor via `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`,
-/// the same pattern `EspTlsStream` already uses. A genuinely blocking socket here would give a
+/// the same pattern `EspIdfTlsStream` already uses. A genuinely blocking socket here would give a
 /// stalled peer (network partition, printer reboot) no `.await` yield point for any outer
 /// timeout/cancellation to preempt, indefinitely parking the FreeRTOS task — exactly the hazard
 /// `connect()`'s own non-blocking dial already fixes one layer up.
@@ -625,7 +625,7 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// with no ABI stability guarantee across ESP-IDF/mbedTLS version bumps. Practical impact:
 /// if a printer's vsFTPd offers/prefers TLS 1.3, `require_tls_1_2_if_enforced`
 /// (`ftps/client.rs`) still fails closed for models where
-/// `model.quirks().enforce_ftps_tls_1_2()` is true — the connection is safely rejected
+/// `model.quirks().enforces_ftps_tls_1_2()` is true — the connection is safely rejected
 /// rather than silently downgraded — but there is currently no way to make it succeed on
 /// ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 /// (`embedded-tls`) have no equivalent gap; both expose a genuine max-protocol-version knob.
@@ -679,7 +679,7 @@ impl Default for EspIdfTlsConnector {
 
 #[cfg(feature = "esp-idf")]
 impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
-    type Stream = EspTlsStream<EspIdfTcpStream>;
+    type Stream = EspIdfTlsStream<EspIdfTcpStream>;
 
     /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
     async fn connect(
@@ -736,7 +736,7 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             }
         }
 
-        Ok(EspTlsStream { tls, timer })
+        Ok(EspIdfTlsStream { tls, timer })
     }
 
     fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {

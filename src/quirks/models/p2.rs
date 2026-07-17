@@ -36,7 +36,7 @@ impl ModelQuirks for P2Quirks {
     /// came back, which `BambuFtpsClient::upload_file` already does
     /// unconditionally (see its doc comment in `src/ftps/client.rs`) — this
     /// quirk alone would not have been a complete fix.
-    fn enforce_ftps_tls_1_2(&self) -> bool {
+    fn enforces_ftps_tls_1_2(&self) -> bool {
         true
     }
 
@@ -44,7 +44,7 @@ impl ModelQuirks for P2Quirks {
         telemetry.is_door_open_from_stat()
     }
 
-    fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool {
+    fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool {
         telemetry.stat.is_some()
     }
 
@@ -95,7 +95,7 @@ impl ModelQuirks for P2Quirks {
         true
     }
 
-    fn auxiliary_fan_uses_percentage(&self) -> bool {
+    fn reports_auxiliary_fan_percentage(&self) -> bool {
         true
     }
 

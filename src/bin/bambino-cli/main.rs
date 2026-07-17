@@ -60,11 +60,11 @@ struct Cli {
     verbose: bool,
 
     #[command(subcommand)]
-    command: Command,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
-enum Command {
+enum Commands {
     /// Scan the local subnet for nearby active printers
     Discover,
 
@@ -206,24 +206,24 @@ async fn main() {
         .init();
 
     let result = match cli.command {
-        Command::Discover => discover::run().await,
-        Command::Info {
+        Commands::Discover => discover::run().await,
+        Commands::Info {
             ip,
             serial,
             access_code,
         } => control::run_info(&ip, &serial, &resolve_access_code(access_code)).await,
-        Command::Monitor {
+        Commands::Monitor {
             ip,
             serial,
             access_code,
         } => monitor::run(&ip, &serial, &resolve_access_code(access_code)).await,
-        Command::Dump {
+        Commands::Dump {
             ip,
             serial,
             access_code,
             follow,
         } => monitor::dump(&ip, &serial, &resolve_access_code(access_code), follow).await,
-        Command::Probe {
+        Commands::Probe {
             ip,
             serial,
             access_code,
@@ -239,13 +239,13 @@ async fn main() {
             )
             .await
         }
-        Command::Control {
+        Commands::Control {
             ip,
             serial,
             access_code,
             action,
         } => control::run(&ip, &serial, &resolve_access_code(access_code), action).await,
-        Command::Files {
+        Commands::Files {
             ip,
             serial,
             access_code,
@@ -261,19 +261,19 @@ async fn main() {
             )
             .await
         }
-        Command::Camera {
+        Commands::Camera {
             ip,
             serial,
             access_code,
             action,
         } => camera::run(&ip, &serial, &resolve_access_code(access_code), action).await,
-        Command::InspectCert {
+        Commands::InspectCert {
             ip,
             serial,
             port,
             output,
         } => inspect_cert::run(&ip, &serial, port, &output).await,
-        Command::VerifyTls {
+        Commands::VerifyTls {
             ip,
             serial,
             port,

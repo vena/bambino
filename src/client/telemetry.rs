@@ -166,7 +166,7 @@ where
         if let Some(state) = &print.gcode_state {
             self.cache.last_gcode_state = Some(state.clone());
         }
-        if self.model.quirks().door_sensor_field_present(print) {
+        if self.model.quirks().has_door_sensor_field(print) {
             self.cache.last_door_open = Some(self.model.quirks().is_door_open(print));
         }
         if let Some(print_error) = print.print_error {
@@ -286,7 +286,7 @@ where
     /// returns `false`, e.g. A1/A2), regardless of telemetry observed — distinct from
     /// `Some(false)`, which means a sensor-equipped model's telemetry confirms the door is
     /// closed. Also `None` before any telemetry carrying `print` has been observed.
-    pub fn door_open(&self) -> Option<bool> {
+    pub fn is_door_open(&self) -> Option<bool> {
         if !self.model.quirks().has_door_sensor() {
             return None;
         }
@@ -333,13 +333,13 @@ where
     /// own `DevFilaSystem.cpp`, whose structural equivalent (`DevAmsTray::reset()`) is dead
     /// code with zero call sites in its own current codebase; the shipped BambuStudio/
     /// OrcaSlicer UI instead gates every read of a tray's material fields on
-    /// `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::get_state()` here) and
+    /// `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::state()` here) and
     /// never scrubs the raw cache. This crate mirrors that design rather than
     /// [`clean_stale_tray_data`]'s proactive-clearing
     /// approach: wiring proactive clearing into this cache would make it *less* faithful to
     /// on-wire state than BambuStudio's own model. Two opt-in ways to get sanitized output
     /// without losing that raw fidelity:
-    /// - Check [`AmsTray::get_state()`](crate::types::AmsTray::get_state) (or
+    /// - Check [`AmsTray::state()`](crate::types::AmsTray::state) (or
     ///   [`evaluate_spool_presence`](crate::ams::evaluate_spool_presence)) before trusting a
     ///   tray's material fields — the same check-before-trust contract BambuStudio itself
     ///   relies on.
@@ -416,7 +416,7 @@ where
     ///
     /// Returns `None` on models without an active chamber temperature sensor/heater
     /// (`ModelQuirks::ignores_chamber_temperature()` returns `true`, e.g. A1/A1 Mini/A2L/P1P/
-    /// P1S) — mirrors `door_open()`'s sensor-capability gate. `Some((0, 0))` before any
+    /// P1S) — mirrors `is_door_open()`'s sensor-capability gate. `Some((0, 0))` before any
     /// telemetry carrying `chamber_temper` has been observed on a chamber-equipped model.
     pub fn chamber_temperature(&self) -> Option<(u16, u16)> {
         if self.model.quirks().ignores_chamber_temperature() {
@@ -495,7 +495,7 @@ where
     }
 
     fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {
-        decode_fan_percentage(raw, self.model.quirks().auxiliary_fan_uses_percentage())
+        decode_fan_percentage(raw, self.model.quirks().reports_auxiliary_fan_percentage())
     }
 
     /// Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

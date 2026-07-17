@@ -31,7 +31,7 @@ pub trait ModelQuirks {
     /// This is a firmware bug workaround, not a real protocol ceiling — see the
     /// doc comments on `P2Quirks`/`X2Quirks` (the only two implementers returning
     /// `true`) for per-model evidence and confidence level.
-    fn enforce_ftps_tls_1_2(&self) -> bool;
+    fn enforces_ftps_tls_1_2(&self) -> bool;
 
     /// Evaluates whether the physical front enclosure door is open based on model-specific sensor routing [REF-NET-DOOR].
     ///
@@ -46,7 +46,7 @@ pub trait ModelQuirks {
     /// incremental message that omits this field doesn't overwrite a previously-observed
     /// door state with `is_door_open()`'s absent-field default of `false` (BUG-021).
     /// Defaults to `false`, correct for every model without a door sensor.
-    fn door_sensor_field_present(&self, _telemetry: &PrinterTelemetry) -> bool {
+    fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool {
         false
     }
 
@@ -167,7 +167,7 @@ pub trait ModelQuirks {
     }
 
     /// Returns true if the model's auxiliary fan telemetry reports speed as a direct percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
-    fn auxiliary_fan_uses_percentage(&self) -> bool {
+    fn reports_auxiliary_fan_percentage(&self) -> bool {
         false
     }
 
@@ -359,7 +359,7 @@ pub fn fan_step_to_percentage(step: u8) -> u8 {
 
 /// Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
 ///
-/// `uses_percentage` should come from [`ModelQuirks::auxiliary_fan_uses_percentage()`] — most
+/// `uses_percentage` should come from [`ModelQuirks::reports_auxiliary_fan_percentage()`] — most
 /// models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an
 /// already-clamped percentage directly. Returns `None` if `raw` is absent or not a valid `u8`.
 pub fn decode_fan_percentage(raw: Option<&str>, uses_percentage: bool) -> Option<u8> {
@@ -470,7 +470,7 @@ mod tests {
     fn test_a1_quirks() {
         let q = BambuModel::A1.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.enforces_ftps_tls_1_2());
         assert!(!q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
@@ -483,7 +483,7 @@ mod tests {
         assert!(!q.supports_auxiliary_right_fan());
         assert!(!q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert!(!q.auxiliary_fan_uses_percentage());
+        assert!(!q.reports_auxiliary_fan_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 100);
@@ -497,7 +497,7 @@ mod tests {
     fn test_a2l_quirks() {
         let q = BambuModel::A2L.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.enforces_ftps_tls_1_2());
         assert!(!q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
@@ -522,7 +522,7 @@ mod tests {
     fn test_a1_mini_quirks() {
         let q = BambuModel::A1Mini.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.enforces_ftps_tls_1_2());
         assert!(!q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
@@ -548,7 +548,7 @@ mod tests {
         for model in [BambuModel::P1P, BambuModel::P1S] {
             let q = model.quirks();
             assert!(!q.uses_plaintext_ftps_data_channel());
-            assert!(!q.enforce_ftps_tls_1_2());
+            assert!(!q.enforces_ftps_tls_1_2());
             assert!(!q.has_door_sensor());
             assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
             assert!(q.ignores_chamber_temperature());
@@ -574,7 +574,7 @@ mod tests {
     fn test_p2s_quirks() {
         let q = BambuModel::P2S.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(q.enforce_ftps_tls_1_2());
+        assert!(q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
@@ -587,7 +587,7 @@ mod tests {
         assert!(q.supports_auxiliary_right_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert!(q.auxiliary_fan_uses_percentage());
+        assert!(q.reports_auxiliary_fan_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 110);
@@ -601,7 +601,7 @@ mod tests {
     fn test_x1c_quirks() {
         let q = BambuModel::X1C.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
@@ -629,7 +629,7 @@ mod tests {
     fn test_x1e_quirks() {
         let q = BambuModel::X1E.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
@@ -653,7 +653,7 @@ mod tests {
     fn test_x2d_quirks() {
         let q = BambuModel::X2D.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(q.enforce_ftps_tls_1_2());
+        assert!(q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
@@ -665,7 +665,7 @@ mod tests {
         assert!(q.supports_auxiliary_right_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
-        assert!(q.auxiliary_fan_uses_percentage());
+        assert!(q.reports_auxiliary_fan_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 120);
@@ -679,7 +679,7 @@ mod tests {
     fn test_h2s_quirks() {
         let q = BambuModel::H2S.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforce_ftps_tls_1_2());
+        assert!(!q.enforces_ftps_tls_1_2());
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());

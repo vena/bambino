@@ -529,7 +529,7 @@ fn get_fan_pct(
     quirks: &dyn ModelQuirks,
 ) -> String {
     let raw = state.get(key).and_then(|v| v.as_str());
-    decode_fan_percentage(raw, quirks.auxiliary_fan_uses_percentage())
+    decode_fan_percentage(raw, quirks.reports_auxiliary_fan_percentage())
         .map(|pct| format!("{}%", pct))
         .unwrap_or_else(|| "--".to_string())
 }

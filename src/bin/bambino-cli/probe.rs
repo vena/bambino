@@ -590,7 +590,7 @@ pub async fn run(
         tests: entries,
     };
 
-    let json = serde_json::to_string_pretty(&report).map_err(|_| Error::SerializationError)?;
+    let json = serde_json::to_string_pretty(&report).map_err(|_| Error::Serialization)?;
 
     std::fs::write(output_path, json.as_bytes()).map_err(|e| {
         Error::ProtocolViolation(

@@ -300,7 +300,7 @@ async fn test_read_to_eof_stalled_connection_times_out() {
     let elapsed = started.elapsed();
 
     assert!(
-        matches!(result, Err(Error::NetworkError(SocketError::TimedOut))),
+        matches!(result, Err(Error::Network(SocketError::TimedOut))),
         "Expected TimedOut for a stalled connection, got {:?}",
         result
     );
@@ -341,7 +341,7 @@ async fn test_read_response_stalled_connection_times_out() {
     let elapsed = started.elapsed();
 
     assert!(
-        matches!(result, Err(Error::NetworkError(SocketError::TimedOut))),
+        matches!(result, Err(Error::Network(SocketError::TimedOut))),
         "Expected TimedOut for a stalled connection, got {:?}",
         result
     );

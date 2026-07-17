@@ -1,7 +1,7 @@
 //! MQTT v3.1.1 packet encoding helpers.
 //!
 //! Pure, stateless functions over primitive args — no dependency on
-//! `BambuMqttClient` or `AsyncIo`.
+//! `MqttClient` or `AsyncIo`.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec;

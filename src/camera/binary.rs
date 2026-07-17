@@ -165,7 +165,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// means the packet was written and flushed to the socket, **not** that the printer accepted
     /// the access code. If the code is wrong, the printer's real-world response (closing the
     /// socket, or simply never sending a frame) only surfaces later, on the *next*
-    /// [`Self::read_next_frame`] call, as `Error::NetworkError(SocketError::ConnectionReset)`
+    /// [`Self::read_next_frame`] call, as `Error::Network(SocketError::ConnectionReset)`
     /// — the same error variant a mid-stream network blip would produce. Callers that need to
     /// distinguish "wrong access code" from "transient network hiccup" cannot do so from this
     /// API alone.
@@ -193,11 +193,11 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             self.stream
                 .write_all(&handshake)
                 .await
-                .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))?;
+                .map_err(|_| Error::Network(SocketError::ConnectionAborted))?;
             self.stream
                 .flush()
                 .await
-                .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))
+                .map_err(|_| Error::Network(SocketError::ConnectionAborted))
         };
 
         if !timer.has_real_clock() {
@@ -211,7 +211,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
         .await
         {
             crate::io::Raced::Left(result) => result,
-            crate::io::Raced::Right(_) => Err(Error::NetworkError(SocketError::TimedOut)),
+            crate::io::Raced::Right(_) => Err(Error::Network(SocketError::TimedOut)),
         }
     }
 
@@ -261,7 +261,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             while *filled < buf.len() {
                 let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
                     .await
-                    .map_err(Error::NetworkError)?;
+                    .map_err(Error::Network)?;
                 *filled += n;
             }
 
@@ -306,7 +306,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
             while *filled < buf.len() {
                 let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
                     .await
-                    .map_err(Error::NetworkError)?;
+                    .map_err(Error::Network)?;
                 *filled += n;
             }
 
@@ -356,7 +356,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
                 let want = core::cmp::min(*remaining, scratch.len());
                 let n = read_chunk(&mut self.stream, &mut scratch[..want], timer, deadline_ms)
                     .await
-                    .map_err(Error::NetworkError)?;
+                    .map_err(Error::Network)?;
                 *remaining -= n;
             }
         }
@@ -449,7 +449,7 @@ mod tests {
             let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(result, Err(Error::NetworkError(_))));
+            assert!(matches!(result, Err(Error::Network(_))));
             // Cursor has no more bytes after the header, so draining the (never-sent) declared
             // payload hits EOF — confirms the drain path is actually exercised (BUG: this used
             // to bail straight to Idle without draining at all, which this test's mere
@@ -557,7 +557,7 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    Err(Error::NetworkError(crate::io::SocketError::TimedOut))
+                    Err(Error::Network(crate::io::SocketError::TimedOut))
                 ),
                 "Expected TimedOut for a stalled connection, got {:?}",
                 result
@@ -597,7 +597,7 @@ mod tests {
             assert!(
                 matches!(
                     result,
-                    Err(Error::NetworkError(crate::io::SocketError::TimedOut))
+                    Err(Error::Network(crate::io::SocketError::TimedOut))
                 ),
                 "Expected TimedOut for a stalled connection, got {:?}",
                 result
@@ -638,7 +638,7 @@ mod tests {
             assert!(
                 matches!(
                     first_attempt,
-                    Err(Error::NetworkError(crate::io::SocketError::TimedOut))
+                    Err(Error::Network(crate::io::SocketError::TimedOut))
                 ),
                 "Expected the first attempt to time out waiting on the missing payload bytes, \
                  got {:?}",

@@ -130,7 +130,7 @@ async fn test_printer_client_camera_end_to_end() {
     )
     .with_camera(DummyTlsConnector, factory);
 
-    assert!(!printer.camera_connected());
+    assert!(!printer.is_camera_connected());
 
     let mut frame_buf = Vec::new();
     printer
@@ -138,7 +138,7 @@ async fn test_printer_client_camera_end_to_end() {
         .await
         .expect("read_camera_frame should connect, authenticate, and read the mock frame");
 
-    assert!(printer.camera_connected());
+    assert!(printer.is_camera_connected());
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8], "Missing JPEG start marker");
     assert_eq!(
         frame_buf[frame_buf.len() - 2..],
@@ -172,7 +172,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
         "expected ProtocolViolation for an RTSPS model, got {:?}",
         result.map(|_| ())
     );
-    assert!(!printer.camera_connected());
+    assert!(!printer.is_camera_connected());
 }
 
 /// BUG-020: `ensure_camera()` used to `.take()` `camera_config` before attempting the dial,
@@ -203,14 +203,14 @@ async fn test_ensure_camera_retries_after_failed_dial() {
     for attempt in 1..=2 {
         let result = printer.read_camera_frame(&mut frame_buf).await;
         assert!(
-            matches!(result, Err(Error::NetworkError(_))),
-            "attempt {attempt}: expected the dial failure to surface as NetworkError, not \
+            matches!(result, Err(Error::Network(_))),
+            "attempt {attempt}: expected the dial failure to surface as Network, not \
              degrade into \"Camera not configured\" from a config consumed on a prior failed \
              attempt, got {:?}",
             result.map(|_| ())
         );
     }
-    assert!(!printer.camera_connected());
+    assert!(!printer.is_camera_connected());
 }
 
 /// BUG-055: full integration-level coverage of a rejected access code — `authenticate()`
@@ -315,10 +315,10 @@ async fn test_attach_and_disconnect_camera() {
             active_stream: Arc::new(Mutex::new(None)),
         },
     );
-    assert!(!client.camera_connected());
+    assert!(!client.is_camera_connected());
 
     client.attach_camera(camera_stream);
-    assert!(client.camera_connected());
+    assert!(client.is_camera_connected());
 
     let mut frame_buf = Vec::new();
     client
@@ -331,7 +331,7 @@ async fn test_attach_and_disconnect_camera() {
         .disconnect_camera()
         .await
         .expect("disconnect_camera should succeed");
-    assert!(!client.camera_connected(), "disconnect_camera must clear self.camera");
+    assert!(!client.is_camera_connected(), "disconnect_camera must clear self.camera");
 
     server_handle
         .await

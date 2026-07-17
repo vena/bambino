@@ -72,7 +72,7 @@ impl TimerProvider for DummyTimer {
     }
 }
 
-/// Marker type used as both the `Tls` and `Factory` slot for a `PrinterClient` wrapping an already-connected [`BambuMqttClient`](crate::mqtt::BambuMqttClient) (`from_mqtt()`, used by tests and Embassy).
+/// Marker type used as both the `Tls` and `Factory` slot for a `PrinterClient` wrapping an already-connected [`MqttClient`](crate::mqtt::MqttClient) (`from_mqtt()`, used by tests and Embassy).
 /// `ensure_mqtt()` short-circuits on `self.mqtt.is_some()` before either impl below is ever called,
 /// so `TlsConnector::connect`'s identity passthrough is never exercised for real, and
 /// `RawStreamFactory::dial` is genuinely unreachable.

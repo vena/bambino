@@ -55,7 +55,7 @@ impl BindableUdpSocket for TokioUdpSocket {
     async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
         // We bind a standard library `std::net::UdpSocket` first and configure standard properties
         // before converting it cleanly into an asynchronous Tokio UdpSocket.
-        let std_socket = std::net::UdpSocket::bind(addr).map_err(to_socket_error)?;
+        let std_socket = std::net::UdpSocket::bind(addr)?;
 
         // Broadcast/multicast setup, then non-blocking mode — required before wrapping in the
         // Tokio asynchronous engine (recent Tokio versions, v1.40+, panic immediately on
@@ -63,7 +63,7 @@ impl BindableUdpSocket for TokioUdpSocket {
         crate::io::configure_std_udp_socket(&std_socket)?;
 
         // Convert the configured standard socket into an asynchronous Tokio UdpSocket.
-        let inner = ::tokio::net::UdpSocket::from_std(std_socket).map_err(to_socket_error)?;
+        let inner = ::tokio::net::UdpSocket::from_std(std_socket)?;
 
         Ok(Self { inner })
     }
@@ -71,10 +71,7 @@ impl BindableUdpSocket for TokioUdpSocket {
 
 impl AsyncUdpSocket for TokioUdpSocket {
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError> {
-        self.inner
-            .send_to(buf, target)
-            .await
-            .map_err(to_socket_error)
+        Ok(self.inner.send_to(buf, target).await?)
     }
 
     /// Asynchronously reads an incoming datagram, bounding the wait block with a timeout.
@@ -92,15 +89,16 @@ impl AsyncUdpSocket for TokioUdpSocket {
         .await
         {
             Ok(Ok((len, addr))) => Ok((len, addr)),
-            Ok(Err(e)) => Err(to_socket_error(e)),
+            Ok(Err(e)) => Err(e.into()),
             Err(_) => Err(SocketError::TimedOut),
         }
     }
 }
 
-/// Helper mapping standard standard Rust IO errors to our runtime-agnostic SocketError enum.
-pub fn to_socket_error(err: std::io::Error) -> SocketError {
-    crate::io::map_std_io_error(err, "Native OS platform IO error occurred")
+impl From<std::io::Error> for SocketError {
+    fn from(err: std::io::Error) -> Self {
+        crate::io::map_std_io_error(err, "Native OS platform IO error occurred")
+    }
 }
 
 mod cert_verify;
@@ -211,7 +209,7 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
             .connector
             .connect(server_name, raw_stream.0)
             .await
-            .map_err(to_socket_error)?;
+            .map_err(SocketError::from)?;
 
         Ok(TokioIo(tls_stream))
     }
@@ -240,7 +238,7 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
     ) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError> {
         let stream = ::tokio::net::TcpStream::connect(format!("{}:{}", host, port))
             .await
-            .map_err(to_socket_error)?;
+            .map_err(SocketError::from)?;
         Ok(TokioIo(stream))
     }
 }

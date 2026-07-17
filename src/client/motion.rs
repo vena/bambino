@@ -230,7 +230,7 @@ where
     /// has already returned — neither protects against that single call stalling
     /// forever on a connection that stops delivering bytes mid-homing (printer powered
     /// off, network drop). That protection is a distinct, lower layer: the underlying
-    /// `BambuMqttClient::poll_wire()` (`src/mqtt/client/mod.rs`) races each low-level read
+    /// `MqttClient::poll_wire()` (`src/mqtt/client/mod.rs`) races each low-level read
     /// step against `self.timer` internally, bounding a single call regardless of what
     /// this loop does above it.
     pub async fn wait_for_homing(&mut self) -> Result<(), Error> {

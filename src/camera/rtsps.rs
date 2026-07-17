@@ -157,7 +157,7 @@ pub struct RtpTimestampCorrector {
 impl RtpTimestampCorrector {
     /// Initializes the corrector by capturing the stream's first embedded RTP timestamp as the base coordinate for all subsequent corrections.
     /// This preserves alignment with the SDP stream definition.
-    pub fn init(embedded_rtp: u32) -> Self {
+    pub fn new(embedded_rtp: u32) -> Self {
         Self {
             base_timestamp: embedded_rtp,
             frequency_hz: RTP_CLOCK_FREQUENCY_HZ,
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_freezing_correction() {
-        let corrector = RtpTimestampCorrector::init(54000);
+        let corrector = RtpTimestampCorrector::new(54000);
 
         // Frame at t=0: base timestamp returned via wrapping_add(0)
         assert_eq!(corrector.correct(0.0), 54000);
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_corrector_wraps_after_13_hours() {
-        let corrector = RtpTimestampCorrector::init(0);
+        let corrector = RtpTimestampCorrector::new(0);
 
         // 50000 seconds (~13.9 hours) at 90kHz = 4,500,000,000 which exceeds u32::MAX
         // (4,294,967,296) and must wrap modulo 2^32, not saturate at u32::MAX.

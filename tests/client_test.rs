@@ -19,7 +19,7 @@ use bambino::diagnostics::DecodedPrintError;
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
-use bambino::mqtt::{BambuMqttClient, PrintJobConfig};
+use bambino::mqtt::{MqttClient, PrintJobConfig};
 
 use common::io::{DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory};
 use common::mock_ftps;
@@ -45,7 +45,7 @@ async fn test_homing_safety_interlocks() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -77,7 +77,7 @@ async fn test_homing_safety_interlocks() {
     });
 
     let mqtt_client_a1 =
-        BambuMqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for A1");
 
@@ -117,7 +117,7 @@ async fn test_kinematic_and_extrusion_moves() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -152,7 +152,7 @@ async fn test_move_relative_zero_distance_is_noop() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -195,7 +195,7 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -222,7 +222,7 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -256,7 +256,7 @@ async fn test_thermal_guards_and_temperatures() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -284,7 +284,7 @@ async fn test_thermal_guards_and_temperatures() {
     });
 
     let mqtt_client_x1c =
-        BambuMqttClient::connect(TokioIo(client_stream_x1c), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_x1c), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for X1C");
 
@@ -301,7 +301,7 @@ async fn test_thermal_guards_and_temperatures() {
     });
 
     let mqtt_client_a1 =
-        BambuMqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for A1");
 
@@ -360,7 +360,7 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -409,7 +409,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -439,7 +439,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     });
 
     let mqtt_client_x2 =
-        BambuMqttClient::connect(TokioIo(client_stream_x2), "20P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_x2), "20P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for X2D");
 
@@ -469,7 +469,7 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
@@ -498,7 +498,7 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "09P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "09P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for H2D");
     let mut client_h2d =
@@ -517,7 +517,7 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
     let mqtt_client_p1s =
-        BambuMqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for P1S");
     let mut client_p1s =
@@ -547,7 +547,7 @@ async fn test_queue_lifecycle_control_blocks() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -578,7 +578,7 @@ async fn test_peripheral_signals_and_climate_controls() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -607,7 +607,7 @@ async fn test_peripheral_signals_and_climate_controls() {
     });
 
     let mqtt_client_a1 =
-        BambuMqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for A1");
 
@@ -627,7 +627,7 @@ async fn test_peripheral_signals_and_climate_controls() {
     });
 
     let mqtt_client_p1s =
-        BambuMqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed for P1S");
 
@@ -669,7 +669,7 @@ async fn test_send_gcode_rejects_unsafe_homing() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -701,7 +701,7 @@ async fn test_send_gcode_raw_bypasses_safety() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -737,7 +737,7 @@ async fn test_temperature_clamping() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -771,7 +771,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
     let mqtt_client_p1s =
-        BambuMqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
     let mut client_p1s =
@@ -790,7 +790,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
         assert_eq!(json["print"]["param"], "M104 T1 S220\n");
     });
     let mqtt_client_h2d =
-        BambuMqttClient::connect(TokioIo(client_stream_h2d), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream_h2d), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
     let mut client_h2d =
@@ -817,7 +817,7 @@ async fn test_in_flight_saturation() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -836,9 +836,9 @@ async fn test_in_flight_saturation() {
     assert!(
         matches!(
             err,
-            Err(Error::NetworkError(bambino::io::SocketError::TimedOut))
+            Err(Error::Network(bambino::io::SocketError::TimedOut))
         ),
-        "Expected NetworkError(TimedOut) on command 201 (BambuMqttClient::publish_command's \
+        "Expected Network(TimedOut) on command 201 (MqttClient::publish_command's \
          documented in-flight-saturation response), got {:?}",
         err
     );
@@ -855,7 +855,7 @@ async fn test_connection_drop_during_operation() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -870,8 +870,8 @@ async fn test_connection_drop_during_operation() {
         "Expected network error after connection drop"
     );
     assert!(
-        matches!(result, Err(Error::NetworkError(_))),
-        "Expected Error::NetworkError, got {:?}",
+        matches!(result, Err(Error::Network(_))),
+        "Expected Error::Network, got {:?}",
         result
     );
 }
@@ -914,7 +914,7 @@ async fn test_start_print_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -950,7 +950,7 @@ async fn test_start_print_idex_nozzle_offset_default() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "20P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "20P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1000,7 +1000,7 @@ async fn test_set_print_speed_all_levels() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1034,7 +1034,7 @@ async fn test_skip_objects_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1062,7 +1062,7 @@ async fn test_start_calibration_combined_flags() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1090,7 +1090,7 @@ async fn test_clear_print_error_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1121,7 +1121,7 @@ async fn test_set_led_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1158,7 +1158,7 @@ async fn test_change_filament_load_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1189,7 +1189,7 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1219,7 +1219,7 @@ async fn test_change_filament_derives_target_for_external_spool() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1241,7 +1241,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
@@ -1273,7 +1273,7 @@ async fn test_drying_lifecycle_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1307,7 +1307,7 @@ async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1334,7 +1334,7 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1368,7 +1368,7 @@ async fn test_scan_rfid_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1387,7 +1387,7 @@ async fn test_scan_rfid_rejects_invalid_ams_id() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
@@ -1415,7 +1415,7 @@ async fn test_select_k_profile_wire_payload() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1437,7 +1437,7 @@ async fn test_select_k_profile_rejects_invalid_combo() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", BambuModel::P1S);
@@ -1507,7 +1507,7 @@ async fn test_get_k_profiles_auto_priming() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1554,7 +1554,7 @@ async fn test_get_k_profiles_manual_prime_skip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1606,7 +1606,7 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1648,7 +1648,7 @@ async fn test_sequence_id_fits_in_i32() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -1699,7 +1699,7 @@ async fn test_get_version_round_trip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1762,7 +1762,7 @@ async fn test_get_version_ignores_mismatched_sequence_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1804,7 +1804,7 @@ async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
         }
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1852,7 +1852,7 @@ async fn test_poll_until_buffers_unmatched_messages() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1886,7 +1886,7 @@ async fn test_request_pushall() {
         assert!(json["pushing"]["sequence_id"].is_string());
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -1926,7 +1926,7 @@ async fn test_home_flag_cache_and_advisory_warnings() {
         assert_eq!(json_e["print"]["param"], "M83\nG0 E5.00 F500\n");
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2001,7 +2001,7 @@ async fn test_wait_for_homing_resolves_after_dip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2044,7 +2044,7 @@ async fn test_wait_for_homing_resolves_when_already_in_progress() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2081,7 +2081,7 @@ async fn test_wait_for_homing_times_out_without_dip() {
         }
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2124,7 +2124,7 @@ async fn test_print_status_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2148,7 +2148,7 @@ async fn test_print_status_cache_from_telemetry() {
     broker_task.await.expect("Broker task panicked");
 }
 
-// Phase 14: door_open / active_fault telemetry accessors
+// Phase 14: is_door_open / active_fault telemetry accessors
 
 #[tokio::test]
 async fn test_door_open_none_on_sensorless_model() {
@@ -2169,14 +2169,14 @@ async fn test_door_open_none_on_sensorless_model() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
     // P1S has no door sensor.
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
 
-    assert_eq!(client.door_open(), None);
+    assert_eq!(client.is_door_open(), None);
 
     client
         .poll_telemetry()
@@ -2184,7 +2184,7 @@ async fn test_door_open_none_on_sensorless_model() {
         .expect("poll_telemetry should parse home_flag report");
 
     // Sensorless model must stay None regardless of the observed register.
-    assert_eq!(client.door_open(), None);
+    assert_eq!(client.is_door_open(), None);
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -2219,7 +2219,7 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -2227,19 +2227,19 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
     let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", BambuModel::X1C);
 
     // No telemetry observed yet — cache must read as unknown, not "closed".
-    assert_eq!(client.door_open(), None);
+    assert_eq!(client.is_door_open(), None);
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse first home_flag report");
-    assert_eq!(client.door_open(), Some(true));
+    assert_eq!(client.is_door_open(), Some(true));
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse second home_flag report");
-    assert_eq!(client.door_open(), Some(false));
+    assert_eq!(client.is_door_open(), Some(false));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -2279,7 +2279,7 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
     });
 
     let mqtt_client =
-        BambuMqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
+        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
             .await
             .expect("MQTT connect handshake failed");
 
@@ -2289,14 +2289,14 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse first home_flag report");
-    assert_eq!(client.door_open(), Some(true));
+    assert_eq!(client.is_door_open(), Some(true));
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse second, home_flag-omitting report");
     assert_eq!(
-        client.door_open(),
+        client.is_door_open(),
         Some(true),
         "a message omitting home_flag must not reset the cached door-open state"
     );
@@ -2333,7 +2333,7 @@ async fn test_active_fault_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2393,7 +2393,7 @@ async fn test_print_progress_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2459,7 +2459,7 @@ async fn test_bed_temperatures_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2503,7 +2503,7 @@ async fn test_ams_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2549,7 +2549,7 @@ async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2590,7 +2590,7 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2631,7 +2631,7 @@ async fn test_printing_tray_global_id_prefers_snow_field() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2670,7 +2670,7 @@ async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::H2D);
@@ -2703,7 +2703,7 @@ async fn test_chamber_temperature_cache() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
 
@@ -2729,7 +2729,7 @@ async fn test_chamber_temperature_cache() {
         .await;
         read_puback(&mut server_stream2).await;
     });
-    let mqtt_client2 = BambuMqttClient::connect(TokioIo(client_stream2), SERIAL, "12345678")
+    let mqtt_client2 = MqttClient::connect(TokioIo(client_stream2), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut heated_client = PrinterClient::from_mqtt(mqtt_client2, SERIAL, BambuModel::H2D);
@@ -2765,7 +2765,7 @@ async fn test_hms_cache_and_active_alerts() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2807,7 +2807,7 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2861,11 +2861,11 @@ async fn test_fan_speed_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     // H2D uses step-encoded (not percentage) fan telemetry for the primary four fans,
-    // unlike X2D (which reports percentages directly — see `X2Quirks::auxiliary_fan_uses_percentage`).
+    // unlike X2D (which reports percentages directly — see `X2Quirks::reports_auxiliary_fan_percentage`).
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::H2D);
 
     assert_eq!(client.part_cooling_fan_speed(), None);
@@ -2903,7 +2903,7 @@ async fn test_print_speed_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -2948,7 +2948,7 @@ async fn test_wifi_signal_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -3024,11 +3024,11 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     let broker_task_a = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_a).await;
     });
-    let mqtt_client_a = BambuMqttClient::connect(TokioIo(client_stream_a), SERIAL, "12345678")
+    let mqtt_client_a = MqttClient::connect(TokioIo(client_stream_a), SERIAL, "12345678")
         .await
         .expect("first MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client_a, SERIAL, BambuModel::P1S);
-    assert!(client.mqtt_connected());
+    assert!(client.is_mqtt_connected());
     broker_task_a.await.expect("First broker task panicked");
 
     client
@@ -3036,7 +3036,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
         .await
         .expect("disconnect_mqtt should succeed");
     assert!(
-        !client.mqtt_connected(),
+        !client.is_mqtt_connected(),
         "disconnect_mqtt must clear self.mqtt"
     );
 
@@ -3053,12 +3053,12 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
         .await;
         read_puback(&mut server_stream_b).await;
     });
-    let mqtt_client_b = BambuMqttClient::connect(TokioIo(client_stream_b), SERIAL, "12345678")
+    let mqtt_client_b = MqttClient::connect(TokioIo(client_stream_b), SERIAL, "12345678")
         .await
         .expect("second MQTT connect handshake failed");
     client.attach_mqtt(mqtt_client_b);
     assert!(
-        client.mqtt_connected(),
+        client.is_mqtt_connected(),
         "attach_mqtt must reinstall a session"
     );
 
@@ -3099,8 +3099,8 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
     for attempt in 1..=2 {
         let result = client.storage().await;
         assert!(
-            matches!(result, Err(Error::NetworkError(_))),
-            "attempt {attempt}: expected the dial failure to surface as NetworkError, not \
+            matches!(result, Err(Error::Network(_))),
+            "attempt {attempt}: expected the dial failure to surface as Network, not \
              degrade into \"FTPS not configured\" from a config consumed on a prior failed \
              attempt, got {:?}",
             result.map(|_| ())
@@ -3142,14 +3142,14 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
         .storage()
         .await
         .expect("first storage() call should connect via the mock FTPS handshake");
-    assert!(client.ftps_connected());
+    assert!(client.is_ftps_connected());
 
     client
         .disconnect_storage()
         .await
         .expect("disconnect_storage should succeed");
     assert!(
-        !client.ftps_connected(),
+        !client.is_ftps_connected(),
         "disconnect_storage must clear self.ftps"
     );
 
@@ -3180,7 +3180,7 @@ async fn test_camera_trio_unconfigured_error() {
         "12345678",
         BambuModel::P1S,
     );
-    assert!(!client.camera_connected());
+    assert!(!client.is_camera_connected());
 
     let mut frame_buf = Vec::new();
     let result = client.read_camera_frame(&mut frame_buf).await;
@@ -3189,13 +3189,13 @@ async fn test_camera_trio_unconfigured_error() {
         "expected ProtocolViolation (\"Camera not configured\") on an unconfigured client, got {:?}",
         result.map(|_| ())
     );
-    assert!(!client.camera_connected());
+    assert!(!client.is_camera_connected());
 }
 
 #[tokio::test]
 async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
     // review/client.md Phase 1: `ensure_mqtt()`'s race must cover the full
-    // dial+TLS+`BambuMqttClient::connect()` handshake, not just dial+TLS. Simulate a peer
+    // dial+TLS+`MqttClient::connect()` handshake, not just dial+TLS. Simulate a peer
     // that completes TCP/TLS but never sends CONNACK — the duplex's server side is left
     // idle forever, so any read from the client side blocks indefinitely unless the
     // handshake itself is inside the timeout race.
@@ -3221,8 +3221,8 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
         .expect("connect_mqtt() must return within the 5s test safety margin, not hang forever");
 
     assert!(
-        matches!(result, Err(Error::NetworkError(_))),
-        "expected a bounded NetworkError(TimedOut) once connect_timeout_secs elapses \
+        matches!(result, Err(Error::Network(_))),
+        "expected a bounded Network(TimedOut) once connect_timeout_secs elapses \
          mid-CONNACK-handshake, got {:?}",
         result.map(|_| ())
     );
@@ -3310,7 +3310,7 @@ async fn test_with_ftps_panics_on_from_mqtt_client() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
     });
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);

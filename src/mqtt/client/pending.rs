@@ -1,11 +1,11 @@
-//! Pending-message buffer management for `BambuMqttClient`.
+//! Pending-message buffer management for `MqttClient`.
 
 #[cfg(not(feature = "std"))]
 use alloc::collections::VecDeque;
 #[cfg(feature = "std")]
 use std::collections::VecDeque;
 
-use super::{BambuMqttClient, MqttMessage};
+use super::{MqttClient, MqttMessage};
 use crate::io::AsyncIo;
 
 /// Upper bound on the combined topic+payload size of all buffered `pending_messages`.
@@ -27,7 +27,7 @@ const _: () = assert!(
      enough to bring the buffer back under the cap"
 );
 
-impl<IO: AsyncIo> BambuMqttClient<IO> {
+impl<IO: AsyncIo> MqttClient<IO> {
     /// Combined topic+payload byte size accounted for a single buffered message.
     /// Shared by `push_pending()` (accounting on insert/evict) and `poll_telemetry()`
     /// (accounting on drain) so both stay in sync with `pending_bytes`.
@@ -113,9 +113,9 @@ mod tests {
         use crate::mqtt::client::frame::FrameReadState;
         use std::collections::BTreeSet;
 
-        /// Builds a `BambuMqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below, so an unread/unwritten in-memory cursor is sufficient.
-        fn test_client() -> BambuMqttClient<TokioIo<std::io::Cursor<Vec<u8>>>> {
-            BambuMqttClient {
+        /// Builds a `MqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below, so an unread/unwritten in-memory cursor is sufficient.
+        fn test_client() -> MqttClient<TokioIo<std::io::Cursor<Vec<u8>>>> {
+            MqttClient {
                 stream: TokioIo(std::io::Cursor::new(Vec::new())),
                 request_topic: "device/test/request".to_string(),
                 next_packet_id: 2,

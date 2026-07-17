@@ -6,7 +6,7 @@ use crate::camera::binary::BambuBinaryCameraStream;
 use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, race};
-use crate::mqtt::BambuMqttClient;
+use crate::mqtt::MqttClient;
 
 use super::PrinterClient;
 
@@ -87,7 +87,7 @@ where
     ///
     /// Short-circuits when `self.mqtt` is already `Some`. Otherwise, dials a raw stream via
     /// `self.mqtt_factory.dial()`, wraps it in TLS via `self.mqtt_tls.connect()`, then calls
-    /// `BambuMqttClient::connect()` — the whole dial+TLS+handshake sequence is raced against
+    /// `MqttClient::connect()` — the whole dial+TLS+handshake sequence is raced against
     /// `self.connect_timeout_secs`.
     pub(super) async fn ensure_mqtt(&mut self) -> Result<(), Error> {
         if self.mqtt.is_some() {
@@ -97,7 +97,7 @@ where
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw = self.mqtt_factory.dial(&self.ip, self.mqtt_port).await?;
                 let stream = self.mqtt_tls.connect(&self.serial, raw).await?;
-                BambuMqttClient::connect(stream, &self.serial, &self.access_code).await
+                MqttClient::connect(stream, &self.serial, &self.access_code).await
             })
             .await?;
         self.mqtt = Some(mqtt_client);
@@ -122,30 +122,30 @@ where
     }
 
     /// Returns whether the MQTT session is currently established.
-    pub fn mqtt_connected(&self) -> bool {
+    pub fn is_mqtt_connected(&self) -> bool {
         self.mqtt.is_some()
     }
 
-    /// Injects a pre-connected [`BambuMqttClient`] directly.
+    /// Injects a pre-connected [`MqttClient`] directly.
     ///
     /// Use this for test mocks or Embassy where the caller manages the MQTT connection,
     /// mirroring [`attach_camera()`](super::PrinterClient::attach_camera)/
     /// [`attach_storage()`](super::PrinterClient::attach_storage).
-    pub fn attach_mqtt(&mut self, mqtt: BambuMqttClient<MqttTls::Stream>) {
+    pub fn attach_mqtt(&mut self, mqtt: MqttClient<MqttTls::Stream>) {
         self.mqtt = Some(mqtt);
     }
 
     /// Disconnects the MQTT session, if one exists, and clears it from the client.
     ///
-    /// There is no protocol-level teardown on `BambuMqttClient` to call — this just clears
+    /// There is no protocol-level teardown on `MqttClient` to call — this just clears
     /// the slot, mirroring `disconnect_camera()`. Without this, a dead stream (a
-    /// [`tick_zombie_check()`](crate::mqtt::BambuMqttClient::tick_zombie_check)-detected
+    /// [`tick_zombie_check()`](crate::mqtt::MqttClient::tick_zombie_check)-detected
     /// zombie, a transport error) left `self.mqtt` stuck `Some(...)` forever, since
     /// `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken
     /// connection with no supported redial path.
     ///
     /// Idempotent. Reconnecting requires [`.attach_mqtt()`](Self::attach_mqtt) with a fresh
-    /// `BambuMqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
+    /// `MqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
     /// `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
     /// only recovers a `connect()`-built client, never one built via `from_mqtt()`.
     pub async fn disconnect_mqtt(&mut self) -> Result<(), Error> {
@@ -369,7 +369,7 @@ where
     }
 
     /// Returns whether the FTPS session is currently established.
-    pub fn ftps_connected(&self) -> bool {
+    pub fn is_ftps_connected(&self) -> bool {
         self.ftps.is_some()
     }
 
@@ -428,7 +428,7 @@ where
     }
 
     /// Returns whether the camera session is currently established.
-    pub fn camera_connected(&self) -> bool {
+    pub fn is_camera_connected(&self) -> bool {
         self.camera.is_some()
     }
 

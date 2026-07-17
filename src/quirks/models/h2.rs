@@ -50,7 +50,7 @@ fn h2_is_door_open(telemetry: &PrinterTelemetry) -> bool {
     telemetry.is_door_open_from_stat()
 }
 
-fn h2_door_sensor_field_present(telemetry: &PrinterTelemetry) -> bool {
+fn h2_has_door_sensor_field(telemetry: &PrinterTelemetry) -> bool {
     telemetry.stat.is_some()
 }
 
@@ -61,7 +61,7 @@ macro_rules! impl_h2_shared {
                 false
             }
 
-            fn enforce_ftps_tls_1_2(&self) -> bool {
+            fn enforces_ftps_tls_1_2(&self) -> bool {
                 false
             }
 
@@ -69,8 +69,8 @@ macro_rules! impl_h2_shared {
                 h2_is_door_open(telemetry)
             }
 
-            fn door_sensor_field_present(&self, telemetry: &PrinterTelemetry) -> bool {
-                h2_door_sensor_field_present(telemetry)
+            fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool {
+                h2_has_door_sensor_field(telemetry)
             }
 
             fn has_door_sensor(&self) -> bool {

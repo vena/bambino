@@ -47,7 +47,7 @@ use crate::error::Error;
 use crate::ftps::BambuFtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::models::BambuModel;
-use crate::mqtt::{BambuMqttClient, MqttMessage};
+use crate::mqtt::{MqttClient, MqttMessage};
 
 pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
@@ -81,7 +81,7 @@ pub(crate) fn clamp_temp(value: u16, max: u16, label: &str) -> u16 {
 /// [`RawStreamFactory`] pair (mandatory — every `PrinterClient` needs MQTT);
 /// `FtpsRawIO`/`FtpsTls`/`FtpsFactory` are FTPS's independent pair (defaulted, configured via
 /// [`.with_ftps()`](Self::with_ftps)). Use [`PreConnected`] for both MQTT slots when wrapping
-/// an already-connected [`BambuMqttClient`] (see [`from_mqtt()`](Self::from_mqtt)), or a
+/// an already-connected [`MqttClient`] (see [`from_mqtt()`](Self::from_mqtt)), or a
 /// platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 /// `TokioRawStreamFactory`) for lazy connection via [`new()`](Self::new).
 pub struct PrinterClient<
@@ -109,7 +109,7 @@ pub struct PrinterClient<
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
-    pub(crate) mqtt: Option<BambuMqttClient<MqttTls::Stream>>,
+    pub(crate) mqtt: Option<MqttClient<MqttTls::Stream>>,
     pub(crate) ftps: Option<BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>>,
     pub(crate) ftps_config: Option<(FtpsTls, FtpsFactory, FtpsTimer)>,
     pub(crate) camera: Option<BambuBinaryCameraStream<CameraTls::Stream>>,
@@ -225,7 +225,7 @@ impl<IO>
 where
     IO: AsyncIo,
 {
-    /// Wraps an already-connected [`BambuMqttClient`] in a `PrinterClient`.
+    /// Wraps an already-connected [`MqttClient`] in a `PrinterClient`.
     ///
     /// Use this when you have a pre-established MQTT session (tests, Embassy,
     /// or any context where the caller manages the connection). The resulting client uses
@@ -234,7 +234,7 @@ where
     /// `PreConnected`'s `RawStreamFactory::dial` (which returns
     /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
     /// practice.
-    pub fn from_mqtt(mqtt_client: BambuMqttClient<IO>, serial: &str, model: BambuModel) -> Self {
+    pub fn from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: BambuModel) -> Self {
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
@@ -384,7 +384,7 @@ where
         request: &T,
     ) -> Result<u16, Error> {
         self.ensure_mqtt().await?;
-        let payload = serde_json::to_vec(request).map_err(|_| Error::SerializationError)?;
+        let payload = serde_json::to_vec(request).map_err(|_| Error::Serialization)?;
         self.mqtt
             .as_mut()
             .unwrap()
@@ -425,12 +425,12 @@ where
         self.model
     }
 
-    /// Returns direct access to the underlying [`BambuMqttClient`], auto-connecting if needed.
+    /// Returns direct access to the underlying [`MqttClient`], auto-connecting if needed.
     ///
     /// Use this for sending custom MQTT payloads, managing zombie detection via
-    /// [`tick_zombie_check()`](BambuMqttClient::tick_zombie_check), or inspecting
+    /// [`tick_zombie_check()`](MqttClient::tick_zombie_check), or inspecting
     /// in-flight state — anything that [`PrinterClient`] doesn't expose directly.
-    pub async fn mqtt(&mut self) -> Result<&mut BambuMqttClient<MqttTls::Stream>, Error> {
+    pub async fn mqtt(&mut self) -> Result<&mut MqttClient<MqttTls::Stream>, Error> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())
     }

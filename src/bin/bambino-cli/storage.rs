@@ -78,7 +78,7 @@ pub async fn run(
     let model = printer.model();
 
     let ftps_config =
-        build_unsafe_client_config_with_options(model.quirks().enforce_ftps_tls_1_2());
+        build_unsafe_client_config_with_options(model.quirks().enforces_ftps_tls_1_2());
     let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
     let mut printer = printer

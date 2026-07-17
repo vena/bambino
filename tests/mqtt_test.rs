@@ -1,7 +1,7 @@
 //! # MQTT Client Integration & Protocol Mock Tests
 //!
 //! Validates the state machine transitions, QoS 1 publish tracking, telemetry
-//! polling, and timeout guards of the custom `BambuMqttClient`.
+//! polling, and timeout guards of the custom `MqttClient`.
 //!
 //! Uses the shared `mock_mqtt` broker over in-memory duplex streams to ensure
 //! deterministic verification of protocol packet framing and multiplexing.
@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use bambino::error::Error;
 use bambino::io::TokioIo;
-use bambino::mqtt::BambuMqttClient;
+use bambino::mqtt::MqttClient;
 
 use common::mock_mqtt::run_mock_mqtt_broker;
 
@@ -32,7 +32,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     ));
 
     // 2. Initialize Client (Executes CONNECT -> CONNACK and SUBSCRIBE -> SUBACK)
-    let mut client = BambuMqttClient::connect(TokioIo(client_stream), serial, "12345678")
+    let mut client = MqttClient::connect(TokioIo(client_stream), serial, "12345678")
         .await
         .expect("Failed to execute MQTT login and subscription handshake");
 
@@ -44,7 +44,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
 
     // Ensure the packet is tracked in the unacknowledged queue
     assert_eq!(
-        client.get_in_flight_count(),
+        client.in_flight_count(),
         1,
         "Expected 1 in-flight packet"
     );
@@ -74,7 +74,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
 
     // Verify the PUBACK was processed in the background during the poll loop
     assert_eq!(
-        client.get_in_flight_count(),
+        client.in_flight_count(),
         0,
         "In-flight queue did not clear after PUBACK reception"
     );

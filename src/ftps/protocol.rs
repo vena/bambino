@@ -131,11 +131,11 @@ pub(crate) async fn write_command<IO: AsyncIo>(
     stream
         .write_all(payload.as_bytes())
         .await
-        .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))?;
+        .map_err(|_| Error::Network(SocketError::ConnectionAborted))?;
     stream
         .flush()
         .await
-        .map_err(|_| Error::NetworkError(SocketError::ConnectionAborted))?;
+        .map_err(|_| Error::Network(SocketError::ConnectionAborted))?;
 
     Ok(())
 }
@@ -192,7 +192,7 @@ async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
         let mut chunk = [0u8; FTP_LINE_READ_CHUNK_SIZE];
         let n = read_chunk(stream, &mut chunk, timer, deadline_ms)
             .await
-            .map_err(Error::NetworkError)?;
+            .map_err(Error::Network)?;
         fill_buf.extend_from_slice(&chunk[..n]);
     }
 }
@@ -445,7 +445,7 @@ pub(crate) async fn read_to_eof<IO: AsyncIo, T: TimerProvider>(
                 }
                 out.extend_from_slice(&chunk[..n]);
             }
-            Err(e) => return Err(Error::NetworkError(e)),
+            Err(e) => return Err(Error::Network(e)),
         }
     }
     Ok(())

@@ -29,7 +29,7 @@ use alloc::borrow::Cow;
 pub enum Error {
     /// Encapsulates direct socket-level failures on TCP, UDP, or TLS streams.
     #[cfg_attr(feature = "std", error("Network transport failure: {0:?}"))]
-    NetworkError(crate::io::SocketError),
+    Network(crate::io::SocketError),
 
     /// Encapsulates platform timer/sleep scheduling failures (e.g. ESP-IDF FreeRTOS timer resource exhaustion).
     #[cfg_attr(feature = "std", error("Timer scheduling failure: {0:?}"))]
@@ -54,7 +54,7 @@ pub enum Error {
         feature = "std",
         error("JSON payload serialization or deserialization failure")
     )]
-    SerializationError,
+    Serialization,
 
     /// Emitted when the provided 8-character LAN access code fails verification checks.
     #[cfg_attr(
@@ -86,7 +86,7 @@ pub enum Error {
 
 impl From<crate::io::SocketError> for Error {
     fn from(e: crate::io::SocketError) -> Self {
-        Error::NetworkError(e)
+        Error::Network(e)
     }
 }
 
@@ -100,11 +100,11 @@ impl From<crate::io::TimerError> for Error {
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Error::NetworkError(e) => write!(f, "Network transport failure: {:?}", e),
+            Error::Network(e) => write!(f, "Network transport failure: {:?}", e),
             Error::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),
             Error::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
             Error::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
-            Error::SerializationError => {
+            Error::Serialization => {
                 write!(f, "JSON payload serialization or deserialization failure")
             }
             Error::AccessDenied => {
@@ -134,11 +134,11 @@ mod tests {
     #[allow(dead_code)]
     fn assert_all_variants_covered(e: &Error) {
         match e {
-            Error::NetworkError(_) => {}
+            Error::Network(_) => {}
             Error::TimerFailure(_) => {}
             Error::TlsHandshakeFailed => {}
             Error::ProtocolViolation(_) => {}
-            Error::SerializationError => {}
+            Error::Serialization => {}
             Error::AccessDenied => {}
             Error::Timeout => {}
             Error::DiskWriteFailure => {}
@@ -150,7 +150,7 @@ mod tests {
     fn test_display_consistency() {
         let variants: Vec<(Error, &str)> = vec![
             (
-                Error::NetworkError(crate::io::SocketError::TimedOut),
+                Error::Network(crate::io::SocketError::TimedOut),
                 "Network transport failure: TimedOut",
             ),
             (
@@ -166,7 +166,7 @@ mod tests {
                 "Protocol violation: test message",
             ),
             (
-                Error::SerializationError,
+                Error::Serialization,
                 "JSON payload serialization or deserialization failure",
             ),
             (
@@ -200,7 +200,7 @@ mod tests {
         let bambu_err: Error = socket_err.into();
         assert!(matches!(
             bambu_err,
-            Error::NetworkError(crate::io::SocketError::ConnectionReset)
+            Error::Network(crate::io::SocketError::ConnectionReset)
         ));
     }
 

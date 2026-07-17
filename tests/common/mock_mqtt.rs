@@ -1,7 +1,7 @@
 //! # Mock MQTT Broker & Shared Test Helpers
 //!
 //! Provides a deterministic, state-machine driven MQTT v3.1.1 broker designed to test
-//! the `BambuMqttClient` over in-memory `tokio::io::duplex` streams.
+//! the `MqttClient` over in-memory `tokio::io::duplex` streams.
 //!
 //! **Behavioral Design:**
 //! 1. Awaits and acknowledges the standard `CONNECT` and `SUBSCRIBE` handshakes.

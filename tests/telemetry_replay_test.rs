@@ -21,7 +21,7 @@ mod common;
 use bambino::client::PrinterClient;
 use bambino::io::TokioIo;
 use bambino::models::BambuModel;
-use bambino::mqtt::BambuMqttClient;
+use bambino::mqtt::MqttClient;
 
 use common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
 
@@ -63,7 +63,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         }
     });
 
-    let mqtt_client = BambuMqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, BambuModel::P1S);
@@ -77,7 +77,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         // Every public telemetry accessor must be callable without panicking, and any
         // numeric value it returns must stay within a generous plausibility bound.
         let _ = client.print_status();
-        let _ = client.door_open();
+        let _ = client.is_door_open();
         let _ = client.active_fault();
 
         let progress = client.print_progress();

@@ -65,7 +65,7 @@ pub struct MqttMessage {
 }
 
 /// Lightweight MQTT client session running over an established `AsyncIo` stream.
-pub struct BambuMqttClient<IO: AsyncIo> {
+pub struct MqttClient<IO: AsyncIo> {
     stream: IO,
     request_topic: String,
     next_packet_id: u16,
@@ -123,11 +123,11 @@ async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), 
     stream
         .write_all(packet)
         .await
-        .map_err(|e| Error::NetworkError(map_embedded_io_error_kind(e.kind())))?;
+        .map_err(|e| Error::Network(map_embedded_io_error_kind(e.kind())))?;
     stream
         .flush()
         .await
-        .map_err(|e| Error::NetworkError(map_embedded_io_error_kind(e.kind())))
+        .map_err(|e| Error::Network(map_embedded_io_error_kind(e.kind())))
 }
 
 /// Same as [`write_frame`], but races the write against `MQTT_WRITE_TIMEOUT_SECS` when `timer`
@@ -149,11 +149,11 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
     let sleep_fut = timer.sleep(core::time::Duration::from_secs(MQTT_WRITE_TIMEOUT_SECS));
     match race(write_fut, sleep_fut).await {
         Raced::Left(result) => result,
-        Raced::Right(_) => Err(Error::NetworkError(SocketError::TimedOut)),
+        Raced::Right(_) => Err(Error::Network(SocketError::TimedOut)),
     }
 }
 
-impl<IO: AsyncIo> BambuMqttClient<IO> {
+impl<IO: AsyncIo> MqttClient<IO> {
     /// Executes a secure local network connection handshake and subscription loop with the printer.
     ///
     /// **Authentication Note:** If the printer's physical broker rejects credentials due to
@@ -177,7 +177,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // Read CONNACK packet. `DummyTimer` (`has_real_clock() == false`) makes
         // `read_exact_packet` fall back to a plain unbounded read here — identical to
         // this crate's pre-existing connect-time behavior. Deliberately not wired to
-        // `PrinterClient`'s configurable `Timer`: `connect()` runs before a `BambuMqttClient`
+        // `PrinterClient`'s configurable `Timer`: `connect()` runs before a `MqttClient`
         // (and thus a persistent `FrameReadState`) exists, and the connect-phase handshake
         // (TCP+TLS dial timeout, `PrinterClient::connect_timeout_secs`) is a separate concern
         // from this fix's target (a stall on an already-established connection,
@@ -326,7 +326,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
                 "In-flight command backlog saturated ({} items)",
                 self.in_flight.len()
             );
-            return Err(Error::NetworkError(SocketError::TimedOut));
+            return Err(Error::Network(SocketError::TimedOut));
         }
 
         let packet_id = self.next_packet_id;
@@ -372,7 +372,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
         // `DummyTimer` has no real wall-clock (`has_real_clock() == false`), so
         // `poll_wire()` falls back to its pre-existing unbounded read here — this public,
         // timer-less entry point (used directly by e.g. `tests/mqtt_test.rs` and any
-        // caller holding a raw `BambuMqttClient` without a `PrinterClient`) keeps its
+        // caller holding a raw `MqttClient` without a `PrinterClient`) keeps its
         // exact prior behavior. `PrinterClient` callers get the new bounded-read
         // protection via `poll_telemetry_with_timer()` instead, since they have a real
         // `Timer` available.
@@ -585,7 +585,7 @@ impl<IO: AsyncIo> BambuMqttClient<IO> {
     }
 
     /// Returns the number of current un-acknowledged QoS 1 packets.
-    pub fn get_in_flight_count(&self) -> usize {
+    pub fn in_flight_count(&self) -> usize {
         self.in_flight.len()
     }
 }
@@ -641,7 +641,7 @@ mod tests {
             });
 
             let result =
-                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
@@ -673,7 +673,7 @@ mod tests {
             });
 
             let result =
-                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
@@ -710,7 +710,7 @@ mod tests {
             });
 
             let result =
-                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
@@ -725,7 +725,7 @@ mod tests {
         async fn test_poll_telemetry_with_timer_resumes_split_frame_through_persistent_client() {
             // BUG-140: the resumable-frame-read invariant (.claude/rules/wire-read-deadline.md)
             // was previously only unit-tested against a bare `FrameReadState`/`read_exact_packet`
-            // call (frame.rs) — never through a live, persistent `BambuMqttClient::read_state`
+            // call (frame.rs) — never through a live, persistent `MqttClient::read_state`
             // field with a real (non-Dummy) timer, the exact combination `PrinterClient` uses via
             // `poll_telemetry_with_timer`. A regression reconstructing a fresh `FrameReadState`
             // per `poll_wire()` call (instead of reusing `self.read_state`) would go uncaught
@@ -765,7 +765,7 @@ mod tests {
             });
 
             let mut client =
-                BambuMqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
                     .await
                     .expect("connect should succeed");
 
@@ -802,7 +802,7 @@ mod tests {
             // `.read()` and leaving a second one-shot `.read()` blocked forever. Just holding
             // `_server_stream` open (never reading it) sidesteps that hazard entirely.
             let (client_stream, _server_stream) = tokio::io::duplex(8192);
-            let mut client = BambuMqttClient {
+            let mut client = MqttClient {
                 stream: TokioIo(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
                 next_packet_id: 2,

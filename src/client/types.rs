@@ -139,7 +139,7 @@ impl core::ops::BitOr for CalibrationOption {
 /// Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
 ///
 /// Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
-/// `gcode_state`/`door_open`/`print_error`, which answer four independent questions) because
+/// `gcode_state`/`is_door_open`/`print_error`, which answer four independent questions) because
 /// `mc_percent`, `mc_remaining_time`, `layer_num`, and `total_layers` are always consumed
 /// together as one "how's the print going" question. Each field updates independently and
 /// keeps its last-observed value across a telemetry message that omits it — a `None` field

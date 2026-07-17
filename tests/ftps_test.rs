@@ -335,8 +335,8 @@ async fn test_ftps_data_channel_failure_poisons_client() {
 
     let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
     assert!(
-        matches!(result, Err(bambino::error::Error::NetworkError(_))),
-        "Expected the data-channel TLS connect failure to surface as NetworkError, got {:?}",
+        matches!(result, Err(bambino::error::Error::Network(_))),
+        "Expected the data-channel TLS connect failure to surface as Network, got {:?}",
         result
     );
 
@@ -374,8 +374,8 @@ async fn test_ftps_single_reply_command_failure_poisons_client() {
 
     let result = client.delete_file("/model/job.3mf").await;
     assert!(
-        matches!(result, Err(Error::NetworkError(_))),
-        "Expected the dropped connection to surface as NetworkError, got {:?}",
+        matches!(result, Err(Error::Network(_))),
+        "Expected the dropped connection to surface as Network, got {:?}",
         result
     );
 
@@ -446,8 +446,8 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
 
     let result = client.list_directory("/model", 2026, 6, 17, 15, 0).await;
     assert!(
-        matches!(result, Err(Error::NetworkError(_))),
-        "Expected the dropped connection to surface as NetworkError, got {:?}",
+        matches!(result, Err(Error::Network(_))),
+        "Expected the dropped connection to surface as Network, got {:?}",
         result
     );
 

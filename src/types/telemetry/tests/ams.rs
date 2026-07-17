@@ -48,7 +48,7 @@ fn test_ams_nested_wire_format() {
     assert_eq!(unit_tray[1].tray_type.as_deref(), Some("PETG"));
     // Slot 2: empty (truncated JSON — P1S firmware behavior)
     assert_eq!(unit_tray[2].state, None);
-    assert_eq!(unit_tray[2].get_state(), 9);
+    assert_eq!(unit_tray[2].state(), 9);
 }
 
 #[test]

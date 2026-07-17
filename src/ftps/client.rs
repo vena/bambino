@@ -386,7 +386,7 @@ where
             );
             return Ok(());
         }
-        if model.quirks().enforce_ftps_tls_1_2()
+        if model.quirks().enforces_ftps_tls_1_2()
             && tls_connector.negotiated_version(stream) != Some(TlsVersion::Tls12)
         {
             return Err(Error::ProtocolViolation(
@@ -685,7 +685,7 @@ where
                     crate::io::Raced::Left(r) => r,
                     crate::io::Raced::Right(_) => {
                         self.poisoned = true;
-                        return Err(Error::NetworkError(SocketError::TimedOut));
+                        return Err(Error::Network(SocketError::TimedOut));
                     }
                 }
             } else {
@@ -695,7 +695,7 @@ where
             };
             if let Err(_e) = write_result {
                 self.poisoned = true;
-                return Err(Error::NetworkError(SocketError::ConnectionAborted));
+                return Err(Error::Network(SocketError::ConnectionAborted));
             }
             offset += chunk_size;
         }
@@ -708,7 +708,7 @@ where
                 crate::io::Raced::Left(r) => r,
                 crate::io::Raced::Right(_) => {
                     self.poisoned = true;
-                    return Err(Error::NetworkError(SocketError::TimedOut));
+                    return Err(Error::Network(SocketError::TimedOut));
                 }
             }
         } else {
@@ -716,7 +716,7 @@ where
         };
         if let Err(_e) = flush_result {
             self.poisoned = true;
-            return Err(Error::NetworkError(SocketError::ConnectionAborted));
+            return Err(Error::Network(SocketError::ConnectionAborted));
         }
         drop(data_channel);
 

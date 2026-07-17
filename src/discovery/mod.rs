@@ -108,7 +108,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
         let bcast_result = self.socket.send_to(query, broadcast_target).await;
 
         match (mcast_result, bcast_result) {
-            (Err(_), Err(e)) => Err(Error::NetworkError(e)),
+            (Err(_), Err(e)) => Err(Error::Network(e)),
             _ => Ok(()),
         }
     }
@@ -152,7 +152,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
             }
             // Catch-all transient socket timeout. Returns None to allow retry loop cycles.
             Err(crate::io::SocketError::TimedOut) => Ok(None),
-            Err(e) => Err(Error::NetworkError(e)),
+            Err(e) => Err(Error::Network(e)),
         }
     }
 }
@@ -211,7 +211,7 @@ where
     }
 
     if engines.is_empty() {
-        return Err(Error::NetworkError(last_bind_err.expect(
+        return Err(Error::Network(last_bind_err.expect(
             "ports is non-empty, so an empty engines list means every bind attempt recorded an error",
         )));
     }

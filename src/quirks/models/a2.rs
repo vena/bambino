@@ -25,7 +25,7 @@ impl ModelQuirks for A2LQuirks {
         false
     }
 
-    fn enforce_ftps_tls_1_2(&self) -> bool {
+    fn enforces_ftps_tls_1_2(&self) -> bool {
         false
     }
 

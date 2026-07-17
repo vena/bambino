@@ -17,7 +17,7 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 /// only ever run *after* a full frame has already been received and therefore cannot
 /// catch a stall that happens mid-read [REF-MQTT-STALL]. A connection that stalls with
 /// zero incoming bytes may take up to this long to surface as
-/// `Error::NetworkError(SocketError::TimedOut)`, even if the caller configured a
+/// `Error::Network(SocketError::TimedOut)`, even if the caller configured a
 /// shorter `command_timeout_secs` — the two timeouts are independent layers, not summed
 /// or coordinated.
 pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
@@ -61,7 +61,7 @@ pub(crate) enum FrameReadState {
 /// read — see `read_chunk`'s doc comment for the cancellation-safety reasoning. A
 /// `SocketError::ConnectionReset`/`InvalidInput` return means the connection itself is no
 /// longer usable regardless of `state` — the caller must reconnect (constructing a new
-/// `BambuMqttClient`, and thus a fresh `FrameReadState`) rather than keep polling the
+/// `MqttClient`, and thus a fresh `FrameReadState`) rather than keep polling the
 /// same stream.
 ///
 /// Computes a fresh deadline every call from `budget_ms` (not once per logical frame) —
