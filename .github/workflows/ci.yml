@@ -1,7 +1,6 @@
 name: CI
 
-# Dormant until this repo has a GitHub remote to push to — kept in the tree
-# ahead of that so the gate exists the moment it's needed. See make check-fast.
+# See make check-fast.
 
 on:
   push:
@@ -16,4 +15,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
       - run: make check-fast
