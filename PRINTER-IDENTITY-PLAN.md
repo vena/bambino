@@ -17,9 +17,11 @@ that duplicates data already implicitly present in the `mqtt_client` it's handed
 today verifies the two match, so a caller could pass the wrong printer's serial to
 `from_mqtt()` and nothing would catch it.
 
-This plan fixes both, and documents why a single shared identity type does **not**
-extend to every constructor that happens to take some of these fields — worked out
-via discussion, not assumed; see "Why not one struct everywhere" below.
+This plan fixes both. The discussion that produced it started as a pure
+transposition-risk fix, then explicitly widened to a developer-experience question:
+should every "connect to protocol X" entry point in this crate share one calling
+convention, not just the ones where a bare risk argument forces it? The answer
+landed on "yes, with exactly one structural exception" — see rule 3.
 
 ## Design decisions (already made — do not re-litigate without new evidence)
 
@@ -47,32 +49,39 @@ via discussion, not assumed; see "Why not one struct everywhere" below.
    |---|---|---|
    | `PrinterClient::new()` | Yes | Owns all three fields long-term for its own multi-protocol orchestration; always has all three by construction. |
    | `BambuFtpsClient::connect()` / `connect_control_stream()` / `from_control_stream()` | Yes | FTPS structurally needs all three (see `ip` for later passive-data-channel dials) — every realistic caller, direct or via `PrinterClient`, already has all three in hand regardless of whether they're bundled. Bundling costs nothing. |
-   | `MqttClient::connect()` | **No** — keeps plain `serial: &str, access_code: &str` | `ip` is not something `connect()` uses, and a direct caller may not have one in this shape at all (dialed via hostname, embedded/static config, some other addressing scheme). Forcing a mandatory `PrinterIdentity.ip` field on them demands data the function doesn't need and they might not possess. `PrinterClient::ensure_mqtt()` (the internal caller) still benefits from reuse at the *storage* layer — it holds `self.identity: PrinterIdentity` and passes `&self.identity.serial, &self.identity.access_code` — but `MqttClient::connect()`'s own public signature stays untouched. |
-   | `BambuBinaryCameraStream::authenticate()` | **No** — keeps its current single `access_code: &str` param | Only ever reads one field. A single-argument function was never a transposition risk in the first place; wrapping it in a 3-field struct would be strictly more complex for zero safety gain. |
+   | `MqttClient::connect()` | **Yes** | Reads `.serial`/`.access_code`, ignores `.ip`. `connect()`'s own direct caller *just finished dialing the stream themselves* — they always know the address they used, in some form (even an embedded caller with a static IP config just needs a `.to_string()`). That's mild friction, not fabricating data from nothing, so the free-reuse argument applies here too. |
+   | `BambuBinaryCameraStream::authenticate()` | **Yes** | Reads `.access_code` only. To have a stream to authenticate at all, the caller already dialed (`ip`) and TLS-wrapped with SNI (`serial`) — the full identity was always in their hands, just not threaded through as an argument today. No fabrication cost. |
+   | `PrinterClient::from_mqtt()` | **No** — this is the one real exception | Its caller receives an **already-connected** `MqttClient`, possibly handed to them by something else entirely — no dial happened in their own code, so `ip`/`access_code` may never have existed for them in any form. This isn't "wrong representation of data they have," it's "the data doesn't exist for them." See rule 6. |
 
-   **The test that actually decides this** (apply it to any future constructor,
-   don't just eyeball arg count): *does every realistic direct caller of this
-   specific public constructor already possess every field the bundled struct would
-   require, independent of whether the fields are bundled?* If yes (FTPS,
-   `PrinterClient::new`), bundling is free reuse. If no (MQTT's `ip`), bundling forces
-   fabricated/unavailable data on some callers — worse than the problem being fixed.
+   **The test that actually decides this** (apply it to any future constructor, not
+   just eyeballed arg count, and not just "does the callee use the field"): *does the
+   direct caller of this specific constructor necessarily just performed the action
+   that produces every field the struct would require — even if some of those
+   fields aren't literally passed as arguments today?* `MqttClient::connect()` and
+   `BambuBinaryCameraStream::authenticate()` both pass this test once you look past
+   "the function doesn't use `ip`/`serial` today" to "the caller necessarily has it
+   anyway, because they just dialed/handshook." `from_mqtt()` fails it — its caller
+   didn't perform any of those actions; someone else did, elsewhere, and only handed
+   over the finished result.
 
-4. **Why not `ip: Option<String>` to let one struct cover every case anyway?**
+4. **Why not `ip: Option<String>` to let `from_mqtt()` take `PrinterIdentity` too?**
    Rejected. An `Option` field doesn't remove the risk it's meant to fix, it changes
-   its shape: today `MqttClient::connect()` has no `ip` parameter, so passing one is
-   a compile error. With `ip: Option<...>` on a shared struct, a caller *can* set
-   `Some(ip)` (e.g. copy-pasted from a `PrinterClient::new()` call site) and it
-   compiles fine — `MqttClient::connect()` either silently ignores it (no signal at
-   all that the field was pointless there) or, worse, someone wires it in later
-   because "the field's right there." A rustc-caught mismatch traded for a
-   silently-wrong one is a regression, not a fix.
+   its shape: today `from_mqtt()` has no `ip`/`access_code` parameters at all, so
+   supplying wrong ones is impossible. With `Option` fields on a shared struct, a
+   caller *can* set `Some(fake_value)` and it compiles fine — nothing stops a
+   fabricated placeholder from looking exactly as valid as real data. A
+   rustc-caught omission traded for a silently-wrong value is a regression, not a
+   fix. (This is the same reasoning that ruled out `Option<ip>` as a way to include
+   `MqttClient::connect()` before rule 3 found the real reason that one's actually
+   fine without `Option` at all.)
 
 5. **`MqttClient` gains a stored `serial` field + `pub fn serial(&self) -> &str`.**
    Currently `connect()` takes `serial: &str` only to build `client_id` and
    `request_topic`, then discards the borrow — the value survives *inside*
    `request_topic` (`format!("device/{}/request", serial)`) but isn't retrievable
    without parsing it back out. Store it directly instead: `serial: String` on the
-   struct, set in `connect()` from the same parameter it already receives.
+   struct, set in `connect()` from `identity.serial` (rule 3's `PrinterIdentity`
+   param) rather than a standalone `&str` param.
 
 6. **`PrinterClient::from_mqtt()` signature shrinks to `from_mqtt(mqtt_client, model)`.**
    Reads `serial` via `mqtt_client.serial()` (compute `let serial =
@@ -84,15 +93,6 @@ via discussion, not assumed; see "Why not one struct everywhere" below.
    reason for `PrinterClient` to report a different serial than the one its own wire
    session used — if you need to control a second printer, you construct a second
    `PrinterClient`.
-
-   `from_mqtt()` does **not** take a `PrinterIdentity` — `ip`/`access_code` are
-   structurally unavailable on this path (a caller with only an already-connected
-   `MqttClient` never had them, or consumed them elsewhere before this call). This is
-   the concrete case that proves rule 3/4's "mandatory-all-three is sometimes
-   harmful" — forcing this constructor to accept a full identity would break it (it
-   cannot supply `ip`/`access_code`) or perpetuate today's fabricated-empty-string
-   pattern under a type that *looks* like it guarantees real data, which is worse
-   than plain strings that obviously might be empty.
 
    **Out of scope, deliberately**: the existing `BUG-072` runtime-panic guard (two
    near-identical `assert!` blocks in `with_ftps()`/`with_camera()`,
@@ -125,8 +125,16 @@ edit).
 `BUG-170` dedup work), `tests/telemetry_replay_test.rs` (1 direct), `README.md` (1
 prose example).
 
-`MqttClient::connect(...)`: signature does not change (rule 3) — no call-site edits
-needed beyond whatever already exists.
+`MqttClient::connect(...)`: re-count at implementation time — this plan's earlier
+draft assumed the signature wouldn't change and didn't enumerate these; it now does
+(rule 3), so every call site needs the same `PrinterIdentity`-construction update as
+`PrinterClient::new(...)`'s. Expect this to mostly overlap with `PrinterClient::new`'s
+call sites plus `PrinterClient::ensure_mqtt()`'s internal call
+(`src/client/connect.rs`) plus any direct-use test/doc sites — grep
+`MqttClient::connect(` fresh rather than trusting a stale count here.
+
+`BambuBinaryCameraStream::authenticate(...)`: re-count at implementation time,
+same reasoning — grep `\.authenticate(` scoped to camera call sites fresh.
 
 ## Phases
 
@@ -140,26 +148,35 @@ Create `src/identity.rs` with the struct (rule 1), doc comments explaining the
 no-`Option` decision inline (future readers shouldn't have to find this plan doc to
 understand why `ip` isn't optional). Re-export from `lib.rs` next to `PrinterModel`.
 No existing code changes yet — this phase is additive only, trivially safe to land
-alone.
+alone. Every later phase depends on this one.
 
-### Phase 2 — `MqttClient` stores `serial`; `from_mqtt()` drops its redundant param
+### Phase 2 — `MqttClient::connect()` takes `PrinterIdentity`; stores `serial`; `from_mqtt()` drops its redundant param
 
-Independent of Phase 1 (`from_mqtt()` doesn't take `PrinterIdentity` — rule 6). Do
-this phase in either order relative to Phase 1/3/4.
+Depends on Phase 1.
 
-1. Add `serial: String` field to `MqttClient` (`src/mqtt/client/mod.rs`), set it in
-   `connect()` from the existing `serial: &str` parameter (unchanged signature).
-2. Add `pub fn serial(&self) -> &str`.
-3. Change `PrinterClient::from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel)`
+1. Change `MqttClient::connect(stream, serial: &str, access_code: &str)` to
+   `connect(stream, identity: &PrinterIdentity)` — reads `identity.serial`,
+   `identity.access_code` where the old params were used; `identity.ip` is unread
+   (rule 3).
+2. Add `serial: String` field to `MqttClient` (`src/mqtt/client/mod.rs`), set from
+   `identity.serial.clone()` (or equivalent) during `connect()`.
+3. Add `pub fn serial(&self) -> &str`.
+4. Change `PrinterClient::from_mqtt(mqtt_client: MqttClient<IO>, serial: &str, model: PrinterModel)`
    to `from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel)` — capture
    `mqtt_client.serial().to_string()` before moving `mqtt_client` into the returned
    `Self`.
-4. Update the 3 call sites listed above (`tests/common/client.rs`,
-   `tests/telemetry_replay_test.rs`, `README.md`).
+5. Update `PrinterClient::ensure_mqtt()` (`src/client/connect.rs`) to pass
+   `&self.identity` (see Phase 3 — if Phase 3 hasn't landed yet in this session,
+   construct a throwaway `PrinterIdentity` from the existing loose fields here
+   instead of blocking on Phase 3's field migration; reconcile when Phase 3 lands).
+6. Update every `MqttClient::connect(...)` call site (re-counted per the Scope
+   section above) and the 3 `PrinterClient::from_mqtt(...)` call sites
+   (`tests/common/client.rs`, `tests/telemetry_replay_test.rs`, `README.md`).
 
 ### Phase 3 — `PrinterClient::new()` and internal storage switch to `PrinterIdentity`
 
-Depends on Phase 1.
+Depends on Phase 1. Do before Phase 2 step 5 and Phase 4 if doing all in one
+session, to avoid the throwaway-construction workaround noted in Phase 2 step 5.
 
 1. Replace `PrinterClient`'s three loose `ip: String, serial: String, access_code: String`
    fields with one `identity: PrinterIdentity` field.
@@ -199,7 +216,22 @@ dependency.
 5. Update the 9 direct `BambuFtpsClient::connect(...)` call sites in
    `tests/ftps_test.rs`.
 
-### Phase 5 — Docs regen and BACKLOG close-out
+### Phase 5 — Camera's `authenticate()` switches to `PrinterIdentity`
+
+Depends on Phase 1. Small, independent of Phases 2-4 — safe to do any time after
+Phase 1, including standalone in its own session.
+
+1. `BambuBinaryCameraStream::authenticate(&mut self, identity: &PrinterIdentity)` —
+   reads `identity.access_code`, `.ip`/`.serial` unread (rule 3). `new(stream)`
+   itself is unaffected (still takes just the stream — identity data isn't needed
+   until `authenticate()`).
+2. Update `PrinterClient::ensure_camera()` (`src/client/connect.rs`) to pass
+   `&self.identity` (same throwaway-construction note as Phase 2 step 5 if Phase 3
+   hasn't landed yet in this session).
+3. Update every direct `.authenticate(...)` call site (re-counted per the Scope
+   section above).
+
+### Phase 6 — Docs regen and BACKLOG close-out
 
 Per this repo's `backlog` skill: run `make docs`, commit the regenerated `docs/`
 separately from the fix commits (per `CLAUDE.md`'s Docs regen convention — batch it,
@@ -211,9 +243,9 @@ deletion.
 
 ## What this plan deliberately does not do
 
-- Does not touch `BambuBinaryCameraStream::new()`/`authenticate()` — no transposition
-  risk existed there (rule 3, camera row).
 - Does not change `BUG-072`'s runtime-panic guard to a compile-time one (rule 6,
   "out of scope, deliberately").
-- Does not attempt to unify `MqttClient::connect()`'s signature with FTPS's — rule 3
-  explains why that would actively hurt direct MQTT consumers.
+- Does not give `PrinterClient::from_mqtt()` a `PrinterIdentity` — the one
+  structural exception in rule 3, not an oversight. Do not "complete the set" by
+  adding it later without re-deriving why it was excluded.
+- Does not add `Option` fields to `PrinterIdentity` under any circumstance (rule 4).
