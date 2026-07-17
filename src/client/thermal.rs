@@ -58,7 +58,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,ignore
     /// printer.set_bed_temperature(60).await?;
     /// ```
     pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {

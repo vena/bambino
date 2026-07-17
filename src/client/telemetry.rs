@@ -105,7 +105,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,ignore
     /// loop {
     ///     match printer.poll_telemetry().await? {
     ///         TelemetryEvent::Report(report, _raw) => {

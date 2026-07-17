@@ -85,7 +85,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,ignore
     /// // Turn on the part cooling fan at 100%
     /// printer.send_gcode("M106 P1 S255").await?;
     ///

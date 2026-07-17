@@ -163,7 +163,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust,ignore
 /// use bambino::discovery::discover_devices;
 /// use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
 ///

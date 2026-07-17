@@ -136,7 +136,7 @@ pub fn build_unsafe_client_config() -> Arc<rustls::ClientConfig> {
 /// Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs.
 ///
 /// Use `rustls_pki_types::pem::PemObject` to load PEM files:
-/// ```ignore
+/// ```rust,ignore
 /// use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 /// let ca = CertificateDer::from_pem_file("ca.pem")?;
 /// ```

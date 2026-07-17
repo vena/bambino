@@ -92,7 +92,7 @@ where
     /// Triggers automated physical calibration routines on the printer chassis [REF-MQTT-LIFECYCLE].
     ///
     /// Use `CalibrationOption` flags combined with `|` to select routines:
-    /// ```ignore
+    /// ```rust,ignore
     /// client.start_calibration(
     ///     CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
     /// ).await?;

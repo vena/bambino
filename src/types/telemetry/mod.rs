@@ -62,7 +62,7 @@ impl TelemetryReport {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```rust,ignore
     /// let (actual, target) = report.bed_temperatures();
     /// println!("Bed: {}°C (target {}°C)", actual, target);
     /// ```
