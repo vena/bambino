@@ -68,6 +68,7 @@ pub struct MqttMessage {
 pub struct MqttClient<IO: AsyncIo> {
     stream: IO,
     request_topic: String,
+    serial: String,
     next_packet_id: u16,
     /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
     in_flight: BTreeSet<u16>,
@@ -289,6 +290,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         Ok(Self {
             stream,
             request_topic: format!("device/{}/request", serial),
+            serial: serial.to_string(),
             next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
             in_flight: BTreeSet::new(),
             pending_messages: VecDeque::new(),
@@ -298,6 +300,11 @@ impl<IO: AsyncIo> MqttClient<IO> {
             secs_since_last_message: 0,
             read_state: FrameReadState::default(),
         })
+    }
+
+    /// Returns the serial number this client authenticated with (`connect()`'s `serial` argument).
+    pub fn serial(&self) -> &str {
+        &self.serial
     }
 
     /// Submits a serialized JSON command payload to the printer's request channel.
@@ -805,6 +812,7 @@ mod tests {
             let mut client = MqttClient {
                 stream: TokioIo(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
+                serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
                 in_flight: BTreeSet::new(),
                 pending_messages: VecDeque::new(),

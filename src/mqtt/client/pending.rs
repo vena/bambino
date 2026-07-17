@@ -118,6 +118,7 @@ mod tests {
             MqttClient {
                 stream: TokioIo(std::io::Cursor::new(Vec::new())),
                 request_topic: "device/test/request".to_string(),
+                serial: "test".to_string(),
                 next_packet_id: 2,
                 in_flight: BTreeSet::new(),
                 pending_messages: VecDeque::new(),

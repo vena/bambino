@@ -40,5 +40,5 @@ pub async fn connect_test_client<IO: AsyncIo>(
     let mqtt_client = MqttClient::connect(stream, serial, "12345678")
         .await
         .expect("MQTT connect handshake failed");
-    PrinterClient::from_mqtt(mqtt_client, serial, model)
+    PrinterClient::from_mqtt(mqtt_client, model)
 }
