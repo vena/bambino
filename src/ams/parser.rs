@@ -45,6 +45,7 @@ pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
 /// in OrcaSlicer with an equivalent formula. This reopens and reverses BUG-015's "AMS-HT
 /// doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
 /// source.
+#[must_use]
 pub fn evaluate_spool_presence(
     tray_exist_bits: &str,
     ams_id: u8,
@@ -168,6 +169,7 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray) {
 /// * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
+#[must_use]
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
     let is_external = ams_id == AMS_EXTERNAL_SPOOL_ID || ams_id == AMS_EXTERNAL_SPOOL_ALT_ID;
@@ -197,6 +199,7 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
 /// (no field in this crate's telemetry types currently sources it), and the map can be
 /// genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
 /// a caller with its own confirmed `ams_extruder_map` source may still use this directly.
+#[must_use]
 pub fn resolve_printing_global_id(
     tray_now: u8,
     active_extruder: Option<u8>,

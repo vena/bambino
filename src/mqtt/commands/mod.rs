@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_ams_mapping2_dropped_when_safety_interlock_trips() {
         // Phase 2.2 regression: an all-external-spool `ams_mapping2` on a single-nozzle
-        // printer trips `validate_external_spool_safety`, forcing `use_ams` to `false` — the
+        // printer trips `is_external_spool_safety_valid`, forcing `use_ams` to `false` — the
         // wire payload must not also carry a populated `ams_mapping2` array in that case
         // (the exact contradictory shape that causes firmware error `0700_8012`).
         use crate::ams::mapping::AmsMapping2Entry;

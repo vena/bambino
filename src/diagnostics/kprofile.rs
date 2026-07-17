@@ -30,12 +30,27 @@ use crate::mqtt::commands::ClampedTaskId;
 /// (e.g. `"PFUS9be9e18f81828a"`) are strictly reserved for slicer-side presets.
 /// Transmitting alphanumeric layouts inside direct database operations causes indexing halts
 /// or table corruption on the physical mainboard.
-pub fn validate_setting_id(setting_id: &str) -> bool {
+#[must_use]
+pub fn is_setting_id_valid(setting_id: &str) -> bool {
     if !setting_id.starts_with("PF") {
         return false;
     }
     let digits = &setting_id[2..];
     digits.len() == 17 && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Returns `Ok(())` if `setting_id` passes [`is_setting_id_valid`], otherwise the shared
+/// `ProtocolViolation` both `ExtrusionCaliSetRequest::new` and `StandardCaliDelRequest::new`
+/// construct on rejection.
+fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
+    if is_setting_id_valid(setting_id) {
+        Ok(())
+    } else {
+        Err(Error::ProtocolViolation(
+            "Setting ID violates the strict 19-character numeric calibration boundary rule"
+                .into(),
+        ))
+    }
 }
 
 // ============================================================================
@@ -169,12 +184,7 @@ impl ExtrusionCaliSetRequest {
     /// database health. Supports multi-profile writes for IDEX platforms.
     pub fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error> {
         for profile in &profiles {
-            if !validate_setting_id(&profile.setting_id) {
-                return Err(Error::ProtocolViolation(
-                    "Setting ID violates the strict 19-character numeric calibration boundary rule"
-                        .into(),
-                ));
-            }
+            ensure_valid_setting_id(&profile.setting_id)?;
         }
 
         Ok(Self {
@@ -274,7 +284,7 @@ pub struct StandardCaliDelEntry {
     pub nozzle_diameter: String,
     /// System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
     pub nozzle_id: String,
-    /// 19-character setting ID of the entry being deleted, validated by [`validate_setting_id`].
+    /// 19-character setting ID of the entry being deleted, validated by [`is_setting_id_valid`].
     pub setting_id: String,
 }
 
@@ -310,12 +320,7 @@ pub struct StandardCaliDelRequest {
 impl StandardCaliDelRequest {
     /// Builds a single-nozzle deletion transaction keyed on the setting identifier.
     pub fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error> {
-        if !validate_setting_id(&target.setting_id) {
-            return Err(Error::ProtocolViolation(
-                "Setting ID violates the strict 19-character numeric calibration boundary rule"
-                    .into(),
-            ));
-        }
+        ensure_valid_setting_id(&target.setting_id)?;
 
         Ok(Self {
             print: StandardCaliDelPayload {
@@ -365,16 +370,16 @@ mod tests {
     #[test]
     fn test_setting_id_validator() {
         // Correct format: "PF" followed by exactly 17 digits (total length 19)
-        assert!(validate_setting_id("PF12345678901234567"));
+        assert!(is_setting_id_valid("PF12345678901234567"));
 
         // Alphanumeric hash used by slicer presets must fail
-        assert!(!validate_setting_id("PFUS9be9e18f81828a"));
+        assert!(!is_setting_id_valid("PFUS9be9e18f81828a"));
 
         // Short decimal block
-        assert!(!validate_setting_id("PF123456"));
+        assert!(!is_setting_id_valid("PF123456"));
 
         // Missing prefix
-        assert!(!validate_setting_id("1234567890123456789"));
+        assert!(!is_setting_id_valid("1234567890123456789"));
     }
 
     #[test]

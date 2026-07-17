@@ -17,5 +17,5 @@ pub use hms::{
 pub use kprofile::{
     ExtrusionCaliGetRequest, ExtrusionCaliGetResponse, ExtrusionCaliSelRequest,
     ExtrusionCaliSetRequest, IdexCaliDelEntry, IdexCaliDelRequest, KProfileEntry,
-    StandardCaliDelEntry, StandardCaliDelRequest, validate_setting_id,
+    StandardCaliDelEntry, StandardCaliDelRequest, is_setting_id_valid,
 };

@@ -51,6 +51,7 @@ impl MaterialSource {
     /// out-of-range `ams_id`/`slot_id` (unlike `parser.rs`'s inbound-side bounds-checking on
     /// wire data) — validated here the same way, falling back to the `-1` sentinel rather than
     /// producing a bogus flat channel value.
+    #[must_use]
     pub fn flat_channel_id(&self) -> i32 {
         match self {
             MaterialSource::StandardAms { ams_id, slot_id } => {
@@ -74,6 +75,7 @@ impl MaterialSource {
     }
 
     /// Converts this source location into a structured `ams_mapping2` JSON entry.
+    #[must_use]
     pub fn to_mapping2_entry(&self) -> AmsMapping2Entry {
         match self {
             // BUG-069: same out-of-range validation as flat_channel_id() — an invalid
@@ -143,6 +145,7 @@ pub struct AmsMapping2Entry {
 /// `ProjectFileRequest::from_config` (`mqtt/commands/print_job.rs`) to derive `ams_mapping`
 /// from `ams_mapping2` when the caller only supplied the latter via
 /// `PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
+#[must_use]
 pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
     if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
         && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
@@ -166,6 +169,7 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
 /// rather than the total count of active spools. If a project uses filament 1 and filament 4,
 /// the array must be padded to a length of 4 (elements 0 to 3), using the `-1` sentinel for
 /// intermediate unused filament indexes.
+#[must_use]
 pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
     if allocations.is_empty() {
         return Vec::new();
@@ -193,6 +197,7 @@ pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
 ///
 /// Symmetrical to `build_ams_mapping`, this array provides detailed physical unit routing
 /// parameters to ensure correct material transitions on multi-AMS and IDEX platforms.
+#[must_use]
 pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMapping2Entry> {
     if allocations.is_empty() {
         return Vec::new();
@@ -226,7 +231,8 @@ pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMap
 /// filaments map to `ExternalSpool` or are left `Unmapped`), single-nozzle printers require that the
 /// `use_ams` command parameter be configured strictly to `false`. Failing to override this parameter
 /// causes the printer's execution processor to reject the print task with error `07FF_8012`.
-pub fn validate_external_spool_safety(
+#[must_use]
+pub fn is_external_spool_safety_valid(
     is_single_nozzle: bool,
     mapping2: &[AmsMapping2Entry],
 ) -> bool {
@@ -240,7 +246,7 @@ pub fn validate_external_spool_safety(
     for entry in mapping2 {
         let is_unmapped =
             entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID && entry.slot_id == AMS_EXTERNAL_SPOOL_ALT_ID;
-        // Checks both external-spool IDs (254 and 255), matching validate_external_spool_safety_flat's
+        // Checks both external-spool IDs (254 and 255), matching is_external_spool_safety_valid_flat's
         // uniform treatment — AmsMapping2Entry's fields are public, so a caller can hand-build
         // an entry with ams_id 254 (normally IDEX-only, via MaterialSource::ExternalSpoolLeft)
         // on a single-nozzle printer; checking only 255 here let that case slip through and
@@ -301,7 +307,8 @@ pub enum AmsPoolComposition {
 /// Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing the same
 /// unit across multiple slots isn't an extra unit. External-spool and unmapped sentinel
 /// entries are ignored, since they don't occupy a physical AMS unit slot.
-pub fn validate_ams_pool_composition(
+#[must_use]
+pub fn is_ams_pool_composition_valid(
     mapping2: &[AmsMapping2Entry],
     composition: AmsPoolComposition,
 ) -> bool {
@@ -331,8 +338,9 @@ pub fn validate_ams_pool_composition(
     }
 }
 
-/// Flat-array equivalent of `validate_external_spool_safety`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
-pub fn validate_external_spool_safety_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool {
+/// Flat-array equivalent of `is_external_spool_safety_valid`, for callers using `PrintJobConfig::with_ams()` (flat `Vec<i32>`) rather than `with_ams_mapping2()`.
+#[must_use]
+pub fn is_external_spool_safety_valid_flat(is_single_nozzle: bool, ams_mapping: &[i32]) -> bool {
     if !is_single_nozzle {
         return true;
     }
@@ -424,7 +432,7 @@ mod tests {
                 slot_id: 255,
             }, // Unmapped
         ];
-        let use_ams_override = validate_external_spool_safety(true, &mapping_all_external);
+        let use_ams_override = is_external_spool_safety_valid(true, &mapping_all_external);
         assert!(!use_ams_override);
 
         // Case 2: At least one standard physical AMS unit is mapped -> use_ams stays true
@@ -438,7 +446,7 @@ mod tests {
                 slot_id: 0,
             }, // External
         ];
-        let use_ams_ok = validate_external_spool_safety(true, &mapping_with_ams);
+        let use_ams_ok = is_external_spool_safety_valid(true, &mapping_with_ams);
         assert!(use_ams_ok);
     }
 
@@ -453,7 +461,7 @@ mod tests {
             ams_id: 254,
             slot_id: 0,
         }];
-        assert!(!validate_external_spool_safety(true, &mapping_all_external));
+        assert!(!is_external_spool_safety_valid(true, &mapping_all_external));
     }
 
     #[test]
@@ -463,7 +471,7 @@ mod tests {
             ams_id: 128,
             slot_id: 0,
         }];
-        assert!(validate_external_spool_safety(true, &mapping));
+        assert!(is_external_spool_safety_valid(true, &mapping));
     }
 
     #[test]
@@ -483,7 +491,7 @@ mod tests {
                 slot_id: 0,
             },
         ];
-        assert!(validate_ams_pool_composition(
+        assert!(is_ams_pool_composition_valid(
             &mapping,
             AmsPoolComposition::Shared { max_units: 4 }
         ));
@@ -514,7 +522,7 @@ mod tests {
                 slot_id: 0,
             },
         ];
-        assert!(!validate_ams_pool_composition(
+        assert!(!is_ams_pool_composition_valid(
             &mapping,
             AmsPoolComposition::Shared { max_units: 4 }
         ));
@@ -534,7 +542,7 @@ mod tests {
                 slot_id: 0,
             },
         ];
-        assert!(validate_ams_pool_composition(
+        assert!(is_ams_pool_composition_valid(
             &valid,
             AmsPoolComposition::Independent {
                 max_standard: 4,
@@ -545,7 +553,7 @@ mod tests {
         let too_many_ht: Vec<AmsMapping2Entry> = (128..=135)
             .map(|ams_id| AmsMapping2Entry { ams_id, slot_id: 0 })
             .collect();
-        assert!(!validate_ams_pool_composition(
+        assert!(!is_ams_pool_composition_valid(
             &too_many_ht,
             AmsPoolComposition::Independent {
                 max_standard: 4,
@@ -572,7 +580,7 @@ mod tests {
                 slot_id: 255,
             },
         ];
-        assert!(validate_ams_pool_composition(
+        assert!(is_ams_pool_composition_valid(
             &mapping,
             AmsPoolComposition::Shared { max_units: 1 }
         ));
@@ -585,22 +593,22 @@ mod tests {
             ams_id: 255,
             slot_id: 0,
         }];
-        assert!(validate_external_spool_safety(false, &mapping_all_external));
+        assert!(is_external_spool_safety_valid(false, &mapping_all_external));
     }
 
     #[test]
     fn test_validate_external_spool_safety_flat_single_nozzle() {
         // All slots unmapped/external (`-1` sentinel) -> use_ams must override to false
-        assert!(!validate_external_spool_safety_flat(true, &[-1, -1]));
+        assert!(!is_external_spool_safety_valid_flat(true, &[-1, -1]));
 
         // At least one real physical AMS channel -> use_ams stays true
-        assert!(validate_external_spool_safety_flat(true, &[0, -1, 1]));
+        assert!(is_external_spool_safety_valid_flat(true, &[0, -1, 1]));
     }
 
     #[test]
     fn test_validate_external_spool_safety_flat_dual_nozzle_bypasses() {
         // Dual-nozzle always returns true regardless of mapping contents
-        assert!(validate_external_spool_safety_flat(false, &[-1, -1]));
+        assert!(is_external_spool_safety_valid_flat(false, &[-1, -1]));
     }
 
     #[test]

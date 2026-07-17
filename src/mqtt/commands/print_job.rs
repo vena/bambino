@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
-use crate::ams::{validate_external_spool_safety, validate_external_spool_safety_flat};
+use crate::ams::{is_external_spool_safety_valid, is_external_spool_safety_valid_flat};
 use crate::models::PrinterModel;
 
 use super::ClampedTaskId;
@@ -233,8 +233,8 @@ impl ProjectFileRequest {
         let is_single_nozzle = model.quirks().physical_nozzle_count() == 1;
         let use_ams = config.use_ams
             && match &config.ams_mapping2 {
-                Some(mapping2) => validate_external_spool_safety(is_single_nozzle, mapping2),
-                None => validate_external_spool_safety_flat(is_single_nozzle, &config.ams_mapping),
+                Some(mapping2) => is_external_spool_safety_valid(is_single_nozzle, mapping2),
+                None => is_external_spool_safety_valid_flat(is_single_nozzle, &config.ams_mapping),
             };
         // BUG-033: derive the flat array from ams_mapping2 whenever it's the active source,
         // instead of trusting config.ams_mapping — with_ams_mapping2() alone never touches
@@ -283,7 +283,7 @@ impl ProjectFileRequest {
                 use_ams,
                 ams_mapping: mapping,
                 // Gated on the *computed* `use_ams` (not `config.use_ams`) so a tripped
-                // `validate_external_spool_safety` interlock can never leave the wire payload
+                // `is_external_spool_safety_valid` interlock can never leave the wire payload
                 // internally contradictory (`use_ams: false` alongside a populated
                 // `ams_mapping2` array) — see [REF-MQTT-LIFECYCLE] for the firmware error
                 // (`0700_8012`) this shape causes.
