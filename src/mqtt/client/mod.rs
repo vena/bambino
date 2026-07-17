@@ -28,6 +28,7 @@ use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use crate::client::dummy::DummyTimer;
 use crate::error::Error;
+use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race};
 
 mod codec;
@@ -161,9 +162,10 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// an invalid access code, this function returns `Error::AccessDenied`.
     pub async fn connect(
         mut stream: IO,
-        serial: &str,
-        access_code: &str,
+        identity: &PrinterIdentity,
     ) -> Result<Self, Error> {
+        let serial = identity.serial.as_str();
+        let access_code = identity.access_code.as_str();
         let conn_id = CONNECTION_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let client_id = format!("bambino_{}_{}", serial, conn_id);
         let connect_pkt = encode_connect(&client_id, "bblp", access_code);
@@ -648,7 +650,14 @@ mod tests {
             });
 
             let result =
-                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(
+                    TokioIo(client_stream),
+                    &PrinterIdentity {
+                        ip: String::new(),
+                        serial: "01P000000000000".into(),
+                        access_code: "12345678".into(),
+                    },
+                )
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
@@ -680,7 +689,14 @@ mod tests {
             });
 
             let result =
-                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(
+                    TokioIo(client_stream),
+                    &PrinterIdentity {
+                        ip: String::new(),
+                        serial: "01P000000000000".into(),
+                        access_code: "12345678".into(),
+                    },
+                )
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
@@ -717,7 +733,14 @@ mod tests {
             });
 
             let result =
-                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(
+                    TokioIo(client_stream),
+                    &PrinterIdentity {
+                        ip: String::new(),
+                        serial: "01P000000000000".into(),
+                        access_code: "12345678".into(),
+                    },
+                )
                     .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
@@ -772,7 +795,14 @@ mod tests {
             });
 
             let mut client =
-                MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
+                MqttClient::connect(
+                    TokioIo(client_stream),
+                    &PrinterIdentity {
+                        ip: String::new(),
+                        serial: "01P000000000000".into(),
+                        access_code: "12345678".into(),
+                    },
+                )
                     .await
                     .expect("connect should succeed");
 

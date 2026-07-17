@@ -2713,7 +2713,10 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
         .await;
         read_puback(&mut server_stream_b).await;
     });
-    let mqtt_client_b = MqttClient::connect(TokioIo(client_stream_b), SERIAL, "12345678")
+    let mqtt_client_b = MqttClient::connect(
+        TokioIo(client_stream_b),
+        &PrinterIdentity { ip: String::new(), serial: SERIAL.into(), access_code: "12345678".into() },
+    )
         .await
         .expect("second MQTT connect handshake failed");
     client.attach_mqtt(mqtt_client_b);

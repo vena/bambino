@@ -11,6 +11,7 @@ use bambino::client::{
     DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected, PrinterClient,
 };
 use bambino::io::AsyncIo;
+use bambino::identity::PrinterIdentity;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
@@ -37,7 +38,10 @@ pub async fn connect_test_client<IO: AsyncIo>(
     serial: &str,
     model: PrinterModel,
 ) -> TestClient<IO> {
-    let mqtt_client = MqttClient::connect(stream, serial, "12345678")
+    let mqtt_client = MqttClient::connect(
+        stream,
+        &PrinterIdentity { ip: String::new(), serial: serial.to_string(), access_code: "12345678".to_string() },
+    )
         .await
         .expect("MQTT connect handshake failed");
     PrinterClient::from_mqtt(mqtt_client, model)

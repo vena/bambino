@@ -19,6 +19,7 @@
 mod common;
 
 use bambino::client::PrinterClient;
+use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
@@ -63,7 +64,10 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         }
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
+    let mqtt_client = MqttClient::connect(
+        TokioIo(client_stream),
+        &PrinterIdentity { ip: String::new(), serial: SERIAL.into(), access_code: "12345678".into() },
+    )
         .await
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, PrinterModel::P1S);
