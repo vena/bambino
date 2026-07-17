@@ -130,6 +130,31 @@ where
     control_fill_buf: Vec<u8>,
 }
 
+/// Sends `cmd`, reads the reply, and maps a non-matching code to `on_reject()` — collapses the
+/// write/read/log/check block that `connect_control_stream()`'s login sequence otherwise repeats
+/// once per command. `on_reject` is a closure (not a fixed `ProtocolViolation` message) because
+/// the PASS step needs `Error::AccessDenied` instead.
+#[allow(clippy::too_many_arguments)]
+async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
+    stream: &mut IO,
+    buf: &mut Vec<u8>,
+    fill_buf: &mut Vec<u8>,
+    timer: &T,
+    deadline_ms: Option<u64>,
+    cmd: &str,
+    log_label: &str,
+    expected_code: u16,
+    on_reject: F,
+) -> Result<(), Error> {
+    write_command(stream, cmd).await?;
+    let (code, text) = read_response(stream, buf, fill_buf, timer, deadline_ms).await?;
+    log::debug!("FTPS {log_label} response: code={code} text={text:?}");
+    if code != expected_code {
+        return Err(on_reject());
+    }
+    Ok(())
+}
+
 impl<RawIO, Tls, Factory, FtpsTimer> BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>
 where
     RawIO: AsyncIo,
@@ -227,89 +252,75 @@ where
             ));
         }
 
-        write_command(&mut control_stream, "USER bblp").await?;
-        let (code, text) = read_response(
+        send_and_expect(
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
             timer,
             deadline_ms,
+            "USER bblp",
+            "USER",
+            FTP_PASSWORD_NEEDED,
+            || Error::ProtocolViolation("USER authentication phase rejected".into()),
         )
         .await?;
-        log::debug!("FTPS USER response: code={code} text={text:?}");
-        if code != FTP_PASSWORD_NEEDED {
-            return Err(Error::ProtocolViolation(
-                "USER authentication phase rejected".into(),
-            ));
-        }
 
         let pass_cmd = format!("PASS {}", access_code);
-        write_command(&mut control_stream, &pass_cmd).await?;
-        let (code, text) = read_response(
+        send_and_expect(
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
             timer,
             deadline_ms,
+            &pass_cmd,
+            "PASS",
+            FTP_LOGIN_OK,
+            || Error::AccessDenied,
         )
         .await?;
-        log::debug!("FTPS PASS response: code={code} text={text:?}");
 
-        if code != FTP_LOGIN_OK {
-            return Err(Error::AccessDenied);
-        }
-
-        write_command(&mut control_stream, "PBSZ 0").await?;
-        let (code, text) = read_response(
+        send_and_expect(
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
             timer,
             deadline_ms,
+            "PBSZ 0",
+            "PBSZ",
+            FTP_COMMAND_OK,
+            || Error::ProtocolViolation("PBSZ protection sizing configuration failed".into()),
         )
         .await?;
-        log::debug!("FTPS PBSZ response: code={code} text={text:?}");
-        if code != FTP_COMMAND_OK {
-            return Err(Error::ProtocolViolation(
-                "PBSZ protection sizing configuration failed".into(),
-            ));
-        }
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !model.quirks().uses_plaintext_ftps_data_channel() {
-            write_command(&mut control_stream, "PROT P").await?;
-            let (code, text) = read_response(
+            send_and_expect(
                 &mut control_stream,
                 &mut buf,
                 &mut fill_buf,
                 timer,
                 deadline_ms,
+                "PROT P",
+                "PROT P",
+                FTP_COMMAND_OK,
+                || Error::ProtocolViolation("Failed to enable TLS data channel protection".into()),
             )
             .await?;
-            log::debug!("FTPS PROT P response: code={code} text={text:?}");
-            if code != FTP_COMMAND_OK {
-                return Err(Error::ProtocolViolation(
-                    "Failed to enable TLS data channel protection".into(),
-                ));
-            }
         }
 
         // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
-        write_command(&mut control_stream, "TYPE I").await?;
-        let (code, text) = read_response(
+        send_and_expect(
             &mut control_stream,
             &mut buf,
             &mut fill_buf,
             timer,
             deadline_ms,
+            "TYPE I",
+            "TYPE I",
+            FTP_COMMAND_OK,
+            || Error::ProtocolViolation("TYPE I binary mode configuration failed".into()),
         )
         .await?;
-        log::debug!("FTPS TYPE I response: code={code} text={text:?}");
-        if code != FTP_COMMAND_OK {
-            return Err(Error::ProtocolViolation(
-                "TYPE I binary mode configuration failed".into(),
-            ));
-        }
 
         Ok((control_stream, fill_buf))
     }
