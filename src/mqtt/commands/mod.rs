@@ -51,9 +51,9 @@ pub fn clamp_task_id(raw_id: u64) -> u32 {
 /// A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId),
 /// which always clamps.
 ///
-/// BUG-001 (a constructor that called `clamp_task_id()` on every field except one) and BUG-053
-/// (24 constructors across 7 files each independently remembering to call `clamp_task_id()`,
-/// with a regression test that only ever exercised 2 of them) were both instances of the same
+/// A constructor that called `clamp_task_id()` on every field except one, and 24 constructors
+/// across 7 files each independently remembering to call `clamp_task_id()` (with a regression
+/// test that only ever exercised 2 of them), were both instances of the same
 /// gap: the clamping invariant was enforced by convention, not the type system, so a future
 /// constructor could silently skip it. Every command constructor now takes `impl
 /// Into<ClampedTaskId>` for its `sequence_id` parameter instead of a raw `u64` — since the only
@@ -94,7 +94,7 @@ mod tests {
             req.print.sequence_id
         );
 
-        // BUG-001: ProjectFileRequest::from_config previously skipped clamp_task_id() too.
+        // ProjectFileRequest::from_config previously skipped clamp_task_id() too.
         let config = PrintJobConfig::new(
             "job.3mf",
             "Metadata/plate_1.gcode",
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_clamp_task_id_wraps_near_max() {
-        // BUG-022: tests/client_test.rs's integration test can't seed sequence_counter near
+        // tests/client_test.rs's integration test can't seed sequence_counter near
         // TASK_ID_MAX (it's pub(crate), invisible outside this crate) so it never actually
         // exercised wraparound. clamp_task_id() is a free function, so this unit test can seed
         // any raw_id directly.
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_ams_mapping2_syncs_flat_ams_mapping() {
-        // BUG-033: with_ams_mapping2() alone (no with_ams()) must still populate the flat
+        // with_ams_mapping2() alone (no with_ams()) must still populate the flat
         // ams_mapping array in sync with ams_mapping2 — the firmware requires the two arrays
         // to stay index-parallel [REF-AMS-MAP], and with_ams_mapping2() never touches
         // config.ams_mapping directly.
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_ams_filament_drying_json() {
-        // BUG-118: field names/shapes rewritten to match the real wire protocol.
+        // Field names/shapes rewritten to match the real wire protocol.
         let req = AmsFilamentDryingRequest::new(128, 1, "PA-CF", 55, 8, 0, true, 20, false, 40004);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_filament_drying"#));

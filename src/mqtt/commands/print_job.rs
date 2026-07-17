@@ -161,14 +161,14 @@ pub struct ProjectFilePayload {
     /// Unique 32-bit tracking identifier (Clamped to prevent overflow lockups).
     pub subtask_id: String,
     /// Dynamic flow (pressure advance) calibration flag, duplicating `extrude_cali_flag` under
-    /// its own key (BUG-119). bambuddy cites a real production incident (#1478) where a
+    /// its own key. bambuddy cites a real production incident (#1478) where a
     /// consumer relying on the wrong one of these two calibration flags silently skipped
     /// calibration — both are sent so no observer can pick the wrong field.
     pub flow_cali: bool,
     /// Slicer preset profile ID. Always `"0"` — confirmed against bambuddy and pybambu, both
     /// of which hardcode this value; no observed non-zero case.
     pub profile_id: String,
-    /// Per-submission project tracking ID. Set equal to `subtask_id` (BUG-119) — bambuddy's
+    /// Per-submission project tracking ID. Set equal to `subtask_id` — bambuddy's
     /// `send_start_print_command` (`bambu_mqtt.py:3721-3781`) mints one fresh ID per
     /// submission and reuses it for `subtask_id`/`project_id`/`task_id` alike; bambino's
     /// `subtask_id` already carries the same "fresh per submission" contract via its own doc
@@ -238,7 +238,7 @@ impl ProjectFileRequest {
                 Some(mapping2) => is_external_spool_safety_valid(is_single_nozzle, mapping2),
                 None => is_external_spool_safety_valid_flat(is_single_nozzle, &config.ams_mapping),
             };
-        // BUG-033: derive the flat array from ams_mapping2 whenever it's the active source,
+        // Derive the flat array from ams_mapping2 whenever it's the active source,
         // instead of trusting config.ams_mapping — with_ams_mapping2() alone never touches
         // ams_mapping, so a caller who only calls that builder previously got a populated
         // ams_mapping2 paired with an empty ams_mapping, breaking the documented 1:1 index
@@ -257,7 +257,7 @@ impl ProjectFileRequest {
             .nozzle_offset_cali
             .unwrap_or_else(|| model.quirks().supports_nozzle_offset_calibration());
 
-        // BUG-119: subtask_id/project_id/task_id all share one value — bambuddy mints a
+        // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's
         // `project_id` doc comment for why reusing bambino's own subtask_id here is equivalent.
         let submission_id = ClampedTaskId::from(config.raw_subtask_id).to_string();

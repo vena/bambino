@@ -55,7 +55,7 @@ impl AmsFilamentSettingRequest {
     /// [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
     /// * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
     ///   `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
-    ///   (`ams_id: 255`) require `tray_id: 254` (BUG-117; confirmed against
+    ///   (`ams_id: 255`) require `tray_id: 254` (confirmed against
     ///   `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
     ///   VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
     ///   `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
@@ -172,7 +172,7 @@ pub struct AmsChangeFilamentPayload {
     pub ams_id: i32,
     /// Target slot index within the AMS unit.
     pub slot_id: i32,
-    /// Load/unload destination slot (BUG-116; confirmed against BambuStudio's
+    /// Load/unload destination slot (confirmed against BambuStudio's
     /// `command_ams_change_filament`, `DeviceManager.cpp:1602-1638`): `255` on unload, the
     /// `ams_id` itself for AMS-HT/external-spool units (`ams_id >= 16`), or the flat global
     /// tray ID (`ams_id*4 + slot_id`) for a standard unit. Only coincidentally mirrors
@@ -220,7 +220,7 @@ impl AmsChangeFilamentRequest {
 
 /// Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
 ///
-/// BUG-118: field set and shapes rewritten to match the real wire protocol — confirmed
+/// Field set and shapes rewritten to match the real wire protocol — confirmed
 /// against BambuStudio's `DevFilaSystem::CtrlAmsStartDryingHour`/`CtrlAmsStopDrying`
 /// (`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the
 /// tree) and independently corroborated by bambuddy's `send_drying_command`

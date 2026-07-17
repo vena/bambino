@@ -45,7 +45,7 @@ pub(crate) fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 pub(crate) fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
     let mut payload = Vec::with_capacity(16 + client_id.len() + username.len() + password.len());
 
-    // BUG-134: string length prefixes below are u16 wire fields; these `as u16` casts
+    // String length prefixes below are u16 wire fields; these `as u16` casts
     // silently truncate/wrap past 65535 bytes instead of erroring. Not reachable today (all
     // values derive from short serials/fixed strings) — debug_assert as insurance.
     debug_assert!(client_id.len() <= u16::MAX as usize, "client_id exceeds u16::MAX");

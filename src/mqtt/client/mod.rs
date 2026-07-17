@@ -133,7 +133,7 @@ async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), 
 }
 
 /// Same as [`write_frame`], but races the write against `MQTT_WRITE_TIMEOUT_SECS` when `timer`
-/// has a real wall-clock (BUG-159) — without this, a stalled peer that stops draining its
+/// has a real wall-clock — without this, a stalled peer that stops draining its
 /// socket buffer (or a dead connection with no RST yet) blocks `write_all()`/`flush()`
 /// forever, unlike the read path's existing `MQTT_READ_TIMEOUT_SECS` protection. Unlike
 /// `read_chunk`'s single-step racing (needed for resumability across partial reads), a timed-
@@ -217,7 +217,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
         log::debug!("Connection accepted response byte: {}", connack_code);
 
-        // BUG-032: MQTT v3.1.1 CONNACK codes 1-3 (unacceptable protocol version, identifier
+        // MQTT v3.1.1 CONNACK codes 1-3 (unacceptable protocol version, identifier
         // rejected, server unavailable) are distinct from 4-5 (bad credentials/not authorized)
         // — only the latter pair actually means the access code was rejected, matching
         // AccessDenied's own doc comment. Collapsing 1-3 into AccessDenied too would misdiagnose
@@ -315,7 +315,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
     ///
     /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
     /// `PrinterClient` callers get the new stalled-write protection via
-    /// `publish_command_with_timer()` instead, since they have a real `Timer` available (BUG-159).
+    /// `publish_command_with_timer()` instead, since they have a real `Timer` available.
     pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error> {
         self.publish_command_with_timer(payload, &DummyTimer).await
     }
@@ -351,7 +351,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
         self.in_flight.insert(packet_id);
 
-        // Arm write-channel zombie detection tracking [REF-MQTT-ZOMBIE] — BUG-078: only on
+        // Arm write-channel zombie detection tracking [REF-MQTT-ZOMBIE] — only on
         // the *first* unanswered command, not unconditionally on every call. Resetting to 0
         // on each publish_command() while an earlier command is still awaiting a response
         // would let a steady stream of new commands mask that earlier one's zombie state
@@ -482,7 +482,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     );
 
                     // QoS 1 requires PUBACK; QoS 2 requires a PUBREC/PUBREL/PUBCOMP handshake,
-                    // which this client doesn't implement (BUG-052) — Bambu printers never
+                    // which this client doesn't implement — Bambu printers never
                     // publish above QoS 1 in practice, so this stays a logged, non-fatal gap
                     // rather than a full protocol extension for a case never observed against
                     // real hardware. A broker that did send genuine QoS 2 would see no PUBREC
@@ -537,7 +537,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
     ///
     /// `DummyTimer` makes the underlying write unbounded here, mirroring `publish_command()`.
     /// `PrinterClient` callers get stalled-write protection via `send_ping_with_timer()`
-    /// instead (BUG-159).
+    /// instead.
     pub async fn send_ping(&mut self) -> Result<(), Error> {
         self.send_ping_with_timer(&DummyTimer).await
     }
@@ -666,7 +666,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_connack_server_unavailable_returns_protocol_violation() {
-            // BUG-032: CONNACK codes 1-3 (unacceptable protocol version, identifier rejected,
+            // CONNACK codes 1-3 (unacceptable protocol version, identifier rejected,
             // server unavailable) are distinct from 4-5 (bad credentials/not authorized) — only
             // the latter pair means the access code was actually rejected. Code 3 here
             // (server unavailable) must not misdiagnose as AccessDenied.
@@ -751,7 +751,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_poll_telemetry_with_timer_resumes_split_frame_through_persistent_client() {
-            // BUG-140: the resumable-frame-read invariant (.claude/rules/wire-read-deadline.md)
+            // The resumable-frame-read invariant (.claude/rules/wire-read-deadline.md)
             // was previously only unit-tested against a bare `FrameReadState`/`read_exact_packet`
             // call (frame.rs) — never through a live, persistent `MqttClient::read_state`
             // field with a real (non-Dummy) timer, the exact combination `PrinterClient` uses via
@@ -822,7 +822,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_publish_command_does_not_reset_zombie_timer_while_pending() {
-            // BUG-078: publish_command() used to unconditionally set write_pending_secs to
+            // publish_command() used to unconditionally set write_pending_secs to
             // Some(0) on every call, even while an earlier command's response was still
             // outstanding. A steady stream of new commands would then mask that earlier
             // command's zombie state forever, since the counter never reached

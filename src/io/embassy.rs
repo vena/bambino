@@ -67,7 +67,7 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
         self.inner
             .send_to(buf, endpoint)
             .await
-            // BUG-049: preserve the specific embassy-net failure mode instead of collapsing
+            // Preserve the specific embassy-net failure mode instead of collapsing
             // every `SendError` variant to `ConnectionReset` — `NoRoute` has no matching
             // `SocketError` variant (kept as `Other`, honest rather than a wrong-shaped
             // guess); `SocketNotBound`/`PacketTooLarge` map to existing variants that fit.
@@ -89,7 +89,7 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
             .inner
             .recv_from(buf)
             .await
-            // BUG-049: `RecvError` currently has one variant (`Truncated` — buffer too small
+            // `RecvError` currently has one variant (`Truncated` — buffer too small
             // for the received datagram), no matching `SocketError` variant exists, so this
             // stays `Other` rather than the misleading `ConnectionReset` it was before.
             .map_err(|_| {
@@ -315,7 +315,7 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
         self.client
             .connect(addr)
             .await
-            // BUG-050: `embassy_net::tcp::client`'s `TcpConnect::Error` (`tcp::Error`) has a
+            // `embassy_net::tcp::client`'s `TcpConnect::Error` (`tcp::Error`) has a
             // single variant, `ConnectionReset` — used for both a genuine remote RST and pool
             // exhaustion (`TcpConnection::new` on an empty pool). Mapping it to
             // `ConnectionRefused` fabricated a distinction the source type doesn't make, which

@@ -90,7 +90,7 @@ impl ServerCertVerifier for NoCertificateVerification {
 /// policy-enforcing validator — confirmed via its own test suite that it treats the version
 /// field as optional, defaulting to v1 when absent, exactly per the DER grammar) for all
 /// parsing, and does two independent things no other code in this crate does:
-/// - **Chain-of-trust**: walks from the leaf through the presented intermediates (BUG-008: this
+/// - **Chain-of-trust**: walks from the leaf through the presented intermediates (this
 ///   used to check the leaf directly against the trusted roots only, silently ignoring
 ///   `intermediates` — a legitimate two-level custom CA (offline root + issuing intermediate)
 ///   failed with `UnknownIssuer` even though the chain was valid) until it either lands on a
@@ -176,7 +176,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             return Err(RustlsError::InvalidCertificate(err));
         }
 
-        // BUG-008: walk from the leaf through `intermediates` (parsed once up front, then
+        // Walk from the leaf through `intermediates` (parsed once up front, then
         // consumed as they're matched — each intermediate is usable at most once, so a cyclic
         // issuer/subject arrangement can't stall the loop) until landing on a trusted root or
         // running out of intermediates. Every hop must both match issuer/subject *and* verify
@@ -203,7 +203,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
                 break;
             }
 
-            // BUG-048: try every unused intermediate matching the issuer subject, not just the
+            // Try every unused intermediate matching the issuer subject, not just the
             // first by position — a duplicate-subject-name chain (e.g. a rotated intermediate
             // reusing its predecessor's subject) could have the wrong one land first, fail
             // signature verification, and abort the whole walk even though a later same-subject

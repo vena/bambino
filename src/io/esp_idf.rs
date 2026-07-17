@@ -26,7 +26,7 @@ impl EspIdfTimer {
     /// Constructs a new timer backed by a dedicated ESP-IDF high-resolution timer service.
     ///
     /// `EspIdfTcpStream::connect` and `EspIdfTlsConnector::connect` each allocate their own
-    /// instance rather than sharing one — verified (BUG-051) that 10,000 sequential
+    /// instance rather than sharing one — verified that 10,000 sequential
     /// allocate/drop cycles on both ESP32-C6 and ESP32-C3 hit zero failures, so the
     /// `esp_timer` slot cap isn't a practical concern here; see `esp32-hw-probe/`.
     pub fn new() -> Result<Self, ::esp_idf_svc::sys::EspError> {
@@ -425,7 +425,7 @@ impl embedded_io_async::Error for EspIdfIoError {
 
 /// Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 ///
-/// BUG-031: the underlying socket stays non-blocking for the stream's entire lifetime (not
+/// The underlying socket stays non-blocking for the stream's entire lifetime (not
 /// just during `connect()`'s own polling loop) — `read()`/`write()` below retry on
 /// `WouldBlock` by yielding to the async executor via `EspIdfTimer::sleep(TLS_POLL_INTERVAL)`,
 /// the same pattern `EspIdfTlsStream` already uses. A genuinely blocking socket here would give a
@@ -460,7 +460,7 @@ impl EspIdfTcpStream {
     /// the non-blocking flag must be set *before* `connect()` is called on a not-yet-connected
     /// socket — hence going through `socket2::Socket` instead.
     ///
-    /// The socket stays non-blocking after the connection completes (BUG-031) — see
+    /// The socket stays non-blocking after the connection completes — see
     /// `EspIdfTcpStream`'s doc comment for why `read()`/`write()` need that.
     ///
     /// Does not bound its own retry loop by a timeout — bounding is the responsibility of
@@ -525,7 +525,7 @@ impl embedded_io_async::ErrorType for EspIdfTcpStream {
 
 /// Shared `WouldBlock` retry loop for `EspIdfTcpStream::read`/`write`, mirroring
 /// `retry_on_would_block` above but for plain `std::io` calls instead of `EspTls` ones.
-/// BUG-031: without this, the raw plaintext stream had no preempt point at all — a stuck
+/// Without this, the raw plaintext stream had no preempt point at all — a stuck
 /// peer blocked the FreeRTOS task indefinitely with no `.await` yield point for an outer
 /// timeout to preempt.
 #[cfg(feature = "esp-idf")]
@@ -658,8 +658,8 @@ impl EspIdfTlsConnector {
     }
 
     /// Overrides the default handshake deadline. Passing `Duration::ZERO` disables the
-    /// deadline entirely (BUG-077), matching `set_command_timeout`'s "0 disables" convention
-    /// and `client::connect::with_connect_timeout`'s precedent (BUG-007) — otherwise the very
+    /// deadline entirely, matching `set_command_timeout`'s "0 disables" convention
+    /// and `client::connect::with_connect_timeout`'s precedent — otherwise the very
     /// first would-block poll would immediately exceed a zero-length budget.
     /// Non-consuming — chain onto `new()`/`with_certs()`.
     #[must_use]
@@ -715,8 +715,8 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             match tls.negotiate(host, &cfg) {
                 Ok(_) => break,
                 Err(e) if is_would_block(&e) => {
-                    // BUG-077: connect_timeout == 0 means "disabled" (matching
-                    // with_connect_timeout's doc comment and BUG-007's precedent elsewhere in
+                    // connect_timeout == 0 means "disabled" (matching
+                    // with_connect_timeout's doc comment and its precedent elsewhere in
                     // this crate), not "expire on the very first would-block poll" — skip the
                     // deadline check entirely in that case.
                     if !self.connect_timeout.is_zero()

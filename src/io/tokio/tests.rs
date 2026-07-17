@@ -57,7 +57,7 @@ mod test_support {
     }
 
     /// Builds an intermediate CA cert signed by `parent_issuer`, plus an `Issuer` for
-    /// signing leaves under it — used by the two-level chain regression test (BUG-008).
+    /// signing leaves under it — used by the two-level chain regression test.
     pub(super) fn generate_test_intermediate_ca(
         parent_issuer: &Issuer<'_, KeyPair>,
         common_name: &str,
@@ -250,7 +250,7 @@ fn test_cn_fallback_verifier_rejects_untrusted_chain() {
 
 #[test]
 fn test_cn_fallback_verifier_accepts_leaf_via_intermediate() {
-    // BUG-008: a leaf signed by an intermediate CA (itself signed by the trusted root, not
+    // A leaf signed by an intermediate CA (itself signed by the trusted root, not
     // trusted directly) must validate when the intermediate is presented in `intermediates`
     // — the verifier previously only ever checked the leaf's issuer directly against the
     // trusted roots, so this always failed with UnknownIssuer regardless.
@@ -308,7 +308,7 @@ fn test_cn_fallback_verifier_rejects_leaf_via_untrusted_intermediate() {
 
 #[test]
 fn test_cn_fallback_verifier_skips_wrong_signature_for_duplicate_subject_intermediate() {
-    // BUG-048: two intermediates share the same subject CN, but only the second (by
+    // Two intermediates share the same subject CN, but only the second (by
     // position in `intermediates`) is the one that actually signed the leaf. The old
     // chain-walk picked the first subject-name match, failed its signature check, and
     // `break`s the whole walk — this proves it now tries the next same-subject candidate
@@ -393,7 +393,7 @@ fn test_cn_fallback_verifier_accepts_real_v1_shaped_cert_with_cn_match() {
 
 #[test]
 fn test_build_verified_client_config_bad_key_returns_error() {
-    // BUG-157: exercise this crate's build_verified_client_config, not just
+    // Exercise this crate's build_verified_client_config, not just
     // rustls_pki_types::PrivateKeyDer::try_from's own parsing (a fact about that crate, not
     // this one). A well-typed-but-garbage PKCS#8 key bypasses try_from's format sniffing so
     // the bogus bytes reach rustls' own key validation inside with_client_auth_cert.

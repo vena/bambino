@@ -14,7 +14,7 @@ use crate::io::AsyncIo;
 /// message fits, logging a `log::warn!` for each eviction.
 pub(crate) const MQTT_PENDING_BUFFER_MAX_BYTES: usize = 2_097_152; // 2 MiB
 
-// BUG-052: `push_pending`'s eviction loop stops once the buffer is empty (see its `while`
+// `push_pending`'s eviction loop stops once the buffer is empty (see its `while`
 // guard below) and unconditionally pushes the incoming message regardless of whether it fit
 // — so a single message whose own size exceeds the cap slips through unenforced. That's
 // currently unreachable only by convention: `MQTT_MAX_PAYLOAD_BYTES` (frame.rs) plus the
