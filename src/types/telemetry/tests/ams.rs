@@ -415,7 +415,7 @@ fn test_ams_unit_info_accessors_dry_sub_status_distinct_bits() {
     // fan1=3 (bits 18-19), fan2=1 (bits 20-21), dry_sub_status=2 (bits 22-23),
     // plus a nonzero bit 24 outside every known field's mask. Every field gets a distinct
     // nonzero value so a shift/mask regression reading a neighboring field's bits instead
-    // of its own (BUG-104's bug class) would fail here, unlike the all-zero-except-one
+    // of its own would fail here, unlike the all-zero-except-one
     // fixtures elsewhere in this file.
     let unit = AmsUnit {
         id: "0".into(),

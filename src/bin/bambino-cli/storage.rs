@@ -276,7 +276,7 @@ fn report_clock_delta(
     if days.abs() > 0 {
         println!(
             "Printer clock is off by more than a day — its onboard clock is not usably \
-             synced (see BUG-042 in BACKLOG.md); don't trust `list_directory`'s inferred \
+             synced; don't trust `list_directory`'s inferred \
              year near a calendar boundary."
         );
     }
@@ -352,7 +352,7 @@ fn print_file_listing_table(remote_path: &str, files: &[bambino::ftps::FtpFile])
     if any_inferred {
         println!(
             "\n* year inferred from host clock, not reported by the printer — its onboard \
-             clock may be unsynced (see BUG-042 in BACKLOG.md); run `files clock-check` to \
+             clock may be unsynced; run `files clock-check` to \
              verify."
         );
     }
