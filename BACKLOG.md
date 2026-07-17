@@ -10,6 +10,10 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
+| BUG-249 | Sev3 | mqtt/client/mod.rs | `write_frame_with_timer` can leave a partial frame on the wire after a timeout, without marking the connection unusable | 2026-07-17 | src/mqtt/client/mod.rs:142-156 — `write_all`'s internal loop may hand bytes to the OS socket buffer before a losing race drops the future; caller treats it as a plain retryable `TimedOut` error, not a desync. See 07-17-RE-REVIEW.md §3 |
+| BUG-250 | Sev3 | ftps/parser.rs, reference/02_ftps.md | `reference/02_ftps.md` §2.2 still documents the pre-BUG-088 filename-joining behavior that the code no longer does | 2026-07-17 | reference/02_ftps.md §2.2 says filenames are "joined with single spaces"; `parse_unix_listing` actually preserves the raw remainder verbatim (fixed by BUG-088). Update the doc to match. See 07-17-RE-REVIEW.md §5 |
+| BUG-251 | Sev3 | types/telemetry/tests/ams.rs | `dry_sub_status()` (the BUG-104 field) is only ever asserted against `Some(0)` in all 4 tests exercising it | 2026-07-17 | src/types/telemetry/tests/ams.rs:371-390,409,429 — a shift/mask regression of BUG-104's exact bug class wouldn't necessarily be caught. Add a fixture with distinct nonzero bits 22-23 vs 24-25. See 07-17-RE-REVIEW.md §12 |
+| BUG-252 | Sev3 | quirks/models/p1.rs | Shared `P1Quirks::supports_auxiliary_left_fan()` returns `true` unconditionally, but MODEL_MATRIX.csv lists the aux fan as Optional on P1P (Yes on P1S) | 2026-07-17 | src/quirks/models/p1.rs — P1P/P1S share one quirks struct; a P1P without the physical aux fan would still report support. Likely harmless if printer telemetry reports 0/absent, but worth a targeted check. See 07-17-RE-REVIEW.md §16 |
 ## Fixed
 
 | ID | Sev | Module | Title | Found | Closed | Detail |
