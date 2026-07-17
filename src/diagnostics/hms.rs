@@ -40,10 +40,9 @@ pub enum HmsSeverity {
 impl HmsSeverity {
     /// Extracts the severity level from the high 16 bits of the 32-bit `code` value.
     ///
-    /// Bit representation: `(code >> 16) & 0xFFFF` [REF-DIAG-HMS]. BUG-108: previously derived
-    /// from `attr` (`(attr >> 8) & 0x0F`); confirmed against BambuStudio's `parse_hms_info`
-    /// (`DevHMS.cpp:7-25`, identical in OrcaSlicer) and pybambu's `get_HMS_severity`, both of
-    /// which derive severity from `code >> 16`.
+    /// Bit representation: `(code >> 16) & 0xFFFF` [REF-DIAG-HMS]. Confirmed against
+    /// BambuStudio's `parse_hms_info` (`DevHMS.cpp:7-25`, identical in OrcaSlicer) and
+    /// pybambu's `get_HMS_severity`, both of which derive severity from `code >> 16`.
     pub fn from_code(code: u32) -> Self {
         match (code >> 16) & 0xFFFF {
             1 => HmsSeverity::Fatal,
@@ -94,7 +93,7 @@ pub fn decode_hms_alert(attr: u32, code: u32) -> DecodedHmsAlert {
     let module_id = ((attr >> 24) & 0xFF) as u8;
     let severity = HmsSeverity::from_code(code);
 
-    // BUG-109: compare the full 32-bit code (not just its low 16 bits) against the fault
+    // Compare the full 32-bit code (not just its low 16 bits) against the fault
     // threshold — confirmed against BambuStudio's bundled `resources/hms/hms_en_093.json`
     // fault catalog (4591/4592 genuine hms[] faults have code_low < 0x4000, so a code_low-only
     // check misclassifies nearly every real fault as a non-fault status step).
@@ -179,7 +178,7 @@ mod tests {
         assert_eq!(decoded.module_id, 0x03);
         assert_eq!(decoded.severity, HmsSeverity::Fatal);
 
-        // BUG-109: is_status_step now compares the full code (65543), which is >= 0x4000,
+        // is_status_step compares the full code (65543), which is >= 0x4000,
         // so this is a genuine fault even though its low word (0x0007) alone is < 0x4000.
         assert!(decoded.is_genuine_fault);
     }
@@ -280,9 +279,6 @@ mod tests {
     #[test]
     fn test_real_x2d_hms_entry() {
         // From pybambu MOCK-X2D.json: attr=83887616 code=131184
-        // BUG-108/109: severity now derives from code>>16 (was Unknown from a wrong attr-byte
-        // read), and is_status_step now compares the full code (was code_low-only, which
-        // wrongly classified this genuine fault as a non-fault status step).
         let decoded = decode_hms_alert(83887616, 131184);
         assert_eq!(decoded.wiki_key, "0500_0600_0002_0070");
         assert_eq!(decoded.short_code, "0500_0070");
@@ -294,7 +290,6 @@ mod tests {
     #[test]
     fn test_real_misc_hms_entry() {
         // From pybambu MOCK-MISC.json: attr=201327360 code=196615
-        // BUG-109: is_status_step now compares the full code, not just code_low.
         let decoded = decode_hms_alert(201327360, 196615);
         assert_eq!(decoded.wiki_key, "0C00_0300_0003_0007");
         assert_eq!(decoded.short_code, "0C00_0007");

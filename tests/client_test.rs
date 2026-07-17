@@ -214,11 +214,9 @@ async fn test_thermal_guards_and_temperatures() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
-        // Bed temperature verification
         let json_bed = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_bed["print"]["param"], "M140 S60\n");
 
-        // Nozzle temperature verification
         let json_nozzle = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_nozzle["print"]["param"], "M104 T0 S220\n");
 
@@ -350,11 +348,9 @@ async fn test_cooling_fans_and_peripheral_switches() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
-        // Verify part cooling fan (M106 P1)
         let json_cf = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_cf["print"]["param"], "M106 P1 S127\n"); // 50% PWM
 
-        // Left auxiliary fan verification (M106 P2)
         let json_aux = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_aux["print"]["param"], "M106 P2 S255\n"); // 100% PWM
     });

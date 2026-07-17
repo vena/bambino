@@ -141,10 +141,8 @@ pub struct AmsMapping2Entry {
 /// Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to.
 ///
 /// Inverse of `MaterialSource::flat_channel_id`, operating on the already-structured
-/// `ams_id`/`slot_id` pair instead of a `MaterialSource` — used by
-/// `ProjectFileRequest::from_config` (`mqtt/commands/print_job.rs`) to derive `ams_mapping`
-/// from `ams_mapping2` when the caller only supplied the latter via
-/// `PrintJobConfig::with_ams_mapping2()`, so the two arrays never go out of sync (BUG-033).
+/// `ams_id`/`slot_id` pair instead of a `MaterialSource` — keeps `ams_mapping` and
+/// `ams_mapping2` from going out of sync when only the latter was supplied (BUG-033).
 #[must_use]
 pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
     if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
@@ -183,8 +181,7 @@ pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
         } else {
             // BUG-070: filament_id is documented as 1-based (1 to N) — id == 0 (or > max_id,
             // unreachable since max_id is derived from this same slice) is a caller bug, not a
-            // legitimately-skippable entry. Silently dropping it previously left that project
-            // slot permanently unmapped with no operator-visible signal.
+            // legitimately-skippable entry.
             log::warn!(
                 "build_ams_mapping: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
             );
@@ -249,17 +246,16 @@ pub fn is_external_spool_safety_valid(
         // Checks both external-spool IDs (254 and 255), matching is_external_spool_safety_valid_flat's
         // uniform treatment — AmsMapping2Entry's fields are public, so a caller can hand-build
         // an entry with ams_id 254 (normally IDEX-only, via MaterialSource::ExternalSpoolLeft)
-        // on a single-nozzle printer; checking only 255 here let that case slip through and
-        // dispatch use_ams:true for a non-physical channel, reproducing the 07FF_8012 lockup
-        // this function exists to prevent.
+        // on a single-nozzle printer. Treating it as physical here would dispatch use_ams:true
+        // for a non-physical channel, reproducing the 07FF_8012 lockup this function exists to
+        // prevent.
         let is_external = (entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID
             || entry.ams_id == AMS_EXTERNAL_SPOOL_ID)
             && entry.slot_id == 0;
-        // BUG-128: an entry that's neither the unmapped sentinel nor a recognized external id
-        // previously fell through to has_physical_ams = true unconditionally, even when
-        // ams_id/slot_id don't correspond to any real standard/AMS-HT hardware — reproducing
-        // the 07FF_8012 lockup class for garbage ids generally. Require a validly-ranged
-        // standard or AMS-HT entry before counting it as physical.
+        // An entry that's neither the unmapped sentinel nor a recognized external id must be a
+        // validly-ranged standard or AMS-HT entry before counting it as physical — an
+        // unconstrained fallthrough would reproduce the 07FF_8012 lockup class for garbage ids
+        // generally.
         let is_valid_physical = (entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
             && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT)
             || (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id);

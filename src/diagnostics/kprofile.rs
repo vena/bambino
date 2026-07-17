@@ -565,8 +565,8 @@ mod tests {
 
     #[test]
     fn test_all_constructors_clamp_unclamped_sequence_id() {
-        // BUG-001: these five constructors previously serialized sequence_id.to_string()
-        // directly, skipping clamp_task_id() — see .claude/rules/task-id-clamping.md.
+        // These five constructors must serialize sequence_id through clamp_task_id() —
+        // see .claude/rules/task-id-clamping.md.
         let raw = u64::MAX;
         let assert_clamped = |sequence_id: &str, label: &str| {
             assert!(

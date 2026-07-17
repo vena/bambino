@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_clean_stale_tray_data_clears_drying_fields() {
-        // Phase 4.12 regression: a spool with a configured drying profile that's removed and
+        // Regression: a spool with a configured drying profile that's removed and
         // replaced with a spool lacking drying config must not leave the *previous* spool's
         // stale drying temp/time cached client-side (which could show a phantom drying
         // countdown in a UI).

@@ -165,10 +165,9 @@ async fn poll_connect_until_complete(
 /// `async-io` crate and `MountedEventfs`, but that needs a new dependency and real
 /// app-side setup (a sized eventfd mount, a dedicated thread with a bumped stack, and
 /// working around an ESP-IDF main-task/async-io-thread priority inversion) — left as a
-/// future upgrade. This fixed-interval poll already fixes the actual problem this phase
-/// targets: since `Config::non_block = true` makes every `EspTls` call return immediately
-/// instead of blocking inside the FFI call, an outer `TimerProvider`-based timeout can
-/// preempt the operation between poll attempts, which it could not do before.
+/// future upgrade. This fixed-interval poll works because `Config::non_block = true` makes
+/// every `EspTls` call return immediately instead of blocking inside the FFI call, so an outer
+/// `TimerProvider`-based timeout can preempt the operation between poll attempts.
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
@@ -194,8 +193,7 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
 /// `SocketError`, distinguishing DNS/address failures and genuine connection refusals from
 /// opaque/other failures instead of collapsing everything to `ConnectionRefused` (the
 /// previous behavior — actively misleading for e.g. a bad CA cert or an out-of-memory
-/// condition inside mbedTLS, both of which used to read as "refused"). Used by
-/// `EspIdfTlsConnector::connect`.
+/// condition inside mbedTLS, both of which used to read as "refused").
 ///
 /// Checks two families of codes, both surfaced by `EspTls::connect`/`negotiate` in practice:
 /// `esp_tls`'s own `ESP_ERR_ESP_TLS_*` codes (returned when `esp_tls` fails before or during
@@ -233,9 +231,8 @@ fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError 
 }
 
 /// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields and `new()`/`with_certs()` constructors.
-/// Factored out (originally shared with the now-deleted `EspIdfSecureConnector` — `SecureConnect`
-/// was removed crate-wide in favor of `TlsConnector`+`RawStreamFactory`) so a future cert-related
-/// option (e.g. ALPN config) only needs to be added in one place.
+/// Factored out so a future cert-related option (e.g. ALPN config) only needs to be added in
+/// one place.
 #[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
     ca_cert: Option<Vec<u8>>,
@@ -270,7 +267,7 @@ impl EspIdfTlsCerts {
     }
 }
 
-/// Builds an `esp_idf_svc::tls::Config` from cert bytes, used by `EspIdfTlsConnector`'s wrap-existing-stream `TlsConnector` impl below.
+/// Builds an `esp_idf_svc::tls::Config` from cert bytes.
 #[cfg(feature = "esp-idf")]
 fn build_tls_config<'a>(
     ca_cert: &'a Option<Vec<u8>>,
@@ -371,7 +368,7 @@ where
     }
 }
 
-/// Shared mbedTLS version query, used by `EspIdfTlsConnector::negotiated_version` (below).
+/// Shared mbedTLS version query.
 /// Generic over the adopted `Socket` impl so it isn't tied to one connector shape.
 #[cfg(feature = "esp-idf")]
 fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
@@ -683,7 +680,7 @@ impl Default for EspIdfTlsConnector {
 impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     type Stream = EspIdfTlsStream<EspIdfTcpStream>;
 
-    /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration); previously this loop had no upper bound at all.
+    /// Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration).
     async fn connect(
         &self,
         host: &str,

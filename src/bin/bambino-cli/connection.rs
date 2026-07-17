@@ -64,9 +64,9 @@ pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Resu
         )));
     }
 
-    // BUG-130: aligned with CAMERA_PASSWORD_MAX_LEN (camera/binary.rs) and the alphanumeric
-    // requirement camera/rtsps.rs and camera/binary.rs both enforce downstream, instead of a
-    // narrower CLI-only ceiling that could reject a legitimate code or admit one that fails later.
+    // Must match CAMERA_PASSWORD_MAX_LEN (camera/binary.rs) and the alphanumeric requirement
+    // camera/rtsps.rs and camera/binary.rs both enforce downstream — a narrower CLI-only
+    // ceiling could reject a legitimate code or admit one that fails later.
     if access_code.is_empty()
         || access_code.len() > bambino::camera::binary::CAMERA_PASSWORD_MAX_LEN
         || !access_code.bytes().all(|b| b.is_ascii_alphanumeric())

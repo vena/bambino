@@ -357,8 +357,7 @@ async fn test_read_response_stalled_connection_times_out() {
 async fn test_write_command_sends_single_write_call() {
     // Regression test: write_command must send "cmd\r\n" as one write_all call, not two
     // separate ones. Some embedded FTP servers (confirmed live against a Bambu P1S) don't
-    // reliably reassemble a command line split across two writes/TLS records — a bug
-    // introduced in commit 6385019 and fixed by combining back into a single write.
+    // reliably reassemble a command line split across two writes/TLS records.
     let recorder = WriteRecorder::default();
     let mut stream = TokioIo(recorder.clone());
 

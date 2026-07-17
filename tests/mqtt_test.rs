@@ -25,7 +25,6 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     let (ack_tx, ack_rx) = oneshot::channel();
     let serial = "01P000000000000";
 
-    // 1. Spawn the background mock broker
     let broker_handle = tokio::spawn(run_mock_mqtt_broker(
         server_stream,
         serial.to_string(),
@@ -33,7 +32,6 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         ack_tx,
     ));
 
-    // 2. Initialize Client (Executes CONNECT -> CONNACK and SUBSCRIBE -> SUBACK)
     let mut client = MqttClient::connect(
         TokioIo(client_stream),
         &PrinterIdentity { ip: String::new(), serial: serial.to_string(), access_code: "12345678".to_string(), model: PrinterModel::P1S },
@@ -41,13 +39,11 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .await
         .expect("Failed to execute MQTT login and subscription handshake");
 
-    // 3. Test QoS 1 Command Publishing and Tracking
     let _packet_id = client
         .publish_command(b"{\"command\":\"pushall\"}")
         .await
         .expect("QoS 1 command publish failed");
 
-    // Ensure the packet is tracked in the unacknowledged queue
     assert_eq!(
         client.in_flight_count(),
         1,
@@ -60,7 +56,6 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .await
         .expect("Failed to receive command acknowledgment signal from mock broker");
 
-    // 4. Test Telemetry Reception & Implicit Acknowledgments
     // Inject a telemetry payload into the broker so the client can pull it.
     // As the client pulls this, it will also read the queued `PUBACK` from the broker,
     // thereby clearing the in-flight tracker.
@@ -77,14 +72,12 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     assert_eq!(msg.topic, format!("device/{}/report", serial));
     assert_eq!(msg.payload, b"{\"mock\":\"telemetry_payload_1\"}");
 
-    // Verify the PUBACK was processed in the background during the poll loop
     assert_eq!(
         client.in_flight_count(),
         0,
         "In-flight queue did not clear after PUBACK reception"
     );
 
-    // 5. Test PINGREQ / PINGRESP cycle
     client
         .send_ping()
         .await
@@ -100,7 +93,6 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .await
         .expect("Telemetry poll failed after PINGREQ cycle");
 
-    // 6. Test Write-Channel Zombie Detection
     // Arm the zombie tracker by publishing a new command
     client
         .publish_command(b"{\"command\":\"zombie_test\"}")

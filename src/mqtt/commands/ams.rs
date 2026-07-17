@@ -225,8 +225,7 @@ impl AmsChangeFilamentRequest {
 /// (`DevFilaSystemCtrl.cpp:18-53`, the sole outbound `ams_filament_drying` constructor in the
 /// tree) and independently corroborated by bambuddy's `send_drying_command`
 /// (`bambu_mqtt.py:4141-4171`, whose own comment cites real-hardware silent-rejection
-/// incident #1447). The previous schema (`dry_temp`/`dry_time` in minutes, no
-/// `humidity`/`cooling_temp`/`close_power_conflict`) shared no field name with either source.
+/// incident #1447).
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentDryingPayload {
     /// Wire command name, always `"ams_filament_drying"`.

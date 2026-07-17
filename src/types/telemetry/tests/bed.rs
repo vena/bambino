@@ -77,9 +77,6 @@ fn test_bed_temperatures_new_gen_nested_in_print() {
                 }
             }
         }"#;
-    // 3932261 = (60 << 16) | 0x0065 = 3932261 → actual=101, target=60? No...
-    // Let me calculate: (60 << 16) | 55 = 3932215. Let me use 60/55: (60 << 16) | 55 = 3932215
-    // Actually let me just use a known value: (60 << 16) | 55 = 0x3C0037 = 3932215
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     let (actual, target) = report.bed_temperatures();
     // 3932261 = 0x3C0065 → actual = 0x65 = 101, target = 0x3C = 60

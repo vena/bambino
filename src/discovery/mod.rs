@@ -150,7 +150,6 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                 }
                 Ok(parsed)
             }
-            // Catch-all transient socket timeout. Returns None to allow retry loop cycles.
             Err(crate::io::SocketError::TimedOut) => Ok(None),
             Err(e) => Err(Error::Network(e)),
         }
@@ -526,8 +525,7 @@ mod tests {
         }
 
         // Use a real TokioTimer with a very short timeout to verify wall-clock
-        // termination. The old poll-counting approach would have run for
-        // (timeout_ms / 100ms) iterations regardless of actual elapsed time.
+        // termination.
         let timer = TokioTimer::new();
         let before = std::time::Instant::now();
         let devices = discover_devices::<QuickExitSocket, TokioTimer>(

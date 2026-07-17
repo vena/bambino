@@ -118,7 +118,7 @@ fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError
     }
 }
 
-/// Writes and flushes a complete packet to `stream`, mapping I/O failures via `map_embedded_io_error_kind` instead of collapsing everything to a fixed `ConnectionAborted` (the previous behavior).
+/// Writes and flushes a complete packet to `stream`, mapping I/O failures via `map_embedded_io_error_kind` instead of collapsing everything to a fixed `ConnectionAborted`.
 /// A free function (not a method) so `connect()` can call it before `Self` exists.
 async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), Error> {
     use embedded_io_async::Error as _;
@@ -178,13 +178,11 @@ impl<IO: AsyncIo> MqttClient<IO> {
         write_frame(&mut stream, &connect_pkt).await?;
 
         // Read CONNACK packet. `DummyTimer` (`has_real_clock() == false`) makes
-        // `read_exact_packet` fall back to a plain unbounded read here — identical to
-        // this crate's pre-existing connect-time behavior. Deliberately not wired to
-        // `PrinterClient`'s configurable `Timer`: `connect()` runs before a `MqttClient`
+        // `read_exact_packet` fall back to a plain unbounded read here. Deliberately not wired
+        // to `PrinterClient`'s configurable `Timer`: `connect()` runs before a `MqttClient`
         // (and thus a persistent `FrameReadState`) exists, and the connect-phase handshake
         // (TCP+TLS dial timeout, `PrinterClient::connect_timeout_secs`) is a separate concern
-        // from this fix's target (a stall on an already-established connection,
-        // mid-`poll_wire()`).
+        // from a stall on an already-established connection, mid-`poll_wire()`.
         let mut read_state = FrameReadState::default();
 
         log::debug!("Awaiting broker CONNACK response packet");
@@ -315,10 +313,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// If the unacknowledged queue size equals or exceeds 200, this function returns a
     /// network timeout error to protect memory space and prevent packet drift [REF-MQTT-CONN].
     ///
-    /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here —
-    /// identical to this crate's pre-existing behavior. `PrinterClient` callers get the new
-    /// stalled-write protection via `publish_command_with_timer()` instead, since they have a
-    /// real `Timer` available (BUG-159).
+    /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
+    /// `PrinterClient` callers get the new stalled-write protection via
+    /// `publish_command_with_timer()` instead, since they have a real `Timer` available (BUG-159).
     pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error> {
         self.publish_command_with_timer(payload, &DummyTimer).await
     }
@@ -379,12 +376,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// returned.
     pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error> {
         // `DummyTimer` has no real wall-clock (`has_real_clock() == false`), so
-        // `poll_wire()` falls back to its pre-existing unbounded read here — this public,
-        // timer-less entry point (used directly by e.g. `tests/mqtt_test.rs` and any
-        // caller holding a raw `MqttClient` without a `PrinterClient`) keeps its
-        // exact prior behavior. `PrinterClient` callers get the new bounded-read
-        // protection via `poll_telemetry_with_timer()` instead, since they have a real
-        // `Timer` available.
+        // `poll_wire()` falls back to an unbounded read here. `PrinterClient` callers get the
+        // new bounded-read protection via `poll_telemetry_with_timer()` instead, since they
+        // have a real `Timer` available.
         self.poll_telemetry_with_timer(&DummyTimer).await
     }
 

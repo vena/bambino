@@ -293,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_uri_does_not_match_embedded_rtsp_substring() {
-        // Regression for Phase 4.2: a `find`-based prefix check would match "rtsp://"
+        // Regression: a `find`-based prefix check would match "rtsp://"
         // wherever it appears in the string, not just at the start. `strip_prefix` only
         // matches at position 0, so a redirect-style URL that merely contains the
         // substring later on must be returned unchanged.

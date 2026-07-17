@@ -172,7 +172,6 @@ where
     /// Prior to issuing or evaluating any standard text commands, the raw connection socket must be
     /// wrapped in a secure TLS session immediately upon establishment. Explicit handshakes (such as `AUTH TLS`)
     /// are not utilized.
-    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         raw_control: RawIO,
         tls_connector: Tls,
@@ -214,7 +213,6 @@ where
     /// permanently discarding it via a premature `.take()`. `connect()` above stays the
     /// normal owned-argument entry point for direct (non-`PrinterClient`) callers and is
     /// implemented in terms of this helper.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn connect_control_stream(
         raw_control: RawIO,
         tls_connector: &Tls,
@@ -318,7 +316,6 @@ where
     /// produced it — the second half of the `connect_control_stream()` split (BUG-020).
     /// `PrinterClient::ensure_ftps()` calls this only after `connect_control_stream()` has
     /// already succeeded, once it's safe to actually consume `self.ftps_config` via `.take()`.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_control_stream(
         control_stream: Tls::Stream,
         tls_connector: Tls,

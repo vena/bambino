@@ -52,9 +52,7 @@ pub async fn dump(
                 }
                 _ = ping_timer.tick() => {
                     printer.send_ping().await?;
-                    // BUG-129: matches run()'s dashboard loop below — a silently-dead
-                    // connection during `monitor dump --follow` previously had no zombie
-                    // detection at all, hanging indefinitely.
+                    // Matches run()'s dashboard loop below.
                     printer.mqtt().await?.tick_zombie_check(PING_TICK_SECS as u32)?;
                 }
             }

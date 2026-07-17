@@ -7,7 +7,7 @@
 //! and transport failures against the printer. Reusing e.g. `Error::ProtocolViolation` for "you
 //! typo'd a test name" or "couldn't write the output file" was misleading — a reader can no
 //! longer tell "the printer's server sent malformed JSON" apart from "the local file doesn't
-//! exist" (BUG-181).
+//! exist".
 //!
 //! Named `CliError`, not bare `Error`, because CLI code routinely needs both this type and
 //! `bambino::Error` in scope at once (e.g. the `Library` variant below, or any `?` converting
