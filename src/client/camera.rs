@@ -65,7 +65,7 @@ where
         &mut self,
     ) -> Result<&mut BambuBinaryCameraStream<CameraTls::Stream>, Error> {
         self.ensure_camera().await?;
-        Ok(self.camera.as_mut().unwrap())
+        Ok(self.camera.as_mut().expect("ensure_camera() just verified self.camera is Some"))
     }
 
     /// Reads the next camera frame, auto-connecting (and authenticating) if needed.
@@ -78,7 +78,7 @@ where
         self.ensure_camera().await?;
         self.camera
             .as_mut()
-            .unwrap()
+            .expect("ensure_camera() just verified self.camera is Some")
             .read_next_frame_with_timer(frame_buf, &self.timer, CAMERA_READ_TIMEOUT_SECS * 1000)
             .await
     }

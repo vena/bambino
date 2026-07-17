@@ -62,7 +62,7 @@ where
         &mut self,
     ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error> {
         self.ensure_ftps().await?;
-        Ok(self.ftps.as_mut().unwrap())
+        Ok(self.ftps.as_mut().expect("ensure_ftps() just verified self.ftps is Some"))
     }
 
     /// Disconnects the FTPS session, if one exists, and clears it from the client.

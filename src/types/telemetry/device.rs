@@ -368,12 +368,12 @@ pub struct ExtruderCollection {
 impl ExtruderCollection {
     /// Returns the active extruder index extracted from the `state` bitmask.
     pub fn active_extruder_index(&self) -> u8 {
-        self.state.map(|s| ((s >> 4) & 0xF) as u8).unwrap_or(0)
+        self.state.map_or(0, |s| ((s >> 4) & 0xF) as u8)
     }
 
     /// Returns the extruder count extracted from the `state` bitmask.
     pub fn extruder_count(&self) -> u8 {
-        self.state.map(|s| (s & 0xF) as u8).unwrap_or(0)
+        self.state.map_or(0, |s| (s & 0xF) as u8)
     }
 
     /// Merges a freshly-parsed `ExtruderCollection` into `self` field-by-field.

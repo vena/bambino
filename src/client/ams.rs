@@ -16,6 +16,14 @@ pub(crate) const AMS_HT_DRY_TEMP_MAX: u32 = 85;
 /// Property of the physical AMS 2 Pro hardware, not the host printer model.
 pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
 
+/// Returns true if `ams_id` addresses a standard AMS unit (`0..=3`), an AMS-HT unit
+/// (`128..=135`), or an external-spool sentinel (`254`/`255`) — the full documented
+/// `ams_id` address space shared by `change_filament()` and `select_k_profile()`.
+#[must_use]
+fn is_valid_ams_id(ams_id: i32) -> bool {
+    (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id) || ams_id == 254 || ams_id == 255
+}
+
 impl<
     MqttRawIO,
     MqttTls,
@@ -79,10 +87,7 @@ where
         curr_temp: i32,
         tar_temp: i32,
     ) -> Result<u16, Error> {
-        let ams_valid = (0..=3).contains(&ams_id)
-            || (128..=135).contains(&ams_id)
-            || ams_id == 254
-            || ams_id == 255;
+        let ams_valid = is_valid_ams_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
         if !ams_valid || !slot_valid {
             return Err(Error::ProtocolViolation(
@@ -244,10 +249,7 @@ where
         filament_id: &str,
         nozzle_diameter: &str,
     ) -> Result<u16, Error> {
-        let ams_valid = (0..=3).contains(&ams_id)
-            || (128..=135).contains(&ams_id)
-            || ams_id == 254
-            || ams_id == 255;
+        let ams_valid = is_valid_ams_id(ams_id);
         let tray_valid = (0..=103).contains(&tray_id)
             || (128..=135).contains(&tray_id)
             || tray_id == 254
