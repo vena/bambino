@@ -158,6 +158,7 @@ where
     ///
     /// Consuming builder — works on both [`new()`](PrinterClient::new) and
     /// [`from_mqtt()`](PrinterClient::from_mqtt) construction paths.
+    #[must_use]
     pub fn with_timer<NewTimer: TimerProvider>(
         self,
         timer: NewTimer,
@@ -203,6 +204,7 @@ where
     }
 
     /// Overrides the default MQTT port (8883).
+    #[must_use]
     pub fn with_mqtt_port(mut self, port: u16) -> Self {
         self.mqtt_port = port;
         self
@@ -211,6 +213,7 @@ where
     /// Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
     /// Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
     /// convention. Non-consuming — chain onto any construction path.
+    #[must_use]
     pub fn with_connect_timeout(mut self, secs: u64) -> Self {
         self.connect_timeout_secs = secs;
         self
@@ -225,6 +228,7 @@ where
     /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
     /// out direct `&mut BambuFtpsClient` access rather than mediating every FTPS call itself,
     /// so there's no call site to thread `self.timer` through the way MQTT/camera do.
+    #[must_use]
     pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
         self,
         tls: NewFtpsTls,
@@ -287,6 +291,7 @@ where
     }
 
     /// Overrides the default FTPS port (990).
+    #[must_use]
     pub fn with_ftps_port(mut self, port: u16) -> Self {
         self.ftps_port = port;
         self
@@ -300,6 +305,7 @@ where
     /// `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually
     /// satisfy the check for real.
     /// Non-consuming — chain onto any construction path.
+    #[must_use]
     pub fn with_ftps_allow_unverified_tls_1_2(mut self, allow: bool) -> Self {
         self.ftps_allow_unverified_tls_1_2 = allow;
         self
@@ -436,6 +442,7 @@ where
     ///
     /// Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
     /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
+    #[must_use]
     pub fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(
         self,
         tls: NewCameraTls,
@@ -494,12 +501,14 @@ where
     }
 
     /// Overrides the default camera port (6000, binary-JPEG only).
+    #[must_use]
     pub fn with_camera_port(mut self, port: u16) -> Self {
         self.camera_port = port;
         self
     }
 
     /// Overrides the default maximum accepted camera frame size (see `BambuBinaryCameraStream::with_max_frame_size`).
+    #[must_use]
     pub fn with_camera_max_frame_size(mut self, bytes: usize) -> Self {
         self.camera_max_frame_size = Some(bytes);
         self

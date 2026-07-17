@@ -154,6 +154,7 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
     /// convention (`src/client/mod.rs`). Embedded callers should clamp this to a value that
     /// fits their actual JPEG resolution and buffer budget (e.g. 64-256KB) rather than relying
     /// on the desktop-sized default.
+    #[must_use]
     pub fn with_max_frame_size(mut self, max: usize) -> Self {
         self.max_frame_size = max;
         self

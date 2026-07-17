@@ -652,6 +652,7 @@ impl EspIdfTlsConnector {
     ///
     /// `ca_cert_pem`: PEM or DER-encoded CA certificate bytes.
     /// `client_auth`: Optional (cert_pem, key_pem) for mutual TLS.
+    #[must_use]
     pub fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
         Self {
             certs: EspIdfTlsCerts::with_certs(ca_cert, client_auth),
@@ -664,6 +665,7 @@ impl EspIdfTlsConnector {
     /// and `client::connect::with_connect_timeout`'s precedent (BUG-007) — otherwise the very
     /// first would-block poll would immediately exceed a zero-length budget.
     /// Non-consuming — chain onto `new()`/`with_certs()`.
+    #[must_use]
     pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
         self.connect_timeout = connect_timeout;
         self

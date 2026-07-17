@@ -79,6 +79,7 @@ impl PrintJobConfig {
     }
 
     /// Enables AMS and sets the flat slot-mapping array (`ams_mapping`).
+    #[must_use]
     pub fn with_ams(mut self, mapping: Vec<i32>) -> Self {
         self.use_ams = true;
         self.ams_mapping = mapping;
@@ -86,6 +87,7 @@ impl PrintJobConfig {
     }
 
     /// Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
+    #[must_use]
     pub fn with_ams_mapping2(mut self, mapping2: Vec<AmsMapping2Entry>) -> Self {
         self.use_ams = true;
         self.ams_mapping2 = Some(mapping2);

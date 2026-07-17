@@ -156,12 +156,14 @@ impl<'a> EmbassyTlsConnector<'a> {
 
     /// Enables server certificate verification against the given CA chain. Without this,
     /// the connector never checks the printer's certificate.
+    #[must_use]
     pub fn with_ca_chain(mut self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self {
         self.ca_chain = Some(ca_chain);
         self
     }
 
     /// Supplies client credentials for mutual TLS (mTLS).
+    #[must_use]
     pub fn with_client_credentials(mut self, creds: ::mbedtls_rs::Credentials<'a>) -> Self {
         self.creds = Some(creds);
         self

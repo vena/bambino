@@ -20,8 +20,7 @@ use crate::types::PrinterTelemetry;
 pub const H2S_Z_MAX: f32 = 340.0;
 /// Z depth (mm) shared by H2D, H2D Pro, and H2C — does not vary by active nozzle, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const H2_DUAL_Z_MAX: f32 = 325.0;
-/// H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build
-/// Volume row (340×320×340mm) (BUG-163).
+/// H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row (340×320×340mm) (BUG-163).
 pub const H2S_X_MAX: f32 = 340.0;
 /// See `H2S_X_MAX`'s doc comment.
 pub const H2S_Y_MAX: f32 = 320.0;
