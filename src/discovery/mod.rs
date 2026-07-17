@@ -130,7 +130,7 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                 let mut parsed = parse_ssdp_payload(&buf[..len]);
                 match &mut parsed {
                     Some(device) => {
-                        // BUG-024: stamp discovery_port here, not just in the discover_devices()
+                        // Stamp discovery_port here, not just in the discover_devices()
                         // convenience wrapper, so callers driving DiscoveryEngine directly (the
                         // required pattern on Embassy, since discover_devices() is std-only) also
                         // get a correctly populated field instead of the zero-value default.
@@ -192,7 +192,7 @@ where
     let ports: &[u16] = &[SSDP_PORT, SSDP_PORT_ALT];
 
     let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
-    // BUG-009: track the last bind failure and keep trying every port, instead of returning
+    // Track the last bind failure and keep trying every port, instead of returning
     // as soon as the *first* port fails to bind. Returning early made degraded mode only work
     // when the second port failed after the first succeeded — if the first port failed (e.g.
     // another process already holds it), the second, free port was never even attempted.
@@ -226,7 +226,7 @@ where
     for i in 0..2 {
         log::debug!("Initializing active query scan block #{}", i + 1);
         for (engine, _) in &engines {
-            // BUG-010: tolerate a per-engine send failure here too, matching the degraded-mode
+            // Tolerate a per-engine send failure here too, matching the degraded-mode
             // bind loop above and the periodic re-broadcast loop below — propagating the error
             // with `?` aborted the whole sweep even when a healthy port could still have found
             // printers.
@@ -260,7 +260,7 @@ where
         }
 
         for (engine, port) in &engines {
-            // BUG-046: log and pace on Err (previously silently discarded with no backoff) —
+            // Log and pace on Err (previously silently discarded with no backoff) —
             // poll_next_device's Err path is reserved for genuine socket faults (not the
             // TimedOut/Ok(None) transient case), which have no `.await` yield point of their
             // own, so a persistently-erroring socket could otherwise busy-spin for the rest of
@@ -368,7 +368,7 @@ mod tests {
         let device = engine.poll_next_device(&mut buf).await.unwrap().unwrap();
         assert_eq!(device.serial, "01P06A521703222");
         assert_eq!(device.model, PrinterModel::P1S);
-        // BUG-024: poll_next_device must stamp discovery_port itself, not rely on the
+        // poll_next_device must stamp discovery_port itself, not rely on the
         // discover_devices() wrapper — Embassy callers use DiscoveryEngine directly.
         assert_eq!(device.discovery_port, SSDP_PORT);
 
@@ -591,7 +591,7 @@ mod tests {
     async fn test_discover_devices_succeeds_in_degraded_mode_when_first_port_fails_to_bind() {
         use crate::io::tokio::TokioTimer;
 
-        // BUG-009: the bind loop used to return as soon as SSDP_PORT (the *first* port in the
+        // The bind loop used to return as soon as SSDP_PORT (the *first* port in the
         // list) failed to bind, so SSDP_PORT_ALT was never even attempted — degraded mode only
         // actually worked when the *second* port failed. Mirrors the sibling test above but
         // fails the other port to prove both orderings now succeed.
@@ -635,7 +635,7 @@ mod tests {
     async fn test_discover_devices_tolerates_initial_broadcast_failure_on_one_engine() {
         use crate::io::tokio::TokioTimer;
 
-        // BUG-010: the initial scan loop used `?` on each engine's broadcast_search(), so one
+        // The initial scan loop used `?` on each engine's broadcast_search(), so one
         // engine failing to send aborted the whole sweep before the listen loop was ever
         // reached — even though the other, healthy port could still have found printers. This
         // contradicted the degraded-mode design used everywhere else in discover_devices

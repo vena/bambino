@@ -142,7 +142,7 @@ async fn test_read_response_multiline_in_single_socket_read() {
 
 #[tokio::test]
 async fn test_read_response_intermediate_line_matching_terminator_shape_not_mistaken() {
-    // BUG-028: RFC 959 §4.2 explicitly warns that an intermediate line can itself start
+    // RFC 959 §4.2 explicitly warns that an intermediate line can itself start
     // with a 3-digit-number-plus-space sequence — it must not be mistaken for the
     // terminator unless its code also matches the reply's opening code.
     let reader = ChunkedReader::with_chunks(&[
@@ -165,7 +165,7 @@ async fn test_read_response_intermediate_line_matching_terminator_shape_not_mist
 
 #[tokio::test]
 async fn test_read_response_free_text_intermediate_line_preserved() {
-    // BUG-028: RFC 959 §4.2 — intermediate lines aren't required to carry any code prefix
+    // RFC 959 §4.2 — intermediate lines aren't required to carry any code prefix
     // at all; free text must be preserved verbatim, not silently dropped.
     let reader =
         ChunkedReader::with_chunks(&[b"213-Header\r\nplain free text, no code\r\n213 End\r\n"]);
@@ -183,7 +183,7 @@ async fn test_read_response_free_text_intermediate_line_preserved() {
 
 #[tokio::test]
 async fn test_read_response_header_with_no_separator_treated_as_terminal() {
-    // BUG-062: a header line whose 4th byte is neither ' ' nor '-' (e.g. code immediately
+    // A header line whose 4th byte is neither ' ' nor '-' (e.g. code immediately
     // followed by CRLF, no separator at all) used to fall through and be silently discarded
     // instead of surfacing as a reply.
     let reader = ChunkedReader::with_chunks(&[b"200\r\n"]);
@@ -460,7 +460,7 @@ fn test_validate_ftp_path_rejects_leading_dash_in_final_segment() {
     ));
     // A leading-dash directory component earlier in the path is not the same hazard.
     assert!(validate_ftp_path("/-oddly-named-dir/file.3mf").is_ok());
-    // BUG-075: a trailing slash made `.next_back()` return "" (the empty segment after
+    // A trailing slash made `.next_back()` return "" (the empty segment after
     // the slash), silently skipping the check on the actual dash-prefixed final directory.
     assert!(matches!(
         validate_ftp_path("/cache/-dir/"),

@@ -76,7 +76,7 @@ impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
 /// exactly one reply, and a `write_command`/`read_response` failure anywhere leaves no way to
 /// know whether the server's reply for that command is still coming. Reusing the client at that
 /// point risks a later, unrelated command silently reading the stale reply instead of its own.
-/// To make this safe, the client sets `poisoned = true` (BUG-004: originally only on the
+/// To make this safe, the client sets `poisoned = true` (originally only on the
 /// `list_directory`/`upload_file`/`download_file` data-transfer window between the server's
 /// `150`/`125` "opening data connection" reply and the matching final reply, since that's the
 /// widest such window; now on every `write_command`/`read_response` failure in every method,
@@ -208,7 +208,7 @@ where
     ///
     /// Split out of `connect()` so `PrinterClient::ensure_ftps()` (`src/client/connect.rs`)
     /// can run the handshake against `self.ftps_config`'s borrowed contents without
-    /// consuming them first (BUG-020) — a failed attempt (including a `connect_timeout_secs`
+    /// consuming them first — a failed attempt (including a `connect_timeout_secs`
     /// timeout on a slow LAN) then leaves the config untouched for a retry, instead of
     /// permanently discarding it via a premature `.take()`. `connect()` above stays the
     /// normal owned-argument entry point for direct (non-`PrinterClient`) callers and is
@@ -313,7 +313,7 @@ where
     }
 
     /// Assembles a `Self` from an already-established control stream plus the config that
-    /// produced it — the second half of the `connect_control_stream()` split (BUG-020).
+    /// produced it — the second half of the `connect_control_stream()` split.
     /// `PrinterClient::ensure_ftps()` calls this only after `connect_control_stream()` has
     /// already succeeded, once it's safe to actually consume `self.ftps_config` via `.take()`.
     pub(crate) fn from_control_stream(
@@ -364,7 +364,7 @@ where
 
     /// Writes `cmd` to the control channel, poisoning the client (see struct doc comment) and
     /// propagating the error on failure. Shared by every method's write-then-read-response
-    /// pattern (BUG-171) — was duplicated verbatim across 11 call sites.
+    /// pattern — was duplicated verbatim across 11 call sites.
     async fn write_command_poisoning(&mut self, cmd: &str) -> Result<(), Error> {
         if let Err(e) = write_command(&mut self.control_stream, cmd).await {
             self.poisoned = true;
@@ -374,7 +374,7 @@ where
     }
 
     /// Reads one control-channel response, poisoning the client (see struct doc comment) and
-    /// propagating the error on failure. Shared sibling of `write_command_poisoning` (BUG-171)
+    /// propagating the error on failure. Shared sibling of `write_command_poisoning`
     /// — was duplicated verbatim across 13 call sites. Owns its own scratch `line_buf`, safe
     /// since only `control_fill_buf` needs to persist across calls (see `read_response`'s doc
     /// comment).
@@ -475,7 +475,7 @@ where
         let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let list_cmd = format!("LIST {}", remote_path);
-        // BUG-029: poison on the initial write/read too, matching every other control-channel
+        // Poison on the initial write/read too, matching every other control-channel
         // operation in this file (per .claude/rules/ftps-poisoning.md) — an unpoisoned failure
         // here leaves the control channel in the same desynced state the poisoning mechanism
         // exists to prevent.
@@ -511,7 +511,7 @@ where
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        // BUG-150: sibling gap to BUG-030's upload_file/download_file handling — the same
+        // Sibling gap to upload_file/download_file's handling — the same
         // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN] can arrive after read_to_eof has already
         // drained the listing to EOF, so 426 must be accepted alongside 226 here too.
         if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
@@ -586,7 +586,7 @@ where
         let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let stor_cmd = format!("STOR {}", remote_path);
-        // BUG-029: poison on the initial write/read too — see the matching comment in
+        // Poison on the initial write/read too — see the matching comment in
         // list_directory() above.
         self.write_command_poisoning(&stor_cmd).await?;
 
@@ -688,7 +688,7 @@ where
         let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
 
         let retr_cmd = format!("RETR {}", remote_path);
-        // BUG-029: poison on the initial write/read too — see the matching comment in
+        // Poison on the initial write/read too — see the matching comment in
         // list_directory() above.
         self.write_command_poisoning(&retr_cmd).await?;
 
@@ -722,7 +722,7 @@ where
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        // BUG-030: also attempt the SIZE recheck on 426 (transient close, e.g. the documented
+        // Also attempt the SIZE recheck on 426 (transient close, e.g. the documented
         // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]), matching upload_file's symmetric
         // handling — previously this branch treated 426 as an unconditional hard failure,
         // discarding an already-fully-received payload on exactly the race this recheck

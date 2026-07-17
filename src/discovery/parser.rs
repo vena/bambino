@@ -67,7 +67,7 @@ fn parse_location(loc: &str) -> Option<(&str, u16)> {
     if host.is_empty() {
         return None;
     }
-    // BUG-084: a present-but-unparseable port string (e.g. a corrupt/truncated LOCATION
+    // A present-but-unparseable port string (e.g. a corrupt/truncated LOCATION
     // header) must reject the packet, not silently coerce to 80 — that's indistinguishable
     // from "no port specified" and would route to the wrong port on a real device.
     let port = match parts.next() {
@@ -180,7 +180,7 @@ fn extract_model_from_nt_st(value: &str) -> Option<&str> {
 pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
 
-    // BUG-085: case-insensitive, consistent with this file's otherwise-thorough
+    // Case-insensitive, consistent with this file's otherwise-thorough
     // case-insensitive header handling (eq_case_insensitive) — a non-canonical-case status
     // line must route to the response parser, not fall through to the request parser and
     // fail there instead. Note `httparse::Response::parse` itself still requires an
@@ -190,7 +190,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
 
     let raw = if is_response {
         let mut response = httparse::Response::new(&mut headers);
-        // BUG-086: httparse::Status::Partial means the buffer ended mid-header —
+        // httparse::Status::Partial means the buffer ended mid-header —
         // a truncated UDP datagram must be rejected, not treated the same as a
         // successfully fully-parsed packet.
         if !matches!(response.parse(buf).ok()?, httparse::Status::Complete(_)) {
@@ -209,7 +209,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     if raw_usn_str.is_empty() {
         return None;
     }
-    // BUG-011: uppercase the serial to make the SsdpDevice::serial doc comment's "uppercase"
+    // Uppercase the serial to make the SsdpDevice::serial doc comment's "uppercase"
     // promise true. SSDP USN casing varies by firmware compile target, but MQTT broker
     // subscriptions and TLS SNI/identity route strictly on exact casing as printed on the
     // physical label — see reference/01_network_discovery.md §1.6 and
@@ -220,7 +220,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
         .to_ascii_uppercase();
 
     // Use DevModel header, falling back to model embedded in NT/ST per Protocol Violation #7.
-    // BUG-047: a present-but-empty DevModel header (`Some("")`) must not short-circuit the
+    // A present-but-empty DevModel header (`Some("")`) must not short-circuit the
     // NT/ST fallback — `.filter()` treats it the same as absent, matching the intent of "use
     // the header if it actually carries a value."
     let effective_dev_model = raw
@@ -231,7 +231,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let (ip, port) = raw.location.and_then(parse_location)?;
     let model = resolve_model(&serial, effective_dev_model);
 
-    // BUG-060: require a positive Bambu-specific signal before accepting the packet as a
+    // Require a positive Bambu-specific signal before accepting the packet as a
     // printer record — USN+LOCATION alone is standard SSDP boilerplate any UPnP device
     // (routers, TVs, other vendors' printers) can supply. `model != Unknown` covers a
     // recognized serial prefix or `DevModel`; the NT/ST urn check also catches a genuine
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_parse_ssdp_lowercase_usn_serial_is_uppercased() {
-        // BUG-011: firmware-dependent USN casing must not leak into SsdpDevice::serial — the
+        // Firmware-dependent USN casing must not leak into SsdpDevice::serial — the
         // doc comment promises "uppercase," and downstream MQTT subscription/TLS SNI routing
         // is exact-casing-sensitive (reference/01_network_discovery.md §1.6).
         let payload = b"HTTP/1.1 200 OK\r\n\
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_empty_dev_model_header_does_not_block_nt_st_fallback() {
-        // BUG-047: a present-but-empty DevModel header (`Some("")`) previously short-circuited
+        // A present-but-empty DevModel header (`Some("")`) previously short-circuited
         // the NT/ST fallback via `.or_else()`, which only triggers on `None`. Uses an
         // unrecognized serial prefix ("999") so resolve_model() must fall through to
         // effective_dev_model rather than resolving via the serial-prefix table directly.
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_non_bambu_device_rejected() {
-        // BUG-060: ordinary UPnP devices (routers, TVs, other vendors' printers) can supply a
+        // Ordinary UPnP devices (routers, TVs, other vendors' printers) can supply a
         // USN+LOCATION SSDP packet with no Bambu-specific header at all — must not be accepted
         // as a printer record.
         let payload = b"NOTIFY * HTTP/1.1\r\n\
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_lowercase_status_line_routes_to_response_parser() {
-        // BUG-085: is_response's classification is now case-insensitive, matching this
+        // is_response's classification is case-insensitive, matching this
         // file's otherwise-thorough case-insensitive handling elsewhere. Note this only
         // fixes *classification* — httparse::Response::parse itself requires an exact-case
         // "HTTP/" token in the status line and rejects "Http/1.1" regardless of which
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_truncated_packet_rejected() {
-        // BUG-086: httparse::Status::Partial (buffer ends mid-header) must be rejected,
+        // httparse::Status::Partial (buffer ends mid-header) must be rejected,
         // not treated the same as Status::Complete — a truncated UDP datagram shouldn't
         // parse into a seemingly-valid device record.
         let payload = b"HTTP/1.1 200 OK\r\n\
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_unparseable_port_rejected() {
-        // BUG-084: a present-but-unparseable port string must reject the packet, not
+        // A present-but-unparseable port string must reject the packet, not
         // silently coerce to 80 — that's indistinguishable from "no port specified."
         assert_eq!(parse_location("192.168.1.158:notaport"), None);
         // Absent port still defaults to 80.

@@ -61,7 +61,7 @@ pub(crate) const FTPS_MAX_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
 /// allowance for entirely different reasons.
 pub(crate) const FTPS_READ_TIMEOUT_SECS: u64 = 30;
 
-/// Per-chunk wall-clock budget for `upload_file`'s data-write loop (BUG-164) — the write-side
+/// Per-chunk wall-clock budget for `upload_file`'s data-write loop — the write-side
 /// counterpart to `FTPS_READ_TIMEOUT_SECS`. The write loop and final `flush()` had no deadline
 /// at all, unlike the STOR negotiation and post-transfer confirmation reads immediately around
 /// them; a stalled write would hang forever.
@@ -232,7 +232,7 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
 ) -> Result<(u16, String), Error> {
     let mut accumulated = String::new();
     let mut lines_read: usize = 0;
-    // BUG-028: RFC 959 §4.2 requires tracking the reply's opening code and only treating a
+    // RFC 959 §4.2 requires tracking the reply's opening code and only treating a
     // later line as the terminator if *both* its separator is ' ' and its code matches this —
     // an intermediate multi-line body line can itself start with a 3-digit-number-plus-space
     // sequence that must not be mistaken for the terminator. `None` until the header line
@@ -277,7 +277,7 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
                 let line_text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
                 accumulated.push_str(line_text);
             } else {
-                // BUG-062: a header line whose 4th byte is neither ' ' nor '-' (e.g. "200\r\n",
+                // A header line whose 4th byte is neither ' ' nor '-' (e.g. "200\r\n",
                 // code immediately followed by CRLF with no separator) previously fell through
                 // to `continue` and was silently discarded, burning a line out of
                 // FTP_MAX_RESPONSE_LINES and eventually surfacing as a generic "exceeded maximum
@@ -392,7 +392,7 @@ pub(crate) fn validate_ftp_path(path: &str) -> Result<(), Error> {
     }
     // Some FTP daemons interpret a leading-dash filename as a flag argument. Only the final
     // segment matters here — a leading-dash directory component earlier in the path is not
-    // the same hazard. BUG-075: `.next_back()` alone returns `""` for a trailing-slash path
+    // the same hazard. `.next_back()` alone returns `""` for a trailing-slash path
     // (e.g. "/cache/-dir/"), silently skipping the check on that dash-prefixed final directory
     // component — filter out empty trailing segments first so the real final segment is checked.
     if path

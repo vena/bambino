@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtpFile {
     /// The parsed file or directory name, exactly as reported by the raw `LIST` line
-    /// (BUG-088) — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
+    /// — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
     /// and rejoining with a single space, so internal runs of multiple consecutive spaces
     /// round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
     pub name: String,
@@ -33,7 +33,7 @@ pub struct FtpFile {
     pub minute: u8,
     /// `true` when `year` was inferred from the host's current date (the wire's HH:MM-recent-
     /// file format, ambiguous by design — see this function's doc comment), `false` when the
-    /// wire reported an explicit `YYYY` directly. BUG-042: `year`'s rollover math always lands
+    /// wire reported an explicit `YYYY` directly. `year`'s rollover math always lands
     /// in `{current_year, current_year - 1}` for an inferred entry by construction, so it can
     /// never itself look implausible even when the printer's own clock (the source of the
     /// month/day/HH:MM this was inferred from) is wrong — this flag is the only honest signal
@@ -77,8 +77,7 @@ fn days_in_month(month: u8, year: i32) -> u8 {
 /// `(token, remainder)`. Unlike `str::split_whitespace()`, callers retain a real `&str`
 /// slice into the original string at every step, so the untouched tail (e.g. everything
 /// after the Nth column) can be sliced out verbatim — preserving any internal multi-space
-/// runs — instead of losing that spacing by re-tokenizing and rejoining with `.join(" ")`
-/// (BUG-088).
+/// runs — instead of losing that spacing by re-tokenizing and rejoining with `.join(" ")`.
 fn next_token(s: &str) -> Option<(&str, &str)> {
     let trimmed = s.trim_start();
     if trimmed.is_empty() {
@@ -111,8 +110,8 @@ pub struct CurrentDateTime {
 /// Embedded systems typically insert arbitrary, variable-width spacing gaps to line up listings.
 /// Rather than relying on rigid column indexes, this implementation tokenizes columns by splitting
 /// on contiguous whitespace sequences, collecting the initial 8 protocol columns, and slicing
-/// the untouched remainder verbatim as the filename (BUG-088 — preserves internal multi-space
-/// runs exactly, rather than re-tokenizing and rejoining with a single space).
+/// the untouched remainder verbatim as the filename — preserves internal multi-space
+/// runs exactly, rather than re-tokenizing and rejoining with a single space.
 ///
 /// **Temporal Rollover Mitigation:**
 /// UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
@@ -184,7 +183,7 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             None => continue,
         };
 
-        // BUG-088: everything following the 8th whitespace-delimited block is the filename.
+        // Everything following the 8th whitespace-delimited block is the filename.
         // `rest` is a real slice into `trimmed` at this point (see `next_token`'s doc comment),
         // so it's sliced out verbatim rather than re-tokenized and rejoined with `.join(" ")`
         // — that used to collapse any run of multiple consecutive spaces in the real filename
@@ -252,7 +251,7 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             }
         } else {
             // Field contains direct YYYY calendar year representation.
-            // BUG-149: sibling gap to BUG-061's day/hour/minute range checks — a parse failure
+            // Sibling gap to the day/hour/minute range checks above — a parse failure
             // must reject the line, not silently default to current_year, and a parsed value
             // still needs a sanity range (printer filesystems don't predate 2000).
             match time_or_year.parse::<i32>() {
@@ -261,7 +260,7 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
             }
         }
 
-        // BUG-133: sibling gap to BUG-061's flat 1..=31 day range check — validate against the
+        // Sibling gap to the day range check above — validate against the
         // actual month length (leap-year-aware, using the now-finalized `year`) so a
         // calendar-invalid line (e.g. "Feb 30") from the untrusted printer LIST output is
         // rejected instead of silently accepted.
@@ -329,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_multiple_internal_spaces_preserved_exactly() {
-        // BUG-088: internal multi-space runs in the filename must round-trip exactly —
+        // Internal multi-space runs in the filename must round-trip exactly —
         // confirmed on real P1S hardware that collapsing them (the old `.join(" ")`
         // behavior) desyncs the reported name from the printer's actual on-disk name,
         // silently breaking delete_file/download_file for that file.
@@ -368,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_garbage_timestamp_rejected() {
-        // BUG-061: day/hour/minute weren't range-validated (unlike month), so a malformed
+        // Day/hour/minute weren't range-validated (unlike month), so a malformed
         // "Jun 99 88:70 file.gcode" entry would previously reach FtpFile verbatim.
         let payload = "-rw-r--r--    1 1000     1000      1024 Jun 99 12:00 bad_day.gcode\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 88:00 bad_hour.gcode\n\
