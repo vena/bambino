@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use bambino::client::DummyTimer;
 use bambino::error::Error;
 use bambino::ftps::BambuFtpsClient;
+use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
@@ -60,9 +61,7 @@ async fn connect_client(
         DummyTlsConnector,
         factory,
         model,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -88,9 +87,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
         connector,
         factory,
         PrinterModel::P1S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -324,9 +321,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         FailingDataTlsConnector::new(),
         factory,
         PrinterModel::P1S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -510,9 +505,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterModel::P2S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -534,9 +527,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterModel::X2D,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -563,9 +554,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
         PrinterModel::P2S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -590,9 +579,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterModel::P1S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -612,9 +599,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
         VersionReportingTlsConnector(None),
         factory,
         PrinterModel::P2S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         false,
     )
@@ -651,9 +636,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterModel::P2S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         true,
     )
@@ -680,9 +663,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
         VersionReportingTlsConnector(None),
         factory,
         PrinterModel::P2S,
-        "127.0.0.1",
-        "TEST0000000001",
-        "12345678",
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into() },
         DummyTimer,
         true,
     )

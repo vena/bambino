@@ -326,21 +326,18 @@ where
                 "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
             )
         })?;
-        let ip = &self.identity.ip;
-        let serial = &self.identity.serial;
-        let access_code = &self.identity.access_code;
+        let identity = &self.identity;
         let model = self.model;
         let ftps_port = self.ftps_port;
         let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
         let (control_stream, fill_buf) =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-                let raw_stream = factory.dial(ip, ftps_port).await?;
+                let raw_stream = factory.dial(&identity.ip, ftps_port).await?;
                 BambuFtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
                     raw_stream,
                     tls,
                     model,
-                    serial,
-                    access_code,
+                    identity,
                     timer,
                     allow_unverified_tls_1_2,
                 )
@@ -354,8 +351,7 @@ where
             tls,
             factory,
             model,
-            ip,
-            serial,
+            &self.identity,
             timer,
             allow_unverified_tls_1_2,
             fill_buf,

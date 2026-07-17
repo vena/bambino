@@ -17,6 +17,7 @@ use embedded_io_async::{Error as _, Write};
 use crate::error::Error;
 use crate::ftps::parser::{CurrentDateTime, FtpFile, parse_unix_listing};
 use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
+use crate::identity::PrinterIdentity;
 use crate::models::PrinterModel;
 
 use super::protocol::*;
@@ -148,9 +149,7 @@ where
         tls_connector: Tls,
         data_factory: Factory,
         model: PrinterModel,
-        ip: &str,
-        serial: &str,
-        access_code: &str,
+        identity: PrinterIdentity,
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
     ) -> Result<Self, Error> {
@@ -158,8 +157,7 @@ where
             raw_control,
             &tls_connector,
             model,
-            serial,
-            access_code,
+            &identity,
             &timer,
             allow_unverified_tls_1_2,
         )
@@ -169,8 +167,8 @@ where
             tls_connector,
             data_factory,
             model,
-            ip: String::from(ip),
-            serial: String::from(serial),
+            ip: identity.ip,
+            serial: identity.serial,
             timer,
             poisoned: false,
             allow_unverified_tls_1_2,
@@ -194,11 +192,12 @@ where
         raw_control: RawIO,
         tls_connector: &Tls,
         model: PrinterModel,
-        serial: &str,
-        access_code: &str,
+        identity: &PrinterIdentity,
         timer: &FtpsTimer,
         allow_unverified_tls_1_2: bool,
     ) -> Result<(Tls::Stream, Vec<u8>), Error> {
+        let serial = identity.serial.as_str();
+        let access_code = identity.access_code.as_str();
         let mut control_stream = tls_connector.connect(serial, raw_control).await?;
 
         Self::require_tls_1_2_if_enforced(
@@ -325,8 +324,7 @@ where
         tls_connector: Tls,
         data_factory: Factory,
         model: PrinterModel,
-        ip: &str,
-        serial: &str,
+        identity: &PrinterIdentity,
         timer: FtpsTimer,
         allow_unverified_tls_1_2: bool,
         control_fill_buf: Vec<u8>,
@@ -336,8 +334,8 @@ where
             tls_connector,
             data_factory,
             model,
-            ip: String::from(ip),
-            serial: String::from(serial),
+            ip: identity.ip.clone(),
+            serial: identity.serial.clone(),
             timer,
             poisoned: false,
             allow_unverified_tls_1_2,
