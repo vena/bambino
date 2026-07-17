@@ -16,6 +16,7 @@
 //! it as a standard module rather than a test crate, allowing our test suites to import
 //! the shared logic efficiently.
 
+pub mod client;
 pub mod io;
 pub mod mock_camera;
 pub mod mock_ftps;

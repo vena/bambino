@@ -22,6 +22,7 @@ use bambino::models::PrinterModel;
 use bambino::mqtt::{MqttClient, PrintJobConfig};
 
 use common::io::{DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory};
+use common::client::connect_test_client;
 use common::mock_ftps;
 use common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
@@ -44,13 +45,8 @@ async fn test_homing_safety_interlocks() {
         assert_eq!(json["print"]["param"], "G28\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
     // CoreXY Bed-on-Z initialization
-    let mut client_x1c = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", PrinterModel::X1C);
+    let mut client_x1c = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     // Assert public serial and model getters expose the correct fields
     assert_eq!(client_x1c.serial(), "00M000000000000");
@@ -76,12 +72,7 @@ async fn test_homing_safety_interlocks() {
         assert_eq!(json["print"]["param"], "G28 Z\n");
     });
 
-    let mqtt_client_a1 =
-        MqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for A1");
-
-    let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", PrinterModel::A1);
+    let mut client_a1 = connect_test_client(TokioIo(client_stream_a1), "039000000000000", PrinterModel::A1).await;
 
     // Bed-Slingers do not share upward bed collision hazards; G28 Z homing is permitted
     client_a1
@@ -116,12 +107,7 @@ async fn test_kinematic_and_extrusion_moves() {
         assert_eq!(json_e["print"]["param"], "M83\nG0 E10.00 F900\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .move_relative('z', 10.0, 3000)
@@ -151,12 +137,7 @@ async fn test_move_relative_zero_distance_is_noop() {
         assert_eq!(json_x["print"]["param"], "G91\nG0 X5.00 F1000\nG90\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // Zero-distance Z move: must be a no-op (Ok(0), no travel-limit error, no wire traffic) —
     // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
@@ -194,12 +175,7 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
     // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
@@ -221,12 +197,7 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     let result = client.move_relative('x', 300.0, 3000).await;
     assert!(matches!(result, Err(Error::ModelMismatch(_))));
@@ -255,12 +226,7 @@ async fn test_thermal_guards_and_temperatures() {
         assert_eq!(json_chamber["print"]["param"], "M141 S45\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client_x1e = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", PrinterModel::X1E);
+    let mut client_x1e = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
 
     client_x1e
         .set_bed_temperature(60)
@@ -283,13 +249,7 @@ async fn test_thermal_guards_and_temperatures() {
         handle_mqtt_handshake(&mut server_stream_x1c).await;
     });
 
-    let mqtt_client_x1c =
-        MqttClient::connect(TokioIo(client_stream_x1c), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for X1C");
-
-    let mut client_x1c =
-        PrinterClient::from_mqtt(mqtt_client_x1c, "00M000000000000", PrinterModel::X1C);
+    let mut client_x1c = connect_test_client(TokioIo(client_stream_x1c), "00M000000000000", PrinterModel::X1C).await;
 
     let err_res = client_x1c.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
@@ -300,12 +260,7 @@ async fn test_thermal_guards_and_temperatures() {
         handle_mqtt_handshake(&mut server_stream_a1).await;
     });
 
-    let mqtt_client_a1 =
-        MqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for A1");
-
-    let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", PrinterModel::A1);
+    let mut client_a1 = connect_test_client(TokioIo(client_stream_a1), "039000000000000", PrinterModel::A1).await;
 
     let err_res = client_a1.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
@@ -359,12 +314,7 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
         assert_eq!(json["print"]["param"], "M140 S120\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", PrinterModel::X1C);
+    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     client
         .set_bed_temperature(999)
@@ -408,12 +358,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
         assert_eq!(json_aux["print"]["param"], "M106 P2 S255\n"); // 100% PWM
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client_p1s = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client_p1s = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client_p1s
         .set_fan_speed(FanTarget::PartCooling, 50)
@@ -438,13 +383,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
         assert_eq!(json_aux_r["print"]["param"], "M106 P10 S204\n"); // 80% PWM
     });
 
-    let mqtt_client_x2 =
-        MqttClient::connect(TokioIo(client_stream_x2), "20P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for X2D");
-
-    let mut client_x2 =
-        PrinterClient::from_mqtt(mqtt_client_x2, "20P000000000000", PrinterModel::X2D);
+    let mut client_x2 = connect_test_client(TokioIo(client_stream_x2), "20P000000000000", PrinterModel::X2D).await;
 
     client_x2
         .set_fan_speed(FanTarget::AuxiliaryRight, 80)
@@ -468,11 +407,7 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
         assert_eq!(json["print"]["param"], "M106 P1 S255\n"); // clamped to 100% PWM
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .set_fan_speed(FanTarget::PartCooling, 150)
@@ -497,12 +432,7 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
         assert_eq!(json["print"]["param"], "M106 P3 S204\n"); // 80% PWM
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "09P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for H2D");
-    let mut client_h2d =
-        PrinterClient::from_mqtt(mqtt_client, "09P000000000000", PrinterModel::H2D);
+    let mut client_h2d = connect_test_client(TokioIo(client_stream), "09P000000000000", PrinterModel::H2D).await;
 
     client_h2d
         .set_fan_speed(FanTarget::ChamberExhaust, 80)
@@ -516,12 +446,7 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     let broker_task_p1s = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
-    let mqtt_client_p1s =
-        MqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for P1S");
-    let mut client_p1s =
-        PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", PrinterModel::P1S);
+    let mut client_p1s = connect_test_client(TokioIo(client_stream_p1s), "01P000000000000", PrinterModel::P1S).await;
 
     let err_res = client_p1s.set_fan_speed(FanTarget::ChamberExhaust, 80).await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
@@ -546,12 +471,7 @@ async fn test_queue_lifecycle_control_blocks() {
         assert_eq!(json_stop["print"]["command"], "stop");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client.pause_print().await.expect("Pause failed");
     client.resume_print().await.expect("Resume failed");
@@ -577,12 +497,7 @@ async fn test_peripheral_signals_and_climate_controls() {
         assert_eq!(json_buzzer["print"]["mode"], 2);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client_h2d = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::H2D);
+    let mut client_h2d = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::H2D).await;
 
     client_h2d
         .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
@@ -606,12 +521,7 @@ async fn test_peripheral_signals_and_climate_controls() {
         assert_eq!(json_sound["print"]["sound_enable"], true);
     });
 
-    let mqtt_client_a1 =
-        MqttClient::connect(TokioIo(client_stream_a1), "039000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for A1");
-
-    let mut client_a1 = PrinterClient::from_mqtt(mqtt_client_a1, "039000000000000", PrinterModel::A1);
+    let mut client_a1 = connect_test_client(TokioIo(client_stream_a1), "039000000000000", PrinterModel::A1).await;
 
     client_a1
         .set_prompt_sound(true)
@@ -626,13 +536,7 @@ async fn test_peripheral_signals_and_climate_controls() {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
 
-    let mqtt_client_p1s =
-        MqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed for P1S");
-
-    let mut client_p1s =
-        PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", PrinterModel::P1S);
+    let mut client_p1s = connect_test_client(TokioIo(client_stream_p1s), "01P000000000000", PrinterModel::P1S).await;
 
     assert!(matches!(
         client_p1s
@@ -668,12 +572,7 @@ async fn test_send_gcode_rejects_unsafe_homing() {
         assert_eq!(json["print"]["param"], "G28\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
     let err = client.send_gcode("G28 Z").await;
@@ -700,12 +599,7 @@ async fn test_send_gcode_raw_bypasses_safety() {
         assert_eq!(json["print"]["param"], "G28 Z\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // send_gcode_raw should bypass safety checks
     client
@@ -736,12 +630,7 @@ async fn test_temperature_clamping() {
         assert_eq!(json_chamber["print"]["param"], "M141 S60\n");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", PrinterModel::X1E);
+    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
 
     client
         .set_bed_temperature(500)
@@ -770,12 +659,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
     let broker_task_p1s = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
-    let mqtt_client_p1s =
-        MqttClient::connect(TokioIo(client_stream_p1s), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-    let mut client_p1s =
-        PrinterClient::from_mqtt(mqtt_client_p1s, "01P000000000000", PrinterModel::P1S);
+    let mut client_p1s = connect_test_client(TokioIo(client_stream_p1s), "01P000000000000", PrinterModel::P1S).await;
     assert!(matches!(
         client_p1s.set_nozzle_temperature(1, 220).await,
         Err(Error::ModelMismatch(_))
@@ -789,12 +673,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
         let json = read_publish_payload(&mut server_stream_h2d).await;
         assert_eq!(json["print"]["param"], "M104 T1 S220\n");
     });
-    let mqtt_client_h2d =
-        MqttClient::connect(TokioIo(client_stream_h2d), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-    let mut client_h2d =
-        PrinterClient::from_mqtt(mqtt_client_h2d, "01P000000000000", PrinterModel::H2D);
+    let mut client_h2d = connect_test_client(TokioIo(client_stream_h2d), "01P000000000000", PrinterModel::H2D).await;
     client_h2d
         .set_nozzle_temperature(1, 220)
         .await
@@ -816,12 +695,7 @@ async fn test_in_flight_saturation() {
         {}
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // Fill the in-flight queue to capacity (200 commands)
     for i in 0..200 {
@@ -854,12 +728,7 @@ async fn test_connection_drop_during_operation() {
         drop(server_stream);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     broker_task.await.expect("Broker task panicked");
 
@@ -913,12 +782,7 @@ async fn test_start_print_wire_payload() {
         assert_eq!(json["print"]["task_id"], subtask_id);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -949,12 +813,7 @@ async fn test_start_print_idex_nozzle_offset_default() {
         assert_eq!(json["print"]["use_ams"], true);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "20P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "20P000000000000", PrinterModel::X2D);
+    let mut client = connect_test_client(TokioIo(client_stream), "20P000000000000", PrinterModel::X2D).await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -999,12 +858,7 @@ async fn test_set_print_speed_all_levels() {
         }
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     for level in [
         PrintSpeed::Silent,
@@ -1033,12 +887,7 @@ async fn test_skip_objects_wire_payload() {
         assert_eq!(json["print"]["obj_list"], serde_json::json!([0, 3, 7]));
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .skip_objects(vec![0, 3, 7])
@@ -1061,12 +910,7 @@ async fn test_start_calibration_combined_flags() {
         assert_eq!(json["print"]["option"], 6);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .start_calibration(
@@ -1089,12 +933,7 @@ async fn test_clear_print_error_wire_payload() {
         assert_eq!(json["print"]["command"], "clean_print_error");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .clear_print_error()
@@ -1120,12 +959,7 @@ async fn test_set_led_wire_payload() {
         assert_eq!(json_off["system"]["led_mode"], "off");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .set_led("chamber_light", true)
@@ -1157,12 +991,7 @@ async fn test_change_filament_load_wire_payload() {
         assert_eq!(json["print"]["tar_temp"], -1);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .change_filament(0, 1, -1, -1)
@@ -1188,12 +1017,7 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
         assert_eq!(json["print"]["target"], 6); // 1*4 + 2, not 2
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .change_filament(1, 2, -1, -1)
@@ -1218,12 +1042,7 @@ async fn test_change_filament_derives_target_for_external_spool() {
         assert_eq!(json["print"]["target"], 255);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .change_filament(255, 254, -1, -1)
@@ -1240,11 +1059,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     let result = client.change_filament(99, 1, -1, -1).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -1272,12 +1087,7 @@ async fn test_drying_lifecycle_wire_payload() {
         assert_eq!(json_stop["print"]["mode"], 0);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::X1C);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
 
     client
         .start_drying(128, 55, 8, 0, true, 20, false, "PA-CF")
@@ -1306,12 +1116,7 @@ async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
         assert_eq!(json_standard["print"]["temp"], 65);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::X1C);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
 
     client
         .start_drying(128, 200, 8, 0, true, 20, false, "PA-CF")
@@ -1333,12 +1138,7 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // P1S firmware acks ams_filament_drying with `result: success` and then silently
     // discards it — no heater/fan activation, dry_status stays 0 — confirmed against real
@@ -1367,12 +1167,7 @@ async fn test_scan_rfid_wire_payload() {
         assert_eq!(json["print"]["slot_id"], 2);
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client.scan_rfid(0, 2).await.expect("scan_rfid failed");
 
@@ -1386,11 +1181,7 @@ async fn test_scan_rfid_rejects_invalid_ams_id() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     let result = client.scan_rfid(255, 2).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -1414,12 +1205,7 @@ async fn test_select_k_profile_wire_payload() {
         assert_eq!(json["print"]["nozzle_diameter"], "0.4");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .select_k_profile(0, 1, 4, "GFA01", "0.4")
@@ -1436,11 +1222,7 @@ async fn test_select_k_profile_rejects_invalid_combo() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     let result = client.select_k_profile(200, 200, 4, "GFA01", "0.4").await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -1507,11 +1289,7 @@ async fn test_get_k_profiles_auto_priming() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // First call triggers auto-prime (2 publishes)
     let resp = client
@@ -1554,11 +1332,7 @@ async fn test_get_k_profiles_manual_prime_skip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -1606,11 +1380,7 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -1647,12 +1417,7 @@ async fn test_sequence_id_fits_in_i32() {
         assert!(seq <= i32::MAX as u64, "Sequence ID must fit in i32");
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "01P000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "01P000000000000", PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client.send_gcode("G28").await.expect("send_gcode failed");
 
@@ -1699,11 +1464,7 @@ async fn test_get_version_round_trip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client.get_version().await.expect("get_version failed");
 
@@ -1762,11 +1523,7 @@ async fn test_get_version_ignores_mismatched_sequence_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client
         .get_version()
@@ -1804,11 +1561,7 @@ async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
         }
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let result = client.get_version().await;
     assert!(
@@ -1852,11 +1605,7 @@ async fn test_poll_until_buffers_unmatched_messages() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client
         .get_version()
@@ -1886,11 +1635,7 @@ async fn test_request_pushall() {
         assert!(json["pushing"]["sequence_id"].is_string());
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .request_pushall()
@@ -1926,11 +1671,7 @@ async fn test_home_flag_cache_and_advisory_warnings() {
         assert_eq!(json_e["print"]["param"], "M83\nG0 E5.00 F500\n");
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet — cache must read as unknown, not "unhomed".
     assert_eq!(client.is_axis_homed('x'), None);
@@ -2001,11 +1742,7 @@ async fn test_wait_for_homing_resolves_after_dip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .wait_for_homing()
@@ -2044,11 +1781,7 @@ async fn test_wait_for_homing_resolves_when_already_in_progress() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .wait_for_homing()
@@ -2081,11 +1814,7 @@ async fn test_wait_for_homing_times_out_without_dip() {
         }
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let result = client.wait_for_homing().await;
     assert!(
@@ -2124,11 +1853,7 @@ async fn test_print_status_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet — cache must read as unknown-state, not a stale guess.
     assert_eq!(client.print_status(), None);
@@ -2169,12 +1894,8 @@ async fn test_door_open_none_on_sensorless_model() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
     // P1S has no door sensor.
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.is_door_open(), None);
 
@@ -2218,13 +1939,8 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
     // X1C has a door sensor, read from home_flag bit 23.
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", PrinterModel::X1C);
+    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     // No telemetry observed yet — cache must read as unknown, not "closed".
     assert_eq!(client.is_door_open(), None);
@@ -2278,12 +1994,7 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client =
-        MqttClient::connect(TokioIo(client_stream), "00M000000000000", "12345678")
-            .await
-            .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, "00M000000000000", PrinterModel::X1C);
+    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     client
         .poll_telemetry()
@@ -2333,11 +2044,7 @@ async fn test_active_fault_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet.
     assert_eq!(client.active_fault(), None);
@@ -2393,10 +2100,7 @@ async fn test_print_progress_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.print_progress(), PrintProgress::default());
 
@@ -2459,10 +2163,7 @@ async fn test_bed_temperatures_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.bed_temperatures(), (0, 0));
 
@@ -2503,10 +2204,7 @@ async fn test_ams_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.ams().is_none());
 
@@ -2549,10 +2247,7 @@ async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.vt_tray().is_none());
     assert!(client.vir_slot().is_none());
@@ -2590,10 +2285,7 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.nozzle_temperatures(), vec![(0, 0, 0)]);
 
@@ -2631,10 +2323,7 @@ async fn test_printing_tray_global_id_prefers_snow_field() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.printing_tray_global_id(), None);
 
@@ -2670,10 +2359,7 @@ async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::H2D);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::H2D).await;
 
     client
         .poll_telemetry()
@@ -2703,12 +2389,8 @@ async fn test_chamber_temperature_cache() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-
     // P1S has no chamber heater/sensor — always None regardless of telemetry.
-    let mut sensorless_client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut sensorless_client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
     assert_eq!(sensorless_client.chamber_temperature(), None);
     sensorless_client
         .poll_telemetry()
@@ -2729,10 +2411,7 @@ async fn test_chamber_temperature_cache() {
         .await;
         read_puback(&mut server_stream2).await;
     });
-    let mqtt_client2 = MqttClient::connect(TokioIo(client_stream2), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut heated_client = PrinterClient::from_mqtt(mqtt_client2, SERIAL, PrinterModel::H2D);
+    let mut heated_client = connect_test_client(TokioIo(client_stream2), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(heated_client.chamber_temperature(), Some((0, 0)));
     heated_client
@@ -2765,10 +2444,7 @@ async fn test_hms_cache_and_active_alerts() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.hms().is_none());
     assert!(client.active_hms_alerts().is_empty());
@@ -2807,10 +2483,7 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.ams().is_none());
     assert!(client.sanitized_ams().is_none());
@@ -2861,12 +2534,9 @@ async fn test_fan_speed_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
     // H2D uses step-encoded (not percentage) fan telemetry for the primary four fans,
     // unlike X2D (which reports percentages directly — see `X2Quirks::reports_auxiliary_fan_percentage`).
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::H2D);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(client.part_cooling_fan_speed(), None);
     assert_eq!(client.auxiliary_right_fan_speed(), None);
@@ -2903,10 +2573,7 @@ async fn test_print_speed_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.print_speed(), None);
     assert_eq!(client.print_speed_magnitude(), None);
@@ -2948,10 +2615,7 @@ async fn test_wifi_signal_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.wifi_signal(), None);
     assert!(!client.is_ethernet_active_via_wifi_signal());
@@ -3024,10 +2688,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     let broker_task_a = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_a).await;
     });
-    let mqtt_client_a = MqttClient::connect(TokioIo(client_stream_a), SERIAL, "12345678")
-        .await
-        .expect("first MQTT connect handshake failed");
-    let mut client = PrinterClient::from_mqtt(mqtt_client_a, SERIAL, PrinterModel::P1S);
+    let mut client = connect_test_client(TokioIo(client_stream_a), SERIAL, PrinterModel::P1S).await;
     assert!(client.is_mqtt_connected());
     broker_task_a.await.expect("First broker task panicked");
 
@@ -3310,10 +2971,7 @@ async fn test_with_ftps_panics_on_from_mqtt_client() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
     });
-    let mqtt_client = MqttClient::connect(TokioIo(client_stream), SERIAL, "12345678")
-        .await
-        .expect("MQTT connect handshake failed");
-    let client = PrinterClient::from_mqtt(mqtt_client, SERIAL, PrinterModel::P1S);
+    let client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let _ = client.with_ftps(
         bambino::client::dummy::DummyTls,
