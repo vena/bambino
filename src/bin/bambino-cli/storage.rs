@@ -43,7 +43,7 @@ pub enum FilesAction {
     /// Uploads a tiny probe file, diffs its printer-reported mtime against host wall-clock
     /// time, then deletes it — checks whether the printer's onboard clock is usably accurate.
     ///
-    /// BUG-042: confirmed unreliable on ESP32/FreeRTOS-class printers (e.g. P1S) — no RTC
+    /// Confirmed unreliable on ESP32/FreeRTOS-class printers (e.g. P1S) — no RTC
     /// battery, and absent a successful LAN-mode NTP sync (observed unreliable), the clock
     /// falls back to the firmware build date on boot. `list_directory`'s year-rollover math
     /// can't be trusted whenever this is the case, since the raw `LIST` HH:MM timestamps come
@@ -96,7 +96,7 @@ pub async fn run(
 
     println!("FTPS connection authenticated. Executing operational action...\n");
 
-    // BUG-071: every arm below used to propagate via `?` directly out of `run()`, bypassing
+    // Every arm below used to propagate via `?` directly out of `run()`, bypassing
     // the `client.disconnect()` at the bottom on any error — skipping FTPS's graceful `QUIT`
     // on every failure path except the empty-listing early return. Capturing the dispatch
     // result in a variable instead lets `disconnect()` run unconditionally before the error
@@ -180,9 +180,9 @@ pub async fn run(
 
 /// Uploads a tiny probe file, diffs its printer-reported mtime against host UTC wall-clock
 /// time, then deletes it. Factored out of `run()`'s `ClockCheck` arm to keep that match
-/// readable — see `FilesAction::ClockCheck`'s doc comment for why this exists (BUG-042:
+/// readable — see `FilesAction::ClockCheck`'s doc comment for why this exists:
 /// LAN-mode NTP sync is unreliable, so `list_directory`'s year-rollover math can't be trusted
-/// without checking the printer's clock first).
+/// without checking the printer's clock first.
 async fn run_clock_check<RawIO, Tls, Factory, FtpsTimer>(
     client: &mut bambino::ftps::BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>,
 ) -> Result<(), Error>
@@ -210,7 +210,7 @@ where
     let files = match listing {
         Ok(files) => files,
         Err(listing_err) => {
-            // BUG-057: the listing error takes priority (it's why the check failed), but
+            // The listing error takes priority (it's why the check failed), but
             // don't let a simultaneous cleanup-delete failure go completely unreported —
             // the probe file would otherwise be silently left behind on the printer's
             // storage with no operator-visible signal.
@@ -321,7 +321,7 @@ fn split_duration(duration: time::Duration) -> (i64, i64, i64) {
 }
 
 /// Renders `files list`'s output table. Factored out of `run()`'s `List` arm to keep that
-/// match readable — see `FilesAction::List`'s `year_is_inferred` handling (BUG-042) for why
+/// match readable — see `FilesAction::List`'s `year_is_inferred` handling for why
 /// this isn't a trivial print loop: every row whose year was inferred (not reported by the
 /// printer) gets marked, since a per-row plausibility threshold can never actually detect
 /// printer clock skew (see `FtpFile::year_is_inferred`'s doc comment).

@@ -10,11 +10,11 @@ Data only: one row per known bug/gap, `Open`/`Fixed`/`Wontfix`. Doesn't replace 
 
 | ID | Sev | Module | Title | Found | Detail |
 |---|---|---|---|---|---|
-| BUG-248 | Sev3 | crate-wide | ~250 doc/regression comments across 48 files inline an internal `BUG-NNN` tracker ID that will dangle once this repo migrates to a real issue tracker (GitHub Issues assigns its own numbers, no 1:1 mapping) | 2026-07-17 | 07-17-REVIEW.md §18 — strip the inline `BUG-NNN` token from each; keep the durable invariant sentence and any external citation (BambuStudio/pybambu/bambuddy file:line, `[REF-*]` tag) verbatim — those don't rot. Where a `BUG-NNN` is used as a same-file cross-reference to another comment (no external citation attached), replace it with the symbol/function name instead. Supersedes/broadens BUG-207–247, which already drop the tag as a side effect of trimming narration — this entry covers the remaining tag-only instances those left alone. |
 ## Fixed
 
 | ID | Sev | Module | Title | Found | Closed | Detail |
 |---|---|---|---|---|---|---|
+| BUG-248 | Sev3 | crate-wide | ~250 doc/regression comments across 48+ files inline an internal `BUG-NNN` tracker ID that will dangle once this repo migrates to a real issue tracker (GitHub Issues assigns its own numbers, no 1:1 mapping) | 2026-07-17 | 2026-07-17 | 07-17-REVIEW.md §18 — stripped the inline `BUG-NNN` token from every comment across `ams/`, `camera/`, `client/`, `diagnostics/`, `discovery/`, `error.rs`, `ftps/`, `io/`, `mqtt/`, `quirks/`, `types/telemetry/`, `bin/bambino-cli/`, and `tests/`; kept durable invariant sentences and external citations (BambuStudio/pybambu/bambuddy file:line, `[REF-*]` tags) verbatim, replaced same-file cross-references with the symbol/function name. §18's file list undercounted — `bin/bambino-cli/*` had inline tags too and was swept as well. Two user-facing `println!` strings in `storage.rs` (lines 279, 355) were left untouched — out of scope, not comments. |
 | BUG-207 | Sev3 | types/telemetry/tests/bed.rs | Dead scratch-arithmetic comment (lines 80-82) contradicts the correct annotation at line 85 | 2026-07-17 | 2026-07-17 | 07-17-REVIEW.md §2 — deleted the 3 dead scratch-arithmetic lines. |
 | BUG-208 | Sev3 | ftps/client.rs | `allow(clippy::too_many_arguments)` on `connect()` is dead — 6 args, clippy's threshold is 8 | 2026-07-17 | 2026-07-17 | 07-17-REVIEW.md §3 — deleted the allow. |
 | BUG-209 | Sev3 | ftps/client.rs | Same dead allow on `connect_control_stream()` — 5 args | 2026-07-17 | 2026-07-17 | 07-17-REVIEW.md §3 — deleted the allow. |

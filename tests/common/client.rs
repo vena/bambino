@@ -1,7 +1,7 @@
 //! # Shared `PrinterClient` Connection Helper
 //!
 //! Collapses the `MqttClient::connect()` + `PrinterClient::from_mqtt()` pair repeated at
-//! ~80 call sites across `tests/client_test.rs` (BUG-170) into one call. Deliberately does
+//! ~80 call sites across `tests/client_test.rs` into one call. Deliberately does
 //! NOT also swallow the preceding `tokio::io::duplex()` + broker-task `tokio::spawn()` —
 //! `MqttClient::connect()` performs a real handshake that blocks until the server end of the
 //! stream is driven, so the broker task must already be running before this is awaited. Moving

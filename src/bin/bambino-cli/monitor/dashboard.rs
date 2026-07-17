@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 /// `write!`, ignoring the error — every `render_*` helper below targets an in-memory or
 /// raw-mode terminal writer where a failed write means the terminal session is gone, which
-/// the render loop has no useful way to react to (BUG-194: was `write!(...).unwrap_or(())`
+/// the render loop has no useful way to react to (was `write!(...).unwrap_or(())`
 /// duplicated at ~24 call sites).
 macro_rules! dwrite {
     ($w:expr, $($arg:tt)*) => {
@@ -53,7 +53,7 @@ impl<W: Write> Write for RawWriter<W> {
 /// Recursively merges `incoming` into `target`: object keys merge key-by-key, everything else
 /// (arrays, scalars, a type change) is replaced wholesale.
 ///
-/// BUG-090: Bambu MQTT pushes are incremental — a push may update one sub-field of a nested
+/// Bambu MQTT pushes are incremental — a push may update one sub-field of a nested
 /// object (e.g. `print.ams.tray_now`) without resending the rest of that object (e.g.
 /// `print.ams.ams`, the actual AMS unit/tray array). A flat `state.insert(key, value)` per
 /// top-level key treated every nested object as an atomic value, so a partial `ams` push wiped
@@ -570,7 +570,7 @@ mod deep_merge_tests {
 
     #[test]
     fn test_deep_merge_preserves_sibling_object_keys() {
-        // BUG-090: a partial `ams` push (only `tray_now` changed) must not wipe the
+        // A partial `ams` push (only `tray_now` changed) must not wipe the
         // previously-accumulated `ams` array sitting alongside it in the same object.
         let mut target = serde_json::json!({
             "ams": { "ams": [{"id": "0"}], "tray_now": "0" }

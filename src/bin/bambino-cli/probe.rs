@@ -158,7 +158,7 @@ struct ProbeEntry {
     capture_window_secs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     publish_error: Option<String>,
-    // BUG-017: capture_responses() failures are recorded here instead of aborting run() via
+    // capture_responses() failures are recorded here instead of aborting run() via
     // `?`, which previously discarded every already-captured entry and wrote nothing at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     capture_error: Option<String>,
@@ -482,7 +482,7 @@ async fn run_capture_test(
         Err(e) => Some(e.to_string()),
     };
 
-    // BUG-017: capture_responses() failures used to propagate via `?`, discarding every
+    // capture_responses() failures used to propagate via `?`, discarding every
     // already-captured entry and aborting before the report was ever written. Recorded
     // as a per-entry capture_error instead, mirroring how publish_error already handles
     // send_command() failures — the run continues to the next test either way.

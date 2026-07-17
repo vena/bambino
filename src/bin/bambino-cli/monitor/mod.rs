@@ -33,7 +33,7 @@ pub async fn dump(
     if follow {
         eprintln!("Following telemetry pushes as NDJSON — Ctrl+C to stop.");
 
-        // BUG-092: MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
+        // MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
         // the broker resets the connection once that elapses with no packet from the client.
         // Mirrors run()'s PING_TICK_SECS/ping_timer below.
         const PING_TICK_SECS: u64 = 15;
@@ -87,7 +87,7 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
-        // BUG-043: construct the guard immediately after raw mode is enabled, before the
+        // Construct the guard immediately after raw mode is enabled, before the
         // fallible alt-screen/cursor-hide write below — if that write or flush fails and `?`
         // returns early, `guard` (already bound) still gets dropped as this function returns,
         // so `Drop` still restores the terminal. Returning `Ok(Self)` only at the end (the

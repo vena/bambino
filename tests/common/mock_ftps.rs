@@ -15,7 +15,7 @@ use bambino::io::TokioIo;
 
 /// Helper: reads the next command from the control stream and returns it as a string.
 ///
-/// BUG-038: this single, non-looping `read()` is *not* a safety net against
+/// This single, non-looping `read()` is *not* a safety net against
 /// `write_command`'s single-write-call guarantee regressing back to two writes — under tokio's
 /// cooperative scheduling, two sequential small writes on a `tokio::io::duplex` normally
 /// coalesce into one `.read()` before this task is ever polled, so every test built on this
@@ -165,7 +165,7 @@ pub async fn run_mock_server(
 /// Mock server for upload exercising `upload_file`'s multi-chunk write loop with a payload
 /// larger than one `FTPS_UPLOAD_CHUNK_SIZE` (64 KiB).
 ///
-/// BUG-055: `run_mock_server`'s upload capture does a single non-looping `read()` into a
+/// `run_mock_server`'s upload capture does a single non-looping `read()` into a
 /// fixed 100-byte buffer, and every test payload built on this harness (e.g.
 /// `b"MOCK_UPLOAD_DATA"`, 16 bytes) is far under one chunk — so no test ever exercised
 /// `upload_file`'s multi-chunk loop past its first iteration. This loops the read until
@@ -264,7 +264,7 @@ pub async fn run_mock_server_download(
     drop(server_data);
     respond(&mut server_control, b"226 Transfer complete.\r\n").await;
 
-    // Post-download SIZE verification (BUG-003)
+    // Post-download SIZE verification
     let cmd = read_cmd(&mut server_control, &mut buf).await;
     assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
     respond(&mut server_control, b"213 30\r\n").await;
@@ -464,7 +464,7 @@ pub async fn run_mock_server_data_channel_failure(
     // before it would ever consume this reply.
 }
 
-/// Mock server for the BUG-004 single-reply-command poisoning regression test.
+/// Mock server for the single-reply-command poisoning regression test.
 ///
 /// Reads the `DELE` command and then drops the control stream without ever replying — the
 /// client's `read_response` sees a clean 0-byte read, which `read_chunk` maps to
@@ -482,8 +482,8 @@ pub async fn run_mock_server_dele_connection_drop(
     // Drop the stream instead of responding.
 }
 
-/// Mock server for the BUG-029 regression test: `LIST`'s *initial* write/read (the `150`/`125`
-/// negotiation, before the data-transfer window BUG-004's poisoning already covered) must
+/// Mock server for the regression test: `LIST`'s *initial* write/read (the `150`/`125`
+/// negotiation, before the data-transfer window the single-reply-command case already covered) must
 /// poison the client on failure too. Drops the control stream right after reading the `LIST`
 /// command, before ever sending a `150`/`125` reply.
 pub async fn run_mock_server_list_connection_drop(
@@ -500,7 +500,7 @@ pub async fn run_mock_server_list_connection_drop(
     // Drop the stream instead of responding.
 }
 
-/// Mock server for the BUG-030 regression test: `download_file`'s confirmation-read handling
+/// Mock server for the regression test: `download_file`'s confirmation-read handling
 /// must accept `426` (the documented P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]) and fall
 /// through to the SIZE recheck, symmetric with `upload_file`'s existing 426 handling —
 /// previously RETR treated 426 as an unconditional hard failure.

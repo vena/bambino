@@ -50,7 +50,7 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 
 /// Reads a single, complete MQTT frame from an asynchronous stream.
 ///
-/// **Not cancellation-safe** (BUG-079): internally awaits across several sequential reads
+/// **Not cancellation-safe**: internally awaits across several sequential reads
 /// (header, variable-length remaining-length bytes, payload). If this future is dropped
 /// mid-flight — e.g. as a losing branch of `tokio::select!` — bytes already consumed from
 /// `stream` are gone for good, desyncing any subsequent read from that same stream. A caller
@@ -192,7 +192,7 @@ pub async fn send_publish_payload(
 /// * `ack_tx`: A oneshot channel used to signal the test suite the exact moment a `PUBACK`
 ///   is flushed to the client socket, preventing race conditions.
 ///
-/// BUG-079: `read_packet` isn't cancellation-safe (see its doc comment), so it must never be
+/// `read_packet` isn't cancellation-safe (see its doc comment), so it must never be
 /// raced directly inside the `select!` loop below — a losing race on a fresh call every
 /// iteration would silently discard header/length bytes already read off the wire, desyncing
 /// every later packet parse. Instead, a dedicated task owns the read half exclusively and

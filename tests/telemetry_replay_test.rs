@@ -12,7 +12,7 @@
 //! `mqtt_test.rs::test_mqtt_client_lifecycle_and_telemetry` and
 //! `client_test.rs`'s `PrinterClient::from_mqtt` tests) over refactoring
 //! `update_telemetry_cache` to take `&mut TelemetryCache` explicitly: this session's Phase 1
-//! sweep confirmed only one new bug (BUG-099, not a merge-logic shape) and left five
+//! sweep confirmed only one new bug (not a merge-logic shape) and left five
 //! `needs-verification`, well under the three-plus-instances threshold this crate's
 //! quirks-engine precedent uses to justify a shared-strategy refactor.
 

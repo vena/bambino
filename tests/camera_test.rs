@@ -161,7 +161,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
     assert!(!printer.is_camera_connected());
 }
 
-/// BUG-020: `ensure_camera()` used to `.take()` `camera_config` before attempting the dial,
+/// `ensure_camera()` used to `.take()` `camera_config` before attempting the dial,
 /// so a failed attempt permanently discarded it — every later call would then report the
 /// misleading "Camera not configured" error instead of retrying. `MockDataStreamFactory`'s
 /// `dial()` fails with `ConnectionRefused` whenever its stream container is empty, so two
@@ -196,7 +196,7 @@ async fn test_ensure_camera_retries_after_failed_dial() {
     assert!(!printer.is_camera_connected());
 }
 
-/// BUG-055: full integration-level coverage of a rejected access code — `authenticate()`
+/// Full integration-level coverage of a rejected access code — `authenticate()`
 /// only confirms the handshake bytes were written (see `src/camera/CLAUDE.md`), so the
 /// actual rejection must surface on the following `read_next_frame()` call as a connection
 /// error, not a hang or a misleading success.
@@ -231,7 +231,7 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
         .expect("Background mock camera server panicked");
 }
 
-/// BUG-055: full integration-level coverage of a connection dropping partway through a
+/// Full integration-level coverage of a connection dropping partway through a
 /// frame's declared payload — no existing unit test in `src/camera/binary.rs` exercises a
 /// short read against an already-valid header (its tests cover fully-present-but-structurally-
 /// invalid payloads instead).
@@ -269,7 +269,7 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
         .expect("Background mock camera server panicked");
 }
 
-/// BUG-073: `attach_camera()`/`disconnect_camera()` were never exercised by any test. Verifies
+/// `attach_camera()`/`disconnect_camera()` were never exercised by any test. Verifies
 /// attach makes the client immediately usable for frame reads, and disconnect clears the slot.
 #[tokio::test]
 async fn test_attach_and_disconnect_camera() {

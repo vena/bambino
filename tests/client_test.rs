@@ -189,7 +189,7 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
 
 #[tokio::test]
 async fn test_move_relative_x_rejects_out_of_range_distance() {
-    // BUG-163: X/Y moves previously had no distance cap at all, unlike Z. P1S x_max is
+    // X/Y moves previously had no distance cap at all, unlike Z. P1S x_max is
     // 256.0mm — a distance exceeding that must be rejected the same way Z's out-of-range
     // case already is.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
@@ -269,7 +269,7 @@ async fn test_thermal_guards_and_temperatures() {
     broker_task_a1.await.expect("A1 broker task panicked");
 }
 
-// BUG-023: X1C's bed_temp_max ceiling is voltage-dependent (110°C @220V, 120°C @110V, per
+// X1C's bed_temp_max ceiling is voltage-dependent (110°C @220V, 120°C @110V, per
 // src/quirks/models/x1.rs's x1c_bed_temp_max), derived from cached home_flag telemetry — but
 // every existing bed-clamping test above only exercises X1E, whose ceiling ignores the
 // parameter entirely. A regression that swapped the two constants or flipped the None-case
@@ -393,7 +393,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
 
 #[tokio::test]
 async fn test_set_fan_speed_clamps_above_100_percent() {
-    // BUG-074: set_fan_speed's speed_percent > 100 clamp path was never exercised — every
+    // set_fan_speed's speed_percent > 100 clamp path was never exercised — every
     // existing call in this file used values <= 100. 150% must clamp to the same 255 PWM
     // value 100% produces, not overflow or wrap.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
@@ -416,7 +416,7 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
 
 #[tokio::test]
 async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
-    // BUG-148: FanTarget::ChamberExhaust was never exercised through set_fan_speed, unlike its
+    // FanTarget::ChamberExhaust was never exercised through set_fan_speed, unlike its
     // 3 sibling fan targets above (PartCooling, AuxiliaryLeft, AuxiliaryRight). Mirrors the
     // AuxiliaryRight success (X2D)/mismatch (P1S) pair in
     // test_cooling_fans_and_peripheral_switches, using H2D for the success case since chamber
@@ -766,10 +766,10 @@ async fn test_start_print_wire_payload() {
         assert_eq!(json["print"]["layer_inspect"], true);
         // P1S: single nozzle → nozzle_offset_cali defaults to 0
         assert_eq!(json["print"]["nozzle_offset_cali"], 0);
-        // BUG-059: PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
+        // PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
         // default), which from_config() serializes as extrude_cali_flag: 1.
         assert_eq!(json["print"]["extrude_cali_flag"], 1);
-        // BUG-119: flow_cali/profile_id/project_id/task_id, previously missing entirely.
+        // flow_cali/profile_id/project_id/task_id, previously missing entirely.
         // subtask_id/project_id/task_id all share one value (see ProjectFilePayload's
         // project_id doc comment for why).
         assert_eq!(json["print"]["flow_cali"], true);
@@ -1000,7 +1000,7 @@ async fn test_change_filament_load_wire_payload() {
 
 #[tokio::test]
 async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
-    // BUG-116: for any standard AMS unit other than 0, target is the flat global tray ID
+    // For any standard AMS unit other than 0, target is the flat global tray ID
     // (ams_id*4 + slot_id), not slot_id — ams_id 0 previously masked this since the two
     // values coincide there.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
@@ -1026,7 +1026,7 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
 
 #[tokio::test]
 async fn test_change_filament_derives_target_for_external_spool() {
-    // BUG-116: an external-spool load's target is the ams_id itself (255), not slot_id
+    // An external-spool load's target is the ams_id itself (255), not slot_id
     // (254) — the reference doc's worked examples for this case were previously wrong too.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
@@ -1392,7 +1392,7 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
     broker_task.await.expect("Broker task panicked");
 }
 
-// BUG-022: this only exercises a single command from a freshly-constructed client (sequence
+// This only exercises a single command from a freshly-constructed client (sequence
 // ID 10001), so it can't seed sequence_counter near TASK_ID_MAX to actually trigger wraparound
 // — that field is pub(crate), invisible to this external integration test. It still verifies a
 // real invariant (every wire sequence_id fits in i32), just not wraparound itself; the
@@ -1959,7 +1959,7 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
 
 #[tokio::test]
 async fn test_door_open_cache_survives_message_omitting_home_flag() {
-    // BUG-021: last_door_open used to be overwritten unconditionally on every telemetry
+    // last_door_open used to be overwritten unconditionally on every telemetry
     // message, ignoring the same absent-field staleness contract every other cache field
     // respects. A print-carrying message that omits home_flag (X1C's door-sensor field)
     // must leave a previously-observed "door open" cached, not reset it to Some(false).
@@ -2297,7 +2297,7 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
 
 #[tokio::test]
 async fn test_printing_tray_global_id_prefers_snow_field() {
-    // BUG-124: printing_tray_global_id() decodes device.extruder.info[active].snow directly,
+    // printing_tray_global_id() decodes device.extruder.info[active].snow directly,
     // no ams_extruder_map needed.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");
@@ -2636,7 +2636,7 @@ async fn test_wifi_signal_cache_from_telemetry() {
 
 #[tokio::test]
 async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
-    // BUG-019: the wall-clock sequence-counter reseed in ensure_mqtt() is meant to stop two
+    // The wall-clock sequence-counter reseed in ensure_mqtt() is meant to stop two
     // independent sessions connecting to the same printer from both starting at the same
     // fixed counter. Under DummyTimer (the documented, first-class default when
     // .with_timer() isn't chained), now_millis() always returns 0, so reseeding
@@ -2672,7 +2672,7 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
 
 #[tokio::test]
 async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
-    // BUG-018: before disconnect_mqtt()/attach_mqtt() existed, a dead MQTT session (a
+    // Before disconnect_mqtt()/attach_mqtt() existed, a dead MQTT session (a
     // tick_zombie_check()-detected zombie, a transport error) had no supported recovery
     // path — ensure_mqtt()'s is_some() short-circuit kept handing back the same broken
     // stream forever, unlike disconnect_camera()/attach_camera() and
@@ -2731,7 +2731,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
 
 #[tokio::test]
 async fn test_ensure_ftps_retries_after_failed_dial() {
-    // BUG-020: ensure_ftps() used to .take() ftps_config before attempting the dial, so a
+    // ensure_ftps() used to .take() ftps_config before attempting the dial, so a
     // failed attempt (including a connect_timeout_secs timeout on a slow LAN) permanently
     // discarded it — every later call would then report the misleading "FTPS not
     // configured" error instead of retrying. MockDataStreamFactory's dial() fails with
@@ -2819,7 +2819,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
 
 #[tokio::test]
 async fn test_camera_trio_unconfigured_error() {
-    // BUG-147: no test exercised the camera trio's "not configured" branch — the same case
+    // No test exercised the camera trio's "not configured" branch — the same case
     // FTPS's disconnect_storage/re-storage() test above covers for the FTPS trio
     // (see "FTPS not configured" a few tests up). A PrinterClient that never called
     // .with_camera()/.attach_camera() must fail read_camera_frame()/camera() with a clear
@@ -2876,7 +2876,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
 
 #[tokio::test]
 async fn test_with_connect_timeout_zero_disables_timeout() {
-    // BUG-007: connect_timeout_secs == 0 used to race against timer.sleep(Duration::from_secs(0)),
+    // connect_timeout_secs == 0 used to race against timer.sleep(Duration::from_secs(0)),
     // which resolves near-instantly and wins the race against the dial+TLS+handshake future on
     // nearly every attempt — making `0` mean "always fail immediately" instead of "disabled,"
     // unlike the sibling `command_timeout_secs` field's documented "0 disables" convention.
@@ -2940,7 +2940,7 @@ async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     );
 }
 
-/// BUG-072: `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host config
+/// `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host config
 /// was ever supplied) — calling `.with_ftps()` on one used to silently succeed and only fail
 /// opaquely at actual FTPS connect time. Must now panic immediately at the builder call site.
 #[tokio::test]

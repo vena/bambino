@@ -75,7 +75,7 @@ pub async fn run_mock_camera_server(
     }
 }
 
-/// BUG-055: variant that reads and validates the handshake exactly like
+/// Variant that reads and validates the handshake exactly like
 /// [`run_mock_camera_server`], then closes the connection immediately instead of streaming any
 /// frame — simulating a rejected access code. Per `src/camera/CLAUDE.md`, `authenticate()`
 /// only confirms the handshake packet was *written*; a real rejection surfaces later as a
@@ -102,7 +102,7 @@ pub async fn run_mock_camera_server_closes_after_handshake(
     // rejecting the access code.
 }
 
-/// BUG-055: variant that streams a valid frame header advertising `payload_len` bytes, then
+/// Variant that streams a valid frame header advertising `payload_len` bytes, then
 /// closes the connection after writing only `bytes_before_drop` of that payload — simulating a
 /// network blip or printer-side disconnect mid-frame. No unit test in `src/camera/binary.rs`
 /// covers a connection closing partway through a payload already declared by its header (its

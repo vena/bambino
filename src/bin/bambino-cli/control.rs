@@ -90,7 +90,7 @@ pub enum CalibrationArg {
 
 #[derive(Subcommand, Debug)]
 pub enum AmsAction {
-    /// Start AMS drying cycle (BUG-118: duration is in hours, not minutes)
+    /// Start AMS drying cycle (duration is in hours, not minutes)
     Dry {
         id: i32,
         temp: u32,
