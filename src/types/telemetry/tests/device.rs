@@ -115,7 +115,7 @@ fn test_device_incremental_top_level() {
 
 #[test]
 fn test_ethernet_active_net_conf_bitmask() {
-    // BUG-110: is_ethernet_active() now reads print.net.conf bit 0, not the confirmed-wrong
+    // is_ethernet_active() reads print.net.conf bit 0, not the confirmed-wrong
     // home_flag bit 18.
     let json = r#"{ "print": { "net": { "conf": 1 } } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json)
@@ -141,7 +141,7 @@ fn test_ethernet_active_net_conf_bitmask() {
 
 #[test]
 fn test_sdcard_state_bitmask() {
-    // BUG-123: home_flag bits 8-9 decode the real SD-card state; sdcard bool alone can
+    // home_flag bits 8-9 decode the real SD-card state; sdcard bool alone can
     // never distinguish a degraded card.
     let cases = [
         (0u32 << 8, SdcardState::NoSdcard),
@@ -423,7 +423,7 @@ fn test_device_empty_report() {
 
 #[test]
 fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
-    // BUG-093: a `device` push touching only `ctc` must not wipe the previously-cached
+    // A `device` push touching only `ctc` must not wipe the previously-cached
     // `nozzle`/`extruder`/`airduct` sub-objects sitting alongside it.
     let mut cached = DeviceTelemetry {
         nozzle: Some(NozzleCollection {
@@ -482,7 +482,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
 
 #[test]
 fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
-    // BUG-094: confirmed via pybambu/bambuddy — device.nozzle.info can be absent while
+    // Confirmed via pybambu/bambuddy — device.nozzle.info can be absent while
     // sibling nozzle fields (e.g. exist) change.
     let mut cached = NozzleCollection {
         info: Some(vec![NozzleInfo {
@@ -526,8 +526,8 @@ fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
 
 #[test]
 fn test_nozzle_collection_merge_from_clears_info_on_present_empty() {
-    // BUG-158: confirmed against BambuStudio's json_diff::restore_objects (generic recursive
-    // JSON-delta merge, verified live via BUG-095's P1S_print_sequence.ndjson capture for a
+    // Confirmed against BambuStudio's json_diff::restore_objects (generic recursive
+    // JSON-delta merge, verified live via a P1S_print_sequence.ndjson capture for a
     // sibling field) — a present-but-empty array in the delta must replace the cached value,
     // not be treated the same as an absent key. `info: Some(vec![])` (key present, empty) is
     // distinguishable from `info: None` (key absent) only because `info` is `Option<Vec<_>>`.
@@ -607,7 +607,7 @@ fn test_extruder_collection_merge_from_preserves_info_on_absence() {
 
 #[test]
 fn test_extruder_collection_merge_from_clears_info_on_present_empty() {
-    // BUG-158: same present-empty-clears rule as NozzleCollection.info — see
+    // Same present-empty-clears rule as NozzleCollection.info — see
     // test_nozzle_collection_merge_from_clears_info_on_present_empty.
     let mut cached = ExtruderCollection {
         info: Some(vec![ExtruderInfo {
@@ -643,7 +643,7 @@ fn test_extruder_collection_merge_from_clears_info_on_present_empty() {
 
 #[test]
 fn test_airduct_collection_merge_from_preserves_fields_independently() {
-    // BUG-094: confirmed via bambuddy — device.airduct.modeCur can change while parts/modeList
+    // Confirmed via bambuddy — device.airduct.modeCur can change while parts/modeList
     // are absent from that same push, and vice versa.
     let mut cached = AirductCollection {
         parts: Some(vec![AirductPart {
@@ -677,7 +677,7 @@ fn test_airduct_collection_merge_from_preserves_fields_independently() {
 
 #[test]
 fn test_airduct_collection_merge_from_clears_parts_and_mode_list_on_present_empty() {
-    // BUG-158: same present-empty-clears rule as NozzleCollection.info, confirmed against
+    // Same present-empty-clears rule as NozzleCollection.info, confirmed against
     // BambuStudio's json_diff::restore_objects for these two fields specifically — see
     // AirductCollection::merge_from's doc comment.
     let mut cached = AirductCollection {
@@ -711,7 +711,7 @@ fn test_airduct_collection_merge_from_clears_parts_and_mode_list_on_present_empt
 
 #[test]
 fn test_ctc_telemetry_merge_from_preserves_info_on_absence() {
-    // BUG-096: confirmed via BambuStudio's DevChamber::ParseChamberV2_0 — device.ctc.info can
+    // Confirmed via BambuStudio's DevChamber::ParseChamberV2_0 — device.ctc.info can
     // be absent while device.ctc.state is present (and changes) in the same push.
     let mut cached = CtcTelemetry {
         info: Some(CtcInfo {
@@ -756,9 +756,9 @@ fn test_ctc_info_merge_from_preserves_target_on_absence() {
 
 #[test]
 fn test_bed_telemetry_merge_from_preserves_info_on_absence() {
-    // BUG-095: confirmed via BambuStudio's json_diff::restore_objects generic reconstruction
+    // Confirmed via BambuStudio's json_diff::restore_objects generic reconstruction
     // layer — device.bed.info can be absent while device.bed.state is present (and changes)
-    // in the same push, same shape as BUG-096's device.ctc.info/.state.
+    // in the same push, same shape as `CtcTelemetry`'s device.ctc.info/.state.
     let mut cached = BedTelemetry {
         info: Some(BedInfo { temp: Some(1900000) }),
         state: Some(0),
@@ -778,7 +778,7 @@ fn test_bed_telemetry_merge_from_preserves_info_on_absence() {
 
 #[test]
 fn test_ext_tool_telemetry_merge_from_preserves_fields_independently() {
-    // BUG-097: confirmed via BambuStudio's DevExtensionToolParser::ParseV2_0 — mount_3d/calib
+    // Confirmed via BambuStudio's DevExtensionToolParser::ParseV2_0 — mount_3d/calib
     // (ParseVal with current-value default) and type/tool_type (unrecognized/absent falls
     // through without writing) all preserve on absence.
     let mut cached = ExtToolTelemetry {

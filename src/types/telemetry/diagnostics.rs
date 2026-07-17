@@ -19,7 +19,7 @@ pub struct CtcTelemetry {
 impl CtcTelemetry {
     /// Merges a freshly-parsed `CtcTelemetry` into `self` field-by-field.
     ///
-    /// BUG-096: confirmed against BambuStudio's own `DevChamber::ParseChamberV2_0`
+    /// Confirmed against BambuStudio's own `DevChamber::ParseChamberV2_0`
     /// (`src/slic3r/GUI/DeviceCore/DevChamber.cpp`) — it reads `device.ctc.state`
     /// unconditionally the moment `device.ctc` itself is present (no absence guard,
     /// i.e. the official client never expects `state` to arrive independently absent),
@@ -100,9 +100,9 @@ impl IpcamTelemetry {
     /// Merges a freshly-parsed `IpcamTelemetry` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
-    /// BUG-105: BambuStudio's `parse_json` (`DeviceManager.cpp:3338-3399`) gates every
+    /// BambuStudio's `parse_json` (`DeviceManager.cpp:3338-3399`) gates every
     /// `ipcam` field behind its own `.contains()` check, same preserve-on-absence pattern
-    /// as `CtcTelemetry`/`BedTelemetry`/`ExtToolTelemetry` (BUG-096/095/097).
+    /// as `CtcTelemetry`/`BedTelemetry`/`ExtToolTelemetry`.
     pub(crate) fn merge_from(&mut self, incoming: &IpcamTelemetry) {
         if incoming.ipcam_dev.is_some() {
             self.ipcam_dev = incoming.ipcam_dev.clone();
@@ -140,7 +140,7 @@ pub struct HmsEntry {
     /// Packed code word encoding fault category and error index.
     #[serde(deserialize_with = "deserialize_permissive_hms_u32")]
     pub code: u32,
-    /// Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2 — see BUG-107).
+    /// Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
     #[serde(default)]
     pub ts_boot: Option<u64>,
     /// UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
@@ -150,7 +150,7 @@ pub struct HmsEntry {
 
 /// Permissively decodes an `HmsEntry.attr`/`.code` wire value.
 ///
-/// BUG-106: BambuStudio's `ParseHMSItems` (`DevHMS.cpp:42-61`) pushes a default-zeroed
+/// BambuStudio's `ParseHMSItems` (`DevHMS.cpp:42-61`) pushes a default-zeroed
 /// item on a malformed entry rather than aborting the whole message; bambuddy
 /// (`bambu_mqtt.py:2756-2761`) additionally tolerates hex-string `attr`/`code` values.
 /// Accepts a plain integer or a hex string (with or without a `0x` prefix); any other

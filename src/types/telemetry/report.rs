@@ -89,7 +89,7 @@ pub struct PrinterTelemetry {
     /// Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
     pub wifi_signal: Option<String>,
 
-    /// Network interface state, nested as `print.net` on the wire (BUG-110).
+    /// Network interface state, nested as `print.net` on the wire.
     #[serde(default)]
     pub net: Option<NetInfo>,
 
@@ -284,7 +284,7 @@ pub(crate) const POWER_220V_BITMASK: u32 = 0x0000_0008;
 pub(crate) const SDCARD_STATE_SHIFT: u32 = 8;
 pub(crate) const SDCARD_STATE_MASK: u32 = 0x3;
 
-/// SD-card presence/health state, decoded from `home_flag` bits 8–9 (BUG-123).
+/// SD-card presence/health state, decoded from `home_flag` bits 8–9.
 ///
 /// Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
 /// `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
@@ -335,7 +335,7 @@ impl PrinterTelemetry {
 
     /// Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
     ///
-    /// BUG-110: previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
+    /// Previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
     /// pybambu-sourced heuristic. Both first-party clients (BambuStudio's
     /// `DevPrintOptions.cpp:26`, OrcaSlicer identically) actually decode that bit as
     /// `is_support_prompt_sound_detection`, unrelated to networking — confirmed wrong, not
@@ -371,7 +371,7 @@ impl PrinterTelemetry {
             .unwrap_or(false)
     }
 
-    /// Evaluates the SD-card presence/health state from `home_flag` bits 8–9 (BUG-123). See
+    /// Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
     /// [`SdcardState`]'s doc comment for verification sources. Returns `None` before any
     /// telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
     pub fn sdcard_state(&self) -> Option<SdcardState> {

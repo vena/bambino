@@ -169,7 +169,7 @@ fn test_extruder_info_x2d_mock() {
     assert_eq!(left_target, 250);
     assert_eq!(left_actual, 250);
 
-    // BUG-124: id 0's snow/spre/star are all the unmapped sentinel 0xFFFF (65535) — this
+    // id 0's snow/spre/star are all the unmapped sentinel 0xFFFF (65535) — this
     // extruder isn't routed to any AMS slot.
     assert_eq!(right.current_ams_slot(), None);
     assert_eq!(right.previous_ams_slot(), None);
@@ -323,7 +323,7 @@ fn test_decode_nozzle_temperatures_idex_swapped_fallback() {
 
 #[test]
 fn test_decode_nozzle_temperatures_h2c_rack_nozzle_not_misclassified_as_idex() {
-    // BUG-111: a single installed nozzle (id 0) plus a rack-stored spare (id 16 — high
+    // A single installed nozzle (id 0) plus a rack-stored spare (id 16 — high
     // nibble 1 flags rack storage per BambuStudio's get_hex_bits(id, 1) == 1) must not be
     // misclassified as IDEX — H2C has one hotend and a spare-nozzle rack.
     let json = r#"{

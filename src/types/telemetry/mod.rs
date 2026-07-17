@@ -90,7 +90,7 @@ impl TelemetryReport {
     /// Returns the `fun` Developer LAN Mode bitmask, checking both wire locations it can
     /// arrive at.
     ///
-    /// BUG-034: mirrors `device()`'s fallback order — top-level `fun` is checked first,
+    /// Mirrors `device()`'s fallback order — top-level `fun` is checked first,
     /// falling back to `print.fun` [REF-MQTT-ENV §3.2.1]. Prefer this over reading `self.fun`
     /// directly, the same way `device()` is preferred over `self.device`.
     pub fn fun(&self) -> Option<&str> {
@@ -146,7 +146,7 @@ pub fn decode_nozzle_temperatures(
             .collect();
     }
 
-    // BUG-111: exclude rack-stored spare nozzles before counting — BambuStudio appends them
+    // Exclude rack-stored spare nozzles before counting — BambuStudio appends them
     // to the same `nozzle.info` array as installed ones, distinguished only by
     // `NozzleInfo::is_rack_stored()`. Without this, an H2C (single hotend + spare-nozzle
     // rack) misclassifies as IDEX.

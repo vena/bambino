@@ -44,7 +44,7 @@ pub trait ModelQuirks {
     ///
     /// Used to gate telemetry-cache updates (`PrinterClient::update_state_cache`) so an
     /// incremental message that omits this field doesn't overwrite a previously-observed
-    /// door state with `is_door_open()`'s absent-field default of `false` (BUG-021).
+    /// door state with `is_door_open()`'s absent-field default of `false`.
     /// Defaults to `false`, correct for every model without a door sensor.
     fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool {
         false
@@ -74,7 +74,7 @@ pub trait ModelQuirks {
     /// * `7` for automatic tool changer storage racks (1 dedicated + 6 interchangeable).
     fn physical_nozzle_count(&self) -> u8;
 
-    /// Returns this model's physical AMS unit pool structure (BUG-122) — whether standard AMS
+    /// Returns this model's physical AMS unit pool structure — whether standard AMS
     /// and AMS-HT units share one combined pool or draw from independent pools, and each
     /// pool's unit-count ceiling. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
     /// See [`crate::ams::AmsPoolComposition`]'s doc comment for the AMS-lite modeling
@@ -109,12 +109,12 @@ pub trait ModelQuirks {
         DEFAULT_Z_MAX_MM
     }
 
-    /// Returns the maximum safe X-axis travel distance in millimeters for this model (BUG-163).
+    /// Returns the maximum safe X-axis travel distance in millimeters for this model.
     fn x_max(&self) -> f32 {
         DEFAULT_X_MAX_MM
     }
 
-    /// Returns the maximum safe Y-axis travel distance in millimeters for this model (BUG-163).
+    /// Returns the maximum safe Y-axis travel distance in millimeters for this model.
     fn y_max(&self) -> f32 {
         DEFAULT_Y_MAX_MM
     }
@@ -127,7 +127,7 @@ pub trait ModelQuirks {
         format_z_move_gcode(distance, feedrate, self.z_max())
     }
 
-    /// Generates a bounded relative X/Y-axis movement G-code command (BUG-163) — the same
+    /// Generates a bounded relative X/Y-axis movement G-code command — the same
     /// single-command distance-cap pattern `relative_z_move_gcode` uses for Z (see its doc
     /// comment for why this isn't true position-aware crash prevention). Returns an empty
     /// string if `distance` is zero, non-finite, exceeds the axis's `x_max()`/`y_max()` bound,
@@ -318,7 +318,7 @@ pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> S
 }
 
 /// Generates a relative X/Y-axis movement G-code block, bounded by a client-side `axis_max`
-/// distance cap on the single move (BUG-163) — same limitation as `format_z_move_gcode`'s
+/// distance cap on the single move — same limitation as `format_z_move_gcode`'s
 /// `z_max` cap (not position-aware crash prevention; see its doc comment). No `M211`/reference-
 /// mode wrapping here: that's specific to Z's frame-shifting risk (see `format_z_move_gcode`),
 /// not applicable to X/Y.
@@ -338,8 +338,8 @@ pub(crate) const FAN_STEP_MAX: u8 = 15;
 /// `z_max()` with its own value (see `MODEL_MATRIX.csv`) — e.g. A1 Mini is 180mm and H2S is
 /// 340mm, not this constant's 256mm.
 pub(crate) const DEFAULT_Z_MAX_MM: f32 = 256.0;
-/// Fallback `x_max()`/`y_max()` (mm) for a model with no dedicated quirks strategy override
-/// (BUG-163). Unreachable in practice: every currently-shipped model's quirks strategy
+/// Fallback `x_max()`/`y_max()` (mm) for a model with no dedicated quirks strategy override.
+/// Unreachable in practice: every currently-shipped model's quirks strategy
 /// overrides both (see `MODEL_MATRIX.csv`'s Build Volume row).
 pub(crate) const DEFAULT_X_MAX_MM: f32 = 256.0;
 /// See `DEFAULT_X_MAX_MM`'s doc comment.
@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn test_z_move_gcode_rejects_non_finite() {
         // Regression: NaN failed both the `== 0.0` and `.abs() > z_max` guards,
-        // so a malformed G0 ZNaN command would have reached the printer (BUG-065).
+        // so a malformed G0 ZNaN command would have reached the printer.
         assert!(format_z_move_gcode(f32::NAN, 3000, 256.0).is_empty());
         assert!(format_z_move_gcode(f32::INFINITY, 3000, 256.0).is_empty());
         assert!(format_z_move_gcode(f32::NEG_INFINITY, 3000, 256.0).is_empty());
@@ -817,7 +817,7 @@ mod tests {
         assert!(gcode.contains("F2000"));
     }
 
-    // X/Y-move gcode parameterization tests (BUG-163)
+    // X/Y-move gcode parameterization tests
 
     #[test]
     fn test_xy_move_gcode_parameterized() {

@@ -12,9 +12,9 @@ use crate::types::PrinterTelemetry;
 /// Build volume Z depth (mm) — uses the conservative aux/dual-nozzle value, not the main-nozzle value; see module docs.
 pub const X2D_Z_MAX: f32 = 256.0;
 /// Build volume X width (mm) — conservative aux/dual-nozzle value (235.5mm, smaller than the
-/// main-nozzle profile's 256mm); see module docs (BUG-163).
+/// main-nozzle profile's 256mm); see module docs.
 pub const X2D_X_MAX: f32 = 235.5;
-/// Build volume Y depth (mm) — 256mm across all nozzle profiles (BUG-163).
+/// Build volume Y depth (mm) — 256mm across all nozzle profiles.
 pub const X2D_Y_MAX: f32 = 256.0;
 /// Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const X2D_NOZZLE_TEMP_MAX: u16 = 300;

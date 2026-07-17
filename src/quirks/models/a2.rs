@@ -8,9 +8,9 @@ use crate::types::PrinterTelemetry;
 
 /// A2L build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm).
 pub const A2L_Z_MAX: f32 = 325.0;
-/// A2L build volume X width (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm) (BUG-163).
+/// A2L build volume X width (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm).
 pub const A2L_X_MAX: f32 = 330.0;
-/// A2L build volume Y depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm) (BUG-163).
+/// A2L build volume Y depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row (330×320×325mm).
 pub const A2L_Y_MAX: f32 = 320.0;
 /// Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.
 pub const A2L_NOZZLE_TEMP_MAX: u16 = 300;

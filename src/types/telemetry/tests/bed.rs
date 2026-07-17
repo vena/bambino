@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_chamber_temper_composite_packed_via_unpack_temperature() {
-    // BUG-082: no test previously exercised a real chamber_temper wire value through
+    // No test previously exercised a real chamber_temper wire value through
     // unpack_temperature() specifically — only generic composite values. Deserializes an
     // actual print.chamber_temper field carrying a composite-packed (>500) value and confirms
     // it decodes correctly: target=45, actual=38 -> (45 << 16) | 38 = 2949158.
@@ -54,7 +54,7 @@ fn test_bed_temperatures_new_gen_top_level() {
 
 #[test]
 fn test_bed_temperatures_ignores_device_bed_temp() {
-    // BUG-081/BUG-054: device.bed_temp is confirmed-redundant wire data that
+    // device.bed_temp is confirmed-redundant wire data that
     // decode_bed_temperatures() must never fall back to. Set it to a value that would decode
     // to a visibly different (10, 20) pair if it were consulted, and confirm the result still
     // comes from device.bed.info.temp (70, 70) instead.

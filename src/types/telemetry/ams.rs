@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
-/// Per-slot filament-change step code (BUG-121). Mirrors BambuStudio's `DevFilamentStep` enum
+/// Per-slot filament-change step code. Mirrors BambuStudio's `DevFilamentStep` enum
 /// (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
 /// wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
 /// the source enum). `Unknown` preserves any other raw value rather than failing to decode.
@@ -167,13 +167,13 @@ pub struct AmsStatusReport {
     #[serde(default)]
     pub cali_stat: Option<i32>,
 
-    /// Whether AMS-side remaining-filament detection is enabled (BUG-121). Confirmed
+    /// Whether AMS-side remaining-filament detection is enabled. Confirmed
     /// independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
     /// and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
     #[serde(default)]
     pub calibrate_remain_flag: Option<bool>,
 
-    /// Per-slot filament-change step codes (BUG-121). Confirmed against BambuStudio's
+    /// Per-slot filament-change step codes. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
     /// consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
     #[serde(default)]
@@ -184,7 +184,7 @@ impl AmsStatusReport {
     /// Merges a freshly-parsed `AmsStatusReport` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
-    /// BUG-091: confirmed via a real P1S wire capture — an incremental `print.ams` push may
+    /// Confirmed via a real P1S wire capture — an incremental `print.ams` push may
     /// carry only a subset of fields (e.g. `{"ams":{"tray_tar":"3"}}` during a tray-switch
     /// sequence), with `ams` (the unit/tray array, `#[serde(default)]`) and every other field
     /// simply absent rather than explicitly emptied. A caller that replaces its cached
@@ -193,11 +193,11 @@ impl AmsStatusReport {
     /// independently keeps its most recently observed value" staleness policy `TelemetryCache`
     /// already documents at the `PrinterTelemetry` level, one layer deeper.
     ///
-    /// BUG-098: `ams` itself is now a keyed per-unit merge, not a wholesale array replace —
+    /// `ams` itself is a keyed per-unit merge, not a wholesale array replace —
     /// see the loop body below and `AmsUnit::merge_from`.
     pub(crate) fn merge_from(&mut self, incoming: &AmsStatusReport) {
         if !incoming.ams.is_empty() {
-            // BUG-098: keyed per-unit merge, not wholesale replace — confirmed against
+            // Keyed per-unit merge, not wholesale replace — confirmed against
             // BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`), which looks up each
             // unit by `ams_id` in a persistent `amsList` map (`system->amsList.find(ams_id)`)
             // that's never pruned by a push's contents; a unit not mentioned in a given
@@ -308,7 +308,7 @@ impl AmsUnit {
     /// Merges a freshly-parsed `AmsUnit` into `self` field-by-field, instead of replacing
     /// `self` wholesale.
     ///
-    /// BUG-098: confirmed against BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`,
+    /// Confirmed against BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`,
     /// ~L590-720) — every field here (`humidity_raw`, `dry_time` via `ParseVal`'s no-default
     /// overload, `dry_setting`, `dry_sf_reason`) is gated behind `.contains()` or `ParseVal`'s
     /// no-default overload against a persistent per-unit object, i.e. preserve-on-absence.
@@ -447,7 +447,7 @@ pub struct VirtualTray {
 pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
 
 /// Native state code meaning "spool physically present but not yet fed to the extruder"
-/// [REF-AMS-DECODE] (BUG-012). On H2D-generation firmware this is one of the two explicit
+/// [REF-AMS-DECODE]. On H2D-generation firmware this is one of the two explicit
 /// "not loaded" signals alongside `AMS_TRAY_STATE_EMPTY` — a spool present in state 10 may
 /// still have unconfirmed/stale metadata attached, so it's treated as an absent-equivalent
 /// state for stale-data cleansing purposes, same as `AMS_TRAY_STATE_EMPTY`. Verified against
@@ -546,7 +546,7 @@ pub struct AmsTray {
     /// Total filament spool length in mm.
     pub total_len: Option<u32>,
 
-    /// Accurate remaining weight in grams, when firmware can resolve it (BUG-126). Distinct
+    /// Accurate remaining weight in grams, when firmware can resolve it. Distinct
     /// from `remain`'s coarse percentage estimate. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:800`/`.h:73` (`remain_g`, introduced in commit `31637e013`,
     /// "ENH: support accurate filament remain weight", 2026-06-12) — firmware sends `-1` for
@@ -554,8 +554,8 @@ pub struct AmsTray {
     /// for the sentinel-translated `Option<u32>`.
     pub remain_g: Option<i32>,
 
-    /// Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching
-    /// (BUG-126), distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
+    /// Filament preset ID BambuStudio resolves and prefers for print-preset auto-matching,
+    /// distinct from `tray_info_idx`. Wire key is `setting_id`; renamed here to
     /// avoid confusion with `tray_info_idx`'s own doc name collision. Confirmed against
     /// BambuStudio's `DevFilaSystem.cpp:801` (`filament_setting_id`) and `DevMapping.cpp`
     /// (commit `d1f121d26`, 2026-06-09), which prefers this field over the coarser
@@ -616,7 +616,7 @@ impl AmsUnit {
         })
     }
 
-    /// Dry-fan 1 status from bits 18–19 (BUG-120). Confirmed against BambuStudio's
+    /// Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
     /// `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
     pub fn dry_fan1_status(&self) -> Option<u8> {
@@ -625,7 +625,7 @@ impl AmsUnit {
         })
     }
 
-    /// Dry-fan 2 status from bits 20–21 (BUG-120). Confirmed against BambuStudio's
+    /// Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
     /// `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
     pub fn dry_fan2_status(&self) -> Option<u8> {
@@ -645,7 +645,7 @@ impl AmsTray {
 }
 
 impl AmsTray {
-    /// Accurate remaining weight in grams (BUG-126), translating `remain_g`'s raw wire
+    /// Accurate remaining weight in grams, translating `remain_g`'s raw wire
     /// sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
     /// (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
     /// `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
@@ -671,15 +671,15 @@ impl AmsTray {
     /// are routine in normal incremental telemetry (no `tag_uid`/`remain`/anything else
     /// repeated), and applying BambuStudio's literal reset there would wipe a tray's RFID tag
     /// and remaining-percent on every such push — the exact "wholesale clobber on a partial
-    /// push" staleness class already fixed at other levels of this tree (BUG-091/097/098).
+    /// push" staleness class already fixed at other levels of this tree.
     /// `tray_info_idx`/`tray_type` are similarly not coupled the way BambuStudio couples them
     /// (both-or-neither, tied to its own `setting_id`-driven `m_fila_type` resolution) — that
     /// coupling is BambuStudio-internal derived-field logic, not a raw preserve/reset merge
     /// rule, so it's out of scope for this intentionally "dumb" field-level merge. `state` has
     /// no BambuStudio counterpart at all (grepped, zero matches in `DevFilaSystem.cpp` for a
     /// tray-level `state` field) — preserved on absence like every field with no confirmed
-    /// counterpart elsewhere in this codebase (BUG-097's precedent). `remain_g`/
-    /// `filament_setting_id` (BUG-126) preserve-on-absence like every other field with a
+    /// counterpart elsewhere in this codebase. `remain_g`/
+    /// `filament_setting_id` preserve-on-absence like every other field with a
     /// confirmed 3-arg `ParseVal` counterpart (`DevFilaSystem.cpp:800-801`).
     pub(crate) fn merge_from(&mut self, incoming: &AmsTray) {
         if incoming.state.is_some() {

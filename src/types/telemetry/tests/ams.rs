@@ -226,7 +226,7 @@ fn test_ams_status_report_extra_fields() {
 
 #[test]
 fn test_ams_status_report_calibrate_remain_flag_and_cfs() {
-    // BUG-121: calibrate_remain_flag (bool) and cfs (typed Vec<AmsFilamentStep>).
+    // calibrate_remain_flag (bool) and cfs (typed Vec<AmsFilamentStep>).
     let json = r#"{
             "print": {
                 "ams": {
@@ -272,7 +272,7 @@ fn test_ams_filament_step_unknown_value_preserved() {
 
 #[test]
 fn test_ams_unit_dry_fan_status() {
-    // BUG-120: bits 18-19 = dry_fan1_status, bits 20-21 = dry_fan2_status.
+    // Bits 18-19 = dry_fan1_status, bits 20-21 = dry_fan2_status.
     // "3c0000" = 0b0011_1100 at bits 16-23: fan1 (bits18-19) = 0b11 = 3, fan2 (bits20-21) = 0b11 = 3.
     let unit = AmsUnit {
         id: "0".into(),
@@ -324,7 +324,7 @@ fn test_ams_unit_info_bitmask() {
     assert_eq!(unit.info.as_deref(), Some("11002103"));
     assert_eq!(unit.dry_sf_reason, Some(vec![0, 0, 0, 0]));
 
-    // BUG-035: call the real accessors instead of hand-rolling the same bit math here — a
+    // Call the real accessors instead of hand-rolling the same bit math here — a
     // regression in ams_type()/extruder_assignment()'s shift/mask constants wouldn't have been
     // caught by this test recomputing the expected value independently.
     assert_eq!(unit.ams_type(), Some(3)); // AMS Lite type
@@ -488,7 +488,7 @@ fn test_ams_unit_info_with_dry_status() {
 
 #[test]
 fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
-    // BUG-091: confirmed via a real P1S wire capture — an incremental `print.ams` push during
+    // Confirmed via a real P1S wire capture — an incremental `print.ams` push during
     // a tray-switch can carry only `{"tray_tar": "3"}`, with the unit/tray array (and every
     // other field) entirely absent rather than explicitly emptied.
     let mut cached = AmsStatusReport {
@@ -551,11 +551,11 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
 
 #[test]
 fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
-    // BUG-098: was test_..._replaces_array_on_full_update, asserting the opposite of this —
+    // Was test_..._replaces_array_on_full_update, asserting the opposite of this —
     // rewritten once BambuStudio's DevFilaSystem.cpp confirmed a keyed persistent per-unit
     // map (system->amsList.find(ams_id), never pruned by a push's contents) is the real
     // behavior, not whole-array replacement. A push mentioning only unit "1" must not drop
-    // previously-cached unit "0" — it's the same wire-economy principle BUG-091 already
+    // previously-cached unit "0" — it's the same wire-economy principle already
     // confirmed one level up (the ams key itself can be absent), applied one level deeper.
     let mut cached = AmsStatusReport {
         ams: vec![AmsUnit {
@@ -624,7 +624,7 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
 
 #[test]
 fn test_ams_unit_merge_from_preserves_fields_on_absence() {
-    // BUG-098: confirmed against BambuStudio's DevFilaSystem.cpp — dry_time/humidity_raw/
+    // Confirmed against BambuStudio's DevFilaSystem.cpp — dry_time/humidity_raw/
     // dry_sf_reason (and temp/humidity/dry_setting/tray) all preserve on absence within a
     // matched unit, rather than a partial per-unit push nulling out previously-known values.
     let mut cached = AmsUnit {
@@ -672,11 +672,11 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
 
 #[test]
 fn test_p1s_print_sequence_ams_merge_never_regresses() {
-    // BUG-091 regression test: replays a real P1S wire capture (342 incremental pushes across
+    // Regression test: replays a real P1S wire capture (342 incremental pushes across
     // a full print — start through finish — including the exact partial `{"tray_tar":"3"}`-only
     // pushes that proved the bug) through `AmsStatusReport::merge_from` and asserts the merged
     // unit array never drops from non-empty back to empty mid-sequence, the failure mode
-    // `merge_from` fixes. Captured via `bambino-cli dump --follow` (BUG-092's fix) during a
+    // `merge_from` fixes. Captured via `bambino-cli dump --follow` during a
     // real tray-load on a P1S.
     let capture = include_str!("../../../../tests/mocks/P1S_print_sequence.ndjson");
 
@@ -768,7 +768,7 @@ fn test_ams_tray_merge_from_preserves_fields_on_absence() {
 
 #[test]
 fn test_ams_tray_remain_g_and_filament_setting_id() {
-    // BUG-126: wire keys are `remain_g` and `setting_id` (the latter renamed to
+    // Wire keys are `remain_g` and `setting_id` (the latter renamed to
     // `filament_setting_id` in this crate to avoid confusion with `tray_info_idx`).
     let json = r#"{
             "print": {

@@ -42,7 +42,7 @@ pub struct DeviceTelemetry {
 
     /// Composite-packed bed temperature mirroring `bed.info.temp`; confirmed redundant, not a fallback.
     ///
-    /// BUG-054: a fixture payload carries the identical value in both fields, and both
+    /// A fixture payload carries the identical value in both fields, and both
     /// pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
     /// never consult this field either. Parsed for wire-format completeness only —
     /// `decode_bed_temperatures()` deliberately does not read it.
@@ -54,25 +54,25 @@ impl DeviceTelemetry {
     /// Merges a freshly-parsed `DeviceTelemetry` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
-    /// BUG-093: same shape as `AmsStatusReport::merge_from` (BUG-091) one struct up — a
+    /// Same shape as `AmsStatusReport::merge_from` one struct up — a
     /// `device` push touching only one sub-object (e.g. `ctc`) has every other field simply
     /// absent from that message, not explicitly cleared. Replacing `self` wholesale on any
     /// `Some(_)` push wiped the other cached sub-objects (`nozzle`, `extruder`, `airduct`,
     /// `bed`, `ext_tool`) back to `None`.
     ///
-    /// BUG-094: recurses into `nozzle`/`extruder`/`airduct` rather than replacing them
+    /// Recurses into `nozzle`/`extruder`/`airduct` rather than replacing them
     /// wholesale when both sides have `Some(_)` — confirmed via `pybambu` and `bambuddy`
     /// (see each collection's own `merge_from`) that `device.nozzle.info`,
     /// `device.extruder.info`, and `device.airduct.modeCur`/`modeList`/`parts` can each be
     /// absent independent of their parent sub-object arriving.
     ///
-    /// BUG-096: recurses into `ctc` too — confirmed via BambuStudio's own
+    /// Recurses into `ctc` too — confirmed via BambuStudio's own
     /// `DevChamber::ParseChamberV2_0` (see `CtcTelemetry::merge_from`).
     ///
-    /// BUG-097: recurses into `ext_tool` too — confirmed via BambuStudio's own
+    /// Recurses into `ext_tool` too — confirmed via BambuStudio's own
     /// `DevExtensionToolParser::ParseV2_0` (see `ExtToolTelemetry::merge_from`).
     ///
-    /// BUG-095: recurses into `bed` too — confirmed via BambuStudio's
+    /// Recurses into `bed` too — confirmed via BambuStudio's
     /// `json_diff::restore_objects` generic reconstruction layer (see `BedTelemetry::merge_from`
     /// for the full trace).
     pub(crate) fn merge_from(&mut self, incoming: &DeviceTelemetry) {
@@ -129,7 +129,7 @@ pub struct BedTelemetry {
 impl BedTelemetry {
     /// Merges a freshly-parsed `BedTelemetry` into `self` field-by-field.
     ///
-    /// BUG-095: confirmed against BambuStudio's `json_diff::restore_objects`
+    /// Confirmed against BambuStudio's `json_diff::restore_objects`
     /// (`src/slic3r/Utils/json_diff.cpp`), wired into `MachineObject::parse_json` for any
     /// message tagged `print.msg == 1` ("diff message" — confirmed live in real P1S traffic
     /// via `tests/mocks/P1S_print_sequence.ndjson`'s `print.msg` values `0`/`1`). Before any
@@ -140,7 +140,7 @@ impl BedTelemetry {
     /// diverged): `parse_json` → `diff2all` → `jj = j["print"]` → `parse_new_info(jj)` →
     /// `device = print["device"]` → `DevBed::ParseV2_0(device, m_bed)` all operate on the
     /// already-reconstructed tree — so `device.bed.info`/`device.bed.state` each survive a
-    /// partial push independently of each other, the same as BUG-096's `ctc.info`/`.state`,
+    /// partial push independently of each other, the same as `ctc`'s `info`/`state`,
     /// even though no field-specific parser (`DevBed.cpp`) ever reads the nested object at
     /// all — the reconstruction layer preserves it regardless of whether anything downstream
     /// consumes it.
@@ -188,13 +188,13 @@ pub struct ExtToolTelemetry {
 impl ExtToolTelemetry {
     /// Merges a freshly-parsed `ExtToolTelemetry` into `self` field-by-field.
     ///
-    /// BUG-097: confirmed against BambuStudio's own `DevExtensionToolParser::ParseV2_0`
+    /// Confirmed against BambuStudio's own `DevExtensionToolParser::ParseV2_0`
     /// (`src/slic3r/GUI/DeviceCore/DevExtensionTool.cpp`) for `mount_3d`/`calib` (both parsed
     /// via `DevJsonValParser::ParseVal`'s current-value-as-default overload — absent leaves
     /// the previous value untouched) and `type`/`tool_type` (absent/unrecognized falls
     /// through the type-map lookup without writing `m_tool_type` at all). `mount`/`low_prec`/
     /// `th_temp` aren't modeled by BambuStudio at all — extended uniformly here for
-    /// consistency with every other `merge_from` in this file, same as BUG-094 extending
+    /// consistency with every other `merge_from` in this file, same as `DeviceTelemetry::merge_from` extending
     /// nozzle/extruder/airduct together once the pattern was established for one.
     pub(crate) fn merge_from(&mut self, incoming: &ExtToolTelemetry) {
         if incoming.mount.is_some() {
@@ -232,7 +232,7 @@ pub struct NozzleCollection {
     /// array replacing a non-empty one), and only an absent key as "carry the old value
     /// forward." `#[serde(default)]` on `Option<Vec<_>>` gives this distinction for free
     /// (absent key -> `None`, present key -> `Some(_)` however short) — previously both
-    /// collapsed to the same empty `Vec` (BUG-158, same shape as BUG-102's `AmsTray` fix).
+    /// collapsed to the same empty `Vec` (same shape as the `AmsTray` fix).
     #[serde(default)]
     pub info: Option<Vec<NozzleInfo>>,
 
@@ -256,9 +256,9 @@ pub struct NozzleCollection {
 impl NozzleCollection {
     /// Merges a freshly-parsed `NozzleCollection` into `self` field-by-field.
     ///
-    /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
+    /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.nozzle.info` can be absent from a push while sibling `device.nozzle` fields
-    /// change, and must not be treated as "nozzle info cleared." BUG-158: `info` is now
+    /// change, and must not be treated as "nozzle info cleared." `info` is now
     /// `Option<Vec<_>>` (see its doc comment) so a present-but-empty push actually clears —
     /// wholesale replace, not a keyed per-entry merge, matching BambuStudio's own
     /// `DevNozzleSystemParser::ParseV2_0` (`system->ClearNozzles()` + full rebuild whenever
@@ -335,7 +335,7 @@ pub struct NozzleInfo {
 impl NozzleInfo {
     /// Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
     ///
-    /// BUG-111: confirmed directly against BambuStudio's source
+    /// Confirmed directly against BambuStudio's source
     /// (`DevNozzleSystem.cpp:769`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
     /// nozzles are appended to the *same* `nozzle.info` array as installed ones, distinguished
     /// by `DevUtil::get_hex_bits(id, 1) == 1`. `get_hex_bits(num, pos, base=10)` extracts the
@@ -357,7 +357,7 @@ pub struct ExtruderCollection {
     /// Per-extruder thermal and routing entries (id 0 = right/main, id 1 = left/deputy).
     ///
     /// `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-    /// (BUG-158) — see its doc comment.
+    /// — see its doc comment.
     #[serde(default)]
     pub info: Option<Vec<ExtruderInfo>>,
 
@@ -378,9 +378,9 @@ impl ExtruderCollection {
 
     /// Merges a freshly-parsed `ExtruderCollection` into `self` field-by-field.
     ///
-    /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
+    /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.extruder.info` can be absent from a push while sibling `device.extruder`
-    /// fields change, and must not be treated as "extruder info cleared." BUG-158: `info` is
+    /// fields change, and must not be treated as "extruder info cleared." `info` is
     /// now `Option<Vec<_>>` (see its doc comment) so a present-but-empty push actually clears
     /// — wholesale replace, matching BambuStudio's own `ExtderSystemParser::ParseV2_0`
     /// (`system->m_extders.clear()` + full rebuild).
@@ -406,13 +406,13 @@ pub struct ExtruderInfo {
     /// Composite-packed temperature (use `unpack_temperature()` to decode).
     pub temp: Option<u32>,
 
-    /// Current AMS slot routing (BUG-112; confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
+    /// Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
     pub snow: Option<u32>,
 
-    /// Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
+    /// Previous AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
     pub spre: Option<u32>,
 
-    /// Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow` — BUG-112.
+    /// Target AMS slot routing. Same 8/8 (slot_id/ams_id) bit split as `snow`.
     pub star: Option<u32>,
 
     /// Current head routing index.
@@ -446,8 +446,8 @@ impl ExtruderInfo {
             .unwrap_or((0, 0))
     }
 
-    /// Decodes an AMS-routing field (`snow`/`spre`/`star`) into `(ams_id, slot_id)` (BUG-112,
-    /// BUG-124). Confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`
+    /// Decodes an AMS-routing field (`snow`/`spre`/`star`) into `(ams_id, slot_id)`.
+    /// Confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`
     /// (`DevExtruderSystem.cpp:369-372`): low 8 bits = slot_id, next 8 bits = ams_id. The
     /// sentinel `0xFFFF` (single-extruder system, unmapped) decodes to `None`.
     fn decode_ams_slot_field(raw: Option<u32>) -> Option<(u8, u8)> {
@@ -461,7 +461,7 @@ impl ExtruderInfo {
     }
 
     /// Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
-    /// resolving which physical tray is feeding this extruder right now (BUG-124), confirmed
+    /// resolving which physical tray is feeding this extruder right now, confirmed
     /// against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
     /// decodes `snow` directly with no extruder-map inversion needed.
     pub fn current_ams_slot(&self) -> Option<(u8, u8)> {
@@ -487,7 +487,7 @@ pub struct AirductCollection {
     /// Array of active climate routing nodes (heaters, dampers, supplementary fans) [REF-CLIM-FANS].
     ///
     /// `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-    /// (BUG-158) — see its doc comment.
+    /// — see its doc comment.
     #[serde(default)]
     pub parts: Option<Vec<AirductPart>>,
 
@@ -498,7 +498,7 @@ pub struct AirductCollection {
     /// List of airduct modes available on this model.
     ///
     /// `Option<Vec<_>>` for the same absent-vs-present-empty reason as `NozzleCollection.info`
-    /// (BUG-158) — see its doc comment.
+    /// — see its doc comment.
     #[serde(rename = "modeList", default)]
     pub mode_list: Option<Vec<AirductModeListEntry>>,
 }
@@ -506,9 +506,9 @@ pub struct AirductCollection {
 impl AirductCollection {
     /// Merges a freshly-parsed `AirductCollection` into `self` field-by-field.
     ///
-    /// BUG-094: confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
+    /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.airduct.parts`/`modeCur`/`modeList` can each independently be absent from a
-    /// push, and must not be treated as "cleared." BUG-158: `parts`/`mode_list` are now
+    /// push, and must not be treated as "cleared." `parts`/`mode_list` are now
     /// `Option<Vec<_>>` (see their doc comments) so a present-but-empty push actually clears —
     /// wholesale replace, matching BambuStudio's `json_diff::restore_objects` (which fully
     /// reconstructs `device.airduct` before `DevFan.cpp`'s own parser unconditionally clears

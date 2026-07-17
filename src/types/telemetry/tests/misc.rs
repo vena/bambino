@@ -73,7 +73,7 @@ fn test_hms_array_deserialization() {
 
 #[test]
 fn test_hms_entry_tolerates_hex_string_attr_and_code() {
-    // BUG-106: a hex-string attr/code (or any other malformed shape) must default to 0
+    // A hex-string attr/code (or any other malformed shape) must default to 0
     // instead of failing the whole telemetry message's deserialize.
     let json_data = r#"{
             "print": {
@@ -134,7 +134,7 @@ fn test_camera_fields_deserialization() {
 
 #[test]
 fn test_ipcam_telemetry_merge_from_preserves_fields_on_absence() {
-    // BUG-105: a partial `print.ipcam` push (e.g. just `ipcam_record` toggling) must not
+    // A partial `print.ipcam` push (e.g. just `ipcam_record` toggling) must not
     // clobber previously-known fields the push didn't repeat.
     let mut cached = IpcamTelemetry {
         ipcam_dev: Some("1".into()),
@@ -603,7 +603,7 @@ fn test_fire_ext_opaque_value() {
 
 #[test]
 fn test_progress_field_removed() {
-    // BUG-067: the legacy "progress" wire field was removed from PrintTelemetry — assert a
+    // The legacy "progress" wire field was removed from PrintTelemetry — assert a
     // stray "progress" key in incoming JSON is silently ignored on deserialize rather than
     // erroring.
     let json = r#"{ "print": { "mc_percent": 75, "progress": 75 } }"#;
