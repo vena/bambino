@@ -57,11 +57,11 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 #### Implementations
 
-- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, model: PrinterModel, identity: PrinterIdentity, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`PrinterModel`](../../models/index.md#printermodel), [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
+- <span id="bambuftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, identity: PrinterIdentity, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
 
   Establishes the secure control channel, performs login handshakes, and configures security properties.
 
-- <span id="bambuftpsclient-list-directory"></span>`async fn list_directory(&mut self, remote_path: &str, current_year: i32, current_month: u8, current_day: u8, current_hour: u8, current_minute: u8) -> Result<Vec<FtpFile>, Error>` — [`FtpFile`](../parser/index.md#ftpfile), [`Error`](../../error/index.md#error)
+- <span id="bambuftpsclient-list-directory"></span>`async fn list_directory(&mut self, remote_path: &str, now: CurrentDateTime) -> Result<Vec<FtpFile>, Error>` — [`CurrentDateTime`](../parser/index.md#currentdatetime), [`FtpFile`](../parser/index.md#ftpfile), [`Error`](../../error/index.md#error)
 
   Queries the storage server for raw directory listings and parses their structures.
 

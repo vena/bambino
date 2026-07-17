@@ -6,21 +6,10 @@
 
 # Printer Identity
 
-[`PrinterIdentity`](#printeridentity) bundles the three pieces of data every "connect to protocol X"
-entry point in this crate needs to dial and authenticate against a specific
-printer: its LAN address, serial number, and access code.
-
-Bundling these into one struct (instead of three adjacent same-typed `&str`
-parameters) removes a transposition risk that isn't compiler-catchable
-otherwise — nothing stops `fn connect(ip: &str, serial: &str, access_code: &str)`
-from being called with two of those arguments swapped, since all three are the
-same type.
-
-`ip`/`serial`/`access_code` are never `Option` — an omitted field would compile
-away the caller's obligation to supply it, but a caller could then just as
-easily supply a fabricated placeholder that type-checks fine and is silently
-wrong. A missing constructor argument is a compile error; a wrong `Some(value)`
-is not. Trading the former for the latter is a regression, not a fix.
+[`PrinterIdentity`](#printeridentity) bundles the LAN address, serial number, and access code every
+"connect to protocol X" entry point in this crate needs to dial and authenticate
+against a specific printer, instead of passing them as three adjacent same-typed
+`&str` parameters a caller could transpose without a compile error.
 
 ## Quick Reference
 
@@ -37,6 +26,7 @@ struct PrinterIdentity {
     pub ip: String,
     pub serial: String,
     pub access_code: String,
+    pub model: crate::models::PrinterModel,
 }
 ```
 
@@ -55,6 +45,17 @@ Address, serial number, and access code identifying one printer on the LAN.
 - **`access_code`**: `String`
 
   Printer's local network access code (found in its LAN-only settings screen).
+
+- **`model`**: `crate::models::PrinterModel`
+
+  Printer model, used for quirks dispatch. Derivable from `serial` via
+  [`resolve_model`](../models/index.md#resolve-model); see [`PrinterIdentity::new`] for the common case.
+
+#### Implementations
+
+- <span id="printeridentity-new"></span>`fn new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Self`
+
+  Builds an identity, deriving `model` from `serial` via [`resolve_model`](../models/index.md#resolve-model).
 
 #### Trait Implementations
 

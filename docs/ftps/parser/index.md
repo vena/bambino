@@ -14,7 +14,7 @@ variable-width column padding and embeds robust temporal rollover heuristics.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`CurrentDateTime`](#currentdatetime) | struct | Bundles the 4 consecutive same-typed (`u8`) "current time" components `parse_unix_listing` needs for its rollover heuristic — replaces 4 adjacent positional `u8` params that were a transposition footgun with no compiler catch. |
+| [`CurrentDateTime`](#currentdatetime) | struct | Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs. |
 | [`FtpFile`](#ftpfile) | struct | Standardized representation of an entry retrieved from physical printer storage. |
 | [`parse_unix_listing`](#parse-unix-listing) | fn | Parses a line-separated UNIX directory listing payload returned by `LIST`. |
 
@@ -24,6 +24,7 @@ variable-width column padding and embeds robust temporal rollover heuristics.
 
 ```rust
 struct CurrentDateTime {
+    pub year: i32,
     pub month: u8,
     pub day: u8,
     pub hour: u8,
@@ -31,11 +32,13 @@ struct CurrentDateTime {
 }
 ```
 
-Bundles the 4 consecutive same-typed (`u8`) "current time" components `parse_unix_listing`
-needs for its rollover heuristic — replaces 4 adjacent positional `u8` params that were a
-transposition footgun with no compiler catch.
+Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs.
 
 #### Fields
+
+- **`year`**: `i32`
+
+  Current calendar year.
 
 - **`month`**: `u8`
 
@@ -154,7 +157,7 @@ Standardized representation of an entry retrieved from physical printer storage.
 ### `parse_unix_listing`
 
 ```rust
-fn parse_unix_listing(payload: &str, current_year: i32, now: CurrentDateTime) -> Vec<FtpFile>
+fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile>
 ```
 
 **Types:** [`CurrentDateTime`](#currentdatetime), [`FtpFile`](#ftpfile)

@@ -707,7 +707,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
 
-- <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity, model: PrinterModel) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity), [`PrinterModel`](../models/index.md#printermodel)
+- <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity)
 
   Creates a lazy client that defers MQTT connection until first use.
 

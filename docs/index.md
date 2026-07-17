@@ -22,7 +22,6 @@ code never touches `tokio::` or `std::net::` directly.
 ```ignore
 use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;
-use bambino::models::resolve_model;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
     build_unsafe_client_config,
@@ -34,11 +33,9 @@ async fn example() -> Result<(), bambino::Error> {
     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
 
     // Create a lazy client — MQTT connects automatically on first use
-    let model = resolve_model("SERIAL123456", None);
     let mut printer = PrinterClient::new(
         tls, TokioRawStreamFactory,
-        PrinterIdentity { ip: "192.168.1.100".into(), serial: "SERIAL123456".into(), access_code: "12345678".into() },
-        model,
+        PrinterIdentity::new("192.168.1.100", "SERIAL123456", "12345678"),
     )
     .with_timer(TokioTimer::new());
 
@@ -148,6 +145,7 @@ struct PrinterIdentity {
     pub ip: String,
     pub serial: String,
     pub access_code: String,
+    pub model: crate::models::PrinterModel,
 }
 ```
 
@@ -166,6 +164,17 @@ Address, serial number, and access code identifying one printer on the LAN.
 - **`access_code`**: `String`
 
   Printer's local network access code (found in its LAN-only settings screen).
+
+- **`model`**: `crate::models::PrinterModel`
+
+  Printer model, used for quirks dispatch. Derivable from `serial` via
+  [`resolve_model`](models/index.md#resolve-model); see [`PrinterIdentity::new`] for the common case.
+
+#### Implementations
+
+- <span id="printeridentity-new"></span>`fn new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Self`
+
+  Builds an identity, deriving `model` from `serial` via [`resolve_model`](models/index.md#resolve-model).
 
 #### Trait Implementations
 
