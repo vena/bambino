@@ -288,7 +288,12 @@ async fn run_holistic_homing(client: &mut Printer) -> Result<String, Error> {
     while Instant::now() < warmup_deadline
         && (client.print_status().is_none() || client.is_all_axes_homed().is_none())
     {
-        let event = client.poll_telemetry().await?;
+        let remaining = warmup_deadline.saturating_duration_since(Instant::now());
+        let event = match tokio::time::timeout(remaining, client.poll_telemetry()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => break,
+        };
         if sub_stage_at_start.is_none() {
             sub_stage_at_start = event
                 .report()
@@ -316,7 +321,12 @@ async fn run_holistic_homing(client: &mut Printer) -> Result<String, Error> {
         Err(Error::Timeout) => {
             // Nothing resolved during the wait. Re-check the safety gate before
             // self-triggering — printing state may have changed during the ~90s wait.
-            client.poll_telemetry().await?;
+            tokio::time::timeout(
+                Duration::from_secs(DEFAULT_CAPTURE_WINDOW_SECS),
+                client.poll_telemetry(),
+            )
+            .await
+            .map_err(|_| Error::Timeout)??;
             if printer_is_busy(client) {
                 return Ok(format!(
                     "refused after wait: printer busy (gcode_state={:?})",
