@@ -183,6 +183,15 @@ impl<IO: AsyncIo> MqttClient<IO> {
     ///
     /// **Authentication Note:** If the printer's physical broker rejects credentials due to
     /// an invalid access code, this function returns `Error::AccessDenied`.
+    ///
+    /// **Unbounded by design — callers must supply their own deadline.** The CONNECT/CONNACK
+    /// and SUBSCRIBE/SUBACK writes and reads inside this function have no internal timeout
+    /// (`DummyTimer` is used throughout, so a stalled peer hangs this call forever). This is
+    /// safe for `PrinterClient::ensure_mqtt()`, the sole production call site, because it
+    /// wraps the *entire* dial+connect sequence in `race_against_connect_timeout`. A caller
+    /// invoking `MqttClient::connect()` directly (bypassing `PrinterClient`) gets no such
+    /// bound and must wrap this call in its own timeout (e.g. `tokio::time::timeout`) against
+    /// a peer that stalls before CONNACK/SUBACK.
     pub async fn connect(
         mut stream: IO,
         identity: &PrinterIdentity,
