@@ -140,16 +140,29 @@ fn extract_sequence_id(payload: &[u8]) -> Option<String> {
 /// - `get_version`: echoed-response shape confirmed by `src/types/version.rs`'s deserialization
 ///   test fixture.
 ///
-/// Not on this list: `pushall` (confirmed *no* ack, see below), and everything else
-/// (`skip_objects`, `project_file`, `ams_control`, `ams_get_rfid`, `ams_change_filament`,
-/// `set_airduct`, `print_option`, `buzzer_ctrl`) — genuinely unverified either way; bambuddy's
-/// own client doesn't correlate responses for these either, it just fire-and-forgets them.
+/// - `skip_objects`/`project_file`/`ams_control`/`ams_get_rfid`/`ams_change_filament`/
+///   `set_airduct`/`print_option`/`buzzer_ctrl`: confirmed on a real P1S (firmware 2025) by a
+///   `bambino-cli ack-probe` run, issue #26. Each was published with a known `sequence_id` and
+///   each echoed it back within 13-57ms inside a `print` wrapper carrying the same `command`
+///   name, with background `push_status` traffic flowing alongside in six of the eight windows
+///   — so the correlation is genuinely by ID, not "a message happened to arrive".
 ///
-/// To graduate one of those onto this list, run `bambino-cli ack-probe` (issue #26) against real
-/// hardware and cite its report: it publishes each unverified command with a known `sequence_id`
-/// and records whether a response echoing that exact ID arrives, which is the only evidence that
-/// distinguishes a real ack from the background `push_status` stream. Do not add an entry on the
-/// strength of a payload's *shape* alone.
+/// Every entry above returned `result: "success"`, including `set_airduct` and `buzzer_ctrl`,
+/// which address hardware a P1S does not have (no chamber damper, no fire-alarm buzzer), and
+/// `project_file` aimed at a file that does not exist. That is the documented P1S behavior
+/// [REF-MQTT-ACK]: the ack confirms *receipt*, not execution or even feature support. Presence
+/// on this list therefore says nothing about whether a command does anything on a given model
+/// — it says only that the printer answers, which is all write-zombie detection needs.
+///
+/// Not on this list: `pushall`, confirmed to produce *no* ack at all (see
+/// `extract_command_and_sequence_id`'s doc comment).
+///
+/// To add a further command, run `bambino-cli ack-probe` against real hardware and cite its
+/// report: it publishes the command with a known `sequence_id` and records whether a response
+/// echoing that exact ID arrives, which is the only evidence that distinguishes a real ack from
+/// the background `push_status` stream. Do not add an entry on the strength of a payload's
+/// *shape* alone. The P1S run above does not generalize to other models either — re-run it on
+/// the model in question before assuming a command behaves the same there.
 const ACK_CORRELATED_COMMANDS: &[&str] = &[
     "pause",
     "resume",
@@ -166,6 +179,14 @@ const ACK_CORRELATED_COMMANDS: &[&str] = &[
     "extrusion_cali_sel",
     "extrusion_cali_del",
     "get_version",
+    "skip_objects",
+    "project_file",
+    "ams_control",
+    "ams_get_rfid",
+    "ams_change_filament",
+    "set_airduct",
+    "print_option",
+    "buzzer_ctrl",
 ];
 
 /// Extracts the `command` name and `sequence_id` from an outgoing command payload's single

@@ -14,6 +14,11 @@
 //! (`pushall`, which has no ack at all, hung `bambino-cli monitor` against a real P1S), so
 //! entries move onto the list only after a run of this harness reports `ACK` for them.
 //!
+//! A positive result is narrow on purpose: it means the printer *answers*, not that the command
+//! does anything. The P1S sweep behind issue #26 acked `set_airduct` and `buzzer_ctrl` with
+//! `result: "success"` on a machine that has neither an airduct damper nor a buzzer
+//! [REF-MQTT-ACK]. Write-zombie detection needs exactly that narrow fact and nothing more.
+//!
 //! Unlike `probe.rs` — which captures whole response *windows* to characterize firmware
 //! behavior — this harness cares about exactly one bit per command, and so builds each request
 //! struct directly (rather than going through `PrinterClient`'s high-level wrappers) to pin the
@@ -68,9 +73,13 @@ mod verdict {
     pub const AMBIGUOUS: &str = "ambiguous_push_status_collision";
 }
 
-/// One command under test. Every variant here is a wire command deliberately *absent* from
-/// `ACK_CORRELATED_COMMANDS` for want of evidence — the list is this harness's whole reason to
-/// exist, so a variant should be deleted once its command graduates onto the allowlist.
+/// One command under test.
+///
+/// All eight were confirmed ack-correlated on a P1S (issue #26) and are now on
+/// `ACK_CORRELATED_COMMANDS`. They stay here rather than being deleted: that evidence is
+/// model-specific, so the same sweep is what confirms (or refutes) the allowlist on any other
+/// model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
+/// for any future command before putting it on the allowlist, never after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AckTest {
     AmsControl,

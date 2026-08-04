@@ -24,6 +24,8 @@ env/
 /reference/probes
 /review
 probe_report*.json
+# ack-probe reports carry the printer serial in a `serial` field — same handling as above.
+ack_probe_report*.json
 
 # libreoffice lock files
 .~lock.*.csv#

@@ -575,6 +575,27 @@ All commands published to the request topic produce an acknowledgment response o
 
 The printer's own incremental `push_status` telemetry uses an independent `sequence_id` counter (starting from low values like `0` or `1`), separate from the client's command sequence IDs. This makes correlation unambiguous — command acks carry the client's high-value sequence IDs, while background telemetry carries the printer's own counter.
 
+###### Ack Correlation Confirmed by Wire Capture (P1S, firmware 2025)
+
+A `bambino-cli ack-probe` run (issue #26) published each of the following with a client-chosen `sequence_id` and captured the response stream for 5s. All eight echoed that exact `sequence_id` back inside a `print` wrapper carrying the same `command` name, 13–57ms after publish, with background `push_status` traffic interleaved in six of the eight windows:
+
+| Command | Ack latency | `result` |
+| :--- | :--- | :--- |
+| `ams_control` | 13ms | `success` |
+| `ams_get_rfid` | 22ms | `success` |
+| `skip_objects` | 35ms | `success` |
+| `set_airduct` | 50ms | `success` |
+| `print_option` | 16ms | `success` |
+| `buzzer_ctrl` | 15ms | `success` |
+| `ams_change_filament` | 29ms | `success` |
+| `project_file` | 57ms | `success` |
+
+This extends the "success regardless of effect" observation above in an important direction: `set_airduct` and `buzzer_ctrl` address hardware a P1S does not physically have (no chamber airduct damper, no fire-alarm buzzer), and `project_file` named a `.3mf` that does not exist on the SD card. All three still acked `result: "success"`. The ack therefore does not confirm feature support or file existence, only that the command reached the broker.
+
+`project_file`'s ack echoes the entire submitted payload back verbatim (every flag, `task_id`/`subtask_id`/`project_id`, and the derived `url`), unlike the other commands' compact `command`+`reason`+`result`+`sequence_id` envelope.
+
+Not confirmed by this run: whether any of these behave the same on other models. The capture is P1S-only.
+
 ---
 
 ### 3.4 Mechanical & Firmware Quirks
