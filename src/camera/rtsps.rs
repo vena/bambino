@@ -138,7 +138,11 @@ pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<S
     } else {
         String::from(printer_ip)
     };
-    if let Some(remainder) = request_uri.strip_prefix("rtsp://") {
+    // Case-insensitive scheme match — RFC 3986 §3.1 treats the scheme as case-insensitive,
+    // and a non-compliant client emitting "RTSP://" must still get the printer-targeted rewrite
+    // rather than silently falling through unrewritten.
+    if request_uri.len() >= 7 && request_uri.as_bytes()[..7].eq_ignore_ascii_case(b"rtsp://") {
+        let remainder = &request_uri[7..];
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
