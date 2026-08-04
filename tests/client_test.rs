@@ -645,6 +645,47 @@ async fn test_temperature_clamping() {
     broker_task.await.expect("Broker task panicked");
 }
 
+#[tokio::test]
+async fn test_temperature_clamping_lower_bound() {
+    // set_bed_temperature/set_nozzle_temperature/set_chamber_temperature clamp only above
+    // max — a 0 ("turn heater off") request must pass through unchanged, not get pulled up
+    // to some floor. Every other clamp test in this file only sends values above max.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json_bed = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_bed["print"]["param"], "M140 S0
+");
+
+        let json_nozzle = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_nozzle["print"]["param"], "M104 T0 S0
+");
+
+        let json_chamber = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json_chamber["print"]["param"], "M141 S0
+");
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
+
+    client
+        .set_bed_temperature(0)
+        .await
+        .expect("Bed temp floor failed");
+    client
+        .set_nozzle_temperature(0, 0)
+        .await
+        .expect("Nozzle temp floor failed");
+    client
+        .set_chamber_temperature(0)
+        .await
+        .expect("Chamber temp floor failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 // ============================================================================
 // Negative / Failure Path Tests
 // ============================================================================
