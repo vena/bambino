@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Parser, Subcommand};
 
+mod ack_probe;
 mod camera;
 mod connection;
 mod control;
@@ -53,7 +54,8 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   ams (dry | dry-stop)
 Files actions:    list  upload  delete  space  clock-check
 Camera actions:   snapshot
-Probe options:    -o/--output  -t/--tests"
+Probe options:    -o/--output  -t/--tests
+Ack-probe:        -o/--output  -t/--tests  --window"
 )]
 struct Cli {
     /// Enable verbose connection and packet debugging output
@@ -114,6 +116,24 @@ enum Commands {
         /// Comma-separated test names to run (default: all non-manual tests)
         #[arg(short = 't', long)]
         tests: Option<String>,
+    },
+
+    /// Check which MQTT commands echo a correlatable `sequence_id` ack (issue #26)
+    AckProbe {
+        ip: String,
+        serial: String,
+        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+        #[arg(default_value = "")]
+        access_code: String,
+        /// Output file path
+        #[arg(short = 'o', long, default_value = "ack_probe_report.json")]
+        output: String,
+        /// Comma-separated wire command names to test (default: all non-actuating ones)
+        #[arg(short = 't', long)]
+        tests: Option<String>,
+        /// Seconds to listen for a correlated ack after each command
+        #[arg(long)]
+        window: Option<u64>,
     },
 
     /// Dispatch a movement or hardware control command
@@ -237,6 +257,24 @@ async fn main() {
                 &resolve_access_code(access_code),
                 &output,
                 tests.as_deref(),
+            )
+            .await
+        }
+        Commands::AckProbe {
+            ip,
+            serial,
+            access_code,
+            output,
+            tests,
+            window,
+        } => {
+            ack_probe::run(
+                &ip,
+                &serial,
+                &resolve_access_code(access_code),
+                &output,
+                tests.as_deref(),
+                window,
             )
             .await
         }

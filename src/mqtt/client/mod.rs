@@ -144,6 +144,12 @@ fn extract_sequence_id(payload: &[u8]) -> Option<String> {
 /// (`skip_objects`, `project_file`, `ams_control`, `ams_get_rfid`, `ams_change_filament`,
 /// `set_airduct`, `print_option`, `buzzer_ctrl`) — genuinely unverified either way; bambuddy's
 /// own client doesn't correlate responses for these either, it just fire-and-forgets them.
+///
+/// To graduate one of those onto this list, run `bambino-cli ack-probe` (issue #26) against real
+/// hardware and cite its report: it publishes each unverified command with a known `sequence_id`
+/// and records whether a response echoing that exact ID arrives, which is the only evidence that
+/// distinguishes a real ack from the background `push_status` stream. Do not add an entry on the
+/// strength of a payload's *shape* alone.
 const ACK_CORRELATED_COMMANDS: &[&str] = &[
     "pause",
     "resume",
