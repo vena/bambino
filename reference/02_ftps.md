@@ -154,3 +154,11 @@ Following the data channel closure, the client must block-wait on the secure con
 
 #### MicroSD Flush Validation & 0500-C010 Exceptions [REF-FTPS-FLUSH]
 The client must await the positive `226 Transfer complete` response on the control channel after closing the passive data channel before dispatching any print commands. If a print command is issued before the printer has fully flushed the file from its write buffers to physical storage, the printer's execution processor will attempt to parse an incomplete payload, triggering a physical `0500-C010 "MicroSD Card read/write exception"` on the printer panel and halting the system.
+
+An *absent* file triggers the same exception, not a clean rejection. Confirmed on a real P1S: a `project_file` command naming a `.3mf` that does not exist on the card at all is acked `result: "success"` (the ack is receipt-only, see [REF-MQTT-ACK]), after which the execution processor fails to read it and latches `0500-C010` on the panel — seconds later, long after the ack. There is no synchronous error path for "no such file"; the only signal is the delayed panel fault.
+
+Two consequences for clients:
+*   Never dispatch `project_file` for a path that has not been confirmed present on the card. A wrong or stale filename is not a no-op.
+*   `0500-C010` on its own does not indicate failing hardware. Both this case and the unflushed-write case above produce it on a perfectly healthy card, so treat it as "the printer could not read the file it was told to print", not as a card-replacement signal.
+
+`clean_print_error` clears the latch — confirmed on a P1S, which cleared a `0500-C010` induced this way with no card reinsert and no reboot. A physical reinsert remains the fallback if the motion controller ever keeps it set.

@@ -48,10 +48,19 @@ const DEFAULT_ACK_WINDOW_SECS: u64 = 5;
 /// `PUSHALL_TIMEOUT_SECS`.
 const BUSY_WARMUP_SECS: u64 = 10;
 /// Filename used by the `project_file` test. `project_file` *starts a print job*, so the test
-/// deliberately names a file that cannot exist on the SD card: the firmware rejects it, and a
-/// rejection response still answers the only question this harness asks (does it echo our
-/// `sequence_id`?) without putting the machine into motion.
+/// names a file that cannot exist on the SD card rather than a real one — nothing prints.
+///
+/// This does **not** make the test consequence-free, and the original claim here that "the
+/// firmware rejects it" was wrong. The ack is receipt-only [REF-MQTT-ACK]: the printer returns
+/// `result: "success"`, then asynchronously tries to fetch the file, fails to read it, and
+/// raises a panel-latched `0500_C010` MicroSD read/write exception well after the capture window
+/// has closed — the same failure mode [REF-FTPS-FLUSH] documents for a file dispatched before
+/// its write buffers flushed. Observed on a real P1S. [`clear_project_file_error`] sends
+/// `clean_print_error` afterwards to clear it.
 const NONEXISTENT_PROJECT_FILE: &str = "__bambino_ack_probe_absent__.3mf";
+/// How long to let `0500_C010` latch before clearing it. The error surfaces asynchronously,
+/// after the ack; clearing too eagerly leaves it to appear once the harness has already exited.
+const PROJECT_FILE_ERROR_SETTLE_SECS: u64 = 10;
 
 /// Verdict strings recorded per entry and printed in the summary table.
 mod verdict {
@@ -127,8 +136,9 @@ impl AckTest {
             }
             Self::SkipObjects => "Skip object index 1 (inert while no print is active)",
             Self::ProjectFile => {
-                "Start a print of a deliberately nonexistent file (expect rejection). PHYSICAL: \
-                 this is the print-start command"
+                "Start a print of a deliberately nonexistent file. PHYSICAL: this is the \
+                 print-start command, and it latches a 0500_C010 SD read/write error on the \
+                 panel, which this harness clears afterwards"
             }
             Self::SetAirduct => {
                 "Airduct damper to cooling — may be unsupported on P1/A1 (no chamber damper); a \
@@ -522,6 +532,36 @@ async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
     }
 }
 
+/// Clears the `0500_C010` the `project_file` test induces (see [`NONEXISTENT_PROJECT_FILE`]).
+///
+/// The error latches on the printer's panel asynchronously, after the ack the test correlates
+/// against — leaving it set would strand the operator with a hardware fault raised by a
+/// diagnostic tool. Waits before clearing so the clear cannot race ahead of the error appearing.
+///
+/// Best-effort and deliberately non-fatal: this runs after every test has already been recorded,
+/// so a failure here must not cost the caller the report. Says so on stderr instead.
+async fn clear_project_file_error(client: &mut Printer) {
+    eprint!(
+        "\nClearing the 0500_C010 induced by project_file (waiting {}s for it to latch)... ",
+        PROJECT_FILE_ERROR_SETTLE_SECS
+    );
+    io::stderr().flush().unwrap_or(());
+
+    tokio::time::sleep(Duration::from_secs(PROJECT_FILE_ERROR_SETTLE_SECS)).await;
+
+    match client.clear_print_error().await {
+        Ok(_) => eprintln!("sent."),
+        Err(e) => eprintln!(
+            "failed: {e}\n  Clear it manually: bambino-cli control <IP> <SERIAL> clear-error"
+        ),
+    }
+
+    eprintln!(
+        "  clean_print_error is confirmed to clear this on a P1S; if the panel still shows \
+         0500_C010, reinsert the MicroSD card."
+    );
+}
+
 fn confirm_actuating_tests(tests: &[AckTest]) -> Result<bool, CliError> {
     let actuating: Vec<&str> = tests
         .iter()
@@ -538,9 +578,13 @@ WARNING: the following selected tests actuate hardware or dispatch a print job:
 
   {}
 
-`ams_change_filament` moves the feeder and may heat the nozzle. `project_file` is the
-print-start command — it targets a deliberately nonexistent file so the firmware rejects it,
-but it is still the real command.
+`ams_change_filament` moves the feeder and may heat the nozzle.
+
+`project_file` is the print-start command. It targets a deliberately nonexistent file, so
+nothing prints — but the ack is receipt-only, and the printer then fails to read that file and
+latches a `0500_C010` MicroSD read/write exception on its panel. This harness sends
+`clean_print_error` afterwards to clear it, which is confirmed to work on a P1S. If that clear
+does not take, run `bambino-cli control <IP> <SERIAL> clear-error`, or reinsert the card.
 
 Clear the build plate, make sure no print is queued, and type 'yes' to continue.",
         actuating.join("\n  ")
@@ -679,6 +723,10 @@ pub async fn run(
     let mut entries = Vec::new();
     for (idx, test) in tests.iter().enumerate() {
         entries.push(run_one(&mut client, idx, tests.len(), *test, window).await?);
+    }
+
+    if tests.contains(&AckTest::ProjectFile) {
+        clear_project_file_error(&mut client).await;
     }
 
     let report = AckReport {
