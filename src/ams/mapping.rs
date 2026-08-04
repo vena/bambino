@@ -311,15 +311,23 @@ pub fn is_ams_pool_composition_valid(
     let mut standard_ids = Vec::new();
     let mut ht_ids = Vec::new();
     for entry in mapping2 {
+        let is_external_sentinel =
+            entry.ams_id == AMS_EXTERNAL_SPOOL_ID || entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID;
         if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
             if !standard_ids.contains(&entry.ams_id) {
                 standard_ids.push(entry.ams_id);
             }
         } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
             .contains(&entry.ams_id)
-            && !ht_ids.contains(&entry.ams_id)
         {
-            ht_ids.push(entry.ams_id);
+            if !ht_ids.contains(&entry.ams_id) {
+                ht_ids.push(entry.ams_id);
+            }
+        } else if !is_external_sentinel {
+            // Anything outside the standard/AMS-HT ranges and not one of the two documented
+            // external-spool sentinels (254/255) is a malformed ams_id — reject exhaustively
+            // rather than silently ignoring it like a legitimate external/unmapped entry.
+            return false;
         }
     }
 
