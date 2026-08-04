@@ -352,6 +352,10 @@ fn render_fans_and_system(
         Some(serde_json::Value::String(s)) if s.to_uppercase() == "HAS_SDCARD_NORMAL" => "Inserted",
         Some(serde_json::Value::Number(n)) if n.as_i64().unwrap_or(0) != 0 => "Inserted",
         Some(serde_json::Value::Bool(false)) | Some(serde_json::Value::Number(_)) => "Not Detected",
+        // An unrecognized string shape (e.g. an abnormal-state constant this dashboard doesn't
+        // know about yet) must not be masked as "--" the same as a genuinely-absent field —
+        // show it raw instead of silently discarding a real, if unrecognized, signal.
+        Some(serde_json::Value::String(s)) => s.as_str(),
         _ => "--",
     };
     let ipcam = state.get("ipcam");
@@ -422,7 +426,7 @@ fn render_ams(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl W
             "\n--- AMS #{} ({}°C, RH:{}){}",
             unit_id, temp, humidity, dry_suffix
         );
-        let pad = 71usize.saturating_sub(header.len() - 1);
+        let pad = 71usize.saturating_sub(header.chars().count() - 1);
         dwriteln!(w, "{} {}", header, "-".repeat(pad));
 
         if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
