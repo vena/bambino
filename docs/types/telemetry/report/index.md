@@ -40,6 +40,10 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for LightReport`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for LightReport`
+
 ##### `impl Clone for LightReport`
 
 - <span id="lightreport-clone"></span>`fn clone(&self) -> LightReport` — [`LightReport`](#lightreport)
@@ -75,6 +79,10 @@ Network interface state from `print.net` [REF-NET-PORTS].
   Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for NetInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for NetInfo`
 
 ##### `impl Clone for NetInfo`
 
@@ -481,6 +489,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for PrinterTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for PrinterTelemetry`
+
 ##### `impl Clone for PrinterTelemetry`
 
 - <span id="printertelemetry-clone"></span>`fn clone(&self) -> PrinterTelemetry` — [`PrinterTelemetry`](#printertelemetry)
@@ -538,6 +550,10 @@ and "read-only."
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for SdcardState`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for SdcardState`
+
 ##### `impl Clone for SdcardState`
 
 - <span id="sdcardstate-clone"></span>`fn clone(&self) -> SdcardState` — [`SdcardState`](#sdcardstate)
@@ -557,4 +573,6 @@ and "read-only."
 ##### `impl PartialEq for SdcardState`
 
 - <span id="sdcardstate-partialeq-eq"></span>`fn eq(&self, other: &SdcardState) -> bool` — [`SdcardState`](#sdcardstate)
+
+##### `impl StructuralPartialEq for SdcardState`
 

@@ -63,6 +63,10 @@ consecutive readings before committing a one-step change.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for FanSpeedDebouncer`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for FanSpeedDebouncer`
+
 ##### `impl Clone for FanSpeedDebouncer`
 
 - <span id="fanspeeddebouncer-clone"></span>`fn clone(&self) -> FanSpeedDebouncer` — [`FanSpeedDebouncer`](#fanspeeddebouncer)
@@ -119,10 +123,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
 
-- `fn has_active_chamber_heater(&self) -> bool`
-
-  Returns true if the model possesses an active PTC chamber heater (M141) [REF-MOTO-GCODE].
-
 - `fn physical_nozzle_count(&self) -> u8`
 
   Returns the number of physical extruder carriages present on the machine carriage bus.
@@ -139,24 +139,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the build plate moves along the Z-axis (CoreXY bed-on-Z platforms) [REF-MOTO-GCODE].
 
-- `fn nozzle_temp_max(&self) -> u16`
-
-  Returns the maximum safe nozzle/hotend temperature in °C for this model.
-
-- `fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16`
-
-  Returns the maximum safe heated bed temperature in °C for this model.
-
-#### Provided Methods 
-
-- `fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool`
-
-  Returns true if `telemetry` carries the specific wire field this model's
-
-- `fn is_unsafe_homing_command(&self, gcode: &str) -> bool`
-
-  Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].
-
 - `fn z_max(&self) -> f32`
 
   Returns the maximum safe Z-axis travel distance in millimeters for this model.
@@ -168,6 +150,28 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - `fn y_max(&self) -> f32`
 
   Returns the maximum safe Y-axis travel distance in millimeters for this model.
+
+- `fn nozzle_temp_max(&self) -> u16`
+
+  Returns the maximum safe nozzle/hotend temperature in °C for this model.
+
+- `fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16`
+
+  Returns the maximum safe heated bed temperature in °C for this model.
+
+- `fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
+
+  Returns this model's active PTC chamber heater ceiling in °C (M141), or `None` if it
+
+#### Provided Methods 
+
+- `fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool`
+
+  Returns true if `telemetry` carries the specific wire field this model's
+
+- `fn is_unsafe_homing_command(&self, gcode: &str) -> bool`
+
+  Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].
 
 - `fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String`
 
@@ -212,10 +216,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - `fn supports_ams_remote_drying(&self) -> bool`
 
   Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
-
-- `fn chamber_temp_max(&self) -> u16`
-
-  Returns the maximum active chamber heater temperature in °C for this model.
 
 #### Implementors
 

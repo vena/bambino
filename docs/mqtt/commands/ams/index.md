@@ -90,6 +90,10 @@ Triggers filament load or unload sequences on physical AMS units or virtual exte
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsChangeFilamentPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsChangeFilamentPayload`
+
 ##### `impl Clone for AmsChangeFilamentPayload`
 
 - <span id="amschangefilamentpayload-clone"></span>`fn clone(&self) -> AmsChangeFilamentPayload` — [`AmsChangeFilamentPayload`](#amschangefilamentpayload)
@@ -125,6 +129,10 @@ Loads or unloads filament from an AMS slot or external spool to the toolhead.
   Builds an `ams_change_filament` request to load or unload filament.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsChangeFilamentRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsChangeFilamentRequest`
 
 ##### `impl Clone for AmsChangeFilamentRequest`
 
@@ -166,6 +174,10 @@ Commands standard AMS controllers to resume, pause, or reset physical material f
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsControlPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsControlPayload`
+
 ##### `impl Clone for AmsControlPayload`
 
 - <span id="amscontrolpayload-clone"></span>`fn clone(&self) -> AmsControlPayload` — [`AmsControlPayload`](#amscontrolpayload)
@@ -201,6 +213,10 @@ Sends a resume, pause, or reset command to the AMS feed mechanism.
   Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsControlRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsControlRequest`
 
 ##### `impl Clone for AmsControlRequest`
 
@@ -290,6 +306,10 @@ incident #1447).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentDryingPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentDryingPayload`
+
 ##### `impl Clone for AmsFilamentDryingPayload`
 
 - <span id="amsfilamentdryingpayload-clone"></span>`fn clone(&self) -> AmsFilamentDryingPayload` — [`AmsFilamentDryingPayload`](#amsfilamentdryingpayload)
@@ -325,6 +345,10 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
   Builds an `ams_filament_drying` request.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentDryingRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentDryingRequest`
 
 ##### `impl Clone for AmsFilamentDryingRequest`
 
@@ -401,6 +425,10 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentSettingPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentSettingPayload`
+
 ##### `impl Clone for AmsFilamentSettingPayload`
 
 - <span id="amsfilamentsettingpayload-clone"></span>`fn clone(&self) -> AmsFilamentSettingPayload` — [`AmsFilamentSettingPayload`](#amsfilamentsettingpayload)
@@ -436,6 +464,10 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   Creates a request payload to update slot parameters.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentSettingRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentSettingRequest`
 
 ##### `impl Clone for AmsFilamentSettingRequest`
 
@@ -482,6 +514,10 @@ Triggers physical filament feeder movement to scan proprietary RFID tag properti
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsGetRfidPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsGetRfidPayload`
+
 ##### `impl Clone for AmsGetRfidPayload`
 
 - <span id="amsgetrfidpayload-clone"></span>`fn clone(&self) -> AmsGetRfidPayload` — [`AmsGetRfidPayload`](#amsgetrfidpayload)
@@ -517,6 +553,10 @@ Requests an RFID tag scan on a specific AMS slot.
   Builds an `ams_get_rfid` request.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsGetRfidRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsGetRfidRequest`
 
 ##### `impl Clone for AmsGetRfidRequest`
 

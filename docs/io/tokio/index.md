@@ -52,6 +52,10 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 #### Trait Implementations
 
+##### `impl<T, E> AsTaggedExplicit<'a, E> for TokioIo<T>`
+
+##### `impl<T, E> AsTaggedImplicit<'a, E> for TokioIo<T>`
+
 ##### `impl<T> AsyncIo for TokioIo<T>`
 
 ##### `impl<T> ErrorType for TokioIo<T>`
@@ -94,6 +98,10 @@ Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trai
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for TokioIoError`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for TokioIoError`
+
 ##### `impl Debug for TokioIoError`
 
 - <span id="tokioioerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
@@ -124,6 +132,10 @@ FTPS passive-mode data transfers alike (the Tokio counterpart to
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for TokioRawStreamFactory`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for TokioRawStreamFactory`
+
 ##### `impl RawStreamFactory<TokioIo<TcpStream>> for TokioRawStreamFactory`
 
 - <span id="tokiorawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError>` — [`TokioIo`](#tokioio), [`SocketError`](../index.md#socketerror)
@@ -145,6 +157,10 @@ Timer implementation utilizing Tokio's non-blocking system clock registry.
   Creates a timer, capturing the current instant as its monotonic epoch.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for TokioTimer`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for TokioTimer`
 
 ##### `impl Default for TokioTimer`
 
@@ -174,6 +190,10 @@ TLS Secure connector wrapping Tokio-Rustls.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for TokioTlsConnector`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for TokioTlsConnector`
+
 ##### `impl TlsConnector<TokioIo<TcpStream>> for TokioTlsConnector`
 
 - <span id="tokiotlsconnector-tlsconnector-type-stream"></span>`type Stream = TokioIo<TlsStream<TcpStream>>`
@@ -193,6 +213,10 @@ struct TokioUdpSocket {
 UDP socket interface wrapping a native Tokio UdpSocket.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for TokioUdpSocket`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for TokioUdpSocket`
 
 ##### `impl AsyncUdpSocket for TokioUdpSocket`
 

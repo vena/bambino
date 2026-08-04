@@ -67,6 +67,10 @@ Which camera streaming protocol a printer model uses.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for CameraProtocol`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for CameraProtocol`
+
 ##### `impl Clone for CameraProtocol`
 
 - <span id="cameraprotocol-clone"></span>`fn clone(&self) -> CameraProtocol` — [`CameraProtocol`](#cameraprotocol)
@@ -86,6 +90,8 @@ Which camera streaming protocol a printer model uses.
 ##### `impl PartialEq for CameraProtocol`
 
 - <span id="cameraprotocol-partialeq-eq"></span>`fn eq(&self, other: &CameraProtocol) -> bool` — [`CameraProtocol`](#cameraprotocol)
+
+##### `impl StructuralPartialEq for CameraProtocol`
 
 
 ---

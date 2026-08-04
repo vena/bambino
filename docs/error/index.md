@@ -87,6 +87,10 @@ and source error tracing are derived automatically via `thiserror`.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for Error`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for Error`
+
 ##### `impl Clone for Error`
 
 - <span id="error-clone"></span>`fn clone(&self) -> Error` — [`Error`](#error)

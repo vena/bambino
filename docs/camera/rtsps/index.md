@@ -79,6 +79,10 @@ Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freez
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for RtpTimestampCorrector`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for RtpTimestampCorrector`
+
 
 ---
 

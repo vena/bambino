@@ -43,6 +43,10 @@ Typed response from a `get_version` command containing all expansion bus modules
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for VersionInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for VersionInfo`
+
 ##### `impl Clone for VersionInfo`
 
 - <span id="versioninfo-clone"></span>`fn clone(&self) -> VersionInfo` — [`VersionInfo`](#versioninfo)
@@ -119,6 +123,10 @@ Hardware or firmware module entry from the printer's expansion bus version datab
   Module flags.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for VersionModule`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for VersionModule`
 
 ##### `impl Clone for VersionModule`
 

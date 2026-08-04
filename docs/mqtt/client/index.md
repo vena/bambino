@@ -65,6 +65,10 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for MqttClient<IO>`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for MqttClient<IO>`
+
 ### `MqttMessage`
 
 ```rust
@@ -87,6 +91,10 @@ Incoming MQTT message details parsed from the wire.
   Raw JSON payload bytes as received off the wire.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for MqttMessage`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for MqttMessage`
 
 ##### `impl Clone for MqttMessage`
 

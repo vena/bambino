@@ -31,6 +31,10 @@ Quirks for the A2L large-format open-frame bed-slinger.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for A2LQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for A2LQuirks`
+
 ##### `impl ModelQuirks for A2LQuirks`
 
 - <span id="a2lquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -47,7 +51,7 @@ Quirks for the A2L large-format open-frame bed-slinger.
 
 - <span id="a2lquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="a2lquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
+- <span id="a2lquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="a2lquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 

@@ -83,6 +83,10 @@ Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliGetPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliGetPayload`
+
 ##### `impl Clone for ExtrusionCaliGetPayload`
 
 - <span id="extrusioncaligetpayload-clone"></span>`fn clone(&self) -> ExtrusionCaliGetPayload` — [`ExtrusionCaliGetPayload`](#extrusioncaligetpayload)
@@ -131,6 +135,10 @@ yourself.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliGetRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliGetRequest`
+
 ##### `impl Clone for ExtrusionCaliGetRequest`
 
 - <span id="extrusioncaligetrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliGetRequest` — [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest)
@@ -160,6 +168,10 @@ JSON response wrapper containing the printer's stored calibration profile databa
   The `print` namespace envelope wrapping the returned calibration data.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliGetResponse`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliGetResponse`
 
 ##### `impl Clone for ExtrusionCaliGetResponse`
 
@@ -207,6 +219,10 @@ Payload envelope returned by the printer in response to `extrusion_cali_get`.
   Complete array of stored calibration profiles matching the active nozzle.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliGetResponsePayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliGetResponsePayload`
 
 ##### `impl Clone for ExtrusionCaliGetResponsePayload`
 
@@ -270,6 +286,10 @@ Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliSelPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliSelPayload`
+
 ##### `impl Clone for ExtrusionCaliSelPayload`
 
 - <span id="extrusioncaliselpayload-clone"></span>`fn clone(&self) -> ExtrusionCaliSelPayload` — [`ExtrusionCaliSelPayload`](#extrusioncaliselpayload)
@@ -311,6 +331,10 @@ database mislinking on the motion board.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliSelRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliSelRequest`
+
 ##### `impl Clone for ExtrusionCaliSelRequest`
 
 - <span id="extrusioncaliselrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliSelRequest` — [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest)
@@ -351,6 +375,10 @@ Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliSetPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliSetPayload`
+
 ##### `impl Clone for ExtrusionCaliSetPayload`
 
 - <span id="extrusioncalisetpayload-clone"></span>`fn clone(&self) -> ExtrusionCaliSetPayload` — [`ExtrusionCaliSetPayload`](#extrusioncalisetpayload)
@@ -386,6 +414,10 @@ JSON request wrapper to create or overwrite calibration profile allocations.
   Builds a secure write-transaction payload targeting physical EEPROM slots.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliSetRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliSetRequest`
 
 ##### `impl Clone for ExtrusionCaliSetRequest`
 
@@ -427,6 +459,10 @@ Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for IdexCaliDelEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for IdexCaliDelEntry`
+
 ##### `impl Clone for IdexCaliDelEntry`
 
 - <span id="idexcalidelentry-clone"></span>`fn clone(&self) -> IdexCaliDelEntry` — [`IdexCaliDelEntry`](#idexcalidelentry)
@@ -448,6 +484,8 @@ Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 ##### `impl Serialize for IdexCaliDelEntry`
 
 - <span id="idexcalidelentry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for IdexCaliDelEntry`
 
 ### `IdexCaliDelPayload`
 
@@ -476,6 +514,10 @@ Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest).
   Request sequence ID, serialized as a string on the wire.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for IdexCaliDelPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for IdexCaliDelPayload`
 
 ##### `impl Clone for IdexCaliDelPayload`
 
@@ -512,6 +554,10 @@ JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [RE
   Builds a dual-nozzle carriage deletion transaction keyed on physical coordinates.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for IdexCaliDelRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for IdexCaliDelRequest`
 
 ##### `impl Clone for IdexCaliDelRequest`
 
@@ -593,6 +639,10 @@ Structured representation of a Linear Advance calibration profile entry on the p
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for KProfileEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for KProfileEntry`
+
 ##### `impl Clone for KProfileEntry`
 
 - <span id="kprofileentry-clone"></span>`fn clone(&self) -> KProfileEntry` — [`KProfileEntry`](#kprofileentry)
@@ -614,6 +664,8 @@ Structured representation of a Linear Advance calibration profile entry on the p
 ##### `impl Serialize for KProfileEntry`
 
 - <span id="kprofileentry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for KProfileEntry`
 
 ### `StandardCaliDelEntry`
 
@@ -653,6 +705,10 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for StandardCaliDelEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for StandardCaliDelEntry`
+
 ##### `impl Clone for StandardCaliDelEntry`
 
 - <span id="standardcalidelentry-clone"></span>`fn clone(&self) -> StandardCaliDelEntry` — [`StandardCaliDelEntry`](#standardcalidelentry)
@@ -674,6 +730,8 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 ##### `impl Serialize for StandardCaliDelEntry`
 
 - <span id="standardcalidelentry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for StandardCaliDelEntry`
 
 ### `StandardCaliDelPayload`
 
@@ -702,6 +760,10 @@ Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest).
   Request sequence ID, serialized as a string on the wire.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for StandardCaliDelPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for StandardCaliDelPayload`
 
 ##### `impl Clone for StandardCaliDelPayload`
 
@@ -738,6 +800,10 @@ JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-D
   Builds a single-nozzle deletion transaction keyed on the setting identifier.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for StandardCaliDelRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for StandardCaliDelRequest`
 
 ##### `impl Clone for StandardCaliDelRequest`
 

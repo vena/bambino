@@ -29,6 +29,10 @@ Quirks for the P2S CoreXY platform.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for P2Quirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for P2Quirks`
+
 ##### `impl ModelQuirks for P2Quirks`
 
 - <span id="p2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -57,7 +61,7 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="p2quirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
+- <span id="p2quirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="p2quirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 

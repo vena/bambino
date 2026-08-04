@@ -35,6 +35,10 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for X2Quirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for X2Quirks`
+
 ##### `impl ModelQuirks for X2Quirks`
 
 - <span id="x2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -67,8 +71,6 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="x2quirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
-
 - <span id="x2quirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
 - <span id="x2quirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
@@ -91,7 +93,7 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
 
-- <span id="x2quirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="x2quirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="x2quirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 

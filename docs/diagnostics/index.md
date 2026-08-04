@@ -69,6 +69,10 @@ Fully decoded representation of an active diagnostic entry from the `hms` teleme
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for DecodedHmsAlert`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for DecodedHmsAlert`
+
 ##### `impl Clone for DecodedHmsAlert`
 
 - <span id="decodedhmsalert-clone"></span>`fn clone(&self) -> DecodedHmsAlert` — [`DecodedHmsAlert`](hms/index.md#decodedhmsalert)
@@ -86,6 +90,8 @@ Fully decoded representation of an active diagnostic entry from the `hms` teleme
 ##### `impl PartialEq for DecodedHmsAlert`
 
 - <span id="decodedhmsalert-partialeq-eq"></span>`fn eq(&self, other: &DecodedHmsAlert) -> bool` — [`DecodedHmsAlert`](hms/index.md#decodedhmsalert)
+
+##### `impl StructuralPartialEq for DecodedHmsAlert`
 
 ### `DecodedPrintError`
 
@@ -115,6 +121,10 @@ Fully decoded representation of the primary system `print_error` register.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for DecodedPrintError`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for DecodedPrintError`
+
 ##### `impl Clone for DecodedPrintError`
 
 - <span id="decodedprinterror-clone"></span>`fn clone(&self) -> DecodedPrintError` — [`DecodedPrintError`](hms/index.md#decodedprinterror)
@@ -132,6 +142,8 @@ Fully decoded representation of the primary system `print_error` register.
 ##### `impl PartialEq for DecodedPrintError`
 
 - <span id="decodedprinterror-partialeq-eq"></span>`fn eq(&self, other: &DecodedPrintError) -> bool` — [`DecodedPrintError`](hms/index.md#decodedprinterror)
+
+##### `impl StructuralPartialEq for DecodedPrintError`
 
 ### `ExtrusionCaliGetRequest`
 
@@ -169,6 +181,10 @@ yourself.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliGetRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliGetRequest`
+
 ##### `impl Clone for ExtrusionCaliGetRequest`
 
 - <span id="extrusioncaligetrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliGetRequest` — [`ExtrusionCaliGetRequest`](kprofile/index.md#extrusioncaligetrequest)
@@ -198,6 +214,10 @@ JSON response wrapper containing the printer's stored calibration profile databa
   The `print` namespace envelope wrapping the returned calibration data.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliGetResponse`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliGetResponse`
 
 ##### `impl Clone for ExtrusionCaliGetResponse`
 
@@ -242,6 +262,10 @@ database mislinking on the motion board.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliSelRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliSelRequest`
+
 ##### `impl Clone for ExtrusionCaliSelRequest`
 
 - <span id="extrusioncaliselrequest-clone"></span>`fn clone(&self) -> ExtrusionCaliSelRequest` — [`ExtrusionCaliSelRequest`](kprofile/index.md#extrusioncaliselrequest)
@@ -277,6 +301,10 @@ JSON request wrapper to create or overwrite calibration profile allocations.
   Builds a secure write-transaction payload targeting physical EEPROM slots.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtrusionCaliSetRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtrusionCaliSetRequest`
 
 ##### `impl Clone for ExtrusionCaliSetRequest`
 
@@ -318,6 +346,10 @@ Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for IdexCaliDelEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for IdexCaliDelEntry`
+
 ##### `impl Clone for IdexCaliDelEntry`
 
 - <span id="idexcalidelentry-clone"></span>`fn clone(&self) -> IdexCaliDelEntry` — [`IdexCaliDelEntry`](kprofile/index.md#idexcalidelentry)
@@ -339,6 +371,8 @@ Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 ##### `impl Serialize for IdexCaliDelEntry`
 
 - <span id="idexcalidelentry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for IdexCaliDelEntry`
 
 ### `IdexCaliDelRequest`
 
@@ -363,6 +397,10 @@ JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [RE
   Builds a dual-nozzle carriage deletion transaction keyed on physical coordinates.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for IdexCaliDelRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for IdexCaliDelRequest`
 
 ##### `impl Clone for IdexCaliDelRequest`
 
@@ -444,6 +482,10 @@ Structured representation of a Linear Advance calibration profile entry on the p
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for KProfileEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for KProfileEntry`
+
 ##### `impl Clone for KProfileEntry`
 
 - <span id="kprofileentry-clone"></span>`fn clone(&self) -> KProfileEntry` — [`KProfileEntry`](kprofile/index.md#kprofileentry)
@@ -465,6 +507,8 @@ Structured representation of a Linear Advance calibration profile entry on the p
 ##### `impl Serialize for KProfileEntry`
 
 - <span id="kprofileentry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for KProfileEntry`
 
 ### `StandardCaliDelEntry`
 
@@ -504,6 +548,10 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for StandardCaliDelEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for StandardCaliDelEntry`
+
 ##### `impl Clone for StandardCaliDelEntry`
 
 - <span id="standardcalidelentry-clone"></span>`fn clone(&self) -> StandardCaliDelEntry` — [`StandardCaliDelEntry`](kprofile/index.md#standardcalidelentry)
@@ -525,6 +573,8 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 ##### `impl Serialize for StandardCaliDelEntry`
 
 - <span id="standardcalidelentry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for StandardCaliDelEntry`
 
 ### `StandardCaliDelRequest`
 
@@ -549,6 +599,10 @@ JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-D
   Builds a single-nozzle deletion transaction keyed on the setting identifier.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for StandardCaliDelRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for StandardCaliDelRequest`
 
 ##### `impl Clone for StandardCaliDelRequest`
 
@@ -606,6 +660,10 @@ Numerical classification of the severity level of an HMS diagnostic alert.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for HmsSeverity`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for HmsSeverity`
+
 ##### `impl Clone for HmsSeverity`
 
 - <span id="hmsseverity-clone"></span>`fn clone(&self) -> HmsSeverity` — [`HmsSeverity`](hms/index.md#hmsseverity)
@@ -625,6 +683,8 @@ Numerical classification of the severity level of an HMS diagnostic alert.
 ##### `impl PartialEq for HmsSeverity`
 
 - <span id="hmsseverity-partialeq-eq"></span>`fn eq(&self, other: &HmsSeverity) -> bool` — [`HmsSeverity`](hms/index.md#hmsseverity)
+
+##### `impl StructuralPartialEq for HmsSeverity`
 
 
 ---

@@ -109,6 +109,10 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for PrinterModel`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for PrinterModel`
+
 ##### `impl Clone for PrinterModel`
 
 - <span id="printermodel-clone"></span>`fn clone(&self) -> PrinterModel` — [`PrinterModel`](#printermodel)
@@ -128,6 +132,8 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 ##### `impl PartialEq for PrinterModel`
 
 - <span id="printermodel-partialeq-eq"></span>`fn eq(&self, other: &PrinterModel) -> bool` — [`PrinterModel`](#printermodel)
+
+##### `impl StructuralPartialEq for PrinterModel`
 
 
 ---

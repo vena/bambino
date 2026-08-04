@@ -36,6 +36,10 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for A1MiniQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for A1MiniQuirks`
+
 ##### `impl ModelQuirks for A1MiniQuirks`
 
 - <span id="a1miniquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -52,7 +56,7 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
 - <span id="a1miniquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="a1miniquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
+- <span id="a1miniquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="a1miniquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
@@ -86,6 +90,10 @@ Quirks for the full-size A1 bed-slinger.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for A1Quirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for A1Quirks`
+
 ##### `impl ModelQuirks for A1Quirks`
 
 - <span id="a1quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -102,7 +110,7 @@ Quirks for the full-size A1 bed-slinger.
 
 - <span id="a1quirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="a1quirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
+- <span id="a1quirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="a1quirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 

@@ -30,6 +30,10 @@ Quirks for the P1P CoreXY platform.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for P1PQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for P1PQuirks`
+
 ##### `impl ModelQuirks for P1PQuirks`
 
 - <span id="p1pquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -46,7 +50,7 @@ Quirks for the P1P CoreXY platform.
 
 - <span id="p1pquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="p1pquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
+- <span id="p1pquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="p1pquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
@@ -88,6 +92,10 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for P1SQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for P1SQuirks`
+
 ##### `impl ModelQuirks for P1SQuirks`
 
 - <span id="p1squirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -104,7 +112,7 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 - <span id="p1squirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="p1squirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
+- <span id="p1squirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="p1squirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 

@@ -123,6 +123,10 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for SsdpDevice`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for SsdpDevice`
+
 ##### `impl Clone for SsdpDevice`
 
 - <span id="ssdpdevice-clone"></span>`fn clone(&self) -> SsdpDevice` — [`SsdpDevice`](parser/index.md#ssdpdevice)
@@ -136,6 +140,8 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 ##### `impl PartialEq for SsdpDevice`
 
 - <span id="ssdpdevice-partialeq-eq"></span>`fn eq(&self, other: &SsdpDevice) -> bool` — [`SsdpDevice`](parser/index.md#ssdpdevice)
+
+##### `impl StructuralPartialEq for SsdpDevice`
 
 ### `DiscoveryEngine<U: AsyncUdpSocket>`
 
@@ -162,6 +168,10 @@ Asynchronous Discovery Engine providing search orchestration and passive monitor
   Listens on the bound socket interface and processes the next incoming SSDP packet.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for DiscoveryEngine<U>`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for DiscoveryEngine<U>`
 
 
 ---

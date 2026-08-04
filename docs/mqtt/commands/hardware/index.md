@@ -68,6 +68,10 @@ Redirects internal climate airflows using active damper deflection plates.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductPayload`
+
 ##### `impl Clone for AirductPayload`
 
 - <span id="airductpayload-clone"></span>`fn clone(&self) -> AirductPayload` — [`AirductPayload`](#airductpayload)
@@ -103,6 +107,10 @@ Switches the enclosure airduct damper between cooling, heating, and laser modes.
   Builds a `set_airduct` request for the given damper mode.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductRequest`
 
 ##### `impl Clone for AirductRequest`
 
@@ -149,6 +157,10 @@ Modifies active alarm or attention chime parameters on the printer cabinet buzze
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for BuzzerPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BuzzerPayload`
+
 ##### `impl Clone for BuzzerPayload`
 
 - <span id="buzzerpayload-clone"></span>`fn clone(&self) -> BuzzerPayload` — [`BuzzerPayload`](#buzzerpayload)
@@ -184,6 +196,10 @@ Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
   Builds a `buzzer_ctrl` request for the given alarm mode.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for BuzzerRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BuzzerRequest`
 
 ##### `impl Clone for BuzzerRequest`
 
@@ -250,6 +266,10 @@ Chamber illumination and toolhead LED control configurations.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for LedCtrlPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for LedCtrlPayload`
+
 ##### `impl Clone for LedCtrlPayload`
 
 - <span id="ledctrlpayload-clone"></span>`fn clone(&self) -> LedCtrlPayload` — [`LedCtrlPayload`](#ledctrlpayload)
@@ -289,6 +309,10 @@ Turns chamber or toolhead LEDs on or off.
   Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for LedCtrlRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for LedCtrlRequest`
 
 ##### `impl Clone for LedCtrlRequest`
 
@@ -330,6 +354,10 @@ Controls structural notification sound output via speakers (Supported on A1, A1 
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for PromptSoundPayload`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for PromptSoundPayload`
+
 ##### `impl Clone for PromptSoundPayload`
 
 - <span id="promptsoundpayload-clone"></span>`fn clone(&self) -> PromptSoundPayload` — [`PromptSoundPayload`](#promptsoundpayload)
@@ -365,6 +393,10 @@ Enables or disables the printer's notification sounds.
   Builds a `print_option` request enabling or disabling notification sounds.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for PromptSoundRequest`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for PromptSoundRequest`
 
 ##### `impl Clone for PromptSoundRequest`
 
@@ -410,6 +442,10 @@ Airduct damper operating mode [REF-MQTT-LIFECYCLE].
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductMode`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductMode`
+
 ##### `impl Clone for AirductMode`
 
 - <span id="airductmode-clone"></span>`fn clone(&self) -> AirductMode` — [`AirductMode`](#airductmode)
@@ -425,4 +461,6 @@ Airduct damper operating mode [REF-MQTT-LIFECYCLE].
 ##### `impl PartialEq for AirductMode`
 
 - <span id="airductmode-partialeq-eq"></span>`fn eq(&self, other: &AirductMode) -> bool` — [`AirductMode`](#airductmode)
+
+##### `impl StructuralPartialEq for AirductMode`
 

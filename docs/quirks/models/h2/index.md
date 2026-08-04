@@ -66,6 +66,10 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for H2CQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for H2CQuirks`
+
 ##### `impl ModelQuirks for H2CQuirks`
 
 - <span id="h2cquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -83,8 +87,6 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 - <span id="h2cquirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
 
 - <span id="h2cquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
-
-- <span id="h2cquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
 
 - <span id="h2cquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
@@ -104,7 +106,7 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 
 - <span id="h2cquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
 
-- <span id="h2cquirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="h2cquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="h2cquirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 
@@ -121,6 +123,10 @@ struct H2DProQuirks;
 Quirks for the H2D Pro — same kinematics as H2D.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for H2DProQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for H2DProQuirks`
 
 ##### `impl ModelQuirks for H2DProQuirks`
 
@@ -140,8 +146,6 @@ Quirks for the H2D Pro — same kinematics as H2D.
 
 - <span id="h2dproquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="h2dproquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
-
 - <span id="h2dproquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
 - <span id="h2dproquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
@@ -160,7 +164,7 @@ Quirks for the H2D Pro — same kinematics as H2D.
 
 - <span id="h2dproquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
 
-- <span id="h2dproquirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="h2dproquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="h2dproquirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 
@@ -177,6 +181,10 @@ struct H2DQuirks;
 Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for H2DQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for H2DQuirks`
 
 ##### `impl ModelQuirks for H2DQuirks`
 
@@ -196,8 +204,6 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 - <span id="h2dquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="h2dquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
-
 - <span id="h2dquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
 - <span id="h2dquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
@@ -216,7 +222,7 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 - <span id="h2dquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
 
-- <span id="h2dquirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="h2dquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="h2dquirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 
@@ -233,6 +239,10 @@ struct H2SQuirks;
 Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for H2SQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for H2SQuirks`
 
 ##### `impl ModelQuirks for H2SQuirks`
 
@@ -252,8 +262,6 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 - <span id="h2squirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="h2squirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
-
 - <span id="h2squirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
 - <span id="h2squirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
@@ -272,7 +280,7 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 - <span id="h2squirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
 
-- <span id="h2squirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="h2squirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="h2squirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 

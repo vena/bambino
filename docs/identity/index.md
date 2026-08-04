@@ -59,6 +59,10 @@ Address, serial number, and access code identifying one printer on the LAN.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for PrinterIdentity`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for PrinterIdentity`
+
 ##### `impl Clone for PrinterIdentity`
 
 - <span id="printeridentity-clone"></span>`fn clone(&self) -> PrinterIdentity` — [`PrinterIdentity`](#printeridentity)
@@ -72,4 +76,6 @@ Address, serial number, and access code identifying one printer on the LAN.
 ##### `impl PartialEq for PrinterIdentity`
 
 - <span id="printeridentity-partialeq-eq"></span>`fn eq(&self, other: &PrinterIdentity) -> bool` — [`PrinterIdentity`](#printeridentity)
+
+##### `impl StructuralPartialEq for PrinterIdentity`
 

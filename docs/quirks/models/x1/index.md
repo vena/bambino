@@ -49,6 +49,10 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for X1CQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for X1CQuirks`
+
 ##### `impl ModelQuirks for X1CQuirks`
 
 - <span id="x1cquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -66,8 +70,6 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 - <span id="x1cquirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
 
 - <span id="x1cquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
-
-- <span id="x1cquirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
 
 - <span id="x1cquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
@@ -87,7 +89,7 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 - <span id="x1cquirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16`
 
-- <span id="x1cquirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="x1cquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 ### `X1EQuirks`
 
@@ -98,6 +100,10 @@ struct X1EQuirks;
 Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for X1EQuirks`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for X1EQuirks`
 
 ##### `impl ModelQuirks for X1EQuirks`
 
@@ -117,8 +123,6 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 
 - <span id="x1equirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
-- <span id="x1equirks-modelquirks-has-active-chamber-heater"></span>`fn has_active_chamber_heater(&self) -> bool`
-
 - <span id="x1equirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
 - <span id="x1equirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
@@ -137,7 +141,7 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 
 - <span id="x1equirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16`
 
-- <span id="x1equirks-modelquirks-chamber-temp-max"></span>`fn chamber_temp_max(&self) -> u16`
+- <span id="x1equirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 
 ---

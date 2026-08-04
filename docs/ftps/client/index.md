@@ -103,3 +103,7 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>`
+

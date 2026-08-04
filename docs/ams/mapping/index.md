@@ -64,6 +64,10 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsMapping2Entry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsMapping2Entry`
+
 ##### `impl Clone for AmsMapping2Entry`
 
 - <span id="amsmapping2entry-clone"></span>`fn clone(&self) -> AmsMapping2Entry` — [`AmsMapping2Entry`](#amsmapping2entry)
@@ -87,6 +91,8 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 ##### `impl Serialize for AmsMapping2Entry`
 
 - <span id="amsmapping2entry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+##### `impl StructuralPartialEq for AmsMapping2Entry`
 
 ### `AmsPoolComposition`
 
@@ -127,6 +133,10 @@ invalid.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsPoolComposition`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsPoolComposition`
+
 ##### `impl Clone for AmsPoolComposition`
 
 - <span id="amspoolcomposition-clone"></span>`fn clone(&self) -> AmsPoolComposition` — [`AmsPoolComposition`](#amspoolcomposition)
@@ -142,6 +152,8 @@ invalid.
 ##### `impl PartialEq for AmsPoolComposition`
 
 - <span id="amspoolcomposition-partialeq-eq"></span>`fn eq(&self, other: &AmsPoolComposition) -> bool` — [`AmsPoolComposition`](#amspoolcomposition)
+
+##### `impl StructuralPartialEq for AmsPoolComposition`
 
 ### `MaterialSource`
 
@@ -201,6 +213,10 @@ Enumeration of possible physical feed locations for loaded spools.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for MaterialSource`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for MaterialSource`
+
 ##### `impl Clone for MaterialSource`
 
 - <span id="materialsource-clone"></span>`fn clone(&self) -> MaterialSource` — [`MaterialSource`](#materialsource)
@@ -216,6 +232,8 @@ Enumeration of possible physical feed locations for loaded spools.
 ##### `impl PartialEq for MaterialSource`
 
 - <span id="materialsource-partialeq-eq"></span>`fn eq(&self, other: &MaterialSource) -> bool` — [`MaterialSource`](#materialsource)
+
+##### `impl StructuralPartialEq for MaterialSource`
 
 
 ---

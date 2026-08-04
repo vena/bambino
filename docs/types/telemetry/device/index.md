@@ -73,6 +73,10 @@ Climate parts collection nested within `device` parameters.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductCollection`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductCollection`
+
 ##### `impl Clone for AirductCollection`
 
 - <span id="airductcollection-clone"></span>`fn clone(&self) -> AirductCollection` — [`AirductCollection`](#airductcollection)
@@ -108,6 +112,10 @@ Entry in the airduct mode availability list reported by the printer.
   Mode identifier (0=cooling, 1=heating, 2=laser).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductModeListEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductModeListEntry`
 
 ##### `impl Clone for AirductModeListEntry`
 
@@ -150,6 +158,10 @@ Represents an individual auxiliary routing component.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductPart`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductPart`
+
 ##### `impl Clone for AirductPart`
 
 - <span id="airductpart-clone"></span>`fn clone(&self) -> AirductPart` — [`AirductPart`](#airductpart)
@@ -185,6 +197,10 @@ Bed info segment with composite-packed temperature.
   Composite-packed bed temperature [REF-THER-DECODE].
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for BedInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BedInfo`
 
 ##### `impl Clone for BedInfo`
 
@@ -226,6 +242,10 @@ Bed telemetry sub-object from `device.bed` on new-protocol printers.
   Bed heating state (2 = heating).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for BedTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BedTelemetry`
 
 ##### `impl Clone for BedTelemetry`
 
@@ -307,6 +327,10 @@ Appears at two locations on the wire:
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for DeviceTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for DeviceTelemetry`
+
 ##### `impl Clone for DeviceTelemetry`
 
 - <span id="devicetelemetry-clone"></span>`fn clone(&self) -> DeviceTelemetry` — [`DeviceTelemetry`](#devicetelemetry)
@@ -368,6 +392,10 @@ Laser/cutter external tool telemetry from `device.ext_tool`.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtToolTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtToolTelemetry`
+
 ##### `impl Clone for ExtToolTelemetry`
 
 - <span id="exttooltelemetry-clone"></span>`fn clone(&self) -> ExtToolTelemetry` — [`ExtToolTelemetry`](#exttooltelemetry)
@@ -421,6 +449,10 @@ IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder
   Returns the extruder count extracted from the `state` bitmask.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtruderCollection`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtruderCollection`
 
 ##### `impl Clone for ExtruderCollection`
 
@@ -544,6 +576,10 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtruderInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtruderInfo`
+
 ##### `impl Clone for ExtruderInfo`
 
 - <span id="extruderinfo-clone"></span>`fn clone(&self) -> ExtruderInfo` — [`ExtruderInfo`](#extruderinfo)
@@ -610,6 +646,10 @@ Wrap block holding nozzle characteristics.
   Tool-change target nozzle ID.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for NozzleCollection`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for NozzleCollection`
 
 ##### `impl Clone for NozzleCollection`
 
@@ -717,6 +757,10 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for NozzleInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for NozzleInfo`
 
 ##### `impl Clone for NozzleInfo`
 

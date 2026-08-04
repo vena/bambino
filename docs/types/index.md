@@ -62,6 +62,10 @@ Climate parts collection nested within `device` parameters.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductCollection`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductCollection`
+
 ##### `impl Clone for AirductCollection`
 
 - <span id="airductcollection-clone"></span>`fn clone(&self) -> AirductCollection` — [`AirductCollection`](telemetry/device/index.md#airductcollection)
@@ -97,6 +101,10 @@ Entry in the airduct mode availability list reported by the printer.
   Mode identifier (0=cooling, 1=heating, 2=laser).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductModeListEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductModeListEntry`
 
 ##### `impl Clone for AirductModeListEntry`
 
@@ -138,6 +146,10 @@ Represents an individual auxiliary routing component.
   The active operating speed percentage ($0$ to $100$) or damper direction flag.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AirductPart`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AirductPart`
 
 ##### `impl Clone for AirductPart`
 
@@ -184,6 +196,10 @@ Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
   Filament type string for the active drying profile (e.g. "PA-CF").
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsDrySetting`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsDrySetting`
 
 ##### `impl Clone for AmsDrySetting`
 
@@ -302,6 +318,10 @@ the intermediate `print.ams` object.
   consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsStatusReport`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsStatusReport`
 
 ##### `impl Clone for AmsStatusReport`
 
@@ -515,6 +535,10 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsTray`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsTray`
+
 ##### `impl Clone for AmsTray`
 
 - <span id="amstray-clone"></span>`fn clone(&self) -> AmsTray` — [`AmsTray`](telemetry/ams/index.md#amstray)
@@ -646,6 +670,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsUnit`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsUnit`
+
 ##### `impl Clone for AmsUnit`
 
 - <span id="amsunit-clone"></span>`fn clone(&self) -> AmsUnit` — [`AmsUnit`](telemetry/ams/index.md#amsunit)
@@ -681,6 +709,10 @@ Bed info segment with composite-packed temperature.
   Composite-packed bed temperature [REF-THER-DECODE].
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for BedInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BedInfo`
 
 ##### `impl Clone for BedInfo`
 
@@ -722,6 +754,10 @@ Bed telemetry sub-object from `device.bed` on new-protocol printers.
   Bed heating state (2 = heating).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for BedTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for BedTelemetry`
 
 ##### `impl Clone for BedTelemetry`
 
@@ -765,6 +801,10 @@ Controller information segment detailing current temperature coordinates.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for CtcInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for CtcInfo`
+
 ##### `impl Clone for CtcInfo`
 
 - <span id="ctcinfo-clone"></span>`fn clone(&self) -> CtcInfo` — [`CtcInfo`](telemetry/diagnostics/index.md#ctcinfo)
@@ -805,6 +845,10 @@ Chamber Temperature Controller (CTC) telemetry sub-object.
   CTC controller state (0 = idle, 2 = heating).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for CtcTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for CtcTelemetry`
 
 ##### `impl Clone for CtcTelemetry`
 
@@ -886,6 +930,10 @@ Appears at two locations on the wire:
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for DeviceTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for DeviceTelemetry`
+
 ##### `impl Clone for DeviceTelemetry`
 
 - <span id="devicetelemetry-clone"></span>`fn clone(&self) -> DeviceTelemetry` — [`DeviceTelemetry`](telemetry/device/index.md#devicetelemetry)
@@ -947,6 +995,10 @@ Laser/cutter external tool telemetry from `device.ext_tool`.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtToolTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtToolTelemetry`
+
 ##### `impl Clone for ExtToolTelemetry`
 
 - <span id="exttooltelemetry-clone"></span>`fn clone(&self) -> ExtToolTelemetry` — [`ExtToolTelemetry`](telemetry/device/index.md#exttooltelemetry)
@@ -1000,6 +1052,10 @@ IDEX extruder collection from `device.extruder` [REF-THER-DECODE §Dual-Extruder
   Returns the extruder count extracted from the `state` bitmask.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtruderCollection`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtruderCollection`
 
 ##### `impl Clone for ExtruderCollection`
 
@@ -1123,6 +1179,10 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for ExtruderInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for ExtruderInfo`
+
 ##### `impl Clone for ExtruderInfo`
 
 - <span id="extruderinfo-clone"></span>`fn clone(&self) -> ExtruderInfo` — [`ExtruderInfo`](telemetry/device/index.md#extruderinfo)
@@ -1176,6 +1236,10 @@ Each entry represents an active hardware fault or status indication. Use
   UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for HmsEntry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for HmsEntry`
 
 ##### `impl Clone for HmsEntry`
 
@@ -1243,6 +1307,10 @@ Camera and recording state telemetry, nested as `print.ipcam` on the wire.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for IpcamTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for IpcamTelemetry`
+
 ##### `impl Clone for IpcamTelemetry`
 
 - <span id="ipcamtelemetry-clone"></span>`fn clone(&self) -> IpcamTelemetry` — [`IpcamTelemetry`](telemetry/diagnostics/index.md#ipcamtelemetry)
@@ -1284,6 +1352,10 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for LightReport`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for LightReport`
+
 ##### `impl Clone for LightReport`
 
 - <span id="lightreport-clone"></span>`fn clone(&self) -> LightReport` — [`LightReport`](telemetry/report/index.md#lightreport)
@@ -1319,6 +1391,10 @@ Network interface state from `print.net` [REF-NET-PORTS].
   Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for NetInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for NetInfo`
 
 ##### `impl Clone for NetInfo`
 
@@ -1386,6 +1462,10 @@ Wrap block holding nozzle characteristics.
   Tool-change target nozzle ID.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for NozzleCollection`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for NozzleCollection`
 
 ##### `impl Clone for NozzleCollection`
 
@@ -1493,6 +1573,10 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for NozzleInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for NozzleInfo`
 
 ##### `impl Clone for NozzleInfo`
 
@@ -1899,6 +1983,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for PrinterTelemetry`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for PrinterTelemetry`
+
 ##### `impl Clone for PrinterTelemetry`
 
 - <span id="printertelemetry-clone"></span>`fn clone(&self) -> PrinterTelemetry` — [`PrinterTelemetry`](telemetry/report/index.md#printertelemetry)
@@ -1986,6 +2074,10 @@ top-level domains depending on which micro-system published the frame.
   arrive at.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for TelemetryReport`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for TelemetryReport`
 
 ##### `impl Clone for TelemetryReport`
 
@@ -2127,6 +2219,10 @@ and virtual/external spool holders use the same field set.
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for VirtualTray`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for VirtualTray`
+
 ##### `impl Clone for VirtualTray`
 
 - <span id="virtualtray-clone"></span>`fn clone(&self) -> VirtualTray` — [`VirtualTray`](telemetry/ams/index.md#virtualtray)
@@ -2172,6 +2268,10 @@ Typed response from a `get_version` command containing all expansion bus modules
   All hardware and firmware modules on the expansion bus.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for VersionInfo`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for VersionInfo`
 
 ##### `impl Clone for VersionInfo`
 
@@ -2249,6 +2349,10 @@ Hardware or firmware module entry from the printer's expansion bus version datab
   Module flags.
 
 #### Trait Implementations
+
+##### `impl<E> AsTaggedExplicit<'a, E> for VersionModule`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for VersionModule`
 
 ##### `impl Clone for VersionModule`
 
@@ -2360,6 +2464,10 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentStep`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentStep`
+
 ##### `impl Clone for AmsFilamentStep`
 
 - <span id="amsfilamentstep-clone"></span>`fn clone(&self) -> AmsFilamentStep` — [`AmsFilamentStep`](telemetry/ams/index.md#amsfilamentstep)
@@ -2389,6 +2497,8 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 ##### `impl Serialize for AmsFilamentStep`
 
 - <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+
+##### `impl StructuralPartialEq for AmsFilamentStep`
 
 ### `SdcardState`
 
@@ -2429,6 +2539,10 @@ and "read-only."
 
 #### Trait Implementations
 
+##### `impl<E> AsTaggedExplicit<'a, E> for SdcardState`
+
+##### `impl<E> AsTaggedImplicit<'a, E> for SdcardState`
+
 ##### `impl Clone for SdcardState`
 
 - <span id="sdcardstate-clone"></span>`fn clone(&self) -> SdcardState` — [`SdcardState`](telemetry/report/index.md#sdcardstate)
@@ -2448,6 +2562,8 @@ and "read-only."
 ##### `impl PartialEq for SdcardState`
 
 - <span id="sdcardstate-partialeq-eq"></span>`fn eq(&self, other: &SdcardState) -> bool` — [`SdcardState`](telemetry/report/index.md#sdcardstate)
+
+##### `impl StructuralPartialEq for SdcardState`
 
 
 ---
