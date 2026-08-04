@@ -322,6 +322,14 @@ fn test_temperature_boundary_500_and_501() {
     let (actual, target) = PrinterTelemetry::unpack_temperature(3932208.0);
     assert_eq!(actual, 48);
     assert_eq!(target, 60);
+
+    // Just above the threshold with non-zero upper bits — the direct/composite branches
+    // only diverge once bits above u16 range are actually set, so a boundary case at 500/501
+    // with a zero upper half can't detect an off-by-one in the threshold comparison itself.
+    // (1 << 16) | 501 = 66037 → target=1, actual=501.
+    let (actual, target) = PrinterTelemetry::unpack_temperature(66037.0);
+    assert_eq!(actual, 501);
+    assert_eq!(target, 1);
 }
 
 #[test]
@@ -598,7 +606,10 @@ fn test_fire_ext_opaque_value() {
         .unwrap()
         .device
         .unwrap();
-    assert!(device.fire_ext.is_some());
+    assert_eq!(
+        device.fire_ext,
+        Some(serde_json::json!({ "status": 1, "alarm": false }))
+    );
 }
 
 #[test]
