@@ -105,19 +105,13 @@ pub trait ModelQuirks {
     }
 
     /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
-    fn z_max(&self) -> f32 {
-        DEFAULT_Z_MAX_MM
-    }
+    fn z_max(&self) -> f32;
 
     /// Returns the maximum safe X-axis travel distance in millimeters for this model.
-    fn x_max(&self) -> f32 {
-        DEFAULT_X_MAX_MM
-    }
+    fn x_max(&self) -> f32;
 
     /// Returns the maximum safe Y-axis travel distance in millimeters for this model.
-    fn y_max(&self) -> f32 {
-        DEFAULT_Y_MAX_MM
-    }
+    fn y_max(&self) -> f32;
 
     /// Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
     ///
@@ -334,18 +328,6 @@ pub(crate) fn format_xy_move_gcode(axis: char, distance: f32, feedrate: u32, axi
 }
 
 pub(crate) const FAN_STEP_MAX: u8 = 15;
-/// Fallback `z_max()` (mm) for a model with no dedicated quirks strategy override.
-///
-/// Unreachable in practice: every currently-shipped model's quirks strategy overrides
-/// `z_max()` with its own value (see `MODEL_MATRIX.csv`) — e.g. A1 Mini is 180mm and H2S is
-/// 340mm, not this constant's 256mm.
-pub(crate) const DEFAULT_Z_MAX_MM: f32 = 256.0;
-/// Fallback `x_max()`/`y_max()` (mm) for a model with no dedicated quirks strategy override.
-/// Unreachable in practice: every currently-shipped model's quirks strategy
-/// overrides both (see `MODEL_MATRIX.csv`'s Build Volume row).
-pub(crate) const DEFAULT_X_MAX_MM: f32 = 256.0;
-/// See `DEFAULT_X_MAX_MM`'s doc comment.
-pub(crate) const DEFAULT_Y_MAX_MM: f32 = 256.0;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
 
 /// Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
