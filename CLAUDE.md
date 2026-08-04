@@ -14,9 +14,9 @@ cargo build --no-default-features --features alloc --lib  # no_std compatibility
 cargo check --no-default-features --features embassy --lib  # embassy target check (must pass)
 ```
 
-`make check-fast` runs all of the above (build, test, both feature-gate checks, clippy) in one command; `make check-esp-idf [CHIP=esp32c6]` wraps `scripts/check-esp-idf.sh`; `make check-all` runs both. `.github/workflows/ci.yml` and `.github/workflows/esp-idf.yml` mirror the same commands but are dormant — this repo has no GitHub remote yet.
+`make check-fast` runs all of the above (build, test, both feature-gate checks, clippy) in one command; `make check-esp-idf [CHIP=esp32c6]` wraps `scripts/check-esp-idf.sh`; `make check-all` runs both. `.github/workflows/ci.yml` and `.github/workflows/esp-idf.yml` mirror the same commands and run live on every push to `main` (confirmed via `gh run list`) — this repo has a GitHub remote (`origin` → `github.com/vena/bambino`) and CI is active, not dormant.
 
-Run `make install-hooks` once after cloning — it installs a pre-commit hook (source in `scripts/hooks/`) that runs `make check-fast` and rejects the commit on failure. `.git/hooks/` isn't tracked by git, so this is the only thing making the gate survive a fresh clone; it's the sole regression backstop until CI is live.
+Run `make install-hooks` once after cloning — it installs a pre-commit hook (source in `scripts/hooks/`) that runs `make check-fast` and rejects the commit on failure. `.git/hooks/` isn't tracked by git, so this is what makes the gate survive a fresh clone before a first push; CI is the backstop after that.
 
 The `esp-idf` target needs `scripts/check-esp-idf.sh [chip]` instead of plain `cargo check` — see `src/io/CLAUDE.md` for the toolchain/Docker details.
 
@@ -30,7 +30,7 @@ The `embassy` feature is not implied by `alloc` alone — `io/embassy.rs` and `#
 
 Run `make check-fast`/`make check-all`/`git commit`/ALL shell commands through `ctx_shell`, not `Bash`, when lean-ctx is connected — their output (multi-target cargo build/test/clippy, ESP-IDF check) is large and repetitive, and global CLAUDE.md's lean-ctx section routes all shell commands through `ctx_shell` — `git commit` firing the pre-commit hook is just the case where forgetting this is costliest, not a special exception to some other rule.
 
-This section is likely to change once this repo lands on GitHub and CI actually runs — kept separate from the raw command list above so that change doesn't tangle the two back together.
+This section was kept separate from the raw command list above so the CI-live transition wouldn't tangle the two together — that transition has now happened (see Build & Test Commands above).
 
 ## Architecture
 

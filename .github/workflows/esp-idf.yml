@@ -1,8 +1,7 @@
 name: ESP-IDF check
 
-# Dormant until this repo has a GitHub remote to push to.
-#
-# Path-filtered rather than run on every push: scripts/check-esp-idf.sh only
+# Live (repo has a GitHub remote), path-filtered rather than run on every push:
+# scripts/check-esp-idf.sh only
 # needs to run when esp-idf-gated code actually changes (CLAUDE.md's existing
 # manual-run rule). Note this job pays the full ~5.5min cold cost on every
 # run, not just the first — GitHub-hosted runners are ephemeral VMs, so the
