@@ -15,6 +15,9 @@ use bambino::identity::PrinterIdentity;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
+/// Serial shared by the `client_*_test.rs` suites that don't need a distinct one.
+pub const SERIAL: &str = "01P000000000000";
+
 /// `PrinterClient` type produced by [`connect_test_client`].
 pub type TestClient<IO> = PrinterClient<
     IO,
