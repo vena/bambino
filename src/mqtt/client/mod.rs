@@ -120,14 +120,59 @@ fn extract_sequence_id(payload: &[u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Returns an outgoing command payload's top-level wrapper key (`print`/`system`/`pushing`/
-/// `info` — the Payload+Request pattern always nests exactly one). Used only to detect
-/// `pushall` requests (wrapped in `pushing` [REF-MQTT-LIFECYCLE]): unlike print/system/info
-/// commands, pushall triggers an unlabeled state-dump stream rather than an echoed ack
-/// [REF-MQTT-ACK], so its sequence_id can never be correlated against an incoming PUBLISH.
-fn wrapper_key(payload: &[u8]) -> Option<String> {
+/// Wire command names confirmed to produce an echoed ack [REF-MQTT-ACK] that write-zombie
+/// detection can correlate against by `sequence_id`. Deliberately an allowlist, not "every
+/// command except pushall": most command families here have never been checked against real
+/// hardware, and defaulting an unverified command to "assumed correlatable" is exactly the bug
+/// that shipped and broke bambino-cli's monitor against a real P1S (pushall has no ack at all,
+/// see `extract_command_and_sequence_id`'s doc comment) — an allowlist instead degrades an
+/// unverified command to the old permissive "any PUBLISH clears it" behavior, never to a hang.
+///
+/// Evidence per entry:
+/// - `pause`/`resume`/`stop`/`gcode_line`/`clean_print_error`/`calibration`/`print_speed`/
+///   `ledctrl`: documented directly in reference/03_mqtt_telemetry.md:543-572 (REF-MQTT-ACK).
+/// - `ams_filament_setting`/`ams_filament_drying`/`extrusion_cali_get`/`extrusion_cali_set`/
+///   `extrusion_cali_sel`/`extrusion_cali_del`: confirmed against real hardware by bambuddy's
+///   independently reverse-engineered MQTT client (`backend/app/services/bambu_mqtt.py`),
+///   which runs its own 10s write-zombie watchdog off `ams_filament_setting`'s echoed response
+///   (their issue #887) and separately handles echoed responses for the `extrusion_cali_*`
+///   family and `ams_filament_drying`.
+/// - `get_version`: echoed-response shape confirmed by `src/types/version.rs`'s deserialization
+///   test fixture.
+///
+/// Not on this list: `pushall` (confirmed *no* ack, see below), and everything else
+/// (`skip_objects`, `project_file`, `ams_control`, `ams_get_rfid`, `ams_change_filament`,
+/// `set_airduct`, `print_option`, `buzzer_ctrl`) — genuinely unverified either way; bambuddy's
+/// own client doesn't correlate responses for these either, it just fire-and-forgets them.
+const ACK_CORRELATED_COMMANDS: &[&str] = &[
+    "pause",
+    "resume",
+    "stop",
+    "gcode_line",
+    "clean_print_error",
+    "calibration",
+    "print_speed",
+    "ledctrl",
+    "ams_filament_setting",
+    "ams_filament_drying",
+    "extrusion_cali_get",
+    "extrusion_cali_set",
+    "extrusion_cali_sel",
+    "extrusion_cali_del",
+    "get_version",
+];
+
+/// Extracts the `command` name and `sequence_id` from an outgoing command payload's single
+/// top-level wrapper object (`print`/`system`/`pushing`/`info` — the Payload+Request pattern
+/// always nests exactly one). `pushall` (`pushing` wrapper) triggers an unlabeled state-dump
+/// stream rather than an echoed ack [REF-MQTT-LIFECYCLE], so it's excluded from
+/// `ACK_CORRELATED_COMMANDS` above like every other command without confirmed ack evidence.
+fn extract_command_and_sequence_id(payload: &[u8]) -> Option<(String, String)> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    value.as_object()?.keys().next().cloned()
+    let inner = value.as_object()?.values().next()?;
+    let command = inner.get("command")?.as_str()?.to_string();
+    let sequence_id = inner.get("sequence_id")?.as_str()?.to_string();
+    Some((command, sequence_id))
 }
 
 /// Maps an `embedded_io_async::ErrorKind` (the only information a generic `AsyncIo` error
@@ -421,14 +466,14 @@ impl<IO: AsyncIo> MqttClient<IO> {
         // indefinitely, since the counter never reaches MQTT_ZOMBIE_TIMEOUT_SECS.
         if self.write_pending_secs.is_none() {
             self.write_pending_secs = Some(0);
-            // pushall (`pushing` wrapper) has no echoed ack to correlate against — see
-            // `wrapper_key`'s doc comment — so leave write_pending_sequence_id unset for it;
-            // poll_wire's PUBLISH arm falls back to clearing on any PUBLISH in that case.
-            self.write_pending_sequence_id = if wrapper_key(payload).as_deref() == Some("pushing")
-            {
-                None
-            } else {
-                extract_sequence_id(payload)
+            // Only correlate commands with confirmed ack evidence (ACK_CORRELATED_COMMANDS);
+            // everything else (including pushall) falls back to clearing on any PUBLISH, same
+            // as before this correlation fix existed.
+            self.write_pending_sequence_id = match extract_command_and_sequence_id(payload) {
+                Some((command, seq)) if ACK_CORRELATED_COMMANDS.contains(&command.as_str()) => {
+                    Some(seq)
+                }
+                _ => None,
             };
         }
 
