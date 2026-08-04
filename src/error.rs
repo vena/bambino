@@ -41,13 +41,8 @@ pub enum Error {
     TlsHandshakeFailed,
 
     /// Emitted when a printer violates expected protocol states or emits illegal data lines.
-    #[cfg(any(feature = "alloc", feature = "std"))]
     #[cfg_attr(feature = "std", error("Protocol violation: {0}"))]
     ProtocolViolation(Cow<'static, str>),
-
-    /// Emitted when a printer violates expected protocol states or emits illegal data lines.
-    #[cfg(not(any(feature = "alloc", feature = "std")))]
-    ProtocolViolation(&'static str),
 
     /// Serializer and Deserializer mismatches during telemetry JSON parsing.
     #[cfg_attr(
@@ -75,13 +70,8 @@ pub enum Error {
     DiskWriteFailure,
 
     /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
-    #[cfg(any(feature = "alloc", feature = "std"))]
     #[cfg_attr(feature = "std", error("Model capability mismatch: {0}"))]
     ModelMismatch(Cow<'static, str>),
-
-    /// Emitted when requesting capabilities not present on the active model target.
-    #[cfg(not(any(feature = "alloc", feature = "std")))]
-    ModelMismatch(&'static str),
 }
 
 impl From<crate::io::SocketError> for Error {
@@ -96,29 +86,38 @@ impl From<crate::io::TimerError> for Error {
     }
 }
 
+/// Body of the manual no_std `Display` impl below, factored out so it compiles
+/// unconditionally (not gated on `not(feature = "std")`) — this lets `test_display_consistency`
+/// call it directly under the default `std` test profile and actually exercise the exact code
+/// path the no_std/embassy build uses, rather than only the thiserror-generated impl.
+#[cfg_attr(all(feature = "std", not(test)), allow(dead_code))]
+pub(crate) fn format_error_no_std(e: &Error, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match e {
+        Error::Network(e) => write!(f, "Network transport failure: {:?}", e),
+        Error::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),
+        Error::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
+        Error::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
+        Error::Serialization => {
+            write!(f, "JSON payload serialization or deserialization failure")
+        }
+        Error::AccessDenied => {
+            write!(f, "Authentication credentials rejected (access denied)")
+        }
+        Error::Timeout => write!(f, "Operational transaction timed out"),
+        Error::DiskWriteFailure => write!(
+            f,
+            "File upload verification failed (possible SD card write error)"
+        ),
+        Error::ModelMismatch(s) => {
+            write!(f, "Model capability mismatch: {}", s)
+        }
+    }
+}
+
 #[cfg(not(feature = "std"))]
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Error::Network(e) => write!(f, "Network transport failure: {:?}", e),
-            Error::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),
-            Error::TlsHandshakeFailed => write!(f, "TLS secure channel handshake failed"),
-            Error::ProtocolViolation(s) => write!(f, "Protocol violation: {}", s),
-            Error::Serialization => {
-                write!(f, "JSON payload serialization or deserialization failure")
-            }
-            Error::AccessDenied => {
-                write!(f, "Authentication credentials rejected (access denied)")
-            }
-            Error::Timeout => write!(f, "Operational transaction timed out"),
-            Error::DiskWriteFailure => write!(
-                f,
-                "File upload verification failed (possible SD card write error)"
-            ),
-            Error::ModelMismatch(s) => {
-                write!(f, "Model capability mismatch: {}", s)
-            }
-        }
+        format_error_no_std(self, f)
     }
 }
 
@@ -184,11 +183,27 @@ mod tests {
             ),
         ];
 
+        struct NoStdFmt<'a>(&'a Error);
+        impl core::fmt::Display for NoStdFmt<'_> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                format_error_no_std(self.0, f)
+            }
+        }
+
         for (variant, expected) in &variants {
             assert_eq!(
                 format!("{}", variant),
                 *expected,
-                "Display mismatch for {:?}",
+                "std Display mismatch for {:?}",
+                variant
+            );
+            // Runs the exact function the #[cfg(not(feature = "std"))] Display impl calls,
+            // so this actually exercises the no_std/embassy formatting path under the default
+            // std test profile instead of only the thiserror-generated impl.
+            assert_eq!(
+                format!("{}", NoStdFmt(variant)),
+                *expected,
+                "no_std Display mismatch for {:?}",
                 variant
             );
         }
