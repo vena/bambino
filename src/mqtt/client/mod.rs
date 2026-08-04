@@ -81,6 +81,11 @@ pub struct MqttClient<IO: AsyncIo> {
     pending_bytes: usize,
     /// Accumulated elapsed seconds since the last command publish while waiting for a response update.
     write_pending_secs: Option<u32>,
+    /// `sequence_id` [REF-MQTT-ACK] of the command that armed `write_pending_secs` — poll_wire's
+    /// PUBLISH arm only clears the zombie timer on a reply echoing this exact value, not on any
+    /// incoming PUBLISH (background telemetry arrives far more often than
+    /// MQTT_ZOMBIE_TIMEOUT_SECS and would otherwise mask a real zombie episode forever).
+    write_pending_sequence_id: Option<String>,
     /// Incremental scale of unacknowledged ping requests.
     ping_outstanding: bool,
     /// Accumulated elapsed seconds since the last received message of any kind.
@@ -99,6 +104,20 @@ pub struct MqttClient<IO: AsyncIo> {
 fn advance_packet_id(current: u16) -> u16 {
     let next = current.wrapping_add(1);
     if next == 0 { 1 } else { next }
+}
+
+/// Extracts the `sequence_id` echoed one level inside a Bambu MQTT JSON payload's top-level
+/// wrapper object (`print`/`system`/`pushing`/`info` — see [REF-MQTT-ACK]). Used to correlate
+/// a command ack with the command that armed the write-zombie timer, rather than treating any
+/// incoming PUBLISH (including background `push_status` telemetry, which carries its own
+/// independent sequence_id counter under the same shape) as proof the write channel is alive.
+fn extract_sequence_id(payload: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    value
+        .as_object()?
+        .values()
+        .find_map(|inner| inner.get("sequence_id")?.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Maps an `embedded_io_async::ErrorKind` (the only information a generic `AsyncIo` error
@@ -328,6 +347,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             pending_messages: VecDeque::new(),
             pending_bytes: 0,
             write_pending_secs: None,
+            write_pending_sequence_id: None,
             ping_outstanding: false,
             secs_since_last_message: 0,
             read_state: FrameReadState::default(),
@@ -391,6 +411,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         // indefinitely, since the counter never reaches MQTT_ZOMBIE_TIMEOUT_SECS.
         if self.write_pending_secs.is_none() {
             self.write_pending_secs = Some(0);
+            self.write_pending_sequence_id = extract_sequence_id(payload);
         }
 
         Ok(packet_id)
@@ -535,8 +556,18 @@ impl<IO: AsyncIo> MqttClient<IO> {
                         );
                     }
 
-                    // Reset write channel zombie tracking since a telemetry update was received
-                    self.write_pending_secs = None;
+                    // Reset write channel zombie tracking only when this PUBLISH's echoed
+                    // sequence_id [REF-MQTT-ACK] matches the outstanding command's — not on any
+                    // incoming PUBLISH. Background telemetry (push_status) carries its own
+                    // independent, low-value sequence_id counter and arrives far more often than
+                    // MQTT_ZOMBIE_TIMEOUT_SECS, so an unconditional reset here would mask a real
+                    // zombie episode (broker discarding commands) forever [REF-MQTT-ZOMBIE].
+                    if self.write_pending_sequence_id.is_some()
+                        && extract_sequence_id(&payload) == self.write_pending_sequence_id
+                    {
+                        self.write_pending_secs = None;
+                        self.write_pending_sequence_id = None;
+                    }
 
                     return Ok(MqttMessage { topic, payload });
                 }
@@ -880,6 +911,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
+                write_pending_sequence_id: None,
                 ping_outstanding: false,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
@@ -904,6 +936,71 @@ mod tests {
                 Some(5),
                 "a second publish while the first is still unanswered must not reset the zombie timer"
             );
+        }
+
+        #[tokio::test]
+        async fn test_poll_wire_only_clears_zombie_timer_on_matching_sequence_id() {
+            // Regression for the bug this issue tracks: poll_wire's PUBLISH arm used to reset
+            // write_pending_secs unconditionally on any incoming PUBLISH. Background telemetry
+            // (push_status) arrives far more often than MQTT_ZOMBIE_TIMEOUT_SECS and carries its
+            // own independent sequence_id, so that reset masked a real zombie episode (broker
+            // silently discarding commands) forever. It must only clear on a PUBLISH whose
+            // sequence_id matches the outstanding command's.
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+            let mut client = MqttClient {
+                stream: TokioIo(client_stream),
+                request_topic: "device/01P000000000000/request".to_string(),
+                serial: "01P000000000000".to_string(),
+                next_packet_id: 2,
+                in_flight: BTreeSet::new(),
+                pending_messages: VecDeque::new(),
+                pending_bytes: 0,
+                write_pending_secs: Some(0),
+                write_pending_sequence_id: Some("100002".to_string()),
+                ping_outstanding: false,
+                secs_since_last_message: 0,
+                read_state: FrameReadState::default(),
+                write_poisoned: false,
+            };
+
+            // Unrelated telemetry with its own low-value sequence_id must not clear the timer.
+            let telemetry = encode_publish_qos1(
+                1,
+                "device/01P000000000000/report",
+                b"{\"print\":{\"sequence_id\":\"1\"}}",
+            );
+            server_stream.write_all(&telemetry).await.unwrap();
+            server_stream.flush().await.unwrap();
+
+            let timer = crate::client::dummy::DummyTimer;
+            client
+                .poll_wire(&timer)
+                .await
+                .expect("telemetry PUBLISH should parse");
+            assert_eq!(
+                client.write_pending_secs,
+                Some(0),
+                "unrelated telemetry must not clear the write-zombie timer"
+            );
+
+            // The matching ack must clear it.
+            let ack = encode_publish_qos1(
+                2,
+                "device/01P000000000000/report",
+                b"{\"print\":{\"sequence_id\":\"100002\",\"result\":\"success\"}}",
+            );
+            server_stream.write_all(&ack).await.unwrap();
+            server_stream.flush().await.unwrap();
+
+            client
+                .poll_wire(&timer)
+                .await
+                .expect("matching ack PUBLISH should parse");
+            assert_eq!(
+                client.write_pending_secs, None,
+                "a PUBLISH echoing the outstanding command's sequence_id must clear the timer"
+            );
+            assert_eq!(client.write_pending_sequence_id, None);
         }
     }
 }

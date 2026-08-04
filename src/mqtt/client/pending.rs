@@ -124,6 +124,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
+                write_pending_sequence_id: None,
                 ping_outstanding: false,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
