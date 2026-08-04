@@ -153,8 +153,9 @@ pub struct HmsEntry {
 /// BambuStudio's `ParseHMSItems` (`DevHMS.cpp:42-61`) pushes a default-zeroed
 /// item on a malformed entry rather than aborting the whole message; bambuddy
 /// (`bambu_mqtt.py:2756-2761`) additionally tolerates hex-string `attr`/`code` values.
-/// Accepts a plain integer or a hex string (with or without a `0x` prefix); any other
-/// shape defaults to `0` instead of failing the entire telemetry message's deserialize.
+/// Accepts a plain integer or a `0x`/`0X`-prefixed hex string; any other shape (including a
+/// non-prefixed decimal string) defaults to `0` instead of failing the entire telemetry
+/// message's deserialize.
 fn deserialize_permissive_hms_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -168,10 +169,11 @@ where
 
     Ok(match RawHmsValue::deserialize(deserializer) {
         Ok(RawHmsValue::Int(i)) => i,
-        Ok(RawHmsValue::Str(s)) => {
-            let trimmed = s.trim_start_matches("0x").trim_start_matches("0X");
-            u32::from_str_radix(trimmed, 16).unwrap_or(0)
-        }
+        Ok(RawHmsValue::Str(s)) => s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .unwrap_or(0),
         Err(_) => 0,
     })
 }
