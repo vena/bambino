@@ -227,14 +227,12 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
         if time_or_year.contains(':') {
             // Field contains HH:MM time layout. Parse temporal properties.
             let mut time_parts = time_or_year.split(':');
-            let parsed_hour = time_parts
-                .next()
-                .and_then(|h| h.parse::<u8>().ok())
-                .unwrap_or(0);
-            let parsed_minute = time_parts
-                .next()
-                .and_then(|m| m.parse::<u8>().ok())
-                .unwrap_or(0);
+            let Some(parsed_hour) = time_parts.next().and_then(|h| h.parse::<u8>().ok()) else {
+                continue;
+            };
+            let Some(parsed_minute) = time_parts.next().and_then(|m| m.parse::<u8>().ok()) else {
+                continue;
+            };
 
             if parsed_hour > 23 || parsed_minute > 59 {
                 continue;
