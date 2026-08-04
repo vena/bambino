@@ -66,10 +66,6 @@ impl ModelQuirks for X2Quirks {
         false
     }
 
-    fn has_active_chamber_heater(&self) -> bool {
-        true
-    }
-
     fn physical_nozzle_count(&self) -> u8 {
         2
     }
@@ -117,8 +113,8 @@ impl ModelQuirks for X2Quirks {
         X2D_BED_TEMP_MAX
     }
 
-    fn chamber_temp_max(&self) -> u16 {
-        X2D_CHAMBER_TEMP_MAX
+    fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
+        Some(X2D_CHAMBER_TEMP_MAX)
     }
 
     fn supports_airduct_mode(&self) -> bool {

@@ -88,10 +88,6 @@ macro_rules! impl_h2_shared {
                 false
             }
 
-            fn has_active_chamber_heater(&self) -> bool {
-                true
-            }
-
             fn physical_nozzle_count(&self) -> u8 {
                 $nozzle_count
             }
@@ -131,8 +127,8 @@ macro_rules! impl_h2_shared {
                 H2_BED_TEMP_MAX
             }
 
-            fn chamber_temp_max(&self) -> u16 {
-                H2_CHAMBER_TEMP_MAX
+            fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
+                Some(H2_CHAMBER_TEMP_MAX)
             }
 
             fn supports_airduct_mode(&self) -> bool {

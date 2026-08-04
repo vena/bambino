@@ -49,8 +49,12 @@ macro_rules! impl_p1_shared {
                 true
             }
 
-            fn has_active_chamber_heater(&self) -> bool {
-                false
+            fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
+
+
+                None
+
+
             }
 
             fn physical_nozzle_count(&self) -> u8 {

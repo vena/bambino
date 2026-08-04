@@ -62,10 +62,6 @@ pub trait ModelQuirks {
     /// Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
     fn has_stg_cur_idle_bug(&self) -> bool;
 
-    /// Returns true if the model possesses an active PTC chamber heater (M141) [REF-MOTO-GCODE].
-    ///
-    /// Supported on: X1E, X2D, H2S, H2D, H2D Pro, H2C.
-    fn has_active_chamber_heater(&self) -> bool;
 
     /// Returns the number of physical extruder carriages present on the machine carriage bus.
     ///
@@ -212,12 +208,16 @@ pub trait ModelQuirks {
     /// ("Max Build Plate Temperature: 110°C @220V, 120°C @110V").
     fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16;
 
-    /// Returns the maximum active chamber heater temperature in °C for this model.
+    /// Returns this model's active PTC chamber heater ceiling in °C (M141), or `None` if it
+    /// has no active chamber heater [REF-MOTO-GCODE].
     ///
-    /// Returns 0 for models without an active PTC chamber heater.
-    fn chamber_temp_max(&self) -> u16 {
-        0
-    }
+    /// Supported on: X1E, X2D, H2S, H2D, H2D Pro, H2C. Combining "has an active heater" and
+    /// "its max temp" into one `Option`-returning method (rather than two separate methods,
+    /// one of which used to default to `0`) makes the two facts impossible to state
+    /// inconsistently — no trait default means every implementor must supply both together,
+    /// so a future model can't set "has heater" true while silently inheriting a stale/absent
+    /// max temp.
+    fn active_chamber_heater_max_temp_c(&self) -> Option<u16>;
 }
 
 impl PrinterModel {
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
         assert!(q.has_stg_cur_idle_bug());
-        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
@@ -471,7 +471,6 @@ mod tests {
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 100);
-        assert_eq!(q.chamber_temp_max(), 0);
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -486,7 +485,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
@@ -511,7 +510,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
         assert!(q.has_stg_cur_idle_bug());
-        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
@@ -537,7 +536,7 @@ mod tests {
             assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
             assert!(q.ignores_chamber_temperature());
             assert!(q.has_stg_cur_idle_bug());
-            assert!(!q.has_active_chamber_heater());
+            assert_eq!(q.active_chamber_heater_max_temp_c(), None);
             assert_eq!(q.physical_nozzle_count(), 1);
             assert!(!q.supports_nozzle_offset_calibration());
             assert!(q.is_bed_on_z());
@@ -563,7 +562,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
@@ -575,7 +574,6 @@ mod tests {
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 110);
-        assert_eq!(q.chamber_temp_max(), 0);
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -590,7 +588,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
@@ -603,7 +601,6 @@ mod tests {
         assert_eq!(q.bed_temp_max(Some(true)), 110);
         assert_eq!(q.bed_temp_max(Some(false)), 120);
         assert_eq!(q.bed_temp_max(None), 110);
-        assert_eq!(q.chamber_temp_max(), 0);
         assert!(!q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -618,14 +615,13 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(60));
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 320);
         assert_eq!(q.bed_temp_max(None), 110);
-        assert_eq!(q.chamber_temp_max(), 60);
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
@@ -642,7 +638,7 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
@@ -653,7 +649,6 @@ mod tests {
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
@@ -668,14 +663,13 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
         assert!(!q.has_stg_cur_idle_bug());
-        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert_eq!(q.z_max(), 340.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
@@ -686,7 +680,7 @@ mod tests {
     #[test]
     fn test_h2d_quirks() {
         let q = PrinterModel::H2D.quirks();
-        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
@@ -694,7 +688,6 @@ mod tests {
         assert_eq!(q.z_max(), 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
@@ -705,14 +698,13 @@ mod tests {
     #[test]
     fn test_h2d_pro_quirks() {
         let q = PrinterModel::H2DPro.quirks();
-        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert_eq!(q.z_max(), 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
@@ -723,7 +715,7 @@ mod tests {
     #[test]
     fn test_h2c_quirks() {
         let q = PrinterModel::H2C.quirks();
-        assert!(q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 7);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
@@ -731,7 +723,6 @@ mod tests {
         assert_eq!(q.z_max(), 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert_eq!(q.chamber_temp_max(), 65);
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
@@ -742,7 +733,7 @@ mod tests {
     #[test]
     fn test_unknown_fallback_quirks() {
         let q = PrinterModel::Unknown.quirks();
-        assert!(!q.has_active_chamber_heater());
+        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(q.supports_auxiliary_left_fan());

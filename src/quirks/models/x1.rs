@@ -58,7 +58,7 @@ fn x1e_bed_temp_max(_mains_220v: Option<bool>) -> u16 {
 }
 
 macro_rules! impl_x1_shared {
-    ($quirks_type:ty, $has_chamber_heater:expr, $nozzle_max:expr, $bed_max_fn:expr, $chamber_max:expr) => {
+    ($quirks_type:ty, $chamber_heater_max:expr, $nozzle_max:expr, $bed_max_fn:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -90,10 +90,6 @@ macro_rules! impl_x1_shared {
 
             fn has_stg_cur_idle_bug(&self) -> bool {
                 false
-            }
-
-            fn has_active_chamber_heater(&self) -> bool {
-                $has_chamber_heater
             }
 
             fn physical_nozzle_count(&self) -> u8 {
@@ -132,18 +128,17 @@ macro_rules! impl_x1_shared {
                 $bed_max_fn(mains_220v)
             }
 
-            fn chamber_temp_max(&self) -> u16 {
-                $chamber_max
+            fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
+                $chamber_heater_max
             }
         }
     };
 }
 
-impl_x1_shared!(X1CQuirks, false, X1C_NOZZLE_TEMP_MAX, x1c_bed_temp_max, 0);
+impl_x1_shared!(X1CQuirks, None, X1C_NOZZLE_TEMP_MAX, x1c_bed_temp_max);
 impl_x1_shared!(
     X1EQuirks,
-    true,
+    Some(X1E_CHAMBER_TEMP_MAX),
     X1E_NOZZLE_TEMP_MAX,
-    x1e_bed_temp_max,
-    X1E_CHAMBER_TEMP_MAX
+    x1e_bed_temp_max
 );
