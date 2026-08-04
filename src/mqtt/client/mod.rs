@@ -120,6 +120,16 @@ fn extract_sequence_id(payload: &[u8]) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Returns an outgoing command payload's top-level wrapper key (`print`/`system`/`pushing`/
+/// `info` — the Payload+Request pattern always nests exactly one). Used only to detect
+/// `pushall` requests (wrapped in `pushing` [REF-MQTT-LIFECYCLE]): unlike print/system/info
+/// commands, pushall triggers an unlabeled state-dump stream rather than an echoed ack
+/// [REF-MQTT-ACK], so its sequence_id can never be correlated against an incoming PUBLISH.
+fn wrapper_key(payload: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    value.as_object()?.keys().next().cloned()
+}
+
 /// Maps an `embedded_io_async::ErrorKind` (the only information a generic `AsyncIo` error
 /// exposes, regardless of platform) to the closest `SocketError` variant — the
 /// `embedded_io_async::ErrorKind` counterpart to `map_io_error_kind`
@@ -411,7 +421,15 @@ impl<IO: AsyncIo> MqttClient<IO> {
         // indefinitely, since the counter never reaches MQTT_ZOMBIE_TIMEOUT_SECS.
         if self.write_pending_secs.is_none() {
             self.write_pending_secs = Some(0);
-            self.write_pending_sequence_id = extract_sequence_id(payload);
+            // pushall (`pushing` wrapper) has no echoed ack to correlate against — see
+            // `wrapper_key`'s doc comment — so leave write_pending_sequence_id unset for it;
+            // poll_wire's PUBLISH arm falls back to clearing on any PUBLISH in that case.
+            self.write_pending_sequence_id = if wrapper_key(payload).as_deref() == Some("pushing")
+            {
+                None
+            } else {
+                extract_sequence_id(payload)
+            };
         }
 
         Ok(packet_id)
@@ -562,9 +580,14 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     // independent, low-value sequence_id counter and arrives far more often than
                     // MQTT_ZOMBIE_TIMEOUT_SECS, so an unconditional reset here would mask a real
                     // zombie episode (broker discarding commands) forever [REF-MQTT-ZOMBIE].
-                    if self.write_pending_sequence_id.is_some()
-                        && extract_sequence_id(&payload) == self.write_pending_sequence_id
-                    {
+                    // A pending command with no known sequence_id (pushall's `pushing` wrapper
+                    // has no echoed ack, see `wrapper_key`) falls back to clearing on any
+                    // PUBLISH, matching pre-correlation behavior for that case only.
+                    let should_clear = match &self.write_pending_sequence_id {
+                        Some(expected) => extract_sequence_id(&payload).as_deref() == Some(expected.as_str()),
+                        None => self.write_pending_secs.is_some(),
+                    };
+                    if should_clear {
                         self.write_pending_secs = None;
                         self.write_pending_sequence_id = None;
                     }
@@ -1000,6 +1023,60 @@ mod tests {
                 client.write_pending_secs, None,
                 "a PUBLISH echoing the outstanding command's sequence_id must clear the timer"
             );
+            assert_eq!(client.write_pending_sequence_id, None);
+        }
+
+        #[tokio::test]
+        async fn test_pushall_zombie_timer_clears_on_any_publish_since_it_has_no_echoed_ack() {
+            // Regression: bambino-cli's monitor sends exactly one command at startup —
+            // request_pushall() — then only pings. pushall (`pushing` wrapper) triggers an
+            // unlabeled push_status stream [REF-MQTT-LIFECYCLE], not an echoed ack, so its
+            // sequence_id can never match an incoming PUBLISH. Requiring strict correlation for
+            // it (like print/system commands get) left write_pending_secs armed forever and
+            // fired a false zombie timeout against real hardware within MQTT_ZOMBIE_TIMEOUT_SECS.
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+            let mut client = MqttClient {
+                stream: TokioIo(client_stream),
+                request_topic: "device/01P000000000000/request".to_string(),
+                serial: "01P000000000000".to_string(),
+                next_packet_id: 2,
+                in_flight: BTreeSet::new(),
+                pending_messages: VecDeque::new(),
+                pending_bytes: 0,
+                write_pending_secs: None,
+                write_pending_sequence_id: None,
+                ping_outstanding: false,
+                secs_since_last_message: 0,
+                read_state: FrameReadState::default(),
+                write_poisoned: false,
+            };
+
+            client
+                .publish_command(b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"20001\"}}")
+                .await
+                .expect("pushall publish failed");
+            assert_eq!(client.write_pending_secs, Some(0));
+            assert_eq!(
+                client.write_pending_sequence_id, None,
+                "pushall has no echoed ack to correlate against"
+            );
+
+            // An ordinary push_status update carrying the printer's own unrelated sequence_id
+            // must still clear the timer, since pushall has nothing to correlate against.
+            let telemetry = encode_publish_qos1(
+                1,
+                "device/01P000000000000/report",
+                b"{\"print\":{\"sequence_id\":\"1\"}}",
+            );
+            server_stream.write_all(&telemetry).await.unwrap();
+            server_stream.flush().await.unwrap();
+
+            let timer = crate::client::dummy::DummyTimer;
+            client
+                .poll_wire(&timer)
+                .await
+                .expect("telemetry PUBLISH should parse");
+            assert_eq!(client.write_pending_secs, None);
             assert_eq!(client.write_pending_sequence_id, None);
         }
     }
