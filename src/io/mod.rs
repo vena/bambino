@@ -335,6 +335,28 @@ where
 /// [`TimerProvider::has_real_clock`] — notably the default `DummyTimer`), in which case
 /// this degrades to a plain unbounded `read()`, identical to this crate's behavior
 /// before per-read deadlines existed.
+/// Maps an `embedded_io_async::ErrorKind` (the only info a generic `AsyncIo::read()` error
+/// exposes across every platform, std or no_std) to the closest `SocketError` variant.
+///
+/// Unconditional (not `#[cfg(feature = "std")]`) — unlike `map_std_io_error`, this only needs
+/// `embedded_io_async::ErrorKind`, which every `AsyncIo` implementor (tokio, ESP-IDF, Embassy)
+/// already produces via `embedded_io_async::Error::kind()`. Used by `read_chunk` so a genuine
+/// `ConnectionRefused`/`TimedOut`/etc. isn't collapsed to a generic `ConnectionReset` the way it
+/// was before this mapping existed.
+pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError {
+    match kind {
+        embedded_io_async::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
+        embedded_io_async::ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
+        embedded_io_async::ErrorKind::ConnectionReset => SocketError::ConnectionReset,
+        embedded_io_async::ErrorKind::NotConnected => SocketError::NotConnected,
+        embedded_io_async::ErrorKind::TimedOut => SocketError::TimedOut,
+        embedded_io_async::ErrorKind::AddrInUse => SocketError::AddressInUse,
+        embedded_io_async::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
+        embedded_io_async::ErrorKind::InvalidInput => SocketError::InvalidInput,
+        _ => SocketError::ConnectionReset,
+    }
+}
+
 pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     buf: &mut [u8],
@@ -347,7 +369,7 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
             Ok(n) => Ok(n),
             Err(e) => {
                 log::trace!("read failed: {:?}", e);
-                Err(SocketError::ConnectionReset)
+                Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(&e)))
             }
         };
     };
@@ -365,7 +387,7 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
         Raced::Left(Ok(n)) => Ok(n),
         Raced::Left(Err(e)) => {
             log::trace!("read failed: {:?}", e);
-            Err(SocketError::ConnectionReset)
+            Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(&e)))
         }
         Raced::Right(_) => Err(SocketError::TimedOut),
     }
