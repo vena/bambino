@@ -39,7 +39,9 @@ use crate::error::CliError;
 /// watch interactively.
 const DEFAULT_ACK_WINDOW_SECS: u64 = 5;
 /// Time allowed for `gcode_state` to arrive before the busy gate gives up and refuses to run.
-const BUSY_WARMUP_SECS: u64 = 5;
+/// Covers a full `pushall` round trip, not just an incremental delta — matches `probe.rs`'s own
+/// `PUSHALL_TIMEOUT_SECS`.
+const BUSY_WARMUP_SECS: u64 = 10;
 /// Filename used by the `project_file` test. `project_file` *starts a print job*, so the test
 /// deliberately names a file that cannot exist on the SD card: the firmware rejects it, and a
 /// rejection response still answers the only question this harness asks (does it echo our
@@ -478,7 +480,14 @@ async fn run_one(
 /// during an active print halting the motion controller with `0500_4003`. Bails rather than
 /// silently skipping those two tests, since a run started mid-print says nothing trustworthy
 /// about the other commands' ack behavior either.
+///
+/// Requests a `pushall` first rather than just waiting on the incremental stream: an idle
+/// printer's deltas frequently carry no `gcode_state` field at all, so polling alone leaves the
+/// cache empty and the gate refuses a perfectly idle machine. `monitor` and `probe` both open
+/// the same way.
 async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
+    client.request_pushall().await?;
+
     let deadline = Instant::now() + Duration::from_secs(BUSY_WARMUP_SECS);
     while Instant::now() < deadline && client.print_status().is_none() {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -498,8 +507,8 @@ async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
         }
         Some(_) => Ok(()),
         None => Err(CliError::Other(format!(
-            "no gcode_state received within {BUSY_WARMUP_SECS}s — cannot confirm the printer is \
-             idle, refusing to run"
+            "no gcode_state received within {BUSY_WARMUP_SECS}s of a pushall — cannot confirm the \
+             printer is idle, refusing to run"
         ))),
     }
 }
