@@ -198,6 +198,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
                 };
                 current.issuer().as_raw() == root.subject().as_raw()
                     && current.verify_signature(Some(root.public_key())).is_ok()
+                    && root.validity().is_valid_at(now_asn1)
             }) {
                 chain_trusted = true;
                 break;
@@ -221,6 +222,14 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             let Some(idx) = next_idx else { break };
             used[idx] = true;
             current = &parsed_intermediates[idx];
+            if !current.validity().is_valid_at(now_asn1) {
+                let err = if now_asn1.timestamp() < current.validity().not_before.timestamp() {
+                    CertificateError::NotValidYet
+                } else {
+                    CertificateError::Expired
+                };
+                return Err(RustlsError::InvalidCertificate(err));
+            }
         }
         if !chain_trusted {
             return Err(RustlsError::InvalidCertificate(
