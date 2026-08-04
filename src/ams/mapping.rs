@@ -340,7 +340,14 @@ pub fn is_external_spool_safety_valid_flat(is_single_nozzle: bool, ams_mapping: 
     if !is_single_nozzle {
         return true;
     }
-    ams_mapping.iter().any(|&v| v >= 0)
+    let max_standard_channel = (super::parser::AMS_MAX_STANDARD_ID as i32 + 1)
+        * super::parser::AMS_SLOTS_PER_UNIT as i32
+        - 1;
+    ams_mapping.iter().any(|&v| {
+        (0..=max_standard_channel).contains(&v)
+            || (super::parser::AMS_HT_ID_MIN as i32..=super::parser::AMS_HT_ID_MAX as i32)
+                .contains(&v)
+    })
 }
 
 #[cfg(test)]

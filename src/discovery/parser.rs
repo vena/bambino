@@ -206,9 +206,6 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     };
 
     let raw_usn_str = raw.usn?;
-    if raw_usn_str.is_empty() {
-        return None;
-    }
     // Uppercase the serial to make the SsdpDevice::serial doc comment's "uppercase"
     // promise true. SSDP USN casing varies by firmware compile target, but MQTT broker
     // subscriptions and TLS SNI/identity route strictly on exact casing as printed on the
@@ -218,6 +215,9 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
         .strip_prefix("uuid:")
         .unwrap_or(raw_usn_str)
         .to_ascii_uppercase();
+    if serial.is_empty() {
+        return None;
+    }
 
     // Use DevModel header, falling back to model embedded in NT/ST per Protocol Violation #7.
     // A present-but-empty DevModel header (`Some("")`) must not short-circuit the

@@ -133,6 +133,7 @@ where
     /// [`attach_storage()`](super::PrinterClient::attach_storage).
     pub fn attach_mqtt(&mut self, mqtt: MqttClient<MqttTls::Stream>) {
         self.mqtt = Some(mqtt);
+        self.k_profile_primed = false;
     }
 
     /// Disconnects the MQTT session, if one exists, and clears it from the client.

@@ -89,7 +89,12 @@ where
     ) -> Result<u16, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
-        if !ams_valid || !slot_valid {
+        // slot_id 254 is only meaningful as the single-nozzle external-spool load sentinel,
+        // valid only against the same ams_id >= 16 sentinel range used for target derivation
+        // below — otherwise a combination like (1, 254) passes both independent checks but
+        // derives a garbage target outside the standard unit's 0..=15 range.
+        let pair_valid = slot_id != 254 || ams_id >= 16;
+        if !ams_valid || !slot_valid || !pair_valid {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for change_filament".into(),
             ));
