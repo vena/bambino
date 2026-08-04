@@ -482,6 +482,56 @@ pub async fn run_mock_server_dele_connection_drop(
     // Drop the stream instead of responding.
 }
 
+/// Mock server for the regression test: a transport failure between `rename_file`'s two-step
+/// `RNFR`/`RNTO` sequence must poison the client the same way a single-reply command's failure
+/// already does. Acks `RNFR` normally, then drops the connection instead of responding to
+/// `RNTO`.
+pub async fn run_mock_server_rnto_connection_drop(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "RNFR /model/old.3mf\r\n");
+    respond(&mut server_control, b"350 Ready for destination name.\r\n").await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "RNTO /model/new.3mf\r\n");
+    // Drop the stream instead of responding.
+}
+
+/// Mock server for the regression test: `LIST`'s transfer-confirmation read must accept `426`
+/// (the documented P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]) the same way upload/download
+/// already do — upload/download both have a dedicated 426-recovery test; LIST did not.
+pub async fn run_mock_server_list_426_recovery(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "LIST /model\r\n");
+    respond(
+        &mut server_control,
+        b"150 Here comes directory listing.\r\n",
+    )
+    .await;
+    server_data
+        .write_all(b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n")
+        .await
+        .expect("LIST data write");
+    server_data.flush().await.expect("LIST data flush");
+    drop(server_data);
+    // 426 instead of 226 — the TLS 1.3 close race, tolerated the same as upload/download.
+    respond(&mut server_control, b"426 Connection closed; transfer aborted.\r\n").await;
+}
+
 /// Mock server for the regression test: `LIST`'s *initial* write/read (the `150`/`125`
 /// negotiation, before the data-transfer window the single-reply-command case already covered) must
 /// poison the client on failure too. Drops the control stream right after reading the `LIST`

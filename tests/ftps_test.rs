@@ -410,6 +410,72 @@ async fn test_ftps_single_reply_command_failure_poisons_client() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// Regression: a transport failure between `rename_file`'s `RNFR` and `RNTO` steps must
+/// poison the client the same way the single-reply commands' poisoning test already covers —
+/// previously only `delete_file` (a one-shot command) had a dedicated poisoning test; the
+/// two-step rename sequence had no coverage for a failure landing mid-sequence.
+#[tokio::test]
+async fn test_ftps_rename_file_mid_sequence_failure_poisons_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_rnto_connection_drop(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client.rename_file("/model/old.3mf", "/model/new.3mf").await;
+    assert!(
+        matches!(result, Err(Error::Network(_))),
+        "Expected the dropped connection to surface as Network, got {:?}",
+        result
+    );
+
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(next_result, Err(Error::ProtocolViolation(_))),
+        "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
+        next_result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Regression: `list_directory`'s transfer-confirmation read must tolerate `426` the same
+/// way `upload_file`/`download_file` already do — both of those have a dedicated
+/// 426-recovery test; LIST did not, so a regression reverting LIST's 426 tolerance would pass
+/// `cargo test` cleanly.
+#[tokio::test]
+async fn test_ftps_list_directory_426_recovery() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_list_426_recovery(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let list = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await
+        .expect("LIST should tolerate 426 confirmation");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "job.3mf");
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 #[tokio::test]
 async fn test_ftps_upload_426_recovery_via_size() {
     let (client_control, server_control, data_container, factory) = setup();
