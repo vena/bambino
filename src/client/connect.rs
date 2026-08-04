@@ -226,6 +226,11 @@ where
     /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
     /// out direct `&mut BambuFtpsClient` access rather than mediating every FTPS call itself,
     /// so there's no call site to thread `self.timer` through the way MQTT/camera do.
+    ///
+    /// Must not be called on a client with an already-connected FTPS session — the existing
+    /// connection is dropped (not explicitly disconnected) when the new struct is built.
+    /// Functionally safe (LAN-only TCP/TLS, `Drop`-based teardown), but callers should
+    /// disconnect first if they want an explicit, orderly teardown.
     #[must_use]
     pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
         self,
@@ -430,6 +435,9 @@ where
     ///
     /// Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
     /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
+    ///
+    /// Must not be called on a client with an already-connected camera session — see
+    /// `.with_ftps()`'s doc comment for why.
     #[must_use]
     pub fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(
         self,
