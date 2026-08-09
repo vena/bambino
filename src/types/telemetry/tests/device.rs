@@ -710,6 +710,52 @@ fn test_airduct_collection_merge_from_clears_parts_and_mode_list_on_present_empt
 }
 
 #[test]
+fn test_airduct_collection_merge_from_upserts_parts_by_id_on_partial_frame() {
+    // A partial frame (a non-empty subset of part ids, not present-but-empty) must upsert
+    // by id, not wholesale-replace — otherwise a frame that only repeats id 160 would wipe
+    // previously-known parts like id 10 (left-aux) or id 3 (exhaust). See
+    // AirductCollection::merge_from's doc comment.
+    let mut cached = AirductCollection {
+        parts: Some(vec![
+            AirductPart {
+                id: 10,
+                state: Some(40),
+            },
+            AirductPart {
+                id: 160,
+                state: Some(50),
+            },
+        ]),
+        mode_cur: None,
+        mode_list: None,
+    };
+
+    let partial = AirductCollection {
+        parts: Some(vec![AirductPart {
+            id: 160,
+            state: Some(75),
+        }]),
+        mode_cur: None,
+        mode_list: None,
+    };
+
+    cached.merge_from(&partial);
+
+    let parts = cached.parts.as_ref().unwrap();
+    assert_eq!(parts.len(), 2, "id 10 must survive a partial frame missing it");
+    assert_eq!(
+        parts.iter().find(|p| p.id == 10).unwrap().state,
+        Some(40),
+        "id 10 must retain its prior state"
+    );
+    assert_eq!(
+        parts.iter().find(|p| p.id == 160).unwrap().state,
+        Some(75),
+        "id 160 must be updated to the incoming state"
+    );
+}
+
+#[test]
 fn test_ctc_telemetry_merge_from_preserves_info_on_absence() {
     // Confirmed via BambuStudio's DevChamber::ParseChamberV2_0 — device.ctc.info can
     // be absent while device.ctc.state is present (and changes) in the same push.

@@ -509,13 +509,29 @@ impl AirductCollection {
     /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
     /// `device.airduct.parts`/`modeCur`/`modeList` can each independently be absent from a
     /// push, and must not be treated as "cleared." `parts`/`mode_list` are now
-    /// `Option<Vec<_>>` (see their doc comments) so a present-but-empty push actually clears —
-    /// wholesale replace, matching BambuStudio's `json_diff::restore_objects` (which fully
+    /// `Option<Vec<_>>` (see their doc comments) so a present-but-empty push actually clears.
+    ///
+    /// `parts` is merged per-id (upsert into the existing `Vec` by id) rather than replaced
+    /// wholesale — unlike BambuStudio, this crate doesn't perform a full JSON-diff
+    /// reconstruction upstream of this call, so a present-but-*partial* frame (a subset of
+    /// part ids, not the same as present-but-empty) must not wipe previously-known parts the
+    /// incoming frame simply didn't repeat. A present-but-empty `parts` array is still treated
+    /// as an explicit clear, matching BambuStudio's `json_diff::restore_objects` (which fully
     /// reconstructs `device.airduct` before `DevFan.cpp`'s own parser unconditionally clears
-    /// and rebuilds `parts`/`modeList` from that already-correct snapshot).
+    /// and rebuilds `parts`/`modeList` from that already-correct snapshot) for that one case.
     pub(crate) fn merge_from(&mut self, incoming: &AirductCollection) {
         if let Some(parts) = &incoming.parts {
-            self.parts = Some(parts.clone());
+            if parts.is_empty() {
+                self.parts = Some(Vec::new());
+            } else {
+                let existing = self.parts.get_or_insert_with(Vec::new);
+                for incoming_part in parts {
+                    match existing.iter_mut().find(|p| p.id == incoming_part.id) {
+                        Some(existing_part) => *existing_part = incoming_part.clone(),
+                        None => existing.push(incoming_part.clone()),
+                    }
+                }
+            }
         }
         if incoming.mode_cur.is_some() {
             self.mode_cur = incoming.mode_cur;
