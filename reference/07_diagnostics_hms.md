@@ -126,6 +126,11 @@ The printer returns the complete onboard profile list over the report topic (`de
 }
 ```
 
+Single-nozzle firmware may omit the per-entry `"nozzle_diameter"` field inside each
+`"filaments"` object shown above, setting it only once at the envelope level (as in the
+example). Parsers must fall back to the envelope's `"nozzle_diameter"` when the per-entry
+field is absent, rather than treating a filament entry without it as malformed.
+
 #### Create or Edit a Calibration Profile
 To save or overwrite a specific K-value profile slot, publish an `"extrusion_cali_set"` command containing a nested `"filaments"` array:
 

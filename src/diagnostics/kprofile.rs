@@ -65,7 +65,12 @@ pub struct KProfileEntry {
     /// Preset identifier associated with the base filament category (e.g. `"GFA01"`).
     pub filament_id: String,
     /// Physical orifice size matching the calibrated tool (e.g. `"0.4"`).
-    pub nozzle_diameter: String,
+    ///
+    /// Single-nozzle firmware omits this field per-entry (it only sets it once at the
+    /// `ExtrusionCaliGetResponsePayload` envelope level) — callers reading a parsed response
+    /// must fall back to the envelope's `nozzle_diameter` when this is `None`.
+    #[serde(default)]
+    pub nozzle_diameter: Option<String>,
     /// System designation of the target hotend profile structure (e.g. `"HS00-0.4"`).
     pub nozzle_id: String,
     /// Carriage layout indicator (0 = Right/Primary extruder, 1 = Left/Deputy extruder).
@@ -82,7 +87,10 @@ pub struct KProfileEntry {
     /// Links K-profile to AMS unit (default 0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ams_id: Option<i32>,
-    /// Links K-profile to AMS tray slot (default -1).
+    /// Links K-profile to AMS tray slot (default -1). At least X1C firmware spuriously
+    /// reports `result: "fail"` for `extrusion_cali` writes using `tray_id: -1` even though
+    /// the write still applies — don't treat that ack `result` as authoritative for a
+    /// `tray_id: -1` write without cross-checking the profile actually landed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tray_id: Option<i32>,
 }
@@ -397,7 +405,7 @@ mod tests {
         let bad_profile = KProfileEntry {
             cali_idx: -1,
             filament_id: "GFA01".into(),
-            nozzle_diameter: "0.4".into(),
+            nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
             extruder_id: 0,
             name: "Faulty ID".into(),
@@ -417,7 +425,7 @@ mod tests {
         let good_profile = KProfileEntry {
             cali_idx: -1,
             filament_id: "GFA01".into(),
-            nozzle_diameter: "0.4".into(),
+            nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
             extruder_id: 0,
             name: "Good ID".into(),
@@ -499,7 +507,7 @@ mod tests {
         let profile = KProfileEntry {
             cali_idx: -1,
             filament_id: "GFA01".into(),
-            nozzle_diameter: "0.4".into(),
+            nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
             extruder_id: 0,
             name: "Test".into(),
@@ -521,7 +529,7 @@ mod tests {
         let profile = KProfileEntry {
             cali_idx: -1,
             filament_id: "GFA01".into(),
-            nozzle_diameter: "0.4".into(),
+            nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
             extruder_id: 0,
             name: "Test".into(),
@@ -564,6 +572,31 @@ mod tests {
     }
 
     #[test]
+    fn test_extrusion_cali_get_response_deserializes_entry_missing_nozzle_diameter() {
+        // Single-nozzle firmware omits nozzle_diameter per-entry, setting it only at the
+        // envelope level — this must deserialize (not fail the whole response) even though
+        // the per-entry field is absent. See KProfileEntry::nozzle_diameter's doc comment.
+        let json = r#"{
+            "print": {
+                "command": "extrusion_cali_get",
+                "sequence_id": "50001",
+                "nozzle_diameter": "0.4",
+                "filaments": [{
+                    "cali_idx": 4,
+                    "filament_id": "GFA01",
+                    "nozzle_id": "HS00-0.4",
+                    "extruder_id": 0,
+                    "name": "My Custom PLA Matte",
+                    "k_value": "0.022000",
+                    "setting_id": "PF12345678901234567"
+                }]
+            }
+        }"#;
+        let resp: ExtrusionCaliGetResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.print.filaments[0].nozzle_diameter, None);
+    }
+
+    #[test]
     fn test_all_constructors_clamp_unclamped_sequence_id() {
         // These five constructors must serialize sequence_id through clamp_task_id() —
         // see .claude/rules/task-id-clamping.md.
@@ -583,7 +616,7 @@ mod tests {
         let profile = KProfileEntry {
             cali_idx: -1,
             filament_id: "GFA01".into(),
-            nozzle_diameter: "0.4".into(),
+            nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
             extruder_id: 0,
             name: "Test".into(),

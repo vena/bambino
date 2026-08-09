@@ -325,9 +325,17 @@ where
 
         let expected_seq = seq.to_string();
         self.poll_until(|msg| {
-            let resp: ExtrusionCaliGetResponse = serde_json::from_slice(&msg.payload).ok()?;
+            let mut resp: ExtrusionCaliGetResponse = serde_json::from_slice(&msg.payload).ok()?;
             if resp.print.command == "extrusion_cali_get" && resp.print.sequence_id == expected_seq
             {
+                // Single-nozzle firmware omits nozzle_diameter per-entry, setting it only at
+                // the envelope level — see KProfileEntry::nozzle_diameter's doc comment.
+                let envelope_diameter = resp.print.nozzle_diameter.clone();
+                for entry in &mut resp.print.filaments {
+                    if entry.nozzle_diameter.is_none() {
+                        entry.nozzle_diameter = envelope_diameter.clone();
+                    }
+                }
                 Some(resp)
             } else {
                 None
