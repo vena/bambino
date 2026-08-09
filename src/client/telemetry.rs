@@ -208,7 +208,11 @@ where
         if let Some(layer_num) = print.layer_num {
             self.cache.last_progress.layer_num = Some(layer_num);
         }
-        if let Some(total_layers) = print.total_layers {
+        // Some firmware (confirmed on P1S) resets total_layer_num to 0 in the end-of-print
+        // frame — only positive values are real, so 0 must not clobber the last known total.
+        if let Some(total_layers) = print.total_layers
+            && total_layers > 0
+        {
             self.cache.last_progress.total_layers = Some(total_layers);
         }
     }
@@ -398,9 +402,10 @@ where
     pub fn sanitized_ams(&self) -> Option<AmsStatusReport> {
         let mut sanitized = self.cache.last_ams.clone()?;
         for unit in &mut sanitized.ams {
+            let ams_id: u8 = unit.id.parse().unwrap_or(0);
             if let Some(trays) = &mut unit.tray {
                 for tray in trays {
-                    clean_stale_tray_data(tray);
+                    clean_stale_tray_data(tray, ams_id);
                 }
             }
         }
@@ -512,7 +517,7 @@ where
             .iter()
             .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_RIGHT)?
             .state?;
-        Some(state.clamp(0, 100) as u8)
+        Some((state & 0xFF).clamp(0, 100) as u8)
     }
 
     fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {
