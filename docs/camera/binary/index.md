@@ -71,10 +71,6 @@ to fully close before redialing.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for BambuBinaryCameraStream<IO>`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for BambuBinaryCameraStream<IO>`
-
 
 ---
 

@@ -70,10 +70,6 @@ README's Embassy section for a worked example.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>`
-
 ##### `impl RawStreamFactory<TcpConnection<'static, N, TX_SZ, RX_SZ>> for EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>`
 
 - <span id="embassyrawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>, SocketError>` — [`SocketError`](../index.md#socketerror)
@@ -87,10 +83,6 @@ struct EmbassyTimer;
 Timer implementation designed for the hardware microsecond clock in Embassy.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for EmbassyTimer`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for EmbassyTimer`
 
 ##### `impl TimerProvider for EmbassyTimer`
 
@@ -160,10 +152,6 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for EmbassyTlsConnector<'a>`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for EmbassyTlsConnector<'a>`
-
 ##### `impl<RawStream> TlsConnector<RawStream> for EmbassyTlsConnector<'a>`
 
 - <span id="embassytlsconnector-tlsconnector-type-stream"></span>`type Stream = Session<'a, RawStream>`
@@ -200,10 +188,6 @@ since embassy-net's `UdpSocket::new()` requires pre-allocated buffer slices and 
   Creates a wrapper using a pre-initialized Embassy UDP socket.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for EmbassyUdpSocket<'a>`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for EmbassyUdpSocket<'a>`
 
 ##### `impl AsyncUdpSocket for EmbassyUdpSocket<'a>`
 

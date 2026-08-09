@@ -69,10 +69,6 @@ Fully decoded representation of an active diagnostic entry from the `hms` teleme
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for DecodedHmsAlert`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for DecodedHmsAlert`
-
 ##### `impl Clone for DecodedHmsAlert`
 
 - <span id="decodedhmsalert-clone"></span>`fn clone(&self) -> DecodedHmsAlert` — [`DecodedHmsAlert`](#decodedhmsalert)
@@ -90,8 +86,6 @@ Fully decoded representation of an active diagnostic entry from the `hms` teleme
 ##### `impl PartialEq for DecodedHmsAlert`
 
 - <span id="decodedhmsalert-partialeq-eq"></span>`fn eq(&self, other: &DecodedHmsAlert) -> bool` — [`DecodedHmsAlert`](#decodedhmsalert)
-
-##### `impl StructuralPartialEq for DecodedHmsAlert`
 
 ### `DecodedPrintError`
 
@@ -121,10 +115,6 @@ Fully decoded representation of the primary system `print_error` register.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for DecodedPrintError`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for DecodedPrintError`
-
 ##### `impl Clone for DecodedPrintError`
 
 - <span id="decodedprinterror-clone"></span>`fn clone(&self) -> DecodedPrintError` — [`DecodedPrintError`](#decodedprinterror)
@@ -142,8 +132,6 @@ Fully decoded representation of the primary system `print_error` register.
 ##### `impl PartialEq for DecodedPrintError`
 
 - <span id="decodedprinterror-partialeq-eq"></span>`fn eq(&self, other: &DecodedPrintError) -> bool` — [`DecodedPrintError`](#decodedprinterror)
-
-##### `impl StructuralPartialEq for DecodedPrintError`
 
 ### `HmsSeverity`
 
@@ -189,10 +177,6 @@ Numerical classification of the severity level of an HMS diagnostic alert.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for HmsSeverity`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for HmsSeverity`
-
 ##### `impl Clone for HmsSeverity`
 
 - <span id="hmsseverity-clone"></span>`fn clone(&self) -> HmsSeverity` — [`HmsSeverity`](#hmsseverity)
@@ -212,8 +196,6 @@ Numerical classification of the severity level of an HMS diagnostic alert.
 ##### `impl PartialEq for HmsSeverity`
 
 - <span id="hmsseverity-partialeq-eq"></span>`fn eq(&self, other: &HmsSeverity) -> bool` — [`HmsSeverity`](#hmsseverity)
-
-##### `impl StructuralPartialEq for HmsSeverity`
 
 
 ---

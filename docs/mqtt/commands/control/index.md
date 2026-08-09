@@ -65,10 +65,6 @@ Triggers automated physical resonance compensation sweeps and chassis alignments
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for CalibrationPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CalibrationPayload`
-
 ##### `impl Clone for CalibrationPayload`
 
 - <span id="calibrationpayload-clone"></span>`fn clone(&self) -> CalibrationPayload` — [`CalibrationPayload`](#calibrationpayload)
@@ -105,10 +101,6 @@ Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for CalibrationRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CalibrationRequest`
-
 ##### `impl Clone for CalibrationRequest`
 
 - <span id="calibrationrequest-clone"></span>`fn clone(&self) -> CalibrationRequest` — [`CalibrationRequest`](#calibrationrequest)
@@ -143,10 +135,6 @@ Clears active error codes from the printer's diagnostic fault register [REF-MQTT
   Request sequence ID, serialized as a string on the wire.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for CleanPrintErrorPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CleanPrintErrorPayload`
 
 ##### `impl Clone for CleanPrintErrorPayload`
 
@@ -183,10 +171,6 @@ Clears the printer's current error state so it can resume operation.
   Builds a `clean_print_error` request.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for CleanPrintErrorRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CleanPrintErrorRequest`
 
 ##### `impl Clone for CleanPrintErrorRequest`
 
@@ -232,10 +216,6 @@ Dynamically scales maximum movement velocity and acceleration limits.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintSpeedPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintSpeedPayload`
-
 ##### `impl Clone for PrintSpeedPayload`
 
 - <span id="printspeedpayload-clone"></span>`fn clone(&self) -> PrintSpeedPayload` — [`PrintSpeedPayload`](#printspeedpayload)
@@ -271,10 +251,6 @@ Changes the active print speed profile (silent, standard, sport, ludicrous).
   Builds a `print_speed` request from a stringified speed index.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintSpeedRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintSpeedRequest`
 
 ##### `impl Clone for PrintSpeedRequest`
 
@@ -316,10 +292,6 @@ Instructs the printer to bypass rendering specific objects within active multi-m
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for SkipObjectsPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for SkipObjectsPayload`
-
 ##### `impl Clone for SkipObjectsPayload`
 
 - <span id="skipobjectspayload-clone"></span>`fn clone(&self) -> SkipObjectsPayload` — [`SkipObjectsPayload`](#skipobjectspayload)
@@ -356,10 +328,6 @@ Tells the printer to skip specific objects in a multi-object print.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for SkipObjectsRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for SkipObjectsRequest`
-
 ##### `impl Clone for SkipObjectsRequest`
 
 - <span id="skipobjectsrequest-clone"></span>`fn clone(&self) -> SkipObjectsRequest` — [`SkipObjectsRequest`](#skipobjectsrequest)
@@ -394,10 +362,6 @@ General control payload used for pause, resume, stop, and clean actions.
   Request sequence ID, serialized as a string on the wire.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for StandardControlPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for StandardControlPayload`
 
 ##### `impl Clone for StandardControlPayload`
 
@@ -434,10 +398,6 @@ Sends a print lifecycle command (pause, resume, stop) to the printer.
   Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for StandardControlRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for StandardControlRequest`
 
 ##### `impl Clone for StandardControlRequest`
 

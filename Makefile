@@ -43,6 +43,7 @@ install-hooks:
 # filter on its own (AsTaggedExplicit/AsTaggedImplicit/StructuralPartialEq/
 # StructuralEq showing up on every type) — see that script's docstring.
 docs:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: docker unreachable — the esp-idf doc pass (scripts/doc-esp-idf.sh) needs it, and a host-only regen silently drops docs/io/esp_idf/* (see project_bambino_make_docs_deletes_esp_idf_index memory). Start Docker and retry." >&2; exit 1; }
 	rm -rf docs
 	RUSTC_BOOTSTRAP=1 cargo rustdoc --features embassy --lib -- -Z unstable-options --output-format json
 	cargo docs-md --path target/doc/bambino.json -o docs --format nested

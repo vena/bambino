@@ -36,10 +36,6 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for A1MiniQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for A1MiniQuirks`
-
 ##### `impl ModelQuirks for A1MiniQuirks`
 
 - <span id="a1miniquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -89,10 +85,6 @@ struct A1Quirks;
 Quirks for the full-size A1 bed-slinger.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for A1Quirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for A1Quirks`
 
 ##### `impl ModelQuirks for A1Quirks`
 

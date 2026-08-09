@@ -63,10 +63,6 @@ consecutive readings before committing a one-step change.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for FanSpeedDebouncer`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for FanSpeedDebouncer`
-
 ##### `impl Clone for FanSpeedDebouncer`
 
 - <span id="fanspeeddebouncer-clone"></span>`fn clone(&self) -> FanSpeedDebouncer` — [`FanSpeedDebouncer`](#fanspeeddebouncer)

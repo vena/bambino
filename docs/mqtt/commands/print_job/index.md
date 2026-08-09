@@ -141,10 +141,6 @@ with named fields and sensible defaults for calibration flags.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintJobConfig`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintJobConfig`
-
 ##### `impl Clone for PrintJobConfig`
 
 - <span id="printjobconfig-clone"></span>`fn clone(&self) -> PrintJobConfig` — [`PrintJobConfig`](#printjobconfig)
@@ -282,10 +278,6 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for ProjectFilePayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for ProjectFilePayload`
-
 ##### `impl Clone for ProjectFilePayload`
 
 - <span id="projectfilepayload-clone"></span>`fn clone(&self) -> ProjectFilePayload` — [`ProjectFilePayload`](#projectfilepayload)
@@ -321,10 +313,6 @@ Submits a `.3mf` print job from the SD card for execution.
   Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for ProjectFileRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for ProjectFileRequest`
 
 ##### `impl Clone for ProjectFileRequest`
 
@@ -367,10 +355,6 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsMappingTable`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsMappingTable`
-
 ##### `impl Clone for AmsMappingTable`
 
 - <span id="amsmappingtable-clone"></span>`fn clone(&self) -> AmsMappingTable` — [`AmsMappingTable`](#amsmappingtable)
@@ -388,6 +372,4 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 ##### `impl Serialize for AmsMappingTable`
 
 - <span id="amsmappingtable-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-##### `impl StructuralPartialEq for AmsMappingTable`
 

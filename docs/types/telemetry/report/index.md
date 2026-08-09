@@ -40,10 +40,6 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for LightReport`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for LightReport`
-
 ##### `impl Clone for LightReport`
 
 - <span id="lightreport-clone"></span>`fn clone(&self) -> LightReport` — [`LightReport`](#lightreport)
@@ -80,10 +76,6 @@ Network interface state from `print.net` [REF-NET-PORTS].
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for NetInfo`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for NetInfo`
-
 ##### `impl Clone for NetInfo`
 
 - <span id="netinfo-clone"></span>`fn clone(&self) -> NetInfo` — [`NetInfo`](#netinfo)
@@ -107,6 +99,7 @@ Network interface state from `print.net` [REF-NET-PORTS].
 ```rust
 struct PrinterTelemetry {
     pub gcode_state: Option<String>,
+    pub command: Option<String>,
     pub gcode_file: Option<String>,
     pub subtask_name: Option<String>,
     pub subtask_id: Option<String>,
@@ -182,6 +175,13 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`gcode_state`**: `Option<String>`
 
   High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
+
+- **`command`**: `Option<String>`
+
+  Wire command name this frame arrived under (`"push_status"`/`"pushall"` for genuine
+  telemetry pushes; a command-echo response — e.g. `"extrusion_cali_get"` — shares this
+  same `print` envelope and can otherwise deserialize as an emptyish telemetry report
+  [see poll_telemetry's command-echo filter].
 
 - **`gcode_file`**: `Option<String>`
 
@@ -489,10 +489,6 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrinterTelemetry`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrinterTelemetry`
-
 ##### `impl Clone for PrinterTelemetry`
 
 - <span id="printertelemetry-clone"></span>`fn clone(&self) -> PrinterTelemetry` — [`PrinterTelemetry`](#printertelemetry)
@@ -550,10 +546,6 @@ and "read-only."
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for SdcardState`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for SdcardState`
-
 ##### `impl Clone for SdcardState`
 
 - <span id="sdcardstate-clone"></span>`fn clone(&self) -> SdcardState` — [`SdcardState`](#sdcardstate)
@@ -573,6 +565,4 @@ and "read-only."
 ##### `impl PartialEq for SdcardState`
 
 - <span id="sdcardstate-partialeq-eq"></span>`fn eq(&self, other: &SdcardState) -> bool` — [`SdcardState`](#sdcardstate)
-
-##### `impl StructuralPartialEq for SdcardState`
 

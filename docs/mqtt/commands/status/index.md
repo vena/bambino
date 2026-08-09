@@ -40,10 +40,6 @@ Payload schema to retrieve hardware/firmware version strings from the expansion 
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for GetVersionPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for GetVersionPayload`
-
 ##### `impl Clone for GetVersionPayload`
 
 - <span id="getversionpayload-clone"></span>`fn clone(&self) -> GetVersionPayload` — [`GetVersionPayload`](#getversionpayload)
@@ -80,10 +76,6 @@ Queries the printer for its hardware and firmware version info.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for GetVersionRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for GetVersionRequest`
-
 ##### `impl Clone for GetVersionRequest`
 
 - <span id="getversionrequest-clone"></span>`fn clone(&self) -> GetVersionRequest` — [`GetVersionRequest`](#getversionrequest)
@@ -118,10 +110,6 @@ Payload schema to trigger a complete state dump ("pushall") from the printer.
   Request sequence ID, serialized as a string on the wire.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for PushAllPayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PushAllPayload`
 
 ##### `impl Clone for PushAllPayload`
 
@@ -158,10 +146,6 @@ Requests a full state dump from the printer (all telemetry fields at once).
   Builds a `pushall` request.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for PushAllRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PushAllRequest`
 
 ##### `impl Clone for PushAllRequest`
 

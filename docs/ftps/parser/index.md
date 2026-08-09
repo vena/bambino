@@ -58,10 +58,6 @@ Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuris
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for CurrentDateTime`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CurrentDateTime`
-
 ##### `impl Clone for CurrentDateTime`
 
 - <span id="currentdatetime-clone"></span>`fn clone(&self) -> CurrentDateTime` — [`CurrentDateTime`](#currentdatetime)
@@ -139,10 +135,6 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for FtpFile`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for FtpFile`
-
 ##### `impl Clone for FtpFile`
 
 - <span id="ftpfile-clone"></span>`fn clone(&self) -> FtpFile` — [`FtpFile`](#ftpfile)
@@ -156,8 +148,6 @@ Standardized representation of an entry retrieved from physical printer storage.
 ##### `impl PartialEq for FtpFile`
 
 - <span id="ftpfile-partialeq-eq"></span>`fn eq(&self, other: &FtpFile) -> bool` — [`FtpFile`](#ftpfile)
-
-##### `impl StructuralPartialEq for FtpFile`
 
 
 ---

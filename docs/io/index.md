@@ -74,10 +74,6 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 #### Trait Implementations
 
-##### `impl<T, E> AsTaggedExplicit<'a, E> for TokioIo<T>`
-
-##### `impl<T, E> AsTaggedImplicit<'a, E> for TokioIo<T>`
-
 ##### `impl<T> AsyncIo for TokioIo<T>`
 
 ##### `impl<T> ErrorType for TokioIo<T>`
@@ -119,10 +115,6 @@ struct TokioIoError(std::io::Error);
 Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for TokioIoError`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for TokioIoError`
 
 ##### `impl Debug for TokioIoError`
 
@@ -205,10 +197,6 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for SocketError`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for SocketError`
-
 ##### `impl Clone for SocketError`
 
 - <span id="socketerror-clone"></span>`fn clone(&self) -> SocketError` — [`SocketError`](#socketerror)
@@ -222,8 +210,6 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 ##### `impl PartialEq for SocketError`
 
 - <span id="socketerror-partialeq-eq"></span>`fn eq(&self, other: &SocketError) -> bool` — [`SocketError`](#socketerror)
-
-##### `impl StructuralPartialEq for SocketError`
 
 ### `TimerError`
 
@@ -247,10 +233,6 @@ ever constructs this.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for TimerError`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for TimerError`
-
 ##### `impl Clone for TimerError`
 
 - <span id="timererror-clone"></span>`fn clone(&self) -> TimerError` — [`TimerError`](#timererror)
@@ -266,8 +248,6 @@ ever constructs this.
 ##### `impl PartialEq for TimerError`
 
 - <span id="timererror-partialeq-eq"></span>`fn eq(&self, other: &TimerError) -> bool` — [`TimerError`](#timererror)
-
-##### `impl StructuralPartialEq for TimerError`
 
 ### `TlsVersion`
 
@@ -292,10 +272,6 @@ TLS protocol version negotiated during a handshake.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for TlsVersion`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for TlsVersion`
-
 ##### `impl Clone for TlsVersion`
 
 - <span id="tlsversion-clone"></span>`fn clone(&self) -> TlsVersion` — [`TlsVersion`](#tlsversion)
@@ -311,8 +287,6 @@ TLS protocol version negotiated during a handshake.
 ##### `impl PartialEq for TlsVersion`
 
 - <span id="tlsversion-partialeq-eq"></span>`fn eq(&self, other: &TlsVersion) -> bool` — [`TlsVersion`](#tlsversion)
-
-##### `impl StructuralPartialEq for TlsVersion`
 
 
 ---

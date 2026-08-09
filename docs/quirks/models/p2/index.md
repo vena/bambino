@@ -29,10 +29,6 @@ Quirks for the P2S CoreXY platform.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for P2Quirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for P2Quirks`
-
 ##### `impl ModelQuirks for P2Quirks`
 
 - <span id="p2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`

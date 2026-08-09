@@ -46,10 +46,6 @@ temperature targets are issued by packing standard G-code lines into this wrappe
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for GCodePayload`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for GCodePayload`
-
 ##### `impl Clone for GCodePayload`
 
 - <span id="gcodepayload-clone"></span>`fn clone(&self) -> GCodePayload` — [`GCodePayload`](#gcodepayload)
@@ -85,10 +81,6 @@ Sends a raw G-code line to the printer for immediate execution.
   Creates a request envelope wrapping a raw G-code payload.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for GCodeRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for GCodeRequest`
 
 ##### `impl Clone for GCodeRequest`
 

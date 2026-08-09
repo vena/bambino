@@ -47,10 +47,6 @@ Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsDrySetting`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsDrySetting`
-
 ##### `impl Clone for AmsDrySetting`
 
 - <span id="amsdrysetting-clone"></span>`fn clone(&self) -> AmsDrySetting` — [`AmsDrySetting`](#amsdrysetting)
@@ -168,10 +164,6 @@ the intermediate `print.ams` object.
   consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsStatusReport`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsStatusReport`
 
 ##### `impl Clone for AmsStatusReport`
 
@@ -385,10 +377,6 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsTray`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsTray`
-
 ##### `impl Clone for AmsTray`
 
 - <span id="amstray-clone"></span>`fn clone(&self) -> AmsTray` — [`AmsTray`](#amstray)
@@ -519,10 +507,6 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsUnit`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsUnit`
 
 ##### `impl Clone for AmsUnit`
 
@@ -664,10 +648,6 @@ and virtual/external spool holders use the same field set.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for VirtualTray`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for VirtualTray`
-
 ##### `impl Clone for VirtualTray`
 
 - <span id="virtualtray-clone"></span>`fn clone(&self) -> VirtualTray` — [`VirtualTray`](#virtualtray)
@@ -782,10 +762,6 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentStep`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentStep`
-
 ##### `impl Clone for AmsFilamentStep`
 
 - <span id="amsfilamentstep-clone"></span>`fn clone(&self) -> AmsFilamentStep` — [`AmsFilamentStep`](#amsfilamentstep)
@@ -815,6 +791,4 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 ##### `impl Serialize for AmsFilamentStep`
 
 - <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
-
-##### `impl StructuralPartialEq for AmsFilamentStep`
 

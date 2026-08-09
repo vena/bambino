@@ -45,10 +45,6 @@ Combine flags with bitwise OR to trigger multiple calibration routines simultane
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for CalibrationOption`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CalibrationOption`
-
 ##### `impl BitOr for CalibrationOption`
 
 - <span id="calibrationoption-bitor-type-output"></span>`type Output = CalibrationOption`
@@ -74,8 +70,6 @@ Combine flags with bitwise OR to trigger multiple calibration routines simultane
 ##### `impl PartialEq for CalibrationOption`
 
 - <span id="calibrationoption-partialeq-eq"></span>`fn eq(&self, other: &CalibrationOption) -> bool` — [`CalibrationOption`](#calibrationoption)
-
-##### `impl StructuralPartialEq for CalibrationOption`
 
 ### `PrintProgress`
 
@@ -117,10 +111,6 @@ means "never observed," not "printer reports zero/none."
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintProgress`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintProgress`
-
 ##### `impl Clone for PrintProgress`
 
 - <span id="printprogress-clone"></span>`fn clone(&self) -> PrintProgress` — [`PrintProgress`](#printprogress)
@@ -140,8 +130,6 @@ means "never observed," not "printer reports zero/none."
 ##### `impl PartialEq for PrintProgress`
 
 - <span id="printprogress-partialeq-eq"></span>`fn eq(&self, other: &PrintProgress) -> bool` — [`PrintProgress`](#printprogress)
-
-##### `impl StructuralPartialEq for PrintProgress`
 
 ### `BuzzerMode`
 
@@ -172,10 +160,6 @@ Supported on models with a physical fire alarm buzzer (H2 series).
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for BuzzerMode`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for BuzzerMode`
-
 ##### `impl Clone for BuzzerMode`
 
 - <span id="buzzermode-clone"></span>`fn clone(&self) -> BuzzerMode` — [`BuzzerMode`](#buzzermode)
@@ -191,8 +175,6 @@ Supported on models with a physical fire alarm buzzer (H2 series).
 ##### `impl PartialEq for BuzzerMode`
 
 - <span id="buzzermode-partialeq-eq"></span>`fn eq(&self, other: &BuzzerMode) -> bool` — [`BuzzerMode`](#buzzermode)
-
-##### `impl StructuralPartialEq for BuzzerMode`
 
 ### `FanTarget`
 
@@ -227,10 +209,6 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for FanTarget`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for FanTarget`
-
 ##### `impl Clone for FanTarget`
 
 - <span id="fantarget-clone"></span>`fn clone(&self) -> FanTarget` — [`FanTarget`](#fantarget)
@@ -250,8 +228,6 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 ##### `impl PartialEq for FanTarget`
 
 - <span id="fantarget-partialeq-eq"></span>`fn eq(&self, other: &FanTarget) -> bool` — [`FanTarget`](#fantarget)
-
-##### `impl StructuralPartialEq for FanTarget`
 
 ### `PrintSpeed`
 
@@ -294,10 +270,6 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintSpeed`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintSpeed`
-
 ##### `impl Clone for PrintSpeed`
 
 - <span id="printspeed-clone"></span>`fn clone(&self) -> PrintSpeed` — [`PrintSpeed`](#printspeed)
@@ -317,8 +289,6 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 ##### `impl PartialEq for PrintSpeed`
 
 - <span id="printspeed-partialeq-eq"></span>`fn eq(&self, other: &PrintSpeed) -> bool` — [`PrintSpeed`](#printspeed)
-
-##### `impl StructuralPartialEq for PrintSpeed`
 
 ### `PrintStatus`
 
@@ -378,10 +348,6 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintStatus`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintStatus`
-
 ##### `impl Clone for PrintStatus`
 
 - <span id="printstatus-clone"></span>`fn clone(&self) -> PrintStatus` — [`PrintStatus`](#printstatus)
@@ -401,8 +367,6 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 ##### `impl PartialEq for PrintStatus`
 
 - <span id="printstatus-partialeq-eq"></span>`fn eq(&self, other: &PrintStatus) -> bool` — [`PrintStatus`](#printstatus)
-
-##### `impl StructuralPartialEq for PrintStatus`
 
 ### `TelemetryEvent`
 
@@ -444,10 +408,6 @@ available via [`into_raw`](TelemetryEvent::into_raw).
   Returns the typed report if this is a `Report` variant.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for TelemetryEvent`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for TelemetryEvent`
 
 ##### `impl Clone for TelemetryEvent`
 

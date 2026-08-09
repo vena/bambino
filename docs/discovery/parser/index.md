@@ -94,10 +94,6 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for SsdpDevice`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for SsdpDevice`
-
 ##### `impl Clone for SsdpDevice`
 
 - <span id="ssdpdevice-clone"></span>`fn clone(&self) -> SsdpDevice` — [`SsdpDevice`](#ssdpdevice)
@@ -111,8 +107,6 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 ##### `impl PartialEq for SsdpDevice`
 
 - <span id="ssdpdevice-partialeq-eq"></span>`fn eq(&self, other: &SsdpDevice) -> bool` — [`SsdpDevice`](#ssdpdevice)
-
-##### `impl StructuralPartialEq for SsdpDevice`
 
 
 ---

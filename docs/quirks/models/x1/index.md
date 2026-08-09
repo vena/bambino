@@ -49,10 +49,6 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for X1CQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for X1CQuirks`
-
 ##### `impl ModelQuirks for X1CQuirks`
 
 - <span id="x1cquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -100,10 +96,6 @@ struct X1EQuirks;
 Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for X1EQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for X1EQuirks`
 
 ##### `impl ModelQuirks for X1EQuirks`
 

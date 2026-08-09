@@ -114,10 +114,6 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>`
-
 ### `CurrentDateTime`
 
 ```rust
@@ -155,10 +151,6 @@ Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuris
   Current minute (0-59).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for CurrentDateTime`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CurrentDateTime`
 
 ##### `impl Clone for CurrentDateTime`
 
@@ -237,10 +229,6 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for FtpFile`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for FtpFile`
-
 ##### `impl Clone for FtpFile`
 
 - <span id="ftpfile-clone"></span>`fn clone(&self) -> FtpFile` — [`FtpFile`](parser/index.md#ftpfile)
@@ -254,8 +242,6 @@ Standardized representation of an entry retrieved from physical printer storage.
 ##### `impl PartialEq for FtpFile`
 
 - <span id="ftpfile-partialeq-eq"></span>`fn eq(&self, other: &FtpFile) -> bool` — [`FtpFile`](parser/index.md#ftpfile)
-
-##### `impl StructuralPartialEq for FtpFile`
 
 
 ---

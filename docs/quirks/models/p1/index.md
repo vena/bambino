@@ -30,10 +30,6 @@ Quirks for the P1P CoreXY platform.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for P1PQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for P1PQuirks`
-
 ##### `impl ModelQuirks for P1PQuirks`
 
 - <span id="p1pquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -91,10 +87,6 @@ struct P1SQuirks;
 Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for P1SQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for P1SQuirks`
 
 ##### `impl ModelQuirks for P1SQuirks`
 

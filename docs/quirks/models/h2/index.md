@@ -66,10 +66,6 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for H2CQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for H2CQuirks`
-
 ##### `impl ModelQuirks for H2CQuirks`
 
 - <span id="h2cquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -123,10 +119,6 @@ struct H2DProQuirks;
 Quirks for the H2D Pro — same kinematics as H2D.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for H2DProQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for H2DProQuirks`
 
 ##### `impl ModelQuirks for H2DProQuirks`
 
@@ -182,10 +174,6 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for H2DQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for H2DQuirks`
-
 ##### `impl ModelQuirks for H2DQuirks`
 
 - <span id="h2dquirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
@@ -239,10 +227,6 @@ struct H2SQuirks;
 Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for H2SQuirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for H2SQuirks`
 
 ##### `impl ModelQuirks for H2SQuirks`
 

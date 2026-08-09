@@ -178,10 +178,6 @@ Address, serial number, and access code identifying one printer on the LAN.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrinterIdentity`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrinterIdentity`
-
 ##### `impl Clone for PrinterIdentity`
 
 - <span id="printeridentity-clone"></span>`fn clone(&self) -> PrinterIdentity` — [`PrinterIdentity`](identity/index.md#printeridentity)
@@ -195,8 +191,6 @@ Address, serial number, and access code identifying one printer on the LAN.
 ##### `impl PartialEq for PrinterIdentity`
 
 - <span id="printeridentity-partialeq-eq"></span>`fn eq(&self, other: &PrinterIdentity) -> bool` — [`PrinterIdentity`](identity/index.md#printeridentity)
-
-##### `impl StructuralPartialEq for PrinterIdentity`
 
 ### `Error`
 
@@ -260,10 +254,6 @@ and source error tracing are derived automatically via `thiserror`.
   Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for Error`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for Error`
 
 ##### `impl Clone for Error`
 
@@ -372,10 +362,6 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrinterModel`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrinterModel`
-
 ##### `impl Clone for PrinterModel`
 
 - <span id="printermodel-clone"></span>`fn clone(&self) -> PrinterModel` — [`PrinterModel`](models/index.md#printermodel)
@@ -395,6 +381,4 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 ##### `impl PartialEq for PrinterModel`
 
 - <span id="printermodel-partialeq-eq"></span>`fn eq(&self, other: &PrinterModel) -> bool` — [`PrinterModel`](models/index.md#printermodel)
-
-##### `impl StructuralPartialEq for PrinterModel`
 

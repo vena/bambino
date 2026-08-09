@@ -35,10 +35,6 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for X2Quirks`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for X2Quirks`
-
 ##### `impl ModelQuirks for X2Quirks`
 
 - <span id="x2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`

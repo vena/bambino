@@ -75,10 +75,6 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for MqttClient<IO>`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for MqttClient<IO>`
-
 ### `MqttMessage`
 
 ```rust
@@ -101,10 +97,6 @@ Incoming MQTT message details parsed from the wire.
   Raw JSON payload bytes as received off the wire.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for MqttMessage`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for MqttMessage`
 
 ##### `impl Clone for MqttMessage`
 
@@ -137,10 +129,6 @@ Switches the enclosure airduct damper between cooling, heating, and laser modes.
   Builds a `set_airduct` request for the given damper mode.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for AirductRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AirductRequest`
 
 ##### `impl Clone for AirductRequest`
 
@@ -178,10 +166,6 @@ Loads or unloads filament from an AMS slot or external spool to the toolhead.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsChangeFilamentRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsChangeFilamentRequest`
-
 ##### `impl Clone for AmsChangeFilamentRequest`
 
 - <span id="amschangefilamentrequest-clone"></span>`fn clone(&self) -> AmsChangeFilamentRequest` — [`AmsChangeFilamentRequest`](commands/ams/index.md#amschangefilamentrequest)
@@ -217,10 +201,6 @@ Sends a resume, pause, or reset command to the AMS feed mechanism.
   Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsControlRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsControlRequest`
 
 ##### `impl Clone for AmsControlRequest`
 
@@ -258,10 +238,6 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentDryingRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentDryingRequest`
-
 ##### `impl Clone for AmsFilamentDryingRequest`
 
 - <span id="amsfilamentdryingrequest-clone"></span>`fn clone(&self) -> AmsFilamentDryingRequest` — [`AmsFilamentDryingRequest`](commands/ams/index.md#amsfilamentdryingrequest)
@@ -297,10 +273,6 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   Creates a request payload to update slot parameters.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsFilamentSettingRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsFilamentSettingRequest`
 
 ##### `impl Clone for AmsFilamentSettingRequest`
 
@@ -338,10 +310,6 @@ Requests an RFID tag scan on a specific AMS slot.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsGetRfidRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsGetRfidRequest`
-
 ##### `impl Clone for AmsGetRfidRequest`
 
 - <span id="amsgetrfidrequest-clone"></span>`fn clone(&self) -> AmsGetRfidRequest` — [`AmsGetRfidRequest`](commands/ams/index.md#amsgetrfidrequest)
@@ -377,10 +345,6 @@ Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
   Builds a `buzzer_ctrl` request for the given alarm mode.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for BuzzerRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for BuzzerRequest`
 
 ##### `impl Clone for BuzzerRequest`
 
@@ -418,10 +382,6 @@ Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for CalibrationRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CalibrationRequest`
-
 ##### `impl Clone for CalibrationRequest`
 
 - <span id="calibrationrequest-clone"></span>`fn clone(&self) -> CalibrationRequest` — [`CalibrationRequest`](commands/control/index.md#calibrationrequest)
@@ -457,10 +417,6 @@ Clears the printer's current error state so it can resume operation.
   Builds a `clean_print_error` request.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for CleanPrintErrorRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CleanPrintErrorRequest`
 
 ##### `impl Clone for CleanPrintErrorRequest`
 
@@ -498,10 +454,6 @@ Sends a raw G-code line to the printer for immediate execution.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for GCodeRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for GCodeRequest`
-
 ##### `impl Clone for GCodeRequest`
 
 - <span id="gcoderequest-clone"></span>`fn clone(&self) -> GCodeRequest` — [`GCodeRequest`](commands/gcode/index.md#gcoderequest)
@@ -537,10 +489,6 @@ Queries the printer for its hardware and firmware version info.
   Builds a `get_version` request.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for GetVersionRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for GetVersionRequest`
 
 ##### `impl Clone for GetVersionRequest`
 
@@ -581,10 +529,6 @@ Turns chamber or toolhead LEDs on or off.
   Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for LedCtrlRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for LedCtrlRequest`
 
 ##### `impl Clone for LedCtrlRequest`
 
@@ -722,10 +666,6 @@ with named fields and sensible defaults for calibration flags.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintJobConfig`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintJobConfig`
-
 ##### `impl Clone for PrintJobConfig`
 
 - <span id="printjobconfig-clone"></span>`fn clone(&self) -> PrintJobConfig` — [`PrintJobConfig`](commands/print_job/index.md#printjobconfig)
@@ -757,10 +697,6 @@ Changes the active print speed profile (silent, standard, sport, ludicrous).
   Builds a `print_speed` request from a stringified speed index.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for PrintSpeedRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PrintSpeedRequest`
 
 ##### `impl Clone for PrintSpeedRequest`
 
@@ -798,10 +734,6 @@ Submits a `.3mf` print job from the SD card for execution.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for ProjectFileRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for ProjectFileRequest`
-
 ##### `impl Clone for ProjectFileRequest`
 
 - <span id="projectfilerequest-clone"></span>`fn clone(&self) -> ProjectFileRequest` — [`ProjectFileRequest`](commands/print_job/index.md#projectfilerequest)
@@ -837,10 +769,6 @@ Enables or disables the printer's notification sounds.
   Builds a `print_option` request enabling or disabling notification sounds.
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for PromptSoundRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PromptSoundRequest`
 
 ##### `impl Clone for PromptSoundRequest`
 
@@ -878,10 +806,6 @@ Requests a full state dump from the printer (all telemetry fields at once).
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for PushAllRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for PushAllRequest`
-
 ##### `impl Clone for PushAllRequest`
 
 - <span id="pushallrequest-clone"></span>`fn clone(&self) -> PushAllRequest` — [`PushAllRequest`](commands/status/index.md#pushallrequest)
@@ -918,10 +842,6 @@ Tells the printer to skip specific objects in a multi-object print.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for SkipObjectsRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for SkipObjectsRequest`
-
 ##### `impl Clone for SkipObjectsRequest`
 
 - <span id="skipobjectsrequest-clone"></span>`fn clone(&self) -> SkipObjectsRequest` — [`SkipObjectsRequest`](commands/control/index.md#skipobjectsrequest)
@@ -957,10 +877,6 @@ Sends a print lifecycle command (pause, resume, stop) to the printer.
   Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for StandardControlRequest`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for StandardControlRequest`
 
 ##### `impl Clone for StandardControlRequest`
 
@@ -1006,10 +922,6 @@ Airduct damper operating mode [REF-MQTT-LIFECYCLE].
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AirductMode`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AirductMode`
-
 ##### `impl Clone for AirductMode`
 
 - <span id="airductmode-clone"></span>`fn clone(&self) -> AirductMode` — [`AirductMode`](commands/hardware/index.md#airductmode)
@@ -1025,8 +937,6 @@ Airduct damper operating mode [REF-MQTT-LIFECYCLE].
 ##### `impl PartialEq for AirductMode`
 
 - <span id="airductmode-partialeq-eq"></span>`fn eq(&self, other: &AirductMode) -> bool` — [`AirductMode`](commands/hardware/index.md#airductmode)
-
-##### `impl StructuralPartialEq for AirductMode`
 
 ### `AmsMappingTable`
 
@@ -1057,10 +967,6 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for AmsMappingTable`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for AmsMappingTable`
-
 ##### `impl Clone for AmsMappingTable`
 
 - <span id="amsmappingtable-clone"></span>`fn clone(&self) -> AmsMappingTable` — [`AmsMappingTable`](commands/print_job/index.md#amsmappingtable)
@@ -1078,8 +984,6 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 ##### `impl Serialize for AmsMappingTable`
 
 - <span id="amsmappingtable-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
-
-##### `impl StructuralPartialEq for AmsMappingTable`
 
 
 ---

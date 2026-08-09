@@ -41,10 +41,6 @@ Controller information segment detailing current temperature coordinates.
 
 #### Trait Implementations
 
-##### `impl<E> AsTaggedExplicit<'a, E> for CtcInfo`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CtcInfo`
-
 ##### `impl Clone for CtcInfo`
 
 - <span id="ctcinfo-clone"></span>`fn clone(&self) -> CtcInfo` — [`CtcInfo`](#ctcinfo)
@@ -85,10 +81,6 @@ Chamber Temperature Controller (CTC) telemetry sub-object.
   CTC controller state (0 = idle, 2 = heating).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for CtcTelemetry`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for CtcTelemetry`
 
 ##### `impl Clone for CtcTelemetry`
 
@@ -143,10 +135,6 @@ Each entry represents an active hardware fault or status indication. Use
   UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for HmsEntry`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for HmsEntry`
 
 ##### `impl Clone for HmsEntry`
 
@@ -213,10 +201,6 @@ Camera and recording state telemetry, nested as `print.ipcam` on the wire.
   RTSP streaming URL (e.g. `"rtsps://192.168.1.64/streaming/live/1"`).
 
 #### Trait Implementations
-
-##### `impl<E> AsTaggedExplicit<'a, E> for IpcamTelemetry`
-
-##### `impl<E> AsTaggedImplicit<'a, E> for IpcamTelemetry`
 
 ##### `impl Clone for IpcamTelemetry`
 
