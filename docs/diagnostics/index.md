@@ -382,7 +382,7 @@ JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [RE
 struct KProfileEntry {
     pub cali_idx: i32,
     pub filament_id: String,
-    pub nozzle_diameter: String,
+    pub nozzle_diameter: Option<String>,
     pub nozzle_id: String,
     pub extruder_id: u8,
     pub name: String,
@@ -406,9 +406,13 @@ Structured representation of a Linear Advance calibration profile entry on the p
 
   Preset identifier associated with the base filament category (e.g. `"GFA01"`).
 
-- **`nozzle_diameter`**: `String`
+- **`nozzle_diameter`**: `Option<String>`
 
   Physical orifice size matching the calibrated tool (e.g. `"0.4"`).
+  
+  Single-nozzle firmware omits this field per-entry (it only sets it once at the
+  `ExtrusionCaliGetResponsePayload` envelope level) — callers reading a parsed response
+  must fall back to the envelope's `nozzle_diameter` when this is `None`.
 
 - **`nozzle_id`**: `String`
 
@@ -440,7 +444,10 @@ Structured representation of a Linear Advance calibration profile entry on the p
 
 - **`tray_id`**: `Option<i32>`
 
-  Links K-profile to AMS tray slot (default -1).
+  Links K-profile to AMS tray slot (default -1). At least X1C firmware spuriously
+  reports `result: "fail"` for `extrusion_cali` writes using `tray_id: -1` even though
+  the write still applies — don't treat that ack `result` as authoritative for a
+  `tray_id: -1` write without cross-checking the profile actually landed.
 
 #### Trait Implementations
 

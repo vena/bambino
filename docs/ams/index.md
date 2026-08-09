@@ -285,7 +285,7 @@ Flat-array equivalent of `is_external_spool_safety_valid`, for callers using `Pr
 ### `clean_stale_tray_data`
 
 ```rust
-fn clean_stale_tray_data(tray: &mut crate::types::AmsTray)
+fn clean_stale_tray_data(tray: &mut crate::types::AmsTray, ams_id: u8)
 ```
 
 **Types:** [`AmsTray`](../types/telemetry/ams/index.md#amstray)
@@ -310,6 +310,10 @@ Bambuddy cross-check (`on_ams_change`'s `loaded = cur_state == 11 or (cur_state 
 (9, 10) and cur_type.strip())`): state 11 is unconditionally treated as loaded regardless
 of whether `tray_type` was repeated in that update, so clearing on absence alone would
 wipe a currently-printing tray's material data.
+
+`ams_id` gates the state-9 heuristic: on AMS-HT units (`ams_id` 128-135), state 9 on a
+partial power-on frame means *loaded*, not empty — the opposite of its meaning on a
+standard 4-slot AMS — so state 9 alone is not treated as a clearing signal for HT units.
 
 ### `evaluate_spool_presence`
 
