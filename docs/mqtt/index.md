@@ -551,12 +551,12 @@ struct PrintJobConfig {
     pub subtask_name: String,
     pub raw_subtask_id: u64,
     pub bed_type: String,
-    pub bed_leveling: bool,
-    pub run_flow_calibration: bool,
+    pub bed_leveling: CalibrationMode,
+    pub run_flow_calibration: CalibrationMode,
     pub run_vibration_compensation: bool,
     pub timelapse: bool,
     pub layer_inspect: bool,
-    pub nozzle_offset_cali: Option<bool>,
+    pub nozzle_offset_cali: Option<CalibrationMode>,
     pub use_ams: bool,
     pub ams_mapping: Vec<i32>,
     pub ams_mapping2: Option<Vec<crate::ams::mapping::AmsMapping2Entry>>,
@@ -590,11 +590,11 @@ with named fields and sensible defaults for calibration flags.
 
   Bed plate type (e.g. "textured", "smooth").
 
-- **`bed_leveling`**: `bool`
+- **`bed_leveling`**: `CalibrationMode`
 
   Whether to run automatic bed leveling before the print.
 
-- **`run_flow_calibration`**: `bool`
+- **`run_flow_calibration`**: `CalibrationMode`
 
   Whether to run dynamic flow calibration before the print.
 
@@ -610,7 +610,7 @@ with named fields and sensible defaults for calibration flags.
 
   Whether to run first-layer inspection during the print.
 
-- **`nozzle_offset_cali`**: `Option<bool>`
+- **`nozzle_offset_cali`**: `Option<CalibrationMode>`
 
   `None` defers to the quirks engine default in `PrinterClient::start_print()`.
 
@@ -640,11 +640,11 @@ with named fields and sensible defaults for calibration flags.
 
   Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
 
-- <span id="printjobconfig-bed-leveling"></span>`fn bed_leveling(self, enabled: bool) -> Self`
+- <span id="printjobconfig-bed-leveling"></span>`fn bed_leveling(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
   Enables or disables automatic bed leveling for this job.
 
-- <span id="printjobconfig-flow-calibration"></span>`fn flow_calibration(self, enabled: bool) -> Self`
+- <span id="printjobconfig-flow-calibration"></span>`fn flow_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
   Enables or disables flow calibration for this job.
 
@@ -660,7 +660,7 @@ with named fields and sensible defaults for calibration flags.
 
   Enables or disables first-layer inspection for this job.
 
-- <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, enabled: bool) -> Self`
+- <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
   Overrides the model's default nozzle-offset-calibration behavior for this job.
 
@@ -984,6 +984,59 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 ##### `impl Serialize for AmsMappingTable`
 
 - <span id="amsmappingtable-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `CalibrationMode`
+
+```rust
+enum CalibrationMode {
+    Off,
+    On,
+    Auto,
+}
+```
+
+Tri-state calibration setting: force every print, skip entirely, or let the firmware decide
+based on whether the relevant calibration ran recently [REF-MQTT-LIFECYCLE].
+
+Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed in
+`bambu_networking.hpp`'s `auto_bed_leveling` member and `SelectMachine.cpp`'s
+`ops_auto`-driven checkboxes): `Off` = 0, `On` = 1, `Auto` = 2 (skip if not needed recently).
+
+#### Variants
+
+- **`Off`**
+
+  Never run this calibration.
+
+- **`On`**
+
+  Always run this calibration.
+
+- **`Auto`**
+
+  Let the firmware run it only if it wasn't done recently.
+
+#### Trait Implementations
+
+##### `impl Clone for CalibrationMode`
+
+- <span id="calibrationmode-clone"></span>`fn clone(&self) -> CalibrationMode` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
+
+##### `impl Copy for CalibrationMode`
+
+##### `impl Debug for CalibrationMode`
+
+- <span id="calibrationmode-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for CalibrationMode`
+
+- <span id="calibrationmode-default"></span>`fn default() -> CalibrationMode` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
+
+##### `impl Eq for CalibrationMode`
+
+##### `impl PartialEq for CalibrationMode`
+
+- <span id="calibrationmode-partialeq-eq"></span>`fn eq(&self, other: &CalibrationMode) -> bool` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
 
 ---

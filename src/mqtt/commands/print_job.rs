@@ -15,6 +15,46 @@ use crate::models::PrinterModel;
 
 use super::ClampedTaskId;
 
+/// Tri-state calibration setting: force every print, skip entirely, or let the firmware decide
+/// based on whether the relevant calibration ran recently [REF-MQTT-LIFECYCLE].
+///
+/// Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed in
+/// `bambu_networking.hpp`'s `auto_bed_leveling` member and `SelectMachine.cpp`'s
+/// `ops_auto`-driven checkboxes): `Off` = 0, `On` = 1, `Auto` = 2 (skip if not needed recently).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CalibrationMode {
+    /// Never run this calibration.
+    Off,
+    /// Always run this calibration.
+    #[default]
+    On,
+    /// Let the firmware run it only if it wasn't done recently.
+    Auto,
+}
+
+impl CalibrationMode {
+    fn as_wire_i32(self) -> i32 {
+        match self {
+            CalibrationMode::Off => 0,
+            CalibrationMode::On => 1,
+            CalibrationMode::Auto => 2,
+        }
+    }
+
+    fn as_wire_bool(self) -> bool {
+        matches!(self, CalibrationMode::On)
+    }
+}
+
+impl From<bool> for CalibrationMode {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            CalibrationMode::On
+        } else {
+            CalibrationMode::Off
+        }
+    }
+}
 /// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 ///
 /// Replaces the positional parameter list on `start_print()` and `ProjectFileRequest::new()`
@@ -32,9 +72,9 @@ pub struct PrintJobConfig {
     /// Bed plate type (e.g. "textured", "smooth").
     pub bed_type: String,
     /// Whether to run automatic bed leveling before the print.
-    pub bed_leveling: bool,
+    pub bed_leveling: CalibrationMode,
     /// Whether to run dynamic flow calibration before the print.
-    pub run_flow_calibration: bool,
+    pub run_flow_calibration: CalibrationMode,
     /// Whether to run vibration compensation calibration before the print.
     pub run_vibration_compensation: bool,
     /// Whether timelapse capture is enabled.
@@ -42,7 +82,7 @@ pub struct PrintJobConfig {
     /// Whether to run first-layer inspection during the print.
     pub layer_inspect: bool,
     /// `None` defers to the quirks engine default in `PrinterClient::start_print()`.
-    pub nozzle_offset_cali: Option<bool>,
+    pub nozzle_offset_cali: Option<CalibrationMode>,
     /// Whether to route filament through the AMS rather than an external spool.
     pub use_ams: bool,
     /// Flat AMS slot mapping (one entry per plate object, -1 = no AMS slot).
@@ -66,8 +106,8 @@ impl PrintJobConfig {
             subtask_name: String::from(subtask_name),
             raw_subtask_id,
             bed_type: String::from(bed_type),
-            bed_leveling: true,
-            run_flow_calibration: true,
+            bed_leveling: CalibrationMode::On,
+            run_flow_calibration: CalibrationMode::On,
             run_vibration_compensation: true,
             timelapse: true,
             layer_inspect: true,
@@ -95,14 +135,14 @@ impl PrintJobConfig {
     }
 
     /// Enables or disables automatic bed leveling for this job.
-    pub fn bed_leveling(mut self, enabled: bool) -> Self {
-        self.bed_leveling = enabled;
+    pub fn bed_leveling(mut self, mode: impl Into<CalibrationMode>) -> Self {
+        self.bed_leveling = mode.into();
         self
     }
 
     /// Enables or disables flow calibration for this job.
-    pub fn flow_calibration(mut self, enabled: bool) -> Self {
-        self.run_flow_calibration = enabled;
+    pub fn flow_calibration(mut self, mode: impl Into<CalibrationMode>) -> Self {
+        self.run_flow_calibration = mode.into();
         self
     }
 
@@ -125,8 +165,8 @@ impl PrintJobConfig {
     }
 
     /// Overrides the model's default nozzle-offset-calibration behavior for this job.
-    pub fn nozzle_offset_calibration(mut self, enabled: bool) -> Self {
-        self.nozzle_offset_cali = Some(enabled);
+    pub fn nozzle_offset_calibration(mut self, mode: impl Into<CalibrationMode>) -> Self {
+        self.nozzle_offset_cali = Some(mode.into());
         self
     }
 }
@@ -187,11 +227,19 @@ pub struct ProjectFilePayload {
     pub timelapse: bool,
     /// Bed plate type used for the print (e.g. "textured", "smooth").
     pub bed_type: String,
-    /// Whether to run automatic bed leveling before the print.
+    /// Whether to run automatic bed leveling before the print. `true` only for `CalibrationMode::On`
+    /// — `Auto` is carried by the companion `auto_bed_leveling` int, not by setting this `true`.
     pub bed_leveling: bool,
-    /// Controls dynamic flow calibration. Expressed as an integer: `1` for active, `0` for bypass.
+    /// Tri-state companion to `bed_leveling`: `0`=off, `1`=on, `2`=auto (skip if leveled recently).
+    /// bed_leveling itself must stay a strict JSON bool on every model — real captures showed
+    /// integer-encoding it disrupts flow calibration on H2S (see reference/03_mqtt_telemetry.md);
+    /// this separate int field is how BambuStudio expresses Auto instead
+    /// (`bambu_networking.hpp`'s `auto_bed_leveling` member, confirmed against bambuddy's wire capture).
+    pub auto_bed_leveling: i32,
+    /// Controls dynamic flow calibration: `0`=off, `1`=on, `2`=auto (skip if calibrated recently).
     pub extrude_cali_flag: i32,
-    /// Active nozzle offset verification flag (Used primarily on IDEX and tool-changers).
+    /// Active nozzle offset verification flag (Used primarily on IDEX and tool-changers):
+    /// `0`=off, `1`=on, `2`=auto (skip if calibrated recently).
     pub nozzle_offset_cali: i32,
     /// Whether vibration compensation calibration ran as part of this job.
     pub vibration_cali: bool,
@@ -253,9 +301,9 @@ impl ProjectFileRequest {
             AmsMappingTable::Inactive(String::new())
         };
 
-        let nozzle_offset = config
-            .nozzle_offset_cali
-            .unwrap_or_else(|| model.quirks().supports_nozzle_offset_calibration());
+        let nozzle_offset = config.nozzle_offset_cali.unwrap_or_else(|| {
+            CalibrationMode::from(model.quirks().supports_nozzle_offset_calibration())
+        });
 
         // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's
@@ -269,7 +317,7 @@ impl ProjectFileRequest {
                 param: config.plate_gcode_path.clone(),
                 subtask_name: config.subtask_name.clone(),
                 subtask_id: submission_id.clone(),
-                flow_cali: config.run_flow_calibration,
+                flow_cali: config.run_flow_calibration.as_wire_bool(),
                 profile_id: String::from("0"),
                 project_id: submission_id.clone(),
                 task_id: submission_id,
@@ -277,9 +325,10 @@ impl ProjectFileRequest {
                 url,
                 timelapse: config.timelapse,
                 bed_type: config.bed_type.clone(),
-                bed_leveling: config.bed_leveling,
-                extrude_cali_flag: if config.run_flow_calibration { 1 } else { 0 },
-                nozzle_offset_cali: if nozzle_offset { 1 } else { 0 },
+                bed_leveling: config.bed_leveling.as_wire_bool(),
+                auto_bed_leveling: config.bed_leveling.as_wire_i32(),
+                extrude_cali_flag: config.run_flow_calibration.as_wire_i32(),
+                nozzle_offset_cali: nozzle_offset.as_wire_i32(),
                 vibration_cali: config.run_vibration_compensation,
                 layer_inspect: config.layer_inspect,
                 use_ams,

@@ -32,7 +32,7 @@ pub use gcode::GCodeRequest;
 pub use hardware::{
     AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
 };
-pub use print_job::{AmsMappingTable, PrintJobConfig, ProjectFileRequest};
+pub use print_job::{AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest};
 pub use status::{GetVersionRequest, PushAllRequest};
 
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
@@ -312,6 +312,33 @@ mod tests {
         let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::X2D);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""nozzle_offset_cali":0"#));
+    }
+
+    #[test]
+    fn test_calibration_mode_auto_wire_encoding() {
+        use crate::mqtt::CalibrationMode;
+
+        let config = PrintJobConfig::new(
+            "job.3mf",
+            "Metadata/plate_1.gcode",
+            "Test Print",
+            12345,
+            "textured",
+        )
+        .bed_leveling(CalibrationMode::Auto)
+        .flow_calibration(CalibrationMode::Auto)
+        .nozzle_offset_calibration(CalibrationMode::Auto);
+        let req = ProjectFileRequest::from_config(&config, 5000, PrinterModel::X2D);
+        let json = serde_json::to_string(&req).unwrap();
+
+        // bed_leveling stays a strict JSON bool (false, since Auto != On) — see
+        // reference/03_mqtt_telemetry.md for why this field can never be int-encoded.
+        // The tri-state intent is carried by auto_bed_leveling instead.
+        assert!(json.contains(r#""bed_leveling":false"#));
+        assert!(json.contains(r#""auto_bed_leveling":2"#));
+        assert!(json.contains(r#""flow_cali":false"#));
+        assert!(json.contains(r#""extrude_cali_flag":2"#));
+        assert!(json.contains(r#""nozzle_offset_cali":2"#));
     }
 
     #[test]

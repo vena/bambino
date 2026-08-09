@@ -126,11 +126,13 @@ let config = PrintJobConfig::new(
 printer.start_print(&config).await?;
 ```
 
-Bed leveling, flow calibration, and vibration compensation run automatically as part of the print (all enabled by default in `PrintJobConfig`). Use the builder methods to change them:
+Bed leveling, flow calibration, and vibration compensation run automatically as part of the print (all enabled by default in `PrintJobConfig`). Use the builder methods to change them — they take either a `bool` or a `CalibrationMode` (`Off`/`On`/`Auto`, matching BambuStudio's tri-state encoding):
 
 ```rust
+use bambino::mqtt::CalibrationMode;
+
 let config = PrintJobConfig::new("job.3mf", "Metadata/plate_1.gcode", "My Print", 12345, "textured")
-    .bed_leveling(false)
+    .bed_leveling(CalibrationMode::Auto) // skip if leveled recently, matching BambuStudio's default
     .flow_calibration(false)
     .timelapse(false);
 ```

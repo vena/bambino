@@ -319,6 +319,7 @@ Initiates print execution of a sliced `.3mf` file currently residing on the Micr
     "timelapse": true,
     "bed_type": "auto",
     "bed_leveling": true,
+    "auto_bed_leveling": 1,
     "extrude_cali_flag": 1,
     "nozzle_offset_cali": 0,
     "vibration_cali": true,
@@ -330,17 +331,27 @@ Initiates print execution of a sliced `.3mf` file currently residing on the Micr
 ```
 
 ###### Calibration and Leveling Fields
-Standard printer configuration toggles (`timelapse`, `bed_leveling`, `vibration_cali`, and `layer_inspect`) are evaluated as raw **JSON booleans** (`true` or `false`) for every model family. Real-world captures indicate that serializing these fields as integers (e.g., `1` or `0`) can disrupt the firmware's local calibration loops, causing certain architectures (such as the single-nozzle `H2S`) to bypass flow calibration entirely.
+Standard printer configuration toggles (`timelapse`, `bed_leveling`, `vibration_cali`, and `layer_inspect`) are evaluated as raw **JSON booleans** (`true` or `false`) for every model family. Real-world captures indicate that serializing these fields as integers (e.g., `1` or `0`) can disrupt the firmware's local calibration loops, causing certain architectures (such as the single-nozzle `H2S`) to bypass flow calibration entirely. `bed_leveling` in particular has no tri-state — it is exactly "on"/"off", nothing else.
+
+###### Bed Leveling Auto Companion Field (`auto_bed_leveling`)
+BambuStudio pairs the strict-boolean `bed_leveling` field above with a separate integer field, `auto_bed_leveling`, that carries the tri-state intent — confirmed against BambuStudio source (`bambu_networking.hpp`'s `PrintParams::auto_bed_leveling` member and `PrintJob.cpp`'s `params.auto_bed_leveling = this->auto_bed_leveling;`) and a bambuddy wire capture (`bambu_mqtt.py`'s `start_print()`, which sends `"bed_leveling": bed_levelling == "on"` alongside `"auto_bed_leveling": bed_level_int`):
+*   `0`: Skip bed leveling (`bed_leveling` is also `false`).
+*   `1`: Force bed leveling every print (`bed_leveling` is also `true`).
+*   `2`: Auto — firmware runs it only if the bed wasn't leveled recently (`bed_leveling` stays `false`; only this field carries Auto).
+
+This two-field shape is why bed_leveling itself must never become tri-state: the earlier ask to encode Auto directly into `bed_leveling` as an integer would collide with the strict-boolean requirement documented above and the H2S flow-calibration regression it was fixed for.
 
 ###### Calibration Execution Flag (`extrude_cali_flag`)
 The `extrude_cali_flag` parameter governs dynamic flow calibration and must be serialized as an integer:
 *   `1`: Execute/run calibration.
 *   `0`: Skip calibration.
+*   `2`: Auto — firmware runs it only if flow wasn't calibrated recently (confirmed against BambuStudio's `SelectMachine.cpp` `getValueInt()` tri-state encoding and bambuddy's `_tristate_wire = {"off": 0, "on": 1, "auto": 2}` map).
 
 ###### Nozzle Offset Calibration Flag (`nozzle_offset_cali`)
 The `nozzle_offset_cali` parameter governs pre-print physical nozzle alignment and is exposed on multi-nozzle carriage platforms (`H2D`, `H2D Pro`, `H2C`, and `X2D`). It must be serialized as an integer:
 *   `1`: Execute/run nozzle offset calibration.
 *   `0`: Skip calibration.
+*   `2`: Auto — firmware runs it only if nozzle offsets weren't calibrated recently (same tri-state encoding as `extrude_cali_flag`; see `CalibUtils.cpp`'s `nozzle_offset_cali = ... ? 2 : 0` default).
 
 On single-nozzle architectures, this field resolves to `0` to prevent the firmware from initiating sensor checks for non-existent secondary hardware carriages.
 
