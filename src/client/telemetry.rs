@@ -22,6 +22,22 @@ use crate::types::{
 use super::PrinterClient;
 use super::types::{PrintProgress, PrintSpeed, PrintStatus, TelemetryEvent};
 
+/// `print.command` values seen on genuine telemetry pushes. Any other value on a
+/// deserializable `TelemetryReport` means the frame is really a command-echo response
+/// (`extrusion_cali_get`, `ams_control`, etc.) that happens to share the `print` envelope
+/// and enough optional field names to parse as a mostly-empty report.
+const KNOWN_TELEMETRY_COMMANDS: &[&str] = &["push_status", "pushall"];
+
+/// True if `report` is a command-echo response misdetected as telemetry rather than a
+/// genuine `push_status`/`pushall` frame — see [`KNOWN_TELEMETRY_COMMANDS`].
+fn is_command_echo(report: &TelemetryReport) -> bool {
+    report
+        .print
+        .as_ref()
+        .and_then(|print| print.command.as_deref())
+        .is_some_and(|command| !KNOWN_TELEMETRY_COMMANDS.contains(&command))
+}
+
 /// Cached "last-observed" telemetry values, updated by `PrinterClient::poll_telemetry()`.
 /// Each field independently keeps its most recently observed value — a telemetry message
 /// that omits a field leaves the previously-cached value in place (see the accessor methods
@@ -99,7 +115,11 @@ where
     /// Pulls the next telemetry event from the MQTT channel.
     ///
     /// Returns a [`TelemetryEvent::Report`] if the payload deserializes as a known
-    /// telemetry structure, or [`TelemetryEvent::Unknown`] otherwise. Drains any
+    /// telemetry structure, or [`TelemetryEvent::Unknown`] otherwise. A payload that
+    /// deserializes successfully but carries a `print.command` other than `"push_status"`/
+    /// `"pushall"` is a command-echo response (e.g. `extrusion_cali_get`'s reply shares the
+    /// `print` envelope and the `nozzle_diameter` field name with genuine telemetry) and is
+    /// also routed to `Unknown` rather than misreported as a report. Drains any
     /// internally buffered messages (from command-response round-trips) before
     /// reading from the wire.
     ///
@@ -126,6 +146,7 @@ where
             .poll_telemetry_with_timer(&self.timer)
             .await?;
         match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
+            Ok(report) if is_command_echo(&report) => Ok(TelemetryEvent::Unknown(msg)),
             Ok(report) => {
                 self.update_telemetry_cache(&report);
                 Ok(TelemetryEvent::Report(Box::new(report), msg))

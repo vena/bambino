@@ -28,6 +28,13 @@ pub struct PrinterTelemetry {
     /// High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
     pub gcode_state: Option<String>,
 
+    /// Wire command name this frame arrived under (`"push_status"`/`"pushall"` for genuine
+    /// telemetry pushes; a command-echo response — e.g. `"extrusion_cali_get"` — shares this
+    /// same `print` envelope and can otherwise deserialize as an emptyish telemetry report
+    /// [see poll_telemetry's command-echo filter].
+    #[serde(default)]
+    pub command: Option<String>,
+
     /// Path or parent project file currently loaded for execution.
     pub gcode_file: Option<String>,
 
