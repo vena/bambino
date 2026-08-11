@@ -521,7 +521,7 @@ where
     }
 
     fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {
-        decode_fan_percentage(raw, self.identity.model.quirks().reports_auxiliary_fan_percentage())
+        decode_fan_percentage(raw)
     }
 
     /// Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

@@ -89,10 +89,6 @@ impl ModelQuirks for X2Quirks {
         true
     }
 
-    fn reports_auxiliary_fan_percentage(&self) -> bool {
-        true
-    }
-
     fn z_max(&self) -> f32 {
         X2D_Z_MAX
     }

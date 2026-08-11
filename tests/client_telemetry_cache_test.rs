@@ -726,12 +726,50 @@ async fn test_fan_speed_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    // H2D uses step-encoded (not percentage) fan telemetry for the primary four fans,
-    // unlike X2D (which reports percentages directly — see `X2Quirks::reports_auxiliary_fan_percentage`).
+    // The four flat fan keys are step-encoded (0-15) on every model, including P2S/X2D — see
+    // test_fan_speed_cache_from_telemetry_x2d_step_encoded below.
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(client.part_cooling_fan_speed(), None);
     assert_eq!(client.auxiliary_right_fan_speed(), None);
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse fan speed report");
+
+    assert_eq!(client.part_cooling_fan_speed(), Some(100));
+    assert_eq!(client.auxiliary_left_fan_speed(), Some(53));
+    assert_eq!(client.chamber_exhaust_fan_speed(), Some(0));
+    assert_eq!(client.heatbreak_fan_speed(), Some(100));
+    assert_eq!(client.auxiliary_right_fan_speed(), Some(75));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5706,
+            br#"{"print":{"cooling_fan_speed":"15","big_fan1_speed":"8","big_fan2_speed":"0","heatbreak_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":75}]}}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    // Regression for #38: X2D/P2S previously decoded the four flat fan keys as
+    // already-percentage (ModelQuirks::reports_auxiliary_fan_percentage), reading ~6.7x too low.
+    // They must step-decode identically to every other model — only the id-160 airduct part
+    // (auxiliary_right_fan_speed) is a true wire percentage.
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
 
     client
         .poll_telemetry()

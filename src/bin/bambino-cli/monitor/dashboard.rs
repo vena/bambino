@@ -115,7 +115,7 @@ pub(super) fn render_dashboard(
     render_print_status(state, &mut w);
     render_nozzles(state, &mut w);
     render_thermal(state, quirks, &mut w);
-    render_fans_and_system(state, quirks, &mut w);
+    render_fans_and_system(state, &mut w);
     render_ams(state, &mut w);
     render_external_spool(state, &mut w);
 
@@ -327,19 +327,18 @@ fn render_thermal(
 
 fn render_fans_and_system(
     state: &serde_json::Map<String, serde_json::Value>,
-    quirks: &dyn ModelQuirks,
     w: &mut impl Write,
 ) {
     let fan_values = [
         (
             "Part Cooling",
-            get_fan_pct(state, "cooling_fan_speed", quirks),
+            get_fan_pct(state, "cooling_fan_speed"),
         ),
-        ("Aux Fan", get_fan_pct(state, "big_fan1_speed", quirks)),
-        ("Chamber Fan", get_fan_pct(state, "big_fan2_speed", quirks)),
+        ("Aux Fan", get_fan_pct(state, "big_fan1_speed")),
+        ("Chamber Fan", get_fan_pct(state, "big_fan2_speed")),
         (
             "Heatbreak Fan",
-            get_fan_pct(state, "heatbreak_fan_speed", quirks),
+            get_fan_pct(state, "heatbreak_fan_speed"),
         ),
     ];
 
@@ -521,13 +520,9 @@ fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mu
     }
 }
 
-fn get_fan_pct(
-    state: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    quirks: &dyn ModelQuirks,
-) -> String {
+fn get_fan_pct(state: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
     let raw = state.get(key).and_then(|v| v.as_str());
-    decode_fan_percentage(raw, quirks.reports_auxiliary_fan_percentage())
+    decode_fan_percentage(raw)
         .map(|pct| format!("{}%", pct))
         .unwrap_or_else(|| "--".to_string())
 }

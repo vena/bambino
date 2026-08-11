@@ -157,11 +157,6 @@ pub trait ModelQuirks {
         false
     }
 
-    /// Returns true if the model's auxiliary fan telemetry reports speed as a direct percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
-    fn reports_auxiliary_fan_percentage(&self) -> bool {
-        false
-    }
-
     /// Returns true if the model has controllable airduct dampers for climate mode switching (cooling vs heating recirculation) [REF-CLIM-FANS].
     ///
     /// Supported on: H2S, H2D, H2D Pro, H2C, P2S, X2D.
@@ -341,18 +336,11 @@ pub fn fan_step_to_percentage(step: u8) -> u8 {
     }
 }
 
-/// Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
-///
-/// `uses_percentage` should come from [`ModelQuirks::reports_auxiliary_fan_percentage()`] — most
-/// models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an
-/// already-clamped percentage directly. Returns `None` if `raw` is absent or not a valid `u8`.
-pub fn decode_fan_percentage(raw: Option<&str>, uses_percentage: bool) -> Option<u8> {
+/// Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`].
+/// Returns `None` if `raw` is absent or not a valid `u8`.
+pub fn decode_fan_percentage(raw: Option<&str>) -> Option<u8> {
     let step: u8 = raw?.parse().ok()?;
-    Some(if uses_percentage {
-        step.min(100)
-    } else {
-        fan_step_to_percentage(step)
-    })
+    Some(fan_step_to_percentage(step))
 }
 
 /// Filters out transient quantization oscillation artifacts emitted by physical fan controllers.
@@ -467,7 +455,6 @@ mod tests {
         assert!(!q.supports_auxiliary_right_fan());
         assert!(!q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert!(!q.reports_auxiliary_fan_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 100);
@@ -570,7 +557,6 @@ mod tests {
         assert!(q.supports_auxiliary_right_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert!(q.reports_auxiliary_fan_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 110);
@@ -645,7 +631,6 @@ mod tests {
         assert!(q.supports_auxiliary_right_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
-        assert!(q.reports_auxiliary_fan_percentage());
         assert_eq!(q.z_max(), 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 120);

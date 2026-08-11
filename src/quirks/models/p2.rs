@@ -99,10 +99,6 @@ impl ModelQuirks for P2Quirks {
         true
     }
 
-    fn reports_auxiliary_fan_percentage(&self) -> bool {
-        true
-    }
-
     fn z_max(&self) -> f32 {
         P2S_Z_MAX
     }
