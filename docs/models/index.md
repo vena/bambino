@@ -148,3 +148,8 @@ Each H2-series model has a distinct serial prefix confirmed by the Bambu Lab wik
 `094` = H2D, `093` = H2S, `239` = H2D Pro, `31B` = H2C. When the prefix is
 unrecognized, the optional `DevModel` SSDP header provides a fallback path.
 
+Both `serial` and `dev_model` are matched case-insensitively: SSDP USN serial casing
+varies by firmware compile target (reference/01_network_discovery.md §1.6), and a
+caller can also pass either value straight into [`PrinterIdentity::new`] with no
+discovery-layer normalization.
+
