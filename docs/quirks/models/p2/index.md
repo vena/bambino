@@ -71,8 +71,6 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-supports-auxiliary-left2-fan"></span>`fn supports_auxiliary_left2_fan(&self) -> bool`
 
-- <span id="p2quirks-modelquirks-reports-auxiliary-fan-percentage"></span>`fn reports_auxiliary_fan_percentage(&self) -> bool`
-
 - <span id="p2quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
 
 - <span id="p2quirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`

@@ -1649,6 +1649,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`home_flag`**: `Option<u32>`
 
   Kinematics flag field tracking homing states, networking interfaces, and door nodes.
+  
+  Transmitted as a signed 32-bit int on the wire [REF-HOMEFLAG]; bit 31 set produces a
+  negative JSON number that a bare `u32` target rejects, failing the whole telemetry
+  message's deserialize. Masked into `u32` via `deserialize_signed_as_u32`.
 
 - **`stat`**: `Option<String>`
 

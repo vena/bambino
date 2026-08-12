@@ -205,7 +205,14 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 
 - **`AuxiliaryLeft2`**
 
-  Second left-side auxiliary fan (Port 10, supported on X2D and P2S).
+  Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+  
+  Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
+  "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
+  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](Self::AuxiliaryLeft)'s
+  primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
+  Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
+  part cooling fan" throughout (issue #60).
 
 #### Trait Implementations
 

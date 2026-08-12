@@ -23,7 +23,7 @@ with the low-resolution PWM fan telemetry common across most models.
 | [`models`](#models) | mod | # Model-Specific Kinematic and Operational Configuration Submodules |
 | [`FanSpeedDebouncer`](#fanspeeddebouncer) | struct | Filters out transient quantization oscillation artifacts emitted by physical fan controllers. |
 | [`ModelQuirks`](#modelquirks) | trait | Polymorphic interface tracking model-specific hardware variations and transport exceptions. |
-| [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage. |
+| [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`]. |
 | [`fan_step_to_percentage`](#fan-step-to-percentage) | fn | Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS]. |
 
 ## Modules
@@ -184,7 +184,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - `fn supports_auxiliary_left2_fan(&self) -> bool`
 
   Returns true if the model has a second left-side auxiliary fan (port 10, wire-labeled
-  "right" but confirmed a left-side fan) [REF-CLIM-FANS].
 
 - `fn supports_auxiliary_left_fan(&self) -> bool`
 
@@ -193,10 +192,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - `fn has_chamber_exhaust_fan(&self) -> bool`
 
   Returns true if the model has a chamber exhaust/filtration fan (port 3) [REF-CLIM-FANS].
-
-- `fn reports_auxiliary_fan_percentage(&self) -> bool`
-
-  Returns true if the model's auxiliary fan telemetry reports speed as a direct percentage (0-100) instead of discrete PWM steps (0-15) [REF-CLIM-FANS].
 
 - `fn supports_airduct_mode(&self) -> bool`
 
@@ -238,14 +233,11 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 ### `decode_fan_percentage`
 
 ```rust
-fn decode_fan_percentage(raw: Option<&str>, uses_percentage: bool) -> Option<u8>
+fn decode_fan_percentage(raw: Option<&str>) -> Option<u8>
 ```
 
-Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage.
-
-`uses_percentage` should come from [`ModelQuirks::reports_auxiliary_fan_percentage()`] — most
-models report a 0-15 step value needing [`fan_step_to_percentage()`], but some report an
-already-clamped percentage directly. Returns `None` if `raw` is absent or not a valid `u8`.
+Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`].
+Returns `None` if `raw` is absent or not a valid `u8`.
 
 ### `fan_step_to_percentage`
 

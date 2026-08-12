@@ -1049,11 +1049,15 @@ Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed i
 fn clamp_task_id(raw_id: u64) -> u32
 ```
 
-Clamps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) within the strict boundary limits of a 32-bit signed integer (`2147483647`).
+Wraps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) into the strict boundary limits of a 32-bit signed integer (`2147483647`) via modulo, not saturation.
 
 **Why this is critical [REF-MQTT-ENV]:**
 The printer's onboard G-code parsing routine clamps subtask identifiers to standard 32-bit
 signed integer limits. If a connecting client uses an un-clamped millisecond epoch (13-digit integer),
 the memory allocation registers on the motion board will overflow. This causes the printer to lock
 indefinitely in an `IDLE` state and reject all subsequent print dispatches.
+
+The modulo semantics are deliberate (`client/mod.rs`'s `next_sequence_id()` wants
+continuation across the wraparound, not a reset to a fixed ceiling) — `clamp_task_id(TASK_ID_MAX)
+== 0`, asserted by `test_clamp_task_id_wraps_near_max` below.
 
