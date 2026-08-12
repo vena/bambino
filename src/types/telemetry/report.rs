@@ -72,6 +72,11 @@ pub struct PrinterTelemetry {
     pub mc_print_stage: Option<String>,
 
     /// Kinematics flag field tracking homing states, networking interfaces, and door nodes.
+    ///
+    /// Transmitted as a signed 32-bit int on the wire [REF-HOMEFLAG]; bit 31 set produces a
+    /// negative JSON number that a bare `u32` target rejects, failing the whole telemetry
+    /// message's deserialize. Masked into `u32` via `deserialize_signed_as_u32`.
+    #[serde(default, deserialize_with = "deserialize_signed_as_u32")]
     pub home_flag: Option<u32>,
 
     /// State field used in newer enclosed printer lines to track sensors (e.g., door status hex strings).
@@ -282,6 +287,17 @@ pub struct NetInfo {
     /// Bitmask; bit 0 (`0x1`) set means wired Ethernet is the active connection.
     #[serde(default)]
     pub conf: Option<u32>,
+}
+
+/// Masks a signed wire value (`home_flag` can carry bit 31 set, read by firmware as negative)
+/// into its `u32` bit pattern instead of rejecting it. Mirrors [REF-HOMEFLAG]'s documented
+/// `flag & 0xFFFFFFFF` handling.
+fn deserialize_signed_as_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<i64> = Option::deserialize(deserializer)?;
+    Ok(raw.map(|v| v as u32))
 }
 
 pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;

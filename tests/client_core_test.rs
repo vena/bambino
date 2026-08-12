@@ -357,7 +357,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
 
     // Verify right auxiliary cooling fan is restricted on non-X2D models
     let err_res = client_p1s
-        .set_fan_speed(FanTarget::AuxiliaryRight, 80)
+        .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
         .await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
@@ -372,7 +372,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     let mut client_x2 = connect_test_client(TokioIo(client_stream_x2), "20P000000000000", PrinterModel::X2D).await;
 
     client_x2
-        .set_fan_speed(FanTarget::AuxiliaryRight, 80)
+        .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
         .await
         .expect("X2D auxiliary right fan set failed");
 
@@ -406,8 +406,8 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
 #[tokio::test]
 async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     // FanTarget::ChamberExhaust was never exercised through set_fan_speed, unlike its
-    // 3 sibling fan targets above (PartCooling, AuxiliaryLeft, AuxiliaryRight). Mirrors the
-    // AuxiliaryRight success (X2D)/mismatch (P1S) pair in
+    // 3 sibling fan targets above (PartCooling, AuxiliaryLeft, AuxiliaryLeft2). Mirrors the
+    // AuxiliaryLeft2 success (X2D)/mismatch (P1S) pair in
     // test_cooling_fans_and_peripheral_switches, using H2D for the success case since chamber
     // exhaust is an H2-series/X2D feature.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);

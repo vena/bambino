@@ -141,7 +141,7 @@ Sets the chamber exhaust/filtration fan speed to 100%:
 ```gcode
 M106 P3 S255
 ```
-Sets the secondary auxiliary fan (right-side fan on the X2D) speed to 100%:
+Sets the second left-side auxiliary fan (port 10, X2D/P2S) speed to 100%:
 ```gcode
 M106 P10 S255
 ```

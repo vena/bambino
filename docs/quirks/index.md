@@ -181,9 +181,10 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
 
-- `fn supports_auxiliary_right_fan(&self) -> bool`
+- `fn supports_auxiliary_left2_fan(&self) -> bool`
 
-  Returns true if the model has a secondary right-side auxiliary fan (port 10) [REF-CLIM-FANS].
+  Returns true if the model has a second left-side auxiliary fan (port 10, wire-labeled
+  "right" but confirmed a left-side fan) [REF-CLIM-FANS].
 
 - `fn supports_auxiliary_left_fan(&self) -> bool`
 

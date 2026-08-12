@@ -92,6 +92,42 @@ async fn test_home_flag_cache_and_advisory_warnings() {
     broker_task.await.expect("Broker task panicked");
 }
 
+#[tokio::test]
+async fn test_home_flag_bit31_set_deserializes_as_negative_wire_value() {
+    // 0x80000003 as a signed 32-bit int is -2147483645; the wire sends this negative form
+    // ([REF-HOMEFLAG]) and it must mask back to the same bit pattern rather than failing the
+    // whole telemetry message's deserialize (issue #49).
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            2500,
+            br#"{"print":{"home_flag":-2147483645}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+
+    let event = client
+        .poll_telemetry()
+        .await
+        .expect("negative home_flag must still parse via deserialize_signed_as_u32");
+    assert!(event.report().is_some());
+
+    assert_eq!(client.is_axis_homed('x'), Some(true));
+    assert_eq!(client.is_axis_homed('y'), Some(true));
+    assert_eq!(client.is_axis_homed('z'), Some(false));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 // Phase 8: wait_for_homing
 
 #[tokio::test]

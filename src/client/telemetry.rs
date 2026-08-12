@@ -246,10 +246,25 @@ where
             }
         }
         if let Some(vt_tray) = &print.vt_tray {
-            self.cache.last_vt_tray = Some(vt_tray.clone());
+            // Merge field-by-field rather than replacing wholesale — VirtualTray shares
+            // AmsTray's wire schema, and a partial id-only push must not wipe cached
+            // tray_type/tray_color/etc.; see `VirtualTray::merge_from`.
+            match &mut self.cache.last_vt_tray {
+                Some(cached) => cached.merge_from(vt_tray),
+                None => self.cache.last_vt_tray = Some(vt_tray.clone()),
+            }
         }
-        if let Some(vir_slot) = &print.vir_slot {
-            self.cache.last_vir_slot = Some(vir_slot.clone());
+        if let Some(incoming_vir_slot) = &print.vir_slot {
+            // Merge per-element by id rather than replacing the array wholesale — a partial
+            // array carrying only one IDEX extruder's entry must not drop the other cached
+            // entry; see `VirtualTray::merge_from`.
+            let cached_slots = self.cache.last_vir_slot.get_or_insert_with(Vec::new);
+            for incoming_slot in incoming_vir_slot {
+                match cached_slots.iter_mut().find(|s| s.id == incoming_slot.id) {
+                    Some(cached_slot) => cached_slot.merge_from(incoming_slot),
+                    None => cached_slots.push(incoming_slot.clone()),
+                }
+            }
         }
     }
 
@@ -500,11 +515,11 @@ where
         self.decode_fan_speed(self.cache.last_heatbreak_fan_speed.as_deref())
     }
 
-    /// Returns the X2D/P2S secondary right-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryRight`) as a percentage (0-100).
+    /// Returns the X2D/P2S second left-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryLeft2`) as a percentage (0-100).
     /// Reported at a different wire location than the other four fans —
     /// `device.airduct.parts[id=160].state` — already a direct percentage, no 0-15 step conversion
     /// [REF-CLIM-FANS].
-    pub fn auxiliary_right_fan_speed(&self) -> Option<u8> {
+    pub fn auxiliary_left2_fan_speed(&self) -> Option<u8> {
         let state = self
             .cache
             .last_device
@@ -515,7 +530,7 @@ where
             .as_deref()
             .unwrap_or(&[])
             .iter()
-            .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_RIGHT)?
+            .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_LEFT2)?
             .state?;
         Some((state & 0xFF).clamp(0, 100) as u8)
     }

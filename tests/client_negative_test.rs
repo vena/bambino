@@ -526,6 +526,36 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
 }
 
 #[tokio::test]
+async fn test_start_drying_rejects_invalid_ams_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    let result = client.start_drying(999, 55, 8, 0, true, 20, false, "PA-CF").await;
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_stop_drying_rejects_invalid_ams_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    let result = client.stop_drying(16).await;
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_scan_rfid_wire_payload() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 

@@ -171,8 +171,9 @@ where
             // travel-limit violation — short-circuit before `relative_z_move_gcode` collapses
             // it to the same empty-string signal it uses for an out-of-range distance. No MQTT
             // packet is published, so there's no real packet identifier to return; `0` signals
-            // "no-op, nothing sent" (`next_sequence_id()` never yields 0, so it can't collide
-            // with a genuine in-flight packet id).
+            // "no-op, nothing sent" — safe because this return value is an MQTT packet
+            // identifier (from `send_gcode_raw`'s publish, not a sequence id), and MQTT reserves
+            // packet identifier 0, so it can't collide with a genuine in-flight packet.
             return Ok(0);
         }
         if axis_upper == 'Z' {

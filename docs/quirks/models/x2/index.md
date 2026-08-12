@@ -75,7 +75,7 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
-- <span id="x2quirks-modelquirks-supports-auxiliary-right-fan"></span>`fn supports_auxiliary_right_fan(&self) -> bool`
+- <span id="x2quirks-modelquirks-supports-auxiliary-left2-fan"></span>`fn supports_auxiliary_left2_fan(&self) -> bool`
 
 - <span id="x2quirks-modelquirks-reports-auxiliary-fan-percentage"></span>`fn reports_auxiliary_fan_percentage(&self) -> bool`
 

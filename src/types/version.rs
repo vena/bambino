@@ -18,6 +18,7 @@ pub struct VersionModule {
     #[serde(default)]
     pub product_name: String,
     /// Internal module name (e.g. "ota", "esp32", "mc", "ams").
+    #[serde(default)]
     pub name: String,
     /// Hardware revision string.
     #[serde(default)]
@@ -49,8 +50,10 @@ pub struct VersionModule {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionInfo {
     /// Command name echoed back (always "get_version").
+    #[serde(default)]
     pub command: String,
     /// Sequence ID echoed back from the request.
+    #[serde(default)]
     pub sequence_id: String,
     /// All hardware and firmware modules on the expansion bus.
     #[serde(default)]

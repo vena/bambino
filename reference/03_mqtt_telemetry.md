@@ -174,7 +174,7 @@ On-board cooling fan speeds are represented in telemetry via the following JSON 
 *   `big_fan1_speed`: Auxiliary cooling fan speed (represents the primary left-side auxiliary fan).
 *   `big_fan2_speed`: Chamber exhaust or filtration fan speed.
 *   `heatbreak_fan_speed`: Toolhead heatbreak/hotend fan speed.
-*   `device.airduct.parts`: On models with a secondary right-hand auxiliary fan (`X2D` and `P2S`), its speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage ($0$ to $100$) and does not require the 0–15 step conversion used by the other fan telemetry keys.
+*   `device.airduct.parts`: On models with a second left-side auxiliary fan (`X2D` and `P2S`), its speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage ($0$ to $100$) and does not require the 0–15 step conversion used by the other fan telemetry keys. Despite the wire port number and this id suggesting a "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` — a second left-side auxiliary fan, distinct from the primary `FAN_REMOTE_COOLING_0_IDX` (port 2, mirrored into `big_fan1_speed`); confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary part cooling fan" throughout (issue #60).
 
 #### Developer LAN Mode Bitmask Evaluation
 Developer LAN Mode is evaluated via the `fun` telemetry field bit `0x20000000` (which represents the `MQTT_SIGNATURE_REQUIRED` flag). The boolean evaluation is inverted:

@@ -95,7 +95,7 @@ impl ModelQuirks for P2Quirks {
         true
     }
 
-    fn supports_auxiliary_right_fan(&self) -> bool {
+    fn supports_auxiliary_left2_fan(&self) -> bool {
         true
     }
 

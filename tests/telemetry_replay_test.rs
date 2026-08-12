@@ -132,7 +132,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
             client.auxiliary_left_fan_speed(),
             client.chamber_exhaust_fan_speed(),
             client.heatbreak_fan_speed(),
-            client.auxiliary_right_fan_speed(),
+            client.auxiliary_left2_fan_speed(),
         ] {
             if let Some(pct) = fan {
                 assert!(pct <= 100, "fan speed implausible at message {i}: {pct}");

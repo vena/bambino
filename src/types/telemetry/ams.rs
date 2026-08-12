@@ -337,8 +337,11 @@ impl AmsUnit {
         if incoming.dry_time.is_some() {
             self.dry_time = incoming.dry_time;
         }
-        if incoming.dry_setting.is_some() {
-            self.dry_setting = incoming.dry_setting.clone();
+        if let Some(incoming_dry) = &incoming.dry_setting {
+            match &mut self.dry_setting {
+                Some(cached_dry) => cached_dry.merge_from(incoming_dry),
+                None => self.dry_setting = Some(incoming_dry.clone()),
+            }
         }
         if let Some(incoming_trays) = &incoming.tray {
             let cached_trays = self.tray.get_or_insert_with(Vec::new);
@@ -368,6 +371,23 @@ pub struct AmsDrySetting {
     pub dry_duration: Option<i32>,
     /// Filament type string for the active drying profile (e.g. "PA-CF").
     pub dry_filament: Option<String>,
+}
+
+impl AmsDrySetting {
+    /// Merges a freshly-parsed `AmsDrySetting` into `self` field-by-field, mirroring
+    /// `AmsTray::merge_from` -- a partial push (e.g. only `dry_temperature` mid-cycle) must not
+    /// clobber cached fields the incoming object omits (issue #57).
+    pub(crate) fn merge_from(&mut self, incoming: &AmsDrySetting) {
+        if incoming.dry_temperature.is_some() {
+            self.dry_temperature = incoming.dry_temperature;
+        }
+        if incoming.dry_duration.is_some() {
+            self.dry_duration = incoming.dry_duration;
+        }
+        if incoming.dry_filament.is_some() {
+            self.dry_filament = incoming.dry_filament.clone();
+        }
+    }
 }
 
 /// Virtual/external spool holder telemetry.
@@ -439,6 +459,79 @@ pub struct VirtualTray {
 
     /// Calibration index (-1 if uncalibrated).
     pub cali_idx: Option<i32>,
+}
+
+impl VirtualTray {
+    /// Merges a freshly-parsed `VirtualTray` into `self` field-by-field, mirroring
+    /// `AmsTray::merge_from` -- `VirtualTray` shares `AmsTray`'s wire schema, and BambuStudio's
+    /// preserve-on-absence `ParseVal` behavior applies here too. A partial id-only push (the
+    /// same shape routine `vt_tray` deltas use) must not wipe cached `tray_type`/`tray_color`/
+    /// etc. that the printer never actually cleared (issue #43).
+    pub(crate) fn merge_from(&mut self, incoming: &VirtualTray) {
+        if incoming.id.is_some() {
+            self.id = incoming.id.clone();
+        }
+        if incoming.tray_type.is_some() {
+            self.tray_type = incoming.tray_type.clone();
+        }
+        if incoming.tray_color.is_some() {
+            self.tray_color = incoming.tray_color.clone();
+        }
+        if incoming.tray_info_idx.is_some() {
+            self.tray_info_idx = incoming.tray_info_idx.clone();
+        }
+        if incoming.tray_sub_brands.is_some() {
+            self.tray_sub_brands = incoming.tray_sub_brands.clone();
+        }
+        if incoming.nozzle_temp_max.is_some() {
+            self.nozzle_temp_max = incoming.nozzle_temp_max.clone();
+        }
+        if incoming.nozzle_temp_min.is_some() {
+            self.nozzle_temp_min = incoming.nozzle_temp_min.clone();
+        }
+        if incoming.tray_diameter.is_some() {
+            self.tray_diameter = incoming.tray_diameter.clone();
+        }
+        if incoming.tray_weight.is_some() {
+            self.tray_weight = incoming.tray_weight.clone();
+        }
+        if incoming.tray_temp.is_some() {
+            self.tray_temp = incoming.tray_temp.clone();
+        }
+        if incoming.tray_time.is_some() {
+            self.tray_time = incoming.tray_time.clone();
+        }
+        if incoming.bed_temp.is_some() {
+            self.bed_temp = incoming.bed_temp.clone();
+        }
+        if incoming.bed_temp_type.is_some() {
+            self.bed_temp_type = incoming.bed_temp_type.clone();
+        }
+        if incoming.tag_uid.is_some() {
+            self.tag_uid = incoming.tag_uid.clone();
+        }
+        if incoming.tray_uuid.is_some() {
+            self.tray_uuid = incoming.tray_uuid.clone();
+        }
+        if incoming.tray_id_name.is_some() {
+            self.tray_id_name = incoming.tray_id_name.clone();
+        }
+        if incoming.xcam_info.is_some() {
+            self.xcam_info = incoming.xcam_info.clone();
+        }
+        if incoming.remain.is_some() {
+            self.remain = incoming.remain;
+        }
+        if incoming.k.is_some() {
+            self.k = incoming.k;
+        }
+        if incoming.n.is_some() {
+            self.n = incoming.n;
+        }
+        if incoming.cali_idx.is_some() {
+            self.cali_idx = incoming.cali_idx;
+        }
+    }
 }
 
 /// Native state code meaning "slot empty" [REF-AMS-DECODE].

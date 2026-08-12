@@ -136,8 +136,10 @@ pub trait ModelQuirks {
         false
     }
 
-    /// Returns true if the model has a secondary right-side auxiliary fan (port 10) [REF-CLIM-FANS].
-    fn supports_auxiliary_right_fan(&self) -> bool {
+    /// Returns true if the model has a second left-side auxiliary fan (port 10, wire-labeled
+    /// "right" but confirmed a left-side fan — see `FanTarget::AuxiliaryLeft2`'s doc comment,
+    /// issue #60) [REF-CLIM-FANS].
+    fn supports_auxiliary_left2_fan(&self) -> bool {
         false
     }
 
@@ -237,7 +239,9 @@ impl PrinterModel {
             PrinterModel::H2C => &models::h2::H2CQuirks,
             PrinterModel::Unknown => {
                 log::warn!(
-                    "Unrecognized printer model — applying X1C quirks as a conservative default"
+                    "Unrecognized printer model — falling back to X1C quirks; travel and \
+                     temperature limits (256mm axes, 110C bed, 300C nozzle) may exceed this \
+                     machine's real ceilings"
                 );
                 &models::x1::X1CQuirks
             }
@@ -267,8 +271,12 @@ fn line_has_unsafe_homing(line: &str) -> bool {
                 .next()
                 .map(|c| c.is_ascii_digit())
                 .unwrap_or(false);
+            // Truncate at the first comment marker before scanning for axis letters — a
+            // trailing `; home XYZ` or `(home XYZ)` comment on a bare (all-axis) G28 must not
+            // be mistaken for an explicit axis-constrained G28 X/Y/Z.
+            let code = rest.split(';').next().unwrap_or("").split('(').next().unwrap_or("");
             if !next_is_digit
-                && rest
+                && code
                     .chars()
                     .any(|c| matches!(c.to_ascii_uppercase(), 'X' | 'Y' | 'Z'))
             {
@@ -452,7 +460,7 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.supports_auxiliary_right_fan());
+        assert!(!q.supports_auxiliary_left2_fan());
         assert!(!q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.z_max(), 256.0);
@@ -528,7 +536,7 @@ mod tests {
             assert!(!q.supports_nozzle_offset_calibration());
             assert!(q.is_bed_on_z());
             assert!(!q.requires_wallclock_rtsp_timestamps());
-            assert!(!q.supports_auxiliary_right_fan());
+            assert!(!q.supports_auxiliary_left2_fan());
             assert_eq!(q.supports_auxiliary_left_fan(), model == PrinterModel::P1S);
             assert!(!q.has_chamber_exhaust_fan());
             assert_eq!(q.z_max(), 256.0);
@@ -554,7 +562,7 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(q.requires_wallclock_rtsp_timestamps());
-        assert!(q.supports_auxiliary_right_fan());
+        assert!(q.supports_auxiliary_left2_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.z_max(), 256.0);
@@ -579,7 +587,7 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.supports_auxiliary_right_fan());
+        assert!(!q.supports_auxiliary_left2_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert_eq!(q.z_max(), 256.0);
@@ -628,7 +636,7 @@ mod tests {
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
-        assert!(q.supports_auxiliary_right_fan());
+        assert!(q.supports_auxiliary_left2_fan());
         assert!(q.supports_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert_eq!(q.z_max(), 256.0);
@@ -854,6 +862,17 @@ mod tests {
         // letter) used to fail the exact "G28" token match and pass through unchecked.
         let q = PrinterModel::P1P.quirks();
         assert!(q.is_unsafe_homing_command("G28X"));
+    }
+
+    #[test]
+    fn test_unsafe_homing_ignores_trailing_comment() {
+        // Regression (issue #55): a bare (all-axis) G28 with a trailing comment mentioning
+        // X/Y/Z must not be mistaken for an explicit axis-constrained G28.
+        let q = PrinterModel::P1P.quirks();
+        assert!(!q.is_unsafe_homing_command("G28 ; home XYZ before print"));
+        assert!(!q.is_unsafe_homing_command("G28 (home XYZ before print)"));
+        // A genuine axis-constrained G28 before the comment must still be flagged.
+        assert!(q.is_unsafe_homing_command("G28 Z ; home Z only"));
     }
 
     #[test]

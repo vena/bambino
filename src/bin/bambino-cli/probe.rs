@@ -423,6 +423,29 @@ async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> 
     }
 }
 
+/// Refuses to run the default test sweep against a printer that is printing, preparing, or
+/// paused. Reuses the pushall already captured by [`run_pushall_capture`] rather than issuing a
+/// second request. Bare `G28` mid-print can drive the toolhead into an in-progress part
+/// (see `client/motion.rs`), and `MoveZUnhomed`/`MoveXUnhomed` move fixed distances regardless
+/// of what's under the nozzle — mirrors `ack_probe.rs::refuse_if_busy`.
+fn refuse_if_busy(client: &Printer) -> Result<(), CliError> {
+    match client.print_status() {
+        Some(status @ (PrintStatus::Preparing | PrintStatus::Running | PrintStatus::Paused)) => {
+            Err(CliError::Other(format!(
+                "printer is busy (gcode_state={status:?}) — probe refuses to run its default \
+                 test sweep during a print; HomeAxes/MoveZUnhomed/MoveXUnhomed and friends can \
+                 drive motion into an in-progress part"
+            )))
+        }
+        Some(_) => Ok(()),
+        None => Err(CliError::Other(
+            "no gcode_state received from the pushall capture — cannot confirm the printer is \
+             idle, refusing to run the default test sweep"
+                .to_string(),
+        )),
+    }
+}
+
 async fn run_holistic_test(
     client: &mut Printer,
     idx: usize,
@@ -608,6 +631,8 @@ pub async fn run(
     eprintln!("Connected.");
 
     let pushall = run_pushall_capture(&mut client).await;
+
+    refuse_if_busy(&client)?;
 
     eprintln!("Running {} tests...\n", tests.len());
 

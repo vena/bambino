@@ -53,22 +53,29 @@ pub enum FanTarget {
     AuxiliaryLeft,
     /// Chamber exhaust/filtration fan (Port 3).
     ChamberExhaust,
-    /// Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
-    AuxiliaryRight,
+    /// Secondary left-side auxiliary fan (Port 10, supported on X2D and P2S) [REF-CLIM-FANS].
+    ///
+    /// Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
+    /// "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
+    /// a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](Self::AuxiliaryLeft)'s
+    /// primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
+    /// Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
+    /// part cooling fan" throughout (issue #60).
+    AuxiliaryLeft2,
 }
 
 // Write-side fan port IDs: `hardware.rs::set_fan_speed` uses these as M106 `P` arguments.
 pub(crate) const FAN_WRITE_PORT_PART_COOLING: u16 = 1;
 pub(crate) const FAN_WRITE_PORT_AUXILIARY_LEFT: u16 = 2;
 pub(crate) const FAN_WRITE_PORT_CHAMBER_EXHAUST: u16 = 3;
-pub(crate) const FAN_WRITE_PORT_AUXILIARY_RIGHT: u16 = 10;
+pub(crate) const FAN_WRITE_PORT_AUXILIARY_LEFT2: u16 = 10;
 
-/// Read-side telemetry port ID for the auxiliary-right fan (`device.airduct.parts[id]`), used by `telemetry.rs::auxiliary_right_fan_speed`.
+/// Read-side telemetry port ID for the second left-side auxiliary fan (`device.airduct.parts[id]`), used by `telemetry.rs::auxiliary_left2_fan_speed`.
 /// **Different address space from the write-side `FAN_WRITE_PORT_*` constants above** — this is not
 /// a typo; write ports are M106 `P` arguments while read ports index the telemetry `airduct.parts`
 /// array, and there is no compiler-enforced link between "this `FanTarget` variant" and both of its
 /// port numbers today.
-pub(crate) const FAN_READ_PORT_AUXILIARY_RIGHT: u32 = 160;
+pub(crate) const FAN_READ_PORT_AUXILIARY_LEFT2: u32 = 160;
 
 /// Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE].
 /// Supported on models with a physical fire alarm buzzer (H2 series).

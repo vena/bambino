@@ -183,7 +183,7 @@ enum FanTarget {
     PartCooling,
     AuxiliaryLeft,
     ChamberExhaust,
-    AuxiliaryRight,
+    AuxiliaryLeft2,
 }
 ```
 
@@ -203,9 +203,9 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 
   Chamber exhaust/filtration fan (Port 3).
 
-- **`AuxiliaryRight`**
+- **`AuxiliaryLeft2`**
 
-  Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
+  Second left-side auxiliary fan (Port 10, supported on X2D and P2S).
 
 #### Trait Implementations
 

@@ -163,6 +163,44 @@ async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
     broker_task.await.expect("Broker task panicked");
 }
 
+// Correct command, matching sequence ID, but a malformed shape (`name` is a number, not a
+// string) that fails to deserialize as VersionInfo — simulates a firmware response arriving
+// but failing to parse (issue #52).
+const VERSION_RESPONSE_MALFORMED: &str =
+    r#"{"info":{"command":"get_version","sequence_id":"10001","module":[{"name":123}]}}"#;
+
+#[tokio::test]
+async fn test_get_version_surfaces_serialization_error_on_malformed_matching_response() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let _json = read_publish_payload(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1001,
+            VERSION_RESPONSE_MALFORMED.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+
+    let result = client.get_version().await;
+    assert!(
+        matches!(result, Err(Error::Serialization)),
+        "a matching-command response that fails to parse must surface Error::Serialization, \
+         not Error::Timeout — got {:?}",
+        result
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 #[tokio::test]
 async fn test_poll_until_buffers_unmatched_messages() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);

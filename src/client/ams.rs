@@ -156,6 +156,11 @@ where
                 "AMS drying is screen-only on this host printer model — firmware acks this command but does not act on it".into(),
             ));
         }
+        if !is_valid_ams_id(ams_id) {
+            return Err(Error::ProtocolViolation(
+                "invalid AMS addressing parameters for start_drying".into(),
+            ));
+        }
         let max_temp: u32 = if (128..=135).contains(&ams_id) {
             AMS_HT_DRY_TEMP_MAX
         } else {
@@ -194,6 +199,11 @@ where
     /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
     /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
     pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error> {
+        if !is_valid_ams_id(ams_id) {
+            return Err(Error::ProtocolViolation(
+                "invalid AMS addressing parameters for stop_drying".into(),
+            ));
+        }
         self.dispatch(|seq| {
             crate::mqtt::AmsFilamentDryingRequest::new(
                 ams_id, 0, "", 0, 0, 0, false, 0, false, seq,
@@ -289,21 +299,35 @@ where
         self.publish_request(&req).await?;
 
         let expected_seq = seq.to_string();
-        self.poll_until(|msg| {
-            let v: serde_json::Value = serde_json::from_slice(&msg.payload).ok()?;
-            let node = v.get("info").unwrap_or(&v);
-            if node.get("command")?.as_str()? == "get_version" {
-                let info: VersionInfo = serde_json::from_value(node.clone()).ok()?;
-                if info.sequence_id == expected_seq {
-                    Some(info)
+        // Distinguishes "a get_version response arrived but failed to deserialize" from "not
+        // my message" — without this, a malformed module (e.g. one missing a field that lacks
+        // #[serde(default)]) silently falls through as a non-match and the caller sees whatever
+        // error poll_until eventually surfaces (typically Error::Timeout, or a connection error
+        // if the stream drops) with no indication a response ever arrived (issue #52).
+        let mut parse_failed = false;
+        let result = self
+            .poll_until(|msg| {
+                let v: serde_json::Value = serde_json::from_slice(&msg.payload).ok()?;
+                let node = v.get("info").unwrap_or(&v);
+                if node.get("command")?.as_str()? == "get_version" {
+                    match serde_json::from_value::<VersionInfo>(node.clone()) {
+                        Ok(info) if info.sequence_id == expected_seq => Some(info),
+                        Ok(_) => None,
+                        Err(_) => {
+                            parse_failed = true;
+                            None
+                        }
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        })
-        .await
+            })
+            .await;
+
+        match result {
+            Err(_) if parse_failed => Err(Error::Serialization),
+            other => other,
+        }
     }
 
     /// Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].

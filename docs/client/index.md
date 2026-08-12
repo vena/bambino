@@ -627,9 +627,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   telemetry.
 
-- <span id="superprinterclient-auxiliary-right-fan-speed"></span>`fn auxiliary_right_fan_speed(&self) -> Option<u8>`
+- <span id="superprinterclient-auxiliary-left2-fan-speed"></span>`fn auxiliary_left2_fan_speed(&self) -> Option<u8>`
 
-  Returns the X2D/P2S secondary right-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryRight`) as a percentage (0-100).
+  Returns the X2D/P2S second left-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryLeft2`) as a percentage (0-100).
 
   Reported at a different wire location than the other four fans —
 
@@ -803,7 +803,7 @@ enum FanTarget {
     PartCooling,
     AuxiliaryLeft,
     ChamberExhaust,
-    AuxiliaryRight,
+    AuxiliaryLeft2,
 }
 ```
 
@@ -823,9 +823,9 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
 
   Chamber exhaust/filtration fan (Port 3).
 
-- **`AuxiliaryRight`**
+- **`AuxiliaryLeft2`**
 
-  Secondary right-side auxiliary fan (Port 10, supported on X2D and P2S).
+  Second left-side auxiliary fan (Port 10, supported on X2D and P2S).
 
 #### Trait Implementations
 

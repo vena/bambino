@@ -25,7 +25,7 @@ pub enum FanTargetArg {
     Part,
     Aux,
     Exhaust,
-    Right,
+    Left2,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug)]
@@ -305,7 +305,7 @@ pub async fn run(
                 FanTargetArg::Part => FanTarget::PartCooling,
                 FanTargetArg::Aux => FanTarget::AuxiliaryLeft,
                 FanTargetArg::Exhaust => FanTarget::ChamberExhaust,
-                FanTargetArg::Right => FanTarget::AuxiliaryRight,
+                FanTargetArg::Left2 => FanTarget::AuxiliaryLeft2,
             };
             dispatch(
                 "Configuring cooling fan PWM scale...",

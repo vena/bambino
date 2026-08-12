@@ -69,7 +69,7 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-requires-wallclock-rtsp-timestamps"></span>`fn requires_wallclock_rtsp_timestamps(&self) -> bool`
 
-- <span id="p2quirks-modelquirks-supports-auxiliary-right-fan"></span>`fn supports_auxiliary_right_fan(&self) -> bool`
+- <span id="p2quirks-modelquirks-supports-auxiliary-left2-fan"></span>`fn supports_auxiliary_left2_fan(&self) -> bool`
 
 - <span id="p2quirks-modelquirks-reports-auxiliary-fan-percentage"></span>`fn reports_auxiliary_fan_percentage(&self) -> bool`
 

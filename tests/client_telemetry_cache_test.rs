@@ -460,6 +460,74 @@ async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
 }
 
 #[tokio::test]
+async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
+    // issue #43: a partial id-only push must not wholesale-clobber prior tray_type/tray_color/
+    // etc., and a vir_slot push carrying only one extruder's entry must not drop the other.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Seed full fields for vt_tray and both vir_slot entries.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5610,
+            br#"{"print":{
+                "vt_tray":{"id":"254","tray_type":"PLA","tray_color":"FF0000FF","remain":80},
+                "vir_slot":[
+                    {"id":"0","tray_type":"PLA","remain":80},
+                    {"id":"1","tray_type":"PETG","remain":60}
+                ]
+            }}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Follow-up: id-only vt_tray, and a vir_slot array carrying only id "0".
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5611,
+            br#"{"print":{"vt_tray":{"id":"254"},"vir_slot":[{"id":"0","remain":70}]}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first vt_tray/vir_slot report");
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse second (partial) vt_tray/vir_slot report");
+
+    let vt_tray = client.vt_tray().expect("vt_tray must still be cached");
+    assert_eq!(
+        vt_tray.tray_type.as_deref(),
+        Some("PLA"),
+        "id-only follow-up must not clobber cached tray_type"
+    );
+    assert_eq!(vt_tray.remain, Some(80), "id-only follow-up must not clobber cached remain");
+
+    let vir_slot = client.vir_slot().expect("vir_slot must still be cached");
+    assert_eq!(vir_slot.len(), 2, "partial push must not drop the other extruder's cached tray");
+    let slot0 = vir_slot.iter().find(|s| s.id.as_deref() == Some("0")).unwrap();
+    assert_eq!(slot0.remain, Some(70), "matched entry must merge in the new remain value");
+    assert_eq!(slot0.tray_type.as_deref(), Some("PLA"), "matched entry must preserve tray_type");
+    let slot1 = vir_slot.iter().find(|s| s.id.as_deref() == Some("1")).unwrap();
+    assert_eq!(slot1.tray_type.as_deref(), Some("PETG"), "unreferenced entry must survive untouched");
+    assert_eq!(slot1.remain, Some(60));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_nozzle_temperatures_cache_single_nozzle_model() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");
@@ -731,7 +799,7 @@ async fn test_fan_speed_cache_from_telemetry() {
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(client.part_cooling_fan_speed(), None);
-    assert_eq!(client.auxiliary_right_fan_speed(), None);
+    assert_eq!(client.auxiliary_left2_fan_speed(), None);
 
     client
         .poll_telemetry()
@@ -742,7 +810,7 @@ async fn test_fan_speed_cache_from_telemetry() {
     assert_eq!(client.auxiliary_left_fan_speed(), Some(53));
     assert_eq!(client.chamber_exhaust_fan_speed(), Some(0));
     assert_eq!(client.heatbreak_fan_speed(), Some(100));
-    assert_eq!(client.auxiliary_right_fan_speed(), Some(75));
+    assert_eq!(client.auxiliary_left2_fan_speed(), Some(75));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -768,7 +836,7 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
     // Regression for #38: X2D/P2S previously decoded the four flat fan keys as
     // already-percentage (ModelQuirks::reports_auxiliary_fan_percentage), reading ~6.7x too low.
     // They must step-decode identically to every other model — only the id-160 airduct part
-    // (auxiliary_right_fan_speed) is a true wire percentage.
+    // (auxiliary_left2_fan_speed) is a true wire percentage.
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
 
     client
@@ -780,7 +848,7 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
     assert_eq!(client.auxiliary_left_fan_speed(), Some(53));
     assert_eq!(client.chamber_exhaust_fan_speed(), Some(0));
     assert_eq!(client.heatbreak_fan_speed(), Some(100));
-    assert_eq!(client.auxiliary_right_fan_speed(), Some(75));
+    assert_eq!(client.auxiliary_left2_fan_speed(), Some(75));
 
     broker_task.await.expect("Broker task panicked");
 }

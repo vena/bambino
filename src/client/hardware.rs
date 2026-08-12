@@ -83,13 +83,13 @@ where
                 }
                 super::types::FAN_WRITE_PORT_CHAMBER_EXHAUST
             }
-            FanTarget::AuxiliaryRight => {
-                if !self.identity.model.quirks().supports_auxiliary_right_fan() {
+            FanTarget::AuxiliaryLeft2 => {
+                if !self.identity.model.quirks().supports_auxiliary_left2_fan() {
                     return Err(Error::ModelMismatch(
-                        "auxiliary right fan not available on this model".into(),
+                        "second auxiliary left fan not available on this model".into(),
                     ));
                 }
-                super::types::FAN_WRITE_PORT_AUXILIARY_RIGHT
+                super::types::FAN_WRITE_PORT_AUXILIARY_LEFT2
             }
         };
 
