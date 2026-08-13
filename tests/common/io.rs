@@ -44,6 +44,43 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
     }
 }
 
+/// A pass-through TLS connector that reports a different negotiated version on the first
+/// `connect()` call (the FTPS control channel) than on every subsequent call (a data-channel
+/// connect) — exercises `open_data_channel`'s own `require_tls_1_2_if_enforced` recheck
+/// (`src/ftps/client.rs`'s "defense in depth" comment) independently of the control-channel
+/// check `BambuFtpsClient::connect` already performs, since TLS session resumption isn't
+/// verified to carry the negotiated version forward.
+pub struct PerCallVersionReportingTlsConnector {
+    pub control: Option<TlsVersion>,
+    pub data: Option<TlsVersion>,
+    call_count: std::sync::atomic::AtomicUsize,
+}
+
+impl PerCallVersionReportingTlsConnector {
+    pub fn new(control: Option<TlsVersion>, data: Option<TlsVersion>) -> Self {
+        Self {
+            control,
+            data,
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+impl<RawIO: AsyncIo> TlsConnector<RawIO> for PerCallVersionReportingTlsConnector {
+    type Stream = RawIO;
+
+    async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
+        Ok(raw_stream)
+    }
+
+    fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        let call = self
+            .call_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 { self.control } else { self.data }
+    }
+}
+
 /// A TLS connector that succeeds on the first `connect()` call (the FTPS implicit
 /// control channel) but fails on every subsequent call — i.e. it always fails a PASV
 /// data-channel connect attempt.

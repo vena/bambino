@@ -40,7 +40,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .expect("Failed to execute MQTT login and subscription handshake");
 
     let _packet_id = client
-        .publish_command(b"{\"command\":\"pushall\"}")
+        .publish_command(b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"1\"}}")
         .await
         .expect("QoS 1 command publish failed");
 
@@ -93,9 +93,12 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .await
         .expect("Telemetry poll failed after PINGREQ cycle");
 
-    // Arm the zombie tracker by publishing a new command
+    // Arm the zombie tracker by publishing a new command. "zombie_test" isn't a real command
+    // name and isn't in ACK_CORRELATED_COMMANDS, so this intentionally exercises only the
+    // uncorrelated fallback-clear path (sequence_id-matching is covered elsewhere, in mod.rs's
+    // own async_tests) — the wrapper shape below matches the real Payload+Request pattern.
     client
-        .publish_command(b"{\"command\":\"zombie_test\"}")
+        .publish_command(b"{\"print\":{\"command\":\"zombie_test\",\"sequence_id\":\"2\"}}")
         .await
         .expect("Zombie test command publish failed");
 

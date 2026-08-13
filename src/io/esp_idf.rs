@@ -338,6 +338,30 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspIdfTlsStream
     }
 }
 
+/// Classifies a post-handshake `EspTls` read/write failure into the closest
+/// `embedded_io_async::ErrorKind`, mirroring `map_esp_tls_connect_error`'s connect-phase
+/// classification so `map_embedded_io_error_kind` (`src/io/mod.rs`) doesn't have to fall back
+/// to its `ConnectionReset` catch-all for every real cause (see #46 — that catch-all previously
+/// received nothing but `Other` here, defeating its own point). Unrecognized codes still fall
+/// back to `Other`, with the real code preserved at `log::debug!`.
+#[cfg(feature = "esp-idf")]
+fn esp_tls_io_error_kind(err: &::esp_idf_svc::sys::EspError) -> embedded_io_async::ErrorKind {
+    let code = err.code();
+
+    if code == ::esp_idf_svc::sys::ECONNRESET as i32 {
+        return embedded_io_async::ErrorKind::ConnectionReset;
+    }
+    if code == ::esp_idf_svc::sys::ECONNREFUSED as i32 {
+        return embedded_io_async::ErrorKind::ConnectionRefused;
+    }
+    if code == ::esp_idf_svc::sys::ETIMEDOUT as i32 {
+        return embedded_io_async::ErrorKind::TimedOut;
+    }
+
+    log::debug!("ESP-IDF TLS I/O failed: {err}");
+    embedded_io_async::ErrorKind::Other
+}
+
 /// Shared `WouldBlock` retry loop for `EspIdfTlsStream::read`/`write` — both wrap a single `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on `is_would_block`, differing only in which `EspTls` method is invoked and the log message text.
 /// Takes `timer`/`op` separately rather than `&mut self` so the caller can borrow `self.tls` (via
 /// the closure) and `self.timer` (via this argument) as disjoint fields — see call sites in
@@ -362,7 +386,7 @@ where
             }
             Err(e) => {
                 log::debug!("ESP-IDF TLS {op_name} failed: {e}");
-                return Err(embedded_io_async::ErrorKind::Other);
+                return Err(esp_tls_io_error_kind(&e));
             }
         }
     }

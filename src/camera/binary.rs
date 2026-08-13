@@ -33,7 +33,9 @@ pub(crate) const CAMERA_HANDSHAKE_MAGIC: u32 = 64;
 pub(crate) const CAMERA_HANDSHAKE_COMMAND_ID: u32 = 12288;
 pub(crate) const CAMERA_USERNAME_OFFSET: usize = 16;
 pub(crate) const CAMERA_PASSWORD_OFFSET: usize = 48;
-/// Maximum accepted access-code length for the camera handshake and RTSPS auth, in bytes.
+/// Maximum accepted access-code length for the camera handshake, in bytes. RTSPS auth
+/// (`camera::rtsps::build_rtsps_url`) doesn't enforce this bound itself — the CLI's
+/// connection-arg validation is the intended enforcement point for that path.
 pub const CAMERA_PASSWORD_MAX_LEN: usize = 32;
 pub(crate) const CAMERA_FRAME_HEADER_SIZE: usize = 16;
 pub(crate) const CAMERA_FRAME_MAX_SIZE: usize = 10 * 1024 * 1024;

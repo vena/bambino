@@ -23,7 +23,7 @@ use bambino::io::TlsVersion;
 
 use common::io::{
     DummyTlsConnector, FailingDataTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
-    VersionReportingTlsConnector,
+    PerCallVersionReportingTlsConnector, VersionReportingTlsConnector,
 };
 use common::mock_ftps;
 
@@ -662,6 +662,63 @@ async fn test_ftps_tls12_accepted_for_p2s() {
     .expect("TLS 1.2 should be accepted for P2S");
 
     client.disconnect().await;
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Regression for issue #58: `open_data_channel`'s "defense in depth" recheck
+/// (`src/ftps/client.rs:453-461`) must actually reject a data channel that renegotiated down
+/// from TLS 1.2 to TLS 1.3, independent of the control-channel check `BambuFtpsClient::connect`
+/// already performed — previously every TLS-1.2-enforcement test only exercised `connect()`,
+/// never a real `list_directory`/`upload_file`/`download_file` call, so this embedded recheck
+/// had zero coverage.
+#[tokio::test]
+async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_data_channel_failure(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = BambuFtpsClient::connect(
+        TokioIo(client_control),
+        PerCallVersionReportingTlsConnector::new(Some(TlsVersion::Tls12), Some(TlsVersion::Tls13)),
+        factory,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: "TEST0000000001".into(), access_code: "12345678".into(), model: PrinterModel::P2S },
+        DummyTimer,
+        false,
+    )
+    .await
+    .expect("Control channel at TLS 1.2 should be accepted for P2S");
+
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(bambino::error::Error::ProtocolViolation(_))),
+        "Expected the data-channel TLS 1.3 recheck to reject with ProtocolViolation, got {:?}",
+        result
+    );
+
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(
+            next_result,
+            Err(bambino::error::Error::ProtocolViolation(_))
+        ),
+        "Expected the client to be poisoned after the data-channel recheck failure, got {:?}",
+        next_result
+    );
+
     server_handle.await.expect("Mock server panicked");
 }
 

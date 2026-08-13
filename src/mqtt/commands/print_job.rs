@@ -75,8 +75,10 @@ pub struct PrintJobConfig {
     pub bed_leveling: CalibrationMode,
     /// Whether to run dynamic flow calibration before the print.
     pub run_flow_calibration: CalibrationMode,
-    /// Whether to run vibration compensation calibration before the print.
-    pub run_vibration_compensation: bool,
+    /// Whether to run vibration compensation calibration before the print. No tri-state
+    /// companion field exists on the wire for this one (`reference/03_mqtt_telemetry.md:334`),
+    /// so `Auto` serializes identically to `Off` via `as_wire_bool()`.
+    pub run_vibration_compensation: CalibrationMode,
     /// Whether timelapse capture is enabled.
     pub timelapse: bool,
     /// Whether to run first-layer inspection during the print.
@@ -108,7 +110,7 @@ impl PrintJobConfig {
             bed_type: String::from(bed_type),
             bed_leveling: CalibrationMode::On,
             run_flow_calibration: CalibrationMode::On,
-            run_vibration_compensation: true,
+            run_vibration_compensation: CalibrationMode::On,
             timelapse: true,
             layer_inspect: true,
             nozzle_offset_cali: None,
@@ -165,9 +167,11 @@ impl PrintJobConfig {
         self
     }
 
-    /// Enables or disables vibration compensation calibration for this job.
-    pub fn vibration_compensation(mut self, enabled: bool) -> Self {
-        self.run_vibration_compensation = enabled;
+    /// Enables or disables vibration compensation calibration for this job. No tri-state
+    /// companion field exists on the wire for this one, so `CalibrationMode::Auto` serializes
+    /// identically to `Off`.
+    pub fn vibration_compensation(mut self, mode: impl Into<CalibrationMode>) -> Self {
+        self.run_vibration_compensation = mode.into();
         self
     }
 
@@ -348,7 +352,7 @@ impl ProjectFileRequest {
                 auto_bed_leveling: config.bed_leveling.as_wire_i32(),
                 extrude_cali_flag: config.run_flow_calibration.as_wire_i32(),
                 nozzle_offset_cali: nozzle_offset.as_wire_i32(),
-                vibration_cali: config.run_vibration_compensation,
+                vibration_cali: config.run_vibration_compensation.as_wire_bool(),
                 layer_inspect: config.layer_inspect,
                 use_ams,
                 ams_mapping: mapping,

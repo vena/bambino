@@ -278,7 +278,7 @@ Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. 
 
 This is platform-general — `TokioTlsConnector` and `EspIdfTlsConnector` implement `negotiated_version` for real. `EmbassyTlsConnector` cannot, so Embassy + P2S/X2D is unconditionally rejected by this check rather than downgraded — see the Embassy TLS section below for why, and for the opt-out.
 
-`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` opts out of the check entirely instead: `require_tls_1_2_if_enforced` logs a warning and returns `Ok(())` unconditionally, regardless of what (if anything) `negotiated_version` reports. This is a reliability tradeoff, not a safety hole — `upload_file`'s `SIZE` recheck and `download_file`'s exact-`226` requirement already catch a truncated/corrupted transfer independently of this flag, so bypassing the version check risks more failed transfers/retries against P2S/X2D, never silently-corrupt data. Default is `false` (fail closed, unchanged). Only meaningful for the `embassy` feature — on `tokio`/`esp-idf`, use `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually negotiate TLS 1.2 for real.
+`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` opts out of the check entirely instead: `require_tls_1_2_if_enforced` logs a warning and returns `Ok(())` unconditionally, regardless of what (if anything) `negotiated_version` reports. This is a reliability tradeoff, not a safety hole — `upload_file`'s `SIZE` recheck and `download_file`'s unconditional `SIZE` recheck (run on both the `226` and `426` completion replies) already catch a truncated/corrupted transfer independently of this flag, so bypassing the version check risks more failed transfers/retries against P2S/X2D, never silently-corrupt data. Default is `false` (fail closed, unchanged). Only meaningful for the `embassy` feature — on `tokio`/`esp-idf`, use `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually negotiate TLS 1.2 for real.
 
 ## Platform targets
 
@@ -335,7 +335,7 @@ let factory = EmbassyRawStreamFactory::new(client);
 let mut printer = printer.with_ftps(ftps_tls, factory, EmbassyTimer);
 ```
 
-**ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK` — so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI.
+**ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK` — so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI. `PrinterClient::with_connect_timeout()` and `EspIdfTlsConnector::with_connect_timeout()` are two independent budgets on this platform — the connector is opaque by the time it reaches `PrinterClient::new()`, so setting one doesn't affect the other. Set both explicitly and keep them in sync (including `0`, which disables the timeout on either).
 
 **ESP-IDF TLS version query:** `EspIdfTlsConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`) — wolfSSL builds aren't supported yet.
 

@@ -425,6 +425,13 @@ where
     /// Use this for sending custom MQTT payloads, managing zombie detection via
     /// [`tick_zombie_check()`](MqttClient::tick_zombie_check), or inspecting
     /// in-flight state — anything that [`PrinterClient`] doesn't expose directly.
+    ///
+    /// Pipelining multiple commands through this handle before awaiting a response forfeits
+    /// write-zombie coverage beyond the first outstanding command: `tick_zombie_check()` tracks
+    /// only one armed `(sequence_id, elapsed_secs)` pair at a time, so a second `publish_command`
+    /// issued while the first is still unanswered gets no tracking of its own — if the broker
+    /// acks the first but silently drops the second, the second can hang forever undetected.
+    /// The default [`PrinterClient`] request flow awaits each command in turn and isn't affected.
     pub async fn mqtt(&mut self) -> Result<&mut MqttClient<MqttTls::Stream>, Error> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())

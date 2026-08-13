@@ -148,7 +148,7 @@ The `"ams_mapping"` parameter is a flat, 1-to-1, forward-mapped JSON array of in
 
 ##### Hardware Channel Identifiers
 The integer values within the flat `ams_mapping` array represent absolute physical hardware channels:
-*   **`0` to `103`**: Standard AMS channels. Calculated via $(\text{ams\_id} \times 4) + \text{slot\_id}$.
+*   **`0` to `15`**: Standard AMS channels. Calculated via $(\text{ams\_id} \times 4) + \text{slot\_id}$ (ams_id 0-3, slot_id 0-3).
 *   **`128` to `135`**: Physical single-slot high-temperature AMS-HT units. Global channel ID equals the unit's bus ID ($\text{ams\_id}$).
 *   **`-1`**: Omit/Unmapped. Mandatory marker for any unused project filament slot or any slot routed to an **External Spool** (non-bus tray).
 
@@ -190,7 +190,7 @@ When configuring an External Spool, parameter formatting depends on whether the 
 
 1.  **Filament Configuration (`ams_filament_setting`)**: Handled by the AMS MCU.
     *   *Single-Nozzle Platforms*: Requires `"ams_id": 255` and `"tray_id": 254`.
-    *   *Dual-Nozzle IDEX*: Ext-L requires `ams_id: 254` / `tray_id: 0`. Ext-R requires `ams_id: 255` / `tray_id: 0`.
+    *   *Dual-Nozzle IDEX*: Ext-L requires `ams_id: 254` / `tray_id: 254`. Ext-R requires `ams_id: 255` / `tray_id: 254` (never `0` — BUG-117 / BambuStudio DeviceManager.cpp:1667-1693).
 2.  **Calibration Profile Binding (`extrusion_cali_sel`)**: Handled by the Main Motion/Extruder MCU. Uses global tray rules.
     *   *Single-Nozzle Platforms*: Requires `"ams_id": 254` and `"tray_id": 254`.
     *   *Dual-Nozzle IDEX*: Ext-L requires `ams_id: 254` / `tray_id: 254`. Ext-R requires `ams_id: 255` / `tray_id: 255`.
