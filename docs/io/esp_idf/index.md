@@ -196,6 +196,22 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 
   Creates a connector that skips server certificate verification.
 
+  Requires `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y` in the consuming app's sdkconfig
+
+  (a sub-option of `CONFIG_ESP_TLS_INSECURE`; both are off by default). No library call
+
+  can enable it — ESP-IDF compiles the no-verification branch out otherwise, and
+
+  `set_client_config` then fails the connection with `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
+
+  Failing loudly there is deliberate: this crate no longer falls back to ESP-IDF's
+
+  public-root CA bundle, which could never validate a self-signed printer certificate
+
+  anyway (GitHub issue #62). Prefer [`Self::with_certs`] wherever the caller can supply
+
+  the printer's CA — it needs no sdkconfig change and actually verifies the peer.
+
   The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
 
   bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
@@ -205,6 +221,14 @@ ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
 - <span id="espidftlsconnector-with-certs"></span>`fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self`
 
   Creates a connector that verifies the server certificate against a CA cert.
+
+  The supplied CA is the sole trust anchor: ESP-IDF's bundled public root CAs are
+
+  explicitly disabled, so these bytes reach mbedTLS as `cacert_buf` rather than being
+
+  silently overridden by the bundle (GitHub issue #62). Certificates are a runtime
+
+  input — nothing is embedded in this crate.
 
 - <span id="espidftlsconnector-with-connect-timeout"></span>`fn with_connect_timeout(self, connect_timeout: core::time::Duration) -> Self`
 
@@ -246,8 +270,8 @@ where
 
 Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
 
-`EspTls`'s own `read`/`write` are synchronous calls, but the underlying socket runs
-in non-blocking mode (`Config::non_block = true`, set by `EspIdfTlsConnector`), so
+`EspTls`'s own `read`/`write` are synchronous calls, but the underlying fd runs
+in non-blocking mode (`O_NONBLOCK`, set by `EspIdfTlsConnector::connect`), so
 each call returns immediately instead of blocking the FreeRTOS task. Retries happen
 by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
 
