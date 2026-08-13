@@ -23,7 +23,11 @@ tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "dep:x509-pars
 cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "dep:unicode-width", "tokio"]
 
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
-esp-idf = ["dep:esp-idf-svc", "dep:socket2", "std"]
+# `dep:embuild` is a build-dependency: `build.rs` needs it to re-emit the `esp_idf_*`
+# kconfig cfgs that `esp-idf-sys` propagates through `esp-idf-svc`. Without it, gates like
+# `#[cfg(esp_idf_mbedtls_certificate_bundle)]` in `io/esp_idf.rs` compile but are always
+# false — see the comment on `build.rs`.
+esp-idf = ["dep:esp-idf-svc", "dep:socket2", "dep:embuild", "std"]
 
 # Dynamic allocation support flag (enables string manipulation on bare-metal environments)
 # Propagates the required allocation features to both serde and serde_json core libraries.
@@ -139,6 +143,12 @@ time = { version = "0.3", features = ["std"], optional = true }
 
 # Terminal display-width (not byte/char count) for CLI table column alignment — CJK/emoji rows (BUG-153)
 unicode-width = { version = "0.2", optional = true }
+
+[build-dependencies]
+# Reads the ESP-IDF kconfig options that `esp-idf-svc` propagates to its dependents and
+# re-emits them as `--cfg esp_idf_*` for this crate. Optional and pulled in only by the
+# `esp-idf` feature, so host/embassy builds neither compile nor run it. See `build.rs`.
+embuild = { version = "0.33", optional = true }
 
 [dev-dependencies]
 # Standard testing runtime components

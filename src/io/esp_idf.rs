@@ -165,9 +165,11 @@ async fn poll_connect_until_complete(
 /// `async-io` crate and `MountedEventfs`, but that needs a new dependency and real
 /// app-side setup (a sized eventfd mount, a dedicated thread with a bumped stack, and
 /// working around an ESP-IDF main-task/async-io-thread priority inversion) — left as a
-/// future upgrade. This fixed-interval poll works because `Config::non_block = true` makes
-/// every `EspTls` call return immediately instead of blocking inside the FFI call, so an outer
-/// `TimerProvider`-based timeout can preempt the operation between poll attempts.
+/// future upgrade. This fixed-interval poll works because `EspIdfTlsConnector::connect` puts the
+/// adopted fd in `O_NONBLOCK`, so every `EspTls` call returns immediately instead of blocking
+/// inside the FFI call, and an outer `TimerProvider`-based timeout can preempt the operation
+/// between poll attempts. (`Config::non_block` is deliberately *off* on the adopted-socket path —
+/// see the comment in `connect` and GitHub issue #61.)
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
@@ -277,6 +279,19 @@ fn build_tls_config<'a>(
     let mut cfg = ::esp_idf_svc::tls::Config::new();
     cfg.non_block = true;
 
+    // Turn off ESP-IDF's bundled public root CAs (GitHub issue #62). `esp-idf-svc`'s
+    // `Config::new` defaults this to `true` wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is
+    // enabled, and ESP-IDF's `set_client_config` checks `crt_bundle_attach` *first* with
+    // mutually exclusive branches — so leaving the default on would verify against the public
+    // roots and silently ignore the caller's `ca_cert` below. Bambu printers are self-signed
+    // and cannot chain to a public root, so the bundle is never the anchor this crate wants.
+    // Cfg gate mirrors the field's own gate in `esp-idf-svc`; it is `build.rs` that makes the
+    // gate evaluate at all (see that file — without it this is silently dead code).
+    #[cfg(esp_idf_mbedtls_certificate_bundle)]
+    {
+        cfg.use_crt_bundle_attach = false;
+    }
+
     if let Some(ca) = ca_cert {
         cfg.ca_cert = Some(::esp_idf_svc::tls::X509::der(ca));
     } else {
@@ -293,8 +308,8 @@ fn build_tls_config<'a>(
 
 /// Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
 ///
-/// `EspTls`'s own `read`/`write` are synchronous calls, but the underlying socket runs
-/// in non-blocking mode (`Config::non_block = true`, set by `EspIdfTlsConnector`), so
+/// `EspTls`'s own `read`/`write` are synchronous calls, but the underlying fd runs
+/// in non-blocking mode (`O_NONBLOCK`, set by `EspIdfTlsConnector::connect`), so
 /// each call returns immediately instead of blocking the FreeRTOS task. Retries happen
 /// by yielding to the async executor via `EspIdfTimer::sleep` — see `TLS_POLL_INTERVAL`.
 ///
@@ -659,6 +674,14 @@ pub struct EspIdfTlsConnector {
 #[cfg(feature = "esp-idf")]
 impl EspIdfTlsConnector {
     /// Creates a connector that skips server certificate verification.
+    /// Requires `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y` in the consuming app's sdkconfig
+    /// (a sub-option of `CONFIG_ESP_TLS_INSECURE`; both are off by default). No library call
+    /// can enable it — ESP-IDF compiles the no-verification branch out otherwise, and
+    /// `set_client_config` then fails the connection with `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
+    /// Failing loudly there is deliberate: this crate no longer falls back to ESP-IDF's
+    /// public-root CA bundle, which could never validate a self-signed printer certificate
+    /// anyway (GitHub issue #62). Prefer [`Self::with_certs`] wherever the caller can supply
+    /// the printer's CA — it needs no sdkconfig change and actually verifies the peer.
     /// The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
     /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
     /// `.with_connect_timeout(d)`.
@@ -670,6 +693,10 @@ impl EspIdfTlsConnector {
     }
 
     /// Creates a connector that verifies the server certificate against a CA cert.
+    /// The supplied CA is the sole trust anchor: ESP-IDF's bundled public root CAs are
+    /// explicitly disabled, so these bytes reach mbedTLS as `cacert_buf` rather than being
+    /// silently overridden by the bundle (GitHub issue #62). Certificates are a runtime
+    /// input — nothing is embedded in this crate.
     ///
     /// `ca_cert_pem`: PEM or DER-encoded CA certificate bytes.
     /// `client_auth`: Optional (cert_pem, key_pem) for mutual TLS.
@@ -710,17 +737,33 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         host: &str,
         raw_stream: EspIdfTcpStream,
     ) -> Result<Self::Stream, SocketError> {
-        // The adopted fd must be non-blocking for `Config::non_block = true` (set by
-        // `build_tls_config`) to actually produce non-blocking handshake polling below —
-        // otherwise mbedTLS's read/write calls inside `negotiate()` would block on the
-        // fd itself despite the config flag. Plaintext callers of `EspIdfTcpStream` never
-        // reach this function, so flipping the fd here doesn't affect them.
+        // The adopted fd must be non-blocking: it is what makes mbedTLS's read/write calls
+        // inside `negotiate()` (and inside `EspIdfTlsStream`'s later read/write) return
+        // `WANT_READ`/`WANT_WRITE` instead of blocking the FreeRTOS task, which is what the
+        // poll loops retry on. `Config::non_block` plays no part in that on this path — see
+        // the override below. Plaintext callers of `EspIdfTcpStream` never reach this
+        // function, so flipping the fd here doesn't affect them.
         raw_stream
             .inner()
             .set_nonblocking(true)
             .map_err(to_esp_socket_error)?;
 
-        let cfg = self.certs.build_config();
+        let mut cfg = self.certs.build_config();
+
+        // Force `non_block` off for the adopted-socket path (GitHub issue #61). ESP-IDF's
+        // `esp_tls_low_level_conn` populates `tls->rset`/`tls->wset` only in its
+        // `ESP_TLS_INIT` branch, but `EspTls::adopt` enters at `ESP_TLS_CONNECTING`, so with
+        // `non_block = true` the `FD_SET` never ran and `select()` waits out the full
+        // `Config::timeout_ms` on zeroed fd sets, returns 0, and the handshake is never
+        // started — every retry burns another timeout and `connect` can only end in
+        // `TimedOut`. `esp-idf-svc`'s own `EspAsyncTls::negotiate` clears the flag for the
+        // same reason. The fd itself stays `O_NONBLOCK` (set above), so mbedTLS still
+        // returns `WANT_READ`/`WANT_WRITE` and the poll loop below works as intended.
+        // `Config::non_block = true` remains correct for the plain `EspTls::connect` path,
+        // so this override is local to `connect` rather than a change to
+        // `build_tls_config`. `scripts/check-esp-idf.sh` cannot catch this class of bug —
+        // it compiles clean either way; reproducing it needs a flashed board and a printer.
+        cfg.non_block = false;
 
         let timer = EspIdfTimer::new().map_err(|e| {
             log::debug!("failed to create ESP-IDF async timer for TLS: {e}");
