@@ -252,6 +252,8 @@ P2S models on certain firmware versions have a bug where RTP timestamps don't ad
 
 By default, `build_unsafe_client_config()` skips certificate verification — necessary because all Bambu printers use self-signed certs. For environments where you can provision your own CA, use `build_verified_client_config()`:
 
+> This section covers the `tokio` backend. ESP-IDF chooses its trust anchor differently and needs target configuration to skip verification at all — see "ESP-IDF certificate verification" under [Platform targets](#platform-targets).
+
 ```rust
 use bambino::io::tokio::{build_verified_client_config, TokioTlsConnector};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
@@ -344,9 +346,26 @@ let mut printer = printer.with_ftps(ftps_tls, factory, EmbassyTimer);
 ```rust
 use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer};
 
-let ftps_tls = EspIdfTlsConnector::new(); // or ::with_certs(ca_cert, client_auth) to verify
+// Prefer with_certs — see "ESP-IDF certificate verification" below for why
+// EspIdfTlsConnector::new() additionally requires two sdkconfig options.
+let ftps_tls = EspIdfTlsConnector::with_certs(ca_cert, None);
 let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTimer::new()?);
 ```
+
+**ESP-IDF certificate verification:** ESP-IDF picks exactly one trust anchor, checking them in a fixed order with mutually exclusive branches — its bundled public root CAs first, then a caller-supplied CA, then no verification at all. `esp-idf-svc` defaults the bundle **on** wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is enabled, so this crate turns it off explicitly: a self-signed printer certificate can never chain to a public root, and leaving the default on would silently ignore a CA you passed to `with_certs`.
+
+`EspIdfTlsConnector::with_certs(ca, client_auth)` is therefore the recommended path on this platform. The CA you supply becomes the sole trust anchor and needs no sdkconfig changes. Certificates are a runtime input — none are embedded in this crate.
+
+`EspIdfTlsConnector::new()` skips verification, which on ESP-IDF requires **both** of these in the consuming app's `sdkconfig`:
+
+```
+CONFIG_ESP_TLS_INSECURE=y
+CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
+```
+
+Both are off by default, and no library call can enable them — ESP-IDF compiles the no-verification branch out otherwise. Without them, `set_client_config` returns `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED` and the connection fails immediately. That is the intended, documented outcome rather than a defect: the alternative is verifying against a trust anchor the caller never asked for. If you see that error, supply a CA via `with_certs` or enable the two options above.
+
+This is the one place the ESP-IDF backend diverges from `io::tokio`, where `build_unsafe_client_config()` skips verification with no target configuration required.
 
 ## bambino-cli
 
