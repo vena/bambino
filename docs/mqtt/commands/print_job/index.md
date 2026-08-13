@@ -29,7 +29,7 @@ struct PrintJobConfig {
     pub bed_type: String,
     pub bed_leveling: CalibrationMode,
     pub run_flow_calibration: CalibrationMode,
-    pub run_vibration_compensation: bool,
+    pub run_vibration_compensation: CalibrationMode,
     pub timelapse: bool,
     pub layer_inspect: bool,
     pub nozzle_offset_cali: Option<CalibrationMode>,
@@ -74,9 +74,11 @@ with named fields and sensible defaults for calibration flags.
 
   Whether to run dynamic flow calibration before the print.
 
-- **`run_vibration_compensation`**: `bool`
+- **`run_vibration_compensation`**: `CalibrationMode`
 
-  Whether to run vibration compensation calibration before the print.
+  Whether to run vibration compensation calibration before the print. No tri-state
+  companion field exists on the wire for this one (`reference/03_mqtt_telemetry.md:334`),
+  so `Auto` serializes identically to `Off` via `as_wire_bool()`.
 
 - **`timelapse`**: `bool`
 
@@ -124,9 +126,13 @@ with named fields and sensible defaults for calibration flags.
 
   Enables or disables flow calibration for this job.
 
-- <span id="printjobconfig-vibration-compensation"></span>`fn vibration_compensation(self, enabled: bool) -> Self`
+- <span id="printjobconfig-vibration-compensation"></span>`fn vibration_compensation(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](#calibrationmode)
 
-  Enables or disables vibration compensation calibration for this job.
+  Enables or disables vibration compensation calibration for this job. No tri-state
+
+  companion field exists on the wire for this one, so `CalibrationMode::Auto` serializes
+
+  identically to `Off`.
 
 - <span id="printjobconfig-timelapse"></span>`fn timelapse(self, enabled: bool) -> Self`
 

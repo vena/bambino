@@ -30,7 +30,7 @@ a standard 16-byte length descriptor.
 |------|------|-------------|
 | [`BambuBinaryCameraStream`](#bambubinarycamerastream) | struct | Abstract state controller parsing incoming frame buffers from raw Port 6000 streams. |
 | [`build_handshake_packet`](#build-handshake-packet) | fn | Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY]. |
-| [`CAMERA_PASSWORD_MAX_LEN`](#camera-password-max-len) | const | Maximum accepted access-code length for the camera handshake and RTSPS auth, in bytes. |
+| [`CAMERA_PASSWORD_MAX_LEN`](#camera-password-max-len) | const | Maximum accepted access-code length for the camera handshake, in bytes. |
 
 ## Types
 
@@ -103,5 +103,7 @@ Constructs the static 80-byte binary authentication packet required by the print
 const CAMERA_PASSWORD_MAX_LEN: usize = 32usize;
 ```
 
-Maximum accepted access-code length for the camera handshake and RTSPS auth, in bytes.
+Maximum accepted access-code length for the camera handshake, in bytes. RTSPS auth
+(`camera::rtsps::build_rtsps_url`) doesn't enforce this bound itself — the CLI's
+connection-arg validation is the intended enforcement point for that path.
 

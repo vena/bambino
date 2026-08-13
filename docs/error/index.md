@@ -11,10 +11,10 @@ crate. It covers network failures, TLS handshake issues, protocol violations,
 authentication rejections, timeouts, and model capability mismatches.
 
 Under `std`, variants get `Display`/`Error` impls via `thiserror`. Under `no_std`,
-a manual `Display` impl is kept in sync by manual inspection — `test_display_consistency`
-only runs under the default `std` feature set (`cargo test`), so it exercises the
-`thiserror`-generated `std` impl, not the `#[cfg(not(feature = "std"))]`-gated manual one;
-there is currently no automated check that the two stay in sync.
+a manual `Display` impl delegates to `format_error_no_std`. `test_display_consistency`
+(below) runs under the default `std` feature set and verifies the `thiserror`-generated
+`std` impl agrees with `format_error_no_std` for every variant — the only piece left
+uncovered is the trivial `#[cfg(not(feature = "std"))] impl Display` wiring itself.
 
 ## Quick Reference
 
