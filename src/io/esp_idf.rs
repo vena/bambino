@@ -132,7 +132,70 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
         || err.raw_os_error() == Some(::esp_idf_svc::sys::EINPROGRESS as i32)
 }
 
-/// Polls a non-blocking `connect()` to completion by alternately checking `SO_ERROR` (via `take_error()`) and connectedness (via `peer_addr()`, which fails with `NotConnected` until the three-way handshake finishes) — `take_error()` alone can't distinguish "still connecting, no error yet" from "connected successfully," both of which return `Ok(None)`.
+/// True once lwIP has resolved a pending non-blocking `connect()`, either by completing the handshake or by failing it.
+///
+/// Uses a zero-timeout `poll()` for `POLLOUT`, the standard non-blocking-connect completion
+/// test, because lwIP offers no cheaper one that is actually correct — `getpeername()` is not
+/// a completion test here (see `poll_connect_until_complete`), and a zero-length `send()` is
+/// not either, since `netconn_write_vectors_partly` returns `ERR_OK` for `size == 0` before
+/// ever reaching the state check that would report `ERR_INPROGRESS`.
+///
+/// `POLLOUT` is exactly the right signal: `lwip_pollscan` raises it only when the socket's
+/// `sendevent` flag is set, a client-dialled TCP socket starts at `sendevent = 0`
+/// (`alloc_socket`), and the flag is set by the `NETCONN_EVT_SENDPLUS` that
+/// `lwip_netconn_do_connected` fires on SYN/ACK — the same callback that clears
+/// `NETCONN_CONNECT`, which is what unblocks writes. So this becomes true precisely when a
+/// write would stop failing with `ERR_INPROGRESS`.
+///
+/// A zero timeout keeps the call non-blocking, so the caller's sleep/`.await` pacing (and the
+/// outer timeout that depends on it) still works. Returns the raw `revents` — 0 while the
+/// connect is still pending — leaving the caller to separate a completed connection from a
+/// failed one, which `POLLOUT` alone cannot express.
+#[cfg(feature = "esp-idf")]
+fn poll_connect_revents(fd: core::ffi::c_int) -> Result<i16, SocketError> {
+    let mut poll_fd = ::esp_idf_svc::sys::pollfd {
+        fd,
+        events: ::esp_idf_svc::sys::POLLOUT as i16,
+        revents: 0,
+    };
+
+    // SAFETY: `poll_fd` is a single initialized `pollfd` owned by this frame, and the count (1)
+    // matches. A zero timeout means the call cannot block. lwIP writes only `revents`.
+    let rc = unsafe { ::esp_idf_svc::sys::poll(&mut poll_fd, 1, 0) };
+
+    if rc < 0 {
+        return Err(SocketError::Other(
+            "poll() failed while polling ESP-IDF TCP connect".into(),
+        ));
+    }
+
+    if rc == 0 {
+        return Ok(0);
+    }
+
+    Ok(poll_fd.revents)
+}
+
+/// `revents` bits that mean the connect failed rather than completed.
+#[cfg(feature = "esp-idf")]
+const POLL_CONNECT_FAILED: i16 = (::esp_idf_svc::sys::POLLERR
+    | ::esp_idf_svc::sys::POLLHUP
+    | ::esp_idf_svc::sys::POLLNVAL) as i16;
+
+/// Polls a non-blocking `connect()` to completion by waiting for the fd to become writable, then reading `SO_ERROR` (via `take_error()`) to tell a completed connection from a refused one.
+///
+/// Deliberately does *not* use `peer_addr()` as the completion test. On lwIP `getpeername()`
+/// answers as soon as `connect()` is initiated — `lwip_netconn_do_getaddr` returns `ERR_CONN`
+/// for a remote-name request only when the pcb is `CLOSED` or `LISTEN`, and a pcb in
+/// `SYN_SENT` is neither — so it returned `Ok` on the first poll iteration and this function
+/// handed back a socket still mid-handshake. The first write then failed outright rather than
+/// reporting would-block (`lwip_netconn_do_write` returns `ERR_INPROGRESS` → `EINPROGRESS`,
+/// which mbedTLS's `net_would_block` does not treat as retryable), killing the TLS handshake
+/// on its first record with `MBEDTLS_ERR_NET_SEND_FAILED`. See GitHub issue #64.
+///
+/// `take_error()` alone cannot carry this either: "still connecting, no error yet" and
+/// "connected successfully" both return `Ok(None)`. Hence readiness first, `SO_ERROR` second.
+///
 /// Sleeps `TLS_POLL_INTERVAL` between attempts so the caller's outer `race_against_connect_timeout`
 /// can preempt this loop; does not bound itself (see `EspIdfTcpStream::connect`'s doc comment for
 /// why).
@@ -141,15 +204,34 @@ async fn poll_connect_until_complete(
     socket: &::socket2::Socket,
     timer: &EspIdfTimer,
 ) -> Result<(), SocketError> {
+    use std::os::fd::AsRawFd;
+
+    let fd = socket.as_raw_fd();
+
     loop {
         if let Some(err) = socket.take_error().map_err(to_esp_socket_error)? {
             return Err(to_esp_socket_error(err));
         }
-        match socket.peer_addr() {
-            Ok(_) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotConnected => {}
-            Err(e) => return Err(to_esp_socket_error(e)),
+
+        let revents = poll_connect_revents(fd)?;
+
+        if revents != 0 {
+            // Readiness only says lwIP reached a verdict; SO_ERROR says which one. A refused or
+            // unreachable connect reports POLLERR here, not a `poll()` failure.
+            if let Some(err) = socket.take_error().map_err(to_esp_socket_error)? {
+                return Err(to_esp_socket_error(err));
+            }
+            // An error bit with no SO_ERROR to explain it still means the socket is unusable.
+            // Returning Ok here would hand back a dead socket and fail on the first write
+            // instead — the same shape of bug as #64 itself.
+            if revents & POLL_CONNECT_FAILED != 0 {
+                return Err(SocketError::Other(
+                    "ESP-IDF TCP connect failed: poll reported an error with no SO_ERROR".into(),
+                ));
+            }
+            return Ok(());
         }
+
         timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
             SocketError::Other("ESP-IDF timer failed while polling TCP connect".into())
         })?;
