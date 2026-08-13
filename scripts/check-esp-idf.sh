@@ -10,8 +10,8 @@
 #   scripts/check-esp-idf.sh esp32s3         # Xtensa
 #   scripts/check-esp-idf.sh esp32c3         # RISC-V
 #
-# Not wired into CI — run manually before landing changes to src/io/esp_idf.rs
-# or anything gated on #[cfg(feature = "esp-idf")].
+# Wired into CI via .github/workflows/esp-idf.yml, path-filtered to only run when
+# src/io/esp_idf.rs, this script, or Cargo.toml change. Also fine to run manually.
 set -euo pipefail
 
 CHIP="${1:-esp32c6}"
@@ -49,6 +49,10 @@ CARGO_REGISTRY_VOLUME="bambino-esp-idf-cargo-registry"
 CARGO_GIT_VOLUME="bambino-esp-idf-cargo-git"
 RUSTUP_VOLUME="bambino-esp-idf-rustup"
 TARGET_VOLUME="bambino-esp-idf-target-${CHIP}"
+# Holds the ESP-IDF SDK/toolchain the build script downloads (ESP_IDF_TOOLS_INSTALL_DIR=global
+# below) — kept out of the bind-mounted repo entirely so the non-root `esp` user never needs
+# write access to the checkout itself. See the comment above the second `docker run` for why.
+ESPRESSIF_VOLUME="bambino-esp-idf-espressif"
 
 # Docker auto-creates named volumes as root-owned on first use, but the image runs
 # as non-root `esp` (uid 1000) — so a brand-new volume is unwritable by the build
@@ -58,18 +62,34 @@ docker run --rm \
   -v "${CARGO_GIT_VOLUME}:/home/esp/.cargo/git" \
   -v "${RUSTUP_VOLUME}:/home/esp/.rustup" \
   -v "${TARGET_VOLUME}:/workspace/target" \
+  -v "${ESPRESSIF_VOLUME}:/home/esp/.espressif" \
   --user root \
   "${IMAGE}" \
-  chown -R esp:esp /home/esp/.cargo /home/esp/.rustup /workspace/target
+  chown -R esp:esp /home/esp/.cargo /home/esp/.rustup /workspace/target /home/esp/.espressif
 
 echo "== cargo check --target ${TARGET} --no-default-features --features esp-idf --lib (chip=${CHIP}) =="
+# Runs as the image's default non-root `esp` user throughout — no --user root anywhere in
+# this script. On a GitHub Actions runner the bind-mounted checkout is owned by the runner's
+# own uid (not esp's 1000), so esp-idf-sys's build script previously failed with "Permission
+# denied" trying to create .embuild/espressif *inside* /workspace as that non-root user.
+# ESP_IDF_TOOLS_INSTALL_DIR=global redirects that install into $HOME/.espressif instead
+# (esp-idf-sys's own documented option, see BUILD-OPTIONS.md) — a location this script
+# already owns via the named volume above, so the SDK download never needs to touch the
+# bind-mounted repo at all. Rejected alternative: chowning the repo bind mount (or running
+# the whole build as root) — tried first, broke on a dev host by recursively hitting
+# .git/objects and any stray build-artifact dirs containing real macOS .app bundles (e.g. a
+# leftover CMake.app under esp32-hw-probe/.embuild), which macOS code-signing protections
+# refuse to let even root touch; running as root at all also risks leaving root-owned files
+# in the bind-mounted checkout on a real Linux host, unlike this approach.
 docker run --rm \
   -v "$(pwd):/workspace" \
   -v "${CARGO_REGISTRY_VOLUME}:/home/esp/.cargo/registry" \
   -v "${CARGO_GIT_VOLUME}:/home/esp/.cargo/git" \
   -v "${RUSTUP_VOLUME}:/home/esp/.rustup" \
   -v "${TARGET_VOLUME}:/workspace/target" \
+  -v "${ESPRESSIF_VOLUME}:/home/esp/.espressif" \
   -w /workspace \
+  -e ESP_IDF_TOOLS_INSTALL_DIR=global \
   -e "IDF_TARGET=${CHIP}" \
   -e "MCU=${CHIP}" \
   "${IMAGE}" \
