@@ -37,19 +37,28 @@ docker pull "${IMAGE}"
 # doc generation and the compile check use the same dependency graph and target
 # triple, so there's no reason to duplicate the cargo registry/rust-src/target
 # cache under a separate name).
+#
+# Sharing the target volume means both scripts must also agree on where the ESP-IDF SDK
+# lives, because CMake bakes an absolute toolchain path into the cached configuration under
+# target/. ESPRESSIF_VOLUME + ESP_IDF_TOOLS_INSTALL_DIR=global below mirror check-esp-idf.sh
+# exactly; without them esp-idf-sys installs the SDK to /workspace/.embuild instead, and the
+# cached CMakeSystem.cmake still points at /home/esp/.espressif/... — "include could not find
+# requested file", which reads like a broken toolchain rather than a cache mismatch.
 CARGO_REGISTRY_VOLUME="bambino-esp-idf-cargo-registry"
 CARGO_GIT_VOLUME="bambino-esp-idf-cargo-git"
 RUSTUP_VOLUME="bambino-esp-idf-rustup"
 TARGET_VOLUME="bambino-esp-idf-target-${CHIP}"
+ESPRESSIF_VOLUME="bambino-esp-idf-espressif"
 
 docker run --rm \
   -v "${CARGO_REGISTRY_VOLUME}:/home/esp/.cargo/registry" \
   -v "${CARGO_GIT_VOLUME}:/home/esp/.cargo/git" \
   -v "${RUSTUP_VOLUME}:/home/esp/.rustup" \
   -v "${TARGET_VOLUME}:/workspace/target" \
+  -v "${ESPRESSIF_VOLUME}:/home/esp/.espressif" \
   --user root \
   "${IMAGE}" \
-  chown -R esp:esp /home/esp/.cargo /home/esp/.rustup /workspace/target
+  chown -R esp:esp /home/esp/.cargo /home/esp/.rustup /workspace/target /home/esp/.espressif
 
 OUT_NAME="esp-idf-doc-${CHIP}.json"
 
@@ -65,7 +74,9 @@ docker run --rm \
   -v "${CARGO_GIT_VOLUME}:/home/esp/.cargo/git" \
   -v "${RUSTUP_VOLUME}:/home/esp/.rustup" \
   -v "${TARGET_VOLUME}:/workspace/target" \
+  -v "${ESPRESSIF_VOLUME}:/home/esp/.espressif" \
   -w /workspace \
+  -e ESP_IDF_TOOLS_INSTALL_DIR=global \
   -e "IDF_TARGET=${CHIP}" \
   -e "MCU=${CHIP}" \
   -e "RUSTC_BOOTSTRAP=1" \
