@@ -248,9 +248,12 @@ async fn poll_connect_until_complete(
 /// app-side setup (a sized eventfd mount, a dedicated thread with a bumped stack, and
 /// working around an ESP-IDF main-task/async-io-thread priority inversion) — left as a
 /// future upgrade. This fixed-interval poll works because `EspIdfTlsConnector::connect` puts the
-/// adopted fd in `O_NONBLOCK`, so every `EspTls` call returns immediately instead of blocking
-/// inside the FFI call, and an outer `TimerProvider`-based timeout can preempt the operation
-/// between poll attempts. (`Config::non_block` is deliberately *off* on the adopted-socket path —
+/// adopted fd in `O_NONBLOCK` *and* pins `Config::timeout_ms = 0`, so every `EspTls` call takes a
+/// single handshake step and returns immediately instead of blocking inside the FFI call, and an
+/// outer `TimerProvider`-based timeout can preempt the operation between poll attempts. Both are
+/// required: `O_NONBLOCK` alone still left `esp_tls_conn_new_sync` spinning internally for up to
+/// the default 4s per call, which made this interval dead time between spins rather than pacing
+/// (GitHub issue #67). (`Config::non_block` is deliberately *off* on the adopted-socket path —
 /// see the comment in `connect` and GitHub issue #61.)
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
@@ -790,7 +793,18 @@ impl EspIdfTlsConnector {
         }
     }
 
-    /// Overrides the default handshake deadline. Passing `Duration::ZERO` disables the
+    /// Overrides the default handshake deadline, which bounds how long the poll loop keeps
+    /// retrying rather than how long any single attempt may take.
+    /// The deadline is checked *between* iterations, so it cannot preempt a stall *inside*
+    /// one: the `EspTls::negotiate` FFI call is not interruptible from this task once entered.
+    /// `connect` pins `Config::timeout_ms = 0` so each call is a single handshake step, which
+    /// keeps that window near-instant and gives this deadline ~`TLS_POLL_INTERVAL` granularity
+    /// (GitHub issue #67) — but a call that blocks internally is still unbounded regardless of
+    /// what is passed here, and the calling task is then lost with nothing logged (observed
+    /// once on ESP32-P4, GitHub issue #66). Consumers running printer I/O on a dedicated task
+    /// should subscribe it to the ESP-IDF Task Watchdog, which is the only layer that can
+    /// recover from that; no in-crate timeout can, and this one does not claim to.
+    /// Passing `Duration::ZERO` disables the
     /// deadline entirely, matching `set_command_timeout`'s "0 disables" convention
     /// and `client::connect::with_connect_timeout`'s precedent — otherwise the very
     /// first would-block poll would immediately exceed a zero-length budget.
@@ -846,6 +860,28 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // `build_tls_config`. `scripts/check-esp-idf.sh` cannot catch this class of bug —
         // it compiles clean either way; reproducing it needs a flashed board and a printer.
         cfg.non_block = false;
+
+        // Make each `negotiate()` perform exactly one handshake step (GitHub issue #67).
+        // With `non_block = false` the call lands in `esp_tls_conn_new_sync`, which is a
+        // `while (1)` around `esp_tls_low_level_conn` bounded only by `cfg->timeout_ms` — and
+        // `esp-idf-svc`'s `Config::new` defaults that to 4000ms. The fd is `O_NONBLOCK`, so
+        // mbedTLS returns `WANT_READ` immediately and that loop simply spins, unyielding, for
+        // up to 4s per call. `timeout_ms = 0` makes its `elapsed / 1000 >= timeout_ms` test
+        // true on the first pass, so it runs one step and returns 0, which `esp-idf-svc` maps
+        // to `EWOULDBLOCK` and `is_would_block` already treats as retryable.
+        //
+        // Without this the poll loop below is not pacing anything: `TLS_POLL_INTERVAL` and the
+        // `connect_timeout` deadline are only evaluated between 4s spins, so a 10s budget has
+        // ~4s granularity and overshoots to ~12.06s (measured: five boot-adjacent timeouts
+        // within 10ms of each other, 3 x ~4.02s). A successful handshake finishes inside the
+        // first spin, so the loop never ran at all on the happy path.
+        //
+        // Set here rather than in `build_tls_config` because 0 is only safe while `non_block`
+        // is false: the `ESP_TLS_CONNECTING` branch passes `cfg->timeout_ms > 0 ? &tv : NULL`
+        // to `select()`, so a `non_block = true` caller would get an indefinite block instead
+        // of a single step. That branch is unreachable from here, but a shared default would
+        // reach it.
+        cfg.timeout_ms = 0;
 
         let timer = EspIdfTimer::new().map_err(|e| {
             log::debug!("failed to create ESP-IDF async timer for TLS: {e}");
