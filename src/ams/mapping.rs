@@ -54,15 +54,11 @@ impl MaterialSource {
     #[must_use]
     pub fn flat_channel_id(&self) -> i32 {
         match self {
-            MaterialSource::StandardAms { ams_id, slot_id } => {
+            MaterialSource::StandardAms { ams_id, slot_id }
                 if *ams_id <= super::parser::AMS_MAX_STANDARD_ID
-                    && *slot_id < super::parser::AMS_SLOTS_PER_UNIT
-                {
-                    ((*ams_id as i32) * super::parser::AMS_SLOTS_PER_UNIT as i32)
-                        + (*slot_id as i32)
-                } else {
-                    -1
-                }
+                    && *slot_id < super::parser::AMS_SLOTS_PER_UNIT =>
+            {
+                ((*ams_id as i32) * super::parser::AMS_SLOTS_PER_UNIT as i32) + (*slot_id as i32)
             }
             MaterialSource::AmsHt { ams_id }
                 if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)

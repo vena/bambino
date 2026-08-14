@@ -18,7 +18,14 @@ use core::net::SocketAddr;
 /// with the FreeRTOS scheduler instead of blocking the task thread.
 #[cfg(feature = "esp-idf")]
 pub struct EspIdfTimer {
-    timer: core::cell::RefCell<::esp_idf_svc::timer::EspAsyncTimer>,
+    /// `Option` so `sleep` can *move* the timer out for the duration of the await rather than
+    /// hold a `RefCell` borrow across it (`clippy::await_holding_refcell_ref`). A borrow held
+    /// across an await panics with `BorrowMutError` if a second caller awaits `sleep` on the
+    /// same timer, which is reachable: `TimerProvider::sleep` takes `&self`, and a single
+    /// timer is shared by a whole client (see `README.md`'s `with_ftps` example), so any
+    /// `select!`-style race between two sleeps on it would abort. With the timer taken out, a
+    /// concurrent caller sees `None` and allocates its own instead of panicking.
+    timer: core::cell::RefCell<Option<::esp_idf_svc::timer::EspAsyncTimer>>,
 }
 
 #[cfg(feature = "esp-idf")]
@@ -30,22 +37,44 @@ impl EspIdfTimer {
     /// allocate/drop cycles on both ESP32-C6 and ESP32-C3 hit zero failures, so the
     /// `esp_timer` slot cap isn't a practical concern here; see `esp32-hw-probe/`.
     pub fn new() -> Result<Self, ::esp_idf_svc::sys::EspError> {
-        let service = ::esp_idf_svc::timer::EspTimerService::<::esp_idf_svc::timer::Task>::new()?;
-        let timer = service.timer_async()?;
         Ok(Self {
-            timer: core::cell::RefCell::new(timer),
+            timer: core::cell::RefCell::new(Some(Self::new_async_timer()?)),
         })
+    }
+
+    /// Allocates one `esp_timer` slot backed by its own timer service.
+    fn new_async_timer() -> Result<::esp_idf_svc::timer::EspAsyncTimer, ::esp_idf_svc::sys::EspError>
+    {
+        let service = ::esp_idf_svc::timer::EspTimerService::<::esp_idf_svc::timer::Task>::new()?;
+        service.timer_async()
     }
 }
 
 #[cfg(feature = "esp-idf")]
 impl TimerProvider for EspIdfTimer {
     async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
-        self.timer
-            .borrow_mut()
-            .after(duration)
-            .await
-            .map_err(|_| TimerError::Other("ESP-IDF hardware timer scheduling failed"))
+        // Take the cached timer out (borrow ends on this line, before the await) or allocate a
+        // fresh one if a concurrent sleep already holds it — see the field's doc comment.
+        let taken = self.timer.borrow_mut().take();
+        let mut timer = match taken {
+            Some(timer) => timer,
+            None => Self::new_async_timer()
+                .map_err(|_| TimerError::Other("ESP-IDF hardware timer allocation failed"))?,
+        };
+
+        let result = timer.after(duration).await;
+
+        // Restore for the next call, unless a concurrent caller already put one back — keep
+        // exactly one cached and drop the extra, so repeated racing sleeps don't accumulate
+        // `esp_timer` slots. Dropping this future mid-await instead (cancellation) simply
+        // leaves the slot empty and the next `sleep` reallocates.
+        let mut slot = self.timer.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(timer);
+        }
+        drop(slot);
+
+        result.map_err(|_| TimerError::Other("ESP-IDF hardware timer scheduling failed"))
     }
 
     fn now_millis(&self) -> u64 {

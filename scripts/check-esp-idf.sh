@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Compiles the `esp-idf` feature target inside the matching `espressif/idf-rust`
-# Docker image — the only way to actually exercise `esp-idf-sys`'s build script
-# (needs Python/cmake/ninja/the ESP-IDF SDK, and for Xtensa chips a forked Rust
-# toolchain) without installing that stack on the host. See CLAUDE.md.
+# Compiles and lints (`cargo clippy`, which subsumes `cargo check`) the `esp-idf`
+# feature target inside the matching `espressif/idf-rust` Docker image — the only
+# way to actually exercise `esp-idf-sys`'s build script (needs Python/cmake/ninja/
+# the ESP-IDF SDK, and for Xtensa chips a forked Rust toolchain) without
+# installing that stack on the host. Clippy rather than check because this is the
+# only gate that compiles `#[cfg(feature = "esp-idf")]` code at all, so it is also
+# the only place a lint in it can be seen. See CLAUDE.md.
 #
 # Usage:
 #   scripts/check-esp-idf.sh                # esp32c6 (RISC-V, default)
@@ -67,7 +70,7 @@ docker run --rm \
   "${IMAGE}" \
   chown -R esp:esp /home/esp/.cargo /home/esp/.rustup /workspace/target /home/esp/.espressif
 
-echo "== cargo check --target ${TARGET} --no-default-features --features esp-idf --lib (chip=${CHIP}) =="
+echo "== cargo clippy --target ${TARGET} --no-default-features --features esp-idf --lib (chip=${CHIP}) =="
 # Runs as the image's default non-root `esp` user throughout — no --user root anywhere in
 # this script. On a GitHub Actions runner the bind-mounted checkout is owned by the runner's
 # own uid (not esp's 1000), so esp-idf-sys's build script previously failed with "Permission
@@ -93,4 +96,4 @@ docker run --rm \
   -e "IDF_TARGET=${CHIP}" \
   -e "MCU=${CHIP}" \
   "${IMAGE}" \
-  bash -lc "source \"\$HOME/export-esp.sh\" 2>/dev/null || true; rustup component add rust-src; cargo check -Z build-std=std,panic_abort --target ${TARGET} --no-default-features --features esp-idf --lib"
+  bash -lc "source \"\$HOME/export-esp.sh\" 2>/dev/null || true; rustup component add rust-src clippy; cargo clippy -Z build-std=std,panic_abort --target ${TARGET} --no-default-features --features esp-idf --lib"
