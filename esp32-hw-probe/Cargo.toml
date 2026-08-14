@@ -26,6 +26,15 @@ log = "0.4"
 esp-idf-svc = { version = "0.52.1", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
 # Remove `generic-queue-8` if you plan to use `embassy-time` WITH `embassy-executor`
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+# Path dep on the crate under test so a probe exercises the *shipped* type rather than a
+# copy of it — a reimplementation here could pass while the real code still fails. Fine
+# despite the root `exclude = ["esp32-hw-probe/"]`: that only keeps this directory out of
+# the published tarball, it doesn't make bambino unusable as a local path dependency.
+bambino = { path = "..", default-features = false, features = ["esp-idf"] }
+# Concurrency combinators for probes that need two futures live on one executor at once
+# (the single-task interleave is the only way to share an `EspIdfTimer` — its `RefCell`
+# isn't `Sync`, so `Arc`-ing one across threads doesn't compile).
+embassy-futures = "0.1"
 
 [build-dependencies]
 embuild = "0.33"

@@ -8,7 +8,14 @@ its `Cargo.toml` `exclude` entry — never a dependency of `bambino` itself.
 
 **To reuse for a new investigation:** replace `src/main.rs`'s body with the new
 test logic (keep the `esp_idf_svc::sys::link_patches()` / logger-init
-boilerplate at the top). Don't accumulate old investigations' logic here —
+boilerplate at the top). Reach for `bambino` itself — it's a path dependency
+here, so a probe can drive the shipped type rather than a copy of it, and a
+copy is exactly what can pass while the real code still fails. Note that
+`&self`-taking types holding a `RefCell` (e.g. `EspIdfTimer`) aren't `Sync`, so
+"two callers at once" has to mean two futures on one executor, not two threads;
+`embassy-futures`' `join`/`select` are already dependencies for that.
+
+Don't accumulate old investigations' logic here —
 `git log -- esp32-hw-probe/src/main.rs` is the record of what's been tested
 before (e.g. the BUG-051 timer-exhaustion stress test), the file itself should
 only ever hold the *current* investigation.
