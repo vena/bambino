@@ -881,6 +881,14 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // to `select()`, so a `non_block = true` caller would get an indefinite block instead
         // of a single step. That branch is unreachable from here, but a shared default would
         // reach it.
+        //
+        // Expected side effect: `conn_new_sync`'s early-return path logs
+        // `W esp-tls: Failed to open new connection in specified timeout` on every step that
+        // does not complete the handshake, so a normal ~1.3s connect emits ~55 `W` lines.
+        // Noisy but correct, and not worth trading away — `timeout_ms = 1` would spin ~1ms
+        // per call before logging the identical warning, reintroducing the busy-wait #67
+        // removed without silencing anything. Consumers who want a quiet log should raise the
+        // `esp-tls` tag's log level, not this value.
         cfg.timeout_ms = 0;
 
         let timer = EspIdfTimer::new().map_err(|e| {
