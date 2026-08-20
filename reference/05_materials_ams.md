@@ -42,7 +42,7 @@ The physical printer's AMS controller represents spool presence and active routi
 | :--- | :--- | :--- |
 | **`11`** | Loaded / Active | Spool detected; filament has successfully fed past the hub multiplexer and is routed to the Active Toolhead. |
 | **`10`** | Spool Present | Spool detected in the tray and loaded into the local feeder drive, but filament is currently retracted (unloaded from toolhead). |
-| **`9`** / **`0`** | Empty Slot | No spool is detected in the tray, or the slot configuration has been cleared. |
+| **`9`** / **`0`** | Empty Slot | No spool is detected in the tray, or the slot configuration has been cleared. **Does not hold for AMS-HT** — see the AMS-HT exception below. |
 | *(Key Absent)* | Empty Slot | **Firmware Exception**: On some firmwares (e.g., P1S, A1 Mini), physically removing a spool omits the `"state"` key entirely (yielding `{id: N}`). Absent state parameters default to `9`. |
 
 ##### Symmetrical Absent-Key Empty Slot Signalling (P1S & A1 Mini)
@@ -52,6 +52,13 @@ On the P1 and A1 hardware series, when a physical AMS slot is completely empty, 
 When the bitwise presence check indicates a spool has been removed (or when the `"state"` transitions to a non-loaded code like `9`), all stale material telemetry fields (including `tray_type`, `tray_color`, `tray_info_idx`, `tag_uid`, `tray_uuid`, and `remain`) must be explicitly cleared or nullified by the parser. This is required because the printer's incremental telemetry updates often omit configuration keys for inactive slots, causing stale material attributes to persist indefinitely in standard parsers.
 
 Additionally, some models (such as `H2D`) only emit `{id, state}` in incremental updates when a slot is not fully loaded. A transition to state `9` (empty) or `10` (present but retracted), or receiving an empty string for `tray_type`, must be treated as an explicit clearing signal. Without this active sanitization, stale material parameters from previously loaded spools will persist in the state representation.
+
+##### AMS-HT State-9 Exception (IDs 128-135)
+An AMS-HT is a single-tray high-temperature dry box, not a 4-slot multiplexer: it does not feed filament into a shared buffer, so it has no distinct "loaded past the hub" condition to report as `11`. On a partial power-on frame it reports its **loaded** tray as `state: 9` — the opposite of the standard-AMS meaning tabulated above. Applying the generic `state ∈ {9, 10} → empty` rule to an HT unit therefore wipes a physically present spool on every power-on.
+
+Parsers must not treat state `9` alone as a clearing signal when `128 <= ams_id <= 135`. A genuine HT spool removal still clears via the explicit empty-`tray_type` signal and via `tray_exist_bits`, so nothing is lost by the carve-out. State `0` (power-off) is **not** carved out: it is a shutdown artifact covered by the `power_on_flag` rule above, and no HT unit has been observed reporting `0` while loaded — so codes `0` and `9` are deliberately handled differently here despite being grouped in the table.
+
+**Verification source:** Bambuddy `bambu_mqtt.py`'s incremental-merge handler skips the state heuristic for `ams_id >= 128`, citing their issue #2594 — a live H2D Pro observation where an HT spool was wiped on every power-on. This independently corroborates the evidence behind bambino issue #27 (commit `3ed570f`), which introduced `clean_stale_tray_data`'s `is_ht` gate without recording the exception here. Note Bambuddy's carve-out is broader than bambino's: they skip the heuristic for *any* non-`11` state on HT, while bambino carves out only `9`.
 
 **Verification source (BUG-012):** confirmed against two independent reverse-engineering projects, not just this doc's original wording. `pybambu`'s `AMSTrayStateFlags` bitmask model disagreed (treated state 9 as "present but unknown"), but `Bambuddy`'s `bambu_mqtt.py` (`apply_tray_exist_bits`, incremental-merge handler citing issue #784) and `main.py`'s `on_ams_change` (`loaded = cur_state == 11 or (cur_state not in (9, 10) and cur_type.strip())`, citing issue #1322, cross-tested against H2D/A1 Mini/P1S firmware) both treat `state ∈ {9, 10}` as the firmware's explicit "not loaded" signals — matching this doc, not pybambu. `src/ams/parser.rs::clean_stale_tray_data` now clears on both.
 

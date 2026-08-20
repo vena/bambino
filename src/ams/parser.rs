@@ -133,6 +133,10 @@ pub fn evaluate_spool_presence(
 /// `ams_id` gates the state-9 heuristic: on AMS-HT units (`ams_id` 128-135), state 9 on a
 /// partial power-on frame means *loaded*, not empty — the opposite of its meaning on a
 /// standard 4-slot AMS — so state 9 alone is not treated as a clearing signal for HT units.
+/// Independently corroborated by Bambuddy's incremental-merge handler, which skips the same
+/// heuristic for `ams_id >= 128` after a live H2D Pro wiped an HT spool on every power-on
+/// (their issue #2594); the exception is recorded in `reference/05_materials_ams.md`, which
+/// also explains why `AMS_TRAY_STATE_POWER_OFF` (0) is deliberately *not* gated the same way.
 pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
     let is_absent_state = matches!(
