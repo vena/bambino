@@ -126,6 +126,7 @@ mod tests {
                 write_pending_secs: None,
                 write_pending_sequence_id: None,
                 ping_outstanding: false,
+                last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,

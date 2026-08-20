@@ -64,6 +64,21 @@ pub(crate) const MQTT_IN_FLIGHT_TTL_SECS: u32 = 120;
 pub(crate) const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10;
 pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 
+/// How long the connection may go with no client-to-broker traffic before
+/// `poll_telemetry_with_timer` sends a keepalive PINGREQ.
+///
+/// `MQTT_KEEP_ALIVE_SECS` (30) obliges this client to send *something* within 1.5× that
+/// window — 45s — or the broker drops the connection (MQTT 3.1.1 §3.1.2.10). Nothing in the
+/// library honored that: only the CLI's monitor sent pings, on its own timer, so a
+/// library-only consumer following README's "connect, then `poll_telemetry()` in a loop"
+/// sent zero bytes and was dropped after ~45s — surfacing as a bare I/O error, since
+/// `MQTT_STALE_CONNECTION_SECS` (60) could not even report staleness before the disconnect.
+///
+/// 20s sits below both bounds that matter: the 45s broker deadline, and
+/// `MQTT_READ_TIMEOUT_SECS` (30), so a ping still falls due between two consecutive
+/// blocking reads on a link with no inbound telemetry at all.
+pub(crate) const MQTT_PING_INTERVAL_SECS: u64 = 20;
+
 // ============================================================================
 // MQTT Client Session Management
 // ============================================================================
@@ -114,6 +129,18 @@ pub struct MqttClient<IO: AsyncIo> {
     secs_since_last_message: u32,
     /// Byte-level progress of an in-flight frame read, preserved across a timed-out `read_exact_packet` call so `poll_wire()` resumes correctly instead of desyncing the stream — see `FrameReadState`'s doc comment.
     read_state: FrameReadState,
+    /// Monotonic timestamp of the last frame this client wrote, driving the keepalive PINGREQ
+    /// in `poll_telemetry_with_timer` (see [`MQTT_PING_INTERVAL_SECS`]).
+    ///
+    /// Deliberately *not* derived from `secs_since_last_message`: that counter only advances
+    /// when the caller calls `tick_zombie_check`, so gating keepalives on it would reproduce the
+    /// very "works only if the consumer knows to do extra work" flaw this exists to remove.
+    ///
+    /// `None` means unstamped — no write has happened yet, or the timer has no real clock. It is
+    /// an `Option` rather than a `0` sentinel because a monotonic clock legitimately reads 0:
+    /// `TokioTimer` measures from its own construction, so the first `now_millis()` of a fresh
+    /// client really is 0, and a sentinel would read that as "never stamped" forever.
+    last_outbound_ms: Option<u64>,
     /// Set once a `write_frame_with_timer` call fails — a write timeout or I/O error may
     /// already have put a partial frame on the wire, and unlike a read timeout (safe to
     /// retry via `FrameReadState`), a write has no resumable partial-progress state.
@@ -300,6 +327,14 @@ impl<IO: AsyncIo> MqttClient<IO> {
         write_frame_with_timer(&mut self.stream, packet, timer)
             .await
             .inspect_err(|_| self.write_poisoned = true)
+            .inspect(|_| {
+                // Every outbound frame resets the keepalive clock, not just PINGREQ: the broker
+                // deadline is about client-to-broker traffic of any kind, so a client publishing
+                // commands steadily never needs to ping at all.
+                if timer.has_real_clock() {
+                    self.last_outbound_ms = Some(timer.now_millis());
+                }
+            })
     }
     /// Executes a secure local network connection handshake and subscription loop with the printer.
     ///
@@ -467,6 +502,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             write_pending_secs: None,
             write_pending_sequence_id: None,
             ping_outstanding: false,
+            last_outbound_ms: None,
             secs_since_last_message: 0,
             read_state: FrameReadState::default(),
             write_poisoned: false,
@@ -601,7 +637,38 @@ impl<IO: AsyncIo> MqttClient<IO> {
                 .saturating_sub(Self::message_size(&buffered));
             return Ok(buffered);
         }
+        self.send_keepalive_if_due(timer).await?;
         self.poll_wire(timer).await
+    }
+
+    /// Sends a keepalive PINGREQ if the connection has been silent outbound for
+    /// [`MQTT_PING_INTERVAL_SECS`], honoring the keepalive this client advertises in CONNECT.
+    ///
+    /// Sent *before* the blocking read rather than after: `poll_wire` may block for up to
+    /// `MQTT_READ_TIMEOUT_SECS` on a link with no inbound telemetry, and a ping issued after
+    /// that would already be too late on the second such read.
+    ///
+    /// No-op without a real wall-clock (`DummyTimer`), which is what `MqttClient::poll_telemetry`
+    /// and test clients use — those keep the pre-existing behavior of never pinging.
+    async fn send_keepalive_if_due<T: TimerProvider>(&mut self, timer: &T) -> Result<(), Error> {
+        if !timer.has_real_clock() {
+            return Ok(());
+        }
+
+        // First call after connect: stamp the clock rather than ping, so the interval is
+        // measured from a real outbound event instead of from the timer's origin.
+        let Some(last_outbound_ms) = self.last_outbound_ms else {
+            self.last_outbound_ms = Some(timer.now_millis());
+            return Ok(());
+        };
+
+        let idle_ms = timer.now_millis().saturating_sub(last_outbound_ms);
+        if idle_ms < MQTT_PING_INTERVAL_SECS * 1000 {
+            return Ok(());
+        }
+
+        log::trace!("Keepalive due after {}ms of outbound silence", idle_ms);
+        self.send_ping_with_timer(timer).await
     }
 
     /// Reads the next message directly from the wire, bypassing the pending buffer.
@@ -1106,6 +1173,7 @@ mod tests {
                 write_pending_secs: None,
                 write_pending_sequence_id: None,
                 ping_outstanding: false,
+                last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
@@ -1132,6 +1200,92 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_keepalive_ping_fires_only_once_the_interval_has_elapsed() {
+            // Regression (issue #113): CONNECT advertises MQTT_KEEP_ALIVE_SECS, obliging this
+            // client to send traffic within 45s, but nothing in the library did — a consumer
+            // polling telemetry in a loop sent zero bytes and was dropped by the broker.
+            //
+            // Drives a controllable clock rather than TokioTimer: the interval under test is
+            // 20s, and TokioTimer measures from its own construction, so a real-clock test would
+            // have to either sleep 20s or backdate into a saturating_sub floor of 0.
+            struct FakeClock {
+                now_ms: core::cell::Cell<u64>,
+            }
+            impl crate::io::TimerProvider for FakeClock {
+                async fn sleep(
+                    &self,
+                    _duration: core::time::Duration,
+                ) -> Result<(), crate::io::TimerError> {
+                    // Never completes, so write_frame_with_timer's write-vs-deadline race is
+                    // always won by the write. A sleep that returned instantly would make every
+                    // write look like a timeout.
+                    core::future::pending().await
+                }
+                fn now_millis(&self) -> u64 {
+                    self.now_ms.get()
+                }
+            }
+
+            let timer = FakeClock {
+                now_ms: core::cell::Cell::new(1_000),
+            };
+            let (client_stream, _server_stream) = tokio::io::duplex(8192);
+            let mut client = MqttClient {
+                stream: TokioIo(client_stream),
+                request_topic: "device/01P000000000000/request".to_string(),
+                serial: "01P000000000000".to_string(),
+                next_packet_id: 2,
+                in_flight: BTreeMap::new(),
+                pending_messages: VecDeque::new(),
+                pending_bytes: 0,
+                write_pending_secs: None,
+                write_pending_sequence_id: None,
+                ping_outstanding: false,
+                last_outbound_ms: None,
+                secs_since_last_message: 0,
+                read_state: FrameReadState::default(),
+                write_poisoned: false,
+            };
+
+            // First call stamps the clock instead of pinging, so the interval is measured from
+            // a real outbound event rather than from the epoch.
+            client
+                .send_keepalive_if_due(&timer)
+                .await
+                .expect("stamping call should not error");
+            assert!(!client.ping_outstanding, "first call must not ping");
+            assert!(
+                client.last_outbound_ms.is_some(),
+                "first call must stamp the clock"
+            );
+
+            // Still inside the interval: no ping.
+            client
+                .send_keepalive_if_due(&timer)
+                .await
+                .expect("in-interval call should not error");
+            assert!(
+                !client.ping_outstanding,
+                "no ping is due while the connection has recent outbound traffic"
+            );
+
+            // Advance past the interval; the ping must now fire without any caller action — in
+            // particular without the caller having driven tick_zombie_check, which is what the
+            // pre-existing secs_since_last_message counter would have required.
+            timer
+                .now_ms
+                .set(timer.now_ms.get() + (MQTT_PING_INTERVAL_SECS + 1) * 1000);
+            client
+                .send_keepalive_if_due(&timer)
+                .await
+                .expect("keepalive ping should send");
+            assert!(
+                client.ping_outstanding,
+                "a ping must be sent once the outbound-silence interval has elapsed"
+            );
+        }
+
+        #[tokio::test]
         async fn test_saturated_in_flight_queue_reports_backpressure_and_drains_on_tick() {
             // Regression: in_flight entries were removed only by a matching PUBACK, so a broker
             // that dropped acks leaked them permanently and every later publish_command returned
@@ -1149,6 +1303,7 @@ mod tests {
                 write_pending_secs: None,
                 write_pending_sequence_id: None,
                 ping_outstanding: false,
+                last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
@@ -1201,6 +1356,7 @@ mod tests {
                 write_pending_secs: Some(0),
                 write_pending_sequence_id: Some("100002".to_string()),
                 ping_outstanding: false,
+                last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
@@ -1266,6 +1422,7 @@ mod tests {
                 write_pending_secs: None,
                 write_pending_sequence_id: None,
                 ping_outstanding: false,
+                last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
