@@ -119,6 +119,13 @@ impl ModelQuirks for P2Quirks {
         P2S_BED_TEMP_MAX
     }
 
+    /// P2S does not run vibration compensation the way the X1/P1 series does, so the flag is
+    /// forced off. Rests on bambuddy `be18ebb3` alone and is unverified on hardware here — see
+    /// [`crate::quirks::PrinterQuirks::supports_vibration_compensation`] and issue #133.
+    fn supports_vibration_compensation(&self) -> bool {
+        false
+    }
+
     fn supports_airduct_mode(&self) -> bool {
         true
     }

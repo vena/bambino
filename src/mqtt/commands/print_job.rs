@@ -389,6 +389,17 @@ impl ProjectFileRequest {
             CalibrationMode::Off
         };
 
+        // Hard gate for the same reason as `nozzle_offset` above: a model that does not run
+        // vibration compensation must not be told to, even by an explicit caller opt-in.
+        // Upstream applies this by overwriting the field after building the payload; doing it
+        // through the quirks engine keeps model dispatch in one place per this crate's
+        // invariants. Unverified on hardware — see `supports_vibration_compensation`.
+        let vibration_cali = if model.quirks().supports_vibration_compensation() {
+            config.run_vibration_compensation
+        } else {
+            CalibrationMode::Off
+        };
+
         // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's
         // `project_id` doc comment for why reusing bambino's own subtask_id here is equivalent.
@@ -413,7 +424,7 @@ impl ProjectFileRequest {
                 auto_bed_leveling: config.bed_leveling.as_wire_i32(),
                 extrude_cali_flag: config.run_flow_calibration.as_wire_i32(),
                 nozzle_offset_cali: nozzle_offset.as_wire_i32(),
-                vibration_cali: config.run_vibration_compensation.as_wire_bool(),
+                vibration_cali: vibration_cali.as_wire_bool(),
                 layer_inspect: config.layer_inspect,
                 use_ams,
                 ams_mapping: mapping,

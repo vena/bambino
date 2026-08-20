@@ -431,6 +431,25 @@ mod tests {
     }
 
     #[test]
+    fn test_vibration_cali_forced_off_on_p2s_despite_explicit_opt_in() {
+        let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
+            .vibration_compensation(CalibrationMode::On);
+        let req = ProjectFileRequest::from_config(&config, 1, PrinterModel::P2S);
+        assert!(
+            !req.print.vibration_cali,
+            "P2S must send vibration_cali:false even when the caller asked for On"
+        );
+    }
+
+    #[test]
+    fn test_vibration_cali_honored_on_a_model_that_supports_it() {
+        let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
+            .vibration_compensation(CalibrationMode::On);
+        let req = ProjectFileRequest::from_config(&config, 1, PrinterModel::P1S);
+        assert!(req.print.vibration_cali);
+    }
+
+    #[test]
     fn test_get_access_code_request_json() {
         let req = GetAccessCodeRequest::new(10002);
         let json = serde_json::to_string(&req).unwrap();

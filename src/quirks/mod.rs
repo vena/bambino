@@ -192,6 +192,27 @@ pub trait ModelQuirks {
         true
     }
 
+    /// Returns true if the model runs vibration-compensation (resonance) calibration as part of a print job.
+    ///
+    /// Default `true` (the X1/P1 series and everything modelled after them). `false` on P2S,
+    /// where `vibration_cali` must be forced off in the `project_file` payload regardless of
+    /// what the caller asked for.
+    ///
+    /// **This one rests on upstream authority alone, unlike its neighbours.** BambuStudio has
+    /// no per-model vibration capability flag to consult — its printer profiles carry 30+
+    /// `support_*` keys and none concerns vibration, and its own calibration checkbox is
+    /// ungated by model. The sole source is bambuddy `be18ebb3` ("Fix P2S printer support —
+    /// disable vibration_cali and fix FTP SSL"), a single community commit whose *other* half
+    /// is the P2S FTPS TLS-1.3 quirk this crate independently confirmed and implements in
+    /// [`models::p2::P2Quirks`]. That makes the contributor demonstrably right about the same
+    /// machine, which is corroboration of the source, not proof of this claim.
+    ///
+    /// No P2S has been available to verify it here. See issue #133 — if one ever is, confirm
+    /// before treating this as settled.
+    fn supports_vibration_compensation(&self) -> bool {
+        true
+    }
+
     /// Returns the maximum safe nozzle/hotend temperature in °C for this model.
     fn nozzle_temp_max(&self) -> u16;
 
@@ -597,6 +618,24 @@ mod tests {
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
+        // P2S is the only model that opts out; see the trait method's doc comment for why this
+        // rests on upstream authority rather than a hardware capture.
+        assert!(!q.supports_vibration_compensation());
+    }
+
+    #[test]
+    fn test_vibration_compensation_defaults_true_off_p2s() {
+        for model in [
+            PrinterModel::P1S,
+            PrinterModel::X1C,
+            PrinterModel::A1,
+            PrinterModel::H2D,
+        ] {
+            assert!(
+                model.quirks().supports_vibration_compensation(),
+                "{model:?} should keep the default"
+            );
+        }
     }
 
     #[test]
