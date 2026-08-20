@@ -4,18 +4,101 @@
 
 # Module `status`
 
-Status query commands (pushall, get_version, clean_print_error).
+Status query commands (pushall, get_version, get_access_code, clean_print_error).
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`GetAccessCodePayload`](#getaccesscodepayload) | struct | Payload schema to ask the printer to report its own current LAN access code. |
+| [`GetAccessCodeRequest`](#getaccesscoderequest) | struct | Queries the printer for its own current LAN access code. |
 | [`GetVersionPayload`](#getversionpayload) | struct | Payload schema to retrieve hardware/firmware version strings from the expansion bus. |
 | [`GetVersionRequest`](#getversionrequest) | struct | Queries the printer for its hardware and firmware version info. |
 | [`PushAllPayload`](#pushallpayload) | struct | Payload schema to trigger a complete state dump ("pushall") from the printer. |
 | [`PushAllRequest`](#pushallrequest) | struct | Requests a full state dump from the printer (all telemetry fields at once). |
 
 ## Types
+
+### `GetAccessCodePayload`
+
+```rust
+struct GetAccessCodePayload {
+    pub command: &'static str,
+    pub sequence_id: String,
+}
+```
+
+Payload schema to ask the printer to report its own current LAN access code.
+
+#### Fields
+
+- **`command`**: `&'static str`
+
+  Wire command name, always `"get_access_code"`.
+
+- **`sequence_id`**: `String`
+
+  Request sequence ID, serialized as a string on the wire.
+
+#### Trait Implementations
+
+##### `impl Clone for GetAccessCodePayload`
+
+- <span id="getaccesscodepayload-clone"></span>`fn clone(&self) -> GetAccessCodePayload` — [`GetAccessCodePayload`](#getaccesscodepayload)
+
+##### `impl Debug for GetAccessCodePayload`
+
+- <span id="getaccesscodepayload-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for GetAccessCodePayload`
+
+- <span id="getaccesscodepayload-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `GetAccessCodeRequest`
+
+```rust
+struct GetAccessCodeRequest {
+    pub system: GetAccessCodePayload,
+}
+```
+
+Queries the printer for its own current LAN access code.
+
+Distinct from the access code the caller supplies to authenticate: this re-reads the value
+from the printer over an already-authenticated session, which is how a client notices that a
+rotated code has invalidated its cached credential.
+
+The reply is `system`-wrapped and echoes the request's `sequence_id`, alongside
+`access_code`, `result`, and `reason` — confirmed on a P1S via `bambino-cli ack-probe`
+(issue #140); see `reference/03_mqtt_telemetry.md` for the observed shape.
+
+Treat the returned code as a credential: it must never be logged or written to disk.
+
+#### Fields
+
+- **`system`**: `GetAccessCodePayload`
+
+  The `system` namespace envelope required by the wire protocol.
+
+#### Implementations
+
+- <span id="getaccesscoderequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
+
+  Builds a `get_access_code` request.
+
+#### Trait Implementations
+
+##### `impl Clone for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-clone"></span>`fn clone(&self) -> GetAccessCodeRequest` — [`GetAccessCodeRequest`](#getaccesscoderequest)
+
+##### `impl Debug for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `GetVersionPayload`
 

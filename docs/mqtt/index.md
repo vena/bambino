@@ -470,6 +470,52 @@ Sends a raw G-code line to the printer for immediate execution.
 
 - <span id="gcoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `GetAccessCodeRequest`
+
+```rust
+struct GetAccessCodeRequest {
+    pub system: GetAccessCodePayload,
+}
+```
+
+Queries the printer for its own current LAN access code.
+
+Distinct from the access code the caller supplies to authenticate: this re-reads the value
+from the printer over an already-authenticated session, which is how a client notices that a
+rotated code has invalidated its cached credential.
+
+The reply is `system`-wrapped and echoes the request's `sequence_id`, alongside
+`access_code`, `result`, and `reason` — confirmed on a P1S via `bambino-cli ack-probe`
+(issue #140); see `reference/03_mqtt_telemetry.md` for the observed shape.
+
+Treat the returned code as a credential: it must never be logged or written to disk.
+
+#### Fields
+
+- **`system`**: `GetAccessCodePayload`
+
+  The `system` namespace envelope required by the wire protocol.
+
+#### Implementations
+
+- <span id="getaccesscoderequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
+
+  Builds a `get_access_code` request.
+
+#### Trait Implementations
+
+##### `impl Clone for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-clone"></span>`fn clone(&self) -> GetAccessCodeRequest` — [`GetAccessCodeRequest`](commands/status/index.md#getaccesscoderequest)
+
+##### `impl Debug for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
 ### `GetVersionRequest`
 
 ```rust

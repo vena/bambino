@@ -81,6 +81,14 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
 
+- <span id="p2quirks-modelquirks-supports-vibration-compensation"></span>`fn supports_vibration_compensation(&self) -> bool`
+
+  P2S does not run vibration compensation the way the X1/P1 series does, so the flag is
+
+  forced off. Rests on bambuddy `be18ebb3` alone and is unverified on hardware here — see
+
+  [`crate::quirks::PrinterQuirks::supports_vibration_compensation`] and issue #133.
+
 - <span id="p2quirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 
 

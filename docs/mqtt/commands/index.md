@@ -42,7 +42,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 | [`gcode`](#gcode) | mod | G-code dispatch command payload. |
 | [`hardware`](#hardware) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound). |
 | [`print_job`](#print-job) | mod | Print job dispatch (file selection, AMS material mapping, plate/timelapse config). |
-| [`status`](#status) | mod | Status query commands (pushall, get_version, clean_print_error). |
+| [`status`](#status) | mod | Status query commands (pushall, get_version, get_access_code, clean_print_error). |
 | [`ClampedTaskId`](#clampedtaskid) | struct | A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId), which always clamps. |
 | [`clamp_task_id`](#clamp-task-id) | fn | Wraps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) into the strict boundary limits of a 32-bit signed integer (`2147483647`) via modulo, not saturation. |
 
@@ -53,7 +53,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 - [`gcode`](gcode/index.md#gcode) — G-code dispatch command payload.
 - [`hardware`](hardware/index.md#hardware) — Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
 - [`print_job`](print_job/index.md#print-job) — Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
-- [`status`](status/index.md#status) — Status query commands (pushall, get_version, clean_print_error).
+- [`status`](status/index.md#status) — Status query commands (pushall, get_version, get_access_code, clean_print_error).
 
 
 ---
@@ -777,6 +777,52 @@ Submits a `.3mf` print job from the SD card for execution.
 ##### `impl Serialize for ProjectFileRequest`
 
 - <span id="projectfilerequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `GetAccessCodeRequest`
+
+```rust
+struct GetAccessCodeRequest {
+    pub system: GetAccessCodePayload,
+}
+```
+
+Queries the printer for its own current LAN access code.
+
+Distinct from the access code the caller supplies to authenticate: this re-reads the value
+from the printer over an already-authenticated session, which is how a client notices that a
+rotated code has invalidated its cached credential.
+
+The reply is `system`-wrapped and echoes the request's `sequence_id`, alongside
+`access_code`, `result`, and `reason` — confirmed on a P1S via `bambino-cli ack-probe`
+(issue #140); see `reference/03_mqtt_telemetry.md` for the observed shape.
+
+Treat the returned code as a credential: it must never be logged or written to disk.
+
+#### Fields
+
+- **`system`**: `GetAccessCodePayload`
+
+  The `system` namespace envelope required by the wire protocol.
+
+#### Implementations
+
+- <span id="getaccesscoderequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a `get_access_code` request.
+
+#### Trait Implementations
+
+##### `impl Clone for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-clone"></span>`fn clone(&self) -> GetAccessCodeRequest` — [`GetAccessCodeRequest`](status/index.md#getaccesscoderequest)
+
+##### `impl Debug for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Serialize for GetAccessCodeRequest`
+
+- <span id="getaccesscoderequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `GetVersionRequest`
 

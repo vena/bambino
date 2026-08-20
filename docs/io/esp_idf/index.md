@@ -342,6 +342,8 @@ UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 
 - <span id="espidfudpsocket-asyncudpsocket-send-to"></span>`async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError>` — [`SocketError`](../index.md#socketerror)
 
+  Non-blocking send that reports transient lwIP buffer exhaustion as `TimedOut` rather than a terminal fault.
+
 - <span id="espidfudpsocket-asyncudpsocket-recv-from"></span>`async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError>` — [`SocketError`](../index.md#socketerror)
 
   Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.

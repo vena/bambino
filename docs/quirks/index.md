@@ -209,6 +209,10 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
 
+- `fn supports_vibration_compensation(&self) -> bool`
+
+  Returns true if the model runs vibration-compensation (resonance) calibration as part of a print job.
+
 #### Implementors
 
 - [`A1MiniQuirks`](models/a1/index.md#a1miniquirks)
