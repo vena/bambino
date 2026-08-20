@@ -715,3 +715,43 @@ fn test_h2d_pushall_comprehensive() {
     let ext_tool = device.ext_tool.unwrap();
     assert_eq!(ext_tool.tool_type.as_deref(), Some("LB00"));
 }
+
+#[test]
+fn test_p_list_pause_schedule_deserialization() {
+    let json = r#"{"print":{"p_list":{"total":2,"list":[
+        {"p":45,"t":3600,"i":1,"l":120},
+        {"p":20,"t":5400,"i":0,"l":60}
+    ]}}}"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let p_list = report.print.as_ref().unwrap().p_list.as_ref().unwrap();
+
+    assert_eq!(p_list.total, Some(2));
+    assert_eq!(p_list.list.as_ref().unwrap().len(), 2);
+
+    // next_pause picks the lowest index, not the first array entry.
+    let next = p_list.next_pause().unwrap();
+    assert_eq!(next.pause_index, Some(0));
+    assert_eq!(next.progress_percent, Some(20));
+    assert_eq!(next.remaining_time_secs, Some(5400));
+    assert_eq!(next.layer, Some(60));
+}
+
+#[test]
+fn test_p_list_tolerates_partial_points_unlike_upstream() {
+    // BambuStudio discards the whole schedule if any point is missing a key; bambino keeps
+    // what parsed. A point with no index must not masquerade as the next pause.
+    let json = r#"{"print":{"p_list":{"total":2,"list":[{"p":45},{"p":10,"i":3}]}}}"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let p_list = report.print.as_ref().unwrap().p_list.as_ref().unwrap();
+
+    assert_eq!(p_list.list.as_ref().unwrap().len(), 2);
+    let next = p_list.next_pause().unwrap();
+    assert_eq!(next.pause_index, Some(3), "unindexed point must be skipped");
+}
+
+#[test]
+fn test_p_list_absent_is_not_an_error() {
+    let json = r#"{"print":{"gcode_state":"RUNNING"}}"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert!(report.print.as_ref().unwrap().p_list.is_none());
+}

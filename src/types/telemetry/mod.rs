@@ -33,7 +33,9 @@ pub use device::{
     ExtToolTelemetry, ExtruderCollection, ExtruderInfo, NozzleCollection, NozzleInfo,
 };
 pub use diagnostics::{CtcInfo, CtcTelemetry, HmsEntry, IpcamTelemetry};
-pub use report::{LightReport, NetInfo, PrinterTelemetry, SdcardState};
+pub use report::{
+    LightReport, NetInfo, PrintPauseList, PrintPausePoint, PrinterTelemetry, SdcardState,
+};
 
 pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
 

@@ -133,7 +133,12 @@ The printer returns a structural JSON response over the report topic containing 
 The system must map the `"name"` field of each module object using the following naming conventions to identify the physical expansion unit and index:
 *   **`ams/<id>`**: Original AMS unit (e.g., standard CoreXY multi-material systems). The trailing number `<id>` corresponds to the physical `ams_id` ($0 \le \text{id} \le 3$).
 *   **`n3f/<id>`**: AMS 2 Pro unit. The trailing number `<id>` corresponds to the physical `ams_id` ($0 \le \text{id} \le 3$).
-*   **`n3s/<id>`**: AMS-HT dry-chamber unit. The trailing number `<id>` represents the physical single-slot ID, typically starting at $128$ (e.g., `n3s/128`).
+*   **`n3s/<id>`**: AMS-HT dry-chamber unit. The trailing number `<id>` represents the physical single-slot ID, **conventionally** starting at $128$ (e.g., `n3s/128`).
+*   **`ams_f1/<id>`**: A fourth AMS unit type BambuStudio accepts alongside the three above. **What physical product this designates is not confirmed here** — it is referenced in upstream's AMS-settings UI in a branch alongside a "lite" firmware selection and an `f1` printer AMS type, which suggests a lite/basic variant, but that is inference from surrounding code rather than an established mapping. Treat the prefix as recognized and its product identity as open.
+
+Note the `<id>` ranges above are conventions of each unit type, **not rules a parser should enforce.** BambuStudio's `MachineObject::get_ams_version()` splits on `/`, accepts the four types verbatim, and parses whatever integer follows — it previously special-cased a hardcoded 128+ offset for `n3s` and that offset was removed. A parser that rejects an out-of-range `<id>`, or that infers unit type from the number instead of the prefix, will disagree with upstream.
+
+**Verification source:** BambuStudio `DeviceManager.cpp:941` (the four-type check) and `AMSSetting.cpp:365-372` / `UpgradePanel.cpp:890` for the `ams_f1` usage context, read directly. bambino needs no code change for this — `VersionModule.name` (`src/types/version.rs`) stores the raw string with no prefix dispatch, so an `ams_f1/0` module already deserializes; it simply is not recognizable as an AMS unit by anything reading the list.
 
 ---
 

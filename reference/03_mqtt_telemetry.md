@@ -427,6 +427,27 @@ Controls the activation mode and flashing cycles of the internal LEDs.
 *   `led_mode`: Set to `"on"`, `"off"`, or `"flashing"`.
 *   `loop_times` and `interval_time`: Must be configured strictly as `0` if `led_mode` is `"on"` or `"off"`.
 
+#### Scheduled Pause List (`print.p_list`)
+While a job with scheduled pauses is loaded (typically filament swaps), `push_status` carries a `p_list` object describing them. It lets a consumer show upcoming pauses before they happen.
+
+```json
+"p_list": {
+  "total": 2,
+  "list": [
+    { "p": 45, "t": 3600, "i": 0, "l": 120 }
+  ]
+}
+```
+
+*   `total` — number of pauses scheduled for the job.
+*   `list[]` — the pauses themselves, with single-letter keys: `p` = percent complete at the pause, `t` = remaining print time at that point (seconds), `i` = pause index within the schedule, `l` = layer number.
+*   The array is **not ordered by `i`**. Resolve "next pause" by minimum `i`, not by array position.
+*   Absent whenever no job with pauses is loaded, which is not an error.
+
+BambuStudio's parser requires all four keys on every point and discards the entire schedule if any is missing. bambino is deliberately more tolerant — it keeps whatever parsed and treats a point with no `i` as unorderable rather than as index 0 — so a single malformed entry cannot blank the list.
+
+**Verification source:** BambuStudio `DevPrintTaskInfo.cpp::parsePauseList` (commit `7cbd2e27`), read directly. **Not confirmed against a capture taken here** — the abbreviated key meanings in particular are upstream's naming, not an observed wire sample. See issue #139.
+
 #### Topic Access Control (`request` is not observable)
 Each printer exposes two MQTT topics: `device/<serial>/report`, which the printer publishes telemetry to, and `device/<serial>/request`, which clients publish commands to. A natural way to capture what another client (e.g. BambuStudio) sends would be to authenticate as a second client and subscribe to `request`. **This does not work on a P1S.**
 

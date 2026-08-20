@@ -22,6 +22,65 @@ pub struct LightReport {
     pub mode: String,
 }
 
+/// One scheduled pause in a running job's pause list.
+///
+/// Wire keys are single letters (`p`/`t`/`i`/`l`), renamed here to something readable. Every
+/// field is `Option` per this module's convention even though BambuStudio's parser requires all
+/// four and discards the whole schedule if any is missing — bambino keeps what it can parse and
+/// lets the caller decide, rather than dropping a pause list because one point is malformed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrintPausePoint {
+    /// Percent complete at which this pause occurs.
+    #[serde(rename = "p")]
+    pub progress_percent: Option<i32>,
+
+    /// Remaining print time at this pause, in seconds.
+    #[serde(rename = "t")]
+    pub remaining_time_secs: Option<i32>,
+
+    /// Index of this pause within the job's schedule.
+    #[serde(rename = "i")]
+    pub pause_index: Option<i32>,
+
+    /// Layer number at which this pause occurs.
+    #[serde(rename = "l")]
+    pub layer: Option<i32>,
+}
+
+/// The pause schedule for a running job, reported as `print.p_list`.
+///
+/// Lets a consumer see upcoming pauses (typically scheduled filament swaps) before they happen.
+/// Nothing in bambino acts on this — it is surfaced so callers can.
+///
+/// **Field names and semantics come from BambuStudio's parser
+/// (`DevPrintTaskInfo.cpp::parsePauseList`), not from a capture taken here.** The abbreviated
+/// wire keys in particular have not been confirmed against a real `push_status` from a printer
+/// running a job with scheduled pauses — see issue #139.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrintPauseList {
+    /// Total number of pauses scheduled for the job.
+    pub total: Option<i32>,
+
+    /// The scheduled pauses themselves. Absent and empty are distinct on the wire; both mean
+    /// "nothing to show" to a caller.
+    pub list: Option<Vec<PrintPausePoint>>,
+}
+
+impl PrintPauseList {
+    /// Returns the next pending pause — the point with the lowest `pause_index`.
+    ///
+    /// Points with no `pause_index` are skipped rather than treated as index 0, which would make
+    /// a malformed entry masquerade as the next pause. Returns `None` when the list is absent,
+    /// empty, or entirely unindexed.
+    pub fn next_pause(&self) -> Option<&PrintPausePoint> {
+        self.list
+            .as_ref()?
+            .iter()
+            .filter(|p| p.pause_index.is_some())
+            .min_by_key(|p| p.pause_index)
+    }
+}
+
 /// Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterTelemetry {
@@ -152,6 +211,12 @@ pub struct PrinterTelemetry {
 
     /// AMS expansion bus status container [REF-AMS-DECODE].
     pub ams: Option<AmsStatusReport>,
+
+    /// Schedule of pauses the firmware plans for the running job. Nested as `print.p_list`.
+    ///
+    /// Present only while a job with scheduled pauses (e.g. filament swaps) is loaded; absent
+    /// otherwise, which is not an error.
+    pub p_list: Option<PrintPauseList>,
 
     /// Combined AMS state bitmask (lower 8 bits = sub status, bits 8–15 = main status).
     #[serde(default)]
