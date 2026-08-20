@@ -17,6 +17,7 @@ variable-width column padding and embeds robust temporal rollover heuristics.
 | [`CurrentDateTime`](#currentdatetime) | struct | Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs. |
 | [`FtpFile`](#ftpfile) | struct | Standardized representation of an entry retrieved from physical printer storage. |
 | [`parse_unix_listing`](#parse-unix-listing) | fn | Parses a line-separated UNIX directory listing payload returned by `LIST`. |
+| [`FTP_MAX_LISTING_ENTRIES`](#ftp-max-listing-entries) | const | Maximum number of entries [`parse_unix_listing`] will return from one `LIST` payload. |
 
 ## Types
 
@@ -178,4 +179,24 @@ was updated within the last six months. In this scenario, we default to the host
 that the parsed datetime is in the future, the file belongs to last year's calendar cycle
 (e.g., parsing a December modification date in January). In this event, we decrement the
 calculated year by 1.
+
+
+---
+
+## Constants
+
+### `FTP_MAX_LISTING_ENTRIES`
+```rust
+const FTP_MAX_LISTING_ENTRIES: usize = 65_536usize;
+```
+
+Maximum number of entries [`parse_unix_listing`](#parse-unix-listing) will return from one `LIST` payload.
+
+The raw payload is already bounded by `FTPS_MAX_TRANSFER_BYTES` (512 MiB), but that cap is one
+level upstream of the allocation that matters here: a listing of millions of ~20-byte lines
+fits inside it and still expands into tens of millions of `FtpFile`s, each carrying its own
+heap `String` — a larger and far more fragmented footprint than the bytes it came from, and on
+no_std/Embassy the resulting exhaustion is the uncatchable `alloc_error_handler` abort, not a
+`Result`. Mirrors `FTP_MAX_RESPONSE_LINES`' role on the control channel. Set well above any
+plausible real printer directory (the microSD holds thousands of files, not millions).
 
