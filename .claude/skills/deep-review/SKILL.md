@@ -1,11 +1,11 @@
 ---
 name: deep-review
-description: Runs a parallel, module-by-module deep code review sweep across the whole bambino crate — discovers the current src/ and tests/ structure, spawns one review agent per module boundary, and compiles findings into a dated review file. Confident bugs get a priority assigned and staged in the review file immediately; plausible-but-unverified findings are re-verified before the sweep finishes and either staged (confirmed) or noted inline as not-a-bug — not left for manual triage. This skill never files GitHub Issues itself — see the `triage-review` skill for that conversion step. Use when asked for a "full review", "deep review", "review sweep", to audit the whole crate/codebase, or to check for accumulated bugs before a release milestone. Not for reviewing a single diff/PR/recent change — use the code-review skill for that instead.
+description: Runs a parallel, module-by-module deep code review sweep across the whole bambino crate — discovers the current src/ and tests/ structure, spawns review agents per module boundary in bounded batches (asking the user which model to run them as), and compiles findings into a dated review file. Confident bugs get a priority assigned and staged in the review file immediately; plausible-but-unverified findings are re-verified before the sweep finishes and either staged (confirmed) or noted inline as not-a-bug — not left for manual triage. This skill never files GitHub Issues itself — see the `triage-review` skill for that conversion step. Use when asked for a "full review", "deep review", "review sweep", to audit the whole crate/codebase, or to check for accumulated bugs before a release milestone. Not for reviewing a single diff/PR/recent change — use the code-review skill for that instead.
 ---
 
 # Deep Review — bambino module sweep
 
-Full-crate correctness review via parallel subagents, one per module. Designed to be re-run as the crate grows — never hardcode today's module list or file count; rediscover both every time this runs. Also designed to survive a session cutoff mid-sweep: results persist to disk per-unit as they land, not batched at the end, so an interrupted run resumes from what's actually on disk (Step 1/Step 4) instead of a fresh session guessing at — or hallucinating — what already happened.
+Full-crate correctness review via subagents, one per module, spawned in bounded batches (Step 4). Designed to be re-run as the crate grows — never hardcode today's module list or file count; rediscover both every time this runs. Also designed to survive a session cutoff mid-sweep: results persist to disk per-unit as they land, not batched at the end, so an interrupted run resumes from what's actually on disk (Step 1/Step 4) instead of a fresh session guessing at — or hallucinating — what already happened.
 
 **Step 0, mandatory, before any other tool call:** if this session has `mcp__lean-ctx__*` tools in its deferred-tools list, run `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_shell,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_tree,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_compose,mcp__lean-ctx__ctx_explore,mcp__lean-ctx__ctx_call,mcp__lean-ctx__ctx_graph,mcp__lean-ctx__ctx_callgraph")` first and use those tools throughout — including `ctx_graph`/`ctx_callgraph` for blast-radius and cross-cutting-invariant checks (e.g. Key Invariants #1/#2) — for this session's own orchestration work and as a mandatory Step 0 inside every spawned agent's prompt (see Step 3). Restated here on purpose: a mandate stated once at session start and not repeated near point of use gets lost across a long task.
 
@@ -68,14 +68,26 @@ Resuming an interrupted run (per Step 1): skip straight to spawning agents only 
 
 Starting fresh: write `MM-DD-REVIEW.md`'s skeleton to disk *before* spawning anything. This is what makes the run resumable — if this session gets cut off mid-sweep, whatever's on disk is a genuine, informative partial artifact, not conversation-only state a fresh session would have to reconstruct or guess at. The skeleton needs:
 - `**Status:** IN PROGRESS (0/N units complete)` at the very top.
-- An opening paragraph: what was reviewed and how (crate description, parallel-agent methodology, unit count).
+- An opening paragraph: what was reviewed and how (crate description, batched-agent methodology, unit count, and the agent model chosen below — a resuming session needs to know what the earlier units were reviewed with).
 - The scope exclusions from Step 3 item 5, restated for the reader (LAN-only-security minor issues and style/refactor suggestions are out of scope, not overlooked).
 - A brief explanation of the `CONFIRMED`/`PLAUSIBLE` distinction — later sections assume the reader already knows why `PLAUSIBLE` findings are separate and un-promoted.
 - An explicit note that the file is meant to be consumed standalone by a fresh session.
 - A caveat that file:line references may have drifted if other changes landed on `main` since this sweep.
 - One `## N. <unit path(s)> — PENDING` placeholder section per unit from Step 2's partition.
 
-Spawn all remaining units' agents in parallel — single message, multiple `Agent` tool calls, `subagent_type: general-purpose`, background (default).
+### Choosing the agent model — ask, don't assume
+
+Before spawning anything, **ask the user which model the unit agents should run as**, via `AskUserQuestion`. Don't pick one silently: unit agents are the bulk of this skill's cost, the right answer changes with how thorough the sweep needs to be, and it is the user's budget. Offer Sonnet (recommended default — the per-unit work is bounded reading against an already-pre-matched invariant list, which Sonnet handles well at a fraction of the cost) and Opus (deeper reasoning on subtle invariant violations, several times the token spend). State the unit count from Step 2 in the question so the user is deciding with the actual scale in front of them.
+
+Pass the answer as the `model` parameter on every `Agent` call. Record the chosen model in the skeleton's opening paragraph so an interrupted run's resume has it. **On resume, ask again** rather than silently reusing what the file records — offer the recorded value as the default, since a session picking the sweep back up may well want to change it (e.g. after the first pass burned more than expected).
+
+### Batch, don't flood
+
+**Spawn in batches of at most 4 concurrent agents — never all remaining units at once.** Spawn a batch (single message, multiple `Agent` tool calls, `subagent_type: general-purpose`, `model` per the answer above, background), wait for that batch to report, write each of its units to disk per the numbered steps below, and only then spawn the next batch.
+
+This cap is not stylistic. A 20-unit sweep spawned all-at-once has been observed to exhaust the account's session limit partway through, killing every in-flight agent at once and wasting the whole batch's work — each unit agent independently consumes on the order of 70–190k tokens, so 20 in parallel is a multi-million-token spike with no backpressure. Batching also means a limit hit costs at most one batch, and everything already written to disk survives. If the user chose Opus, consider dropping to 2–3 per batch; the per-agent spend is several times higher.
+
+Between batches, check in briefly if a batch came back unusually expensive or several units returned nothing — the user may want to change model or stop early rather than have the sweep silently keep burning.
 
 If several agents' notifications land in the same turn (common with background spawns), still process and write each unit fully — dedupe through file-edit — before moving to the next; don't let a burst tempt you into batching the file writes at the end. Use `ctx_patch` directly for each edit, not native `Edit` (which needs an implicit read-back that lean-ctx's replace-mode denies).
 
