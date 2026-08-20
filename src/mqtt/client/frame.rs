@@ -1,8 +1,6 @@
 //! Resumable MQTT frame reading over an abstract `AsyncIo` stream.
 
 #[cfg(not(feature = "std"))]
-use alloc::vec;
-#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
@@ -22,22 +20,24 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 
 /// Largest MQTT payload this client will allocate for on a memory-constrained target.
 ///
-/// Scaled down from the host's 1 MiB because that value is not survivable here: a single
-/// PUBLISH *declaring* a 1 MiB remaining length forces `vec![0u8; rem_len]` on
-/// firmware-controlled input, and a heap that cannot satisfy it calls `handle_alloc_error` and
-/// aborts rather than returning a recoverable error. `pending.rs` already notes that RAM on
-/// these targets is measured in KB.
+/// Scaled down from the host's 1 MiB because that value is not survivable here: a heap that
+/// cannot satisfy an allocation calls `handle_alloc_error` and aborts rather than returning a
+/// recoverable error, and `pending.rs` already notes that RAM on these targets is measured in KB.
+///
+/// Note this is now purely a ceiling on what will be *accepted*. It is no longer the amount a
+/// single PUBLISH can force the client to allocate on firmware-controlled input — the payload
+/// buffer grows with delivery, so reaching this bound requires a peer that actually sends this
+/// many bytes.
 ///
 /// Covers ESP-IDF as well as `no_std`/Embassy: `esp-idf` implies `std`, so gating on `std`
 /// alone would have left an ESP32 — one of the two targets this bound exists for — at the host
 /// value. The predicate here is the exact negation of the host one above, so exactly one
 /// definition is ever live.
 ///
-/// This bounds the *ceiling*; it does not stop a peer from making the client allocate the full
-/// 64 KiB by declaring it and then sending nothing. Removing that amplification means growing
-/// the payload buffer as bytes actually arrive, which changes `FrameReadState::ReadingPayload`'s
-/// "buf is pre-sized to the full payload length" invariant and so needs hardware verification
-/// per `.claude/rules/wire-framing-hardware-verification.md` — tracked separately.
+/// This bounds the *ceiling* on a payload bambino will accept at all. It is no longer also the
+/// amount a peer can make the client allocate up front: `FrameReadState::ReadingPayload` grows
+/// its buffer as bytes actually arrive (see that variant's doc comment), so a declared-huge frame
+/// that delivers nothing costs [`PAYLOAD_GROWTH_CHUNK`], not this.
 #[cfg(any(not(feature = "std"), feature = "esp-idf"))]
 pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 65_536; // 64 KiB
 
@@ -53,6 +53,14 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 65_536; // 64 KiB
 /// shorter `command_timeout_secs` — the two timeouts are independent layers, not summed
 /// or coordinated.
 pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
+
+/// How much the payload buffer grows per read pass in [`read_exact_packet`].
+///
+/// Bounds what a peer can make the client allocate before delivering anything: a declared-huge
+/// frame now costs this much, not the declared length. Sized to swallow a typical `push_status`
+/// in a couple of passes while staying small enough that the worst case is negligible on the
+/// 64 KiB-ceiling targets.
+pub(crate) const PAYLOAD_GROWTH_CHUNK: usize = 2048;
 
 /// Per-call deadline for `write_frame_with_timer` when a genuine wall-clock [`TimerProvider`]
 /// is available — the write-side counterpart to [`MQTT_READ_TIMEOUT_SECS`]. A stalled write
@@ -72,11 +80,22 @@ pub(crate) enum FrameReadState {
         value: usize,
         multiplier: usize,
     },
-    /// Remaining length fully decoded; `buf` is pre-sized to the full payload length and accumulates bytes as they arrive, `filled` tracks how many are valid so far.
+    /// Remaining length fully decoded; `buf` holds exactly the payload bytes received so far and grows toward `target_len` as more arrive.
+    ///
+    /// **`buf` is deliberately *not* pre-sized to `target_len`.** Sizing the allocation from the
+    /// length a peer merely *declared* let one small frame header cost the full
+    /// [`MQTT_MAX_PAYLOAD_BYTES`] before a single payload byte was delivered — 64 KiB on an
+    /// ESP32 or Embassy heap, held until the read completed or the connection dropped.
+    ///
+    /// `buf.len()` is therefore the count of valid bytes, replacing the separate `filled` field
+    /// this state carried while the buffer was pre-sized. The resume-after-timeout contract is
+    /// unchanged and slightly simpler for it: a stalled read leaves `buf` holding precisely what
+    /// arrived, and the next call continues while `buf.len() < target_len`. There is no window in
+    /// which `buf` holds zero-padded tail bytes that a `filled` counter has to exclude.
     ReadingPayload {
         header: u8,
         buf: Vec<u8>,
-        filled: usize,
+        target_len: usize,
     },
     /// Terminal: the stream is unusable and every further read fails fast.
     ///
@@ -191,8 +210,8 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
 
         *state = FrameReadState::ReadingPayload {
             header: hdr,
-            buf: vec![0u8; rem_len],
-            filled: 0,
+            buf: Vec::new(),
+            target_len: rem_len,
         };
     }
 
@@ -200,12 +219,32 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
     if let FrameReadState::ReadingPayload {
         header,
         buf,
-        filled,
+        target_len,
     } = state
     {
-        while *filled < buf.len() {
-            let n = read_chunk(stream, &mut buf[*filled..], timer, deadline_ms).await?;
-            *filled += n;
+        while buf.len() < *target_len {
+            // Grow by at most PAYLOAD_GROWTH_CHUNK per pass, and with `reserve_exact` rather
+            // than letting `Vec` double: a genuinely-large payload would otherwise need old and
+            // new allocations live simultaneously during realloc, which is worse than one
+            // up-front allocation on a fragmented embedded heap — the opposite of what this is
+            // for. Exact growth in bounded steps costs a few more reallocs and never more than
+            // one chunk of slack.
+            let want = core::cmp::min(*target_len - buf.len(), PAYLOAD_GROWTH_CHUNK);
+            let filled = buf.len();
+            buf.reserve_exact(want);
+            buf.resize(filled + want, 0);
+
+            // A short read is normal; truncate back so `buf.len()` keeps meaning "bytes actually
+            // received". This must hold on every early return too, or a timeout would leave zero
+            // padding in the buffer and desync the frame on resume. `read_chunk` maps EOF to
+            // `ConnectionReset` rather than `Ok(0)`, so this cannot spin.
+            match read_chunk(stream, &mut buf[filled..], timer, deadline_ms).await {
+                Ok(n) => buf.truncate(filled + n),
+                Err(e) => {
+                    buf.truncate(filled);
+                    return Err(e);
+                }
+            }
         }
         let hdr = *header;
         let payload = core::mem::take(buf);
@@ -342,6 +381,93 @@ mod tests {
         /// original frame (not corrupted, not desynced, not duplicated), proving `FrameReadState` correctly
         /// carried the partial payload across the timed-out attempt.
         #[tokio::test]
+        async fn test_read_exact_packet_does_not_preallocate_the_declared_length() {
+            use tokio::io::AsyncWriteExt;
+
+            // The defect this guards (#135): the buffer used to be sized from the length the
+            // peer *declared*, so a peer could announce a huge payload, send almost nothing, and
+            // make the client hold the full amount. Declare just under the ceiling, deliver 2
+            // bytes, and assert the allocation tracks what arrived rather than what was claimed.
+            let declared = MQTT_MAX_PAYLOAD_BYTES - 1;
+            let (client_stream, mut server_stream) = tokio::io::duplex(64);
+            let mut stream = TokioIo(client_stream);
+            let mut state = FrameReadState::default();
+            let timer = crate::io::tokio::TokioTimer::new();
+
+            let mut header = vec![0x30u8];
+            header.extend_from_slice(&encode_remaining_length(declared));
+            header.extend_from_slice(&[0xAA, 0xBB]);
+            server_stream.write_all(&header).await.unwrap();
+            server_stream.flush().await.unwrap();
+
+            let attempt = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                read_exact_packet(&mut stream, &mut state, &timer, 50),
+            )
+            .await
+            .expect("read hung past the meta-safety timeout");
+            assert!(matches!(attempt, Err(crate::io::SocketError::TimedOut)));
+
+            match &state {
+                FrameReadState::ReadingPayload {
+                    buf, target_len, ..
+                } => {
+                    assert_eq!(*target_len, declared, "the declared length is still tracked");
+                    assert_eq!(buf.len(), 2, "only delivered bytes are held");
+                    // The documented contract is "never more than one chunk of slack" beyond
+                    // what has been received — not "never more than one chunk total". The
+                    // pending pass reserves a full chunk ahead of the bytes already held, so
+                    // `filled + PAYLOAD_GROWTH_CHUNK` is the real ceiling.
+                    assert!(
+                        buf.capacity() <= buf.len() + PAYLOAD_GROWTH_CHUNK,
+                        "capacity {} must stay within one growth chunk of the {} bytes \
+                         received, not balloon toward the declared {declared}",
+                        buf.capacity(),
+                        buf.len()
+                    );
+                }
+                _ => panic!("expected ReadingPayload after a partial delivery"),
+            }
+        }
+
+        #[tokio::test]
+        async fn test_read_exact_packet_reassembles_a_payload_larger_than_one_growth_chunk() {
+            use tokio::io::AsyncWriteExt;
+
+            // Exercises the multi-pass growth path: a payload spanning several chunks must come
+            // back byte-identical, with no seams at the chunk boundaries.
+            let payload: Vec<u8> = (0..(PAYLOAD_GROWTH_CHUNK * 2 + 7))
+                .map(|i| (i % 251) as u8)
+                .collect();
+            let mut frame = vec![0x30u8];
+            frame.extend_from_slice(&encode_remaining_length(payload.len()));
+            frame.extend_from_slice(&payload);
+
+            let (client_stream, mut server_stream) = tokio::io::duplex(128);
+            let mut stream = TokioIo(client_stream);
+            let mut state = FrameReadState::default();
+            let timer = crate::io::tokio::TokioTimer::new();
+
+            let writer = tokio::spawn(async move {
+                server_stream.write_all(&frame).await.unwrap();
+                server_stream.flush().await.unwrap();
+            });
+
+            let (hdr, got) = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                read_exact_packet(&mut stream, &mut state, &timer, 5000),
+            )
+            .await
+            .expect("read hung past the meta-safety timeout")
+            .expect("a fully-delivered multi-chunk frame must read back");
+
+            writer.await.unwrap();
+            assert_eq!(hdr, 0x30);
+            assert_eq!(got, payload, "multi-chunk payload must reassemble exactly");
+            assert!(matches!(state, FrameReadState::Idle));
+        }
+
+        #[tokio::test]
         async fn test_read_exact_packet_resumes_after_timeout_without_losing_bytes() {
             use tokio::io::AsyncWriteExt;
 
@@ -380,15 +506,19 @@ mod tests {
                 FrameReadState::ReadingPayload {
                     header,
                     buf,
-                    filled,
+                    target_len,
                 } => {
                     assert_eq!(*header, 0x99, "header byte must survive the timeout");
+                    assert_eq!(*target_len, 4, "declared length must survive the timeout");
+                    // buf.len() is now itself the filled count — the buffer holds exactly what
+                    // arrived, with no zero-padded tail, so a timeout cannot leave phantom bytes.
                     assert_eq!(
-                        *filled, 2,
+                        buf.len(),
+                        2,
                         "exactly the 2 bytes that arrived must be recorded"
                     );
                     assert_eq!(
-                        &buf[..2],
+                        &buf[..],
                         &[0xAA, 0xBB],
                         "already-read payload bytes must not be corrupted"
                     );
