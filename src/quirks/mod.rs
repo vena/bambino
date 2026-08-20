@@ -239,11 +239,11 @@ impl PrinterModel {
             PrinterModel::H2C => &models::h2::H2CQuirks,
             PrinterModel::Unknown => {
                 log::warn!(
-                    "Unrecognized printer model — falling back to X1C quirks; travel and \
-                     temperature limits (256mm axes, 110C bed, 300C nozzle) may exceed this \
-                     machine's real ceilings"
+                    "Unrecognized printer model — falling back to conservative quirks; travel \
+                     and temperature limits (180mm axes, 80C bed, 300C nozzle) are the floor of \
+                     the supported family and will be below this machine's real ceilings"
                 );
-                &models::x1::X1CQuirks
+                &models::unknown::UnknownQuirks
             }
         }
     }
@@ -731,6 +731,18 @@ mod tests {
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(q.supports_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
+
+        // The fallback's ceilings must be the floor of the whole family, and must not vary
+        // with mains region: a 110V unit used to inherit X1C's 120C bed ceiling, 40C above
+        // the entry-level models an unrecognized printer might actually be.
+        for mains in [Some(true), Some(false), None] {
+            assert_eq!(q.bed_temp_max(mains), 80);
+        }
+        assert_eq!(q.nozzle_temp_max(), 300);
+        assert_eq!(q.z_max(), 180.0);
+        assert_eq!(q.x_max(), 180.0);
+        assert_eq!(q.y_max(), 180.0);
+        assert!(q.is_unsafe_homing_command("G28 Z"));
     }
 
     // Z-move gcode parameterization tests
