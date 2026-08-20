@@ -191,7 +191,10 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
 
         let mut current = &leaf;
         let mut chain_trusted = false;
-        for _ in 0..=parsed_intermediates.len() {
+        // The loop index doubles as the number of intermediates already traversed below the cert
+        // about to be adopted — one is adopted per iteration that doesn't break — which is what
+        // the `pathLenConstraint` check needs.
+        for intermediates_below in 0..=parsed_intermediates.len() {
             if self.trusted_roots.iter().any(|root_der| {
                 let Ok((_, root)) = X509Certificate::from_der(root_der.as_ref()) else {
                     return false;
@@ -222,6 +225,14 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             let Some(idx) = next_idx else { break };
             used[idx] = true;
             current = &parsed_intermediates[idx];
+            // A cert only gets to *act* as a CA if it says it is one. Without this, a chain hop
+            // was accepted on subject/issuer name equality plus signature alone, so anyone
+            // holding an ordinary leaf issued by the trusted CA could mint a sub-cert with
+            // `CN=<other printer serial>`, present their own leaf as an intermediate, and have
+            // the walk mark the chain trusted (CVE-2002-0862 class). Only certs used as issuers
+            // are checked — the leaf itself is exempt, since real Bambu v1 leaf certs carry no
+            // extensions at all.
+            check_ca_capable(current, intermediates_below as u32)?;
             if !current.validity().is_valid_at(now_asn1) {
                 let err = if now_asn1.timestamp() < current.validity().not_before.timestamp() {
                     CertificateError::NotValidYet
@@ -257,6 +268,11 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, RustlsError> {
+        if !scheme_supported_in_tls13(dss.scheme) {
+            return Err(RustlsError::PeerMisbehaved(
+                rustls::PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,
+            ));
+        }
         verify_handshake_signature(cert, message, dss, self.algs_mapping, false)
     }
 
@@ -266,6 +282,71 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             .map(|(scheme, _)| *scheme)
             .collect()
     }
+}
+
+/// Rejects a peer-supplied cert that is being used as an issuer but isn't allowed to be one.
+///
+/// Requires `basicConstraints` with `ca == true`, `keyUsage.keyCertSign` when a `keyUsage`
+/// extension is present at all (absent `keyUsage` means unrestricted, per RFC 5280 §4.2.1.3),
+/// and a `pathLenConstraint` at least as large as the number of intermediates already traversed
+/// beneath this one. `intermediates_below` counts intermediates only, not the leaf, matching RFC
+/// 5280 §4.2.1.9's definition.
+///
+/// Applies to peer-supplied intermediates only. Trusted roots are anchors the caller chose, and
+/// the leaf is never used as an issuer.
+fn check_ca_capable(
+    cert: &x509_parser::certificate::X509Certificate<'_>,
+    intermediates_below: u32,
+) -> Result<(), RustlsError> {
+    // `UnknownIssuer` rather than a bespoke error: from the caller's point of view a cert that
+    // may not sign certs is not a usable issuer, which is exactly what that variant means.
+    let reject = |reason: &str| {
+        log::warn!("Rejecting TLS chain: intermediate is not a usable CA ({reason})");
+        RustlsError::InvalidCertificate(CertificateError::UnknownIssuer)
+    };
+
+    let Ok(Some(bc)) = cert.basic_constraints() else {
+        return Err(reject("no basicConstraints extension"));
+    };
+    if !bc.value.ca {
+        return Err(reject("basicConstraints CA is false"));
+    }
+    if let Some(path_len) = bc.value.path_len_constraint
+        && intermediates_below > path_len
+    {
+        return Err(reject("pathLenConstraint exceeded"));
+    }
+    if let Ok(Some(ku)) = cert.key_usage()
+        && !ku.value.key_cert_sign()
+    {
+        return Err(reject("keyUsage lacks keyCertSign"));
+    }
+    Ok(())
+}
+
+/// Returns true if `scheme` is legal for a TLS 1.3 CertificateVerify, per RFC 8446 §4.2.3.
+///
+/// Reimplements rustls's own `SignatureScheme::supported_in_tls13()`, which is crate-private and
+/// therefore unreachable from here. The `rustls-webpki` free functions this verifier replaces
+/// open with that gate (`rustls/src/webpki/verify.rs:194-196`); omitting it let a peer sign the
+/// CertificateVerify with `RSA_PKCS1_SHA1` (or any other PKCS#1/SHA-1 scheme) and be accepted in
+/// a TLS 1.3 handshake. `supported_verify_schemes` advertises the full ring mapping including
+/// PKCS#1 — legal for TLS 1.2, which is what makes it reachable — so the gate has to live on the
+/// 1.3 side rather than in the advertised list.
+///
+/// Denylist, not an allowlist, matching rustls: a scheme allocated after this was written is
+/// permitted in TLS 1.3 by default rather than silently breaking a future handshake.
+fn scheme_supported_in_tls13(scheme: SignatureScheme) -> bool {
+    !matches!(
+        scheme,
+        // SHA-1 hashes ("Legacy algorithms" in §4.2.3).
+        SignatureScheme::RSA_PKCS1_SHA1
+            | SignatureScheme::ECDSA_SHA1_Legacy
+            // RSASSA-PKCS1-v1_5 in any hash — TLS 1.3 requires RSA-PSS.
+            | SignatureScheme::RSA_PKCS1_SHA256
+            | SignatureScheme::RSA_PKCS1_SHA384
+            | SignatureScheme::RSA_PKCS1_SHA512
+    )
 }
 
 /// Verifies a live TLS handshake signature against the leaf cert's own public key, extracted
