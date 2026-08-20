@@ -107,7 +107,9 @@ where
 
     /// Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
     ///
-    /// When `nozzle_offset_cali` is `None`, the model's quirks engine resolves the default.
+    /// The model's quirks engine gates `nozzle_offset_cali`: it resolves the default when the
+    /// config left it `None`, and forces it off on a single-nozzle model even if the caller set
+    /// it explicitly.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error> {
         let model = self.identity.model;
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))

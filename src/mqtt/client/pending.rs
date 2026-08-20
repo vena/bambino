@@ -111,7 +111,7 @@ mod tests {
         use super::super::*;
         use crate::io::TokioIo;
         use crate::mqtt::client::frame::FrameReadState;
-        use std::collections::BTreeSet;
+        use std::collections::BTreeMap;
 
         /// Builds a `MqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below, so an unread/unwritten in-memory cursor is sufficient.
         fn test_client() -> MqttClient<TokioIo<std::io::Cursor<Vec<u8>>>> {
@@ -120,7 +120,7 @@ mod tests {
                 request_topic: "device/test/request".to_string(),
                 serial: "test".to_string(),
                 next_packet_id: 2,
-                in_flight: BTreeSet::new(),
+                in_flight: BTreeMap::new(),
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,

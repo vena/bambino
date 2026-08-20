@@ -46,6 +46,17 @@ pub(crate) enum FrameReadState {
         buf: Vec<u8>,
         filled: usize,
     },
+    /// Terminal: the stream is unusable and every further read fails fast.
+    ///
+    /// Entered when a frame is rejected *after* its header and remaining-length bytes were
+    /// already consumed but before its payload was drained — an oversized payload or a
+    /// malformed varint. Those bytes are gone from the stream and MQTT has no resync marker, so
+    /// resetting to `Idle` (the previous behavior) meant the next `read_exact_packet` parsed the
+    /// middle of the discarded payload as a fresh fixed header and returned garbage forever. The
+    /// doc below says the caller must reconnect; nothing enforced it, since `poll_wire` just
+    /// propagates the error and `PrinterClient` has no auto-invalidation. This mirrors the write
+    /// side's `write_poisoned` flag, which already makes the same guarantee structurally.
+    Poisoned,
 }
 
 /// Reads exactly one standard MQTT frame asynchronously from our abstract socket, resuming from `state` if a prior call on this same stream timed out partway through.
@@ -101,6 +112,12 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
         None
     };
 
+    // A frame rejection past the header point leaves the stream unresynchronizable — fail every
+    // later call rather than parse a discarded payload's bytes as a new frame.
+    if matches!(state, FrameReadState::Poisoned) {
+        return Err(SocketError::InvalidInput);
+    }
+
     // Fixed header packet type byte (only if not already read by a prior, timed-out call).
     if matches!(state, FrameReadState::Idle) {
         let header = read_one_byte(stream, timer, deadline_ms).await?;
@@ -126,7 +143,7 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
             }
             *multiplier *= 128;
             if *multiplier > 128 * 128 * 128 {
-                *state = FrameReadState::Idle;
+                *state = FrameReadState::Poisoned;
                 return Err(SocketError::InvalidInput); // Protocol violation
             }
         }
@@ -135,7 +152,7 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
         let hdr = *header;
 
         if rem_len > MQTT_MAX_PAYLOAD_BYTES {
-            *state = FrameReadState::Idle;
+            *state = FrameReadState::Poisoned;
             log::warn!("MQTT payload length {} exceeds maximum", rem_len);
             return Err(SocketError::InvalidInput);
         }
@@ -196,6 +213,28 @@ mod tests {
             assert!(
                 matches!(result, Err(crate::io::SocketError::InvalidInput)),
                 "Expected InvalidInput for oversized payload, got {:?}",
+                result
+            );
+
+            // The rejection consumed the header and remaining-length bytes without draining the
+            // payload, so the stream can never be resynchronized. Every later call must fail
+            // fast instead of parsing whatever follows as a fresh frame — feed it a perfectly
+            // well-formed PUBLISH to prove the guard is structural, not incidental.
+            assert!(matches!(state, FrameReadState::Poisoned));
+            let mut good = vec![0x30u8];
+            good.extend_from_slice(&encode_remaining_length(2));
+            good.extend_from_slice(b"hi");
+            let mut stream = TokioIo(std::io::Cursor::new(good));
+            let result = read_exact_packet(
+                &mut stream,
+                &mut state,
+                &DummyTimer,
+                MQTT_READ_TIMEOUT_SECS * 1000,
+            )
+            .await;
+            assert!(
+                matches!(result, Err(crate::io::SocketError::InvalidInput)),
+                "Poisoned frame state must reject every subsequent read, got {:?}",
                 result
             );
         }
@@ -330,6 +369,7 @@ mod tests {
                         FrameReadState::Idle => "Idle",
                         FrameReadState::ReadingRemainingLength { .. } => "ReadingRemainingLength",
                         FrameReadState::ReadingPayload { .. } => unreachable!(),
+                        FrameReadState::Poisoned => "Poisoned",
                     }
                 ),
             }

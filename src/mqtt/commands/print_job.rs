@@ -287,9 +287,11 @@ pub struct ProjectFileRequest {
 impl ProjectFileRequest {
     /// Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
     ///
-    /// When `nozzle_offset_cali` is `None`, defaults to the model's quirks-engine value
-    /// via `supports_nozzle_offset_calibration()` — enabling it automatically on IDEX
-    /// and tool-changer platforms.
+    /// `nozzle_offset_cali` is gated on the model's `supports_nozzle_offset_calibration()`
+    /// quirk as a hard ceiling, not a default: it is enabled automatically on IDEX and
+    /// tool-changer platforms when the caller left it `None`, and forced off on every
+    /// single-nozzle model even when the caller explicitly asked for it — the printer has no
+    /// second carriage to calibrate.
     ///
     /// **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
     /// `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
@@ -324,9 +326,16 @@ impl ProjectFileRequest {
             AmsMappingTable::Inactive(String::new())
         };
 
-        let nozzle_offset = config.nozzle_offset_cali.unwrap_or_else(|| {
-            CalibrationMode::from(model.quirks().supports_nozzle_offset_calibration())
-        });
+        // Hard gate, not a default: `reference/03_mqtt_telemetry.md` restricts
+        // `nozzle_offset_cali` to multi-nozzle platforms and upstream bambuddy blocks it the
+        // same way. Consulting the quirk only inside `unwrap_or_else` meant an explicit
+        // `.nozzle_offset_calibration(true)` serialized `nozzle_offset_cali: 1` to a P1S/A1/X1
+        // that has no second carriage to calibrate.
+        let nozzle_offset = if model.quirks().supports_nozzle_offset_calibration() {
+            config.nozzle_offset_cali.unwrap_or(CalibrationMode::On)
+        } else {
+            CalibrationMode::Off
+        };
 
         // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's

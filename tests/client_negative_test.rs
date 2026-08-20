@@ -79,12 +79,10 @@ async fn test_in_flight_saturation() {
     // The 201st command must be rejected due to in-flight saturation
     let err = client.send_gcode("G28").await;
     assert!(
-        matches!(
-            err,
-            Err(Error::Network(bambino::io::SocketError::TimedOut))
-        ),
-        "Expected Network(TimedOut) on command 201 (MqttClient::publish_command's \
-         documented in-flight-saturation response), got {:?}",
+        matches!(err, Err(Error::Backpressure)),
+        "Expected Backpressure on command 201 (MqttClient::publish_command's documented \
+         in-flight-saturation response). It must not be a timeout: saturation doesn't clear on \
+         its own, so a caller's retry-on-timeout policy would spin forever. Got {:?}",
         err
     );
 }
@@ -138,7 +136,7 @@ async fn test_start_print_wire_payload() {
         assert_eq!(json["print"]["vibration_cali"], true);
         assert_eq!(json["print"]["timelapse"], true);
         assert_eq!(json["print"]["layer_inspect"], true);
-        // P1S: single nozzle → nozzle_offset_cali defaults to 0
+        // P1S: single nozzle → nozzle_offset_cali forced to 0
         assert_eq!(json["print"]["nozzle_offset_cali"], 0);
         // PrintJobConfig::new() defaults run_flow_calibration to true (README-documented
         // default), which from_config() serializes as extrude_cali_flag: 1.
@@ -194,6 +192,40 @@ async fn test_start_print_idex_nozzle_offset_default() {
         "textured",
     )
     .with_ams(vec![0, -1]);
+    client
+        .start_print(&config)
+        .await
+        .expect("start_print failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_start_print_single_nozzle_overrides_nozzle_offset_off() {
+    // Regression: the quirk was consulted only inside `unwrap_or_else`, so an explicit
+    // `.nozzle_offset_calibration(true)` sailed past the single-nozzle hardware gate and
+    // serialized `nozzle_offset_cali: 1` to a printer with no second carriage. The quirk is a
+    // hard ceiling, not a default.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["nozzle_offset_cali"], 0);
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+
+    let config = PrintJobConfig::new(
+        "job.3mf",
+        "Metadata/plate_1.gcode",
+        "Test Print",
+        12345,
+        "textured",
+    )
+    .nozzle_offset_calibration(true);
     client
         .start_print(&config)
         .await

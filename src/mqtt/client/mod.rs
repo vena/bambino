@@ -9,7 +9,7 @@
 //! and bare-metal Embassy targets.
 
 #[cfg(not(feature = "std"))]
-use alloc::collections::BTreeSet;
+use alloc::collections::BTreeMap;
 #[cfg(not(feature = "std"))]
 use alloc::collections::VecDeque;
 #[cfg(not(feature = "std"))]
@@ -20,7 +20,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 #[cfg(feature = "std")]
 use std::collections::VecDeque;
 
@@ -49,6 +49,15 @@ mod pending;
 static CONNECTION_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const MQTT_IN_FLIGHT_LIMIT: usize = 200;
+/// How long an unacknowledged QoS 1 packet id is kept in `in_flight` before `tick_zombie_check`
+/// drops it.
+///
+/// Entries used to be removed *only* by a matching PUBACK, so a broker that dropped PUBACKs
+/// leaked them permanently: once 200 accumulated, every later `publish_command` failed forever
+/// against a condition nothing could clear. Set well above `MQTT_ZOMBIE_TIMEOUT_SECS` so a
+/// genuinely slow ack is never aged out before the zombie check has had its say — this is a
+/// leak backstop, not a retransmission policy (QoS 1 redelivery is the broker's job).
+pub(crate) const MQTT_IN_FLIGHT_TTL_SECS: u32 = 120;
 pub(crate) const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10;
 pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 
@@ -71,8 +80,11 @@ pub struct MqttClient<IO: AsyncIo> {
     request_topic: String,
     serial: String,
     next_packet_id: u16,
-    /// Outgoing QoS 1 packet tracking registry. Handles up to 200 concurrent unacknowledged entries.
-    in_flight: BTreeSet<u16>,
+    /// Outgoing QoS 1 packet tracking registry, packet id → seconds elapsed since it was
+    /// published. Handles up to `MQTT_IN_FLIGHT_LIMIT` concurrent unacknowledged entries; a
+    /// PUBACK removes an entry, and `tick_zombie_check` ages out anything past
+    /// `MQTT_IN_FLIGHT_TTL_SECS` so a broker dropping acks cannot wedge the queue permanently.
+    in_flight: BTreeMap<u16, u32>,
     /// Messages buffered by request-response round-trips (e.g. `poll_until`), drained first by `poll_telemetry()` before reading from the wire.
     pending_messages: VecDeque<MqttMessage>,
     /// Combined topic+payload byte size of every message currently in `pending_messages`.
@@ -425,7 +437,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             request_topic: format!("device/{}/request", serial),
             serial: serial.to_string(),
             next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
-            in_flight: BTreeSet::new(),
+            in_flight: BTreeMap::new(),
             pending_messages: VecDeque::new(),
             pending_bytes: 0,
             write_pending_secs: None,
@@ -445,8 +457,11 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// Submits a serialized JSON command payload to the printer's request channel.
     ///
     /// **In-flight Bounds Verification:**
-    /// If the unacknowledged queue size equals or exceeds 200, this function returns a
-    /// network timeout error to protect memory space and prevent packet drift [REF-MQTT-CONN].
+    /// If the unacknowledged queue size equals or exceeds `MQTT_IN_FLIGHT_LIMIT`, this function
+    /// returns [`Error::Backpressure`] without sending, to protect memory space and prevent
+    /// packet drift [REF-MQTT-CONN]. A saturated queue is not a timeout — retrying immediately
+    /// will not clear it; drain it by servicing PUBACKs (`poll_wire`) or let
+    /// `tick_zombie_check` age the entries out.
     ///
     /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
     /// `PrinterClient` callers get the new stalled-write protection via
@@ -467,7 +482,10 @@ impl<IO: AsyncIo> MqttClient<IO> {
                 "In-flight command backlog saturated ({} items)",
                 self.in_flight.len()
             );
-            return Err(Error::Network(SocketError::TimedOut));
+            // Not `SocketError::TimedOut`: saturation isn't a stall, and reporting it as one
+            // invited callers into an infinite retry loop against a queue that only inbound
+            // PUBACKs or `tick_zombie_check`'s TTL sweep can drain.
+            return Err(Error::Backpressure);
         }
 
         let packet_id = self.next_packet_id;
@@ -484,7 +502,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
         self.write_frame_guarded(&packet, timer).await?;
 
-        self.in_flight.insert(packet_id);
+        self.in_flight.insert(packet_id, 0);
 
         // Arm write-channel zombie detection tracking [REF-MQTT-ZOMBIE] — only on
         // the *first* unanswered command, not unconditionally on every call. Resetting to 0
@@ -723,6 +741,22 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// 2. **Connection staleness**: No packets of any kind received for 60+ seconds,
     ///    indicating a silently dropped connection — independent of (1) [REF-MQTT-CONN].
     pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error> {
+        // Age out unacknowledged QoS 1 entries. Without this, a broker that drops PUBACKs leaks
+        // `in_flight` entries with no expiry and no drain, and `publish_command` returns
+        // saturation forever — see `MQTT_IN_FLIGHT_TTL_SECS`.
+        self.in_flight.retain(|packet_id, age_secs| {
+            *age_secs += elapsed_secs;
+            if *age_secs >= MQTT_IN_FLIGHT_TTL_SECS {
+                log::warn!(
+                    "Dropping unacknowledged QoS 1 packet_id {} after {}s with no PUBACK",
+                    packet_id,
+                    age_secs
+                );
+                return false;
+            }
+            true
+        });
+
         if let Some(ref mut secs) = self.write_pending_secs {
             *secs += elapsed_secs;
             if *secs >= MQTT_ZOMBIE_TIMEOUT_SECS {
@@ -1002,7 +1036,7 @@ mod tests {
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
-                in_flight: BTreeSet::new(),
+                in_flight: BTreeMap::new(),
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
@@ -1034,6 +1068,56 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_saturated_in_flight_queue_reports_backpressure_and_drains_on_tick() {
+            // Regression: in_flight entries were removed only by a matching PUBACK, so a broker
+            // that dropped acks leaked them permanently and every later publish_command returned
+            // SocketError::TimedOut forever — inviting a caller's retry-on-timeout policy into an
+            // infinite loop against a condition that was neither a timeout nor self-clearing.
+            let (client_stream, _server_stream) = tokio::io::duplex(64 * 1024);
+            let mut client = MqttClient {
+                stream: TokioIo(client_stream),
+                request_topic: "device/01P000000000000/request".to_string(),
+                serial: "01P000000000000".to_string(),
+                next_packet_id: 2,
+                in_flight: (0..MQTT_IN_FLIGHT_LIMIT as u16).map(|id| (id + 1, 0)).collect(),
+                pending_messages: VecDeque::new(),
+                pending_bytes: 0,
+                write_pending_secs: None,
+                write_pending_sequence_id: None,
+                ping_outstanding: false,
+                secs_since_last_message: 0,
+                read_state: FrameReadState::default(),
+                write_poisoned: false,
+            };
+
+            let result = client.publish_command(b"{}").await;
+            assert!(
+                matches!(result, Err(Error::Backpressure)),
+                "saturation must report Backpressure, not a timeout, got {:?}",
+                result
+            );
+
+            // A tick below the TTL leaves the queue saturated; crossing it drains it. Ages are
+            // set directly and `secs_since_last_message` reset before each tick, so the
+            // independent 60s stale-connection valve doesn't fire first and mask what's being
+            // tested (it would, on any single tick large enough to reach the TTL).
+            client.secs_since_last_message = 0;
+            client.tick_zombie_check(1).expect("tick should not error");
+            assert_eq!(client.in_flight_count(), MQTT_IN_FLIGHT_LIMIT);
+
+            for age in client.in_flight.values_mut() {
+                *age = MQTT_IN_FLIGHT_TTL_SECS - 1;
+            }
+            client.secs_since_last_message = 0;
+            client.tick_zombie_check(1).expect("tick should not error");
+            assert_eq!(client.in_flight_count(), 0);
+            client
+                .publish_command(b"{}")
+                .await
+                .expect("publish must succeed once the leaked entries aged out");
+        }
+
+        #[tokio::test]
         async fn test_poll_wire_only_clears_zombie_timer_on_matching_sequence_id() {
             // Regression for the bug this issue tracks: poll_wire's PUBLISH arm used to reset
             // write_pending_secs unconditionally on any incoming PUBLISH. Background telemetry
@@ -1047,7 +1131,7 @@ mod tests {
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
-                in_flight: BTreeSet::new(),
+                in_flight: BTreeMap::new(),
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: Some(0),
@@ -1112,7 +1196,7 @@ mod tests {
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
-                in_flight: BTreeSet::new(),
+                in_flight: BTreeMap::new(),
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,

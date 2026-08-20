@@ -72,6 +72,18 @@ pub enum Error {
     /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
     #[cfg_attr(feature = "std", error("Model capability mismatch: {0}"))]
     ModelMismatch(Cow<'static, str>),
+
+    /// The unacknowledged QoS 1 command queue is full; the command was not sent.
+    ///
+    /// Distinct from [`Error::Timeout`] on purpose: saturation is not a transient stall, so the
+    /// natural retry-on-timeout policy is exactly the wrong response — a caller that keeps
+    /// retrying spins against a queue only inbound PUBACKs (or the in-flight entries aging out)
+    /// can drain.
+    #[cfg_attr(
+        feature = "std",
+        error("Command queue saturated with unacknowledged commands")
+    )]
+    Backpressure,
 }
 
 impl From<crate::io::SocketError> for Error {
@@ -111,6 +123,9 @@ pub(crate) fn format_error_no_std(e: &Error, f: &mut core::fmt::Formatter<'_>) -
         Error::ModelMismatch(s) => {
             write!(f, "Model capability mismatch: {}", s)
         }
+        Error::Backpressure => {
+            write!(f, "Command queue saturated with unacknowledged commands")
+        }
     }
 }
 
@@ -142,6 +157,7 @@ mod tests {
             Error::Timeout => {}
             Error::DiskWriteFailure => {}
             Error::ModelMismatch(_) => {}
+            Error::Backpressure => {}
         }
     }
 
@@ -180,6 +196,10 @@ mod tests {
             (
                 Error::ModelMismatch("test capability".into()),
                 "Model capability mismatch: test capability",
+            ),
+            (
+                Error::Backpressure,
+                "Command queue saturated with unacknowledged commands",
             ),
         ];
 
