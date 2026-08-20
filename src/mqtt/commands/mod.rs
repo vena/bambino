@@ -32,7 +32,9 @@ pub use gcode::GCodeRequest;
 pub use hardware::{
     AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
 };
-pub use print_job::{AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest};
+pub use print_job::{
+    AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest, resolve_rack_nozzle_mapping,
+};
 pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
 
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
@@ -428,6 +430,76 @@ mod tests {
             json,
             r#"{"info":{"command":"get_version","sequence_id":"10002"}}"#
         );
+    }
+
+    #[test]
+    fn test_rack_mapping_sends_physical_ids_not_extruder_indices() {
+        // Extruder index 1 is the FIXED hotend (physical id 1); index 0 is the RACK.
+        // Upstream had this inverted once and printed a first layer in mid-air, so the
+        // polarity is asserted explicitly rather than left implicit in a wire snapshot.
+        let wire = resolve_rack_nozzle_mapping(&[0, 1, -1], 18).expect("resolvable");
+        assert_eq!(wire[0], 18, "slot 0 uses the rack -> live rack physical id");
+        assert_eq!(wire[1], 1, "slot 1 uses the fixed hotend -> physical id 1");
+        assert_eq!(wire[2], -1, "slot 2 is not printed");
+    }
+
+    #[test]
+    fn test_rack_mapping_is_a_padded_32_slot_array() {
+        // Not the plate's filament count. Upstream briefly derived the length from a 3-entry
+        // capture, then reverted after a real 3-filament dispatch was observed as 32 entries.
+        let wire = resolve_rack_nozzle_mapping(&[0], 16).expect("resolvable");
+        assert_eq!(wire.len(), 32);
+        assert_eq!(wire[0], 16);
+        assert!(wire[1..].iter().all(|&v| v == -1), "tail must be -1 padded");
+    }
+
+    #[test]
+    fn test_rack_mapping_declines_rather_than_guessing() {
+        // Every one of these omits nozzle_mapping so firmware picks — never a wrong physical id.
+        assert!(resolve_rack_nozzle_mapping(&[], 16).is_none(), "empty slots");
+        assert!(
+            resolve_rack_nozzle_mapping(&[0; 33], 16).is_none(),
+            "more slots than the wire carries"
+        );
+        assert!(
+            resolve_rack_nozzle_mapping(&[0, 1], 15).is_none(),
+            "15 is below the rack id range"
+        );
+        assert!(
+            resolve_rack_nozzle_mapping(&[0, 1], 22).is_none(),
+            "22 is above the rack id range"
+        );
+        assert!(
+            resolve_rack_nozzle_mapping(&[1, 1], 16).is_none(),
+            "no slot needs the rack — Studio omits the field entirely here"
+        );
+        assert!(
+            resolve_rack_nozzle_mapping(&[0, 2], 16).is_none(),
+            "extruder 2 is a carriage an H2C does not have"
+        );
+    }
+
+    #[test]
+    fn test_nozzle_mapping_omitted_on_non_rack_models_and_present_on_h2c() {
+        let with_rack = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
+            .with_nozzle_rack(vec![0, 1], 17);
+
+        let h2c = ProjectFileRequest::from_config(&with_rack, 1, PrinterModel::H2C);
+        assert_eq!(h2c.print.nozzle_mapping.as_ref().map(|m| m.len()), Some(32));
+        let json = serde_json::to_string(&h2c).unwrap();
+        assert!(json.contains("\"nozzle_mapping\""));
+
+        // Same config on a non-rack model must not emit the field at all.
+        let p1s = ProjectFileRequest::from_config(&with_rack, 1, PrinterModel::P1S);
+        assert!(p1s.print.nozzle_mapping.is_none());
+        let json = serde_json::to_string(&p1s).unwrap();
+        assert!(!json.contains("nozzle_mapping"));
+
+        // An H2C job that never called with_nozzle_rack also omits it.
+        let bare = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured");
+        let h2c_bare = ProjectFileRequest::from_config(&bare, 1, PrinterModel::H2C);
+        assert!(h2c_bare.print.nozzle_mapping.is_none());
+        assert!(!serde_json::to_string(&h2c_bare).unwrap().contains("nozzle_mapping"));
     }
 
     #[test]

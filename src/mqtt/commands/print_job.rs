@@ -80,6 +80,84 @@ impl From<bool> for CalibrationMode {
         }
     }
 }
+/// Physical nozzle ID of the H2C's fixed hotend.
+///
+/// **Not its extruder index.** The two namespaces overlap at these low numbers and mean
+/// different things — see [`resolve_rack_nozzle_mapping`].
+pub(crate) const RACK_FIXED_NOZZLE_ID: i32 = 1;
+/// Extruder index of the H2C's fixed hotend, as it appears in a slot-to-extruder mapping.
+pub(crate) const RACK_FIXED_EXTRUDER_ID: i32 = 1;
+/// Extruder index of the H2C's swappable rack carriage.
+pub(crate) const RACK_RACK_EXTRUDER_ID: i32 = 0;
+/// Lowest physical nozzle ID the rack reports (rack position 1).
+pub(crate) const RACK_NOZZLE_ID_MIN: i32 = 16;
+/// Highest physical nozzle ID the rack reports (rack position 6).
+pub(crate) const RACK_NOZZLE_ID_MAX: i32 = 21;
+/// Fixed length of the `nozzle_mapping` array on the wire, padded with `-1`.
+pub(crate) const RACK_WIRE_SLOTS: usize = 32;
+
+/// Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs.
+///
+/// `slot_extruders` holds one extruder index per filament slot, with any negative value meaning
+/// "this slot is not printed". `rack_nozzle_id` is the physical ID of the rack position the
+/// printer currently reports as live, which only the caller can know — the mounted hotend can
+/// change between slicing and dispatch.
+///
+/// Returns a [`RACK_WIRE_SLOTS`]-long vector of physical IDs, or `None` when the mapping cannot
+/// be resolved with confidence. **`None` means "omit the field entirely" and is the deliberate
+/// failure mode, not an error path.** Omitting it returns the firmware to its own nozzle pick,
+/// which is merely suboptimal; a *wrong* physical ID makes the printer level with one nozzle and
+/// print with another millimetres off the bed. Upstream reached that failure twice, so this
+/// declines rather than guesses when any of the following holds:
+///
+/// - the slot list is empty, or longer than the wire format carries;
+/// - `rack_nozzle_id` is not a real rack position;
+/// - no slot actually needs the rack — BambuStudio omits `nozzle_mapping` for a fixed-hotend-only
+///   plate, so this matches rather than naming a nozzle it need not name;
+/// - a slot names a carriage an H2C does not have, meaning the file was mapped for another
+///   machine and forwarding the value raw would name a physical nozzle by a foreign index.
+///
+/// # The two namespaces
+///
+/// Extruder indices and physical nozzle IDs overlap numerically and mean different things. On an
+/// H2C the *fixed* hotend is extruder index `1` and physical ID `1`; the *rack* is extruder index
+/// `0` and physical IDs `16..=21`. Passing an index where an ID belongs is the entire bug class
+/// this function exists to prevent.
+///
+/// **Unverified on hardware here** — no H2C is available. Every value above is taken from
+/// bambuddy's hardware-measured constants; see `reference/03_mqtt_telemetry.md` for the
+/// measurements and the two corrections upstream made to them.
+pub fn resolve_rack_nozzle_mapping(
+    slot_extruders: &[i32],
+    rack_nozzle_id: i32,
+) -> Option<Vec<i32>> {
+    if slot_extruders.is_empty() || slot_extruders.len() > RACK_WIRE_SLOTS {
+        return None;
+    }
+    if !(RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX).contains(&rack_nozzle_id) {
+        return None;
+    }
+    if !slot_extruders.contains(&RACK_RACK_EXTRUDER_ID) {
+        return None;
+    }
+
+    // Built via `resize` rather than the `vec!` macro, which is only in the prelude under `std`
+    // and would need a separate `alloc::vec` import on the no_std targets.
+    let mut wire: Vec<i32> = Vec::with_capacity(RACK_WIRE_SLOTS);
+    wire.resize(RACK_WIRE_SLOTS, -1);
+    for (index, &extruder) in slot_extruders.iter().enumerate() {
+        if extruder < 0 {
+            continue;
+        }
+        wire[index] = match extruder {
+            RACK_RACK_EXTRUDER_ID => rack_nozzle_id,
+            RACK_FIXED_EXTRUDER_ID => RACK_FIXED_NOZZLE_ID,
+            _ => return None,
+        };
+    }
+    Some(wire)
+}
+
 /// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 ///
 /// Replaces the positional parameter list on `start_print()` and `ProjectFileRequest::new()`
@@ -116,6 +194,19 @@ pub struct PrintJobConfig {
     pub ams_mapping: Vec<i32>,
     /// Structured per-nozzle AMS mapping; takes precedence over `ams_mapping` when set.
     pub ams_mapping2: Option<Vec<AmsMapping2Entry>>,
+    /// Extruder index per filament slot for tool-changer models, negative for unprinted slots.
+    ///
+    /// Only consulted on a model whose quirks report [`uses_nozzle_rack`]. Set together with
+    /// `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`]; either one alone resolves to no
+    /// `nozzle_mapping` on the wire, which is the safe outcome.
+    ///
+    /// [`uses_nozzle_rack`]: crate::quirks::ModelQuirks::uses_nozzle_rack
+    pub nozzle_slot_extruders: Option<Vec<i32>>,
+    /// Physical nozzle ID of the rack position the printer currently reports as live (`16..=21`).
+    ///
+    /// The caller must supply this because the mounted hotend can change between slicing and
+    /// dispatch, and bambino does not model rack telemetry.
+    pub rack_nozzle_id: Option<i32>,
 }
 
 impl PrintJobConfig {
@@ -142,6 +233,8 @@ impl PrintJobConfig {
             use_ams: false,
             ams_mapping: Vec::new(),
             ams_mapping2: None,
+            nozzle_slot_extruders: None,
+            rack_nozzle_id: None,
         }
     }
 
@@ -202,6 +295,18 @@ impl PrintJobConfig {
     /// Enables or disables first-layer inspection for this job.
     pub fn layer_inspect(mut self, enabled: bool) -> Self {
         self.layer_inspect = enabled;
+        self
+    }
+
+    /// Supplies the tool-changer rack routing for this job (H2C only).
+    ///
+    /// `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
+    /// `rack_nozzle_id` is the physical ID of the live rack position (`16..=21`). Both are needed
+    /// — see [`resolve_rack_nozzle_mapping`] for how they combine and when the resulting
+    /// `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
+    pub fn with_nozzle_rack(mut self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self {
+        self.nozzle_slot_extruders = Some(slot_extruders);
+        self.rack_nozzle_id = Some(rack_nozzle_id);
         self
     }
 
@@ -284,6 +389,13 @@ pub struct ProjectFilePayload {
     pub nozzle_offset_cali: i32,
     /// Whether vibration compensation calibration ran as part of this job.
     pub vibration_cali: bool,
+    /// Physical nozzle ID per filament slot on tool-changer models, `-1` for unprinted slots.
+    ///
+    /// Omitted from the wire entirely when `None`, which is the case for every non-rack model and
+    /// for a rack model whose routing could not be resolved with confidence — firmware then picks
+    /// the nozzle itself. See [`resolve_rack_nozzle_mapping`] for why omission beats guessing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nozzle_mapping: Option<Vec<i32>>,
     /// Whether layer inspection (first-layer scan) ran as part of this job.
     pub layer_inspect: bool,
     /// Triggers physical AMS multiplexer material routing. Must strictly be serialized as a boolean.
@@ -400,6 +512,22 @@ impl ProjectFileRequest {
             CalibrationMode::Off
         };
 
+        // Resolved through the quirks engine rather than a model match, per the Key Invariants.
+        // Both inputs are required and the resolver declines rather than guesses — every path
+        // that cannot name the right physical nozzle with confidence lands on `None`, which omits
+        // the field and returns firmware to its own pick.
+        let nozzle_mapping = if model.quirks().uses_nozzle_rack() {
+            match (
+                config.nozzle_slot_extruders.as_deref(),
+                config.rack_nozzle_id,
+            ) {
+                (Some(slots), Some(rack_id)) => resolve_rack_nozzle_mapping(slots, rack_id),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's
         // `project_id` doc comment for why reusing bambino's own subtask_id here is equivalent.
@@ -425,6 +553,7 @@ impl ProjectFileRequest {
                 extrude_cali_flag: config.run_flow_calibration.as_wire_i32(),
                 nozzle_offset_cali: nozzle_offset.as_wire_i32(),
                 vibration_cali: vibration_cali.as_wire_bool(),
+                nozzle_mapping,
                 layer_inspect: config.layer_inspect,
                 use_ams,
                 ams_mapping: mapping,

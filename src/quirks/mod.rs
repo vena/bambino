@@ -213,6 +213,16 @@ pub trait ModelQuirks {
         true
     }
 
+    /// Returns true if the model mounts its hotends from a swappable tool-changer rack.
+    ///
+    /// Only the H2C. A rack model addresses nozzles by *physical ID* rather than by extruder
+    /// index, and the two namespaces overlap in a way that makes an untranslated value silently
+    /// wrong rather than obviously wrong — see
+    /// [`crate::mqtt::resolve_rack_nozzle_mapping`] for the translation and why it matters.
+    fn uses_nozzle_rack(&self) -> bool {
+        false
+    }
+
     /// Returns the maximum safe nozzle/hotend temperature in °C for this model.
     fn nozzle_temp_max(&self) -> u16;
 

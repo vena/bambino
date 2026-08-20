@@ -54,7 +54,7 @@ fn h2_has_door_sensor_field(telemetry: &PrinterTelemetry) -> bool {
 }
 
 macro_rules! impl_h2_shared {
-    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr) => {
+    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr, $uses_rack:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -90,6 +90,13 @@ macro_rules! impl_h2_shared {
 
             fn physical_nozzle_count(&self) -> u8 {
                 $nozzle_count
+            }
+
+            /// Passed explicitly rather than derived from `$nozzle_count` so a future H2 variant
+            /// joining this macro has to state whether it racks its hotends, instead of
+            /// inheriting the answer from an unrelated count.
+            fn uses_nozzle_rack(&self) -> bool {
+                $uses_rack
             }
 
             fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
@@ -146,7 +153,7 @@ macro_rules! impl_h2_shared {
     };
 }
 
-impl_h2_shared!(H2SQuirks, 1, false, H2S_Z_MAX, H2S_X_MAX, H2S_Y_MAX);
-impl_h2_shared!(H2DQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX);
-impl_h2_shared!(H2DProQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX);
-impl_h2_shared!(H2CQuirks, 7, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX);
+impl_h2_shared!(H2SQuirks, 1, false, H2S_Z_MAX, H2S_X_MAX, H2S_Y_MAX, false);
+impl_h2_shared!(H2DQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX, false);
+impl_h2_shared!(H2DProQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX, false);
+impl_h2_shared!(H2CQuirks, 7, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX, true);

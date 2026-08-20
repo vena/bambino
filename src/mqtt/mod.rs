@@ -23,4 +23,5 @@ pub use commands::{
     GetAccessCodeRequest, GetVersionRequest,
     LedCtrlRequest, PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest,
     PushAllRequest, SkipObjectsRequest, StandardControlRequest, clamp_task_id,
+    resolve_rack_nozzle_mapping,
 };

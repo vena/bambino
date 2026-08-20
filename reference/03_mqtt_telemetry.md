@@ -365,6 +365,25 @@ The `"ams_mapping"` field varies conditionally based on the operating mode:
         *   *Array Type Requirement*: Flat mapping must use -1 for unmapped or external/virtual spools; the firmware does not accept raw virtual tray IDs like 254/255 in the flat array, which would cause the print initialization to fail with `0700_8012` "Failed to get AMS mapping table".
         *   *Sub-mapping Detail (`ams_mapping2`)*: For detailed nozzle and material routing, the printer relies on structural extensions which map physical AMS slots or external feeders to corresponding extruder positions.
 
+###### Tool-Changer Nozzle Routing (`nozzle_mapping`, H2C only)
+On a nozzle-rack model the `project_file` payload carries a `nozzle_mapping` array selecting which physical nozzle prints each filament slot. Without it, firmware picks the nozzle itself, which is the bug class this field exists to prevent: printing from a carriage that was not the one levelled.
+
+**Two overlapping namespaces — this is the whole hazard.** Extruder indices and physical nozzle IDs are different numbering schemes that collide at low values:
+
+| Carriage | Extruder index | Physical nozzle ID |
+| :--- | :--- | :--- |
+| Fixed hotend | `1` | `1` |
+| Rack position *n* (1-based) | `0` | `15 + n`, i.e. `16`–`21` |
+
+Passing an extruder index where a physical ID belongs is silently wrong rather than obviously wrong. Observed consequences upstream: the printer levels with one nozzle and prints with another millimetres off the bed, or rejects the job outright as a hotend mismatch (HMS `0500-4047`).
+
+*   **The array is a fixed 32 entries**, padded with `-1` for slots the plate does not print — *not* the plate's filament count.
+*   **Omission is the correct failure mode.** BambuStudio omits `nozzle_mapping` entirely for a plate sliced for the fixed hotend only, and any client that cannot resolve the routing with confidence should do the same rather than guess. Firmware auto-pick is suboptimal; a wrong physical ID is destructive.
+
+**Two prior claims here were wrong and are corrected above — re-read this table rather than trusting older notes.** Upstream initially had the extruder polarity inverted (fixed = `0`, rack = `1`), which dispatched a plate to the carriage that had not been levelled and printed its first layer in mid-air; it was corrected to fixed = `1`, rack = `0` (bambuddy `45dc139c`, 2026-08-14). Upstream also briefly derived the array length from the plate's filament count on the strength of a single 3-entry capture, then reverted to a fixed 32 after observing a real 3-filament project dispatch as 32 entries (`[16, 1, 18, -1 ×29]`, captured 2026-08-13); the 3-entry capture had been a calibration job, so its length tracked what Studio was doing rather than the filament count.
+
+**Verification source:** bambuddy's hardware-measured constants (`3954d3a7`, `45dc139c`, `dfeac792`, `ec26cba9`), cross-checked against their `ams_extruder_map` telemetry and native BambuStudio dispatch captures on the maintainer's H2C. **Not verified here — no H2C is available.** bambino implements this in `resolve_rack_nozzle_mapping`, gated by `ModelQuirks::uses_nozzle_rack()`.
+
 ###### Deliberately Omitted Fields (`md5`, `cfg`, `extrude_cali_manual_mode`)
 Upstream bambuddy sends three fields in `project_file` that bambino does not, all as fixed defaults: `"md5": ""`, `"cfg": "0"`, and `"extrude_cali_manual_mode": 0`. **The omission is deliberate, not an oversight — do not "fix" it without new evidence.**
 
