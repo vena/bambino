@@ -1687,6 +1687,130 @@ Network interface state from `print.net` [REF-NET-PORTS].
 
 - <span id="netinfo-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `PrintPauseList`
+
+```rust
+struct PrintPauseList {
+    pub total: Option<i32>,
+    pub list: Option<Vec<PrintPausePoint>>,
+}
+```
+
+The pause schedule for a running job, reported as `print.p_list`.
+
+Lets a consumer see upcoming pauses (typically scheduled filament swaps) before they happen.
+Nothing in bambino acts on this — it is surfaced so callers can.
+
+**Field names and semantics come from BambuStudio's parser
+(`DevPrintTaskInfo.cpp::parsePauseList`), not from a capture taken here.** The abbreviated
+wire keys in particular have not been confirmed against a real `push_status` from a printer
+running a job with scheduled pauses — see issue #139.
+
+#### Fields
+
+- **`total`**: `Option<i32>`
+
+  Total number of pauses scheduled for the job.
+
+- **`list`**: `Option<Vec<PrintPausePoint>>`
+
+  The scheduled pauses themselves. Absent and empty are distinct on the wire; both mean
+  "nothing to show" to a caller.
+
+#### Implementations
+
+- <span id="printpauselist-next-pause"></span>`fn next_pause(&self) -> Option<&PrintPausePoint>` — [`PrintPausePoint`](report/index.md#printpausepoint)
+
+  Returns the next pending pause — the point with the lowest `pause_index`.
+
+#### Trait Implementations
+
+##### `impl Clone for PrintPauseList`
+
+- <span id="printpauselist-clone"></span>`fn clone(&self) -> PrintPauseList` — [`PrintPauseList`](report/index.md#printpauselist)
+
+##### `impl Debug for PrintPauseList`
+
+- <span id="printpauselist-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Deserialize<'de> for PrintPauseList`
+
+- <span id="printpauselist-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for PrintPauseList`
+
+##### `impl Eq for PrintPauseList`
+
+##### `impl PartialEq for PrintPauseList`
+
+- <span id="printpauselist-partialeq-eq"></span>`fn eq(&self, other: &PrintPauseList) -> bool` — [`PrintPauseList`](report/index.md#printpauselist)
+
+##### `impl Serialize for PrintPauseList`
+
+- <span id="printpauselist-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `PrintPausePoint`
+
+```rust
+struct PrintPausePoint {
+    pub progress_percent: Option<i32>,
+    pub remaining_time_secs: Option<i32>,
+    pub pause_index: Option<i32>,
+    pub layer: Option<i32>,
+}
+```
+
+One scheduled pause in a running job's pause list.
+
+Wire keys are single letters (`p`/`t`/`i`/`l`), renamed here to something readable. Every
+field is `Option` per this module's convention even though BambuStudio's parser requires all
+four and discards the whole schedule if any is missing — bambino keeps what it can parse and
+lets the caller decide, rather than dropping a pause list because one point is malformed.
+
+#### Fields
+
+- **`progress_percent`**: `Option<i32>`
+
+  Percent complete at which this pause occurs.
+
+- **`remaining_time_secs`**: `Option<i32>`
+
+  Remaining print time at this pause, in seconds.
+
+- **`pause_index`**: `Option<i32>`
+
+  Index of this pause within the job's schedule.
+
+- **`layer`**: `Option<i32>`
+
+  Layer number at which this pause occurs.
+
+#### Trait Implementations
+
+##### `impl Clone for PrintPausePoint`
+
+- <span id="printpausepoint-clone"></span>`fn clone(&self) -> PrintPausePoint` — [`PrintPausePoint`](report/index.md#printpausepoint)
+
+##### `impl Debug for PrintPausePoint`
+
+- <span id="printpausepoint-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Deserialize<'de> for PrintPausePoint`
+
+- <span id="printpausepoint-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+
+##### `impl DeserializeOwned for PrintPausePoint`
+
+##### `impl Eq for PrintPausePoint`
+
+##### `impl PartialEq for PrintPausePoint`
+
+- <span id="printpausepoint-partialeq-eq"></span>`fn eq(&self, other: &PrintPausePoint) -> bool` — [`PrintPausePoint`](report/index.md#printpausepoint)
+
+##### `impl Serialize for PrintPausePoint`
+
+- <span id="printpausepoint-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
 ### `PrinterTelemetry`
 
 ```rust
@@ -1726,6 +1850,7 @@ struct PrinterTelemetry {
     pub ipcam: Option<super::diagnostics::IpcamTelemetry>,
     pub xcam: Option<serde_json::Value>,
     pub ams: Option<super::ams::AmsStatusReport>,
+    pub p_list: Option<PrintPauseList>,
     pub ams_status: Option<i32>,
     pub ams_mapping: Vec<i32>,
     pub vt_tray: Option<super::ams::VirtualTray>,
@@ -1919,6 +2044,13 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`ams`**: `Option<super::ams::AmsStatusReport>`
 
   AMS expansion bus status container [REF-AMS-DECODE].
+
+- **`p_list`**: `Option<PrintPauseList>`
+
+  Schedule of pauses the firmware plans for the running job. Nested as `print.p_list`.
+  
+  Present only while a job with scheduled pauses (e.g. filament swaps) is loaded; absent
+  otherwise, which is not an error.
 
 - **`ams_status`**: `Option<i32>`
 

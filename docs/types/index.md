@@ -1559,6 +1559,7 @@ struct PrinterTelemetry {
     pub ipcam: Option<super::diagnostics::IpcamTelemetry>,
     pub xcam: Option<serde_json::Value>,
     pub ams: Option<super::ams::AmsStatusReport>,
+    pub p_list: Option<PrintPauseList>,
     pub ams_status: Option<i32>,
     pub ams_mapping: Vec<i32>,
     pub vt_tray: Option<super::ams::VirtualTray>,
@@ -1752,6 +1753,13 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`ams`**: `Option<super::ams::AmsStatusReport>`
 
   AMS expansion bus status container [REF-AMS-DECODE].
+
+- **`p_list`**: `Option<PrintPauseList>`
+
+  Schedule of pauses the firmware plans for the running job. Nested as `print.p_list`.
+  
+  Present only while a job with scheduled pauses (e.g. filament swaps) is loaded; absent
+  otherwise, which is not an error.
 
 - **`ams_status`**: `Option<i32>`
 
