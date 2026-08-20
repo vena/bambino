@@ -66,7 +66,14 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 - **`discovery_port`**: `u16`
 
-  SSDP port on which the device was discovered (2021 or 1990).
+  SSDP port on which the device was discovered (2021 or 1990), or `0` if the record has
+  not been stamped with one.
+  
+  The port is not carried in the payload, so [`parse_ssdp_payload`](#parse-ssdp-payload) — which sees only the
+  datagram bytes — always leaves this `0`. It is filled in by
+  [`DiscoveryEngine::poll_next_device`](crate::discovery::DiscoveryEngine::poll_next_device),
+  which knows which socket the datagram arrived on. Callers parsing captured datagrams
+  directly must treat `0` as "unknown", not as a real port.
 
 - **`version`**: `String`
 

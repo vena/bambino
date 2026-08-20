@@ -55,6 +55,10 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
   Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
 
+- <span id="mqttclient-is-poisoned"></span>`fn is_poisoned(&self) -> bool`
+
+  Returns true once a write has failed and left the stream possibly desynced.
+
 - <span id="mqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Platform-agnostic timer tick update.

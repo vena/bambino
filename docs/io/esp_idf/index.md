@@ -187,8 +187,16 @@ if a printer's vsFTPd offers/prefers TLS 1.3, `require_tls_1_2_if_enforced`
 (`ftps/client.rs`) still fails closed for models where
 `model.quirks().enforces_ftps_tls_1_2()` is true — the connection is safely rejected
 rather than silently downgraded — but there is currently no way to make it succeed on
-ESP-IDF for those models. `io/tokio.rs` (`tokio-rustls`) and `io/embassy.rs`
-(`embedded-tls`) have no equivalent gap; both expose a genuine max-protocol-version knob.
+ESP-IDF for those models.
+
+**Only `io/tokio.rs` (`tokio-rustls`) exposes a genuine max-protocol-version knob.**
+`io/embassy.rs` has the same gap for a different reason: its backend is `mbedtls-rs` (not
+`embedded-tls`, which it replaced — see `Cargo.toml`'s dependency comment), and
+`EmbassyTlsConnector::connect` sets only `min_version` while `negotiated_version` returns
+`None` unconditionally, so `require_tls_1_2_if_enforced` (`ftps/client.rs`) fails closed
+there too for every `enforces_ftps_tls_1_2()` model. On both embedded backends the only way
+through today is `with_ftps_allow_unverified_tls_1_2(true)`, which bypasses the check
+rather than satisfying it.
 
 #### Implementations
 

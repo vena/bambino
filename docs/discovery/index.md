@@ -95,7 +95,14 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
 - **`discovery_port`**: `u16`
 
-  SSDP port on which the device was discovered (2021 or 1990).
+  SSDP port on which the device was discovered (2021 or 1990), or `0` if the record has
+  not been stamped with one.
+  
+  The port is not carried in the payload, so [`parse_ssdp_payload`](parser/index.md#parse-ssdp-payload) — which sees only the
+  datagram bytes — always leaves this `0`. It is filled in by
+  [`DiscoveryEngine::poll_next_device`](crate::discovery::DiscoveryEngine::poll_next_device),
+  which knows which socket the datagram arrived on. Callers parsing captured datagrams
+  directly must treat `0` as "unknown", not as a real port.
 
 - **`version`**: `String`
 
@@ -205,8 +212,11 @@ use bambino::discovery::discover_devices;
 use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
 
 let timer = TokioTimer::new();
+// Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
+// are found only through their ~10.1s NOTIFY advertisements, so a shorter window
+// intermittently returns nothing at all — see `reference/01_network_discovery.md`.
 let printers = discover_devices::<TokioUdpSocket, _>(
-    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(20),
     &timer,
 ).await?;
 

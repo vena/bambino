@@ -42,6 +42,124 @@ and the Rustls TLS stack.
 
 ## Types
 
+### `CnFallbackServerVerifier`
+
+```rust
+struct CnFallbackServerVerifier {
+    // [REDACTED: Private Fields]
+}
+```
+
+Certificate verifier for the "verified" (CA-checked) connection path that validates real
+chain-of-trust against caller-supplied trusted roots, but — unlike rustls's default
+`WebPkiServerVerifier` — works against real Bambu printer certs at all.
+
+**Why this can't use `rustls-webpki`:** real Bambu printer certs are X.509 **v1** (confirmed
+against a live P1S — no version tag, implicit v1 encoding per RFC 5280 §4.1.2.1).
+`rustls-webpki` (confirmed against the pinned `0.103.13`, `src/cert.rs::version3`) rejects
+*any* cert that isn't v3, unconditionally — this is deliberate mozilla::pkix policy
+("We allow only v3"), not a bug, and it applies to `EndEntityCert`/`ParsedCertificate`
+parsing used by chain validation *and* to the free functions `verify_tls12_signature`/
+`verify_tls13_signature` (which independently re-parse the leaf via
+`EndEntityCert::try_from` during the handshake's signature check). So neither chain
+validation nor the handshake-signature check can be delegated to anything in
+`rustls-webpki` for a real Bambu cert — confirmed as a known limitation other real-world
+self-signed device certs have hit too: rustls/rustls#1298 (the identical
+"UnsupportedCertVersion" error, hit by an unrelated user), rustls/webpki#205 ("Support
+self-signed certificate"), and rustls/rustls#772, where the LND project hit the exact same
+wall with its own self-signed device cert — their `SingleCertVerifier` pattern (comparing
+the peer cert against a pinned expected cert, bypassing webpki's chain logic entirely) is
+the community-blessed approach this verifier adapts, using signed-by-root trust instead of
+exact-leaf pinning so it survives individual device cert rotation.
+
+This verifier uses `x509-parser` instead (a general ASN.1/X.509 parser, not a
+policy-enforcing validator — confirmed via its own test suite that it treats the version
+field as optional, defaulting to v1 when absent, exactly per the DER grammar) for all
+parsing, and does two independent things no other code in this crate does:
+- **Chain-of-trust**: walks from the leaf through the presented intermediates (this
+  used to check the leaf directly against the trusted roots only, silently ignoring
+  `intermediates` — a legitimate two-level custom CA (offline root + issuing intermediate)
+  failed with `UnknownIssuer` even though the chain was valid) until it either lands on a
+  caller-supplied trusted root's public key or runs out of intermediates, verifying each
+  issuer/subject match and signature link along the way, with an unexpired validity period
+  on the leaf. (`verify_server_cert`, via `X509Certificate::verify_signature` — real
+  `ring`-backed verification, not hand-rolled crypto.)
+- **Handshake-signature check**: does the live TLS handshake signature verify under the
+  leaf's own public key? (`verify_tls12_signature`/`verify_tls13_signature`, via
+  `rustls_pki_types::SignatureVerificationAlgorithm::verify_signature` directly — this is
+  the check that actually proves the peer holds the private key matching the presented
+  cert; per the LND issue's own reasoning, this is what prevents MITM here, not the chain
+  check alone.)
+
+Identity (SAN-then-CN, mirroring mbedtls's `x509_crt_verify_name` algorithm) is still
+checked last, same logic as before — only its data source changed, from a hand-rolled DER
+walker to `x509-parser`'s parsed fields.
+
+#### Implementations
+
+- <span id="cnfallbackserververifier-new"></span>`fn new(ca_certs: impl IntoIterator<Item = CertificateDer<'static>>) -> Result<Self, RustlsError>`
+
+  Builds the verifier from a set of trusted root certs. Fails if `ca_certs` is empty or
+
+  any supplied cert fails to parse — there is nothing to validate a chain against
+
+  otherwise, so failing fast at config-build time (rather than silently succeeding and
+
+  only failing later at handshake time) is deliberate.
+
+#### Trait Implementations
+
+##### `impl Debug for CnFallbackServerVerifier`
+
+- <span id="cnfallbackserververifier-debug-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+##### `impl ServerCertVerifier for CnFallbackServerVerifier`
+
+- <span id="cnfallbackserververifier-servercertverifier-verify-server-cert"></span>`fn verify_server_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], server_name: &ServerName<'_>, _ocsp_response: &[u8], now: UnixTime) -> Result<ServerCertVerified, RustlsError>`
+
+- <span id="cnfallbackserververifier-servercertverifier-verify-tls12-signature"></span>`fn verify_tls12_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+
+- <span id="cnfallbackserververifier-servercertverifier-verify-tls13-signature"></span>`fn verify_tls13_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+
+- <span id="cnfallbackserververifier-servercertverifier-supported-verify-schemes"></span>`fn supported_verify_schemes(&self) -> Vec<SignatureScheme>`
+
+### `NoCertificateVerification`
+
+```rust
+struct NoCertificateVerification;
+```
+
+Custom certificate verifier that disables **all** peer certificate verification.
+
+This bypasses far more than the CA chain walk: `verify_tls12_signature` and
+`verify_tls13_signature` both return `HandshakeSignatureValid::assertion()`
+unconditionally, so the peer never proves possession of the private key matching the
+certificate it presented. That handshake-signature check — not the chain check alone — is
+what actually prevents a MITM (see [`CnFallbackServerVerifier`](#cnfallbackserververifier)'s own doc). Identity is not
+checked either: any certificate from any host is accepted for any name.
+
+**Why this is required:**
+Physical Bambu Lab printers (all models) host an onboard local MQTTS/FTPS broker
+utilizing self-signed certificates with the printer's serial number in the CN field.
+Because these do not trace back to any root authority in OS certificate stores,
+standard verifiers reject the connections immediately.
+
+#### Trait Implementations
+
+##### `impl Debug for NoCertificateVerification`
+
+- <span id="nocertificateverification-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl ServerCertVerifier for NoCertificateVerification`
+
+- <span id="nocertificateverification-servercertverifier-verify-server-cert"></span>`fn verify_server_cert(&self, _end_entity: &CertificateDer<'_>, _intermediates: &[CertificateDer<'_>], _server_name: &ServerName<'_>, _ocsp_response: &[u8], _now: UnixTime) -> Result<rustls::client::danger::ServerCertVerified, RustlsError>`
+
+- <span id="nocertificateverification-servercertverifier-verify-tls12-signature"></span>`fn verify_tls12_signature(&self, _message: &[u8], _cert: &CertificateDer<'_>, _dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+
+- <span id="nocertificateverification-servercertverifier-verify-tls13-signature"></span>`fn verify_tls13_signature(&self, _message: &[u8], _cert: &CertificateDer<'_>, _dss: &DigitallySignedStruct) -> Result<HandshakeSignatureValid, RustlsError>`
+
+- <span id="nocertificateverification-servercertverifier-supported-verify-schemes"></span>`fn supported_verify_schemes(&self) -> Vec<SignatureScheme>`
+
 ### `TokioIo<T>`
 
 ```rust

@@ -32,6 +32,8 @@ struct PrinterIdentity {
 
 Address, serial number, and access code identifying one printer on the LAN.
 
+[`Debug`](https://docs.rs/core/latest/core/fmt/trait.Debug.html) is implemented manually to redact `access_code`; see the impl below.
+
 #### Fields
 
 - **`ip`**: `String`
@@ -65,7 +67,7 @@ Address, serial number, and access code identifying one printer on the LAN.
 
 ##### `impl Debug for PrinterIdentity`
 
-- <span id="printeridentity-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+- <span id="printeridentity-debug-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
 ##### `impl Eq for PrinterIdentity`
 
