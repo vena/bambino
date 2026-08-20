@@ -2,7 +2,7 @@
 
 Async Rust library for talking to Bambu Lab 3D printers over your local network. No Bambu Cloud, just direct MQTT, FTPS, and camera access from one codebase that compiles to desktop, ESP32 (ESP-IDF), and bare-metal (Embassy) targets.
 
-**🤖 Notice:** In case it's not obvious, this was built with the assistance of AI.
+**🤖 DISCLOSURE:** This was built with heavy assistance from AI. This exists because I wanted it for another project, and I barely know Rust myself! 3D printers are expensive and deal with [high temperatures](#safety-notice), so bare this in mind before you unleash my slop upon your baby.
 
 ## What it does
 
