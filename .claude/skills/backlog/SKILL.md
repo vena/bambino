@@ -20,7 +20,7 @@ Not every finding gets one. A confirmed real bug or an outstanding needs-verific
 ## Issue format
 
 1. **Title**: one line, states the problem, not "bug in X."
-2. **Body**: file:line, one-sentence problem, one-sentence fix direction. Longer investigative detail goes in a dated review file (or a `*_PLAN.md`), linked from the issue body, not pasted into it.
+2. **Body**: self-contained. `file:line`, the failure mechanism, and a one-sentence fix direction, all pasted in — plus whatever code, `reference/` docs, `.claude/rules/` files, or related issue numbers the reader needs. **Never point the body at a review file, a `*_PLAN.md`, or a commit SHA for the substance.** A `*-REVIEW.md` is deleted by `triage-review` the moment its findings are filed, so a link to one is dead on arrival and costs whoever picks the issue up a wasted lookup; a plan file has the same fate. Length is not the constraint — an issue nobody can act on without fetching a second document is the thing to avoid. Keep the investigative narrative (what was ruled out, how it was verified, which agent found it) out of the issue; that's the review file's job while it exists, and it isn't needed to fix the bug.
 3. **Labels**: exactly one priority label (`P-critical`/`P-high`/`P-low`/`needs-verification`, see Severity below) plus GitHub's default `bug` label — the latter distinguishes this from a feature request or question landing in the same tracker later. No separate status label — issue `open`/`closed` state is the status.
 4. **No manual numbering.** GitHub assigns the issue number.
 
