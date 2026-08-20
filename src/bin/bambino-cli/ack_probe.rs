@@ -84,8 +84,9 @@ mod verdict {
 
 /// One command under test.
 ///
-/// All eight were confirmed ack-correlated on a P1S (issue #26) and are now on
-/// `ACK_CORRELATED_COMMANDS`. They stay here rather than being deleted: that evidence is
+/// The first eight were confirmed ack-correlated on a P1S (issue #26) and are now on
+/// `ACK_CORRELATED_COMMANDS`; `GetAccessCode` is under test and deliberately *not* on that list
+/// yet (issue #140). They stay here rather than being deleted: that evidence is
 /// model-specific, so the same sweep is what confirms (or refutes) the allowlist on any other
 /// model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
 /// for any future command before putting it on the allowlist, never after.
@@ -99,6 +100,7 @@ enum AckTest {
     SetAirduct,
     PrintOption,
     BuzzerCtrl,
+    GetAccessCode,
 }
 
 impl AckTest {
@@ -120,6 +122,7 @@ impl AckTest {
             Self::SetAirduct => "set_airduct",
             Self::PrintOption => "print_option",
             Self::BuzzerCtrl => "buzzer_ctrl",
+            Self::GetAccessCode => "get_access_code",
         }
     }
 
@@ -146,6 +149,11 @@ impl AckTest {
             }
             Self::PrintOption => "Enable notification sounds (A1/A1 Mini/A2L feature)",
             Self::BuzzerCtrl => "Buzzer to silent/disarmed (H2-series feature)",
+            Self::GetAccessCode => {
+                "Ask the printer to report its own LAN access code (issue #140). Read-only: it \
+                 queries a value the caller already had to know to connect, and changes nothing. \
+                 A `system`-wrapped reply echoing our sequence_id is the evidence sought"
+            }
         }
     }
 
@@ -167,6 +175,7 @@ impl AckTest {
             Self::SetAirduct,
             Self::PrintOption,
             Self::BuzzerCtrl,
+            Self::GetAccessCode,
         ]
     }
 
@@ -214,6 +223,16 @@ impl AckTest {
             Self::BuzzerCtrl => {
                 serde_json::to_value(BuzzerRequest::new(BuzzerMode::Silent as i32, seq))
             }
+            // Built as a literal rather than through a request struct on purpose: the command
+            // has no type in `src/mqtt/commands/` yet, and adding one before this harness
+            // confirms the printer answers would put an unverified command in the public API.
+            // Shape from BambuStudio's `MachineObject::request_access_code` (commit 1678b5ac).
+            Self::GetAccessCode => Ok(serde_json::json!({
+                "system": {
+                    "sequence_id": seq.to_string(),
+                    "command": "get_access_code",
+                }
+            })),
         };
 
         value.map_err(|e| {
@@ -222,6 +241,38 @@ impl AckTest {
                 self.wire_command()
             ))
         })
+    }
+}
+
+/// Keys whose values are credentials or device identity, and must never reach the report file.
+///
+/// The report is routinely written into the repo working tree, and root `CLAUDE.md` forbids an
+/// access code or serial number landing in a file here. `get_access_code`'s whole reply is a
+/// credential, so without this the harness that verifies the command would itself leak it.
+const REDACTED_KEYS: &[&str] = &["access_code", "sn", "serial", "serial_number", "dev_sn"];
+
+/// Recursively replaces the value of every [`REDACTED_KEYS`] entry with a placeholder.
+///
+/// Keys are matched exactly and case-insensitively, at any depth. The surrounding structure is
+/// preserved so the report still shows *that* the field was present and where — which is the part
+/// the ack question actually needs.
+fn redact_secrets(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.into_iter()
+                .map(|(k, v)| {
+                    if REDACTED_KEYS.iter().any(|r| r.eq_ignore_ascii_case(&k)) {
+                        (k, serde_json::Value::String("<redacted>".to_string()))
+                    } else {
+                        (k, redact_secrets(v))
+                    }
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(redact_secrets).collect())
+        }
+        other => other,
     }
 }
 
@@ -354,7 +405,7 @@ async fn capture_ack(client: &mut Printer, expected_seq: &str, window: Duration)
                 ack = Some(AckObservation {
                     message: ObservedMessage {
                         elapsed_ms: start.elapsed().as_millis() as u64,
-                        payload: payload.clone(),
+                        payload: redact_secrets(payload.clone()),
                     },
                     wrapper: wrapper.to_string(),
                     command,
@@ -747,4 +798,45 @@ pub async fn run(
     print_summary(&report);
     eprintln!("\nReport written to {}", output);
     Ok(())
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_secrets;
+
+    #[test]
+    fn test_redact_secrets_replaces_access_code_at_any_depth() {
+        let input = serde_json::json!({
+            "system": {
+                "command": "get_access_code",
+                "access_code": "12345678",
+                "sequence_id": "42",
+            }
+        });
+        let out = redact_secrets(input);
+        assert_eq!(out["system"]["access_code"], "<redacted>");
+        assert_eq!(out["system"]["command"], "get_access_code");
+        assert_eq!(out["system"]["sequence_id"], "42");
+    }
+
+    #[test]
+    fn test_redact_secrets_walks_arrays_and_is_case_insensitive() {
+        let input = serde_json::json!({
+            "module": [
+                { "name": "ams/0", "SN": "0123456789ABCDE" },
+                { "name": "mc", "sn": "0123456789ABCDE" },
+            ]
+        });
+        let out = redact_secrets(input);
+        assert_eq!(out["module"][0]["SN"], "<redacted>");
+        assert_eq!(out["module"][1]["sn"], "<redacted>");
+        assert_eq!(out["module"][0]["name"], "ams/0");
+    }
+
+    #[test]
+    fn test_redact_secrets_leaves_unrelated_scalars_alone() {
+        let input = serde_json::json!({ "result": "success", "nested": [1, true, null] });
+        let out = redact_secrets(input.clone());
+        assert_eq!(out, input);
+    }
 }
