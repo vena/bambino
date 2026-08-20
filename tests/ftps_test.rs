@@ -480,15 +480,17 @@ async fn test_ftps_list_directory_426_recovery() {
 async fn test_ftps_upload_426_recovery_via_size() {
     let (client_control, server_control, data_container, factory) = setup();
 
+    const PAYLOAD: &[u8] = b"TEST_DATA";
     let server_handle = tokio::spawn(mock_ftps::run_mock_server_upload_426_recovery(
         server_control,
         data_container.clone(),
+        PAYLOAD.len(),
     ));
 
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     client
-        .upload_file("/model/job.3mf", b"TEST_DATA")
+        .upload_file("/model/job.3mf", PAYLOAD)
         .await
         .expect("Upload should succeed via 426 + SIZE verification recovery");
 

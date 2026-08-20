@@ -119,25 +119,53 @@ async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
 }
 
 /// Sends a formatted ASCII FTP command string cleanly terminated with CRLF boundaries.
-pub(crate) async fn write_command<IO: AsyncIo>(
+///
+/// `deadline_ms` bounds the write the same way `read_response` bounds the reply: an absolute
+/// epoch-ms deadline from [`ftps_deadline_ms`], or `None` under a `DummyTimer` (unbounded,
+/// unchanged behavior). Without it, a printer whose firmware wedges with a full receive window
+/// blocked `write_all`/`flush` forever, hanging SIZE/DELE/MKD/RMD/RNFR/AVBL/PASV/QUIT with no
+/// upper bound and never reaching the caller's poisoning path.
+pub(crate) async fn write_command<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     cmd: &str,
+    timer: &T,
+    deadline_ms: Option<u64>,
 ) -> Result<(), Error> {
     // Single write_all call for "cmd\r\n" together — some embedded FTP servers (confirmed live
     // against a P1S) don't correctly reassemble a command line split across two separate writes.
     let mut payload = String::from(cmd);
     payload.push_str("\r\n");
 
-    stream
-        .write_all(payload.as_bytes())
-        .await
-        .map_err(|_| Error::Network(SocketError::ConnectionAborted))?;
-    stream
-        .flush()
-        .await
-        .map_err(|_| Error::Network(SocketError::ConnectionAborted))?;
+    write_bounded(stream.write_all(payload.as_bytes()), timer, deadline_ms).await?;
+    write_bounded(stream.flush(), timer, deadline_ms).await?;
 
     Ok(())
+}
+
+/// Races one control-channel write future against `deadline_ms`, mapping the timeout branch to
+/// `SocketError::TimedOut` and any write failure to `ConnectionAborted`.
+async fn write_bounded<T: TimerProvider, E>(
+    write_fut: impl core::future::Future<Output = Result<(), E>>,
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<(), Error> {
+    let Some(deadline_ms) = deadline_ms else {
+        return write_fut
+            .await
+            .map_err(|_| Error::Network(SocketError::ConnectionAborted));
+    };
+
+    let remaining_ms = deadline_ms.saturating_sub(timer.now_millis());
+    if remaining_ms == 0 {
+        return Err(Error::Network(SocketError::TimedOut));
+    }
+
+    let sleep_fut = timer.sleep(core::time::Duration::from_millis(remaining_ms));
+    match race(write_fut, sleep_fut).await {
+        Raced::Left(Ok(())) => Ok(()),
+        Raced::Left(Err(_)) => Err(Error::Network(SocketError::ConnectionAborted)),
+        Raced::Right(_) => Err(Error::Network(SocketError::TimedOut)),
+    }
 }
 
 /// Reads a line-by-line buffer stream incrementally up to the terminating LF character.
@@ -367,24 +395,35 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, Error> {
     Ok(port as u16)
 }
 
-/// Validates a caller-supplied FTP path argument before it is interpolated into a command line.
+/// Rejects control characters in a path or filename, whichever direction it came from.
 ///
-/// Every path-taking method on `BambuFtpsClient` sends `format!("CMD {}", path)` followed by a
-/// single trailing CRLF (`write_command`). If `path` itself contains `\r` or `\n`, the bytes
-/// written to the control channel contain an embedded line break that the FTP server parses as a
-/// written to the control channel contain an embedded line break that the FTP server parses as
-/// a *second*, caller/attacker-controlled command — invisible to whoever called the original
-/// method. Also rejects NUL (`\0`), which some FTP daemons treat as a string terminator, for
-/// the same class of confusion.
-pub(crate) fn validate_ftp_path(path: &str) -> Result<(), Error> {
-    // Covers CR/LF/NUL (the original command-injection hazard this function guards
-    // against) plus every other C0 control byte and DEL — non-CR/LF control characters can
-    // smuggle ANSI escapes into a filename a caller later prints/logs.
+/// Covers CR/LF/NUL (the command-injection hazard `validate_ftp_path` guards against) plus every
+/// other C0 control byte and DEL — non-CR/LF control characters can smuggle ANSI escapes into a
+/// filename a caller later prints or logs.
+///
+/// Split out from [`validate_ftp_path`] because this is the only half that describes an unsafe
+/// *name*. The `..` and leading-dash rules describe an unsafe *command argument*, and applying
+/// them to server-supplied names in `parse_unix_listing` silently deleted legitimately named
+/// files (e.g. `-timelapse.mp4`) from every listing.
+pub(crate) fn validate_ftp_path_bytes(path: &str) -> Result<(), Error> {
     if path.bytes().any(|b| b < FTP_PATH_CONTROL_CHAR_MAX || b == FTP_PATH_DEL_CHAR) {
         return Err(Error::ProtocolViolation(
             "FTP path contains an illegal control character".into(),
         ));
     }
+    Ok(())
+}
+
+/// Validates a caller-supplied FTP path argument before it is interpolated into a command line.
+///
+/// Every path-taking method on `BambuFtpsClient` sends `format!("CMD {}", path)` followed by a
+/// single trailing CRLF (`write_command`). If `path` itself contains `\r` or `\n`, the bytes
+/// written to the control channel contain an embedded line break that the FTP server parses as
+/// a *second*, caller/attacker-controlled command — invisible to whoever called the original
+/// method. Also rejects NUL (`\0`), which some FTP daemons treat as a string terminator, for
+/// the same class of confusion.
+pub(crate) fn validate_ftp_path(path: &str) -> Result<(), Error> {
+    validate_ftp_path_bytes(path)?;
     if path.split(['/', '\\']).any(|segment| segment == "..") {
         return Err(Error::ProtocolViolation(
             "FTP path contains a '..' path traversal segment".into(),

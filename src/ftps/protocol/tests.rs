@@ -361,7 +361,9 @@ async fn test_write_command_sends_single_write_call() {
     let recorder = WriteRecorder::default();
     let mut stream = TokioIo(recorder.clone());
 
-    write_command(&mut stream, "USER bblp").await.unwrap();
+    write_command(&mut stream, "USER bblp", &DummyTimer, None)
+        .await
+        .unwrap();
 
     let calls = recorder.0.lock().unwrap();
     assert_eq!(
@@ -371,6 +373,43 @@ async fn test_write_command_sends_single_write_call() {
         calls.len()
     );
     assert_eq!(calls[0], b"USER bblp\r\n");
+}
+
+/// Regression test: `write_command` had no deadline at all, so a printer wedged with a full
+/// receive window blocked every control-channel command (SIZE/DELE/MKD/PASV/QUIT) forever, and
+/// the caller never reached its poisoning path. A 1-byte duplex whose peer never reads models
+/// exactly that: the first byte lands, the rest of the write blocks indefinitely.
+#[tokio::test]
+async fn test_write_command_stalled_connection_times_out() {
+    let (client_half, _server_half) = tokio::io::duplex(1);
+    let mut stream = TokioIo(client_half);
+    let timer = crate::io::tokio::TokioTimer::new();
+    let budget_ms = 50;
+    let deadline_ms = Some(timer.now_millis().saturating_add(budget_ms));
+
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        core::time::Duration::from_secs(5),
+        write_command(&mut stream, "USER bblp", &timer, deadline_ms),
+    )
+    .await
+    .expect(
+        "write_command hung past the 5s meta-safety timeout instead of honoring its own \
+         budget — this is the exact regression this test guards against",
+    );
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(result, Err(Error::Network(SocketError::TimedOut))),
+        "Expected TimedOut for a stalled control channel, got {:?}",
+        result
+    );
+    assert!(
+        elapsed < core::time::Duration::from_secs(2),
+        "write_command took {:?} to time out against a {}ms budget — too slow",
+        elapsed,
+        budget_ms
+    );
 }
 
 #[test]

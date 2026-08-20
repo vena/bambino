@@ -364,9 +364,17 @@ pub async fn run_mock_server_avbl_unsupported(
 }
 
 /// Mock server for upload with 426 (TLS 1.3 close race) + SIZE recovery.
+///
+/// `expected_len` is the caller's independently-known payload length, and the SIZE reply is
+/// derived from it — not from the byte count this mock happened to read. Echoing the observed
+/// count made the client's post-426 SIZE recheck tautological: a client bug that truncated the
+/// upload would have been confirmed "correct" by a SIZE reply that shrank to match it. That
+/// recheck is what `src/ftps/CLAUDE.md` cites to justify the fail-open
+/// `allow_unverified_tls_1_2` opt-out, so the test proving it has to be able to fail.
 pub async fn run_mock_server_upload_426_recovery(
     mut server_control: tokio::io::DuplexStream,
     data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    expected_len: usize,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -378,11 +386,19 @@ pub async fn run_mock_server_upload_426_recovery(
     assert_eq!(cmd, "STOR /model/job.3mf\r\n");
     respond(&mut server_control, b"150 Ok to send data.\r\n").await;
 
-    let mut upload_buf = vec![0u8; 100];
-    let bytes_read = server_upload_data
-        .read(&mut upload_buf)
-        .await
-        .expect("upload data read");
+    // Loop until the full expected payload arrives, like run_mock_server_upload_multi_chunk:
+    // a single read can return a short chunk, which the old single-read version silently
+    // accepted as the whole upload.
+    let mut received = 0usize;
+    let mut chunk = vec![0u8; 8192];
+    while received < expected_len {
+        let n = server_upload_data
+            .read(&mut chunk)
+            .await
+            .expect("upload data read");
+        assert!(n > 0, "data channel closed before all bytes were received");
+        received += n;
+    }
     drop(server_upload_data);
 
     // Return 426 (TLS 1.3 close race) instead of 226
@@ -392,12 +408,12 @@ pub async fn run_mock_server_upload_426_recovery(
     )
     .await;
 
-    // SIZE verification — report size matches
+    // SIZE verification — report the independently-known length, not the observed count.
     let cmd = read_cmd(&mut server_control, &mut buf).await;
     assert!(cmd.starts_with("SIZE "));
     respond(
         &mut server_control,
-        format!("213 {}\r\n", bytes_read).as_bytes(),
+        format!("213 {}\r\n", expected_len).as_bytes(),
     )
     .await;
 }

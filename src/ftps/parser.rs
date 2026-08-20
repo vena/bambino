@@ -203,9 +203,14 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
         // control characters `validate_ftp_path` rejects on the way out. A caller might
         // round-trip a name returned here into another FTP command
         // (`delete_file`/`rename_file`/`download_file`) — this client can't control what
-        // characters the printer's own filesystem (or a MITM'd `LIST` response) contains, so
-        // skip any entry that couldn't be safely reused as a path argument.
-        if super::protocol::validate_ftp_path(&name).is_err() {
+        // characters the printer's own filesystem (or a MITM'd `LIST` response) contains.
+        //
+        // Only the control-character half applies here. The full `validate_ftp_path` also
+        // rejects `..` and a leading dash, which are properties of an unsafe *command
+        // argument*, not an unsafe *name* — running them over inbound listings made a real file
+        // named `-timelapse.mp4` vanish from `list_directory` with no error and no log.
+        if super::protocol::validate_ftp_path_bytes(&name).is_err() {
+            log::warn!("Dropping LIST entry with control characters in its name");
             continue;
         }
 
@@ -285,6 +290,29 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_leading_dash_filename_survives_listing() {
+        // Regression: the parser used to run the full `validate_ftp_path` over inbound names,
+        // so a real file named `-timelapse.mp4` was dropped from every listing with no error
+        // and no log. The leading-dash and `..` rules guard command *arguments*, not names;
+        // only the control-character check belongs on this side.
+        let payload = "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 -timelapse.mp4\r\n";
+
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "-timelapse.mp4");
+    }
+
+    #[test]
+    fn test_control_character_filename_still_dropped() {
+        let payload = "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 bad\u{7}name.mp4\r\n";
+
+        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+
+        assert!(files.is_empty());
+    }
 
     #[test]
     fn test_standard_unix_file_parsing() {

@@ -150,7 +150,7 @@ async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
     expected_code: u16,
     on_reject: F,
 ) -> Result<(), Error> {
-    write_command(ctx.stream, cmd).await?;
+    write_command(ctx.stream, cmd, ctx.timer, ctx.deadline_ms).await?;
     let (code, text) = read_response(ctx.stream, ctx.buf, ctx.fill_buf, ctx.timer, ctx.deadline_ms).await?;
     log::debug!("FTPS {log_label} response: code={code} text={text:?}");
     if code != expected_code {
@@ -366,7 +366,12 @@ where
     /// propagating the error on failure. Shared by every method's write-then-read-response
     /// pattern — was duplicated verbatim across 11 call sites.
     async fn write_command_poisoning(&mut self, cmd: &str) -> Result<(), Error> {
-        if let Err(e) = write_command(&mut self.control_stream, cmd).await {
+        // Fresh write deadline per command, same shape as the per-call read deadline: a wedged
+        // printer must not be able to block the control channel indefinitely before this
+        // method gets the chance to poison the client.
+        let deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
+        if let Err(e) = write_command(&mut self.control_stream, cmd, &self.timer, deadline_ms).await
+        {
             self.poisoned = true;
             return Err(e);
         }
@@ -873,7 +878,14 @@ where
         if self.check_poisoned().is_err() {
             return;
         }
-        let _ = write_command(&mut self.control_stream, "QUIT").await;
+        let write_deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
+        let _ = write_command(
+            &mut self.control_stream,
+            "QUIT",
+            &self.timer,
+            write_deadline_ms,
+        )
+        .await;
         let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
         let _ = read_response(
