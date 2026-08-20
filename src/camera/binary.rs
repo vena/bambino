@@ -153,8 +153,8 @@ impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
 
     /// Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
     ///
-    /// Non-consuming builder, matching the `PrinterClient::with_mqtt_port`/`with_ftps_port`
-    /// convention (`src/client/mod.rs`). Embedded callers should clamp this to a value that
+    /// Consuming builder, matching the `PrinterClient::with_mqtt_port`/`with_ftps_port`
+    /// convention (`src/client/connect.rs`). Embedded callers should clamp this to a value that
     /// fits their actual JPEG resolution and buffer budget (e.g. 64-256KB) rather than relying
     /// on the desktop-sized default.
     #[must_use]

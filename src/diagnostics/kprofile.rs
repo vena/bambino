@@ -253,8 +253,8 @@ impl ExtrusionCaliSelRequest {
     ///   the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     ///   uncalibrated.
     /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
-    ///   Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 0`; Ext-R requires
-    ///   `ams_id: 255` / `tray_id: 0`.
+    ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
+    ///   `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
     pub fn new(
         ams_id: i32,
         tray_id: i32,

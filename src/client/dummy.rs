@@ -73,9 +73,15 @@ impl TimerProvider for DummyTimer {
 }
 
 /// Marker type used as both the `Tls` and `Factory` slot for a `PrinterClient` wrapping an already-connected [`MqttClient`](crate::mqtt::MqttClient) (`from_mqtt()`, used by tests and Embassy).
-/// `ensure_mqtt()` short-circuits on `self.mqtt.is_some()` before either impl below is ever called,
-/// so `TlsConnector::connect`'s identity passthrough is never exercised for real, and
-/// `RawStreamFactory::dial` is genuinely unreachable.
+/// For as long as the client holds its pre-supplied `MqttClient`, `ensure_mqtt()` short-circuits on
+/// `self.mqtt.is_some()` before either impl below is ever called, so `TlsConnector::connect`'s
+/// identity passthrough is never exercised for real.
+///
+/// `RawStreamFactory::dial` is reachable through exactly one path: after `disconnect_mqtt()` clears
+/// `self.mqtt`, the next `ensure_mqtt()`-gated call falls through to a real dial and gets
+/// `SocketError::NotConnected`. That is intentional — a `from_mqtt()` client has no transport to
+/// reconnect with, which is the contract `disconnect_mqtt()`'s own doc
+/// (`src/client/connect.rs`) describes.
 #[doc(hidden)]
 pub struct PreConnected<IO: AsyncIo>(pub(crate) PhantomData<IO>);
 

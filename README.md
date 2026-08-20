@@ -35,8 +35,10 @@ use bambino::io::tokio::{TokioTimer, TokioUdpSocket};
 use std::time::Duration;
 
 let timer = TokioTimer::new();
+// Allow at least 20s: the P1S ignores M-SEARCH on port 2021 and is found only via its
+// ~10.1s NOTIFY advertisements, so a shorter window returns empty results intermittently.
 let printers = discover_devices::<TokioUdpSocket, _>(
-    Duration::from_secs(5),
+    Duration::from_secs(20),
     &timer,
 ).await?;
 
@@ -390,6 +392,7 @@ Commands:
   monitor       Stream real-time status telemetry and HMS warnings
   dump          Dump the raw pushall JSON response and exit
   probe         Run command response capture suite and write report
+  ack-probe     Check which MQTT commands echo a correlatable `sequence_id` ack
   control       Dispatch a movement or hardware control command
   files         Traverse and transfer files on the printer's MicroSD card
   camera        Camera streaming operations
@@ -412,10 +415,16 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   gcode-raw skips model safety checks and normally prompts for an
                   interactive "yes" confirmation before sending; pass --unsafe to
                   skip that confirmation prompt too (e.g. for scripting).
-Files actions:    list  upload  delete  space
+Files actions:    list  upload  delete  space  clock-check
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
+Ack-probe:        -o/--output  -t/--tests  --window
 ```
+
+`ack-probe` dispatches real commands to determine which of them echo a correlatable
+`sequence_id`. Depending on `-t/--tests`, that set can include physically-actuating commands
+(`ams_change_filament`, `project_file`) — read its `--help` before running it against a
+loaded printer.
 
 - **IP** and **Serial** — shown by `bambino-cli discover`
 - **Access Code** — on the printer's touchscreen under Network > LAN Mode

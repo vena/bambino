@@ -136,6 +136,12 @@ impl core::fmt::Display for Error {
     }
 }
 
+/// Mirrors the `std` build's `thiserror`-derived `std::error::Error` impl so downstream
+/// generic bounds like `E: core::error::Error` compile identically on all three targets.
+/// No `source()` override is needed: no variant carries a nested error field.
+#[cfg(not(feature = "std"))]
+impl core::error::Error for Error {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

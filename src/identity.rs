@@ -10,7 +10,9 @@ use alloc::string::String;
 use crate::models::{PrinterModel, resolve_model};
 
 /// Address, serial number, and access code identifying one printer on the LAN.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// [`Debug`] is implemented manually to redact `access_code`; see the impl below.
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrinterIdentity {
     /// LAN IP address or hostname of the printer.
     pub ip: String,
@@ -32,5 +34,37 @@ impl PrinterIdentity {
         let serial = serial.into();
         let model = resolve_model(&serial, None);
         Self { ip: ip.into(), serial, access_code: access_code.into(), model }
+    }
+}
+
+/// Redacts `access_code`, which is a network credential and must never reach a log line
+/// through an incidental `{:?}` on the whole identity. Every other field prints verbatim.
+impl core::fmt::Debug for PrinterIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PrinterIdentity")
+            .field("ip", &self.ip)
+            .field("serial", &self.serial)
+            .field("access_code", &"<redacted>")
+            .field("model", &self.model)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(not(feature = "std"))]
+    use alloc::format;
+
+    #[test]
+    fn debug_redacts_access_code_but_keeps_the_other_fields() {
+        let secret = "s3cr3tcode";
+        let identity = PrinterIdentity::new("192.168.1.50", "00M00A000000000", secret);
+        let rendered = format!("{:?}", identity);
+
+        assert!(!rendered.contains(secret), "access code leaked into Debug: {rendered}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(rendered.contains("192.168.1.50"));
+        assert!(rendered.contains("00M00A000000000"));
     }
 }

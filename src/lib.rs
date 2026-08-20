@@ -68,6 +68,8 @@
 //!
 //! # Module guide
 //!
+//! - [`identity`] — [`identity::PrinterIdentity`], the IP + serial + access code bundle every
+//!   connection is built from.
 //! - [`client`] — The main entry point. [`client::PrinterClient`] wraps MQTT + FTPS into
 //!   one coordinated interface with methods for thermal control, motion, print jobs, etc.
 //! - [`mqtt`] — Low-level MQTT v3.1.1 client and command serialization.
