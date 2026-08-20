@@ -39,6 +39,7 @@ use serde::Serialize;
 
 use crate::connection::{Printer, create_printer};
 use crate::error::CliError;
+use crate::redact::redact_secrets;
 
 /// Default per-command listening window. Comfortably longer than the sub-second ack latency
 /// `probe.rs` runs have observed on a P1S, while keeping a full default sweep short enough to
@@ -233,38 +234,6 @@ impl AckTest {
                 self.wire_command()
             ))
         })
-    }
-}
-
-/// Keys whose values are credentials or device identity, and must never reach the report file.
-///
-/// The report is routinely written into the repo working tree, and root `CLAUDE.md` forbids an
-/// access code or serial number landing in a file here. `get_access_code`'s whole reply is a
-/// credential, so without this the harness that verifies the command would itself leak it.
-const REDACTED_KEYS: &[&str] = &["access_code", "sn", "serial", "serial_number", "dev_sn"];
-
-/// Recursively replaces the value of every [`REDACTED_KEYS`] entry with a placeholder.
-///
-/// Keys are matched exactly and case-insensitively, at any depth. The surrounding structure is
-/// preserved so the report still shows *that* the field was present and where — which is the part
-/// the ack question actually needs.
-fn redact_secrets(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => serde_json::Value::Object(
-            map.into_iter()
-                .map(|(k, v)| {
-                    if REDACTED_KEYS.iter().any(|r| r.eq_ignore_ascii_case(&k)) {
-                        (k, serde_json::Value::String("<redacted>".to_string()))
-                    } else {
-                        (k, redact_secrets(v))
-                    }
-                })
-                .collect(),
-        ),
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.into_iter().map(redact_secrets).collect())
-        }
-        other => other,
     }
 }
 
@@ -792,43 +761,3 @@ pub async fn run(
     Ok(())
 }
 
-#[cfg(test)]
-mod redact_tests {
-    use super::redact_secrets;
-
-    #[test]
-    fn test_redact_secrets_replaces_access_code_at_any_depth() {
-        let input = serde_json::json!({
-            "system": {
-                "command": "get_access_code",
-                "access_code": "12345678",
-                "sequence_id": "42",
-            }
-        });
-        let out = redact_secrets(input);
-        assert_eq!(out["system"]["access_code"], "<redacted>");
-        assert_eq!(out["system"]["command"], "get_access_code");
-        assert_eq!(out["system"]["sequence_id"], "42");
-    }
-
-    #[test]
-    fn test_redact_secrets_walks_arrays_and_is_case_insensitive() {
-        let input = serde_json::json!({
-            "module": [
-                { "name": "ams/0", "SN": "0123456789ABCDE" },
-                { "name": "mc", "sn": "0123456789ABCDE" },
-            ]
-        });
-        let out = redact_secrets(input);
-        assert_eq!(out["module"][0]["SN"], "<redacted>");
-        assert_eq!(out["module"][1]["sn"], "<redacted>");
-        assert_eq!(out["module"][0]["name"], "ams/0");
-    }
-
-    #[test]
-    fn test_redact_secrets_leaves_unrelated_scalars_alone() {
-        let input = serde_json::json!({ "result": "success", "nested": [1, true, null] });
-        let out = redact_secrets(input.clone());
-        assert_eq!(out, input);
-    }
-}

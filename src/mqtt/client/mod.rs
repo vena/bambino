@@ -273,6 +273,38 @@ fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError
     }
 }
 
+/// Which of a printer's two MQTT topics a client subscribes to on connect.
+///
+/// The printer exposes `device/<serial>/report` (telemetry it publishes) and
+/// `device/<serial>/request` (commands clients publish to it). A normal session wants the
+/// former; the latter only makes sense for observing another client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubscriptionTopic {
+    /// `device/<serial>/report` — the printer's telemetry stream. The normal choice.
+    Report,
+    /// `device/<serial>/request` — the topic *clients publish commands to*, subscribed in order
+    /// to observe what another client (typically BambuStudio) sends.
+    ///
+    /// Diagnostic use only. Two things to know before relying on it:
+    ///
+    /// 1. Whether the broker permits a second client to subscribe here is a firmware ACL
+    ///    question, not a protocol guarantee. A refusal surfaces as a rejected SUBACK
+    ///    (`Error::ProtocolViolation`), which is an answer, not a bug.
+    /// 2. A client subscribed to `Request` receives no telemetry, so none of
+    ///    `PrinterClient`'s state caches will ever populate. Use it for capture, not control.
+    Request,
+}
+
+impl SubscriptionTopic {
+    /// Returns the topic suffix that follows `device/<serial>/`.
+    pub fn suffix(&self) -> &'static str {
+        match self {
+            Self::Report => "report",
+            Self::Request => "request",
+        }
+    }
+}
+
 /// Writes and flushes a complete packet to `stream`, mapping I/O failures via `map_embedded_io_error_kind` instead of collapsing everything to a fixed `ConnectionAborted`.
 /// A free function (not a method) so `connect()` can call it before `Self` exists.
 async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), Error> {
@@ -350,9 +382,19 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// invoking `MqttClient::connect()` directly (bypassing `PrinterClient`) gets no such
     /// bound and must wrap this call in its own timeout (e.g. `tokio::time::timeout`) against
     /// a peer that stalls before CONNACK/SUBACK.
-    pub async fn connect(
+    pub async fn connect(stream: IO, identity: &PrinterIdentity) -> Result<Self, Error> {
+        Self::connect_subscribed(stream, identity, SubscriptionTopic::Report).await
+    }
+
+    /// Same handshake as [`MqttClient::connect`], but subscribes to a caller-chosen topic.
+    ///
+    /// Exists for [`SubscriptionTopic::Request`], which is a diagnostic capture mode rather than
+    /// a normal session — see that variant's doc comment. Every caveat on `connect` applies here
+    /// unchanged, including that this call is unbounded and needs the caller's own deadline.
+    pub async fn connect_subscribed(
         mut stream: IO,
         identity: &PrinterIdentity,
+        topic: SubscriptionTopic,
     ) -> Result<Self, Error> {
         let serial = identity.serial.as_str();
         let access_code = identity.access_code.as_str();
@@ -432,15 +474,14 @@ impl<IO: AsyncIo> MqttClient<IO> {
             }
         }
 
-        // Subscribe to report topic
-        let report_topic = format!("device/{}/report", serial);
+        let subscribe_topic = format!("device/{}/{}", serial, topic.suffix());
 
         log::debug!(
             "Sending SUBSCRIBE frame targeting topic: '{}' (granted QoS 1)",
-            report_topic
+            subscribe_topic
         );
 
-        let subscribe_pkt = encode_subscribe(1, &report_topic, 1);
+        let subscribe_pkt = encode_subscribe(1, &subscribe_topic, 1);
 
         write_frame(&mut stream, &subscribe_pkt).await?;
 
