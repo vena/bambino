@@ -128,37 +128,22 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
         .unwrap_or(false);
 
     if is_absent_state || is_type_cleared {
-        // Enforce clean state representation by resetting optional keys
-        tray.tray_type = None;
-        tray.tray_color = None;
-        tray.tray_info_idx = None;
-        tray.tag_uid = None;
-        tray.tray_uuid = None;
-        tray.remain = Some(-1);
-        tray.tray_sub_brands = None;
-        tray.nozzle_temp_max = None;
-        tray.nozzle_temp_min = None;
-        tray.tray_diameter = None;
-        tray.tray_weight = None;
-        tray.tray_id_name = None;
-        tray.xcam_info = None;
-        tray.k = None;
-        tray.n = None;
-        tray.cali_idx = None;
-        tray.cols = None;
-        tray.ctype = None;
-        tray.total_len = None;
-        tray.bed_temp = None;
-        tray.bed_temp_type = None;
-        tray.tray_temp = None;
-        tray.tray_time = None;
-        tray.drying_temp = None;
-        tray.drying_time = None;
-
-        // Standardize absent state representation to 9
-        if tray.state.is_none() {
-            tray.state = Some(AMS_TRAY_STATE_EMPTY);
-        }
+        // Whole-struct reset rather than a hand-maintained list of per-field clears: the
+        // enumeration this replaces silently missed `remain_g` and `filament_setting_id`, so an
+        // emptied slot kept reporting the removed spool's gram weight via
+        // `remaining_weight_grams()`. Constructing from `Default` makes a future `AmsTray` field
+        // cleared by construction instead of depending on someone remembering to add a line.
+        // `id` identifies the physical slot and must survive; `state` is standardized to 9
+        // (`AMS_TRAY_STATE_EMPTY`) when the update carried no state at all.
+        let id = core::mem::take(&mut tray.id);
+        let state = tray.state.or(Some(AMS_TRAY_STATE_EMPTY));
+        *tray = AmsTray {
+            id,
+            state,
+            // Empty is `-1` (firmware's "no spool" sentinel), not `None` ("not reported").
+            remain: Some(-1),
+            ..Default::default()
+        };
     }
 }
 
@@ -285,6 +270,30 @@ mod tests {
         assert_eq!(tray.tray_time, None);
         assert_eq!(tray.drying_temp, None);
         assert_eq!(tray.drying_time, None);
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_clears_weight_and_setting_id() {
+        // Regression: the old per-field enumeration cleared 25 fields but not `remain_g` or
+        // `filament_setting_id`, so `remaining_weight_grams()` kept reporting the removed
+        // spool's grams for a slot the firmware had just declared empty.
+        let mut tray = AmsTray {
+            id: "2".into(),
+            state: Some(9),
+            tray_type: Some("PLA".into()),
+            remain_g: Some(742),
+            filament_setting_id: Some("GFSA00".into()),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray, 0);
+
+        assert_eq!(tray.remain_g, None);
+        assert_eq!(tray.remaining_weight_grams(), None);
+        assert_eq!(tray.filament_setting_id, None);
+        // The slot identity and standardized empty state still survive the reset.
+        assert_eq!(tray.id, "2");
+        assert_eq!(tray.state, Some(9));
     }
 
     #[test]
