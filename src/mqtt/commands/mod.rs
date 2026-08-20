@@ -33,7 +33,7 @@ pub use hardware::{
     AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
 };
 pub use print_job::{AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest};
-pub use status::{GetVersionRequest, PushAllRequest};
+pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
 
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
 
@@ -427,6 +427,16 @@ mod tests {
         assert_eq!(
             json,
             r#"{"info":{"command":"get_version","sequence_id":"10002"}}"#
+        );
+    }
+
+    #[test]
+    fn test_get_access_code_request_json() {
+        let req = GetAccessCodeRequest::new(10002);
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"system":{"command":"get_access_code","sequence_id":"10002"}}"#
         );
     }
 

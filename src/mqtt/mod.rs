@@ -20,7 +20,7 @@ pub use commands::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest,
     AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, AmsMappingTable,
     BuzzerRequest, CalibrationMode, CalibrationRequest, CleanPrintErrorRequest, GCodeRequest,
-    GetVersionRequest,
+    GetAccessCodeRequest, GetVersionRequest,
     LedCtrlRequest, PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest,
     PushAllRequest, SkipObjectsRequest, StandardControlRequest, clamp_task_id,
 };

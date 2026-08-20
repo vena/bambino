@@ -388,6 +388,38 @@ Controls the activation mode and flashing cycles of the internal LEDs.
 *   `led_mode`: Set to `"on"`, `"off"`, or `"flashing"`.
 *   `loop_times` and `interval_time`: Must be configured strictly as `0` if `led_mode` is `"on"` or `"off"`.
 
+#### Access Code Readback (`get_access_code`)
+Asks the printer to report its own current LAN access code over an already-authenticated session. This is distinct from the access code a client supplies to connect: it lets a connected client re-read the value, which is how it notices that a rotated code has invalidated its cached credential.
+
+Request:
+```json
+{
+  "system": {
+    "sequence_id": "30009",
+    "command": "get_access_code"
+  }
+}
+```
+
+Response:
+```json
+{
+  "system": {
+    "command": "get_access_code",
+    "access_code": "<code>",
+    "result": "success",
+    "reason": "success",
+    "sequence_id": "30009"
+  }
+}
+```
+
+*   The reply is `system`-wrapped and echoes the request's `sequence_id`, so it is correlatable; `get_access_code` is on `ACK_CORRELATED_COMMANDS` on that basis.
+*   `result` and `reason` are present on the wire even though BambuStudio's own client does not read them — do not assume a reply consisting of `access_code` alone.
+*   **Handle the returned value as a credential.** It must never be logged or written to a file in this repository; `bambino-cli ack-probe` masks it before writing its report for exactly this reason.
+
+**Verification source:** observed directly on a P1S via `bambino-cli ack-probe -t get_access_code` (issue #140) — `verdict: ack_correlated`, 14 ms round trip, `result: "success"`. The command's existence was first identified in BambuStudio commit `1678b5ac` (`MachineObject::request_access_code`, refined by `5cc7ed4f`); the `result`/`reason` fields above come from the local capture, not from upstream. Not yet re-verified on any other model.
+
 #### Airduct AC Mode Selection (`set_airduct`)
 Controls the target routing of the internal air circulation flaps.
 ```json

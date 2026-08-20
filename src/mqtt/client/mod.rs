@@ -235,6 +235,7 @@ const ACK_CORRELATED_COMMANDS: &[&str] = &[
     "set_airduct",
     "print_option",
     "buzzer_ctrl",
+    "get_access_code",
 ];
 
 /// Extracts the `command` name and `sequence_id` from an outgoing command payload's single

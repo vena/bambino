@@ -32,7 +32,8 @@ use bambino::client::{BuzzerMode, PrintStatus};
 use bambino::models::PrinterModel;
 use bambino::mqtt::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsGetRfidRequest,
-    BuzzerRequest, PrintJobConfig, ProjectFileRequest, PromptSoundRequest, SkipObjectsRequest,
+    BuzzerRequest, GetAccessCodeRequest, PrintJobConfig, ProjectFileRequest, PromptSoundRequest,
+    SkipObjectsRequest,
 };
 use serde::Serialize;
 
@@ -84,9 +85,9 @@ mod verdict {
 
 /// One command under test.
 ///
-/// The first eight were confirmed ack-correlated on a P1S (issue #26) and are now on
-/// `ACK_CORRELATED_COMMANDS`; `GetAccessCode` is under test and deliberately *not* on that list
-/// yet (issue #140). They stay here rather than being deleted: that evidence is
+/// All nine were confirmed ack-correlated on a P1S (the first eight under issue #26,
+/// `GetAccessCode` under issue #140) and are now on `ACK_CORRELATED_COMMANDS`. They stay here
+/// rather than being deleted: that evidence is
 /// model-specific, so the same sweep is what confirms (or refutes) the allowlist on any other
 /// model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
 /// for any future command before putting it on the allowlist, never after.
@@ -223,16 +224,7 @@ impl AckTest {
             Self::BuzzerCtrl => {
                 serde_json::to_value(BuzzerRequest::new(BuzzerMode::Silent as i32, seq))
             }
-            // Built as a literal rather than through a request struct on purpose: the command
-            // has no type in `src/mqtt/commands/` yet, and adding one before this harness
-            // confirms the printer answers would put an unverified command in the public API.
-            // Shape from BambuStudio's `MachineObject::request_access_code` (commit 1678b5ac).
-            Self::GetAccessCode => Ok(serde_json::json!({
-                "system": {
-                    "sequence_id": seq.to_string(),
-                    "command": "get_access_code",
-                }
-            })),
+            Self::GetAccessCode => serde_json::to_value(GetAccessCodeRequest::new(seq)),
         };
 
         value.map_err(|e| {
