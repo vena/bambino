@@ -457,6 +457,48 @@ fn test_ams_unit_info_accessors_right_extruder() {
 }
 
 #[test]
+fn test_filament_switch_inlet_decodes_four_bits_not_two() {
+    // bind_switch_in occupies bits 24-27 (BUG-136). Raw 0 => In-B, 1 => In-A.
+    let unit = |info: &str| AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: None,
+        info: Some(info.into()),
+        dry_sf_reason: None,
+    };
+
+    // 0x00000E03: bits 24-27 = 0 => In-B, and bits 8-11 = 0xE => unfixed.
+    assert_eq!(unit("E03").filament_switch_inlet(), Some(FilamentSwitchInlet::InB));
+    assert!(unit("E03").has_unfixed_extruder());
+
+    // 0x01000E03: bits 24-27 = 1 => In-A.
+    assert_eq!(
+        unit("1000E03").filament_switch_inlet(),
+        Some(FilamentSwitchInlet::InA)
+    );
+
+    // 0x04000E03: bits 24-27 = 4 => not bound. A 2-bit read would mask this to 0 and
+    // wrongly report In-B — this assertion is the whole point of BUG-136.
+    assert_eq!(unit("4000E03").filament_switch_inlet(), None);
+
+    // 0x0F000E03: bits 24-27 = 0xF => not bound. A 2-bit read would mask to 3.
+    assert_eq!(unit("F000E03").filament_switch_inlet(), None);
+
+    // A unit wired to a fixed extruder is not unfixed, whatever bits 24-27 hold.
+    assert!(!unit("1000103").has_unfixed_extruder());
+
+    // Absent info yields neither.
+    let mut bare = unit("E03");
+    bare.info = None;
+    assert_eq!(bare.filament_switch_inlet(), None);
+    assert!(!bare.has_unfixed_extruder());
+}
+
+#[test]
 fn test_ams_unit_info_uninitialized_extruder() {
     // 0xE in bits 8-11 → extruder_assignment returns None
     let unit = AmsUnit {

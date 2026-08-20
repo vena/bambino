@@ -76,9 +76,20 @@ Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` fiel
 | **0–3** | `0xF` | AMS unit type | e.g. `3` = AMS Lite |
 | **4–7** | `0xF0` | Dry status | Drying cycle state |
 | **8–11** | `0xF00` | Extruder assignment | `0` = right/main, `1` = left/deputy, `0xE` = uninitialized |
-| **22–23** | `0xC00000` | Dry sub-status | Drying sub-state detail (bits 24–25 belong to the unrelated `bind_switch_in` field) |
+| **22–23** | `0xC00000` | Dry sub-status | Drying sub-state detail |
 | **18–19** | `0xC0000` | Dry fan 1 status | Drying fan 1 state (BUG-120; confirmed against BambuStudio's `DevFilaSystem.cpp:696` and independently by `bambu-printer-manager`'s `bambutools.py:685`) |
 | **20–21** | `0x300000` | Dry fan 2 status | Drying fan 2 state (BUG-120; `DevFilaSystem.cpp:697`, `bambutools.py:686`) |
+| **24–27** | `0xF000000` | `bind_switch_in` | Filament Track Switch inlet this unit feeds. `0` = inlet In-B, `1` = inlet In-A, any other value = not bound |
+| **30–31** | `0xC0000000` | Remain-estimate version | Which filament-remaining estimation algorithm the unit reports (`DevAms::RemainEstimateVersion`; `0` = Legacy) |
+
+##### `bind_switch_in` is four bits, not two (BUG-136)
+This field was previously documented here and in two places in `src/` as occupying bits **24–25**. That was wrong: BambuStudio reads `DevUtil::get_flag_bits(info, 24, 4)`, whose implementation is `(value >> start) & ((1 << count) - 1)` — four bits at offset 24, i.e. bits 24–27, mask `0xF000000`.
+
+The value semantics confirm the width independently. Upstream distinguishes `0` (In-B) from `1` (In-A) and treats every other value as "not bound", so a 2-bit read would alias values 4–15 down into 0–3 and silently misreport a binding as a valid inlet.
+
+The field is only meaningful when the extruder-assignment field (bits 8–11) reads `0xE` *and* a Filament Track Switch is installed — that combination is what "not wired to a fixed extruder, routed through the switch instead" looks like on the wire. With no FTS installed, `0xE` simply means uninitialized and this field carries nothing.
+
+**Verification source:** BambuStudio `DevFilaSystem.cpp:598-609` and `DevUtil.cpp:7-14`, read directly; corroborated by bambuddy's independent parser (`c5e00558`, `7a42e0a7`), which uses the same 4-bit extraction. The adjacent dry-sub-status claim (bits 22–23) is unaffected — only the parenthetical about `bind_switch_in` was wrong.
 
 The extruder assignment field is used on IDEX platforms to track which extruder carriage an AMS unit is physically wired to. A value of `0xE` indicates the assignment has not been initialized by the firmware.
 

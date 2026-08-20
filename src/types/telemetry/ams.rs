@@ -657,6 +657,24 @@ pub struct AmsTray {
     pub filament_setting_id: Option<String>,
 }
 
+/// Which Filament Track Switch inlet an AMS unit feeds through.
+///
+/// The FTS is an accessory that lets one AMS feed either printer nozzle through a shared switch,
+/// instead of being wired to a fixed extruder. A unit routed this way reports `0xE`
+/// ("not fixed") for its extruder assignment, and the inlet below is the only thing that says
+/// which physical nozzle it actually reaches.
+///
+/// Deliberately not `Copy`-cheap-`u8` — the wire values (`0` = In-B, `1` = In-A) are inverted
+/// relative to how the inlets read alphabetically, and every prior attempt to remember that from
+/// a bare integer is a bug waiting to happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilamentSwitchInlet {
+    /// Inlet In-A. Wire value `1`.
+    InA,
+    /// Inlet In-B. Wire value `0`.
+    InB,
+}
+
 const AMS_UNIT_INFO_TYPE_MASK: u64 = 0xF;
 const AMS_UNIT_INFO_DRY_STATUS_SHIFT: u32 = 4;
 const AMS_UNIT_INFO_DRY_STATUS_MASK: u64 = 0xF;
@@ -668,6 +686,13 @@ const AMS_UNIT_INFO_DRY_SUB_STATUS_MASK: u64 = 0x3;
 const AMS_UNIT_INFO_DRY_FAN1_STATUS_SHIFT: u32 = 18;
 const AMS_UNIT_INFO_DRY_FAN2_STATUS_SHIFT: u32 = 20;
 const AMS_UNIT_INFO_DRY_FAN_STATUS_MASK: u64 = 0x3;
+const AMS_UNIT_INFO_BIND_SWITCH_IN_SHIFT: u32 = 24;
+/// Four bits wide, not two — see [`AmsUnit::filament_switch_inlet`] for why that matters.
+const AMS_UNIT_INFO_BIND_SWITCH_IN_MASK: u64 = 0xF;
+/// `bind_switch_in` value for the Filament Track Switch's In-B inlet.
+const AMS_UNIT_INFO_SWITCH_INLET_B: u8 = 0;
+/// `bind_switch_in` value for the Filament Track Switch's In-A inlet.
+const AMS_UNIT_INFO_SWITCH_INLET_A: u8 = 1;
 
 impl AmsUnit {
     /// Parses the hex-encoded `info` bitmask string into an integer.
@@ -702,7 +727,53 @@ impl AmsUnit {
         })
     }
 
-    /// Drying sub-status from bits 22–23. Bits 24–25 belong to the unrelated `bind_switch_in` field.
+    /// Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
+    ///
+    /// Returns [`FilamentSwitchInlet::InB`] for `0` and [`FilamentSwitchInlet::InA`] for `1`;
+    /// `None` for `info` absent, or any other value, which upstream treats as "not bound".
+    ///
+    /// **Only meaningful when [`extruder_assignment`](Self::extruder_assignment) returns `None`
+    /// because the raw field is `0xE`.** An AMS wired to a fixed extruder reports that extruder
+    /// directly and this field carries nothing; `0xE` means "not fixed", and when a Filament
+    /// Track Switch is installed, this is the only way to recover which physical nozzle the unit
+    /// actually feeds. That matters beyond display: BambuStudio uses the resolved inlet to pick
+    /// the K-profile for the feeding nozzle. Note `extruder_assignment` collapses `0xE` into
+    /// `None` and cannot distinguish "uninitialized" from "routed through a switch", so a caller
+    /// wanting that distinction must consult this method as well.
+    ///
+    /// The field is four bits, not the two this crate documented before BUG-136 — a 2-bit read
+    /// aliases values 4–15 into 0–3 and reports a valid inlet for a unit that has none.
+    ///
+    /// **Unverified against hardware.** No Filament Track Switch has been available; the decode
+    /// follows BambuStudio's `DevFilaSystem.cpp:598-609`, corroborated by bambuddy (`c5e00558`,
+    /// `7a42e0a7`). See issue #137.
+    pub fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet> {
+        self.parse_info().and_then(|v| {
+            let raw = ((v >> AMS_UNIT_INFO_BIND_SWITCH_IN_SHIFT)
+                & AMS_UNIT_INFO_BIND_SWITCH_IN_MASK) as u8;
+            match raw {
+                AMS_UNIT_INFO_SWITCH_INLET_B => Some(FilamentSwitchInlet::InB),
+                AMS_UNIT_INFO_SWITCH_INLET_A => Some(FilamentSwitchInlet::InA),
+                _ => None,
+            }
+        })
+    }
+
+    /// True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
+    ///
+    /// Distinguishes the two cases [`extruder_assignment`](Self::extruder_assignment) folds into
+    /// `None`: a unit routed through a Filament Track Switch, versus one whose assignment the
+    /// firmware simply has not initialized. Pair with
+    /// [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
+    /// `bind_switch_in` alongside `0xE` means uninitialized.
+    pub fn has_unfixed_extruder(&self) -> bool {
+        self.parse_info().is_some_and(|v| {
+            ((v >> AMS_UNIT_INFO_EXTRUDER_SHIFT) & AMS_UNIT_INFO_EXTRUDER_MASK) as u8
+                == AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED
+        })
+    }
+
+    /// Drying sub-status from bits 22–23.
     pub fn dry_sub_status(&self) -> Option<u8> {
         self.parse_info().map(|v| {
             ((v >> AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_SUB_STATUS_MASK) as u8
