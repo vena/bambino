@@ -15,6 +15,7 @@ Print job dispatch (file selection, AMS material mapping, plate/timelapse config
 | [`ProjectFileRequest`](#projectfilerequest) | struct | Submits a `.3mf` print job from the SD card for execution. |
 | [`AmsMappingTable`](#amsmappingtable) | enum | Represents the conditional, polymorphic typing needed for the `ams_mapping` key [REF-MQTT-LIFECYCLE]. |
 | [`CalibrationMode`](#calibrationmode) | enum | Tri-state calibration setting: force every print, skip entirely, or let the firmware decide based on whether the relevant calibration ran recently [REF-MQTT-LIFECYCLE]. |
+| [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) | fn | Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs. |
 
 ## Types
 
@@ -36,6 +37,8 @@ struct PrintJobConfig {
     pub use_ams: bool,
     pub ams_mapping: Vec<i32>,
     pub ams_mapping2: Option<Vec<crate::ams::mapping::AmsMapping2Entry>>,
+    pub nozzle_slot_extruders: Option<Vec<i32>>,
+    pub rack_nozzle_id: Option<i32>,
 }
 ```
 
@@ -104,6 +107,21 @@ with named fields and sensible defaults for calibration flags.
 
   Structured per-nozzle AMS mapping; takes precedence over `ams_mapping` when set.
 
+- **`nozzle_slot_extruders`**: `Option<Vec<i32>>`
+
+  Extruder index per filament slot for tool-changer models, negative for unprinted slots.
+  
+  Only consulted on a model whose quirks report [`uses_nozzle_rack`]. Set together with
+  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`]; either one alone resolves to no
+  `nozzle_mapping` on the wire, which is the safe outcome.
+
+- **`rack_nozzle_id`**: `Option<i32>`
+
+  Physical nozzle ID of the rack position the printer currently reports as live (`16..=21`).
+  
+  The caller must supply this because the mounted hotend can change between slicing and
+  dispatch, and bambino does not model rack telemetry.
+
 #### Implementations
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
@@ -142,6 +160,10 @@ with named fields and sensible defaults for calibration flags.
 
   Enables or disables first-layer inspection for this job.
 
+- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self`
+
+  Supplies the tool-changer rack routing for this job (H2C only).
+
 - <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](#calibrationmode)
 
   Overrides the model's default nozzle-offset-calibration behavior for this job.
@@ -178,6 +200,7 @@ struct ProjectFilePayload {
     pub extrude_cali_flag: i32,
     pub nozzle_offset_cali: i32,
     pub vibration_cali: bool,
+    pub nozzle_mapping: Option<Vec<i32>>,
     pub layer_inspect: bool,
     pub use_ams: bool,
     pub ams_mapping: AmsMappingTable,
@@ -277,6 +300,14 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
 - **`vibration_cali`**: `bool`
 
   Whether vibration compensation calibration ran as part of this job.
+
+- **`nozzle_mapping`**: `Option<Vec<i32>>`
+
+  Physical nozzle ID per filament slot on tool-changer models, `-1` for unprinted slots.
+  
+  Omitted from the wire entirely when `None`, which is the case for every non-rack model and
+  for a rack model whose routing could not be resolved with confidence — firmware then picks
+  the nozzle itself. See [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) for why omission beats guessing.
 
 - **`layer_inspect`**: `bool`
 
@@ -443,4 +474,47 @@ Mirrors BambuStudio's own `getValueInt()` encoding for these fields (confirmed i
 ##### `impl PartialEq for CalibrationMode`
 
 - <span id="calibrationmode-partialeq-eq"></span>`fn eq(&self, other: &CalibrationMode) -> bool` — [`CalibrationMode`](#calibrationmode)
+
+
+---
+
+## Functions
+
+### `resolve_rack_nozzle_mapping`
+
+```rust
+fn resolve_rack_nozzle_mapping(slot_extruders: &[i32], rack_nozzle_id: i32) -> Option<Vec<i32>>
+```
+
+Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs.
+
+`slot_extruders` holds one extruder index per filament slot, with any negative value meaning
+"this slot is not printed". `rack_nozzle_id` is the physical ID of the rack position the
+printer currently reports as live, which only the caller can know — the mounted hotend can
+change between slicing and dispatch.
+
+Returns a [`RACK_WIRE_SLOTS`]-long vector of physical IDs, or `None` when the mapping cannot
+be resolved with confidence. **`None` means "omit the field entirely" and is the deliberate
+failure mode, not an error path.** Omitting it returns the firmware to its own nozzle pick,
+which is merely suboptimal; a *wrong* physical ID makes the printer level with one nozzle and
+print with another millimetres off the bed. Upstream reached that failure twice, so this
+declines rather than guesses when any of the following holds:
+
+- the slot list is empty, or longer than the wire format carries;
+- `rack_nozzle_id` is not a real rack position;
+- no slot actually needs the rack — BambuStudio omits `nozzle_mapping` for a fixed-hotend-only
+  plate, so this matches rather than naming a nozzle it need not name;
+- a slot names a carriage an H2C does not have, meaning the file was mapped for another
+  machine and forwarding the value raw would name a physical nozzle by a foreign index.
+
+# The two namespaces
+
+Extruder indices and physical nozzle IDs overlap numerically and mean different things. On an
+H2C the *fixed* hotend is extruder index `1` and physical ID `1`; the *rack* is extruder index
+`0` and physical IDs `16..=21`. Passing an index where an ID belongs is the entire bug class
+this function exists to prevent.
+
+**Unverified on hardware here** — no H2C is available. Every value above is taken from
+bambuddy's hardware-measured constants; see `reference/03_mqtt_telemetry.md` for the
+measurements and the two corrections upstream made to them.
 

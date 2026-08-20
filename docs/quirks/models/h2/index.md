@@ -86,6 +86,14 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 
 - <span id="h2cquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
+- <span id="h2cquirks-modelquirks-uses-nozzle-rack"></span>`fn uses_nozzle_rack(&self) -> bool`
+
+  Passed explicitly rather than derived from `$nozzle_count` so a future H2 variant
+
+  joining this macro has to state whether it racks its hotends, instead of
+
+  inheriting the answer from an unrelated count.
+
 - <span id="h2cquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="h2cquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
@@ -139,6 +147,14 @@ Quirks for the H2D Pro — same kinematics as H2D.
 - <span id="h2dproquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
 - <span id="h2dproquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
+
+- <span id="h2dproquirks-modelquirks-uses-nozzle-rack"></span>`fn uses_nozzle_rack(&self) -> bool`
+
+  Passed explicitly rather than derived from `$nozzle_count` so a future H2 variant
+
+  joining this macro has to state whether it racks its hotends, instead of
+
+  inheriting the answer from an unrelated count.
 
 - <span id="h2dproquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
@@ -194,6 +210,14 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 - <span id="h2dquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
+- <span id="h2dquirks-modelquirks-uses-nozzle-rack"></span>`fn uses_nozzle_rack(&self) -> bool`
+
+  Passed explicitly rather than derived from `$nozzle_count` so a future H2 variant
+
+  joining this macro has to state whether it racks its hotends, instead of
+
+  inheriting the answer from an unrelated count.
+
 - <span id="h2dquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="h2dquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
@@ -247,6 +271,14 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 - <span id="h2squirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
 - <span id="h2squirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
+
+- <span id="h2squirks-modelquirks-uses-nozzle-rack"></span>`fn uses_nozzle_rack(&self) -> bool`
+
+  Passed explicitly rather than derived from `$nozzle_count` so a future H2 variant
+
+  joining this macro has to state whether it racks its hotends, instead of
+
+  inheriting the answer from an unrelated count.
 
 - <span id="h2squirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 

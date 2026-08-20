@@ -624,9 +624,17 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Returns `None` when `info` is absent or the value is 0xE (uninitialized).
 
+- <span id="amsunit-filament-switch-inlet"></span>`fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet>` — [`FilamentSwitchInlet`](telemetry/ams/index.md#filamentswitchinlet)
+
+  Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
+
+- <span id="amsunit-has-unfixed-extruder"></span>`fn has_unfixed_extruder(&self) -> bool`
+
+  True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
+
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
 
-  Drying sub-status from bits 22–23. Bits 24–25 belong to the unrelated `bind_switch_in` field.
+  Drying sub-status from bits 22–23.
 
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
 

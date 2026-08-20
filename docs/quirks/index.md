@@ -213,6 +213,10 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model runs vibration-compensation (resonance) calibration as part of a print job.
 
+- `fn uses_nozzle_rack(&self) -> bool`
+
+  Returns true if the model mounts its hotends from a swappable tool-changer rack.
+
 #### Implementors
 
 - [`A1MiniQuirks`](models/a1/index.md#a1miniquirks)

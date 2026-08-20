@@ -16,6 +16,7 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
 | [`AmsUnit`](#amsunit) | struct | Modular standard expansion unit managing up to 4 physical spool slots. |
 | [`VirtualTray`](#virtualtray) | struct | Virtual/external spool holder telemetry. |
 | [`AmsFilamentStep`](#amsfilamentstep) | enum | Per-slot filament-change step code. |
+| [`FilamentSwitchInlet`](#filamentswitchinlet) | enum | Which Filament Track Switch inlet an AMS unit feeds through. |
 
 ## Types
 
@@ -486,9 +487,17 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Returns `None` when `info` is absent or the value is 0xE (uninitialized).
 
+- <span id="amsunit-filament-switch-inlet"></span>`fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet>` — [`FilamentSwitchInlet`](#filamentswitchinlet)
+
+  Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
+
+- <span id="amsunit-has-unfixed-extruder"></span>`fn has_unfixed_extruder(&self) -> bool`
+
+  True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
+
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
 
-  Drying sub-status from bits 22–23. Bits 24–25 belong to the unrelated `bind_switch_in` field.
+  Drying sub-status from bits 22–23.
 
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
 
@@ -791,4 +800,52 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 ##### `impl Serialize for AmsFilamentStep`
 
 - <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+
+### `FilamentSwitchInlet`
+
+```rust
+enum FilamentSwitchInlet {
+    InA,
+    InB,
+}
+```
+
+Which Filament Track Switch inlet an AMS unit feeds through.
+
+The FTS is an accessory that lets one AMS feed either printer nozzle through a shared switch,
+instead of being wired to a fixed extruder. A unit routed this way reports `0xE`
+("not fixed") for its extruder assignment, and the inlet below is the only thing that says
+which physical nozzle it actually reaches.
+
+Deliberately not `Copy`-cheap-`u8` — the wire values (`0` = In-B, `1` = In-A) are inverted
+relative to how the inlets read alphabetically, and every prior attempt to remember that from
+a bare integer is a bug waiting to happen.
+
+#### Variants
+
+- **`InA`**
+
+  Inlet In-A. Wire value `1`.
+
+- **`InB`**
+
+  Inlet In-B. Wire value `0`.
+
+#### Trait Implementations
+
+##### `impl Clone for FilamentSwitchInlet`
+
+- <span id="filamentswitchinlet-clone"></span>`fn clone(&self) -> FilamentSwitchInlet` — [`FilamentSwitchInlet`](#filamentswitchinlet)
+
+##### `impl Copy for FilamentSwitchInlet`
+
+##### `impl Debug for FilamentSwitchInlet`
+
+- <span id="filamentswitchinlet-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FilamentSwitchInlet`
+
+##### `impl PartialEq for FilamentSwitchInlet`
+
+- <span id="filamentswitchinlet-partialeq-eq"></span>`fn eq(&self, other: &FilamentSwitchInlet) -> bool` — [`FilamentSwitchInlet`](#filamentswitchinlet)
 
