@@ -37,6 +37,7 @@ enum Error {
     Timeout,
     DiskWriteFailure,
     ModelMismatch(std::borrow::Cow<'static, str>),
+    Backpressure,
 }
 ```
 
@@ -84,6 +85,15 @@ and source error tracing are derived automatically via `thiserror`.
 - **`ModelMismatch`**
 
   Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
+
+- **`Backpressure`**
+
+  The unacknowledged QoS 1 command queue is full; the command was not sent.
+  
+  Distinct from [`Timeout`](https://docs.rs/tokio/latest/tokio/time/timeout/struct.Timeout.html) on purpose: saturation is not a transient stall, so the
+  natural retry-on-timeout policy is exactly the wrong response — a caller that keeps
+  retrying spins against a queue only inbound PUBACKs (or the in-flight entries aging out)
+  can drain.
 
 #### Trait Implementations
 

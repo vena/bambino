@@ -221,6 +221,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - [`P1PQuirks`](models/p1/index.md#p1pquirks)
 - [`P1SQuirks`](models/p1/index.md#p1squirks)
 - [`P2Quirks`](models/p2/index.md#p2quirks)
+- [`UnknownQuirks`](models/unknown/index.md#unknownquirks)
 - [`X1CQuirks`](models/x1/index.md#x1cquirks)
 - [`X1EQuirks`](models/x1/index.md#x1equirks)
 - [`X2Quirks`](models/x2/index.md#x2quirks)
