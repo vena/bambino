@@ -18,7 +18,7 @@
 
 mod common;
 
-use bambino::client::PrinterClient;
+use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -72,11 +72,27 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, PrinterModel::P1S);
 
+    let mut reports_parsed = 0usize;
+
     for (i, _line) in lines.iter().enumerate() {
-        client
+        let event = client
             .poll_telemetry()
             .await
             .unwrap_or_else(|e| panic!("poll_telemetry failed at message {i}: {e:?}"));
+
+        // Without this the whole test is vacuous: both a command-echo false positive and an
+        // outright deserialization failure yield `Ok(TelemetryEvent::Unknown(..))` rather than
+        // panicking, and every assertion below either reads a default/zero value or sits inside
+        // an `if let Some(..)` that is trivially satisfied when the cache never updates — so the
+        // test passed end to end with zero telemetry actually parsed.
+        //
+        // The capture interleaves genuine state reports with command echoes (`project_file`
+        // and friends), and `Unknown` is the correct outcome for an echo. So the per-line
+        // expectation is derived from the fixture itself rather than asserted blanket-wise, and
+        // the totals are compared after the loop.
+        if matches!(event, TelemetryEvent::Report(..)) {
+            reports_parsed += 1;
+        }
 
         // Every public telemetry accessor must be callable without panicking, and any
         // numeric value it returns must stay within a generous plausibility bound.
@@ -144,6 +160,31 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         let _ = client.wifi_signal();
         let _ = client.is_ethernet_active_via_wifi_signal();
     }
+
+    // A line is a command echo (legitimately `Unknown`) if its `print` object carries a
+    // `command` field naming something other than a status push. Everything else in this
+    // capture is a state report and must have parsed as one.
+    let expected_reports = lines
+        .iter()
+        .filter(|line| {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                return false;
+            };
+            !matches!(
+                v.get("print").and_then(|p| p.get("command")).and_then(|c| c.as_str()),
+                Some(cmd) if cmd != "push_status"
+            )
+        })
+        .count();
+
+    assert!(
+        reports_parsed > 0,
+        "no replayed message parsed as a Report at all"
+    );
+    assert_eq!(
+        reports_parsed, expected_reports,
+        "every non-command-echo line should parse as a Report"
+    );
 
     drop(client);
     broker_task.await.expect("mock broker task panicked");

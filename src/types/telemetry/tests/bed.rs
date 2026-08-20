@@ -97,6 +97,22 @@ fn test_bed_temperatures_old_gen_direct() {
 }
 
 #[test]
+fn test_bed_temperatures_old_gen_direct_above_composite_threshold() {
+    // Guards the invariant in `src/types/telemetry/CLAUDE.md`: the flat old-gen fields are a
+    // direct `as u16` cast, never the composite unpacker. Every other old-gen test uses values
+    // <= 500, so routing these through `unpack_temperature` — e.g. while "fixing" the apparent
+    // inconsistency with `chamber_temper` — would decode 600.0 as 0/0 with nothing failing.
+    let json = r#"{
+            "print": {
+                "bed_temper": 600.0,
+                "bed_target_temper": 600.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    assert_eq!(report.bed_temperatures(), (600, 600));
+}
+
+#[test]
 fn test_bed_temperatures_both_present_new_gen_wins() {
     // When both top-level device.bed and print.bed_temper exist, device.bed wins
     let json = r#"{

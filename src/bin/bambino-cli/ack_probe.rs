@@ -264,10 +264,12 @@ struct AckEntry {
     uncorrelated_commands: Vec<String>,
 }
 
+/// No `serial` field, deliberately — same reasoning as `ProbeReport` in `probe.rs`: the serial
+/// is a credential, `-o/--output` takes an arbitrary path outside `.gitignore`'s
+/// `ack_probe_report*.json` glob, and stderr conveys it to the operator without writing it down.
 #[derive(Serialize)]
 struct AckReport {
     model: String,
-    serial: String,
     timestamp: u64,
     window_secs: u64,
     tests: Vec<AckEntry>,
@@ -729,9 +731,10 @@ pub async fn run(
         clear_project_file_error(&mut client).await;
     }
 
+    eprintln!("Probing {} (serial {})", format_args!("{:?}", model), serial_owned);
+
     let report = AckReport {
         model: format!("{:?}", model),
-        serial: serial_owned,
         timestamp,
         window_secs: window.as_secs(),
         tests: entries,

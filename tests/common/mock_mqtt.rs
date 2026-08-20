@@ -57,6 +57,15 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 /// racing this in `select!` must keep the same in-flight call alive across loop iterations
 /// (e.g. via `tokio::pin!` + `.set()`, as `run_mock_mqtt_broker` does) rather than
 /// reconstructing the future on every iteration.
+///
+/// **This mock cannot verify write/read framing changes** (see
+/// `.claude/rules/wire-framing-hardware-verification.md`). It consumes the stream with
+/// `read_exact` regardless of how many `write_all` calls produced the bytes, so it cannot tell
+/// `write_frame` from `write_frame_with_timer`'s raced write, and cannot detect a partial frame
+/// a timed-out write left on the wire. `tests/mqtt_test.rs` covers only the happy path:
+/// `write_poisoned`, `MQTT_WRITE_TIMEOUT_SECS`, `MQTT_READ_TIMEOUT_SECS`, and frame resumption
+/// live in in-crate unit tests over `tokio::io::duplex`. A green `tests/mqtt_test.rs` is
+/// therefore not evidence for that class of change — it needs hardware.
 pub async fn read_packet<R: AsyncRead + Unpin>(
     stream: &mut R,
 ) -> Result<(u8, Vec<u8>), std::io::Error> {

@@ -298,6 +298,30 @@ fn test_decode_nozzle_temperatures_single_nozzle_flat_fallback() {
 }
 
 #[test]
+fn test_decode_nozzle_temperatures_flat_fallback_above_composite_threshold() {
+    // Same guard as the bed-side test: the flat `nozzle_temper`/`nozzle_target_temper` fields
+    // are a direct `as u16` cast, never `unpack_temperature`. Every other flat-fallback test
+    // stays <= 500, so a change routing these through the composite unpacker would silently
+    // decode 600.0 as 0/0 (`src/types/telemetry/CLAUDE.md`).
+    let json = r#"{
+            "device": {
+                "nozzle": { "info": [{ "id": 0 }] }
+            },
+            "print": {
+                "nozzle_temper": 600.0,
+                "nozzle_target_temper": 600.0
+            }
+        }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let temps = decode_nozzle_temperatures(
+        report.device(),
+        report.print.as_ref().unwrap().nozzle_temper,
+        report.print.as_ref().unwrap().nozzle_target_temper,
+    );
+    assert_eq!(temps, vec![(0, 600, 600)]);
+}
+
+#[test]
 fn test_decode_nozzle_temperatures_idex_swapped_fallback() {
     // IDEX model (2 nozzle.info entries) with no live device.extruder telemetry yet — the
     // undocumented wire routing quirk: nozzle_temper is nozzle 1's actual, and

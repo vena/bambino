@@ -169,10 +169,13 @@ struct ProbeEntry {
     wait_outcome: Option<String>,
 }
 
+/// No `serial` field, deliberately. The serial is a credential by this repo's rules, and
+/// `-o/--output` accepts an arbitrary path — `.gitignore` only covers the default
+/// `probe_report*.json` names, so `-o results/p1s.json` would be swept up by `git add -A`.
+/// The serial is printed to stderr instead, where the operator sees it and no file records it.
 #[derive(Serialize)]
 struct ProbeReport {
     model: String,
-    serial: String,
     timestamp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pushall: Option<serde_json::Value>,
@@ -645,9 +648,10 @@ pub async fn run(
 
     let entries = run_test_loop(&mut client, &tests).await;
 
+    eprintln!("Probing {} (serial {})", format_args!("{:?}", model), serial_owned);
+
     let report = ProbeReport {
         model: format!("{:?}", model),
-        serial: serial_owned,
         timestamp,
         pushall,
         tests: entries,
