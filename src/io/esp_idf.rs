@@ -120,8 +120,35 @@ impl BindableUdpSocket for EspIdfUdpSocket {
 
 #[cfg(feature = "esp-idf")]
 impl AsyncUdpSocket for EspIdfUdpSocket {
+    /// Non-blocking send that reports transient lwIP buffer exhaustion as `TimedOut` rather than a terminal fault.
+    ///
+    /// `bind` puts the socket in non-blocking mode, and under Wi-Fi load lwIP can momentarily
+    /// have no pbuf to hand this datagram. That surfaces as `ERR_MEM`/`ERR_BUF`, which lwIP's
+    /// `err_to_errno` table maps to `ENOMEM`/`ENOBUFS` (`lwip/src/api/err.c`) — *not* to
+    /// `EWOULDBLOCK`, which that table reserves for `ERR_TIMEOUT`/`ERR_WOULDBLOCK`. Both land in
+    /// `map_std_io_error`'s `_` arm as `SocketError::Other`, and `DiscoveryEngine::broadcast_search`
+    /// errors out when its multicast and broadcast sends both fail — which a single pbuf shortage
+    /// makes likely, since they go back to back. Discovery then aborted on a condition that would
+    /// have cleared on its own milliseconds later.
+    ///
+    /// `TimedOut` is the right signal because `poll_next_device` already treats it as benign, so
+    /// the caller retries instead of giving up. `WouldBlock` is folded in for completeness: lwIP
+    /// is not expected to produce it for a UDP `sendto`, but a non-blocking socket returning it
+    /// means exactly the same "try again" as the buffer-exhaustion case.
     async fn send_to(&self, buf: &[u8], target: SocketAddr) -> Result<usize, SocketError> {
-        self.inner.send_to(buf, target).map_err(to_esp_socket_error)
+        match self.inner.send_to(buf, target) {
+            Ok(len) => Ok(len),
+            Err(e) if is_transient_send_shortage(&e) => {
+                log::debug!(
+                    "EspIdfUdpSocket::send_to: transient lwIP buffer shortage, reporting as TimedOut: {e}"
+                );
+                if let Err(e) = self.timer.sleep(UDP_RECV_POLL_INTERVAL).await {
+                    log::debug!("EspIdfUdpSocket::send_to: pacing sleep failed: {e:?}");
+                }
+                Err(SocketError::TimedOut)
+            }
+            Err(e) => Err(to_esp_socket_error(e)),
+        }
     }
 
     /// Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.
@@ -141,6 +168,23 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
             Err(e) => Err(to_esp_socket_error(e)),
         }
     }
+}
+
+/// True if `err` is lwIP momentarily running out of send buffers, rather than a real fault.
+///
+/// Matched on `raw_os_error` rather than `ErrorKind` because std maps neither `ENOMEM` nor
+/// `ENOBUFS` to a kind that distinguishes "retry me" from "give up": both fall through to the
+/// catch-all. See `send_to`'s doc comment for where these errnos come from.
+#[cfg(feature = "esp-idf")]
+fn is_transient_send_shortage(err: &std::io::Error) -> bool {
+    if err.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+    matches!(
+        err.raw_os_error(),
+        Some(e) if e == ::esp_idf_svc::sys::ENOMEM as i32
+            || e == ::esp_idf_svc::sys::ENOBUFS as i32
+    )
 }
 
 /// Helper mapping standard Rust IO errors to our ESP-IDF socket errors.
@@ -192,9 +236,19 @@ fn poll_connect_revents(fd: core::ffi::c_int) -> Result<i16, SocketError> {
     // matches. A zero timeout means the call cannot block. lwIP writes only `revents`.
     let rc = unsafe { ::esp_idf_svc::sys::poll(&mut poll_fd, 1, 0) };
 
+    // Deliberately no EINTR retry here. On this platform `poll()` is a newlib shim over
+    // `select()` (`components/newlib/src/poll.c`, which keeps select's errno verbatim), and
+    // lwIP's socket layer never sets `EINTR` at all — the whole lwIP component references it
+    // only in its `errno.h` definition, the unused Unix port, and PPP file I/O. The one place
+    // `EINTR` is set is `esp_vfs_select` (`components/vfs/vfs.c`), and there it means a VFS
+    // driver's `start_select` *failed*, not that a signal interrupted a call still making
+    // progress. Retrying that would spin on a persistent failure, so the errno is reported
+    // rather than swallowed: the fixed string this used to return discarded the one piece of
+    // information that tells a driver refusal apart from a genuine socket fault.
     if rc < 0 {
+        let err = std::io::Error::last_os_error();
         return Err(SocketError::Other(
-            "poll() failed while polling ESP-IDF TCP connect".into(),
+            std::format!("poll() failed while polling ESP-IDF TCP connect: {err}").into(),
         ));
     }
 
