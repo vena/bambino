@@ -43,13 +43,18 @@ pub const SSDP_PORT_ALT: u16 = 1990;
 #[cfg(feature = "std")]
 pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u128 = 3000;
 
-/// Pacing sleep after a `poll_next_device` error inside `discover_devices()`'s listen loop, so
-/// a persistently-erroring socket (e.g. a platform-specific UDP ICMP-unreachable quirk) can't
-/// busy-spin for the rest of the discovery window — `poll_next_device` returns `Err` (not
-/// `Ok(None)`) only for genuine socket faults, which have no `.await` yield point of their own
-/// on the error path.
+/// Pacing sleep inside `discover_devices()`'s listen loop, applied on two paths that would
+/// otherwise busy-spin for the rest of the discovery window:
+///
+/// 1. After a `poll_next_device` error — a persistently-erroring socket (e.g. a
+///    platform-specific UDP ICMP-unreachable quirk). `poll_next_device` returns `Err` (not
+///    `Ok(None)`) only for genuine socket faults, which have no `.await` yield point of their
+///    own on the error path.
+/// 2. After a full pass over every engine that consumed no measurable wall-clock time — the
+///    signature of an `AsyncUdpSocket` impl that returns instantly on "no data" instead of
+///    waiting or yielding as the trait requires.
 #[cfg(feature = "std")]
-const SSDP_POLL_ERROR_BACKOFF_MS: u64 = 50;
+const SSDP_POLL_BACKOFF_MS: u64 = 50;
 
 const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
                                      HOST: 239.255.255.250:2021\r\n\
@@ -127,7 +132,20 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                     from_addr
                 );
 
-                let mut parsed = parse_ssdp_payload(&buf[..len]);
+                // `AsyncUdpSocket` is public and unsealed, and its impls sit on top of raw
+                // syscalls (EspIdfUdpSocket) or third-party FFI, so an out-of-range `len` is
+                // untrusted input at a network boundary, not an internal invariant. Drop the
+                // datagram instead of panicking the whole discovery loop on the slice.
+                let Some(datagram) = buf.get(..len) else {
+                    log::warn!(
+                        "AsyncUdpSocket reported a datagram length of {} into a {}-byte buffer; dropping it",
+                        len,
+                        buf.len()
+                    );
+                    return Ok(None);
+                };
+
+                let mut parsed = parse_ssdp_payload(datagram);
                 match &mut parsed {
                     Some(device) => {
                         // Stamp discovery_port here, not just in the discover_devices()
@@ -168,8 +186,11 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 /// use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
 ///
 /// let timer = TokioTimer::new();
+/// // Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
+/// // are found only through their ~10.1s NOTIFY advertisements, so a shorter window
+/// // intermittently returns nothing at all — see `reference/01_network_discovery.md`.
 /// let printers = discover_devices::<TokioUdpSocket, _>(
-///     std::time::Duration::from_secs(5),
+///     std::time::Duration::from_secs(20),
 ///     &timer,
 /// ).await?;
 ///
@@ -232,7 +253,12 @@ where
             // printers.
             let _ = engine.broadcast_search().await;
         }
-        timer.sleep(core::time::Duration::from_millis(50)).await?;
+        // Non-fatal for the same reason as the broadcast above and the backoff sleep below: a
+        // TimerError on this 50ms inter-burst pause used to abort the entire sweep with both
+        // sockets already bound and the listen loop never entered.
+        if let Err(e) = timer.sleep(core::time::Duration::from_millis(50)).await {
+            log::debug!("Inter-burst pacing sleep failed: {:?} (continuing sweep)", e);
+        }
     }
 
     let mut devices: Vec<SsdpDevice> = Vec::new();
@@ -250,7 +276,8 @@ where
     );
 
     while timer.now_millis().saturating_sub(start) < total_millis {
-        let now = timer.now_millis();
+        let pass_start = timer.now_millis();
+        let now = pass_start;
         if now.saturating_sub(last_search) >= SSDP_REBROADCAST_INTERVAL_MS as u64 {
             log::trace!("Re-broadcasting periodic M-SEARCH queries");
             for (engine, _) in &engines {
@@ -272,6 +299,9 @@ where
                         devices.push(device);
                     }
                 }
+                // No pacing here: an `Ok(None)` pass that consumed no wall-clock time is
+                // caught by the whole-pass guard below, which covers both the socket-yield
+                // and the non-printer-packet cases without slowing a socket that does block.
                 Ok(None) => {}
                 Err(e) => {
                     log::debug!(
@@ -281,11 +311,24 @@ where
                     );
                     let _ = timer
                         .sleep(core::time::Duration::from_millis(
-                            SSDP_POLL_ERROR_BACKOFF_MS,
+                            SSDP_POLL_BACKOFF_MS,
                         ))
                         .await;
                 }
             }
+        }
+
+        // Self-pace when a full pass over every engine consumed no measurable time. The
+        // `AsyncUdpSocket` docs require impls not to busy-spin, but the trait is public and
+        // unsealed, so a conforming-looking impl that returns instantly on "no data" would
+        // otherwise turn this loop into a genuine 100%-CPU spin for the entire discovery
+        // window. Costs nothing when the socket really does block — the branch is not taken.
+        if timer.now_millis().saturating_sub(pass_start) == 0 {
+            let _ = timer
+                .sleep(core::time::Duration::from_millis(
+                    SSDP_POLL_BACKOFF_MS,
+                ))
+                .await;
         }
     }
 

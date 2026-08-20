@@ -26,7 +26,14 @@ pub struct SsdpDevice {
     pub ip: String,
     /// Discovery communications port parsed from the LOCATION header.
     pub port: u16,
-    /// SSDP port on which the device was discovered (2021 or 1990).
+    /// SSDP port on which the device was discovered (2021 or 1990), or `0` if the record has
+    /// not been stamped with one.
+    ///
+    /// The port is not carried in the payload, so [`parse_ssdp_payload`] — which sees only the
+    /// datagram bytes — always leaves this `0`. It is filled in by
+    /// [`DiscoveryEngine::poll_next_device`](crate::discovery::DiscoveryEngine::poll_next_device),
+    /// which knows which socket the datagram arrived on. Callers parsing captured datagrams
+    /// directly must treat `0` as "unknown", not as a real port.
     pub discovery_port: u16,
     /// Device firmware target version.
     pub version: String,
@@ -211,9 +218,15 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     // subscriptions and TLS SNI/identity route strictly on exact casing as printed on the
     // physical label — see reference/01_network_discovery.md §1.6 and
     // .claude/rules/tls-identity-sni.md.
-    let serial = raw_usn_str
-        .strip_prefix("uuid:")
-        .unwrap_or(raw_usn_str)
+    // A UPnP-compliant USN is compound: `uuid:<serial>::<urn>`. Truncating at the first `::`
+    // keeps only the UUID part; without it the whole URN suffix is glued onto the serial, which
+    // still passes resolve_model's 3-char prefix match and so is accepted as a corrupt serial —
+    // one that then routes MQTT topics and TLS identity to a name the printer never answers to.
+    let uuid_part = raw_usn_str.strip_prefix("uuid:").unwrap_or(raw_usn_str);
+    let serial = uuid_part
+        .split("::")
+        .next()
+        .unwrap_or(uuid_part)
         .to_ascii_uppercase();
     if serial.is_empty() {
         return None;
@@ -364,6 +377,35 @@ mod tests {
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "01P06A521703222");
         assert_eq!(device.model, PrinterModel::P1S);
+    }
+
+    #[test]
+    fn test_parse_ssdp_compound_usn_yields_a_clean_serial() {
+        // Regression (issue #104): a UPnP-compliant USN is `uuid:<id>::<urn>`. Keeping the URN
+        // suffix produced a serial that still passed resolve_model's 3-char prefix match, so
+        // the device was accepted with a corrupt serial that then drove MQTT topic routing and
+        // TLS identity.
+        let payload = b"HTTP/1.1 200 OK\r\n\
+                        LOCATION: http://10.0.0.5:80/\r\n\
+                        USN: uuid:01P06A521703222::urn:bambulab-com:device:3dprinter:1\r\n\
+                        DevModel.bambu.com: C12\r\n\r\n";
+
+        let device = parse_ssdp_payload(payload).unwrap();
+        assert_eq!(device.serial, "01P06A521703222");
+        assert_eq!(device.model, PrinterModel::P1S);
+    }
+
+    #[test]
+    fn test_parse_ssdp_payload_leaves_discovery_port_unstamped() {
+        // parse_ssdp_payload sees only datagram bytes, so it cannot know which socket the
+        // packet arrived on; `0` means "unknown", per the SsdpDevice::discovery_port doc.
+        // DiscoveryEngine::poll_next_device is what stamps the real 2021/1990 value.
+        let payload = b"HTTP/1.1 200 OK\r\n\
+                        LOCATION: http://10.0.0.5:80/\r\n\
+                        USN: 01P06A521703222\r\n\
+                        DevModel.bambu.com: C12\r\n\r\n";
+
+        assert_eq!(parse_ssdp_payload(payload).unwrap().discovery_port, 0);
     }
 
     #[test]
