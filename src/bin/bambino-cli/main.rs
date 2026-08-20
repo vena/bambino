@@ -20,7 +20,6 @@ mod inspect_cert;
 mod monitor;
 mod probe;
 mod redact;
-mod sniff;
 mod storage;
 mod table;
 mod verify_tls;
@@ -118,26 +117,6 @@ enum Commands {
         /// Comma-separated test names to run (default: all non-manual tests)
         #[arg(short = 't', long)]
         tests: Option<String>,
-    },
-
-    /// Diagnostic: capture what *another* client (e.g. BambuStudio) publishes to this printer
-    ///
-    /// Subscribes to `device/<serial>/request` as a second authenticated client — no TLS
-    /// interception or proxy needed. Whether the broker permits this is a firmware ACL
-    /// decision; a refusal is reported plainly. All output has access codes and serials
-    /// redacted.
-    Sniff {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
-        /// Seconds to capture for; 0 runs until interrupted
-        #[arg(long, default_value_t = 0)]
-        seconds: u64,
-        /// Also append each captured message to this file as one NDJSON line
-        #[arg(short = 'o', long)]
-        output: Option<String>,
     },
 
     /// Check which MQTT commands echo a correlatable `sequence_id` ack (issue #26)
@@ -328,22 +307,6 @@ async fn main() {
             access_code,
             action,
         } => camera::run(&ip, &serial, &resolve_access_code(access_code), action).await,
-        Commands::Sniff {
-            ip,
-            serial,
-            access_code,
-            seconds,
-            output,
-        } => {
-            sniff::run(
-                &ip,
-                &serial,
-                &resolve_access_code(access_code),
-                seconds,
-                output.as_deref(),
-            )
-            .await
-        }
         Commands::InspectCert {
             ip,
             serial,

@@ -398,6 +398,21 @@ Controls the activation mode and flashing cycles of the internal LEDs.
 *   `led_mode`: Set to `"on"`, `"off"`, or `"flashing"`.
 *   `loop_times` and `interval_time`: Must be configured strictly as `0` if `led_mode` is `"on"` or `"off"`.
 
+#### Topic Access Control (`request` is not observable)
+Each printer exposes two MQTT topics: `device/<serial>/report`, which the printer publishes telemetry to, and `device/<serial>/request`, which clients publish commands to. A natural way to capture what another client (e.g. BambuStudio) sends would be to authenticate as a second client and subscribe to `request`. **This does not work on a P1S.**
+
+Observed behaviour: the broker accepts the CONNECT normally (CONNACK return code `0`), the client writes its SUBSCRIBE for `device/<serial>/request`, and the broker then **resets the TCP connection** while the client awaits SUBACK. It does *not* return the `0x80` failure SUBACK that MQTT 3.1.1 §3.9.3 defines for a refused subscription.
+
+*   Authentication is not the issue — the same credentials connect fine and the CONNACK succeeds. Only the subscription is refused.
+*   A client must therefore treat **both** a failure SUBACK and a mid-handshake connection reset as "subscription refused". Handling only the spec-defined rejection misses the case that actually occurs.
+*   Consequence: bambino cannot observe another client's requests from the side. Capturing them requires a proxy between that client and the printer, or standing up an endpoint the client connects to instead.
+
+Only P1S has been tested. Whether other models refuse the same way, refuse cleanly, or permit the subscription is unknown.
+
+**Do not re-attempt this approach without new evidence.** A `bambino-cli sniff` subcommand was written to do exactly this and removed once the P1S refused it — the finding is the artifact worth keeping, not the code. If a future model is found to permit the subscription, the implementation is recoverable from git history (search the log for `sniff`).
+
+**Verification source:** direct observation against a P1S (issue #134) — CONNACK return code `0`, SUBSCRIBE written, TCP reset while awaiting SUBACK.
+
 #### Access Code Readback (`get_access_code`)
 Asks the printer to report its own current LAN access code over an already-authenticated session. This is distinct from the access code a client supplies to connect: it lets a connected client re-read the value, which is how it notices that a rotated code has invalidated its cached credential.
 

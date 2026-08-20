@@ -15,7 +15,7 @@ pub mod commands;
 
 pub(crate) const MQTTS_PORT: u16 = 8883;
 
-pub use client::{MqttClient, MqttMessage, SubscriptionTopic};
+pub use client::{MqttClient, MqttMessage};
 pub use commands::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest,
     AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, AmsMappingTable,

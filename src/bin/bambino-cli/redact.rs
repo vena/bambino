@@ -1,11 +1,12 @@
 #![cfg(feature = "cli")]
 //! # Secret Redaction for Captured Payloads
 //!
-//! Shared by every harness that writes a printer's own words to a file or to stdout
-//! (`ack_probe`, `sniff`). Root `CLAUDE.md` forbids an access code or serial number landing in a
-//! file in this repository, and both are exactly what a capture picks up: `get_access_code`'s
-//! whole reply is a credential, and module lists and job payloads carry serials. Redacting at the
-//! point of rendering means no individual harness has to remember.
+//! Used by every harness that writes a printer's own words to a file or to stdout — today just
+//! `ack_probe`. Root `CLAUDE.md` forbids an access code or serial number landing in a file in this
+//! repository, and both are exactly what a capture picks up: `get_access_code`'s whole reply is a
+//! credential, and module lists and job payloads carry serials. Kept as its own module rather than
+//! folded back into `ack_probe` because the rule applies to any future capture harness, and the
+//! cost of re-deriving it after a leak is not symmetric with the cost of keeping it here.
 
 /// Keys whose values are credentials or device identity, and must never reach a report or stdout.
 pub const REDACTED_KEYS: &[&str] = &["access_code", "sn", "serial", "serial_number", "dev_sn"];
