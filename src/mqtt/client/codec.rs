@@ -24,8 +24,21 @@ pub(crate) const HEADER_PINGREQ: u8 = 0xC0;
 
 pub(crate) const MQTT_KEEP_ALIVE_SECS: u16 = 30;
 
+/// Largest value MQTT v3.1.1's 4-byte remaining-length varint can encode (§2.2.3).
+pub(crate) const MQTT_MAX_REMAINING_LENGTH: usize = 268_435_455;
+
 /// Encodes an input length parameter into a variable-length MQTT remaining length block (1 to 4 bytes).
+///
+/// `len` must not exceed [`MQTT_MAX_REMAINING_LENGTH`]: the loop below is otherwise happy to
+/// emit a 5th continuation byte, producing a frame the decoder (`frame.rs`, which correctly
+/// rejects varints longer than 4 bytes) and any conforming broker will reject — desyncing the
+/// connection rather than failing the call. `publish_command` enforces the caller-facing bound;
+/// this assertion catches an internal caller that forgot to.
 pub(crate) fn encode_remaining_length(mut len: usize) -> Vec<u8> {
+    debug_assert!(
+        len <= MQTT_MAX_REMAINING_LENGTH,
+        "remaining length {len} exceeds the 4-byte varint maximum"
+    );
     let mut bytes = Vec::with_capacity(4);
     loop {
         let mut byte = (len % 128) as u8;

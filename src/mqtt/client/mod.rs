@@ -39,7 +39,10 @@ use codec::{
 };
 
 mod frame;
-use frame::{FrameReadState, MQTT_READ_TIMEOUT_SECS, MQTT_WRITE_TIMEOUT_SECS, read_exact_packet};
+use frame::{
+    FrameReadState, MQTT_MAX_PAYLOAD_BYTES, MQTT_READ_TIMEOUT_SECS, MQTT_WRITE_TIMEOUT_SECS,
+    read_exact_packet,
+};
 
 mod pending;
 
@@ -98,7 +101,13 @@ pub struct MqttClient<IO: AsyncIo> {
     /// incoming PUBLISH (background telemetry arrives far more often than
     /// MQTT_ZOMBIE_TIMEOUT_SECS and would otherwise mask a real zombie episode forever).
     write_pending_sequence_id: Option<String>,
-    /// Incremental scale of unacknowledged ping requests.
+    /// Whether a PINGREQ has been sent with no PINGRESP yet received.
+    ///
+    /// Set by `send_ping_with_timer`, cleared by `poll_wire`'s PINGRESP arm, and checked on the
+    /// *next* `send_ping_with_timer`: a second ping falling due while one is still outstanding
+    /// means the broker has stopped answering keepalives. `MQTT_STALE_CONNECTION_SECS` alone
+    /// cannot catch that — any inbound traffic resets the staleness counter, so a broker still
+    /// streaming telemetry while ignoring PINGREQ would never be flagged.
     ping_outstanding: bool,
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
@@ -422,11 +431,26 @@ impl<IO: AsyncIo> MqttClient<IO> {
         if payload_buf.len() < 3 {
             return Err(Error::ProtocolViolation("Short SUBACK payload".into()));
         }
+        // The SUBACK's variable header echoes the SUBSCRIBE packet id, which `encode_subscribe`
+        // always sets to 1. A mismatch means the bytes at [2] are not the return code for the
+        // subscription we sent, so validating the code alone would be meaningless.
+        let echoed_packet_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
+        if echoed_packet_id != 1 {
+            return Err(Error::ProtocolViolation(
+                "SUBACK echoed an unexpected packet id".into(),
+            ));
+        }
+
         let return_code = payload_buf[2];
 
         log::debug!("SUBACK response status granted: 0x{:02X}", return_code);
 
-        if return_code == 0x80 {
+        // MQTT 3.1.1 §3.9.3 defines exactly four return codes: 0x00/0x01/0x02 granted (max QoS)
+        // and 0x80 failure. Rejecting only 0x80 accepted every other byte — a firmware bug, or
+        // a byte read at the wrong offset because the SUBACK carried multiple topic results —
+        // and returned a client subscribed to nothing, whose failure only surfaced much later
+        // as "no telemetry ever arrives".
+        if !(0x00..=0x02).contains(&return_code) {
             return Err(Error::ProtocolViolation(
                 "Subscription rejected by physical broker".into(),
             ));
@@ -463,6 +487,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// will not clear it; drain it by servicing PUBACKs (`poll_wire`) or let
     /// `tick_zombie_check` age the entries out.
     ///
+    /// Payloads larger than `MQTT_MAX_PAYLOAD_BYTES` are rejected with
+    /// [`Error::ProtocolViolation`] rather than encoded, mirroring the read path's own cap.
+    ///
     /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
     /// `PrinterClient` callers get the new stalled-write protection via
     /// `publish_command_with_timer()` instead, since they have a real `Timer` available.
@@ -486,6 +513,22 @@ impl<IO: AsyncIo> MqttClient<IO> {
             // invited callers into an infinite retry loop against a queue that only inbound
             // PUBACKs or `tick_zombie_check`'s TTL sweep can drain.
             return Err(Error::Backpressure);
+        }
+
+        // Symmetric with the read path's own `MQTT_MAX_PAYLOAD_BYTES` check
+        // (`frame.rs::read_exact_packet`). `publish_command` is public and README advertises
+        // sending raw payloads through it, so without this an oversized payload reached
+        // `encode_remaining_length`, which has no 4-byte varint ceiling of its own, and wrote a
+        // malformed frame that desyncs the broker instead of returning an error.
+        if payload.len() > MQTT_MAX_PAYLOAD_BYTES {
+            log::warn!(
+                "Refusing to publish a {}-byte payload; the cap is {} bytes",
+                payload.len(),
+                MQTT_MAX_PAYLOAD_BYTES
+            );
+            return Err(Error::ProtocolViolation(
+                "MQTT payload exceeds MQTT_MAX_PAYLOAD_BYTES".into(),
+            ));
         }
 
         let packet_id = self.next_packet_id;
@@ -725,12 +768,33 @@ impl<IO: AsyncIo> MqttClient<IO> {
         &mut self,
         timer: &T,
     ) -> Result<(), Error> {
+        // A ping already outstanding when the next one falls due means the broker acknowledged
+        // neither. Callers ping on their own schedule, so "a second ping is due" is the only
+        // point at which enough time has demonstrably passed to call it a failure — and it is a
+        // failure the staleness counter cannot see, since inbound telemetry keeps resetting it.
+        if self.ping_outstanding {
+            log::warn!("Broker did not answer the previous PINGREQ; treating the link as dead");
+            return Err(Error::Timeout);
+        }
+
         log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
         self.write_frame_guarded(&ping, timer).await?;
         self.ping_outstanding = true;
         Ok(())
+    }
+
+    /// Returns true once a write has failed and left the stream possibly desynced.
+    ///
+    /// A poisoned client is permanently unusable: every later `publish_command`, `send_ping`,
+    /// and automatic PUBACK returns `ConnectionAborted` forever, because a failed write may have
+    /// put a partial frame on the wire and, unlike a read, has no resumable progress state.
+    /// Without this accessor a retry loop could not tell that error apart from a transient one
+    /// and would spin against a client that can never recover; the correct response is to drop
+    /// the connection and reconnect (`PrinterClient::disconnect_mqtt()`).
+    pub fn is_poisoned(&self) -> bool {
+        self.write_poisoned
     }
 
     /// Platform-agnostic timer tick update.
