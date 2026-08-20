@@ -4,7 +4,14 @@ use rustls_pki_types::{CertificateDer, ServerName, SignatureVerificationAlgorith
 use tokio_rustls::rustls;
 use x509_parser::prelude::FromDer;
 
-/// Custom certificate verifier that bypasses standard CA chain authority validation.
+/// Custom certificate verifier that disables **all** peer certificate verification.
+///
+/// This bypasses far more than the CA chain walk: `verify_tls12_signature` and
+/// `verify_tls13_signature` both return `HandshakeSignatureValid::assertion()`
+/// unconditionally, so the peer never proves possession of the private key matching the
+/// certificate it presented. That handshake-signature check — not the chain check alone — is
+/// what actually prevents a MITM (see [`CnFallbackServerVerifier`]'s own doc). Identity is not
+/// checked either: any certificate from any host is accepted for any name.
 ///
 /// **Why this is required:**
 /// Physical Bambu Lab printers (all models) host an onboard local MQTTS/FTPS broker
@@ -213,6 +220,11 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             // signature verification, and abort the whole walk even though a later same-subject
             // candidate would verify. Fail-closed only: this could spuriously reject a legitimate
             // chain, never accept a bad one, since every candidate is still signature-checked.
+            // Validity is part of the *selection* predicate, not a post-selection check, for the
+            // same reason signature verification is: a rotated intermediate pair (old expired +
+            // new valid, same subject) presented old-first would otherwise select the expired
+            // one and abort the walk, never trying its valid sibling. Fail-closed either way,
+            // but the post-selection-only form rejected chains that are genuinely good.
             let next_idx = parsed_intermediates
                 .iter()
                 .enumerate()
@@ -220,6 +232,7 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
                     !used[*i]
                         && current.issuer().as_raw() == c.subject().as_raw()
                         && current.verify_signature(Some(c.public_key())).is_ok()
+                        && c.validity().is_valid_at(now_asn1)
                 })
                 .map(|(i, _)| i);
             let Some(idx) = next_idx else { break };
@@ -408,11 +421,21 @@ fn verify_name_matches_leaf_cert(
         _ => return Err(RustlsError::UnsupportedNameType),
     };
 
-    let san = leaf
-        .subject_alternative_name()
-        .ok()
-        .flatten()
-        .map(|ext| &ext.value.general_names);
+    // `subject_alternative_name()` returns `Result<Option<_>>`, and x509-parser reports `Err`
+    // for a duplicate or malformed SAN extension. Collapsing that to `None` with `.ok()` made a
+    // broken SAN indistinguishable from "no SAN present" and fell through to CN matching — the
+    // inverse of the documented SAN-then-CN precedence, so a cert carrying a real SAN for
+    // another printer plus a malformed second SAN and `CN=<target serial>` would match on CN.
+    // A SAN that is present but unparseable is a bad cert, not an absent extension.
+    let san = match leaf.subject_alternative_name() {
+        Ok(ext) => ext.map(|ext| &ext.value.general_names),
+        Err(e) => {
+            log::debug!("leaf certificate has an unparseable SAN extension: {:?}", e);
+            return Err(RustlsError::InvalidCertificate(
+                CertificateError::BadEncoding,
+            ));
+        }
+    };
 
     if let Some(general_names) = san {
         let dns_names = general_names.iter().filter_map(|gn| match gn {

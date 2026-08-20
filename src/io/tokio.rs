@@ -102,7 +102,11 @@ impl From<std::io::Error> for SocketError {
 }
 
 mod cert_verify;
-use cert_verify::{CnFallbackServerVerifier, NoCertificateVerification};
+/// Re-exported so a consumer assembling a `rustls::ClientConfig` by hand — rather than through
+/// [`build_verified_client_config_with_options`] — can name these verifiers. `.claude/rules/
+/// tls-identity-sni.md` documents `CnFallbackServerVerifier` at this path, which a private
+/// `use` made unreachable.
+pub use cert_verify::{CnFallbackServerVerifier, NoCertificateVerification};
 
 /// Builds an unsafe `ClientConfig` with configurable TLS version constraints.
 ///
@@ -288,7 +292,20 @@ impl<T: ::tokio::io::AsyncRead + Unpin> embedded_io_async::Read for TokioIo<T> {
 impl<T: ::tokio::io::AsyncWrite + Unpin> embedded_io_async::Write for TokioIo<T> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         use ::tokio::io::AsyncWriteExt;
-        self.0.write(buf).await.map_err(TokioIoError)
+        let n = self.0.write(buf).await.map_err(TokioIoError)?;
+        // `embedded_io_async::Write::write_all` *panics* on `Ok(0)`
+        // (`embedded-io-async-0.7.0/src/lib.rs:143`), and the trait forbids impls from
+        // returning it for a non-empty buffer. `TokioIo<T>` is generic over any
+        // `tokio::io::AsyncWrite`, so nothing here upholds that contract on the caller's
+        // behalf — and `write_all` sits on live network paths (MQTT, FTPS, camera). Convert
+        // it into the error the caller can actually handle instead of panicking the library.
+        if n == 0 && !buf.is_empty() {
+            return Err(TokioIoError(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                "underlying AsyncWrite returned Ok(0) for a non-empty buffer",
+            )));
+        }
+        Ok(n)
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {

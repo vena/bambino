@@ -314,27 +314,6 @@ where
     .await
 }
 
-/// Reads up to `buf.len()` bytes via a single underlying `read()` call, optionally raced against a wall-clock deadline.
-///
-/// **Why a single `read()` step (not `read_exact`, and not the whole multi-byte target
-/// in one shot):** `embedded_io_async::Read::read_exact`'s default implementation writes
-/// directly into the caller's buffer across a loop of multiple internal `read()` calls.
-/// If a future built on it is dropped mid-loop — exactly what happens when the timeout
-/// side of a race wins — there is no way to learn how many of those internal calls had
-/// already landed bytes, so the caller can't know how much of the buffer is valid.
-/// Racing one `read()` step at a time instead means a "timeout wins" outcome only ever
-/// discards *zero-progress* state: either this step's `read()` had not yet returned
-/// (nothing written to `buf`, safe to retry) or it already returned and we recorded
-/// exactly how many bytes landed via its `Ok(n)` before the timeout was even considered.
-/// The residual risk of the underlying transport silently consuming bytes during a
-/// cancelled `read()` without reporting them back is inherent to any cancellable I/O
-/// primitive (platform-dependent, unavoidable at this layer) — a single small `read`
-/// step minimizes that exposure relative to racing one large atomic multi-byte read.
-///
-/// `deadline_ms` is `None` when `timer` has no real wall-clock (see
-/// [`TimerProvider::has_real_clock`] — notably the default `DummyTimer`), in which case
-/// this degrades to a plain unbounded `read()`, identical to this crate's behavior
-/// before per-read deadlines existed.
 /// Maps an `embedded_io_async::ErrorKind` (the only info a generic `AsyncIo::read()` error
 /// exposes across every platform, std or no_std) to the closest `SocketError` variant.
 ///
@@ -357,6 +336,27 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
     }
 }
 
+/// Reads up to `buf.len()` bytes via a single underlying `read()` call, optionally raced against a wall-clock deadline.
+///
+/// **Why a single `read()` step (not `read_exact`, and not the whole multi-byte target
+/// in one shot):** `embedded_io_async::Read::read_exact`'s default implementation writes
+/// directly into the caller's buffer across a loop of multiple internal `read()` calls.
+/// If a future built on it is dropped mid-loop — exactly what happens when the timeout
+/// side of a race wins — there is no way to learn how many of those internal calls had
+/// already landed bytes, so the caller can't know how much of the buffer is valid.
+/// Racing one `read()` step at a time instead means a "timeout wins" outcome only ever
+/// discards *zero-progress* state: either this step's `read()` had not yet returned
+/// (nothing written to `buf`, safe to retry) or it already returned and we recorded
+/// exactly how many bytes landed via its `Ok(n)` before the timeout was even considered.
+/// The residual risk of the underlying transport silently consuming bytes during a
+/// cancelled `read()` without reporting them back is inherent to any cancellable I/O
+/// primitive (platform-dependent, unavoidable at this layer) — a single small `read`
+/// step minimizes that exposure relative to racing one large atomic multi-byte read.
+///
+/// `deadline_ms` is `None` when `timer` has no real wall-clock (see
+/// [`TimerProvider::has_real_clock`] — notably the default `DummyTimer`), in which case
+/// this degrades to a plain unbounded `read()`, identical to this crate's behavior
+/// before per-read deadlines existed.
 pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     buf: &mut [u8],
@@ -389,6 +389,19 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
             log::trace!("read failed: {:?}", e);
             Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(&e)))
         }
-        Raced::Right(_) => Err(SocketError::TimedOut),
+        Raced::Right(Ok(())) => Err(SocketError::TimedOut),
+        // A failing timer is not a timeout. `EspIdfTimer::sleep` returns `Err(TimerError)`
+        // *before awaiting anything* when `new_async_timer()` fails (esp_timer slot
+        // exhaustion), so `sleep_fut` is instantly ready and wins every race: reporting
+        // TimedOut there made every read look like a zero-elapsed timeout and drove the
+        // reconnect loop at full speed — the exact failure `has_real_clock()` exists to
+        // prevent, through a door it cannot detect. Surface it as a distinct error so callers
+        // stop retrying instead of spinning.
+        Raced::Right(Err(e)) => {
+            log::warn!("read deadline timer failed: {:?}", e);
+            Err(SocketError::Other(Cow::Borrowed(
+                "read deadline timer failed",
+            )))
+        }
     }
 }
