@@ -525,6 +525,27 @@ where
             ));
         }
 
+        // `upload_file`/`download_file` each pair their 426 tolerance with an independent SIZE
+        // recheck — the compensating integrity check `src/ftps/CLAUDE.md` cites to justify the
+        // fail-open `allow_unverified_tls_1_2` opt-out. A listing has no SIZE to compare
+        // against, so a 426 here was tolerated with nothing backing it: a data channel closing
+        // early yields a listing truncated mid-line, `parse_unix_listing` drops the truncated
+        // tail as just another malformed line, and the caller silently gets a short file list.
+        // Line-framing is the one integrity signal a listing does carry — a complete transfer
+        // ends on a line terminator. A truncation landing exactly on a line boundary still
+        // passes; this narrows the window rather than closing it, which is why 426 is not
+        // tolerated here as freely as on the byte-exact-verifiable transfer paths.
+        if code == FTP_TRANSFER_ABORTED
+            && !listing_payload.is_empty()
+            && !listing_payload.ends_with(b"\n")
+        {
+            // Not poisoned: the final reply was read, so the control channel is in sync —
+            // per `.claude/rules/ftps-poisoning.md`, only a transport-level failure desyncs it.
+            return Err(Error::ProtocolViolation(
+                "LIST aborted (426) with a truncated final entry".into(),
+            ));
+        }
+
         let payload_str = core::str::from_utf8(&listing_payload).map_err(|_| {
             Error::ProtocolViolation("Non-UTF8 directory listings response".into())
         })?;

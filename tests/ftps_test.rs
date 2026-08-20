@@ -39,9 +39,7 @@ type SetupResult = (
 fn setup() -> SetupResult {
     let (client_control, server_control) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(None));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container.clone(),
-    };
+    let factory = MockDataStreamFactory::new(data_container.clone());
     (client_control, server_control, data_container, factory)
 }
 
@@ -111,6 +109,11 @@ async fn test_ftps_client_lifecycle_and_operations() {
         data_container.clone(),
     ));
 
+    // The PASV reply advertises port 49320 (192*256+168) and the client is configured with IP
+    // 127.0.0.1. Nothing observed either value before: `MockDataStreamFactory::dial` hands back
+    // the same preloaded stream whatever it is asked for, so a regression dialing port 0, a
+    // stale port, or the serial in place of the IP left every FTPS test green.
+    let dialed = factory.dialed.clone();
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let list = client
@@ -126,6 +129,11 @@ async fn test_ftps_client_lifecycle_and_operations() {
         )
         .await
         .expect("LIST failed");
+    assert_eq!(
+        dialed.lock().await.as_slice(),
+        [("127.0.0.1".to_string(), 49320u16)],
+        "LIST's data channel must dial the printer IP on the PASV-advertised port"
+    );
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].name, "job.3mf");
     assert_eq!(list[0].size, 102400);
@@ -143,6 +151,14 @@ async fn test_ftps_client_lifecycle_and_operations() {
         .upload_file("/model/job.3mf", b"MOCK_UPLOAD_DATA")
         .await
         .expect("STOR upload failed");
+    assert_eq!(
+        dialed.lock().await.as_slice(),
+        [
+            ("127.0.0.1".to_string(), 49320u16),
+            ("127.0.0.1".to_string(), 49320u16)
+        ],
+        "STOR's data channel must re-dial the IP on the second PASV's advertised port"
+    );
 
     client
         .delete_file("/model/job.3mf")
@@ -224,6 +240,7 @@ async fn test_ftps_download_file() {
         data_container.clone(),
     ));
 
+    let dialed = factory.dialed.clone();
     let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     let data = client
@@ -231,6 +248,55 @@ async fn test_ftps_download_file() {
         .await
         .expect("RETR download failed");
     assert_eq!(data, b"MOCK_FILE_CONTENT_FOR_DOWNLOAD");
+    assert_eq!(
+        dialed.lock().await.as_slice(),
+        [("127.0.0.1".to_string(), 49320u16)],
+        "RETR's data channel must dial the printer IP on the PASV-advertised port"
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Regression test for the `fill_buf`-scoping desync `read_response`'s doc describes, made
+/// deterministic: the mock writes `150 ...\r\n226 ...\r\n` in one `write_all`, so both replies
+/// are unavoidably in one socket read. `test_ftps_download_file` reproduces the same coalescing
+/// only by scheduler luck (two back-to-back writes that happen not to yield), so it could stop
+/// covering this under a different runtime or a small reordering.
+#[tokio::test]
+async fn test_ftps_download_with_coalesced_replies_in_one_write() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_download_coalesced_replies(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let data = client
+        .download_file("/model/job.3mf")
+        .await
+        .expect("RETR download failed with 150/226 delivered in a single socket read");
+    assert_eq!(data, b"MOCK_FILE_CONTENT_FOR_DOWNLOAD");
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// A multi-line `220-`…`220 ` greeting (RFC 959 §4.2, and what several real FTP daemons send)
+/// must be consumed as one reply. Covered only by unit tests over an in-memory reader before —
+/// no mock here ever emitted a multi-line reply, so the client's own `control_fill_buf` never
+/// saw one.
+#[tokio::test]
+async fn test_ftps_connect_accepts_multiline_greeting() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_multiline_greeting(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+    client.disconnect().await;
 
     server_handle.await.expect("Mock server panicked");
 }
@@ -472,6 +538,42 @@ async fn test_ftps_list_directory_426_recovery() {
         .expect("LIST should tolerate 426 confirmation");
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].name, "job.3mf");
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Counterpart to the test above: the 426 tolerance is bounded by a completeness check, because
+/// LIST has no `SIZE` recheck backing it the way upload/download do. A listing cut mid-line must
+/// surface an error instead of silently handing the caller a short file list —
+/// `parse_unix_listing` discards the truncated tail as just another malformed line.
+#[tokio::test]
+async fn test_ftps_list_directory_426_with_truncated_entry_rejected() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_list_426_truncated(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "a 426-aborted LIST cut mid-entry must error, not return a silently short listing, got {:?}",
+        result.map(|l| l.len())
+    );
 
     server_handle.await.expect("Mock server panicked");
 }

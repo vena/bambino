@@ -11,6 +11,7 @@ use bambino::client::{
     DummyFactory, DummyTimer, DummyTls, PrinterClient,
 };
 use bambino::error::Error;
+use bambino::ftps::BambuFtpsClient;
 use bambino::io::TokioIo;
 use bambino::identity::PrinterIdentity;
 use bambino::models::PrinterModel;
@@ -34,9 +35,7 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
     // ensure_mqtt() connect still carries the untouched default sequence ID (10001).
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container,
-    };
+    let factory = MockDataStreamFactory::new(data_container);
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
@@ -129,9 +128,7 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
     // never degrading into "not configured" (which would mean the config got dropped after
     // the first attempt).
     let data_container = Arc::new(Mutex::new(None));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container.clone(),
-    };
+    let factory = MockDataStreamFactory::new(data_container.clone());
 
     let mut client = PrinterClient::new(
         DummyTlsConnector,
@@ -156,18 +153,23 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
 async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     // `disconnect_storage()` (review/client.md Phase 5) must leave `self.ftps` as `None`
     // afterward, so a later `storage()` call falls through to `ensure_ftps()`'s existing
-    // "FTPS not configured" error instead of ever handing back the now-poisoned client that
+    // "FTPS not configured" error instead of ever handing back the poisoned client that
     // `BambuFtpsClient::disconnect()` leaves behind (review/ftps.md Phase 2/7).
+    //
+    // The FTPS client is genuinely poisoned first, via a control-channel transport failure
+    // (`.claude/rules/ftps-poisoning.md`) — without that this test only reproved that
+    // `ftps_config` is consumed on first connect, an unrelated invariant already covered
+    // elsewhere, and broken code resetting `self.ftps` on the ordinary-disconnect path only
+    // would still have passed.
     let (client_control, server_control) = tokio::io::duplex(8192);
 
     // `ensure_ftps()` fetches its raw control stream via the factory, so the mock data
     // stream is preloaded with the client side of the duplex pair up front.
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_control))));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container.clone(),
-    };
+    let factory = MockDataStreamFactory::new(data_container.clone());
 
-    let server_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+    // Acks the handshake, reads DELE, then drops the control stream without replying.
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_dele_connection_drop(
         server_control,
         data_container.clone(),
     ));
@@ -179,10 +181,27 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     )
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
 
-    client
+    let ftps = client
         .storage()
         .await
         .expect("first storage() call should connect via the mock FTPS handshake");
+    assert!(matches!(
+        ftps.delete_file("/model/job.3mf").await,
+        Err(Error::Network(_))
+    ));
+    // Poisoned now: `storage()` still hands back this same instance (`ensure_ftps()`'s
+    // `is_some()` short-circuit), and every operation through it fails.
+    let through_poisoned = client
+        .storage()
+        .await
+        .expect("storage() short-circuits to the existing, now-poisoned client")
+        .get_file_size("/model/job.3mf")
+        .await;
+    assert!(
+        matches!(through_poisoned, Err(Error::ProtocolViolation(_))),
+        "a poisoned FTPS client must keep failing until it is replaced, got {:?}",
+        through_poisoned
+    );
     assert!(client.is_ftps_connected());
 
     client
@@ -204,6 +223,36 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     );
 
     server_handle.await.expect("Mock server panicked");
+
+    // The documented recovery path: a freshly connected client installed via attach_storage()
+    // works, proving disconnect_storage() left the slot genuinely reusable rather than just
+    // having consumed a one-shot config.
+    let (fresh_control, fresh_server_control) = tokio::io::duplex(8192);
+    let fresh_container = Arc::new(Mutex::new(None));
+    let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        fresh_server_control,
+        fresh_container.clone(),
+    ));
+
+    let fresh_ftps = BambuFtpsClient::connect(
+        TokioIo(fresh_control),
+        DummyTlsConnector,
+        MockDataStreamFactory::new(fresh_container),
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
+        DummyTimer,
+        false,
+    )
+    .await
+    .expect("fresh FTPS handshake failed");
+
+    client.attach_storage(fresh_ftps);
+    assert!(client.is_ftps_connected());
+    client
+        .disconnect_storage()
+        .await
+        .expect("disconnect_storage on the reattached session should succeed");
+
+    fresh_handle.await.expect("Fresh mock server panicked");
 }
 
 #[tokio::test]
@@ -239,9 +288,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
     // handshake itself is inside the timeout race.
     let (client_stream, _server_stream) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container,
-    };
+    let factory = MockDataStreamFactory::new(data_container);
 
     let mut client = PrinterClient::new(
         DummyTlsConnector,
@@ -272,9 +319,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
     // With a real (non-stalled) peer completing the handshake, connect_mqtt() must now succeed.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container,
-    };
+    let factory = MockDataStreamFactory::new(data_container);
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
@@ -307,9 +352,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
 async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     let (client_stream, _server_stream) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container,
-    };
+    let factory = MockDataStreamFactory::new(data_container);
 
     let (connector, captured_host) = HostCapturingTlsConnector::new();
     let mut client = PrinterClient::new(

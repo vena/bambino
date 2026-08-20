@@ -76,8 +76,15 @@ pub(crate) const FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS: u64 = 300;
 
 /// Computes an absolute deadline (epoch-ms) `budget_secs` in the future, or `None` if `timer` has no real wall-clock (see `TimerProvider::has_real_clock`) — the same `has_real_clock()`-gated pattern used throughout this crate (`read_exact_packet`, `read_next_frame_with_timer`) so a `DummyTimer`-backed client sees zero behavior change (unbounded reads, exactly as before per-read deadlines existed).
 pub(crate) fn ftps_deadline_ms<T: TimerProvider>(timer: &T, budget_secs: u64) -> Option<u64> {
+    ftps_deadline_from_ms(timer, budget_secs.saturating_mul(1000))
+}
+
+/// Millisecond-budget sibling of [`ftps_deadline_ms`], for the data-channel reads whose budget is already expressed in milliseconds (`read_to_eof`).
+/// The `has_real_clock()` gating decision lives here and in nothing else — `read_to_eof` used to
+/// re-derive it inline, so a policy change applied to one copy silently left the other behind.
+pub(crate) fn ftps_deadline_from_ms<T: TimerProvider>(timer: &T, budget_ms: u64) -> Option<u64> {
     if timer.has_real_clock() {
-        Some(timer.now_millis().saturating_add(budget_secs * 1000))
+        Some(timer.now_millis().saturating_add(budget_ms))
     } else {
         None
     }
@@ -190,6 +197,13 @@ async fn write_bounded<T: TimerProvider, E>(
 /// too narrow, and `BambuFtpsClient::control_fill_buf` for how the sole caller now satisfies
 /// this (a struct field threaded through every method, not a local per-response variable).
 ///
+/// **Partial-progress persistence on error:** bytes pulled off the socket are never moved into
+/// the per-call `line_buf` until a complete line is present in `fill_buf`. A failed read
+/// (`.claude/rules/wire-read-deadline.md`'s stall deadline firing mid-line, most importantly)
+/// therefore leaves the partial line intact in `fill_buf` for the next call, the same property
+/// `FrameReadState` gives MQTT — it does not rely on `.claude/rules/ftps-poisoning.md`'s
+/// no-un-poisoning convention to keep the parser in sync.
+///
 /// Enforces a maximum line length to prevent OOM from malformed server output.
 async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
@@ -199,19 +213,23 @@ async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
     deadline_ms: Option<u64>,
 ) -> Result<(), Error> {
     line_buf.clear();
+    // Bytes at the front of `fill_buf` already scanned for `\n` and known not to contain one.
+    // Only an offset is tracked, never a move: the bytes themselves stay in the caller's
+    // persistent `fill_buf` until a complete line is available, so an error return (timeout in
+    // particular) leaves every byte read so far exactly where the next call will find it.
+    let mut scanned = 0usize;
     loop {
-        if let Some(pos) = fill_buf.iter().position(|&b| b == b'\n') {
-            // Found a full line already sitting in the leftover buffer from a prior read —
-            // consume only up through the newline; anything after stays in `fill_buf` for the
-            // next call.
-            line_buf.extend(fill_buf.drain(..=pos));
+        if let Some(pos) = fill_buf[scanned..].iter().position(|&b| b == b'\n') {
+            // Found a full line sitting in the leftover buffer — consume only up through the
+            // newline; anything after stays in `fill_buf` for the next call.
+            line_buf.extend(fill_buf.drain(..=scanned + pos));
             return Ok(());
         }
 
-        // No newline buffered yet: everything currently in `fill_buf` belongs to this line.
-        line_buf.append(fill_buf);
+        // No newline anywhere in `fill_buf`, so all of it belongs to the line being read.
+        scanned = fill_buf.len();
 
-        if line_buf.len() >= FTP_MAX_RESPONSE_LINE_BYTES {
+        if scanned >= FTP_MAX_RESPONSE_LINE_BYTES {
             return Err(Error::ProtocolViolation(
                 "FTP response line exceeds maximum length".into(),
             ));
@@ -367,7 +385,11 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, Error> {
         .map(|e| e + start + 1)
         .ok_or(Error::ProtocolViolation("Invalid PASV format".into()))?;
     let inner = &text[start + 1..end];
-    let parts = inner.split(',');
+    // Trim each component: a server emitting `(127, 0, 0, 1, 192, 168)` yields `" 192"`, which
+    // Rust's integer parser rejects outright (it does not skip leading whitespace). RFC 959
+    // doesn't permit the spaces, but the rest of this parser is deliberately lenient, and a
+    // hard connection failure is a poor trade for cosmetic strictness.
+    let parts = inner.split(',').map(str::trim);
 
     let mut parts = parts.skip(4);
 
@@ -464,17 +486,29 @@ pub(crate) async fn read_to_eof<IO: AsyncIo, T: TimerProvider>(
     timer: &T,
     budget_ms: u64,
 ) -> Result<(), Error> {
+    read_to_eof_bounded(stream, out, timer, budget_ms, FTPS_MAX_TRANSFER_BYTES).await
+}
+
+/// [`read_to_eof`] with an explicit size cap instead of [`FTPS_MAX_TRANSFER_BYTES`].
+///
+/// Exists so the cap-enforcement test can drive the abort path with a small value: exercising it
+/// at the real 512 MiB constant really allocated half a gigabyte (peaking near 1 GiB through
+/// `Vec` doubling) on every `cargo test`, pre-commit hook run, and CI job, in parallel with the
+/// rest of the suite. Production callers use [`read_to_eof`].
+pub(crate) async fn read_to_eof_bounded<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    out: &mut Vec<u8>,
+    timer: &T,
+    budget_ms: u64,
+    max_bytes: usize,
+) -> Result<(), Error> {
     let mut chunk = [0u8; FTPS_DATA_READ_BUF_SIZE];
     loop {
-        let deadline_ms = if timer.has_real_clock() {
-            Some(timer.now_millis().saturating_add(budget_ms))
-        } else {
-            None
-        };
+        let deadline_ms = ftps_deadline_from_ms(timer, budget_ms);
         match read_transfer_chunk(stream, &mut chunk, timer, deadline_ms).await {
             Ok(0) => break,
             Ok(n) => {
-                if out.len() + n > FTPS_MAX_TRANSFER_BYTES {
+                if out.len() + n > max_bytes {
                     return Err(Error::ProtocolViolation(
                         "FTPS transfer exceeds maximum accepted size".into(),
                     ));

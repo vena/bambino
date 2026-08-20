@@ -43,8 +43,21 @@ async fn run_standard_handshake(
     buf: &mut [u8],
     expect_prot_p: bool,
 ) {
-    // Greeting
-    respond(server_control, b"220 vsFTPd 3.0.3\r\n").await;
+    run_handshake_with_greeting(server_control, buf, expect_prot_p, b"220 vsFTPd 3.0.3\r\n").await;
+}
+
+/// Helper: [`run_standard_handshake`] with a caller-supplied greeting.
+///
+/// Split out so a test can drive a multi-line (`220-`…`220 `) greeting through `read_response`'s
+/// RFC 959 §4.2 continuation handling — every other mock here writes single-line replies only,
+/// so no integration test exercised that path end to end.
+async fn run_handshake_with_greeting(
+    server_control: &mut tokio::io::DuplexStream,
+    buf: &mut [u8],
+    expect_prot_p: bool,
+    greeting: &[u8],
+) {
+    respond(server_control, greeting).await;
 
     // USER
     let cmd = read_cmd(server_control, buf).await;
@@ -548,6 +561,41 @@ pub async fn run_mock_server_list_426_recovery(
     respond(&mut server_control, b"426 Connection closed; transfer aborted.\r\n").await;
 }
 
+/// Mock server for the regression test: a `426` on `LIST` whose listing was cut mid-line.
+///
+/// The 426 tolerance exists for the P2S/X2D TLS 1.3 close race, but unlike upload/download it has
+/// no `SIZE` recheck behind it — a data channel closing early yields a listing truncated mid-line,
+/// `parse_unix_listing` drops the truncated tail as just another malformed line, and the caller
+/// silently gets a short file list. The final line here ends without a terminator, which is the
+/// signal `list_directory` now rejects.
+pub async fn run_mock_server_list_426_truncated(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "LIST /model\r\n");
+    respond(
+        &mut server_control,
+        b"150 Here comes directory listing.\r\n",
+    )
+    .await;
+    server_data
+        .write_all(
+            b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n\
+              -rw-r--r--    1 1000     1000      512 Jun 17 12:1",
+        )
+        .await
+        .expect("LIST data write");
+    server_data.flush().await.expect("LIST data flush");
+    drop(server_data);
+    respond(&mut server_control, b"426 Connection closed; transfer aborted.\r\n").await;
+}
+
 /// Mock server for the regression test: `LIST`'s *initial* write/read (the `150`/`125`
 /// negotiation, before the data-transfer window the single-reply-command case already covered) must
 /// poison the client on failure too. Drops the control stream right after reading the `LIST`
@@ -601,6 +649,75 @@ pub async fn run_mock_server_download_426_recovery(
     // SIZE verification — report size matches, so download_file should still succeed.
     let cmd = read_cmd(&mut server_control, &mut buf).await;
     assert!(cmd.starts_with("SIZE "));
+    respond(
+        &mut server_control,
+        format!("213 {}\r\n", payload.len()).as_bytes(),
+    )
+    .await;
+}
+
+/// Mock server whose greeting is a multi-line `220-`…`220 ` reply written in one `write_all`.
+///
+/// Every other mock here writes one complete single-line reply per command, so `read_response`'s
+/// multi-line continuation handling (`FTP_MAX_RESPONSE_LINES`, the header-code terminator rule)
+/// was only ever covered by unit tests over an in-memory reader, never through a real socket and
+/// the client's own `control_fill_buf`. Ends with QUIT so the caller can assert a clean session.
+pub async fn run_mock_server_multiline_greeting(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_handshake_with_greeting(
+        &mut server_control,
+        &mut buf,
+        true,
+        b"220-vsFTPd 3.0.3\r\n220-Bambu Lab storage service\r\n220 Ready.\r\n",
+    )
+    .await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "QUIT\r\n");
+    respond(&mut server_control, b"221 Goodbye.\r\n").await;
+}
+
+/// Mock server for RETR whose `150` and `226` replies are written in a *single* `write_all`.
+///
+/// `read_response`'s doc credits `test_ftps_download_file` with catching the `fill_buf`-scoping
+/// desync, but that test only reproduces the coalescing because the mock's two back-to-back
+/// writes happen not to yield to the client task in between — nothing forces it, so the same
+/// regression could slip through under a different runtime or a small reordering. Here the two
+/// replies are unavoidably one socket read, so the second `read_response` *must* come from the
+/// carried-over leftover bytes.
+pub async fn run_mock_server_download_coalesced_replies(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "RETR /model/job.3mf\r\n");
+
+    let payload = b"MOCK_FILE_CONTENT_FOR_DOWNLOAD";
+    server_data
+        .write_all(payload)
+        .await
+        .expect("RETR data write");
+    server_data.flush().await.expect("RETR data flush");
+    drop(server_data);
+
+    // Both replies in one write: not two writes that merely tend to coalesce.
+    respond(
+        &mut server_control,
+        b"150 Opening data connection.\r\n226 Transfer complete.\r\n",
+    )
+    .await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "SIZE /model/job.3mf\r\n");
     respond(
         &mut server_control,
         format!("213 {}\r\n", payload.len()).as_bytes(),

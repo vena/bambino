@@ -225,6 +225,45 @@ async fn test_read_response_leftover_bytes_carry_to_next_call() {
     assert_eq!(code, 226);
 }
 
+/// Regression test: a read deadline firing mid-line must not discard the bytes already read.
+/// `read_line_raw` used to `append` the leftover buffer into the per-call `line_buf` before every
+/// socket read, so a timeout dropped the partial line on the floor and the next call resumed
+/// mid-line — desyncing the reply parser. Nothing structural prevented that; only
+/// `.claude/rules/ftps-poisoning.md`'s "never un-poison" convention kept it from being observable.
+#[tokio::test]
+async fn test_read_response_keeps_partial_line_across_a_timeout() {
+    let (client_half, mut server_half) = tokio::io::duplex(4096);
+    let mut stream = TokioIo(client_half);
+    let mut line_buf = Vec::new();
+    let mut fill_buf = Vec::new();
+    let timer = crate::io::tokio::TokioTimer::new();
+
+    // Half a reply arrives, then the server goes silent past the deadline.
+    tokio::io::AsyncWriteExt::write_all(&mut server_half, b"226 Transfer com")
+        .await
+        .expect("partial reply write");
+
+    let deadline_ms = Some(timer.now_millis().saturating_add(50));
+    let result = read_response(&mut stream, &mut line_buf, &mut fill_buf, &timer, deadline_ms).await;
+    assert!(
+        matches!(result, Err(Error::Network(SocketError::TimedOut))),
+        "expected the stall deadline to fire, got {:?}",
+        result
+    );
+
+    // The rest arrives; a fresh call must reassemble the whole line from the retained prefix.
+    tokio::io::AsyncWriteExt::write_all(&mut server_half, b"plete.\r\n")
+        .await
+        .expect("remainder write");
+
+    let deadline_ms = Some(timer.now_millis().saturating_add(5_000));
+    let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &timer, deadline_ms)
+        .await
+        .expect("second read must complete the line held over from the timed-out call");
+    assert_eq!(code, 226);
+    assert_eq!(text, "Transfer complete.");
+}
+
 /// Returns a fixed-size nonzero chunk on every `poll_read` call, forever — never signals EOF.
 /// Used to exercise `read_to_eof`'s size cap against a stream that never stops sending data.
 #[derive(Clone)]
@@ -262,17 +301,23 @@ impl tokio::io::AsyncWrite for InfiniteReader {
 
 #[tokio::test]
 async fn test_read_to_eof_rejects_oversized_transfer() {
-    // A stream that never sends EOF and exceeds FTPS_MAX_TRANSFER_BYTES must error
-    // cleanly instead of growing `out` without bound.
+    // A stream that never sends EOF and exceeds the transfer cap must error cleanly instead of
+    // growing `out` without bound. Driven through `read_to_eof_bounded` with a small cap: the
+    // real `FTPS_MAX_TRANSFER_BYTES` is 512 MiB, so running this against the production
+    // constant allocated half a gigabyte (peaking near 1 GiB through `Vec` doubling) on every
+    // test run, pre-commit hook, and CI job. `read_to_eof` is a thin delegation to this
+    // function with the constant, so the abort path under test is the same one.
+    const TEST_MAX_BYTES: usize = FTPS_DATA_READ_BUF_SIZE * 4;
     let reader = InfiniteReader {
         chunk_len: FTPS_DATA_READ_BUF_SIZE,
     };
     let mut stream = TokioIo(reader);
     let mut out = Vec::new();
 
-    let result = read_to_eof(&mut stream, &mut out, &DummyTimer, 30_000).await;
+    let result =
+        read_to_eof_bounded(&mut stream, &mut out, &DummyTimer, 30_000, TEST_MAX_BYTES).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
-    assert!(out.len() <= FTPS_MAX_TRANSFER_BYTES);
+    assert!(out.len() <= TEST_MAX_BYTES);
 }
 
 /// Regression test mirroring `read_exact_packet`'s `test_read_exact_packet_stalled_connection_times_out`: a data channel that stalls with zero incoming bytes (e.g. firmware hang mid-transfer) must not hang `read_to_eof` forever.
@@ -432,6 +477,17 @@ fn test_pasv_missing_parentheses() {
 }
 
 #[test]
+fn test_pasv_tolerates_whitespace_after_commas() {
+    // A server formatting the tuple as `(127, 0, 0, 1, 192, 168)` yields `" 192"` per
+    // component, which Rust's integer parser rejects (no leading-whitespace skipping) — the
+    // connection failed with "Failed to parse PORT_1 in PASV" even though the reply is
+    // unambiguous. Not RFC 959-legal, but the rest of this parser is deliberately lenient.
+    let port = parse_pasv_port("Entering Passive Mode (127, 0, 0, 1, 192, 168).")
+        .expect("PASV with spaces after commas");
+    assert_eq!(port, 49320);
+}
+
+#[test]
 fn test_pasv_non_numeric_port() {
     let result = parse_pasv_port("(127,0,0,1,abc,168)");
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -503,6 +559,31 @@ fn test_validate_ftp_path_rejects_leading_dash_in_final_segment() {
     // the slash), silently skipping the check on the actual dash-prefixed final directory.
     assert!(matches!(
         validate_ftp_path("/cache/-dir/"),
+        Err(Error::ProtocolViolation(_))
+    ));
+}
+
+#[test]
+fn test_validate_ftp_path_rejects_crlf_and_nul_injection() {
+    // The command-injection case `validate_ftp_path` exists for: a `\r\n` inside a path is a
+    // second, caller-invisible command on the control channel. Covered only incidentally by
+    // the `b < FTP_PATH_CONTROL_CHAR_MAX` predicate, so narrowing that predicate to an
+    // allow-list (plausible — it also rejects tab, stricter than any FTP spec) could weaken
+    // the guard with the suite still green.
+    assert!(matches!(
+        validate_ftp_path("/model/a\r\nDELE /model/b"),
+        Err(Error::ProtocolViolation(_))
+    ));
+    assert!(matches!(
+        validate_ftp_path("/model/a\nDELE /model/b"),
+        Err(Error::ProtocolViolation(_))
+    ));
+    assert!(matches!(
+        validate_ftp_path("/model/a\r"),
+        Err(Error::ProtocolViolation(_))
+    ));
+    assert!(matches!(
+        validate_ftp_path("/model/job\0.3mf"),
         Err(Error::ProtocolViolation(_))
     ));
 }

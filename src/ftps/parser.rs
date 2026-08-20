@@ -9,6 +9,17 @@ use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+/// Maximum number of entries [`parse_unix_listing`] will return from one `LIST` payload.
+///
+/// The raw payload is already bounded by `FTPS_MAX_TRANSFER_BYTES` (512 MiB), but that cap is one
+/// level upstream of the allocation that matters here: a listing of millions of ~20-byte lines
+/// fits inside it and still expands into tens of millions of `FtpFile`s, each carrying its own
+/// heap `String` — a larger and far more fragmented footprint than the bytes it came from, and on
+/// no_std/Embassy the resulting exhaustion is the uncatchable `alloc_error_handler` abort, not a
+/// `Result`. Mirrors `FTP_MAX_RESPONSE_LINES`' role on the control channel. Set well above any
+/// plausible real printer directory (the microSD holds thousands of files, not millions).
+pub const FTP_MAX_LISTING_ENTRIES: usize = 65_536;
+
 /// Standardized representation of an entry retrieved from physical printer storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FtpFile {
@@ -269,6 +280,14 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
         // rejected instead of silently accepted.
         if day > days_in_month(month, year) {
             continue;
+        }
+
+        if files.len() >= FTP_MAX_LISTING_ENTRIES {
+            log::warn!(
+                "LIST payload yielded more than {} entries; truncating the parsed listing",
+                FTP_MAX_LISTING_ENTRIES
+            );
+            break;
         }
 
         files.push(FtpFile {

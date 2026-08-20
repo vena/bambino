@@ -106,9 +106,7 @@ async fn test_printer_client_camera_end_to_end() {
     let (client_stream, server_stream) = tokio::io::duplex(8192);
 
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container.clone(),
-    };
+    let factory = MockDataStreamFactory::new(data_container.clone());
 
     let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
 
@@ -171,9 +169,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
 #[tokio::test]
 async fn test_ensure_camera_retries_after_failed_dial() {
     let data_container = Arc::new(Mutex::new(None));
-    let factory = MockDataStreamFactory {
-        active_stream: data_container.clone(),
-    };
+    let factory = MockDataStreamFactory::new(data_container.clone());
 
     let mut printer = PrinterClient::new(
         DummyTls,
@@ -291,9 +287,7 @@ async fn test_attach_and_disconnect_camera() {
     )
     .with_camera(
         DummyTlsConnector,
-        MockDataStreamFactory {
-            active_stream: Arc::new(Mutex::new(None)),
-        },
+        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
     );
     assert!(!client.is_camera_connected());
 

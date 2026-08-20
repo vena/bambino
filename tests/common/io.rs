@@ -162,14 +162,33 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for HostCapturingTlsConnector {
 pub struct MockDataStreamFactory {
     /// Container holding the pre-allocated duplex stream representing the passive channel.
     pub active_stream: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    /// Every `(host, port)` pair `dial()` was asked for, in call order.
+    ///
+    /// `dial()` yields the same preloaded stream regardless of its arguments, so without this
+    /// nothing observed them: a regression producing port `0`, a stale port, or the serial in
+    /// place of the IP on the data dial passed every integration test (the *control* channel's
+    /// serial-vs-IP choice is guarded separately by
+    /// `test_ftps_control_channel_connects_with_serial_not_ip`).
+    pub dialed: Arc<Mutex<Vec<(String, u16)>>>,
+}
+
+impl MockDataStreamFactory {
+    /// Builds a factory over `active_stream` with an empty dial log.
+    pub fn new(active_stream: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>) -> Self {
+        Self {
+            active_stream,
+            dialed: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 impl RawStreamFactory<TokioIo<tokio::io::DuplexStream>> for MockDataStreamFactory {
     async fn dial(
         &self,
-        _host: &str,
-        _port: u16,
+        host: &str,
+        port: u16,
     ) -> Result<TokioIo<tokio::io::DuplexStream>, SocketError> {
+        self.dialed.lock().await.push((host.to_string(), port));
         let mut guard = self.active_stream.lock().await;
         // Yield the stream if available, otherwise simulate a standard TCP connection refusal
         guard.take().ok_or(SocketError::ConnectionRefused)
