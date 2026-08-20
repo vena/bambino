@@ -89,11 +89,14 @@ where
     ) -> Result<u16, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
-        // slot_id 254 is only meaningful as the single-nozzle external-spool load sentinel,
-        // valid only against the same ams_id >= 16 sentinel range used for target derivation
-        // below — otherwise a combination like (1, 254) passes both independent checks but
-        // derives a garbage target outside the standard unit's 0..=15 range.
-        let pair_valid = slot_id != 254 || ams_id >= 16;
+        // slot_id 254 is only meaningful as the external-spool load sentinel, so it is valid
+        // only against an external-spool ams_id. `ams_id >= 16` was too loose: it also admits
+        // the AMS-HT bus range 128..=135, and the reference documents an AMS-HT slot only as
+        // `{"ams_id": ams_id, "slot_id": 0}` (`reference/05_materials_ams.md` §5.3). A pair like
+        // (130, 254) therefore derived a correct `target` but shipped a nonsensical slot.
+        let pair_valid = slot_id != 254
+            || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
+            || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID);
         if !ams_valid || !slot_valid || !pair_valid {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for change_filament".into(),

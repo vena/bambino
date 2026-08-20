@@ -10,7 +10,7 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use super::parser::{AMS_EXTERNAL_SPOOL_ALT_ID, AMS_EXTERNAL_SPOOL_ID};
+use super::parser::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use serde::{Deserialize, Serialize};
 
 /// Enumeration of possible physical feed locations for loaded spools.
@@ -87,8 +87,8 @@ impl MaterialSource {
                     }
                 } else {
                     AmsMapping2Entry {
-                        ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
-                        slot_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+                        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
                     }
                 }
             }
@@ -100,26 +100,26 @@ impl MaterialSource {
                     }
                 } else {
                     AmsMapping2Entry {
-                        ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
-                        slot_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+                        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
                     }
                 }
             }
             MaterialSource::ExternalSpool => AmsMapping2Entry {
-                ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
                 slot_id: 0,
             },
             MaterialSource::ExternalSpoolLeft => AmsMapping2Entry {
-                ams_id: AMS_EXTERNAL_SPOOL_ID,
+                ams_id: AMS_EXTERNAL_SPOOL_DEPUTY_ID,
                 slot_id: 0,
             },
             MaterialSource::ExternalSpoolRight => AmsMapping2Entry {
-                ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
                 slot_id: 0,
             },
             MaterialSource::Unmapped => AmsMapping2Entry {
-                ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
-                slot_id: AMS_EXTERNAL_SPOOL_ALT_ID,
+                ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+                slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
             },
         }
     }
@@ -153,10 +153,25 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
     }
 }
 
+/// Largest `filament_id` the mapping builders will size an output array from.
+///
+/// The array length is driven by the highest filament id in the project (see the Array Length
+/// Rule below), so without a ceiling a single allocation carrying a huge id — `usize::MAX`, or
+/// any large value read out of an untrusted slicer project file — would size the allocation from
+/// caller-supplied data. On `alloc`/`embassy` that is an OOM abort in a fixed heap, not a
+/// recoverable error.
+///
+/// `20` is the physical ceiling: 16 flat channels (4 standard units × 4 slots) plus the 4 further
+/// ids an AMS-HT configuration can add. Allocations above it are dropped through the same
+/// `log::warn!` path as any other out-of-range filament id.
+pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize = 20;
+
 /// Builds the flat `ams_mapping` integer array from raw project allocations.
 ///
 /// `allocations` is a slice of `(filament_id, MaterialSource)` pairs where `filament_id`
 /// represents the 1-based index (1 to N) of the project material defined in the slicer.
+/// Ids above [`AMS_MAX_PROJECT_FILAMENTS`] are dropped with a warning rather than sizing the
+/// output array.
 ///
 /// **Array Length Rule [REF-AMS-MAP]:**
 /// The length of the array is governed by the highest filament ID index present in the project,
@@ -168,16 +183,21 @@ pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
     if allocations.is_empty() {
         return Vec::new();
     }
-    let max_id = allocations.iter().map(|(id, _)| *id).max().unwrap_or(1);
+    let max_id = allocations
+        .iter()
+        .map(|(id, _)| *id)
+        .max()
+        .unwrap_or(1)
+        .min(AMS_MAX_PROJECT_FILAMENTS);
     let mut mapping = vec![-1; max_id];
 
     for (id, source) in allocations {
         if *id > 0 && *id <= max_id {
             mapping[*id - 1] = source.flat_channel_id();
         } else {
-            // filament_id is documented as 1-based (1 to N) — id == 0 (or > max_id,
-            // unreachable since max_id is derived from this same slice) is a caller bug, not a
-            // legitimately-skippable entry.
+            // filament_id is documented as 1-based (1 to N), so id == 0 is a caller bug. The
+            // `> max_id` half is live now that max_id is capped at AMS_MAX_PROJECT_FILAMENTS:
+            // it is what keeps an absurd caller-supplied id from sizing the allocation.
             log::warn!(
                 "build_ams_mapping: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
             );
@@ -195,11 +215,16 @@ pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMap
     if allocations.is_empty() {
         return Vec::new();
     }
-    let max_id = allocations.iter().map(|(id, _)| *id).max().unwrap_or(1);
+    let max_id = allocations
+        .iter()
+        .map(|(id, _)| *id)
+        .max()
+        .unwrap_or(1)
+        .min(AMS_MAX_PROJECT_FILAMENTS);
     let mut mapping2 = vec![
         AmsMapping2Entry {
-            ams_id: AMS_EXTERNAL_SPOOL_ALT_ID,
-            slot_id: AMS_EXTERNAL_SPOOL_ALT_ID
+            ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+            slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID
         };
         max_id
     ];
@@ -238,15 +263,15 @@ pub fn is_external_spool_safety_valid(
     let mut has_physical_ams = false;
     for entry in mapping2 {
         let is_unmapped =
-            entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID && entry.slot_id == AMS_EXTERNAL_SPOOL_ALT_ID;
+            entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID && entry.slot_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
         // Checks both external-spool IDs (254 and 255), matching is_external_spool_safety_valid_flat's
         // uniform treatment — AmsMapping2Entry's fields are public, so a caller can hand-build
         // an entry with ams_id 254 (normally IDEX-only, via MaterialSource::ExternalSpoolLeft)
         // on a single-nozzle printer. Treating it as physical here would dispatch use_ams:true
         // for a non-physical channel, reproducing the 07FF_8012 lockup this function exists to
         // prevent.
-        let is_external = (entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID
-            || entry.ams_id == AMS_EXTERNAL_SPOOL_ID)
+        let is_external = (entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID
+            || entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID)
             && entry.slot_id == 0;
         // An entry that's neither the unmapped sentinel nor a recognized external id must be a
         // validly-ranged standard or AMS-HT entry before counting it as physical — an
@@ -308,7 +333,7 @@ pub fn is_ams_pool_composition_valid(
     let mut ht_ids = Vec::new();
     for entry in mapping2 {
         let is_external_sentinel =
-            entry.ams_id == AMS_EXTERNAL_SPOOL_ID || entry.ams_id == AMS_EXTERNAL_SPOOL_ALT_ID;
+            entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
         if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
             if !standard_ids.contains(&entry.ams_id) {
                 standard_ids.push(entry.ams_id);
@@ -459,7 +484,7 @@ mod tests {
 
     #[test]
     fn test_validate_external_spool_safety_single_nozzle_ams_id_254() {
-        // ams_id 254 (AMS_EXTERNAL_SPOOL_ID) is normally only produced by
+        // ams_id 254 (AMS_EXTERNAL_SPOOL_DEPUTY_ID) is normally only produced by
         // MaterialSource::ExternalSpoolLeft on IDEX builds, but AmsMapping2Entry's fields are
         // public — a caller can hand-build one with 254 on a single-nozzle printer too. Must be
         // treated as external the same as 255, or use_ams would stay true for a non-physical

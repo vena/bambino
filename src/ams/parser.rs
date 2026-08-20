@@ -22,8 +22,18 @@ pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
 pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
 pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
-pub(crate) const AMS_EXTERNAL_SPOOL_ID: u8 = 254;
-pub(crate) const AMS_EXTERNAL_SPOOL_ALT_ID: u8 = 255;
+/// The single-nozzle external spool, and IDEX's right (primary) carriage — BambuStudio's
+/// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md:165-166,200`). This is the id an
+/// `ams_mapping2` payload must carry for a single-nozzle printer; sending the deputy id
+/// instead targets physical AMS tray 0 and produces firmware error `0700_8012`.
+pub(crate) const AMS_EXTERNAL_SPOOL_MAIN_ID: u8 = 255;
+/// IDEX's left (deputy) carriage — BambuStudio's `VIRTUAL_TRAY_DEPUTY_ID`. Meaningful only on
+/// dual-nozzle IDEX machines.
+///
+/// The previous names had these two roles inverted (`..._ID = 254` / `..._ALT_ID = 255`), which
+/// made the "alternate" constant the main id and was the standing trap behind the repeated
+/// 254/255 confusion in issues #42, #50, and #56.
+pub(crate) const AMS_EXTERNAL_SPOOL_DEPUTY_ID: u8 = 254;
 pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
 
 /// Evaluates if a physical spool is present in a specific standard AMS slot.
@@ -69,6 +79,15 @@ pub fn evaluate_spool_presence(
     // dedicated bit range in tray_exist_bits, starting right after the standard units'
     // (base offset 16, since AMS_MAX_STANDARD_ID=3 caps the standard range at bits 0-15).
     if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
+        // An AMS-HT unit is single-slot, and consecutive unit ids occupy *consecutive* bits, so
+        // the `16 + (ams_id - 128) + tray_id` formula is only unambiguous at `tray_id == 0`: any
+        // other value aliases onto a neighbouring unit's bit (e.g. `(128, 1)` reads unit 129's).
+        // The overflow guard below cannot catch that — it only fires once the alias runs off the
+        // end of the mask — so reject the out-of-range slot explicitly, mirroring the standard
+        // branch's own `tray_id >= AMS_SLOTS_PER_UNIT` check.
+        if tray_id != 0 {
+            return None;
+        }
         let shift_ht = 16u32 + (ams_id - AMS_HT_ID_MIN) as u32 + tray_id as u32;
         if shift_ht >= 32 {
             return None;
@@ -159,7 +178,7 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
 #[must_use]
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-    let is_external = ams_id == AMS_EXTERNAL_SPOOL_ID || ams_id == AMS_EXTERNAL_SPOOL_ALT_ID;
+    let is_external = ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
 
     if is_ht || is_external {
         Some(ams_id)

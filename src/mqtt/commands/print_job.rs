@@ -10,10 +10,35 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
+use crate::ams::parser::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use crate::ams::{is_external_spool_safety_valid, is_external_spool_safety_valid_flat};
 use crate::models::PrinterModel;
 
 use super::ClampedTaskId;
+
+/// Folds flat `ams_mapping` channel ids outside the documented space to the `-1` unmapped
+/// sentinel, logging each one.
+///
+/// Valid ids are `-1` (unmapped), `0..=15` (4 standard units × 4 slots), and `128..=135`
+/// (AMS-HT). Firmware rejects anything else — `254`/`255` in particular — with a visible
+/// `0700_8012`/`07FF_8012` error (`reference/05_materials_ams.md:151`).
+///
+/// Called from both `PrintJobConfig::with_ams` and `ProjectFileRequest::from_config`: the
+/// builder is only a convenience, and `from_config` is the actual enforcement point, since
+/// `ams_mapping` is a public field on a struct that is not `#[non_exhaustive]` (issue #120).
+fn sanitize_flat_mapping(mapping: Vec<i32>, ctx: &str) -> Vec<i32> {
+    mapping
+        .into_iter()
+        .map(|v| {
+            if v == -1 || (0..=15).contains(&v) || (128..=135).contains(&v) {
+                v
+            } else {
+                log::warn!("{ctx}: out-of-range flat channel id {v}, mapping to -1 (unmapped)");
+                -1
+            }
+        })
+        .collect()
+}
 
 /// Tri-state calibration setting: force every print, skip entirely, or let the firmware decide
 /// based on whether the relevant calibration ran recently [REF-MQTT-LIFECYCLE].
@@ -128,22 +153,15 @@ impl PrintJobConfig {
     /// `07FF_8012`, `reference/05_materials_ams.md:151`). The `with_ams_mapping2`-derived path
     /// already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
     /// (issue #56).
+    ///
+    /// This is a convenience, not the enforcement point: `ams_mapping` is a public field, so
+    /// `ProjectFileRequest::from_config` re-runs the same sanitization at serialization time
+    /// (issue #120). Bypassing this builder cannot produce an out-of-range flat channel on the
+    /// wire.
     #[must_use]
     pub fn with_ams(mut self, mapping: Vec<i32>) -> Self {
         self.use_ams = true;
-        self.ams_mapping = mapping
-            .into_iter()
-            .map(|v| {
-                if v == -1 || (0..=15).contains(&v) || (128..=135).contains(&v) {
-                    v
-                } else {
-                    log::warn!(
-                        "with_ams: out-of-range flat channel id {v}, mapping to -1 (unmapped)"
-                    );
-                    -1
-                }
-            })
-            .collect();
+        self.ams_mapping = sanitize_flat_mapping(mapping, "with_ams");
         self
     }
 
@@ -306,8 +324,38 @@ impl ProjectFileRequest {
         let url = format!("ftp://{}", config.job_filename);
 
         let is_single_nozzle = model.quirks().physical_nozzle_count() == 1;
+
+        // Normalize before anything reads it. `ams_mapping2` is a public field, so a caller can
+        // set `MaterialSource::ExternalSpoolLeft`'s `{254, 0}` — documented IDEX-only — on a
+        // single-nozzle printer, where `reference/05_materials_ams.md:200` says the payload must
+        // always carry `255`: transmitting `254` targets physical AMS tray 0 instead of the
+        // external spool and yields firmware error `0700_8012` (issue #119).
+        let normalized_mapping2 = config.ams_mapping2.as_ref().map(|mapping2| {
+            if !is_single_nozzle {
+                return mapping2.clone();
+            }
+            mapping2
+                .iter()
+                .map(|entry| {
+                    if entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID {
+                        log::warn!(
+                            "from_config: ams_mapping2 entry uses the IDEX deputy external-spool id {} on a single-nozzle model; normalizing to {}",
+                            AMS_EXTERNAL_SPOOL_DEPUTY_ID,
+                            AMS_EXTERNAL_SPOOL_MAIN_ID
+                        );
+                        AmsMapping2Entry {
+                            ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+                            slot_id: entry.slot_id,
+                        }
+                    } else {
+                        entry.clone()
+                    }
+                })
+                .collect()
+        });
+
         let use_ams = config.use_ams
-            && match &config.ams_mapping2 {
+            && match &normalized_mapping2 {
                 Some(mapping2) => is_external_spool_safety_valid(is_single_nozzle, mapping2),
                 None => is_external_spool_safety_valid_flat(is_single_nozzle, &config.ams_mapping),
             };
@@ -316,9 +364,13 @@ impl ProjectFileRequest {
         // ams_mapping, so a caller who only calls that builder previously got a populated
         // ams_mapping2 paired with an empty ams_mapping, breaking the documented 1:1 index
         // pairing the firmware relies on [REF-AMS-MAP].
-        let flat_mapping: Vec<i32> = match &config.ams_mapping2 {
+        // Sanitize the raw path here rather than trusting `with_ams` to have done it: every
+        // `PrintJobConfig` field is public and the struct is not `#[non_exhaustive]`, so
+        // `config.ams_mapping = vec![255]` bypasses the builder entirely (issue #120). The
+        // mapping2-derived branch is already sanitized by `flat_channel_id_for_entry`.
+        let flat_mapping: Vec<i32> = match &normalized_mapping2 {
             Some(mapping2) => mapping2.iter().map(flat_channel_id_for_entry).collect(),
-            None => config.ams_mapping.clone(),
+            None => sanitize_flat_mapping(config.ams_mapping.clone(), "from_config"),
         };
         let mapping = if use_ams {
             AmsMappingTable::Active(flat_mapping)
@@ -371,7 +423,7 @@ impl ProjectFileRequest {
                 // `ams_mapping2` array) — see [REF-MQTT-LIFECYCLE] for the firmware error
                 // (`0700_8012`) this shape causes.
                 ams_mapping2: if use_ams {
-                    config.ams_mapping2.clone()
+                    normalized_mapping2.clone()
                 } else {
                     None
                 },
