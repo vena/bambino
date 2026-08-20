@@ -223,13 +223,35 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     // A present-but-empty DevModel header (`Some("")`) must not short-circuit the
     // NT/ST fallback — `.filter()` treats it the same as absent, matching the intent of "use
     // the header if it actually carries a value."
-    let effective_dev_model = raw
-        .dev_model
-        .filter(|s| !s.is_empty())
-        .or_else(|| raw.nt_or_st.and_then(extract_model_from_nt_st));
+    let mut effective_dev_model = raw.dev_model.filter(|s| !s.is_empty());
+    let nt_st_model = raw.nt_or_st.and_then(extract_model_from_nt_st);
 
     let (ip, port) = raw.location.and_then(parse_location)?;
-    let model = resolve_model(&serial, effective_dev_model);
+    let mut model = resolve_model(&serial, effective_dev_model);
+
+    // Protocol Violation #7 requires the NT/ST fallback when `DevModel` is missing *or
+    // malformed*, so it's conditioned on resolution failing, not on the header being absent: a
+    // present-but-unrecognized token (a new SKU string, a firmware typo) would otherwise pin a
+    // live printer to `PrinterModel::Unknown` and its conservative quirks profile even though
+    // NT/ST names a model this crate knows. The retry is only adopted when it actually
+    // resolves, so a junk `DevModel` is still reported verbatim in `raw_model_str` when NT/ST
+    // can't do better.
+    if model == PrinterModel::Unknown
+        && let Some(nt_model) = nt_st_model
+    {
+        let retried = resolve_model(&serial, Some(nt_model));
+        if retried != PrinterModel::Unknown {
+            model = retried;
+            effective_dev_model = Some(nt_model);
+        }
+    }
+
+    // With no DevModel header at all, the NT/ST-embedded token is the only model string this
+    // packet carries — report it in `raw_model_str` even when the serial prefix already
+    // resolved the model without needing it.
+    if effective_dev_model.is_none() {
+        effective_dev_model = nt_st_model;
+    }
 
     // Require a positive Bambu-specific signal before accepting the packet as a
     // printer record — USN+LOCATION alone is standard SSDP boilerplate any UPnP device
@@ -407,6 +429,42 @@ mod tests {
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.model, PrinterModel::P1S);
         assert_eq!(device.raw_model_str, "C12");
+    }
+
+    #[test]
+    fn test_malformed_dev_model_falls_back_to_nt_st() {
+        // Protocol Violation #7's fallback covers a *malformed* DevModel, not just a missing
+        // one: the header used to win unconditionally whenever it was non-empty, so an
+        // unrecognized token plus a resolvable NT/ST resolved to Unknown and bound a live P1S
+        // to the conservative fallback quirks profile. Unrecognized serial prefix ("999") so
+        // the model can only come from the header or NT/ST.
+        let payload = b"NOTIFY * HTTP/1.1\r\n\
+                        HOST: 239.255.255.250:2021\r\n\
+                        LOCATION: http://192.168.1.42:80/\r\n\
+                        USN: 999123456789012\r\n\
+                        DevModel.bambu.com: NOT-A-REAL-MODEL\r\n\
+                        NT: urn:bambulab-com:device:C12:1\r\n\r\n";
+
+        let device = parse_ssdp_payload(payload).unwrap();
+        assert_eq!(device.model, PrinterModel::P1S);
+        assert_eq!(device.raw_model_str, "C12");
+    }
+
+    #[test]
+    fn test_unresolvable_dev_model_is_still_reported_verbatim() {
+        // When NT/ST can't do better either, the junk DevModel token stays in raw_model_str
+        // rather than being replaced by an equally unresolvable NT/ST token — the retry is
+        // only adopted when it resolves.
+        let payload = b"NOTIFY * HTTP/1.1\r\n\
+                        HOST: 239.255.255.250:2021\r\n\
+                        LOCATION: http://192.168.1.42:80/\r\n\
+                        USN: 999123456789012\r\n\
+                        DevModel.bambu.com: NOT-A-REAL-MODEL\r\n\
+                        NT: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
+
+        let device = parse_ssdp_payload(payload).unwrap();
+        assert_eq!(device.model, PrinterModel::Unknown);
+        assert_eq!(device.raw_model_str, "NOT-A-REAL-MODEL");
     }
 
     #[test]
