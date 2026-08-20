@@ -365,6 +365,16 @@ The `"ams_mapping"` field varies conditionally based on the operating mode:
         *   *Array Type Requirement*: Flat mapping must use -1 for unmapped or external/virtual spools; the firmware does not accept raw virtual tray IDs like 254/255 in the flat array, which would cause the print initialization to fail with `0700_8012` "Failed to get AMS mapping table".
         *   *Sub-mapping Detail (`ams_mapping2`)*: For detailed nozzle and material routing, the printer relies on structural extensions which map physical AMS slots or external feeders to corresponding extruder positions.
 
+###### Deliberately Omitted Fields (`md5`, `cfg`, `extrude_cali_manual_mode`)
+Upstream bambuddy sends three fields in `project_file` that bambino does not, all as fixed defaults: `"md5": ""`, `"cfg": "0"`, and `"extrude_cali_manual_mode": 0`. **The omission is deliberate, not an oversight — do not "fix" it without new evidence.**
+
+*   Prints submitted by bambino succeed on a P1S without them, which is the only direct evidence available about whether firmware requires them. It does not.
+*   All three are constants in upstream, never varying with job configuration. Nothing computes an actual MD5; the field is sent empty.
+*   BambuStudio's own payload cannot be consulted. `project_file` is assembled inside the closed-source `bambu_networking` library — the open tree only marshals values into `BBL::PrintParams` (`slic3r/Utils/bambu_networking.hpp`, `GUI/Jobs/PrintJob.cpp`) and hands them over. Reading BambuStudio's source cannot answer which fields it puts on the wire.
+*   Observing BambuStudio's traffic was investigated and ruled out as disproportionate: the `request` topic is not subscribable (see "Topic Access Control" below), BambuStudio's own logs are encrypted (`*_enc.log`), and it verifies the printer's TLS certificate — so a capture requires installing a custom CA into the slicer's trust store plus a TLS-terminating relay. That is a reasonable thing to build for general protocol capture, but not to confirm three inert constants.
+
+If a capture ever *does* become available, check these three first and update this note.
+
 ###### Model Gate (`vibration_cali`)
 `vibration_cali` is sent on every model **except P2S**, where it must be forced to `false` regardless of the caller's request. The P2S does not run vibration compensation the way the X1/P1 series does.
 
