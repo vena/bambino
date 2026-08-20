@@ -260,21 +260,24 @@ impl PrinterModel {
 /// the space-separated form (`G28 X`). Rejects numeric extensions of the command number (e.g.
 /// `G280`, `G281`), which are distinct G-codes, not `G28` with a trailing digit. `no_std` rules
 /// out `regex`, hence the manual byte/char scan.
+///
+/// Each line is reduced to its executable G-code (see [`executable_gcode`]) *before* the scan
+/// starts, so neither the `G28` match itself nor the axis letters after it can come from
+/// non-executable text: `"; G28 Z"` (match inside a comment), `"G28 ; home Z"` (axis letter
+/// inside a trailing comment), and `"M117 G28 Z"` (match inside a display message) are all
+/// correctly treated as safe.
 fn line_has_unsafe_homing(line: &str) -> bool {
-    let bytes = line.as_bytes();
+    let code_only = executable_gcode(line);
+    let bytes = code_only.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
         if is_g28_prefix(bytes, i) {
-            let rest = &line[i + 3..];
-            let next_is_digit = rest
+            let code = &code_only[i + 3..];
+            let next_is_digit = code
                 .chars()
                 .next()
                 .map(|c| c.is_ascii_digit())
                 .unwrap_or(false);
-            // Truncate at the first comment marker before scanning for axis letters — a
-            // trailing `; home XYZ` or `(home XYZ)` comment on a bare (all-axis) G28 must not
-            // be mistaken for an explicit axis-constrained G28 X/Y/Z.
-            let code = rest.split(';').next().unwrap_or("").split('(').next().unwrap_or("");
             if !next_is_digit
                 && code
                     .chars()
@@ -286,6 +289,29 @@ fn line_has_unsafe_homing(line: &str) -> bool {
         i += 1;
     }
     false
+}
+
+/// Returns the executable portion of one G-code line — the part a `G28` scan may legitimately
+/// match inside.
+///
+/// Two kinds of non-executable text are removed:
+///
+/// 1. Comments: everything from the first `;` or `(`. Both markers are located in one pass
+///    because either may come first, and only the earlier one bounds the executable text —
+///    splitting on `;` first would keep a `(`-comment that opened before it, and vice versa.
+/// 2. `M117` display-message operands: `M117` consumes the rest of its line as free-form text
+///    for the printer's LCD, so a `G28` appearing there is a message, not a command. `M117` is
+///    handled and its `M118`-style siblings are not because it is the case actually observed;
+///    the scan stays conservative (it only ever *drops* rejections it can prove are text).
+fn executable_gcode(line: &str) -> &str {
+    let end = line.find([';', '(']).unwrap_or(line.len());
+    let code = &line[..end];
+
+    let trimmed = code.trim_start();
+    let is_m117 = trimmed.len() >= 4
+        && trimmed[..4].eq_ignore_ascii_case("M117")
+        && trimmed[4..].chars().next().is_none_or(|c| !c.is_ascii_alphanumeric());
+    if is_m117 { "" } else { code }
 }
 
 /// Returns true if `bytes[i..]` starts with `G28` (case-insensitive on the `G`; `2`/`8` are digits with no case to normalize).
@@ -885,6 +911,24 @@ mod tests {
         assert!(!q.is_unsafe_homing_command("G28 (home XYZ before print)"));
         // A genuine axis-constrained G28 before the comment must still be flagged.
         assert!(q.is_unsafe_homing_command("G28 Z ; home Z only"));
+    }
+
+    #[test]
+    fn test_unsafe_homing_ignores_non_executable_g28() {
+        // Regression (issue #100): the mirror image of #55 — the G28 *match itself* sitting in
+        // text that is not executable G-code, either a comment that opened earlier on the line
+        // or an M117 display message. The executable G-code on each of these lines is safe (or
+        // absent), so none may be rejected.
+        let q = PrinterModel::P1P.quirks();
+        assert!(!q.is_unsafe_homing_command("; G28 Z"));
+        assert!(!q.is_unsafe_homing_command("(G28 Z)"));
+        assert!(!q.is_unsafe_homing_command("M400 ; then G28 Z manually"));
+        assert!(!q.is_unsafe_homing_command("M117 G28 Z"));
+        assert!(!q.is_unsafe_homing_command("  m117 now homing G28 Z"));
+        // M1170 is a different command, not M117 with a trailing digit — do not swallow it.
+        assert!(q.is_unsafe_homing_command("M1170 G28 Z"));
+        // Only the commented line is inert; a real G28 Z on another line still counts.
+        assert!(q.is_unsafe_homing_command("; G28 Z\nG28 Z"));
     }
 
     #[test]
