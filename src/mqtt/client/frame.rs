@@ -7,7 +7,39 @@ use alloc::vec::Vec;
 
 use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 
+/// Largest MQTT payload this client will allocate for, on a full host.
+///
+/// `read_exact_packet` sizes its payload buffer from the *declared* remaining length before a
+/// single payload byte has arrived, so this constant is the ceiling on what a peer can make
+/// this client allocate by asserting a length. It also bounds the outbound side via
+/// `publish_command`, and is load-bearing for `pending.rs`'s `MQTT_PENDING_BUFFER_MAX_BYTES`
+/// assertion.
+///
+/// For scale: the largest payload in this repo's captured P1S print sequence is ~3.1 KB and a
+/// full `pushall` is ~3.9 KB, so even the constrained value below carries ~16x headroom.
+#[cfg(all(feature = "std", not(feature = "esp-idf")))]
 pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
+
+/// Largest MQTT payload this client will allocate for on a memory-constrained target.
+///
+/// Scaled down from the host's 1 MiB because that value is not survivable here: a single
+/// PUBLISH *declaring* a 1 MiB remaining length forces `vec![0u8; rem_len]` on
+/// firmware-controlled input, and a heap that cannot satisfy it calls `handle_alloc_error` and
+/// aborts rather than returning a recoverable error. `pending.rs` already notes that RAM on
+/// these targets is measured in KB.
+///
+/// Covers ESP-IDF as well as `no_std`/Embassy: `esp-idf` implies `std`, so gating on `std`
+/// alone would have left an ESP32 — one of the two targets this bound exists for — at the host
+/// value. The predicate here is the exact negation of the host one above, so exactly one
+/// definition is ever live.
+///
+/// This bounds the *ceiling*; it does not stop a peer from making the client allocate the full
+/// 64 KiB by declaring it and then sending nothing. Removing that amplification means growing
+/// the payload buffer as bytes actually arrive, which changes `FrameReadState::ReadingPayload`'s
+/// "buf is pre-sized to the full payload length" invariant and so needs hardware verification
+/// per `.claude/rules/wire-framing-hardware-verification.md` — tracked separately.
+#[cfg(any(not(feature = "std"), feature = "esp-idf"))]
+pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 65_536; // 64 KiB
 
 /// Per-call deadline for `read_exact_packet` when a genuine wall-clock [`TimerProvider`] is available (see [`TimerProvider::has_real_clock`]).
 ///

@@ -8,11 +8,22 @@ use std::collections::VecDeque;
 use super::{MqttClient, MqttMessage};
 use crate::io::AsyncIo;
 
-/// Upper bound on the combined topic+payload size of all buffered `pending_messages`.
-/// Generous for a handful of telemetry updates, small enough to stay safe on ESP32.
-/// Once exceeded, `push_pending()` evicts from the front (oldest first) until the new
-/// message fits, logging a `log::warn!` for each eviction.
+/// Upper bound on the combined topic+payload size of all buffered `pending_messages`, on a
+/// full host.
+/// Generous for a handful of telemetry updates. Once exceeded, `push_pending()` evicts from the
+/// front (oldest first) until the new message fits, logging a `log::warn!` for each eviction.
+#[cfg(all(feature = "std", not(feature = "esp-idf")))]
 pub(crate) const MQTT_PENDING_BUFFER_MAX_BYTES: usize = 2_097_152; // 2 MiB
+
+/// Upper bound on buffered `pending_messages` on a memory-constrained target.
+///
+/// Moved in step with `MQTT_MAX_PAYLOAD_BYTES` (frame.rs), not scaled independently: the
+/// assertion below requires one worst-case message to fit under this cap, so scaling the
+/// payload bound without this one would leave a 2 MiB reserve on a heap measured in KB, and
+/// scaling this one without that would fail to compile. Same target predicate as there, so the
+/// two always move together.
+#[cfg(any(not(feature = "std"), feature = "esp-idf"))]
+pub(crate) const MQTT_PENDING_BUFFER_MAX_BYTES: usize = 262_144; // 256 KiB
 
 // `push_pending`'s eviction loop stops once the buffer is empty (see its `while`
 // guard below) and unconditionally pushes the incoming message regardless of whether it fit
