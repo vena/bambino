@@ -26,9 +26,11 @@ The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public i
 
 ## Quick start
 
+Not on crates.io yet — depend on it from GitHub:
+
 ```toml
 [dependencies]
-bambino = { path = "../bambino" }
+bambino = { git = "https://github.com/vena/bambino" }
 ```
 
 ### Discover printers
@@ -56,7 +58,6 @@ for p in &printers {
 ```rust
 use bambino::client::PrinterClient;
 use bambino::identity::PrinterIdentity;
-use bambino::models::resolve_model;
 use bambino::io::tokio::{
     TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
     build_unsafe_client_config,
@@ -67,8 +68,10 @@ use bambino::io::tokio::{
 let config = build_unsafe_client_config();
 let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
-let model = resolve_model(serial, None);
-let identity = PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string(), model };
+// `new` derives the model from the serial prefix; construct the struct literal
+// directly if you need to override that.
+let identity = PrinterIdentity::new(ip, serial, access_code);
+let model = identity.model;
 let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity)
     .with_timer(TokioTimer::new())
     .with_connect_timeout(5);
@@ -176,7 +179,7 @@ use bambino::io::tokio::{
 
 // Configure FTPS TLS (respecting model-specific requirements)
 let ftps_config = build_unsafe_client_config_with_options(
-    model.quirks().enforce_ftps_tls_1_2(),
+    model.quirks().enforces_ftps_tls_1_2(),
 );
 let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
@@ -184,7 +187,7 @@ let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer:
 
 // storage() auto-connects on first call
 let ftp = printer.storage().await?;
-let files = ftp.list_directory("/", year, month, day, hour, min).await?;
+let files = ftp.list_directory("/", now).await?; // now: ftps::CurrentDateTime
 ftp.upload_file("/model/print.3mf", &file_bytes).await?;
 let data = ftp.download_file("/timelapse/video.mp4").await?;
 let free = ftp.get_available_space().await?;
@@ -203,7 +206,7 @@ use bambino::camera::binary::BambuBinaryCameraStream;
 use bambino::identity::PrinterIdentity;
 
 let mut cam = BambuBinaryCameraStream::new(tls_stream);
-cam.authenticate(&PrinterIdentity { ip: ip.to_string(), serial: serial.to_string(), access_code: access_code.to_string(), model: bambino::models::resolve_model(&serial, None) }).await?;
+cam.authenticate(&PrinterIdentity::new(ip, serial, access_code)).await?;
 
 let mut frame = Vec::new();
 loop {
@@ -283,7 +286,7 @@ let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config))
 
 `build_verified_client_config()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `build_unsafe_client_config()` is unaffected — it never checks certificate identity.
 
-Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models — P2S and X2D — need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().enforce_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
+Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models — P2S and X2D — need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().enforces_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
 
 This is platform-general — `TokioTlsConnector` and `EspIdfTlsConnector` implement `negotiated_version` for real. `EmbassyTlsConnector` cannot, so Embassy + P2S/X2D is unconditionally rejected by this check rather than downgraded — see the Embassy TLS section below for why, and for the opt-out.
 
@@ -295,10 +298,10 @@ The default feature set (`tokio`) targets desktop/server. For embedded, swap the
 
 ```toml
 # ESP32 with ESP-IDF (std)
-bambino = { path = "../bambino", default-features = false, features = ["esp-idf"] }
+bambino = { git = "https://github.com/vena/bambino", default-features = false, features = ["esp-idf"] }
 
 # Bare-metal with Embassy (no_std + alloc)
-bambino = { path = "../bambino", default-features = false, features = ["embassy"] }
+bambino = { git = "https://github.com/vena/bambino", default-features = false, features = ["embassy"] }
 ```
 
 All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerProvider`, etc.) so library code is platform-agnostic. Platform-specific implementations live in `io::tokio`, `io::esp_idf`, and `io::embassy`.
@@ -395,7 +398,7 @@ Commands:
   discover      Scan the local subnet for nearby active printers
   info          Query expansion bus module and firmware versions
   monitor       Stream real-time status telemetry and HMS warnings
-  dump          Dump the raw pushall JSON response and exit
+  dump          Dump the raw pushall JSON response and exit (or every subsequent push, with --follow)
   probe         Run command response capture suite and write report
   ack-probe     Check which MQTT commands echo a correlatable `sequence_id` ack
   control       Dispatch a movement or hardware control command
@@ -420,10 +423,9 @@ Run 'bambino-cli <COMMAND> --help' for full argument details.
 
 Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   airduct  calibrate  gcode  gcode-raw  pause  resume  stop
+                  gcode-raw prompts for interactive confirmation unless --unsafe is
+                  passed, and bypasses all model safety checks — see its --help.
                   ams (dry | dry-stop)
-                  gcode-raw skips model safety checks and normally prompts for an
-                  interactive "yes" confirmation before sending; pass --unsafe to
-                  skip that confirmation prompt too (e.g. for scripting).
 Files actions:    list  upload  delete  space  clock-check
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
