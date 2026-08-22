@@ -22,6 +22,7 @@ mod probe;
 mod redact;
 mod storage;
 mod table;
+mod trust;
 mod verify_tls;
 
 use connection::resolve_access_code;
@@ -62,6 +63,13 @@ struct Cli {
     /// Enable verbose connection and packet debugging output
     #[arg(short = 'v', long)]
     verbose: bool,
+
+    /// Verify the printer's TLS certificate against these CA certs instead of skipping
+    /// verification entirely. Accepts a single PEM/DER file or a directory of them (e.g.
+    /// --with-certs certs/). Applies to every printer-facing subcommand: MQTT, FTPS, camera.
+    /// Without it the CLI performs no certificate verification at all.
+    #[arg(long, value_name = "PATH", global = true)]
+    with_certs: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -204,16 +212,14 @@ enum Commands {
 
     /// Diagnostic: attempt a real CA-verified TLS handshake (SNI=serial) against a printer
     /// using build_verified_client_config, to validate CnFallbackServerVerifier end-to-end
-    /// (see .claude/rules/tls-identity-sni.md). No FTPS/MQTT traffic is exchanged.
+    /// (see .claude/rules/tls-identity-sni.md). Requires --with-certs. No FTPS/MQTT traffic
+    /// is exchanged.
     VerifyTls {
         ip: String,
         serial: String,
         /// TLS port to connect to (990=FTPS, 8883=MQTT, 322=RTSPS, 6000=camera)
         #[arg(long, default_value_t = 990)]
         port: u16,
-        /// Path to a PEM-encoded CA cert to trust (e.g. certs/bbl-ca-root.pem)
-        #[arg(long)]
-        ca_cert: String,
     },
 }
 
@@ -226,6 +232,16 @@ async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
         .format_target(true)
         .init();
+
+    if let Some(path) = cli.with_certs.as_deref() {
+        match trust::load_trust_anchors(path) {
+            Ok(anchors) => trust::set_trusted_roots(anchors),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            }
+        }
+    }
 
     let result = match cli.command {
         Commands::Discover => discover::run().await,
@@ -313,12 +329,7 @@ async fn main() {
             port,
             output,
         } => inspect_cert::run(&ip, &serial, port, &output).await,
-        Commands::VerifyTls {
-            ip,
-            serial,
-            port,
-            ca_cert,
-        } => verify_tls::run(&ip, &serial, port, &ca_cert).await,
+        Commands::VerifyTls { ip, serial, port } => verify_tls::run(&ip, &serial, port).await,
     };
 
     if let Err(e) = result {

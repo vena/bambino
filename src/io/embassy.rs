@@ -144,7 +144,8 @@ impl<'a> EmbassyTlsConnector<'a> {
     /// Creates a new connector against the single active [`Tls`](::mbedtls_rs::Tls) instance
     /// (via its [`TlsReference`](::mbedtls_rs::TlsReference)), defaulting to no certificate
     /// verification — matching this crate's existing unsafe-by-default convention on other
-    /// platforms (`build_unsafe_client_config`), since Bambu printers use self-signed certs.
+    /// platforms (`build_unsafe_client_config`), since Bambu printer certs chain to a private
+    /// BBL CA that no OS trust store carries.
     pub fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self {
         Self {
             tls,

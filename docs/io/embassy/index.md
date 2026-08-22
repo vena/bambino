@@ -138,7 +138,9 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
   verification — matching this crate's existing unsafe-by-default convention on other
 
-  platforms (`build_unsafe_client_config`), since Bambu printers use self-signed certs.
+  platforms (`build_unsafe_client_config`), since Bambu printer certs chain to a private
+
+  BBL CA that no OS trust store carries.
 
 - <span id="embassytlsconnector-with-ca-chain"></span>`fn with_ca_chain(self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self`
 

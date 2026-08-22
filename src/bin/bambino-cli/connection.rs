@@ -4,11 +4,10 @@ use bambino::client::PrinterClient;
 use bambino::identity::PrinterIdentity;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
 use bambino::io::TokioIo;
-use bambino::io::tokio::{
-    TokioRawStreamFactory, TokioTimer, TokioTlsConnector, build_unsafe_client_config,
-};
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
 
 use crate::error::CliError;
+use crate::trust::build_cli_tls_config;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
@@ -39,7 +38,7 @@ pub type Printer = PrinterClient<
 pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, CliError> {
     validate_params(ip, serial, access_code)?;
 
-    let config = build_unsafe_client_config();
+    let config = build_cli_tls_config(false)?;
     let tls_connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
     Ok(PrinterClient::new(

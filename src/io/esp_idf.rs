@@ -451,8 +451,8 @@ fn build_tls_config<'a>(
     // `Config::new` defaults this to `true` wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is
     // enabled, and ESP-IDF's `set_client_config` checks `crt_bundle_attach` *first* with
     // mutually exclusive branches — so leaving the default on would verify against the public
-    // roots and silently ignore the caller's `ca_cert` below. Bambu printers are self-signed
-    // and cannot chain to a public root, so the bundle is never the anchor this crate wants.
+    // roots and silently ignore the caller's `ca_cert` below. Bambu printer certs chain to a
+    // private BBL CA, never to a public root, so the bundle is never the anchor this crate wants.
     // Cfg gate mirrors the field's own gate in `esp-idf-svc`; it is `build.rs` that makes the
     // gate evaluate at all (see that file — without it this is silently dead code).
     #[cfg(esp_idf_mbedtls_certificate_bundle)]

@@ -13,11 +13,16 @@ use x509_parser::prelude::FromDer;
 /// what actually prevents a MITM (see [`CnFallbackServerVerifier`]'s own doc). Identity is not
 /// checked either: any certificate from any host is accepted for any name.
 ///
-/// **Why this is required:**
-/// Physical Bambu Lab printers (all models) host an onboard local MQTTS/FTPS broker
-/// utilizing self-signed certificates with the printer's serial number in the CN field.
-/// Because these do not trace back to any root authority in OS certificate stores,
-/// standard verifiers reject the connections immediately.
+/// **Why this is the default:**
+/// Physical Bambu Lab printers host an onboard local MQTTS/FTPS broker whose leaf cert carries
+/// the printer's serial number in the CN field and chains to BBL's own private CA, which is in
+/// no OS certificate store — so standard verifiers reject the connection for lack of a trust
+/// anchor, not because the cert is bad. Callers holding the BBL CA certs can verify properly via
+/// [`super::build_verified_client_config`]; this type is the fallback for callers who don't.
+///
+/// Earlier revisions of this comment described the leaf as *self-signed*. That is wrong: a live
+/// P1S (firmware 01.10.00.00) completed a full chain-verified handshake against the BBL CA
+/// anchors, so the leaf is CA-issued and a genuine chain of trust is available.
 #[derive(Debug)]
 pub struct NoCertificateVerification;
 
@@ -196,20 +201,38 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             .collect();
         let mut used = vec![false; parsed_intermediates.len()];
 
+        log::debug!(
+            "Verifying TLS chain: leaf subject='{}' issuer='{}', {} intermediate(s) presented, \
+             {} trust anchor(s) configured",
+            leaf.subject(),
+            leaf.issuer(),
+            parsed_intermediates.len(),
+            self.trusted_roots.len()
+        );
+
         let mut current = &leaf;
         let mut chain_trusted = false;
         // The loop index doubles as the number of intermediates already traversed below the cert
         // about to be adopted — one is adopted per iteration that doesn't break — which is what
         // the `pathLenConstraint` check needs.
         for intermediates_below in 0..=parsed_intermediates.len() {
-            if self.trusted_roots.iter().any(|root_der| {
-                let Ok((_, root)) = X509Certificate::from_der(root_der.as_ref()) else {
-                    return false;
-                };
-                current.issuer().as_raw() == root.subject().as_raw()
+            // `find_map` rather than `any` so the matching anchor's subject can be logged:
+            // with several anchors supplied at once (a root plus its device-CA intermediates,
+            // say) "the handshake succeeded" alone doesn't say *which* one the chain landed on,
+            // which is the whole question when auditing a printer's trust path.
+            let matched_root = self.trusted_roots.iter().find_map(|root_der| {
+                let (_, root) = X509Certificate::from_der(root_der.as_ref()).ok()?;
+                (current.issuer().as_raw() == root.subject().as_raw()
                     && current.verify_signature(Some(root.public_key())).is_ok()
-                    && root.validity().is_valid_at(now_asn1)
-            }) {
+                    && root.validity().is_valid_at(now_asn1))
+                .then(|| root.subject().to_string())
+            });
+            if let Some(root_subject) = matched_root {
+                log::debug!(
+                    "TLS chain anchored: '{}' verified against trusted anchor '{root_subject}' \
+                     after {intermediates_below} intermediate(s)",
+                    current.subject()
+                );
                 chain_trusted = true;
                 break;
             }
@@ -238,6 +261,10 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
             let Some(idx) = next_idx else { break };
             used[idx] = true;
             current = &parsed_intermediates[idx];
+            log::debug!(
+                "TLS chain hop: adopted presented intermediate '{}' as issuer",
+                current.subject()
+            );
             // A cert only gets to *act* as a CA if it says it is one. Without this, a chain hop
             // was accepted on subject/issuer name equality plus signature alone, so anyone
             // holding an ordinary leaf issued by the trusted CA could mint a sub-cert with

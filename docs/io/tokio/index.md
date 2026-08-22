@@ -138,11 +138,16 @@ certificate it presented. That handshake-signature check — not the chain check
 what actually prevents a MITM (see [`CnFallbackServerVerifier`](#cnfallbackserververifier)'s own doc). Identity is not
 checked either: any certificate from any host is accepted for any name.
 
-**Why this is required:**
-Physical Bambu Lab printers (all models) host an onboard local MQTTS/FTPS broker
-utilizing self-signed certificates with the printer's serial number in the CN field.
-Because these do not trace back to any root authority in OS certificate stores,
-standard verifiers reject the connections immediately.
+**Why this is the default:**
+Physical Bambu Lab printers host an onboard local MQTTS/FTPS broker whose leaf cert carries
+the printer's serial number in the CN field and chains to BBL's own private CA, which is in
+no OS certificate store — so standard verifiers reject the connection for lack of a trust
+anchor, not because the cert is bad. Callers holding the BBL CA certs can verify properly via
+[`build_verified_client_config`](#build-verified-client-config); this type is the fallback for callers who don't.
+
+Earlier revisions of this comment described the leaf as *self-signed*. That is wrong: a live
+P1S (firmware 01.10.00.00) completed a full chain-verified handshake against the BBL CA
+anchors, so the leaf is CA-issued and a genuine chain of trust is available.
 
 #### Trait Implementations
 

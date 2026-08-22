@@ -4,7 +4,9 @@ use std::fs;
 use std::path::Path;
 
 use bambino::camera::CameraProtocol;
-use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config};
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector};
+
+use crate::trust::build_cli_tls_config;
 use clap::Subcommand;
 
 use crate::connection::create_printer;
@@ -53,7 +55,7 @@ async fn run_snapshot(
         ));
     }
 
-    let config = build_unsafe_client_config();
+    let config = build_cli_tls_config(false)?;
     let tls_connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
     let mut printer = printer.with_camera(tls_connector, TokioRawStreamFactory);

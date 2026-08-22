@@ -29,7 +29,8 @@
 //! };
 //!
 //! async fn example() -> Result<(), bambino::Error> {
-//!     // Printers use self-signed certs, so we skip verification
+//!     // Printer certs chain to BBL's private CA, absent from OS trust stores;
+//!     // skip verification unless you can supply that CA
 //!     let tls_config = build_unsafe_client_config();
 //!     let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
 //!

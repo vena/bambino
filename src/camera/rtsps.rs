@@ -13,8 +13,9 @@
 //!
 //! # RTSPS proxy architecture
 //!
-//! The printer's RTSPS server uses a self-signed TLS certificate that standard media players
-//! cannot validate. The common integration pattern is a local decryption proxy:
+//! The printer's RTSPS server presents a TLS certificate issued by BBL's private CA, which no
+//! media player's trust store carries, so standard players cannot validate it. The common
+//! integration pattern is a local decryption proxy:
 //!
 //! 1. A proxy listens on `127.0.0.1:<local_port>` accepting plain `rtsp://` connections
 //! 2. The media player connects to `rtsp://127.0.0.1:<local_port>/streaming/live/1`

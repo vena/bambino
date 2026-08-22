@@ -2,7 +2,10 @@
 
 Async Rust library for talking to Bambu Lab 3D printers over your local network. No Bambu Cloud, just direct MQTT, FTPS, and camera access from one codebase that compiles to desktop, ESP32 (ESP-IDF), and bare-metal (Embassy) targets.
 
-**🤖 DISCLOSURE:** This was built with heavy assistance from AI. This exists because I wanted it for another project, and I barely know Rust myself! 3D printers are expensive and deal with [high temperatures](#safety-notice), so bare this in mind before you unleash my slop upon your baby.
+**🤖 DISCLOSURE:** This was built with heavy assistance from AI. This exists because I wanted it for a personal project, and I barely know Rust myself! 3D printers are expensive and deal with [high temperatures](#safety-notice), so bear this in mind before you unleash my slop upon your baby.
+
+Huge shout-out to the projects in [Acknowledgements](#acknowledgements
+), without which I wouldn't have gotten far.
 
 ## What it does
 
@@ -58,7 +61,8 @@ use bambino::io::tokio::{
     build_unsafe_client_config,
 };
 
-// Printers use self-signed certs, so we skip verification
+// Printer certs chain to BBL's private CA, absent from OS trust stores;
+// skip verification unless you can supply that CA (see "TLS configuration")
 let config = build_unsafe_client_config();
 let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
 
@@ -252,7 +256,7 @@ P2S models on certain firmware versions have a bug where RTP timestamps don't ad
 
 ## TLS configuration
 
-By default, `build_unsafe_client_config()` skips certificate verification — necessary because all Bambu printers use self-signed certs. For environments where you can provision your own CA, use `build_verified_client_config()`:
+By default, `build_unsafe_client_config()` skips certificate verification. A printer's leaf cert carries its serial in the CN and chains to BBL's own private CA, which is in no OS trust store — so the default exists because most callers have no anchor to verify against, not because the cert is unverifiable. If you hold the BBL CA certs (or provision your own), `build_verified_client_config()` performs a real chain-of-trust, handshake-signature, and CN-identity check; this has been confirmed end-to-end against a live P1S over both MQTT (8883) and FTPS (990):
 
 > This section covers the `tokio` backend. ESP-IDF chooses its trust anchor differently and needs target configuration to skip verification at all — see "ESP-IDF certificate verification" under [Platform targets](#platform-targets).
 
@@ -356,7 +360,7 @@ let ftps_tls = EspIdfTlsConnector::with_certs(ca_cert, None);
 let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTimer::new()?);
 ```
 
-**ESP-IDF certificate verification:** ESP-IDF picks exactly one trust anchor, checking them in a fixed order with mutually exclusive branches — its bundled public root CAs first, then a caller-supplied CA, then no verification at all. `esp-idf-svc` defaults the bundle **on** wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is enabled, so this crate turns it off explicitly: a self-signed printer certificate can never chain to a public root, and leaving the default on would silently ignore a CA you passed to `with_certs`.
+**ESP-IDF certificate verification:** ESP-IDF picks exactly one trust anchor, checking them in a fixed order with mutually exclusive branches — its bundled public root CAs first, then a caller-supplied CA, then no verification at all. `esp-idf-svc` defaults the bundle **on** wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is enabled, so this crate turns it off explicitly: a printer certificate chains to BBL's private CA, never to a public root, and leaving the default on would silently ignore a CA you passed to `with_certs`.
 
 `EspIdfTlsConnector::with_certs(ca, client_auth)` is therefore the recommended path on this platform. The CA you supply becomes the sole trust anchor and needs no sdkconfig changes. Certificates are a runtime input — none are embedded in this crate.
 
@@ -401,8 +405,12 @@ Commands:
   help          Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose  Enable verbose connection and packet debugging output
-  -h, --help     Print help
+  -v, --verbose       Enable verbose connection and packet debugging output
+      --with-certs <PATH>
+                      Verify the printer's TLS certificate against these CA certs
+                      instead of skipping verification. Accepts a cert file or a
+                      directory of them; applies to every printer-facing subcommand.
+  -h, --help          Print help
 
 Most commands require positional args: <IP> <SERIAL> <ACCESS_CODE>
 ACCESS_CODE may be omitted (or passed as "") to fall back to the
@@ -420,6 +428,11 @@ Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
 Ack-probe:        -o/--output  -t/--tests  --window
 ```
+
+Without `--with-certs`, the CLI performs no certificate verification at all — traffic is
+encrypted but the peer is unauthenticated. With it, every connection goes through
+`CnFallbackServerVerifier` (chain of trust, handshake signature, CN-vs-serial identity), and
+`-v` prints which anchor the chain resolved against. `verify-tls` requires the flag.
 
 `ack-probe` dispatches real commands to determine which of them echo a correlatable
 `sequence_id`. Depending on `-t/--tests`, that set can include physically-actuating commands
@@ -459,6 +472,7 @@ The [protocol spec](reference/00_index.md) and this library would not have been 
 - [ha-bambulab](https://github.com/greghesp/ha-bambulab/)
 - [bambu-printer-manager](https://github.com/synman/bambu-printer-manager/)
 - [OpenBambuAPI](https://github.com/Doridian/OpenBambuAPI/)
+- [SpoolEase](https://github.com/yanshay/spoolease) - Not directly referenced for this project, but they deserve a special shout-out for many reasons.
 
 ## Safety Notice
 
