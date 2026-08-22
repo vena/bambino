@@ -5,6 +5,10 @@ edition = "2024"
 authors = ["vena <deaconvena+bambino@gmail.com>"]
 description = "A multi-platform, asynchronous Rust library for direct local network control of Bambu Lab 3D printers."
 license = "AGPL-3.0"
+repository = "https://github.com/vena/bambino"
+documentation = "https://docs.rs/bambino"
+keywords = ["bambu", "3d-printing", "mqtt", "ftps", "no-std"]
+categories = ["network-programming", "embedded", "no-std", "hardware-support", "api-bindings"]
 exclude = ["esp32-hw-probe/"]
 
 [features]

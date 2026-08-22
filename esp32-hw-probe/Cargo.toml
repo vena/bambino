@@ -5,6 +5,10 @@ authors = ["Daniel Vena <deaconvena+bambino@gmail.com>"]
 edition = "2021"
 resolver = "2"
 rust-version = "1.82"
+repository = "https://github.com/vena/bambino"
+description = "Bare-metal hardware probe harness for bambino's ESP-IDF target. Not published."
+license = "AGPL-3.0"
+publish = false
 
 [[bin]]
 name = "esp32-hw-probe"
