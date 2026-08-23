@@ -205,7 +205,7 @@ async fn test_read_response_leftover_bytes_carry_to_next_call() {
     // logically separate replies to the same command (e.g. `150` then `226`) without
     // waiting for the client to finish reading the first — both can land in one socket
     // read. `fill_buf` must be threaded across *both* `read_response` calls (as
-    // `BambuFtpsClient` does via its `control_fill_buf` field) so the second call sees the
+    // `FtpsClient` does via its `control_fill_buf` field) so the second call sees the
     // already-buffered `226` line instead of blocking on a socket read that never comes.
     let reader = ChunkedReader::with_chunks(&[
         b"150 Opening data connection.\r\n226 Transfer complete.\r\n",

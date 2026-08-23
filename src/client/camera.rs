@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use crate::camera::binary::BambuBinaryCameraStream;
+use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
@@ -47,15 +47,15 @@ where
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
-    /// Injects a pre-connected [`BambuBinaryCameraStream`] directly.
+    /// Injects a pre-connected [`BinaryCameraStream`] directly.
     ///
     /// Use this for test mocks or Embassy where the caller manages the camera
     /// connection. For lazy connection, use [`.with_camera()`](Self::with_camera).
-    pub fn attach_camera(&mut self, camera: BambuBinaryCameraStream<CameraTls::Stream>) {
+    pub fn attach_camera(&mut self, camera: BinaryCameraStream<CameraTls::Stream>) {
         self.camera = Some(camera);
     }
 
-    /// Returns direct access to the underlying [`BambuBinaryCameraStream`], auto-connecting if needed.
+    /// Returns direct access to the underlying [`BinaryCameraStream`], auto-connecting if needed.
     ///
     /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
     /// [`.attach_camera()`](Self::attach_camera). Returns `Error::ProtocolViolation`
@@ -63,7 +63,7 @@ where
     /// comment.
     pub async fn camera(
         &mut self,
-    ) -> Result<&mut BambuBinaryCameraStream<CameraTls::Stream>, Error> {
+    ) -> Result<&mut BinaryCameraStream<CameraTls::Stream>, Error> {
         self.ensure_camera().await?;
         Ok(self.camera.as_mut().expect("ensure_camera() just verified self.camera is Some"))
     }
@@ -71,7 +71,7 @@ where
     /// Reads the next camera frame, auto-connecting (and authenticating) if needed.
     ///
     /// Bounds the read against `self.timer` (see
-    /// `BambuBinaryCameraStream::read_next_frame_with_timer`), mirroring
+    /// `BinaryCameraStream::read_next_frame_with_timer`), mirroring
     /// [`poll_telemetry()`](Self::poll_telemetry)'s relationship to
     /// [`.mqtt()`](Self::mqtt).
     pub async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error> {
@@ -89,7 +89,7 @@ where
     /// stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
     /// stuck `Some(...)` forever, since `ensure_camera()`'s `is_some()` short-circuit would
     /// keep handing back the same broken stream. There is no protocol-level teardown on
-    /// `BambuBinaryCameraStream` to call — this just clears the slot.
+    /// `BinaryCameraStream` to call — this just clears the slot.
     ///
     /// Idempotent. Reconnecting requires a fresh [`.with_camera()`](Self::with_camera) on a
     /// new `PrinterClient`, the same caveat FTPS already documents for

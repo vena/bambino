@@ -48,7 +48,7 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
 /// `connect()` call (the FTPS control channel) than on every subsequent call (a data-channel
 /// connect) — exercises `open_data_channel`'s own `require_tls_1_2_if_enforced` recheck
 /// (`src/ftps/client.rs`'s "defense in depth" comment) independently of the control-channel
-/// check `BambuFtpsClient::connect` already performs, since TLS session resumption isn't
+/// check `FtpsClient::connect` already performs, since TLS session resumption isn't
 /// verified to carry the negotiated version forward.
 pub struct PerCallVersionReportingTlsConnector {
     pub control: Option<TlsVersion>,
@@ -93,7 +93,7 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for PerCallVersionReportingTlsConnector
 /// `connect()` no longer takes a `port` parameter (`review/io.md` Phase 5.4: the raw stream is
 /// already connected to its target port by the time `connect()` is called, so no implementer
 /// needs it) — control-vs-data-channel is instead exactly "was this the first `connect()` call
-/// on this instance," matching how `BambuFtpsClient` actually sequences connects (control
+/// on this instance," matching how `FtpsClient` actually sequences connects (control
 /// channel once in `connect()`, then one data-channel connect per transfer).
 pub struct FailingDataTlsConnector {
     control_channel_connected: std::sync::atomic::AtomicBool,

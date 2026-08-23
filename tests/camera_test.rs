@@ -1,7 +1,7 @@
 //! # Binary Camera Protocol Integration Tests
 //!
 //! Validates the handshaking and frame extraction logic of the proprietary
-//! Port 6000 binary JPEG stream (`BambuBinaryCameraStream`).
+//! Port 6000 binary JPEG stream (`BinaryCameraStream`).
 //!
 //! Evaluates the client against the `mock_camera` server over an isolated
 //! in-memory duplex stream, ensuring that JPEG magic marker bounds and payload
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::io::DuplexStream;
 use tokio::sync::Mutex;
 
-use bambino::camera::binary::BambuBinaryCameraStream;
+use bambino::camera::binary::BinaryCameraStream;
 use bambino::client::{DummyFactory, DummyTls, PrinterClient};
 use bambino::error::Error;
 use bambino::io::TokioIo;
@@ -37,8 +37,8 @@ async fn test_binary_camera_handshake_and_streaming() {
     let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 3));
 
     // We wrap the raw duplex stream in `TokioIo` to satisfy `AsyncIo` trait bounds.
-    let mut camera_client: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
-        BambuBinaryCameraStream::new(TokioIo(client_stream));
+    let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
+        BinaryCameraStream::new(TokioIo(client_stream));
 
     // This transmits the 80-byte block. The mock server will panic and fail the test
     // if the magic identifiers or access code do not match expectations.
@@ -206,8 +206,8 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
         access_code,
     ));
 
-    let mut camera_client: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
-        BambuBinaryCameraStream::new(TokioIo(client_stream));
+    let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
+        BinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
         .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
@@ -244,8 +244,8 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
         10,
     ));
 
-    let mut camera_client: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
-        BambuBinaryCameraStream::new(TokioIo(client_stream));
+    let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
+        BinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
         .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
@@ -273,8 +273,8 @@ async fn test_attach_and_disconnect_camera() {
     let (client_stream, server_stream) = tokio::io::duplex(8192);
     let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
 
-    let mut camera_stream: BambuBinaryCameraStream<TokioIo<DuplexStream>> =
-        BambuBinaryCameraStream::new(TokioIo(client_stream));
+    let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
+        BinaryCameraStream::new(TokioIo(client_stream));
     camera_stream
         .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
         .await

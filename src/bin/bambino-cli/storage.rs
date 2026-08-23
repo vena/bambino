@@ -184,7 +184,7 @@ pub async fn run(
 /// LAN-mode NTP sync is unreliable, so `list_directory`'s year-rollover math can't be trusted
 /// without checking the printer's clock first.
 async fn run_clock_check<RawIO, Tls, Factory, FtpsTimer>(
-    client: &mut bambino::ftps::BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>,
+    client: &mut bambino::ftps::FtpsClient<RawIO, Tls, Factory, FtpsTimer>,
 ) -> Result<(), Error>
 where
     RawIO: bambino::io::AsyncIo,

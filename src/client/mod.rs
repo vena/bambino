@@ -42,9 +42,9 @@ use serde::Serialize;
 use core::marker::PhantomData;
 
 use crate::camera::CameraProtocol;
-use crate::camera::binary::BambuBinaryCameraStream;
+use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
-use crate::ftps::BambuFtpsClient;
+use crate::ftps::FtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::identity::PrinterIdentity;
 use crate::models::PrinterModel;
@@ -77,7 +77,7 @@ pub(crate) fn clamp_temp(value: u16, max: u16, label: &str) -> u16 {
 
 /// High-level client for controlling a Bambu Lab printer.
 ///
-/// Wraps an MQTT session (connected or lazy) and optionally a [`BambuFtpsClient`] for
+/// Wraps an MQTT session (connected or lazy) and optionally a [`FtpsClient`] for
 /// SD card access. `MqttRawIO`/`MqttTls`/`MqttFactory` are MQTT's [`TlsConnector`]+
 /// [`RawStreamFactory`] pair (mandatory — every `PrinterClient` needs MQTT);
 /// `FtpsRawIO`/`FtpsTls`/`FtpsFactory` are FTPS's independent pair (defaulted, configured via
@@ -111,9 +111,9 @@ pub struct PrinterClient<
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     pub(crate) mqtt: Option<MqttClient<MqttTls::Stream>>,
-    pub(crate) ftps: Option<BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>>,
+    pub(crate) ftps: Option<FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>>,
     pub(crate) ftps_config: Option<(FtpsTls, FtpsFactory, FtpsTimer)>,
-    pub(crate) camera: Option<BambuBinaryCameraStream<CameraTls::Stream>>,
+    pub(crate) camera: Option<BinaryCameraStream<CameraTls::Stream>>,
     pub(crate) camera_config: Option<(CameraTls, CameraFactory)>,
     pub(crate) mqtt_tls: MqttTls,
     pub(crate) mqtt_factory: MqttFactory,
@@ -126,7 +126,7 @@ pub struct PrinterClient<
     pub(crate) connect_timeout_secs: u64,
     pub(crate) mqtt_port: u16,
     pub(crate) ftps_port: u16,
-    /// Bypasses `BambuFtpsClient`'s TLS-1.2-enforcement rejection for P2S/X2D when set —
+    /// Bypasses `FtpsClient`'s TLS-1.2-enforcement rejection for P2S/X2D when set —
     /// see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. Only meaningful for the `embassy`
     /// feature; on `tokio`/`esp-idf`, use `force_tls_1_2` on the `TlsConnector` instead.
     /// Default `false`.

@@ -1,7 +1,7 @@
 //! # Mock FTPS Server
 //!
 //! Provides deterministic, state-machine driven FTP server fixtures designed to test
-//! the `BambuFtpsClient` over in-memory `tokio::io::duplex` streams.
+//! the `FtpsClient` over in-memory `tokio::io::duplex` streams.
 //!
 //! Supports multiple test scenarios via separate server functions, each exercising
 //! different FTPS protocol paths (happy path, A1 plaintext, STAT fallback,

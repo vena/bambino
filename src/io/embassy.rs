@@ -126,7 +126,7 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
 ///
 /// **`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
 /// API to read back the TLS version actually negotiated (confirmed by reading its source, not
-/// assumed). This means `BambuFtpsClient::connect()`'s TLS-1.2 enforcement check still fails
+/// assumed). This means `FtpsClient::connect()`'s TLS-1.2 enforcement check still fails
 /// closed for P2S/X2D even after this backend swap; use
 /// `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
 /// needed (see `src/ftps/CLAUDE.md` and this module's `CLAUDE.md`).
@@ -318,7 +318,7 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
         use ::embedded_nal_async::TcpConnect;
 
         // IPv4-only is deliberate, not a missing case: `host` here is always
-        // `BambuFtpsClient`'s printer IP, which traces back to either a caller-supplied
+        // `FtpsClient`'s printer IP, which traces back to either a caller-supplied
         // literal IP or SSDP discovery (`discovery/parser.rs::parse_location`), which only
         // ever extracts a dotted-decimal IPv4 address from the LOCATION header — Bambu
         // printers don't advertise IPv6 or hostnames. `embassy-net`'s IPv6 stack

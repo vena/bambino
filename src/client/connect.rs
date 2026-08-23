@@ -2,9 +2,9 @@ use core::future::Future;
 use core::marker::PhantomData;
 
 use crate::camera::CameraProtocol;
-use crate::camera::binary::BambuBinaryCameraStream;
+use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
-use crate::ftps::BambuFtpsClient;
+use crate::ftps::FtpsClient;
 use crate::io::{AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, race};
 use crate::mqtt::MqttClient;
 
@@ -230,9 +230,9 @@ where
     /// Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, `FtpsFactory`, and `FtpsTimer`
     /// type parameters. The FTPS [`TlsConnector`] is independent from MQTT's (some models
     /// require different TLS settings for FTPS, e.g. `force_tls_1_2`). `timer` is
-    /// constructed fresh by the caller (e.g. `TokioTimer::new()`) — `BambuFtpsClient` owns it
+    /// constructed fresh by the caller (e.g. `TokioTimer::new()`) — `FtpsClient` owns it
     /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
-    /// out direct `&mut BambuFtpsClient` access rather than mediating every FTPS call itself,
+    /// out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
     /// so there's no call site to thread `self.timer` through the way MQTT/camera do.
     ///
     /// Must not be called on a client with an already-connected FTPS session — the existing
@@ -305,7 +305,7 @@ where
         self
     }
 
-    /// Overrides the default `false` for `BambuFtpsClient`'s TLS-1.2-enforcement bypass.
+    /// Overrides the default `false` for `FtpsClient`'s TLS-1.2-enforcement bypass.
     ///
     /// Only meaningful for the `embassy` feature talking to P2S/X2D, where no available TLS
     /// backend can honestly satisfy `require_tls_1_2_if_enforced`'s exact-version check —
@@ -323,7 +323,7 @@ where
     ///
     /// Short-circuits when `self.ftps` is already `Some`. Otherwise, borrows the TLS
     /// connector and data factory from `ftps_config`, dials a raw connection, and runs
-    /// `BambuFtpsClient::connect_control_stream()` — the whole dial+connect sequence is
+    /// `FtpsClient::connect_control_stream()` — the whole dial+connect sequence is
     /// raced against `self.connect_timeout_secs`. `ftps_config` is only consumed
     /// (`.take()`n) once that attempt has actually succeeded — a failed attempt,
     /// including a `connect_timeout_secs` timeout on a slow LAN, leaves it intact so the
@@ -344,7 +344,7 @@ where
         let (control_stream, fill_buf) =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw_stream = factory.dial(&identity.ip, ftps_port).await?;
-                BambuFtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
+                FtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
                     raw_stream,
                     tls,
                     identity,
@@ -356,7 +356,7 @@ where
             .await?;
         // Safe to consume now — the handshake above already succeeded.
         let (tls, factory, timer) = self.ftps_config.take().unwrap();
-        self.ftps = Some(BambuFtpsClient::from_control_stream(
+        self.ftps = Some(FtpsClient::from_control_stream(
             control_stream,
             tls,
             factory,
@@ -385,7 +385,7 @@ where
     /// Returns `Error::ProtocolViolation` immediately for RTSPS models — those use
     /// `camera::rtsps::build_rtsps_url()` instead and have no `PrinterClient`-managed
     /// connection state. Otherwise dials a raw stream via the camera factory, wraps it in
-    /// TLS, constructs a `BambuBinaryCameraStream`, and authenticates — the whole sequence is
+    /// TLS, constructs a `BinaryCameraStream`, and authenticates — the whole sequence is
     /// raced against `self.connect_timeout_secs`, mirroring `ensure_ftps()`.
     pub(super) async fn ensure_camera(&mut self) -> Result<(), Error> {
         if self.identity.model.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
@@ -411,7 +411,7 @@ where
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw = factory.dial(ip, camera_port).await?;
                 let stream = tls.connect(serial, raw).await?;
-                let mut cam = BambuBinaryCameraStream::new(stream);
+                let mut cam = BinaryCameraStream::new(stream);
                 if let Some(max) = max_frame_size {
                     cam = cam.with_max_frame_size(max);
                 }
@@ -508,7 +508,7 @@ where
         self
     }
 
-    /// Overrides the default maximum accepted camera frame size (see `BambuBinaryCameraStream::with_max_frame_size`).
+    /// Overrides the default maximum accepted camera frame size (see `BinaryCameraStream::with_max_frame_size`).
     #[must_use]
     pub fn with_camera_max_frame_size(mut self, bytes: usize) -> Self {
         self.camera_max_frame_size = Some(bytes);

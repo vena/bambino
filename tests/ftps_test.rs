@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use bambino::client::DummyTimer;
 use bambino::error::Error;
-use bambino::ftps::{BambuFtpsClient, CurrentDateTime};
+use bambino::ftps::{FtpsClient, CurrentDateTime};
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -48,13 +48,13 @@ async fn connect_client(
     client_control: tokio::io::DuplexStream,
     factory: MockDataStreamFactory,
     model: PrinterModel,
-) -> BambuFtpsClient<
+) -> FtpsClient<
     TokioIo<tokio::io::DuplexStream>,
     DummyTlsConnector,
     MockDataStreamFactory,
     DummyTimer,
 > {
-    BambuFtpsClient::connect(
+    FtpsClient::connect(
         TokioIo(client_control),
         DummyTlsConnector,
         factory,
@@ -79,7 +79,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
     ));
 
     let (connector, captured_host) = HostCapturingTlsConnector::new();
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         connector,
         factory,
@@ -398,7 +398,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
         data_container.clone(),
     ));
 
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         FailingDataTlsConnector::new(),
         factory,
@@ -707,7 +707,7 @@ async fn test_ftps_disconnect() {
 async fn test_ftps_tls13_rejected_for_p2s() {
     let (client_control, _server_control, _data_container, factory) = setup();
 
-    let result = BambuFtpsClient::connect(
+    let result = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
@@ -728,7 +728,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
 async fn test_ftps_tls13_rejected_for_x2d() {
     let (client_control, _server_control, _data_container, factory) = setup();
 
-    let result = BambuFtpsClient::connect(
+    let result = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
@@ -754,7 +754,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
@@ -771,7 +771,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
 
 /// Regression for issue #58: `open_data_channel`'s "defense in depth" recheck
 /// (`src/ftps/client.rs:453-461`) must actually reject a data channel that renegotiated down
-/// from TLS 1.2 to TLS 1.3, independent of the control-channel check `BambuFtpsClient::connect`
+/// from TLS 1.2 to TLS 1.3, independent of the control-channel check `FtpsClient::connect`
 /// already performed — previously every TLS-1.2-enforcement test only exercised `connect()`,
 /// never a real `list_directory`/`upload_file`/`download_file` call, so this embedded recheck
 /// had zero coverage.
@@ -784,7 +784,7 @@ async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
         data_container.clone(),
     ));
 
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         PerCallVersionReportingTlsConnector::new(Some(TlsVersion::Tls12), Some(TlsVersion::Tls13)),
         factory,
@@ -835,7 +835,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
@@ -854,7 +854,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
 async fn test_ftps_version_none_rejected_for_p2s() {
     let (client_control, _server_control, _data_container, factory) = setup();
 
-    let result = BambuFtpsClient::connect(
+    let result = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,
@@ -890,7 +890,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
@@ -916,7 +916,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = BambuFtpsClient::connect(
+    let mut client = FtpsClient::connect(
         TokioIo(client_control),
         VersionReportingTlsConnector(None),
         factory,

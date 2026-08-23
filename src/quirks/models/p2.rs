@@ -33,7 +33,7 @@ impl ModelQuirks for P2Quirks {
     /// close still occasionally races the `226` confirmation, just later and
     /// less often than the pre-cap mid-stream truncation. What actually closes
     /// it is verifying the transfer via `SIZE` regardless of which reply code
-    /// came back, which `BambuFtpsClient::upload_file` already does
+    /// came back, which `FtpsClient::upload_file` already does
     /// unconditionally (see its doc comment in `src/ftps/client.rs`) — this
     /// quirk alone would not have been a complete fix.
     fn enforces_ftps_tls_1_2(&self) -> bool {

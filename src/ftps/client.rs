@@ -83,16 +83,16 @@ impl<RawIO: AsyncIo, TlsStream: AsyncIo> embedded_io_async::Write
 /// including the single-reply metadata/filesystem commands, and unconditionally in
 /// `disconnect()`); every public method checks the flag first and returns
 /// [`Error::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
-/// reconnect via a fresh [`BambuFtpsClient::connect`] call instead of reusing the instance.
+/// reconnect via a fresh [`FtpsClient::connect`] call instead of reusing the instance.
 ///
 /// **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
 /// `FTPS_READ_TIMEOUT_SECS`/`FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS` in `protocol.rs`) — owned
 /// independently of whatever `Timer` a `PrinterClient` that hands out this client is using,
-/// since `PrinterClient::storage()` hands out direct `&mut BambuFtpsClient` access rather than
+/// since `PrinterClient::storage()` hands out direct `&mut FtpsClient` access rather than
 /// mediating every method call the way it does for MQTT/camera (no call site to thread
 /// `&self.timer` through). Defaults to `DummyTimer` (unbounded, matching this crate's existing
 /// `DummyTimer` convention) for direct (non-`PrinterClient`) callers that don't supply one.
-pub struct BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer = crate::client::DummyTimer>
+pub struct FtpsClient<RawIO, Tls, Factory, FtpsTimer = crate::client::DummyTimer>
 where
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
@@ -159,7 +159,7 @@ async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
     Ok(())
 }
 
-impl<RawIO, Tls, Factory, FtpsTimer> BambuFtpsClient<RawIO, Tls, Factory, FtpsTimer>
+impl<RawIO, Tls, Factory, FtpsTimer> FtpsClient<RawIO, Tls, Factory, FtpsTimer>
 where
     RawIO: AsyncIo,
     Tls: TlsConnector<RawIO>,
@@ -347,7 +347,7 @@ where
         if self.poisoned {
             return Err(Error::ProtocolViolation(
                 "FTPS client is poisoned after a previous control-channel desync — this \
-                 instance must be discarded; reconnect with a new BambuFtpsClient::connect() \
+                 instance must be discarded; reconnect with a new FtpsClient::connect() \
                  call instead of reusing it"
                     .into(),
             ));
@@ -887,7 +887,7 @@ where
     ///
     /// Best-effort: errors during QUIT are silently ignored since the connection is being torn
     /// down regardless. Non-consuming (`&mut self`, not `self`) by design:
-    /// `PrinterClient::storage()` only exposes `&mut BambuFtpsClient`, and direct-module
+    /// `PrinterClient::storage()` only exposes `&mut FtpsClient`, and direct-module
     /// consumers may want to disconnect and reconnect the same variable via a fresh `connect()`
     /// call without re-declaring it.
     ///

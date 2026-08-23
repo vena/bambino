@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::ftps::BambuFtpsClient;
+use crate::ftps::FtpsClient;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
 use super::PrinterClient;
@@ -43,31 +43,31 @@ where
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
-    /// Injects a pre-connected [`BambuFtpsClient`] directly.
+    /// Injects a pre-connected [`FtpsClient`] directly.
     ///
     /// Use this for test mocks or Embassy where the caller manages the FTPS
     /// connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps).
     pub fn attach_storage(
         &mut self,
-        ftps_client: BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>,
+        ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>,
     ) {
         self.ftps = Some(ftps_client);
     }
 
-    /// Returns direct access to the underlying [`BambuFtpsClient`], auto-connecting if needed.
+    /// Returns direct access to the underlying [`FtpsClient`], auto-connecting if needed.
     ///
     /// Requires prior FTPS configuration via [`.with_ftps()`](Self::with_ftps) or
     /// [`.attach_storage()`](Self::attach_storage).
     pub async fn storage(
         &mut self,
-    ) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error> {
+    ) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error> {
         self.ensure_ftps().await?;
         Ok(self.ftps.as_mut().expect("ensure_ftps() just verified self.ftps is Some"))
     }
 
     /// Disconnects the FTPS session, if one exists, and clears it from the client.
     ///
-    /// `BambuFtpsClient::disconnect()` is `&mut self` (non-consuming) and always poisons
+    /// `FtpsClient::disconnect()` is `&mut self` (non-consuming) and always poisons
     /// itself on the way out (see its doc comment) — every subsequent call on that instance
     /// would fail with `ProtocolViolation`. Without this method, nothing ever resets
     /// `self.ftps` back to `None`, so a later [`storage()`](Self::storage) call would

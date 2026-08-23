@@ -11,7 +11,7 @@ use bambino::client::{
     DummyFactory, DummyTimer, DummyTls, PrinterClient,
 };
 use bambino::error::Error;
-use bambino::ftps::BambuFtpsClient;
+use bambino::ftps::FtpsClient;
 use bambino::io::TokioIo;
 use bambino::identity::PrinterIdentity;
 use bambino::models::PrinterModel;
@@ -154,7 +154,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     // `disconnect_storage()` (review/client.md Phase 5) must leave `self.ftps` as `None`
     // afterward, so a later `storage()` call falls through to `ensure_ftps()`'s existing
     // "FTPS not configured" error instead of ever handing back the poisoned client that
-    // `BambuFtpsClient::disconnect()` leaves behind (review/ftps.md Phase 2/7).
+    // `FtpsClient::disconnect()` leaves behind (review/ftps.md Phase 2/7).
     //
     // The FTPS client is genuinely poisoned first, via a control-channel transport failure
     // (`.claude/rules/ftps-poisoning.md`) — without that this test only reproved that
@@ -234,7 +234,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
         fresh_container.clone(),
     ));
 
-    let fresh_ftps = BambuFtpsClient::connect(
+    let fresh_ftps = FtpsClient::connect(
         TokioIo(fresh_control),
         DummyTlsConnector,
         MockDataStreamFactory::new(fresh_container),

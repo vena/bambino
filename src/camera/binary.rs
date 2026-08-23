@@ -15,7 +15,7 @@
 //!    against decoding crashes.
 //! 2. Clamps incoming frame sizes to a reasonable upper boundary (10MB by default) to protect
 //!    against unbounded memory allocation crashes on low-resource environments if transport
-//!    stream corruption occurs. Use [`BambuBinaryCameraStream::with_max_frame_size`] to lower
+//!    stream corruption occurs. Use [`BinaryCameraStream::with_max_frame_size`] to lower
 //!    this cap on constrained (`no_std`/Embassy) targets.
 
 #[cfg(not(feature = "std"))]
@@ -44,7 +44,7 @@ pub(crate) const JPEG_MARKER_SOI_LOW: u8 = 0xD8;
 pub(crate) const JPEG_MARKER_EOI_HIGH: u8 = 0xFF;
 pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
 
-/// Per-read wall-clock deadline for [`BambuBinaryCameraStream::read_next_frame_with_timer`] when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
+/// Per-read wall-clock deadline for [`BinaryCameraStream::read_next_frame_with_timer`] when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
 pub(crate) const CAMERA_READ_TIMEOUT_SECS: u64 = 30;
 
 /// Chunk size for draining an oversized frame's declared-but-rejected payload off the wire
@@ -90,7 +90,7 @@ pub fn build_handshake_packet(
     Ok(packet)
 }
 
-/// Byte-level progress of an in-flight camera frame read, preserved across a timed-out [`BambuBinaryCameraStream::read_next_frame_with_timer`] call so a subsequent call resumes exactly where the previous one left off — losing this state would permanently desync the stream, the same failure class `FrameReadState` guards against for MQTT (`src/mqtt/client/frame.rs`).
+/// Byte-level progress of an in-flight camera frame read, preserved across a timed-out [`BinaryCameraStream::read_next_frame_with_timer`] call so a subsequent call resumes exactly where the previous one left off — losing this state would permanently desync the stream, the same failure class `FrameReadState` guards against for MQTT (`src/mqtt/client/frame.rs`).
 /// Not a straight copy of that shape: MQTT's 1-byte header can't partially complete a single
 /// `read()` step, so its `Idle` variant never needs header-partial-progress tracking — camera's
 /// 16-byte header can, so `ReadingHeader` carries its own `filled` counter (closer in shape to
@@ -129,13 +129,13 @@ enum CameraFrameReadState {
 /// orphan the old socket server-side until keepalive reaps it (~20 min stall). Confirmed
 /// printer behavior (bambuddy `fix(camera) #2521`); add a delay or wait for the old socket
 /// to fully close before redialing.
-pub struct BambuBinaryCameraStream<IO: AsyncIo> {
+pub struct BinaryCameraStream<IO: AsyncIo> {
     stream: IO,
     max_frame_size: usize,
     read_state: CameraFrameReadState,
 }
 
-impl<IO: AsyncIo> BambuBinaryCameraStream<IO> {
+impl<IO: AsyncIo> BinaryCameraStream<IO> {
     /// Instantiates a camera parser wrapper surrounding an active secure stream socket.
     ///
     /// The accepted frame size defaults to `CAMERA_FRAME_MAX_SIZE` (10MB). Use
@@ -454,7 +454,7 @@ mod tests {
         async fn test_read_frame_oversized() {
             let data = make_frame_header((CAMERA_FRAME_MAX_SIZE + 1) as u32);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut camera = BinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(Error::Network(_))));
@@ -475,7 +475,7 @@ mod tests {
             let mut data = make_frame_header(1024);
             data.extend(vec![0u8; 1024]);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
+            let mut camera = BinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -497,7 +497,7 @@ mod tests {
             data.extend(&valid_frame);
 
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
+            let mut camera = BinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
             let mut buf = Vec::new();
 
             let oversized_result = camera.read_next_frame(&mut buf).await;
@@ -519,7 +519,7 @@ mod tests {
         async fn test_read_frame_zero_size() {
             let data = make_frame_header(0);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut camera = BinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -530,7 +530,7 @@ mod tests {
             let mut data = make_frame_header(4);
             data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(cursor));
+            let mut camera = BinaryCameraStream::new(TokioIo(cursor));
             let mut buf = Vec::new();
             let result = camera.read_next_frame(&mut buf).await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -545,7 +545,7 @@ mod tests {
             // Server side is kept alive (bound to `_server_stream`) but never writes —
             // dropping it would deliver `Ok(0)`/EOF instead of a genuine stall.
 
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(client_stream));
+            let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
             let budget_ms = 50;
             let mut buf = Vec::new();
@@ -586,7 +586,7 @@ mod tests {
         async fn test_authenticate_with_timer_stalled_connection_times_out() {
             let (client_stream, _server_stream) = tokio::io::duplex(64);
 
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(client_stream));
+            let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
             let budget_ms = 50;
 
@@ -625,7 +625,7 @@ mod tests {
         #[tokio::test]
         async fn test_read_next_frame_with_timer_resumes_after_timeout_without_losing_bytes() {
             let (client_stream, mut server_stream) = tokio::io::duplex(64);
-            let mut camera = BambuBinaryCameraStream::new(TokioIo(client_stream));
+            let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
             let mut buf = Vec::new();
 

@@ -20,7 +20,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 
 `PrinterClient` is the high-level interface — it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits, Z-axis homing validation, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
-For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `MqttClient` and `BambuFtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
+For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `MqttClient` and `FtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
 
 The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access — useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
@@ -218,7 +218,7 @@ let data = ftp.download_file("/timelapse/video.mp4").await?;
 let free = ftp.get_available_space().await?;
 ```
 
-> **Direct protocol access:** For cases where `PrinterClient` isn't needed, `BambuFtpsClient::connect()` provides standalone FTPS access — see the [`ftps`](src/ftps/) module.
+> **Direct protocol access:** For cases where `PrinterClient` isn't needed, `FtpsClient::connect()` provides standalone FTPS access — see the [`ftps`](src/ftps/) module.
 
 ### Camera
 
@@ -243,10 +243,10 @@ an already-connected stream (tests, Embassy).
 The stream type is also usable standalone:
 
 ```rust
-use bambino::camera::binary::BambuBinaryCameraStream;
+use bambino::camera::binary::BinaryCameraStream;
 use bambino::identity::PrinterIdentity;
 
-let mut cam = BambuBinaryCameraStream::new(tls_stream);
+let mut cam = BinaryCameraStream::new(tls_stream);
 cam.authenticate(&PrinterIdentity::new(ip, serial, access_code)).await?;
 
 let mut frame = Vec::new();
@@ -264,7 +264,7 @@ two from this API alone.
 
 `read_next_frame` rejects frames above a configurable cap (default 10MB) to guard against
 unbounded allocation. Constrained (`no_std`/Embassy) targets should lower it with
-`BambuBinaryCameraStream::new(stream).with_max_frame_size(64 * 1024)` to match their actual
+`BinaryCameraStream::new(stream).with_max_frame_size(64 * 1024)` to match their actual
 buffer budget — the 10MB default can exceed an embedded target's entire SRAM.
 
 **RTSPS (X1, X2, H2, P2S series) — port 322.** RTSP behind implicit TLS with Digest auth. This library provides helpers for integrating with external media players — it does not include an RTSP client.
@@ -327,7 +327,7 @@ let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config))
 
 `build_verified_client_config()` validates the printer's certificate against the given CA root(s) and checks its identity against the printer's serial number, falling back to Subject CN when no Subject Alternative Name is present (matching mbedtls's behavior on ESP-IDF/Embassy). `build_unsafe_client_config()` is unaffected — it never checks certificate identity.
 
-Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models — P2S and X2D — need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().enforces_ftps_tls_1_2()`. `BambuFtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
+Both functions have `_with_options` variants that accept `force_tls_1_2: bool`. Two models — P2S and X2D — need FTPS capped to TLS 1.2, but not because the protocol demands it: it's a firmware bug in their embedded vsFTPd (confirmed for P2S via an independent reverse-engineering project's own bug report; assumed-by-analogy for X2D, whose actual root cause is still unconfirmed). Check with `model.quirks().enforces_ftps_tls_1_2()`. `FtpsClient::connect()` fails closed on those models: it errors unless `negotiated_version` reports exactly `Some(TlsVersion::Tls12)` (an undetermined `None` also rejects — never a silent pass-through).
 
 This is platform-general — `TokioTlsConnector` and `EspIdfTlsConnector` implement `negotiated_version` for real. `EmbassyTlsConnector` cannot, so Embassy + P2S/X2D is unconditionally rejected by this check rather than downgraded — see the Embassy TLS section below for why, and for the opt-out.
 
@@ -369,7 +369,7 @@ let ftps_tls = EmbassyTlsConnector::new(tls.reference());
 
 There's no buffer-consumption limit — `connect()` can be called repeatedly on the same connector (`mbedtls-rs` allocates its own 16 KiB in/out record buffers per session). Certificate verification defaults to off, matching this crate's unsafe-by-default convention elsewhere; call `.with_ca_chain(cert)` to enable it, or `.with_client_credentials(creds)` for mTLS.
 
-**`negotiated_version` always returns `None`** — `mbedtls-rs` exposes no API to read back the negotiated TLS version, so `BambuFtpsClient`'s TLS-1.2 enforcement check for P2S/X2D still fails closed under Embassy even with this real-TLS-1.2-capable backend (nothing forces the handshake to actually land on 1.2 over 1.3). Use `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when talking to those two models under Embassy — see the "TLS configuration" section above.
+**`negotiated_version` always returns `None`** — `mbedtls-rs` exposes no API to read back the negotiated TLS version, so `FtpsClient`'s TLS-1.2 enforcement check for P2S/X2D still fails closed under Embassy even with this real-TLS-1.2-capable backend (nothing forces the handshake to actually land on 1.2 over 1.3). Use `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when talking to those two models under Embassy — see the "TLS configuration" section above.
 
 **Embassy raw streams:** `EmbassyRawStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool — used for both MQTT's lazy connect and FTPS's data channel. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs — `N = 1` covers FTPS's usage, since data-channel connections are always sequential (MQTT needs its own factory instance since it's a separate, concurrent connection). Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `dial`'s host must be a literal IPv4 address — Bambu printers are always addressed that way, so this isn't a limitation in practice:
 

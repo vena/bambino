@@ -173,7 +173,7 @@ enum Commands {
         access_code: String,
         #[command(subcommand)]
         action: storage::FilesAction,
-        /// Bypass BambuFtpsClient's TLS-1.2-enforcement check for P2S/X2D (the embassy
+        /// Bypass FtpsClient's TLS-1.2-enforcement check for P2S/X2D (the embassy
         /// escape hatch, ported to the CLI for testing; see src/ftps/CLAUDE.md and
         /// src/io/CLAUDE.md). On tokio, force_tls_1_2 is already applied automatically
         /// per-model — this flag exists to let a caller override enforcement even when

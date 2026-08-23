@@ -4,7 +4,7 @@
 //!
 //! 1. **Binary JPEG (Port 6000)** — A1, A1 Mini, A2L, and P1 series. A lightweight binary protocol that
 //!    streams discrete JPEG frames over TLS. This module provides a complete client
-//!    ([`binary::BambuBinaryCameraStream`]) that handles the handshake and frame extraction.
+//!    ([`binary::BinaryCameraStream`]) that handles the handshake and frame extraction.
 //!
 //! 2. **RTSPS (Port 322)** — X1, X2, H2, and P2S series. An RTSP server behind implicit TLS
 //!    with Digest authentication. This module provides helper utilities ([`rtsps`]) for
@@ -22,7 +22,7 @@ pub const CAMERA_PORT_RTSPS: u16 = 322;
 /// The printer accepts only one connection to this port at a time. A caller redialing it
 /// immediately after disconnecting can orphan the prior socket server-side until keepalive
 /// reaps it (~20 min stall) — wait for the old connection to fully close, or add a delay,
-/// before reconnecting. See [`binary::BambuBinaryCameraStream`]'s doc comment.
+/// before reconnecting. See [`binary::BinaryCameraStream`]'s doc comment.
 pub const CAMERA_PORT_BINARY_JPEG: u16 = 6000;
 
 /// Which camera streaming protocol a printer model uses.

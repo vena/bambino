@@ -49,7 +49,7 @@ pub(crate) const FTP_LINE_READ_CHUNK_SIZE: usize = 512;
 /// no_std/Embassy target hits the uncatchable `alloc_error_handler` abort, not a recoverable
 /// `Result`. Chosen generously for legitimate large downloads (multi-hundred-MB timelapse videos)
 /// while still bounding worst case. Fixed, not yet caller-configurable — unlike camera's
-/// `with_max_frame_size`, there is currently no `BambuFtpsClient` builder to lower this for
+/// `with_max_frame_size`, there is currently no `FtpsClient` builder to lower this for
 /// embedded targets with tighter memory budgets.
 pub(crate) const FTPS_MAX_TRANSFER_BYTES: usize = 512 * 1024 * 1024;
 
@@ -194,7 +194,7 @@ async fn write_bounded<T: TimerProvider, E>(
 /// any further socket read. **Callers must pass the same `fill_buf` across every call against
 /// a given stream for the life of that stream, not just within one `read_response` call** —
 /// see `read_response`'s doc comment for a concrete failure this caused when that scoping was
-/// too narrow, and `BambuFtpsClient::control_fill_buf` for how the sole caller now satisfies
+/// too narrow, and `FtpsClient::control_fill_buf` for how the sole caller now satisfies
 /// this (a struct field threaded through every method, not a local per-response variable).
 ///
 /// **Partial-progress persistence on error:** bytes pulled off the socket are never moved into
@@ -267,7 +267,7 @@ async fn read_line_raw<IO: AsyncIo, T: TimerProvider>(
 /// earlier version of this function scoped `fill_buf` to a single call: the `150`/`226` pair
 /// for one `RETR` arrived in one control-channel read, and scoping the leftover buffer to one
 /// `read_response` call silently dropped the buffered `226` bytes, desyncing the next read.
-/// `BambuFtpsClient` (`src/ftps/client.rs`) holds its `fill_buf` as a field for exactly this
+/// `FtpsClient` (`src/ftps/client.rs`) holds its `fill_buf` as a field for exactly this
 /// reason, threading it through every method's `read_response` call.
 pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
@@ -438,7 +438,7 @@ pub(crate) fn validate_ftp_path_bytes(path: &str) -> Result<(), Error> {
 
 /// Validates a caller-supplied FTP path argument before it is interpolated into a command line.
 ///
-/// Every path-taking method on `BambuFtpsClient` sends `format!("CMD {}", path)` followed by a
+/// Every path-taking method on `FtpsClient` sends `format!("CMD {}", path)` followed by a
 /// single trailing CRLF (`write_command`). If `path` itself contains `\r` or `\n`, the bytes
 /// written to the control channel contain an embedded line break that the FTP server parses as
 /// a *second*, caller/attacker-controlled command — invisible to whoever called the original

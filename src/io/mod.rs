@@ -213,7 +213,7 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     ///
     /// Platforms that cannot inspect the negotiated version return `None`. This does **not**
     /// mean "skip validation" — a caller enforcing a specific version (e.g.
-    /// `BambuFtpsClient::require_tls_1_2_if_enforced`, which P2S/X2D need) treats an
+    /// `FtpsClient::require_tls_1_2_if_enforced`, which P2S/X2D need) treats an
     /// undetermined `None` as a failure to confirm the required version and rejects the
     /// connection, the same as a confirmed wrong version. `None` only means "this platform
     /// has nothing useful to report" — whether that's fail-open or fail-closed is entirely
@@ -252,7 +252,7 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 /// Dials a fresh, un-encrypted (pre-TLS) raw stream to a host:port.
 ///
 /// Protocol-neutral by design: MQTT's lazy connect (`PrinterClient::ensure_mqtt`) and FTPS's
-/// per-transfer passive data channel (`BambuFtpsClient::list_directory`/`upload_file`/
+/// per-transfer passive data channel (`FtpsClient::list_directory`/`upload_file`/
 /// `download_file`) both just need "give me a raw stream to host:port" with no
 /// protocol-specific semantics in the trait itself — confirmed by every implementor
 /// (`TokioRawStreamFactory`, `EspIdfRawStreamFactory`, `EmbassyRawStreamFactory`) having zero
@@ -322,7 +322,7 @@ pub(crate) enum Raced<A, B> {
 ///
 /// `pub(crate)` — reused by `PrinterClient::ensure_mqtt`/`ensure_ftps` (`src/client/mod.rs`) to
 /// race their two-step dial+connect sequences against a connect-timeout deadline, and by
-/// `BambuBinaryCameraStream::read_next_frame_with_timer` (`src/camera/binary.rs`) for the same
+/// `BinaryCameraStream::read_next_frame_with_timer` (`src/camera/binary.rs`) for the same
 /// per-read deadline purpose `mqtt::client`'s own `read_chunk`/`read_exact_packet` is built on.
 pub(crate) async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
 where
