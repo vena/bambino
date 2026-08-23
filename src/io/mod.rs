@@ -37,6 +37,9 @@ use std::borrow::Cow;
 #[cfg(all(not(feature = "std"), feature = "alloc"))]
 use alloc::borrow::Cow;
 
+#[cfg(all(not(feature = "std"), feature = "alloc"))]
+use alloc::vec::Vec;
+
 /// Unified transport-level Socket Errors, agnostic of runtime implementations.
 ///
 /// `Other` carries `Cow<'static, str>` (not `Copy`, hence the enum overall isn't either)
@@ -216,6 +219,30 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     /// has nothing useful to report" — whether that's fail-open or fail-closed is entirely
     /// up to the caller.
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        None
+    }
+
+    /// Returns the peer's certificate chain exactly as presented during the handshake,
+    /// DER-encoded, leaf first.
+    ///
+    /// Exists so a consumer can pin a printer's certificate — this crate ships no CA material
+    /// and deliberately treats certificates as runtime input, so trust-on-first-use has to be
+    /// built on top of it. Storage and policy (where a pin lives, what happens on a mismatch)
+    /// belong to the caller; all this provides is read access to what the peer actually sent.
+    ///
+    /// Returns `None` where the platform cannot report it — a *lack of information*, never
+    /// "the peer sent nothing" and never "skip validation". A caller enforcing a pin must treat
+    /// `None` as a failure to confirm, exactly as `negotiated_version` documents above.
+    ///
+    /// Whether the chain contains the issuing CA or only the leaf is up to the peer. Bambu
+    /// printers have not been confirmed either way on hardware — use `bambino-cli inspect-cert`
+    /// against a real printer to find out, since that decides whether a captured anchor can be
+    /// fed back through `with_certs(..)` for genuine chain verification or whether only a
+    /// leaf-fingerprint comparison is possible.
+    ///
+    /// The returned DER is copied out of the live session: on ESP-IDF the chain is owned by the
+    /// SSL context and is freed on drop or renegotiation, so borrowing it would dangle.
+    fn peer_chain_der(&self, _stream: &Self::Stream) -> Option<Vec<Vec<u8>>> {
         None
     }
 }

@@ -10,6 +10,9 @@ use crate::io::{
     TlsConnector, TlsVersion,
 };
 
+#[cfg(all(feature = "embassy", not(feature = "std")))]
+use alloc::vec::Vec;
+
 /// Timer implementation designed for the hardware microsecond clock in Embassy.
 #[cfg(feature = "embassy")]
 pub struct EmbassyTimer;
@@ -233,6 +236,17 @@ where
     /// `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this
     /// type's doc comment above. Return `None` honestly rather than hard-coding a guess.
     fn negotiated_version(&self, _stream: &Self::Stream) -> Option<TlsVersion> {
+        None
+    }
+
+    /// `mbedtls-rs` exposes neither a peer-certificate accessor nor the raw
+    /// `mbedtls_ssl_context` pointer that would let this crate call
+    /// `mbedtls_ssl_get_peer_cert` itself (confirmed by reading its source: the only
+    /// post-handshake inspectors on `Session` are `tls_verification_details` and `tls_alpn`).
+    /// The ESP-IDF backend can do this only because `esp_tls_get_ssl_context` hands out that
+    /// pointer. Return `None` honestly — a consumer pinning certificates cannot do so on this
+    /// backend today, and must fail closed rather than be handed a fabricated empty chain.
+    fn peer_chain_der(&self, _stream: &Self::Stream) -> Option<Vec<Vec<u8>>> {
         None
     }
 }

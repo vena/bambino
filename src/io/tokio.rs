@@ -225,6 +225,13 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
             _ => None,
         }
     }
+
+    /// rustls retains the peer chain on the connection after the handshake, so this is a
+    /// straight copy of what the server sent, in wire order (leaf first).
+    fn peer_chain_der(&self, stream: &Self::Stream) -> Option<Vec<Vec<u8>>> {
+        let chain = stream.0.get_ref().1.peer_certificates()?;
+        Some(chain.iter().map(|cert| cert.as_ref().to_vec()).collect())
+    }
 }
 
 /// Raw (pre-TLS) connection factory for the Tokio runtime.

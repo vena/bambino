@@ -197,15 +197,18 @@ enum Commands {
         action: camera::CameraAction,
     },
 
-    /// Diagnostic: capture a printer's raw leaf TLS cert to disk for SAN/CN inspection
-    /// (see .claude/rules/tls-identity-sni.md). No FTPS/MQTT traffic is exchanged.
+    /// Diagnostic: capture a printer's raw TLS cert chain to disk for SAN/CN inspection
+    /// (see .claude/rules/tls-identity-sni.md). Also reports whether the printer sends its
+    /// issuing CA alongside the leaf, which decides what certificate pinning a consumer can
+    /// build on TlsConnector::peer_chain_der. No FTPS/MQTT traffic is exchanged.
     InspectCert {
         ip: String,
         serial: String,
         /// TLS port to connect to (990=FTPS, 8883=MQTT, 322=RTSPS, 6000=camera)
         #[arg(long, default_value_t = 990)]
         port: u16,
-        /// Where to write the captured leaf certificate's raw DER bytes
+        /// Where to write the leaf certificate's raw DER bytes. Any further chain members are
+        /// written beside it with `.chain<N>` before the extension (cert.der → cert.chain1.der)
         #[arg(short = 'o', long, default_value = "printer_leaf_cert.der")]
         output: String,
     },

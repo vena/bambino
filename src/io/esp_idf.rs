@@ -604,6 +604,63 @@ fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
     }
 }
 
+/// Upper bound on certificates walked out of a peer chain, guarding the `next`-pointer walk in
+/// `query_peer_chain_der` against looping forever on a corrupt list. A real printer chain is a
+/// leaf plus at most a couple of CAs; anything past this is a bug in mbedTLS or in memory, not a
+/// chain worth reporting.
+#[cfg(feature = "esp-idf")]
+const MAX_PEER_CHAIN_CERTS: usize = 8;
+
+/// Shared mbedTLS peer-certificate-chain query, returning DER, leaf first.
+///
+/// Generic over the adopted `Socket` impl for the same reason as `query_negotiated_tls_version`,
+/// and reaches the raw `mbedtls_ssl_context` by the same `esp_tls_get_ssl_context` route.
+///
+/// **Requires `CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE`.** It is on by ESP-IDF default, but a
+/// consumer that depends on this accessor should pin it explicitly in `sdkconfig` rather than
+/// inherit the default: with it off, mbedTLS frees the peer certificate at the end of the
+/// handshake, `mbedtls_ssl_get_peer_cert` returns `NULL`, and this degrades to `None`.
+///
+/// `mbedtls_ssl_get_peer_cert` returns the whole chain the peer sent, not just the leaf
+/// (`ssl->session_negotiate->peer_cert = chain` in mbedTLS's `ssl_tls.c`); the leaf-only
+/// re-parse elsewhere in that file is the session export/resumption path, which this is not.
+/// The chain is owned by the live SSL context and freed on drop or renegotiation, so every
+/// certificate is copied out here rather than borrowed.
+#[cfg(feature = "esp-idf")]
+fn query_peer_chain_der<S: ::esp_idf_svc::tls::Socket>(
+    tls: &::esp_idf_svc::tls::EspTls<S>,
+) -> Option<Vec<Vec<u8>>> {
+    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
+        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
+
+    if ssl_ctx.is_null() {
+        return None;
+    }
+
+    let mut cert = unsafe { ::esp_idf_svc::sys::mbedtls_ssl_get_peer_cert(ssl_ctx) };
+    if cert.is_null() {
+        log::debug!(
+            "mbedTLS reported no peer certificate; \
+             CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE is likely disabled"
+        );
+        return None;
+    }
+
+    let mut chain: Vec<Vec<u8>> = Vec::new();
+
+    while !cert.is_null() && chain.len() < MAX_PEER_CHAIN_CERTS {
+        // Read the two `raw` fields individually rather than copying the `mbedtls_x509_buf`
+        // out: that keeps this from depending on whether bindgen derived `Copy` for it.
+        let (der_ptr, der_len) = unsafe { ((*cert).raw.p, (*cert).raw.len) };
+        if !der_ptr.is_null() && der_len > 0 {
+            chain.push(unsafe { core::slice::from_raw_parts(der_ptr, der_len) }.to_vec());
+        }
+        cert = unsafe { (*cert).next };
+    }
+
+    if chain.is_empty() { None } else { Some(chain) }
+}
+
 /// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
 #[cfg(feature = "esp-idf")]
 #[derive(Debug)]
@@ -1030,6 +1087,10 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
 
     fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
         query_negotiated_tls_version(&stream.tls)
+    }
+
+    fn peer_chain_der(&self, stream: &Self::Stream) -> Option<Vec<Vec<u8>>> {
+        query_peer_chain_der(&stream.tls)
     }
 }
 
