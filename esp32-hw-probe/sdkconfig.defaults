@@ -10,3 +10,16 @@ CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
 # that allocate large stack variables; or better yet - use 
 # `std::thread::Builder::new().stack_size(XXX)` for spawning
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
+
+# The issue #145 probe links Wi-Fi, esp-tls and mbedTLS, which the earlier timer-only
+# probes did not: the image is ~1.18MB against the default `single_app` layout's 1MB app
+# partition, so the flash fails with `image_too_big` before anything runs. The C6 on hand
+# reports 4MB of flash while the build defaulted to a 2MB layout, so declaring the real
+# size and taking the large single-app table (1.5MB factory partition) is enough — no
+# custom partitions.csv needed.
+#
+# Deliberately not solved by shrinking the binary: the obvious lever is
+# CONFIG_MBEDTLS_ERROR_STRINGS=n, and this probe's whole output is *why* a handshake was
+# rejected. Trading away the error strings would save space by destroying the evidence.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
