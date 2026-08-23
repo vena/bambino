@@ -434,3 +434,199 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
         }
     }
 }
+
+/// PEM line width, in base64 characters, per RFC 7468 §2 ("generators MUST wrap at 64").
+#[cfg(any(feature = "esp-idf", test))]
+const PEM_LINE_WIDTH: usize = 64;
+
+/// Standard base64 alphabet (RFC 4648 §4) — the encoding PEM bodies use.
+#[cfg(any(feature = "esp-idf", test))]
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Appends `data` to `out` as padded standard base64, wrapped to `PEM_LINE_WIDTH` columns.
+///
+/// Hand-rolled rather than pulling in a base64 crate: this is the only base64 encoder the
+/// crate needs, it runs once per connector construction (not per packet), and every candidate
+/// dependency would be a new transitive edge on the `esp-idf` target for ~20 lines of code.
+#[cfg(any(feature = "esp-idf", test))]
+fn append_base64_wrapped(data: &[u8], out: &mut Vec<u8>) {
+    let mut column = 0;
+    for chunk in data.chunks(3) {
+        // Zero-extend a short final chunk; the padding count below discards the invented bits.
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        // 3 input bytes -> 4 output chars, minus one char per missing input byte, replaced by '='.
+        let significant = chunk.len() + 1;
+        for i in 0..4 {
+            let byte = if i < significant {
+                BASE64_ALPHABET[((triple >> (18 - 6 * i)) & 0x3F) as usize]
+            } else {
+                b'='
+            };
+            out.push(byte);
+            column += 1;
+            if column == PEM_LINE_WIDTH {
+                out.push(b'\n');
+                column = 0;
+            }
+        }
+    }
+    if column != 0 {
+        out.push(b'\n');
+    }
+}
+
+/// Encodes DER certificates as one NUL-terminated PEM bundle, or `None` if `certs` is empty.
+///
+/// **Why this exists at all.** mbedTLS picks its parse strategy from the buffer itself:
+/// `mbedtls_x509_crt_parse` only takes the multi-certificate PEM loop when the buffer is
+/// NUL-terminated *and* contains a `BEGIN CERTIFICATE` header, and otherwise calls
+/// `mbedtls_x509_crt_parse_der`, which parses exactly one certificate and returns
+/// (`components/mbedtls/mbedtls/library/x509_crt.c`, ESP-IDF v5.5.4). So concatenated DER
+/// silently loads only the first anchor — no error, just a confusing verification failure
+/// later. PEM is the only encoding that carries more than one trust anchor through
+/// `esp_tls`'s single `cacert_buf`. See GitHub issue #145.
+///
+/// The trailing NUL is part of the contract: `esp_idf_svc::tls::X509::pem_until_nul` panics
+/// without one, and mbedTLS's own format sniff requires it.
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) fn der_certs_to_pem_bundle(
+    certs: impl IntoIterator<Item = Vec<u8>>,
+) -> Option<Vec<u8>> {
+    const HEADER: &[u8] = b"-----BEGIN CERTIFICATE-----\n";
+    const FOOTER: &[u8] = b"-----END CERTIFICATE-----\n";
+
+    let mut out: Vec<u8> = Vec::new();
+    for der in certs {
+        out.extend_from_slice(HEADER);
+        append_base64_wrapped(&der, &mut out);
+        out.extend_from_slice(FOOTER);
+    }
+
+    if out.is_empty() {
+        return None;
+    }
+
+    out.push(0);
+    Some(out)
+}
+
+#[cfg(test)]
+mod pem_bundle_tests {
+    use super::*;
+
+    /// Decodes a PEM bundle back to the DER payloads it carries, so round-trip tests don't
+    /// have to hand-check base64.
+    fn decode_bundle(pem: &[u8]) -> Vec<Vec<u8>> {
+        let text = core::str::from_utf8(pem).expect("bundle is ASCII");
+        let mut out = Vec::new();
+        let mut body = String::new();
+        let mut inside = false;
+        for line in text.lines() {
+            match line {
+                "-----BEGIN CERTIFICATE-----" => {
+                    inside = true;
+                    body.clear();
+                }
+                "-----END CERTIFICATE-----" => {
+                    inside = false;
+                    out.push(decode_base64(&body));
+                }
+                _ if inside => {
+                    assert!(
+                        line.len() <= PEM_LINE_WIDTH,
+                        "PEM body line exceeds {PEM_LINE_WIDTH} columns: {}",
+                        line.len()
+                    );
+                    body.push_str(line);
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn decode_base64(s: &str) -> Vec<u8> {
+        let mut bits: u32 = 0;
+        let mut nbits = 0;
+        let mut out = Vec::new();
+        for c in s.bytes() {
+            if c == b'=' {
+                break;
+            }
+            let v = BASE64_ALPHABET
+                .iter()
+                .position(|&a| a == c)
+                .unwrap_or_else(|| panic!("non-base64 byte {c:#x} in PEM body")) as u32;
+            bits = (bits << 6) | v;
+            nbits += 6;
+            if nbits >= 8 {
+                nbits -= 8;
+                out.push((bits >> nbits) as u8);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn empty_input_yields_no_bundle() {
+        assert_eq!(der_certs_to_pem_bundle(Vec::<Vec<u8>>::new()), None);
+    }
+
+    #[test]
+    fn bundle_is_nul_terminated_and_pem_framed() {
+        let bundle = der_certs_to_pem_bundle([vec![1u8, 2, 3]]).expect("one cert");
+        assert_eq!(bundle.last(), Some(&0), "X509::pem_until_nul requires a NUL");
+        let text = core::str::from_utf8(&bundle[..bundle.len() - 1]).unwrap();
+        assert!(text.starts_with("-----BEGIN CERTIFICATE-----\n"));
+        assert!(text.ends_with("-----END CERTIFICATE-----\n"));
+    }
+
+    /// The whole point of #145: every anchor must survive, not just the first.
+    #[test]
+    fn all_certs_round_trip_in_order() {
+        // Lengths chosen to hit each base64 padding case (len % 3 == 0, 1, 2) and to exceed
+        // one wrapped line, since mis-wrapping is the classic hand-rolled-PEM bug.
+        let certs: Vec<Vec<u8>> = vec![
+            (0u8..=200).collect(),
+            (0u8..=100).collect(),
+            (0u8..=101).collect(),
+            vec![0xFF],
+        ];
+        let bundle = der_certs_to_pem_bundle(certs.clone()).expect("non-empty");
+        assert_eq!(decode_bundle(&bundle[..bundle.len() - 1]), certs);
+    }
+
+    /// Matches a known-good vector so the encoder can't be self-consistently wrong.
+    #[test]
+    fn base64_matches_reference_vectors() {
+        for (input, expected) in [
+            (&b""[..], ""),
+            (&b"f"[..], "Zg==\n"),
+            (&b"fo"[..], "Zm8=\n"),
+            (&b"foo"[..], "Zm9v\n"),
+            (&b"foob"[..], "Zm9vYg==\n"),
+            (&b"fooba"[..], "Zm9vYmE=\n"),
+            (&b"foobar"[..], "Zm9vYmFy\n"),
+        ] {
+            let mut out = Vec::new();
+            append_base64_wrapped(input, &mut out);
+            assert_eq!(core::str::from_utf8(&out).unwrap(), expected);
+        }
+    }
+
+    /// A 48-byte input encodes to exactly 64 base64 chars — the boundary where an off-by-one
+    /// would emit either a 65-column line or a stray blank line.
+    #[test]
+    fn exact_line_width_boundary_wraps_once() {
+        let mut out = Vec::new();
+        append_base64_wrapped(&vec![0u8; 48], &mut out);
+        assert_eq!(out.len(), PEM_LINE_WIDTH + 1);
+        assert_eq!(out.last(), Some(&b'\n'));
+        assert_eq!(out.iter().filter(|&&b| b == b'\n').count(), 1);
+    }
+}

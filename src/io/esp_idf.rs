@@ -400,12 +400,17 @@ fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError 
     SocketError::Other(std::format!("ESP-IDF TLS handshake failed: {err}").into())
 }
 
-/// Cert bundle used by `EspIdfTlsConnector`'s `ca_cert`/`client_cert`/`client_key` fields and `new()`/`with_certs()` constructors.
+/// Cert bundle used by `EspIdfTlsConnector`'s `ca_pem`/`client_cert`/`client_key` fields and `new()`/`with_certs()` constructors.
 /// Factored out so a future cert-related option (e.g. ALPN config) only needs to be added in
 /// one place.
+///
+/// `ca_pem` holds the caller's trust anchors already converted to a NUL-terminated PEM bundle
+/// (see `crate::io::der_certs_to_pem_bundle`) rather than raw DER, because DER can only ever
+/// express *one* anchor to mbedTLS. The conversion happens once at construction, not per
+/// connect, so `build_config` stays a cheap borrow.
 #[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
-    ca_cert: Option<Vec<u8>>,
+    ca_pem: Option<Vec<u8>>,
     client_cert: Option<Vec<u8>>,
     client_key: Option<Vec<u8>>,
 }
@@ -414,33 +419,42 @@ struct EspIdfTlsCerts {
 impl EspIdfTlsCerts {
     fn new() -> Self {
         Self {
-            ca_cert: None,
+            ca_pem: None,
             client_cert: None,
             client_key: None,
         }
     }
 
-    fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
+    fn with_certs(
+        ca_certs: impl IntoIterator<Item = Vec<u8>>,
+        client_auth: Option<(Vec<u8>, Vec<u8>)>,
+    ) -> Self {
         let (client_cert, client_key) = match client_auth {
             Some((cert, key)) => (Some(cert), Some(key)),
             None => (None, None),
         };
         Self {
-            ca_cert: Some(ca_cert),
+            // `None` for an empty iterator, which `build_tls_config` treats exactly like
+            // `new()` — an anchor-less connector, not a connector with an empty anchor set
+            // that mbedTLS would reject at handshake time with nothing pointing at the cause.
+            ca_pem: crate::io::der_certs_to_pem_bundle(ca_certs),
             client_cert,
             client_key,
         }
     }
 
     fn build_config(&self) -> ::esp_idf_svc::tls::Config<'_> {
-        build_tls_config(&self.ca_cert, &self.client_cert, &self.client_key)
+        build_tls_config(&self.ca_pem, &self.client_cert, &self.client_key)
     }
 }
 
 /// Builds an `esp_idf_svc::tls::Config` from cert bytes.
+///
+/// `ca_pem` is a NUL-terminated PEM bundle (`der_certs_to_pem_bundle`); the client cert/key
+/// stay DER, since each is a single item and DER is this crate's public convention.
 #[cfg(feature = "esp-idf")]
 fn build_tls_config<'a>(
-    ca_cert: &'a Option<Vec<u8>>,
+    ca_pem: &'a Option<Vec<u8>>,
     client_cert: &'a Option<Vec<u8>>,
     client_key: &'a Option<Vec<u8>>,
 ) -> ::esp_idf_svc::tls::Config<'a> {
@@ -451,7 +465,7 @@ fn build_tls_config<'a>(
     // `Config::new` defaults this to `true` wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is
     // enabled, and ESP-IDF's `set_client_config` checks `crt_bundle_attach` *first* with
     // mutually exclusive branches — so leaving the default on would verify against the public
-    // roots and silently ignore the caller's `ca_cert` below. Bambu printer certs chain to a
+    // roots and silently ignore the caller's `ca_pem` below. Bambu printer certs chain to a
     // private BBL CA, never to a public root, so the bundle is never the anchor this crate wants.
     // Cfg gate mirrors the field's own gate in `esp-idf-svc`; it is `build.rs` that makes the
     // gate evaluate at all (see that file — without it this is silently dead code).
@@ -460,8 +474,12 @@ fn build_tls_config<'a>(
         cfg.use_crt_bundle_attach = false;
     }
 
-    if let Some(ca) = ca_cert {
-        cfg.ca_cert = Some(::esp_idf_svc::tls::X509::der(ca));
+    if let Some(ca) = ca_pem {
+        // `pem_until_nul`, not `der`: `X509::der` stores the slice without a trailing NUL,
+        // which is precisely the condition mbedTLS reads as "this is a single DER cert" —
+        // it would then parse only the first anchor of the bundle and drop the rest
+        // silently. `der_certs_to_pem_bundle` guarantees the NUL this requires.
+        cfg.ca_cert = Some(::esp_idf_svc::tls::X509::pem_until_nul(ca));
     } else {
         cfg.skip_common_name = true;
     }
@@ -925,24 +943,36 @@ impl EspIdfTlsConnector {
         }
     }
 
-    /// Creates a connector that verifies the server certificate against a CA cert.
-    /// The supplied CA is the sole trust anchor: ESP-IDF's bundled public root CAs are
+    /// Creates a connector that verifies the server certificate against one or more CA certs.
+    /// The supplied CAs are the sole trust anchors: ESP-IDF's bundled public root CAs are
     /// explicitly disabled, so these bytes reach mbedTLS as `cacert_buf` rather than being
     /// silently overridden by the bundle (GitHub issue #62). Certificates are a runtime
     /// input — nothing is embedded in this crate.
     ///
-    /// **DER only, despite what the parameter names once claimed.** `build_tls_config` always
-    /// constructs `X509::der(..)`, which stores the slice without the trailing NUL that makes
-    /// `mbedtls_x509_crt_parse` take its PEM branch, so PEM input fails with
-    /// `MBEDTLS_ERR_X509_INVALID_FORMAT` — surfacing as an opaque `SocketError::Other` that
-    /// gives no hint the encoding was the problem. DER is this crate's convention throughout.
+    /// **Takes many anchors, mirroring the tokio backend** (`build_verified_client_config`'s
+    /// `ca_certs: impl IntoIterator<..>`). Bambu is mid-PKI-rollover: a P1S chains to the
+    /// legacy `BBL CA` root while newer models chain through `BBL Device CA <model>-V2` to
+    /// `BBL CA2 RSA`/`BBL CA2 ECC`, so a caller covering the model range needs several
+    /// anchors at once and cannot pick one. See GitHub issue #145.
     ///
-    /// `ca_cert`: DER-encoded CA certificate bytes.
+    /// **Still DER in, despite the PEM bundle used internally.** DER is this crate's public
+    /// convention throughout; the certs are re-encoded once here into the NUL-terminated PEM
+    /// bundle that is the only form mbedTLS will parse as more than one certificate — see
+    /// `crate::io::der_certs_to_pem_bundle`. Passing PEM bytes in is still wrong and will
+    /// fail the handshake, now with the extra confusion of being base64'd a second time.
+    ///
+    /// An empty `ca_certs` yields an anchor-less connector, behaving exactly like
+    /// [`Self::new`] rather than failing later inside the handshake.
+    ///
+    /// `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
     /// `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
     #[must_use]
-    pub fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self {
+    pub fn with_certs(
+        ca_certs: impl IntoIterator<Item = Vec<u8>>,
+        client_auth: Option<(Vec<u8>, Vec<u8>)>,
+    ) -> Self {
         Self {
-            certs: EspIdfTlsCerts::with_certs(ca_cert, client_auth),
+            certs: EspIdfTlsCerts::with_certs(ca_certs, client_auth),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }

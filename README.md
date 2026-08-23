@@ -401,13 +401,16 @@ use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTim
 
 // Prefer with_certs — see "ESP-IDF certificate verification" below for why
 // EspIdfTlsConnector::new() additionally requires two sdkconfig options.
-let ftps_tls = EspIdfTlsConnector::with_certs(ca_cert, None);
+// Takes every anchor you want to trust, not just one (DER, one Vec per cert).
+let ftps_tls = EspIdfTlsConnector::with_certs(ca_certs, None);
 let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTimer::new()?);
 ```
 
-**ESP-IDF certificate verification:** ESP-IDF picks exactly one trust anchor, checking them in a fixed order with mutually exclusive branches — its bundled public root CAs first, then a caller-supplied CA, then no verification at all. `esp-idf-svc` defaults the bundle **on** wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is enabled, so this crate turns it off explicitly: a printer certificate chains to BBL's private CA, never to a public root, and leaving the default on would silently ignore a CA you passed to `with_certs`.
+**ESP-IDF certificate verification:** ESP-IDF picks exactly one trust-anchor *source*, checking them in a fixed order with mutually exclusive branches — its bundled public root CAs first, then a caller-supplied CA, then no verification at all. `esp-idf-svc` defaults the bundle **on** wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is enabled, so this crate turns it off explicitly: a printer certificate chains to BBL's private CA, never to a public root, and leaving the default on would silently ignore the CAs you passed to `with_certs`.
 
-`EspIdfTlsConnector::with_certs(ca, client_auth)` is therefore the recommended path on this platform. The CA you supply becomes the sole trust anchor and needs no sdkconfig changes. Certificates are a runtime input — none are embedded in this crate.
+`EspIdfTlsConnector::with_certs(ca_certs, client_auth)` is therefore the recommended path on this platform. The CAs you supply become the sole trust anchors and need no sdkconfig changes. Certificates are a runtime input — none are embedded in this crate.
+
+It accepts an iterator of DER certificates rather than a single one, matching the tokio backend, because Bambu is mid-PKI-rollover: a P1S chains to the legacy `BBL CA` root, while newer models chain through a `BBL Device CA <model>-V2` intermediate to `BBL CA2 RSA`/`BBL CA2 ECC`, so covering the model range means trusting several roots at once. The certs are re-encoded internally into a single NUL-terminated PEM bundle — the only form mbedTLS parses as more than one certificate; concatenated DER would silently load just the first.
 
 `EspIdfTlsConnector::new()` skips verification, which on ESP-IDF requires **both** of these in the consuming app's `sdkconfig`:
 
@@ -416,7 +419,7 @@ CONFIG_ESP_TLS_INSECURE=y
 CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
 ```
 
-Both are off by default, and no library call can enable them — ESP-IDF compiles the no-verification branch out otherwise. Without them, `set_client_config` returns `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED` and the connection fails immediately. That is the intended, documented outcome rather than a defect: the alternative is verifying against a trust anchor the caller never asked for. If you see that error, supply a CA via `with_certs` or enable the two options above.
+Both are off by default, and no library call can enable them — ESP-IDF compiles the no-verification branch out otherwise. Without them, `set_client_config` returns `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED` and the connection fails immediately. That is the intended, documented outcome rather than a defect: the alternative is verifying against a trust anchor the caller never asked for. If you see that error, supply CAs via `with_certs` or enable the two options above.
 
 This is the one place the ESP-IDF backend diverges from `io::tokio`, where `build_unsafe_client_config()` skips verification with no target configuration required.
 
