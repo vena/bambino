@@ -20,7 +20,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 
 `PrinterClient` is the high-level interface — it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits, Z-axis homing validation, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
-For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `BambuMqttClient` and `BambuFtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
+For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `MqttClient` and `BambuFtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
 
 The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access — useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
@@ -74,13 +74,13 @@ let identity = PrinterIdentity::new(ip, serial, access_code);
 let model = identity.model;
 let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity)
     .with_timer(TokioTimer::new())
-    .with_connect_timeout(5);
+    .with_connect_timeout(5); // seconds; 0 disables the timeout
 
 // MQTT connects lazily on first use, or eagerly:
 printer.connect_mqtt().await?;
 ```
 
-If you already have a connected `BambuMqttClient` (tests, Embassy), wrap it directly:
+If you already have a connected `MqttClient` (tests, Embassy), wrap it directly:
 
 ```rust
 use bambino::client::PrinterClient;
@@ -92,7 +92,7 @@ let mut printer = PrinterClient::from_mqtt(mqtt_client, model);
 
 ```rust
 printer.request_pushall().await?;              // request full state dump
-printer.home_axes(false).await?;               // "safe" homing (bare G28)
+printer.home_axes(false).await?;               // false = bare G28; true = Z-only (rejected on bed-on-Z models)
 printer.set_bed_temperature(60).await?;        // clamped to model max
 printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
 printer.set_led("chamber_light", true).await?;
@@ -131,7 +131,11 @@ let config = PrintJobConfig::new(
     "My Print",                     // task name
     12345,                          // subtask ID
     "textured",                     // bed type
-).with_ams(vec![0, -1, 1]);        // AMS slot mapping
+)
+// One entry per filament the plate uses, in slicer order. Each value is a flat channel ID
+// (`ams_id * 4 + slot_id`, so 0..=15 for standard AMS, 128..=135 for AMS-HT) or -1 for
+// "not fed from the AMS". Out-of-range values are folded to -1 with a warning.
+.with_ams(vec![0, -1, 1]);
 
 printer.start_print(&config).await?;
 ```
@@ -161,11 +165,32 @@ printer.start_calibration(
 
 ### AMS filament control
 
+Both AMS calls take flat positional arguments; the addressing sentinels matter more than the
+ordering, so they're spelled out here.
+
 ```rust
-printer.change_filament(0, 1, -1, -1).await?;               // load AMS 0, slot 1
-printer.start_drying(0, 55, 8, 0, true, 20, false, "PA-CF").await?; // dry at 55°C for 8h
-printer.stop_drying(0).await?;
+// change_filament(ams_id, slot_id, curr_temp, tar_temp)
+//   ams_id:    0..=3 standard AMS unit · 128..=135 AMS-HT bus ID · 254/255 external spool
+//   slot_id:   0..=3 slot within the unit · 254 external-spool load · 255 unload/retract
+//   temps:     nozzle current/target in °C; -1 lets the firmware decide
+printer.change_filament(0, 1, -1, -1).await?;   // load AMS 0, slot 1, firmware picks temps
+printer.change_filament(0, 255, -1, -1).await?; // unload whatever AMS 0 currently has loaded
+
+// start_drying(ams_id, temp, duration_hours, humidity, rotate_tray, cooling_temp,
+//              close_power_conflict, filament)
+//   temp:                 °C, clamped to the attached unit's ceiling (AMS-HT 85, AMS 2 Pro 65)
+//   duration_hours:       hours, not minutes
+//   humidity:             target %; 0 = firmware default
+//   rotate_tray:          rotate trays during the cycle
+//   cooling_temp:         °C to cool down to once drying finishes
+//   close_power_conflict: override the unit's power-conflict interlock
+//   filament:             filament type string, for the unit's own display/logic
+printer.start_drying(0, 55, 8, 0, true, 20, false, "PA-CF").await?;
+printer.stop_drying(0).await?;                  // ams_id only — every other field is zeroed
 ```
+
+`start_drying` returns `Error::ModelMismatch` on P1P/P1S: that firmware acks the command and
+then silently discards it instead of driving the AMS heater.
 
 ### File transfer
 
@@ -199,7 +224,23 @@ let free = ftp.get_available_space().await?;
 
 Bambu printers use two different camera protocols depending on the model. Check which one with `model.quirks().camera_protocol()`.
 
-**Binary JPEG (A1, P1 series, and A2L) — port 6000.** Streams JPEG frames over a lightweight binary protocol on TLS:
+**Binary JPEG (A1, P1 series, and A2L) — port 6000.** Streams JPEG frames over a lightweight binary protocol on TLS. Through `PrinterClient`, add a camera connector the same way you add FTPS — the connection and handshake happen lazily on the first frame read:
+
+```rust
+let mut printer = printer.with_camera(camera_tls, TokioRawStreamFactory);
+
+let mut frame = Vec::new();
+loop {
+    printer.read_camera_frame(&mut frame).await?; // frame is a complete JPEG image
+}
+```
+
+`read_camera_frame` bounds the read against the client's timer. `camera()` hands out the
+underlying stream directly, and errors immediately on RTSPS models. Use
+`.with_camera_max_frame_size(bytes)` to lower the frame cap, and `.attach_camera()` to inject
+an already-connected stream (tests, Embassy).
+
+The stream type is also usable standalone:
 
 ```rust
 use bambino::camera::binary::BambuBinaryCameraStream;
@@ -381,13 +422,13 @@ This is the one place the ESP-IDF backend diverges from `io::tokio`, where `buil
 
 ## bambino-cli
 
-A CLI built on our own library client, for testing against real printers and proving out the `std` build. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in terminal dependencies.
+A CLI built on this crate's own `PrinterClient`, so you can exercise the library against a real printer without first building an application around it — useful for confirming a model behaves as documented, capturing wire data, or checking a change before it ships. It also keeps the `std` build honest by consuming the public API the way a consumer would. Ships as a binary in the same crate, gated behind the `cli` feature so library consumers don't pull in terminal dependencies.
 
 ```sh
 cargo build --bin bambino-cli --features cli
 ```
 
-A `cargo bambino-cli` alias (`.cargo/config.toml`) wraps `cargo run --bin bambino-cli --features cli --`, so you don't have to type `--features cli` on every invocation — e.g. `cargo bambino-cli discover` instead of `cargo run --bin bambino-cli --features cli -- discover`.
+Working inside a checkout of this repo, the `cargo bambino-cli` alias in `.cargo/config.toml` wraps `cargo run --bin bambino-cli --features cli --`, so `cargo bambino-cli discover` stands in for `cargo run --bin bambino-cli --features cli -- discover`. The alias comes from this repo's cargo config, so it isn't available to a project that depends on bambino — run or install the binary directly there.
 
 ### Usage
 
