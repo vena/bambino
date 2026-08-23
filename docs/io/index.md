@@ -100,6 +100,12 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokiotlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](#tlsconnector), [`TlsVersion`](#tlsversion)
 
+- <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](#tlsconnector)
+
+  rustls retains the peer chain on the connection after the handshake, so this is a
+
+  straight copy of what the server sent, in wire order (leaf first).
+
 ##### `impl<T: ::tokio::io::AsyncWrite + Unpin> Write for TokioIo<T>`
 
 - <span id="tokioio-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
@@ -452,6 +458,10 @@ without enforcing a static library provider.
 - `fn negotiated_version(&self, _stream: &<Self as >::Stream) -> Option<TlsVersion>`
 
   Returns the TLS protocol version negotiated on the given stream.
+
+- `fn peer_chain_der(&self, _stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>`
+
+  Returns the peer's certificate chain exactly as presented during the handshake,
 
 #### Implementors
 

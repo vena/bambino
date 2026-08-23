@@ -166,6 +166,22 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
   type's doc comment above. Return `None` honestly rather than hard-coding a guess.
 
+- <span id="embassytlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, _stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
+
+  `mbedtls-rs` exposes neither a peer-certificate accessor nor the raw
+
+  `mbedtls_ssl_context` pointer that would let this crate call
+
+  `mbedtls_ssl_get_peer_cert` itself (confirmed by reading its source: the only
+
+  post-handshake inspectors on `Session` are `tls_verification_details` and `tls_alpn`).
+
+  The ESP-IDF backend can do this only because `esp_tls_get_ssl_context` hands out that
+
+  pointer. Return `None` honestly — a consumer pinning certificates cannot do so on this
+
+  backend today, and must fail closed rather than be handed a fabricated empty chain.
+
 ### `EmbassyUdpSocket<'a>`
 
 ```rust

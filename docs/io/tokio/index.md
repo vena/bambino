@@ -201,6 +201,12 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokiotlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
+- <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
+
+  rustls retains the peer chain on the connection after the handshake, so this is a
+
+  straight copy of what the server sent, in wire order (leaf first).
+
 ##### `impl<T: ::tokio::io::AsyncWrite + Unpin> Write for TokioIo<T>`
 
 - <span id="tokioio-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
@@ -304,6 +310,12 @@ TLS Secure connector wrapping Tokio-Rustls.
 - <span id="tokiotlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: TokioIo<::tokio::net::TcpStream>) -> Result<<Self as >::Stream, SocketError>` — [`TokioIo`](#tokioio), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
 - <span id="tokiotlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
+
+- <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
+
+  rustls retains the peer chain on the connection after the handshake, so this is a
+
+  straight copy of what the server sent, in wire order (leaf first).
 
 ### `TokioUdpSocket`
 

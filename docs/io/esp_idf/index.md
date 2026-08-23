@@ -126,6 +126,8 @@ give up ownership of the fd first or the fd would be double-closed.
 
 - <span id="espidftlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
+- <span id="espidftlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
+
 ##### `impl Write for EspIdfTcpStream`
 
 - <span id="espidftcpstream-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
@@ -287,6 +289,8 @@ rather than satisfying it.
   Bounds the handshake loop by `self.connect_timeout`, tracked the same way `poll_until` does (`src/client/mod.rs`: capture `now_millis()` before the loop, compare `saturating_sub` against a budget each iteration).
 
 - <span id="espidftlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
+
+- <span id="espidftlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
 
 ### `EspIdfTlsStream<S>`
 
