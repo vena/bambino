@@ -234,11 +234,13 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     /// "the peer sent nothing" and never "skip validation". A caller enforcing a pin must treat
     /// `None` as a failure to confirm, exactly as `negotiated_version` documents above.
     ///
-    /// Whether the chain contains the issuing CA or only the leaf is up to the peer. Bambu
-    /// printers have not been confirmed either way on hardware — use `bambino-cli inspect-cert`
-    /// against a real printer to find out, since that decides whether a captured anchor can be
-    /// fed back through `with_certs(..)` for genuine chain verification or whether only a
-    /// leaf-fingerprint comparison is possible.
+    /// Whether the chain contains the issuing CA or only the leaf is up to the peer, and that
+    /// decides what pinning is possible. Confirmed on a P1S: two certificates, the `CN=<serial>`
+    /// leaf followed by the self-signed `CN=BBL CA` root (`CA:TRUE`) — so an anchor *can* be
+    /// captured at first contact and fed back through `with_certs(..)` for genuine chain
+    /// verification, rather than being limited to a leaf-fingerprint comparison. Only the P1S has
+    /// been checked; use `bambino-cli inspect-cert` to confirm any other model rather than
+    /// assuming it generalizes.
     ///
     /// The returned DER is copied out of the live session: on ESP-IDF the chain is owned by the
     /// SSL context and is freed on drop or renegotiation, so borrowing it would dangle.

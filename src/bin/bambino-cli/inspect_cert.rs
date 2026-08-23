@@ -2,94 +2,39 @@
 
 //! Diagnostic-only command that captures the raw TLS certificate chain a
 //! printer presents so it can be inspected for a Subject Alternative Name
-//! (SAN) — every cert sample checked into `certs/` is a CA/intermediate
-//! cert, never an actual per-printer leaf cert, so this is the only way to
-//! confirm what a real printer sends. See `.claude/rules/tls-identity-sni.md`
-//! for the resulting identity-verification invariant. Not part of the
-//! library's connection path; does not touch `NoCertificateVerification` or
-//! any `PrinterClient` code.
+//! (SAN) — every cert sample in `certs/` is a CA/intermediate cert, never an
+//! actual per-printer leaf cert, so this is the only way to confirm what a
+//! real printer sends. See `.claude/rules/tls-identity-sni.md` for the
+//! resulting identity-verification invariant. Not part of the library's
+//! connection path; does not touch any `PrinterClient` code.
+//!
+//! Runs through the library's own [`TokioTlsConnector`] and reads the chain back with
+//! [`TlsConnector::peer_chain_der`], rather than driving `tokio_rustls` with a bespoke
+//! capturing verifier as it used to. That makes this command an exercise of the exact code
+//! path a consumer pinning a certificate would use, instead of a parallel implementation that
+//! could drift from it — and it costs nothing, because `build_unsafe_client_config` already
+//! builds the identical config (ring provider, `DEFAULT_VERSIONS`, `NoCertificateVerification`
+//! advertising the same twelve signature schemes) that the local verifier was duplicating.
 //!
 //! The **whole** chain is captured, not just the leaf, because whether a printer sends its
-//! issuing CA in the handshake decides what certificate pinning a consumer can build on
-//! [`TlsConnector::peer_chain_der`](bambino::io::TlsConnector::peer_chain_der): if the issuer
-//! is present it can be captured once and passed back through `with_certs(..)` for genuine
-//! stack-enforced verification on every later connection; if only the leaf is sent, a consumer
-//! is stuck comparing a leaf fingerprint with verification disabled. That question is
-//! unanswerable without a printer on the LAN, which is exactly what this command has.
+//! issuing CA decides what pinning a consumer can build on top of `peer_chain_der`: if the
+//! issuer is present it can be captured once and passed back through `with_certs(..)` for
+//! genuine stack-enforced verification on every later connection; if only the leaf is sent, a
+//! consumer is stuck comparing a leaf fingerprint with verification disabled.
+//!
+//! **Answered on hardware (P1S, issue #142): the printer sends two certificates** — the
+//! `CN=<serial>` leaf (no extensions at all, i.e. X.509 v1, which is why
+//! `CnFallbackServerVerifier` exists) followed by the self-signed `CN=BBL CA` root itself,
+//! `CA:TRUE`. The captured root is byte-identical to the known BBL CA root. So the good case
+//! holds: an anchor *can* be captured at first contact. Re-run this against any new model
+//! rather than assuming it generalizes.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config};
+use bambino::io::{RawStreamFactory, TlsConnector};
 
 use crate::error::CliError;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
-use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
-use tokio_rustls::rustls;
-
-/// Certificate verifier used only by `inspect-cert`: accepts any certificate (identical
-/// unconditional-trust behavior to `bambino::io::tokio::NoCertificateVerification`) but also
-/// stashes the peer's raw DER certificate chain so `run` can write it to disk after the
-/// handshake completes.
-///
-/// Stores the chain leaf-first, matching the order `TlsConnector::peer_chain_der` returns, so
-/// what this command writes out is what a consumer of that accessor would see.
-#[derive(Debug, Default)]
-struct CapturingVerifier {
-    captured: Mutex<Option<Vec<Vec<u8>>>>,
-}
-
-impl ServerCertVerifier for CapturingVerifier {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        let chain = core::iter::once(end_entity)
-            .chain(intermediates)
-            .map(|cert| cert.as_ref().to_vec())
-            .collect();
-        *self.captured.lock().expect("verifier mutex poisoned") = Some(chain);
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-        ]
-    }
-}
 
 /// Builds the on-disk path for chain position `index`, counting the leaf as 0.
 ///
@@ -117,41 +62,40 @@ fn chain_member_path(output: &str, index: usize) -> PathBuf {
 }
 
 /// Connects to `ip:port`, completes a TLS handshake sending `serial` as the SNI value
-/// (matching what a real fix would send), and writes every certificate the printer presented
-/// as raw DER — the leaf to `output`, any further chain members to the `.chain<N>` paths
-/// `chain_member_path` derives. No FTPS/MQTT protocol traffic is exchanged beyond the
-/// handshake itself — the connection is dropped as soon as it completes.
+/// (matching what the library's own connection path sends), and writes every certificate the
+/// printer presented as raw DER — the leaf to `output`, any further chain members to the
+/// `.chain<N>` paths `chain_member_path` derives. No FTPS/MQTT protocol traffic is exchanged
+/// beyond the handshake itself — the connection is dropped as soon as the chain is read off it.
 pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), CliError> {
     let addr = format!("{ip}:{port}");
-    let stream = ::tokio::net::TcpStream::connect(&addr)
-        .await
-        .map_err(|e| CliError::Network(format!("TCP connect to {addr} failed: {e}")))?;
 
-    let verifier = Arc::new(CapturingVerifier::default());
-    let provider = rustls::crypto::ring::default_provider();
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_protocol_versions(rustls::DEFAULT_VERSIONS)
-        .expect("protocol versions must initialize")
-        .dangerous()
-        .with_custom_certificate_verifier(verifier.clone())
-        .with_no_client_auth();
-    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+    let raw_stream = TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {
+        CliError::Network(format!(
+            "TCP connect to {addr} failed: {}",
+            bambino::Error::from(e)
+        ))
+    })?;
 
-    let server_name = ServerName::try_from(serial.to_string())
-        .map_err(|_| CliError::InvalidArgs(format!("invalid serial for SNI: '{serial}'")))?;
+    let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(
+        build_unsafe_client_config(),
+    ));
 
-    let tls_stream = connector
-        .connect(server_name, stream)
-        .await
-        .map_err(|e| CliError::Network(format!("TLS handshake with {addr} failed: {e}")))?;
+    let tls_stream = connector.connect(serial, raw_stream).await.map_err(|e| {
+        CliError::Network(format!(
+            "TLS handshake with {addr} (SNI={serial}) failed: {}",
+            bambino::Error::from(e)
+        ))
+    })?;
+
+    // Must be read before the stream is dropped: the chain is owned by the live session.
+    let chain = connector.peer_chain_der(&tls_stream).ok_or_else(|| {
+        CliError::Other(
+            "handshake succeeded but the connector reported no peer chain — on tokio this \
+             should not happen, since rustls retains the peer certificates"
+                .into(),
+        )
+    })?;
     drop(tls_stream);
-
-    let chain = verifier
-        .captured
-        .lock()
-        .expect("verifier mutex poisoned")
-        .take()
-        .expect("handshake succeeded but no certificate was captured");
 
     println!(
         "Printer presented {} certificate(s) in its handshake chain.",
@@ -165,15 +109,15 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
         let role = if index == 0 { "leaf" } else { "issuer/CA" };
         let display = path.display();
         println!("  [{index}] {role}, {} bytes → {display}", der.len());
-        println!(
-            "      openssl x509 -in {display} -inform DER -noout -text -ext subjectAltName"
-        );
+        println!("      openssl x509 -in {display} -inform DER -noout -text -ext subjectAltName");
     }
 
     if chain.len() == 1 {
         println!(
             "Only the leaf was sent — a consumer pinning this printer cannot capture an anchor \
-             from the handshake and must compare the leaf itself (see issue #142)."
+             from the handshake and must compare the leaf itself. Note this is NOT what a P1S \
+             does (it sends the BBL CA root too), so it is worth double-checking (see issue \
+             #142)."
         );
     }
 
