@@ -20,18 +20,22 @@ Thermal, configuration, and structural climate performance data are evaluated us
 For models supporting advanced thermal monitoring (such as the heatbed, active chamber heaters, and dual-nozzle extruders on H2D platforms), actual and target temperatures are packed and transmitted as a single composite 32-bit unsigned integer to conserve network bandwidth and indicate active heating states.
 
 The system evaluates the raw telemetry field value to determine the encoding state:
-*   **Direct Value (Value $\le 500$)**: The reported integer value represents the raw actual temperature directly in degrees Celsius. The target temperature is implicitly $0^\circ\text{C}$ (or is tracked via separate target registers).
-*   **Composite Packed Value (Value $> 500$)**: When a heater is active and a non-zero target temperature is set, the field value exceeds 500. The field is transmitted as a single composite 32-bit unsigned integer containing both the target and actual temperatures.
+*   **Direct Value (value ≤ `500`)**: The reported integer value represents the raw actual temperature directly in degrees Celsius. The target temperature is implicitly 0 °C (or is tracked via separate target registers).
+*   **Composite Packed Value (value > `500`)**: When a heater is active and a non-zero target temperature is set, the field value exceeds 500. The field is transmitted as a single composite 32-bit unsigned integer containing both the target and actual temperatures.
 
 The system must unpack these composite integers dynamically:
 
 *   **Target Temperature**: Extracted by shifting the composite integer right by 16 bits:
 
-    $$\text{Target} = \text{packed\_val} \gg 16$$
+    ```text
+    target = packed_val >> 16
+    ```
 
 *   **Actual Temperature**: Extracted from the lower 16 bits of the composite integer using a bitwise AND mask:
 
-    $$\text{Actual} = \text{packed\_val} \ \& \ 0\text{xFFFF}$$
+    ```text
+    actual = packed_val & 0xFFFF
+    ```
 
 ##### Bed Temperature Wire Paths
 Bed temperature telemetry arrives via different wire paths depending on the hardware generation:
@@ -44,13 +48,13 @@ New-gen payloads also carry a top-level `device.bed_temp` field, composite-packe
 
 ##### Case Study: Bed Temperature Composite Encoding
 When the heatbed target temperature and actual temperature are both set to 100°C, the telemetry channel transmits the packed decimal integer `6553700` (which is hex `0x00640064`).
-*   $\text{Target} = 0\text{x}00640064 \gg 16 = 0\text{x}0064 = 100^\circ\text{C}$
-*   $\text{Actual} = 0\text{x}00640064 \ \& \ 0\text{xFFFF} = 0\text{x}0064 = 100^\circ\text{C}$
+*   `target = 0x00640064 >> 16 = 0x0064` = 100 °C
+*   `actual = 0x00640064 & 0xFFFF = 0x0064` = 100 °C
 
 ##### Chamber Temperature Target & Heater State Encoding (H2D Series)
 On dual-extruder platforms equipped with active chamber heaters (such as the `H2D` series), this composite encoding applies to the chamber temperature parameters (`chamber_temper` and `info.temp` fields). The parser must evaluate the value dynamically:
-*   **Value $> 500$**: The chamber heater is actively enabled. The value is composite-encoded representing $(\text{target} \times 65536) + \text{current}$.
-*   **Value $\le 500$**: The chamber heater is inactive. The telemetry reports direct Celsius temperature, and the target is implicitly `0`.
+*   **Value > `500`**: The chamber heater is actively enabled. The value is composite-encoded representing `(target * 65536) + current`.
+*   **Value ≤ `500`**: The chamber heater is inactive. The telemetry reports direct Celsius temperature, and the target is implicitly `0`.
 
 ##### Chamber Temperature Sensor Availability Constraints
 Only specific hardware lines (specifically the `X1C`, `X1E`, `X2D`, `P2S`, `H2C`, `H2D`, `H2D Pro`, and `H2S`) are equipped with physical chamber temperature sensors. For open-frame or entry-level models (specifically the `P1P`, `P1S`, `A1`, `A1 Mini`, and `A2L` series), no physical chamber temperature sensor exists on the toolhead or enclosure bus. Consequently, any `chamber_temper` or `ctc.info.temp` values reported in their telemetry status streams are meaningless static or junk values and must be ignored by state tracking systems.
@@ -95,11 +99,13 @@ Carriage structural parameters are parsed from `device.nozzle.info` (refer to `[
 *   **Vortek Tool Changer Systems (H2C)**: Interpret nozzle IDs `16` to `21` strictly as physical hotends resting inside the passive hotend storage rack. The `"stat"` parameter for these rack slots indicates tool status (such as `0` for empty, or bitmask states representing presence, alignment, and locking confirmations).
 
 #### Fan Speed Telemetry Step-to-Percentage Conversions [REF-CLIM-FANS]
-The speed values for the cooling fans (excluding the X2D secondary auxiliary fan) are reported on the MQTTS status channel as discrete step integers on a scale of `0` to `15` (mapped in `[REF-CLIM-FANS]`). Receiving applications must map these steps ($S$) to standard percentage values:
+The speed values for the cooling fans (excluding the X2D secondary auxiliary fan) are reported on the MQTTS status channel as discrete step integers on a scale of `0` to `15` (mapped in `[REF-CLIM-FANS]`). Receiving applications must map these steps (`S`) to standard percentage values:
 
-$$\text{Percentage} = \text{Round}\left(S \times \frac{100}{15}\right) \approx \text{Round}(S \times 6.67)$$
+```text
+percentage = round(S * 100 / 15)   # ≈ round(S * 6.67)
+```
 
-*   **Secondary Auxiliary Fan (Right Auxiliary Fan on X2D)**: Mapped to `device.airduct.parts` with `id: 160`. The `"state"` parameter of this part object represents the actual speed directly as an integer percentage value ($0$ to $100$) and does not require step conversion.
+*   **Secondary Auxiliary Fan (Right Auxiliary Fan on X2D)**: Mapped to `device.airduct.parts` with `id: 160`. The `"state"` parameter of this part object represents the actual speed directly as an integer percentage value (`0` to `100`) and does not require step conversion.
 
 ##### Fan Oscillation Telemetry Artifacts
 Due to discrete 0–15 PWM-step quantization within the physical fan controller, the reported fan speed value in telemetry may oscillate rapidly between adjacent integer steps when trying to maintain fractional target speeds. Downstream systems parsing this status stream must handle this oscillation to prevent interface flickering or false fan speed alert triggers.

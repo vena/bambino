@@ -24,13 +24,17 @@ To determine if a physical spool is present in a specific standard slot, parse t
 
 Standard physical AMS units (IDs `0` to `3`) each manage 4 physical slots. The global tray bit index is calculated as follows:
 
-$$\text{shift\_standard} = (\text{ams\_id} \times 4) + \text{tray\_id}$$
+```text
+shift_standard = (ams_id * 4) + tray_id
+```
 
 With the shift index determined, the existence of the physical spool in the slot is verified:
 
-$$\text{slot\_exists} = (\text{tray\_exist\_bits} \gg \text{shift\_standard}) \ \& \ 1$$
+```text
+slot_exists = (tray_exist_bits >> shift_standard) & 1
+```
 
-*   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': $\text{shift\_ht} = 16 + (\text{ams\_id} - 128) + \text{slot\_id}$ (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp:833`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
+*   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': `shift_ht = 16 + (ams_id - 128) + slot_id` (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp:833`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
 
 ##### The Printer-Shutdown Telemetry Exception
 During printer shutdown routines, the firmware emits a final status update where `tray_exist_bits` evaluates to `0` and the `power_on_flag` boolean is set to `false`. To prevent telemetry parsers from falsely interpreting this final update as a physical spool-removal event, updates where `tray_exist_bits = 0` must be ignored strictly when `power_on_flag` is `false`. Conversely, if `power_on_flag` is `false` but `tray_exist_bits` is non-zero, this represents a valid idle-printer state and changes must be processed normally.
@@ -131,9 +135,9 @@ The printer returns a structural JSON response over the report topic containing 
 ```
 
 The system must map the `"name"` field of each module object using the following naming conventions to identify the physical expansion unit and index:
-*   **`ams/<id>`**: Original AMS unit (e.g., standard CoreXY multi-material systems). The trailing number `<id>` corresponds to the physical `ams_id` ($0 \le \text{id} \le 3$).
-*   **`n3f/<id>`**: AMS 2 Pro unit. The trailing number `<id>` corresponds to the physical `ams_id` ($0 \le \text{id} \le 3$).
-*   **`n3s/<id>`**: AMS-HT dry-chamber unit. The trailing number `<id>` represents the physical single-slot ID, **conventionally** starting at $128$ (e.g., `n3s/128`).
+*   **`ams/<id>`**: Original AMS unit (e.g., standard CoreXY multi-material systems). The trailing number `<id>` corresponds to the physical `ams_id` (`0` to `3`).
+*   **`n3f/<id>`**: AMS 2 Pro unit. The trailing number `<id>` corresponds to the physical `ams_id` (`0` to `3`).
+*   **`n3s/<id>`**: AMS-HT dry-chamber unit. The trailing number `<id>` represents the physical single-slot ID, **conventionally** starting at `128` (e.g., `n3s/128`).
 *   **`ams_f1/<id>`**: A fourth AMS unit type BambuStudio accepts alongside the three above. **What physical product this designates is not confirmed here** — it is referenced in upstream's AMS-settings UI in a branch alongside a "lite" firmware selection and an `f1` printer AMS type, which suggests a lite/basic variant, but that is inference from surrounding code rather than an established mapping. Treat the prefix as recognized and its product identity as open.
 
 Note the `<id>` ranges above are conventions of each unit type, **not rules a parser should enforce.** BambuStudio's `MachineObject::get_ams_version()` splits on `/`, accepts the four types verbatim, and parses whatever integer follows — it previously special-cased a hardcoded 128+ offset for `n3s` and that offset was removed. A parser that rejects an out-of-range `<id>`, or that infers unit type from the number instead of the prefix, will disagree with upstream.
@@ -167,12 +171,12 @@ The `"ams_mapping"` parameter is a flat, 1-to-1, forward-mapped JSON array of in
 
 ##### Array Mapping Mechanics
 *   **Array Length via Maximum ID**: The length of the `ams_mapping` array is determined by the *highest filament ID index* present in the sliced project metadata (`slice_info.config`), not the total count of unique filaments. If a project utilizes filament ID 1 and filament ID 4, the array must be sized to 4.
-*   **Forward 0-Indexed Mapping & Padding**: The array positions map sequentially from left to right. Index $i$ corresponds directly to the 0-indexed filament slot $i$ defined in the sliced project file. Intermediate unused filament IDs must be explicitly padded with the `-1` (unmapped) sentinel.
+*   **Forward 0-Indexed Mapping & Padding**: The array positions map sequentially from left to right. Index `i` corresponds directly to the 0-indexed filament slot `i` defined in the sliced project file. Intermediate unused filament IDs must be explicitly padded with the `-1` (unmapped) sentinel.
 
 ##### Hardware Channel Identifiers
 The integer values within the flat `ams_mapping` array represent absolute physical hardware channels:
-*   **`0` to `15`**: Standard AMS channels. Calculated via $(\text{ams\_id} \times 4) + \text{slot\_id}$ (ams_id 0-3, slot_id 0-3).
-*   **`128` to `135`**: Physical single-slot high-temperature AMS-HT units. Global channel ID equals the unit's bus ID ($\text{ams\_id}$).
+*   **`0` to `15`**: Standard AMS channels. Calculated via `(ams_id * 4) + slot_id` (`ams_id` 0-3, `slot_id` 0-3).
+*   **`128` to `135`**: Physical single-slot high-temperature AMS-HT units. Global channel ID equals the unit's bus ID (`ams_id`).
 *   **`-1`**: Omit/Unmapped. Mandatory marker for any unused project filament slot or any slot routed to an **External Spool** (non-bus tray).
 
 ##### External Spool Flat-Mapping Restrictions
@@ -181,8 +185,8 @@ The flat `ams_mapping` array cannot accept absolute external spool IDs (`254` or
 #### Structured `ams_mapping2` Array
 The `"ams_mapping2"` parameter is a JSON array of structured objects that maintains a direct 1-to-1 index pairing with `"ams_mapping"`. It defines detailed unit and slot routing:
 
-*   **Standard AMS Slot**: `{"ams_id": ams_id, "slot_id": slot_id}` (where $0 \le \text{ams\_id} \le 3$, and $0 \le \text{slot\_id} \le 3$).
-*   **AMS-HT Slot**: `{"ams_id": ams_id, "slot_id": 0}` (where $128 \le \text{ams\_id} \le 135$).
+*   **Standard AMS Slot**: `{"ams_id": ams_id, "slot_id": slot_id}` (where `ams_id` is `0` to `3`, and `slot_id` is `0` to `3`).
+*   **AMS-HT Slot**: `{"ams_id": ams_id, "slot_id": 0}` (where `ams_id` is `128` to `135`).
 *   **Unmapped / Unused Filament**: `{"ams_id": 255, "slot_id": 255}`. *(Note: Do not pass `-1` inside the structured object; it violates 8-bit unsigned bounds)*.
 *   **External Spool**:
     *   *Single-Nozzle Printers*: `{"ams_id": 255, "slot_id": 0}`.

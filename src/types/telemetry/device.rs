@@ -556,6 +556,6 @@ pub struct AirductPart {
     /// Part index matching hardware configurations (e.g., `160` for the right auxiliary fan).
     pub id: u32,
 
-    /// The active operating speed percentage ($0$ to $100$) or damper direction flag.
+    /// The active operating speed percentage (`0` to `100`) or damper direction flag.
     pub state: Option<i32>,
 }

@@ -146,7 +146,7 @@ Represents an individual auxiliary routing component.
 
 - **`state`**: `Option<i32>`
 
-  The active operating speed percentage ($0$ to $100$) or damper direction flag.
+  The active operating speed percentage (`0` to `100`) or damper direction flag.
 
 #### Trait Implementations
 

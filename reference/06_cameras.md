@@ -37,10 +37,10 @@ The packet is structured in little-endian byte ordering as follows:
 | `48 - 79` | 32 | `string` | `<access_code>` (Null-padded ASCII access code) |
 
 Once authenticated, the printer continuously streams JPEG payloads back over the socket. Each frame is preceded by a **16-byte header**:
-*   **Bytes 0-3**: `uint32` payload size $N$ (little-endian). This represents the size of the subsequent raw JPEG data.
+*   **Bytes 0-3**: `uint32` payload size `N` (little-endian). This represents the size of the subsequent raw JPEG data.
 *   **Bytes 4-15**: Padding / Metadata (zeros).
 
-The client must parse the size $N$, validate that $N$ does not exceed a sanity limit of 10MB (to guard against malformed headers causing unbounded allocation), read exactly $N$ bytes of data, and verify that the payload starts with the JPEG magic marker `\xff\xd8` and ends with `\xff\xd9` before displaying the frame.
+The client must parse the size `N`, validate that `N` does not exceed a sanity limit of 10MB (to guard against malformed headers causing unbounded allocation), read exactly `N` bytes of data, and verify that the payload starts with the JPEG magic marker `\xff\xd8` and ends with `\xff\xd9` before displaying the frame.
 
 #### RTSPS Protocol Handshake (Port 322)
 RTSPS connection URLs are formatted as:
