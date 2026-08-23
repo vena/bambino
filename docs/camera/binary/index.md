@@ -21,23 +21,23 @@ a standard 16-byte length descriptor.
    against decoding crashes.
 2. Clamps incoming frame sizes to a reasonable upper boundary (10MB by default) to protect
    against unbounded memory allocation crashes on low-resource environments if transport
-   stream corruption occurs. Use [`BambuBinaryCameraStream::with_max_frame_size`] to lower
+   stream corruption occurs. Use [`BinaryCameraStream::with_max_frame_size`] to lower
    this cap on constrained (`no_std`/Embassy) targets.
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`BambuBinaryCameraStream`](#bambubinarycamerastream) | struct | Abstract state controller parsing incoming frame buffers from raw Port 6000 streams. |
+| [`BinaryCameraStream`](#binarycamerastream) | struct | Abstract state controller parsing incoming frame buffers from raw Port 6000 streams. |
 | [`build_handshake_packet`](#build-handshake-packet) | fn | Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY]. |
 | [`CAMERA_PASSWORD_MAX_LEN`](#camera-password-max-len) | const | Maximum accepted access-code length for the camera handshake, in bytes. |
 
 ## Types
 
-### `BambuBinaryCameraStream<IO: AsyncIo>`
+### `BinaryCameraStream<IO: AsyncIo>`
 
 ```rust
-struct BambuBinaryCameraStream<IO: AsyncIo> {
+struct BinaryCameraStream<IO: AsyncIo> {
     // [REDACTED: Private Fields]
 }
 ```
@@ -53,19 +53,19 @@ to fully close before redialing.
 
 #### Implementations
 
-- <span id="bambubinarycamerastream-new"></span>`fn new(stream: IO) -> Self`
+- <span id="binarycamerastream-new"></span>`fn new(stream: IO) -> Self`
 
   Instantiates a camera parser wrapper surrounding an active secure stream socket.
 
-- <span id="bambubinarycamerastream-with-max-frame-size"></span>`fn with_max_frame_size(self, max: usize) -> Self`
+- <span id="binarycamerastream-with-max-frame-size"></span>`fn with_max_frame_size(self, max: usize) -> Self`
 
   Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
 
-- <span id="bambubinarycamerastream-authenticate"></span>`async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
+- <span id="binarycamerastream-authenticate"></span>`async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
 
   Transmits the 80-byte authentication handshake to activate the continuous frame-push process.
 
-- <span id="bambubinarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+- <span id="binarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Asynchronously extracts the next complete frame from the stream.
 

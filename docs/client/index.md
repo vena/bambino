@@ -172,7 +172,7 @@ where
 
 High-level client for controlling a Bambu Lab printer.
 
-Wraps an MQTT session (connected or lazy) and optionally a [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient) for
+Wraps an MQTT session (connected or lazy) and optionally a [`FtpsClient`](../ftps/client/index.md#ftpsclient) for
 SD card access. `MqttRawIO`/`MqttTls`/`MqttFactory` are MQTT's [`TlsConnector`](../io/index.md#tlsconnector)+
 [`RawStreamFactory`](../io/index.md#rawstreamfactory) pair (mandatory — every `PrinterClient` needs MQTT);
 `FtpsRawIO`/`FtpsTls`/`FtpsFactory` are FTPS's independent pair (defaulted, configured via
@@ -215,13 +215,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Controls whether `get_k_profiles()` sends an automatic priming request.
 
-- <span id="superprinterclient-attach-camera"></span>`fn attach_camera(&mut self, camera: BambuBinaryCameraStream<<CameraTls as >::Stream>)` — [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector)
+- <span id="superprinterclient-attach-camera"></span>`fn attach_camera(&mut self, camera: BinaryCameraStream<<CameraTls as >::Stream>)` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector)
 
-  Injects a pre-connected [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream) directly.
+  Injects a pre-connected [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream) directly.
 
-- <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BambuBinaryCameraStream<<CameraTls as >::Stream>, Error>` — [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BinaryCameraStream<<CameraTls as >::Stream>, Error>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
-  Returns direct access to the underlying [`BambuBinaryCameraStream`](../camera/binary/index.md#bambubinarycamerastream), auto-connecting if needed.
+  Returns direct access to the underlying [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), auto-connecting if needed.
 
 - <span id="superprinterclient-read-camera-frame"></span>`async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -273,7 +273,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-with-ftps-allow-unverified-tls-1-2"></span>`fn with_ftps_allow_unverified_tls_1_2(self, allow: bool) -> Self`
 
-  Overrides the default `false` for `BambuFtpsClient`'s TLS-1.2-enforcement bypass.
+  Overrides the default `false` for `FtpsClient`'s TLS-1.2-enforcement bypass.
 
 - <span id="superprinterclient-connect-ftps"></span>`async fn connect_ftps(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -301,7 +301,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-with-camera-max-frame-size"></span>`fn with_camera_max_frame_size(self, bytes: usize) -> Self`
 
-  Overrides the default maximum accepted camera frame size (see `BambuBinaryCameraStream::with_max_frame_size`).
+  Overrides the default maximum accepted camera frame size (see `BinaryCameraStream::with_max_frame_size`).
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<u16, Error>` — [`FanTarget`](types/index.md#fantarget), [`Error`](../error/index.md#error)
 
@@ -437,13 +437,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-attach-storage"></span>`fn attach_storage(&mut self, ftps_client: BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient)
+- <span id="superprinterclient-attach-storage"></span>`fn attach_storage(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
 
-  Injects a pre-connected [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient) directly.
+  Injects a pre-connected [`FtpsClient`](../ftps/client/index.md#ftpsclient) directly.
 
-- <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut BambuFtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`Error`](../error/index.md#error)
 
-  Returns direct access to the underlying [`BambuFtpsClient`](../ftps/client/index.md#bambuftpsclient), auto-connecting if needed.
+  Returns direct access to the underlying [`FtpsClient`](../ftps/client/index.md#ftpsclient), auto-connecting if needed.
 
 - <span id="superprinterclient-disconnect-storage"></span>`async fn disconnect_storage(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 

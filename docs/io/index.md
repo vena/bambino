@@ -380,7 +380,7 @@ trait RawStreamFactory<RawIO: AsyncIo> { ... }
 Dials a fresh, un-encrypted (pre-TLS) raw stream to a host:port.
 
 Protocol-neutral by design: MQTT's lazy connect (`PrinterClient::ensure_mqtt`) and FTPS's
-per-transfer passive data channel (`BambuFtpsClient::list_directory`/`upload_file`/
+per-transfer passive data channel (`FtpsClient::list_directory`/`upload_file`/
 `download_file`) both just need "give me a raw stream to host:port" with no
 protocol-specific semantics in the trait itself — confirmed by every implementor
 (`TokioRawStreamFactory`, `EspIdfRawStreamFactory`, `EmbassyRawStreamFactory`) having zero

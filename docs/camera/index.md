@@ -10,7 +10,7 @@ Bambu Lab printers expose camera feeds through two protocols:
 
 1. **Binary JPEG (Port 6000)** — A1, A1 Mini, A2L, and P1 series. A lightweight binary protocol that
    streams discrete JPEG frames over TLS. This module provides a complete client
-   ([`BambuBinaryCameraStream`](binary/index.md#bambubinarycamerastream)) that handles the handshake and frame extraction.
+   ([`BinaryCameraStream`](binary/index.md#binarycamerastream)) that handles the handshake and frame extraction.
 
 2. **RTSPS (Port 322)** — X1, X2, H2, and P2S series. An RTSP server behind implicit TLS
    with Digest authentication. This module provides helper utilities ([`rtsps`](rtsps/index.md#rtsps)) for
@@ -102,7 +102,7 @@ Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series).
 The printer accepts only one connection to this port at a time. A caller redialing it
 immediately after disconnecting can orphan the prior socket server-side until keepalive
 reaps it (~20 min stall) — wait for the old connection to fully close, or add a delay,
-before reconnecting. See [`BambuBinaryCameraStream`](binary/index.md#bambubinarycamerastream)'s doc comment.
+before reconnecting. See [`BinaryCameraStream`](binary/index.md#binarycamerastream)'s doc comment.
 
 ### `CAMERA_PORT_RTSPS`
 ```rust
