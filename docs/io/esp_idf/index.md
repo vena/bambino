@@ -228,11 +228,11 @@ rather than satisfying it.
 
   `.with_connect_timeout(d)`.
 
-- <span id="espidftlsconnector-with-certs"></span>`fn with_certs(ca_cert: Vec<u8>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self`
+- <span id="espidftlsconnector-with-certs"></span>`fn with_certs(ca_certs: impl IntoIterator<Item = Vec<u8>>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self`
 
-  Creates a connector that verifies the server certificate against a CA cert.
+  Creates a connector that verifies the server certificate against one or more CA certs.
 
-  The supplied CA is the sole trust anchor: ESP-IDF's bundled public root CAs are
+  The supplied CAs are the sole trust anchors: ESP-IDF's bundled public root CAs are
 
   explicitly disabled, so these bytes reach mbedTLS as `cacert_buf` rather than being
 
