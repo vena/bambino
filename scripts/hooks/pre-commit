@@ -25,6 +25,12 @@ cd "$(git rev-parse --show-toplevel)"
 staged="$(git diff --cached --name-only)"
 
 if [ -n "$staged" ]; then
+    # Runs BEFORE the docs-only early exit below: a reference/*.md edit is
+    # docs-only, so a check placed after it would never see the commits most
+    # likely to reintroduce broken LaTeX. Cheap enough (one grep over tracked
+    # files) that it costs nothing to run on every commit.
+    scripts/check-doc-latex.sh
+
     code_touched=0
     while IFS= read -r path; do
         [ -z "$path" ] && continue

@@ -14,6 +14,7 @@ check-fast:
 	cargo clippy
 	cargo clippy --bin bambino-cli --features cli
 	scripts/check-rules-globs.sh
+	scripts/check-doc-latex.sh
 
 # Wraps scripts/check-esp-idf.sh. Not run by check-fast/check-all's CI job on
 # every push — see .github/workflows/esp-idf.yml for why (path-filtered, and
