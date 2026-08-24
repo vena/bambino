@@ -141,6 +141,12 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
 
     let mut state = serde_json::Map::new();
 
+    // Most recent non-fatal diagnostic, shown in the dashboard footer. These used to be
+    // `log::warn!` calls, which reach stderr on the same raw-mode tty the dashboard is
+    // drawing to and corrupt it; the CLI's logger is silenced for this subcommand
+    // (see main.rs), so the footer is now the only place they surface.
+    let mut warning: Option<String> = None;
+
     // NOTE: racing `poll_telemetry()` against `ping_timer.tick()` here means a silently
     // dropped connection is caught by `tick_zombie_check`'s 60s `secs_since_last_message`
     // counter below, not by `poll_wire`'s 30s per-read deadline (`mqtt/client/frame.rs`) —
@@ -153,8 +159,17 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
                 match telemetry_res {
                     Ok(event) => {
                         let payload = &event.raw().payload;
-                        if let Err(e) = dashboard::render_dashboard(payload, &mut state, quirks) {
-                            log::warn!("Failed to render telemetry updates: {:?}", e);
+                        match dashboard::render_dashboard(
+                            payload,
+                            &mut state,
+                            quirks,
+                            warning.as_deref(),
+                        ) {
+                            Ok(()) => warning = None,
+                            Err(e) => {
+                                warning =
+                                    Some(format!("Failed to render telemetry updates: {:?}", e));
+                            }
                         }
                     }
                     Err(e) => break Err(e),
@@ -163,10 +178,12 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
 
             _ = ping_timer.tick() => {
                 if let Err(e) = printer.send_ping().await {
-                    log::warn!("Failed to dispatch keep-alive ping: {:?}", e);
+                    warning = Some(format!("Failed to dispatch keep-alive ping: {:?}", e));
                 }
-                // `tick_zombie_check` already logs its own `log::warn!` describing which
-                // liveness condition tripped before returning `Err`, so a detected zombie is
+                // `tick_zombie_check` logs its own `log::warn!` describing which liveness
+                // condition tripped before returning `Err` (discarded under this subcommand's
+                // silenced logger, but the `Err` itself surfaces as a `CliError` once the
+                // terminal guard has restored the screen), so a detected zombie is
                 // treated as fatal here (mirroring the `poll_telemetry` error branch above)
                 // rather than logged-and-ignored like a single failed ping write above —
                 // continuing to loop against a connection this check has already confirmed

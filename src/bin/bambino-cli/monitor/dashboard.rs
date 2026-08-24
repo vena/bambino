@@ -76,10 +76,16 @@ fn deep_merge(target: &mut serde_json::Value, incoming: &serde_json::Value) {
 }
 
 /// Merges a partial telemetry update into accumulated state and redraws the dashboard.
+///
+/// `warning` is the monitor loop's most recent non-fatal diagnostic, rendered in the footer
+/// through the same [`RawWriter`] as everything else. It cannot go to `log::warn!`: the CLI's
+/// logger writes to the tty this dashboard has put in raw mode, so a record would land
+/// mid-screen at the current cursor with stair-stepped line breaks.
 pub(super) fn render_dashboard(
     payload: &[u8],
     state: &mut serde_json::Map<String, serde_json::Value>,
     quirks: &dyn ModelQuirks,
+    warning: Option<&str>,
 ) -> Result<(), serde_json::Error> {
     let v: serde_json::Value = serde_json::from_slice(payload)?;
 
@@ -124,6 +130,10 @@ pub(super) fn render_dashboard(
     );
 
     render_diagnostics(state, &mut w);
+
+    if let Some(warning) = warning {
+        dwriteln!(w, "\n\x1B[33m! {}\x1B[0m", warning);
+    }
 
     dwriteln!(w, "\n\x1B[2m[q/x/Esc to quit]\x1B[0m");
     w.flush().unwrap_or(());

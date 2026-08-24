@@ -232,9 +232,19 @@ async fn main() {
 
     VERBOSE.store(cli.verbose, Ordering::SeqCst);
     let log_level = if cli.verbose { "debug" } else { "warn" };
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
-        .format_target(true)
-        .init();
+    let mut log_builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level));
+    log_builder.format_target(true);
+    // The monitor dashboard owns the terminal: raw mode plus the alternate screen are
+    // tty-level states shared by stdout and stderr, so any log record written while it runs
+    // lands mid-screen at the dashboard's cursor position with stair-stepped line breaks.
+    // Discarding is safe here because the dashboard surfaces its own diagnostics through
+    // `RawWriter` (see monitor::dashboard), and a fatal error still returns as a `CliError`
+    // printed after the terminal guard restores the screen.
+    if matches!(cli.command, Commands::Monitor { .. }) {
+        log_builder.target(env_logger::Target::Pipe(Box::new(std::io::sink())));
+    }
+    log_builder.init();
 
     if let Some(path) = cli.with_certs.as_deref() {
         match trust::load_trust_anchors(path) {

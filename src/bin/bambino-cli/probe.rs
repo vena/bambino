@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use crate::connection::{Printer, create_printer};
 use crate::error::CliError;
+use crate::redact::redact_secrets;
 
 const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 3;
 const LONG_CAPTURE_WINDOW_SECS: u64 = 60;
@@ -364,9 +365,11 @@ async fn capture_responses(
             Err(_) => break,
         };
         if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload) {
+            // Redact before the value is ever stored: `-o/--output` takes an arbitrary path,
+            // and raw telemetry carries per-component `sn` fields (see redact::REDACTED_KEYS).
             responses.push(CapturedMessage {
                 elapsed_ms: start.elapsed().as_millis() as u64,
-                payload: v,
+                payload: redact_secrets(v),
             });
         }
     }
@@ -405,7 +408,9 @@ async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> 
         Ok(_) => match capture_pushall(client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await {
             Ok(Some(p)) => {
                 eprintln!("captured.");
-                Some(p)
+                // A full pushall's `module` list is the densest source of hardware serials
+                // in the whole protocol — redact before it can reach the report file.
+                Some(redact_secrets(p))
             }
             Ok(None) => {
                 eprintln!(
