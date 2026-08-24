@@ -14,4 +14,6 @@ pub(crate) mod protocol;
 pub(crate) const FTPS_PORT: u16 = 990;
 
 pub use client::FtpsClient;
-pub use parser::{CurrentDateTime, FtpFile, parse_unix_listing};
+pub use parser::{
+    CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
+};

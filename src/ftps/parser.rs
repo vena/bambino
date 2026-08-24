@@ -32,7 +32,8 @@ pub struct FtpFile {
     pub is_dir: bool,
     /// Absolute size of the file, in bytes.
     pub size: u64,
-    /// Reconstructed modification year, calculated using current time markers.
+    /// Reconstructed modification year: taken verbatim from the wire when the listing carried one,
+    /// otherwise inferred against the [`CurrentDateTime`] reference (see `year_is_inferred`).
     pub year: i32,
     /// Numeric calendar month (1 to 12).
     pub month: u8,
@@ -42,13 +43,13 @@ pub struct FtpFile {
     pub hour: u8,
     /// Clock minute (0 to 59). Default is 0 if listing only provides a calendar year.
     pub minute: u8,
-    /// `true` when `year` was inferred from the host's current date (the wire's HH:MM-recent-
-    /// file format, ambiguous by design — see this function's doc comment), `false` when the
-    /// wire reported an explicit `YYYY` directly. `year`'s rollover math always lands
-    /// in `{current_year, current_year - 1}` for an inferred entry by construction, so it can
-    /// never itself look implausible even when the printer's own clock (the source of the
-    /// month/day/HH:MM this was inferred from) is wrong — this flag is the only honest signal
-    /// available without an independent probe like `bambino-cli`'s `files clock-check`.
+    /// `true` when `year` was inferred from the [`CurrentDateTime`] reference (the wire's
+    /// HH:MM-recent-file format, ambiguous by design; see `parse_unix_listing`'s doc comment),
+    /// `false` when the wire reported an explicit `YYYY` directly. `year`'s rollover math always
+    /// lands in `{reference_year, reference_year - 1}` for an inferred entry by construction, so it
+    /// can never itself look implausible even when the reference is wrong. This flag is the only
+    /// honest signal available without an independent probe like `bambino-cli`'s
+    /// `files clock-check`.
     pub year_is_inferred: bool,
 }
 
@@ -100,19 +101,138 @@ fn next_token(s: &str) -> Option<(&str, &str)> {
     Some((&trimmed[..end], &trimmed[end..]))
 }
 
-/// Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs.
+/// An absolute file modification time as reported by the `MDTM` command, to one-second resolution.
+///
+/// Unlike everything derived from a `LIST` line, this carries an explicit four-digit year straight
+/// off the wire, with no reference clock and no inference. It is still the printer's *own* notion of
+/// when the file was written, so an unsynced printer yields a confidently-wrong absolute timestamp
+/// rather than an ambiguous one; `MDTM` removes the reconstruction, not the clock skew.
+///
+/// See [`FtpsClient::modification_time`](crate::ftps::FtpsClient::modification_time), which returns
+/// `None` when the printer's firmware doesn't implement the command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FtpTimestamp {
+    /// Four-digit calendar year, as reported.
+    pub year: i32,
+    /// Calendar month (1-12).
+    pub month: u8,
+    /// Day of month (1-31).
+    pub day: u8,
+    /// Hour (0-23).
+    pub hour: u8,
+    /// Minute (0-59).
+    pub minute: u8,
+    /// Second (0-59).
+    pub second: u8,
+}
+
+/// Parses an `MDTM` reply body (`YYYYMMDDHHMMSS`) into an [`FtpTimestamp`].
+///
+/// Returns `None` when the body isn't exactly 14 ASCII digits or the fields fall outside a valid
+/// calendar date. The reply comes from the printer and is untrusted, same as a `LIST` line. Any
+/// fractional-second suffix RFC 3659 permits (`.sss`) is ignored.
+pub fn parse_mdtm_timestamp(body: &str) -> Option<FtpTimestamp> {
+    let digits = body.trim();
+    // RFC 3659 allows an optional fractional-second suffix; the integral part is all we keep.
+    let digits = digits.split('.').next()?;
+    if digits.len() != 14 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+
+    let year = digits[0..4].parse::<i32>().ok()?;
+    let month = digits[4..6].parse::<u8>().ok()?;
+    let day = digits[6..8].parse::<u8>().ok()?;
+    let hour = digits[8..10].parse::<u8>().ok()?;
+    let minute = digits[10..12].parse::<u8>().ok()?;
+    let second = digits[12..14].parse::<u8>().ok()?;
+
+    // Same range discipline `parse_unix_listing` applies to LIST fields, including the
+    // leap-year-aware month length; a printer filesystem doesn't predate 2000.
+    if !(2000..=9999).contains(&year)
+        || !(1..=12).contains(&month)
+        || day < 1
+        || day > days_in_month(month, year)
+        || hour > 23
+        || minute > 59
+        // Leap seconds: RFC 3659 timestamps are UTC, where 60 is representable.
+        || second > 60
+    {
+        return None;
+    }
+
+    Some(FtpTimestamp {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    })
+}
+
+/// The printer's own wall-clock time, used as the reference for `parse_unix_listing`'s year-rollover heuristic.
+///
+/// This must be the **printer's** believed current time, not the host's. vsFTPd decides whether
+/// to emit `HH:MM` or `YYYY` in a `LIST` line by comparing each file's mtime against the printer's
+/// clock, so that clock is the only reference against which an omitted year can be recovered.
+/// Bambu printers in LAN mode frequently never sync time; their clock restarts from a fixed base
+/// on every boot, so it reads months stale. Passing host time to such a printer stamps every
+/// year-omitted entry with the wrong year, and not even consistently wrong, because the rollover
+/// comparison below then fires on an arbitrary subset of entries.
+///
+/// Recover it by uploading a throwaway file and asking
+/// [`FtpsClient::modification_time`](crate::ftps::FtpsClient::modification_time) for its mtime:
+/// the printer stamps the file from its own clock as it writes, and `MDTM` reports that stamp with
+/// an explicit four-digit year, so the reply is the printer's current time outright. `bambino-cli`'s
+/// `files clock-check` does exactly this.
+///
+/// Where the firmware doesn't implement `MDTM`, the same probe read back through `LIST` gives only
+/// a partial answer: month/day/HH:MM come off the printer's clock no matter what reference is
+/// passed here, but the year is whatever that reference supplied. An unsynced printer typically
+/// reads months behind real time. Host time is a fine fallback when the printer's clock is
+/// unknown, and [`FtpFile::year_is_inferred`] marks every entry whose year came from this
+/// reference rather than from the wire.
+///
+/// Note the limit of what this buys: it is the printer's *current* time, not evidence of when any
+/// given file was actually written. Every timestamp FTPS reports, whether reconstructed from
+/// `LIST` or read outright via `MDTM`, is what the printer believed when it wrote the file, so a
+/// clock that was wrong then is still wrong now. A better reference makes the reconstruction more
+/// likely to be right, never authoritative.
 #[derive(Debug, Clone, Copy)]
 pub struct CurrentDateTime {
-    /// Current calendar year.
+    /// The printer's calendar year.
     pub year: i32,
-    /// Current month (1-12).
+    /// The printer's month (1-12).
     pub month: u8,
-    /// Current day of month (1-31).
+    /// The printer's day of month (1-31).
     pub day: u8,
-    /// Current hour (0-23).
+    /// The printer's hour (0-23).
     pub hour: u8,
-    /// Current minute (0-59).
+    /// The printer's minute (0-59).
     pub minute: u8,
+}
+
+/// Converts an `MDTM` reading into a `LIST` reference clock, discarding the seconds field.
+///
+/// This is the intended way to obtain a `CurrentDateTime`: upload a throwaway file, read its
+/// mtime back with
+/// [`FtpsClient::modification_time`](crate::ftps::FtpsClient::modification_time), and convert.
+/// The printer stamps the file from its own clock as it writes, so the result is the printer's
+/// current time, which is the reference
+/// [`parse_unix_listing`]'s rollover heuristic wants.
+///
+/// `LIST` lines carry no seconds field, so the rollover comparison never uses one and the
+/// conversion drops it. Keep the [`FtpTimestamp`] if you need second resolution.
+impl From<FtpTimestamp> for CurrentDateTime {
+    fn from(t: FtpTimestamp) -> Self {
+        Self {
+            year: t.year,
+            month: t.month,
+            day: t.day,
+            hour: t.hour,
+            minute: t.minute,
+        }
+    }
 }
 
 /// Parses a line-separated UNIX directory listing payload returned by `LIST`.
@@ -126,8 +246,9 @@ pub struct CurrentDateTime {
 ///
 /// **Temporal Rollover Mitigation:**
 /// UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
-/// was updated within the last six months. In this scenario, we default to the host system's
-/// `current_year`. If comparing the parsed datetime markers against our system context reveals
+/// was updated within the last six months. In this scenario the year is taken from `now`, which
+/// must carry the *printer's* clock and not the host's (see [`CurrentDateTime`]). If comparing the
+/// parsed datetime markers against that reference reveals
 /// that the parsed datetime is in the future, the file belongs to last year's calendar cycle
 /// (e.g., parsing a December modification date in January). In this event, we decrement the
 /// calculated year by 1.
@@ -440,5 +561,69 @@ mod tests {
         assert_eq!(file.day, 31);
         assert_eq!(file.hour, 23);
         assert_eq!(file.minute, 59);
+    }
+
+    #[test]
+    fn test_parse_mdtm_timestamp_accepts_canonical_reply() {
+        let t = parse_mdtm_timestamp("20241103094107").expect("valid MDTM body");
+        assert_eq!(
+            t,
+            FtpTimestamp {
+                year: 2024,
+                month: 11,
+                day: 3,
+                hour: 9,
+                minute: 41,
+                second: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_mdtm_timestamp_ignores_fractional_seconds_and_padding() {
+        // RFC 3659 permits a fractional-second suffix; vsFTPd doesn't emit one, but the reply
+        // is the printer's to choose. Surrounding whitespace comes from the reply-line split.
+        let t = parse_mdtm_timestamp(" 20241103094107.250 ").expect("valid MDTM body");
+        assert_eq!(t.second, 7);
+        assert_eq!(t.year, 2024);
+    }
+
+    #[test]
+    fn test_parse_mdtm_timestamp_rejects_malformed_and_out_of_range() {
+        // Wrong length, non-digits, and a plausible-looking but calendar-invalid date must all
+        // be rejected rather than silently yielding a wrong timestamp; the reply is untrusted.
+        assert!(parse_mdtm_timestamp("2024110309410").is_none());
+        assert!(parse_mdtm_timestamp("202411030941070").is_none());
+        assert!(parse_mdtm_timestamp("").is_none());
+        assert!(parse_mdtm_timestamp("2024110309410x").is_none());
+        assert!(parse_mdtm_timestamp("19991103094107").is_none()); // predates 2000
+        assert!(parse_mdtm_timestamp("20241303094107").is_none()); // month 13
+        assert!(parse_mdtm_timestamp("20241100094107").is_none()); // day 0
+        assert!(parse_mdtm_timestamp("20240230094107").is_none()); // Feb 30
+        assert!(parse_mdtm_timestamp("20241103244107").is_none()); // hour 24
+        assert!(parse_mdtm_timestamp("20241103096107").is_none()); // minute 61
+        assert!(parse_mdtm_timestamp("20241103094161").is_none()); // second 61
+    }
+
+    #[test]
+    fn test_ftp_timestamp_converts_to_reference_clock_dropping_seconds() {
+        let t = parse_mdtm_timestamp("20260202085730").expect("valid MDTM body");
+        let now: CurrentDateTime = t.into();
+        assert_eq!(now.year, 2026);
+        assert_eq!(now.month, 2);
+        assert_eq!(now.day, 2);
+        assert_eq!(now.hour, 8);
+        assert_eq!(now.minute, 57);
+        // A LIST line has no seconds column, so the rollover comparison never sees one.
+        assert_eq!(t.second, 30);
+    }
+
+    #[test]
+    fn test_parse_mdtm_timestamp_accepts_leap_day_and_leap_second() {
+        // 2024 is a leap year, so Feb 29 is real; second 60 is representable in UTC.
+        assert!(parse_mdtm_timestamp("20240229120000").is_some());
+        // 2023 is not.
+        assert!(parse_mdtm_timestamp("20230229120000").is_none());
+        assert!(parse_mdtm_timestamp("20241103094160").is_some());
     }
 }

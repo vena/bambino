@@ -15,7 +15,9 @@ use alloc::vec::Vec;
 use embedded_io_async::{Error as _, Write};
 
 use crate::error::Error;
-use crate::ftps::parser::{CurrentDateTime, FtpFile, parse_unix_listing};
+use crate::ftps::parser::{
+    CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
+};
 use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
 use crate::identity::PrinterIdentity;
 use crate::models::PrinterModel;
@@ -468,6 +470,13 @@ where
     }
 
     /// Queries the storage server for raw directory listings and parses their structures.
+    ///
+    /// `now` must carry the **printer's** wall-clock time, not the host's. A `LIST` line omits
+    /// the year for recently-modified files, and the printer's clock is the reference vsFTPd used
+    /// when deciding to omit it. Bambu printers in LAN mode routinely never sync time, so the two
+    /// clocks can be years apart; see [`CurrentDateTime`] for how to recover the printer's and what
+    /// passing host time instead costs. Entries whose year came from `now` are flagged with
+    /// [`FtpFile::year_is_inferred`].
     pub async fn list_directory(
         &mut self,
         remote_path: &str,
@@ -571,6 +580,55 @@ where
 
         text.parse::<u64>().map_err(|_| {
             Error::ProtocolViolation("Invalid file size parameter returned".into())
+        })
+    }
+
+    /// Queries a file's absolute modification time via `MDTM`, to one-second resolution.
+    ///
+    /// This is the only path to a file timestamp that doesn't go through a reference clock: the
+    /// `213 YYYYMMDDHHMMSS` reply carries an explicit four-digit year, where a `LIST` line omits
+    /// the year entirely for recently-modified files (see [`CurrentDateTime`]). It's still the
+    /// printer's own notion of when the file was written; an unsynced printer answers
+    /// confidently and wrongly rather than ambiguously.
+    ///
+    /// Confirmed working on a P1S (`reference/02_ftps.md` §2.2); unverified on other models, which
+    /// is why the return is an `Option`. These firmware builds are trimmed (the same P1S answers
+    /// `502` to `STAT` even though stock vsFTPd implements it), so `Ok(None)` is returned on
+    /// `500`/`502` and callers should treat it as "fall back to the `LIST` heuristic", not as an
+    /// error. A missing file still surfaces as `Err`, not `None`: unsupported and absent are
+    /// different answers.
+    ///
+    /// This is a per-file query, not a listing strategy: it costs a round trip each, and a
+    /// well-used printer's card holds thousands of files. Resolving a directory this way is not
+    /// worth offering: use `list_directory` against a [`CurrentDateTime`] reference for that, and
+    /// reach for `MDTM` when one file's timestamp needs to be exact.
+    pub async fn modification_time(
+        &mut self,
+        remote_path: &str,
+    ) -> Result<Option<FtpTimestamp>, Error> {
+        self.check_poisoned()?;
+        validate_ftp_path(remote_path)?;
+
+        let mdtm_cmd = format!("MDTM {}", remote_path);
+        self.write_command_poisoning(&mdtm_cmd).await?;
+
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
+        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
+
+        // An unsupported-command reply is an ordinary, fully-read control-channel response. The
+        // channel is still in sync, so this reports "unsupported" without poisoning the client.
+        if code == FTP_SYNTAX_ERROR || code == FTP_NOT_IMPLEMENTED {
+            log::debug!("MDTM not implemented by this firmware (reply {code})");
+            return Ok(None);
+        }
+        if code != FTP_SIZE_OK {
+            return Err(Error::ProtocolViolation(
+                "MDTM query rejected by storage server".into(),
+            ));
+        }
+
+        parse_mdtm_timestamp(&text).map(Some).ok_or_else(|| {
+            Error::ProtocolViolation("Malformed MDTM timestamp returned".into())
         })
     }
 

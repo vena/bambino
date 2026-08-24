@@ -200,6 +200,12 @@ where
     client.upload_file(PROBE_PATH, payload).await?;
     let after = time::OffsetDateTime::now_utc();
 
+    // Ask MDTM first. When the firmware implements it, the reply carries an explicit four-digit
+    // year, so the printer's clock is read outright instead of reconstructed against ours, which
+    // is the whole ambiguity this check exists to expose. A failure here isn't fatal: the LIST
+    // path below is both the fallback and what a no-MDTM firmware is stuck with anyway.
+    let mdtm = client.modification_time(PROBE_PATH).await;
+
     let now = current_date_utc();
     let listing = client.list_directory("/", now).await;
 
@@ -227,18 +233,56 @@ where
     println!("\nHost UTC time before upload : {}", format_utc(before));
     println!("Host UTC time after upload   : {}", format_utc(after));
 
+    match &mdtm {
+        Ok(Some(t)) => println!(
+            "Printer MDTM mtime (absolute): {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            t.year, t.month, t.day, t.hour, t.minute, t.second
+        ),
+        Ok(None) => println!(
+            "Printer MDTM mtime (absolute): not implemented by this firmware"
+        ),
+        Err(e) => println!("Printer MDTM mtime (absolute): query failed ({e})"),
+    }
+
     match probe {
         Some(f) => {
             println!(
-                "Printer-reported mtime       : {:04}-{:02}-{:02} {:02}:{:02}",
-                f.year, f.month, f.day, f.hour, f.minute
+                "Printer LIST mtime{}: {:04}-{:02}-{:02} {:02}:{:02}",
+                if f.year_is_inferred {
+                    " (year reconstructed)"
+                } else {
+                    " (year from wire)  "
+                },
+                f.year,
+                f.month,
+                f.day,
+                f.hour,
+                f.minute
             );
-            report_clock_delta(after, f.year, f.month, f.day, f.hour, f.minute);
         }
         None => println!(
             "\nCould not locate the probe file in the directory listing — upload may have \
              failed, or the listing raced the SD card flush."
         ),
+    }
+
+    // Report the delta against MDTM when it's available: it's the only reading here whose year
+    // didn't come from this host's clock, so a delta computed from it is the only one that can
+    // legitimately span years. Falling back to the LIST entry keeps the check useful on firmware
+    // without MDTM, but that delta is capped at a year by construction; see `CurrentDateTime`.
+    match (&mdtm, probe) {
+        (Ok(Some(t)), _) => report_clock_delta(after, t.year, t.month, t.day, t.hour, t.minute),
+        (_, Some(f)) => {
+            report_clock_delta(after, f.year, f.month, f.day, f.hour, f.minute);
+            if f.year_is_inferred {
+                println!(
+                    "Note: MDTM was unavailable, so the year above was reconstructed from this \
+                     host's clock. A printer more than a year out of sync cannot be detected \
+                     as such by this fallback."
+                );
+            }
+        }
+        (_, None) => {}
     }
 
     delete_result?;
@@ -267,10 +311,13 @@ fn report_clock_delta(
         days.abs(),
         hours.abs(),
         minutes.abs(),
+        // `delta` is host-minus-printer: positive means the host is later, i.e. the printer's
+        // clock lags. These two arms were swapped, which reported a P1S running months stale
+        // as "ahead of host", the exact reading this check exists to make legible.
         if delta.is_negative() {
-            "behind host"
-        } else {
             "ahead of host"
+        } else {
+            "behind host"
         }
     );
     if days.abs() > 0 {

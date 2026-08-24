@@ -21,6 +21,13 @@ pub(crate) const FTP_RENAME_PENDING: u16 = 350;
 pub(crate) const FTP_TRANSFER_ABORTED: u16 = 426;
 pub(crate) const FTP_FILE_NOT_FOUND: u16 = 550;
 pub(crate) const FTP_COMMAND_OK: u16 = 200;
+/// `500 Syntax error, command unrecognized`: how a trimmed firmware build reports a command
+/// it doesn't implement at all. Paired with [`FTP_NOT_IMPLEMENTED`] wherever an optional command
+/// (`MDTM`) needs "unsupported" distinguished from "failed".
+pub(crate) const FTP_SYNTAX_ERROR: u16 = 500;
+/// `502 Command not implemented`: the other reply a trimmed firmware build uses for an
+/// unimplemented command. Confirmed on a P1S for `STAT` (see `reference/02_ftps.md` §2.4).
+pub(crate) const FTP_NOT_IMPLEMENTED: u16 = 502;
 
 pub(crate) const FTPS_UPLOAD_CHUNK_SIZE: usize = 65536;
 pub(crate) const FTPS_DATA_READ_BUF_SIZE: usize = 4096;
