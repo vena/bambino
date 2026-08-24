@@ -17,7 +17,7 @@ variable-width column padding and embeds robust temporal rollover heuristics.
 | [`CurrentDateTime`](#currentdatetime) | struct | Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs. |
 | [`FtpFile`](#ftpfile) | struct | Standardized representation of an entry retrieved from physical printer storage. |
 | [`parse_unix_listing`](#parse-unix-listing) | fn | Parses a line-separated UNIX directory listing payload returned by `LIST`. |
-| [`FTP_MAX_LISTING_ENTRIES`](#ftp-max-listing-entries) | const | Maximum number of entries [`parse_unix_listing`] will return from one `LIST` payload. |
+| [`FTP_MAX_LISTING_ENTRIES`](#ftp-max-listing-entries) | const | Maximum number of entries [`parse_unix_listing`](#parse-unix-listing) will return from one `LIST` payload. |
 
 ## Types
 

@@ -15,13 +15,13 @@ sub-structures like [`AmsTray`](telemetry/ams/index.md#amstray), [`DeviceTelemet
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`telemetry`](#telemetry) | mod | # State Telemetry Payload Schemas |
-| [`version`](#version) | mod | Firmware version information returned by the `get_version` command. |
+| [`telemetry`](telemetry/index.md) | mod | # State Telemetry Payload Schemas |
+| [`version`](version/index.md) | mod | Firmware version information returned by the `get_version` command. |
 
 ## Modules
 
-- [`telemetry`](telemetry/index.md#telemetry) — # State Telemetry Payload Schemas
-- [`version`](version/index.md#version) — Firmware version information returned by the `get_version` command.
+- [`telemetry`](telemetry/index.md) — # State Telemetry Payload Schemas
+- [`version`](version/index.md) — Firmware version information returned by the `get_version` command.
 
 
 ---
@@ -623,10 +623,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
 
-  Returns [`FilamentSwitchInlet::InB`] for `0` and [`FilamentSwitchInlet::InA`] for `1`;
+  Returns [`FilamentSwitchInlet::InB`](telemetry/ams/index.md#filamentswitchinlet) for `0` and [`FilamentSwitchInlet::InA`](telemetry/ams/index.md#filamentswitchinlet) for `1`;
   `None` for `info` absent, or any other value, which upstream treats as "not bound".
 
-  **Only meaningful when [`extruder_assignment`](Self::extruder_assignment) returns `None`
+  **Only meaningful when [`extruder_assignment`](telemetry/ams/index.md#amsunit) returns `None`
   because the raw field is `0xE`.** An AMS wired to a fixed extruder reports that extruder
   directly and this field carries nothing; `0xE` means "not fixed", and when a Filament
   Track Switch is installed, this is the only way to recover which physical nozzle the unit
@@ -646,10 +646,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
 
-  Distinguishes the two cases [`extruder_assignment`](Self::extruder_assignment) folds into
+  Distinguishes the two cases [`extruder_assignment`](telemetry/ams/index.md#amsunit) folds into
   `None`: a unit routed through a Filament Track Switch, versus one whose assignment the
   firmware simply has not initialized. Pair with
-  [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
+  [`filament_switch_inlet`](telemetry/ams/index.md#amsunit) to tell them apart — an unbound
   `bind_switch_in` alongside `0xE` means uninitialized.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
@@ -1133,12 +1133,12 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
 
   Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
-  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+  [`ExtruderInfo::current_ams_slot`](telemetry/device/index.md#extruderinfo)'s doc comment for the shared bit layout.
 
 - <span id="extruderinfo-target-ams-slot"></span>`fn target_ams_slot(&self) -> Option<(u8, u8)>`
 
   Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
-  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+  [`ExtruderInfo::current_ams_slot`](telemetry/device/index.md#extruderinfo)'s doc comment for the shared bit layout.
 
 #### Trait Implementations
 
@@ -1455,7 +1455,7 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 
   Extruder carriage index (0 = Right/Main, 1 = Left/Deputy), or on H2C, a packed rack
   slot: high nibble (bits 4–7) `1` flags a rack-stored spare nozzle, low nibble (bits
-  0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`].
+  0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`](telemetry/device/index.md#nozzleinfo).
 
 - **`diameter`**: `Option<f32>`
 
@@ -1949,7 +1949,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
 
-  Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
+  Used by [`crate::quirks::ModelQuirks::bed_temp_max`](../quirks/index.md#modelquirks) on X1C, where the safe bed
   temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
   official spec sheet.
 
@@ -2533,10 +2533,10 @@ fn decode_nozzle_temperatures(device: Option<&DeviceTelemetry>, nozzle_temper: O
 
 **Types:** [`DeviceTelemetry`](telemetry/device/index.md#devicetelemetry)
 
-Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
+Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
 
 Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
-(composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`]).
+(composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`](telemetry/device/index.md#extruderinfo)).
 Falls back to the flat `nozzle_temper`/`nozzle_target_temper` fields when absent: a single
 entry `(0, actual, target)` for a single-nozzle model, or — for a dual-nozzle (IDEX) model
 with no live extruder temps yet — the wire's undocumented routing quirk: `nozzle_temper` is

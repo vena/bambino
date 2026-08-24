@@ -116,7 +116,7 @@ their `tray_now` telemetry parameter. To resolve this back to a global index, th
 inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
 
 This is the *fallback* path — prefer
-[`crate::client::PrinterClient::printing_tray_global_id`], which decodes
+[`crate::client::PrinterClient::printing_tray_global_id`](../../client/index.md#printerclient), which decodes
 `ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
 This function remains unwired in the crate's own client code: `ams_extruder_map`'s
 construction from real wire data is itself an unresolved, unconfirmed design question

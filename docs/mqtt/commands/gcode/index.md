@@ -38,7 +38,7 @@ temperature targets are issued by packing standard G-code lines into this wrappe
 
 - **`param`**: `String`
 
-  Raw G-code line, newline-terminated by [`GCodeRequest::new`].
+  Raw G-code line, newline-terminated by [`GCodeRequest::new`](#gcoderequest).
 
 - **`sequence_id`**: `String`
 

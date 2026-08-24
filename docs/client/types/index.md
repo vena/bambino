@@ -11,8 +11,8 @@ Client-facing enums and helper types (telemetry events, fan targets, print speed
 | Item | Kind | Description |
 |------|------|-------------|
 | [`CalibrationOption`](#calibrationoption) | struct | Bitmask flags for selecting hardware calibration routines [REF-MQTT-LIFECYCLE]. |
-| [`PrintProgress`](#printprogress) | struct | Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)). |
-| [`BuzzerMode`](#buzzermode) | enum | Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE]. |
+| [`PrintProgress`](#printprogress) | struct | Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](../index.md#printerclient)). |
+| [`BuzzerMode`](#buzzermode) | enum | Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`](../index.md#printerclient) [REF-MQTT-LIFECYCLE]. |
 | [`FanTarget`](#fantarget) | enum | Enumeration representing target onboard cooling fans [REF-CLIM-FANS]. |
 | [`PrintSpeed`](#printspeed) | enum | Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECYCLE]. |
 | [`PrintStatus`](#printstatus) | enum | Decoded classification of the printer's high-level `gcode_state` telemetry field. |
@@ -82,7 +82,7 @@ struct PrintProgress {
 }
 ```
 
-Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
+Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](../index.md#printerclient)).
 
 Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
 `gcode_state`/`is_door_open`/`print_error`, which answer four independent questions) because
@@ -141,7 +141,7 @@ enum BuzzerMode {
 }
 ```
 
-Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE].
+Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`](../index.md#printerclient) [REF-MQTT-LIFECYCLE].
 Supported on models with a physical fire alarm buzzer (H2 series).
 
 #### Variants
@@ -209,7 +209,7 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
   
   Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
   "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](Self::AuxiliaryLeft)'s
+  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](#fantarget)'s
   primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
   Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
   part cooling fan" throughout (issue #60).
@@ -271,7 +271,7 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 
 - <span id="printspeed-from-level"></span>`fn from_level(level: u8) -> Option<Self>`
 
-  Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
+  Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](../index.md#printerclient) sends).
   Returns `None` for an out-of-range level.
 
 #### Trait Implementations
@@ -387,7 +387,7 @@ Typed telemetry event from the printer's MQTT channel.
 
 The library deserializes wire payloads into structured types so consumers don't
 have to reimplement JSON parsing and model-quirk handling. Raw access is always
-available via [`into_raw`](TelemetryEvent::into_raw).
+available via [`into_raw`](#telemetryevent).
 
 #### Variants
 

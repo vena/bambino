@@ -25,13 +25,13 @@ The client applies model-aware safety checks automatically:
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`dummy`](#dummy) | mod | Zero-cost dummy implementations for [`PrinterClient`](super::PrinterClient)'s type parameters. |
+| [`dummy`](dummy/index.md) | mod | Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters. |
 | [`types`](#types) | mod | Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration). |
 | [`PrinterClient`](#printerclient) | struct | High-level client for controlling a Bambu Lab printer. |
 
 ## Modules
 
-- [`dummy`](dummy/index.md#dummy) — Zero-cost dummy implementations for [`PrinterClient`](super::PrinterClient)'s type parameters.
+- [`dummy`](dummy/index.md) — Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters.
 - [`types`](types/index.md#types) — Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration).
 
 
@@ -101,7 +101,7 @@ struct PrintProgress {
 }
 ```
 
-Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry)).
+Cached print-progress snapshot as of the last-observed telemetry carrying any of these fields (via [`poll_telemetry()`](#printerclient)).
 
 Bundled into one struct rather than four separate cached scalars (unlike `home_flag`/
 `gcode_state`/`is_door_open`/`print_error`, which answer four independent questions) because
@@ -176,10 +176,10 @@ Wraps an MQTT session (connected or lazy) and optionally a [`FtpsClient`](../ftp
 SD card access. `MqttRawIO`/`MqttTls`/`MqttFactory` are MQTT's [`TlsConnector`](../io/index.md#tlsconnector)+
 [`RawStreamFactory`](../io/index.md#rawstreamfactory) pair (mandatory — every `PrinterClient` needs MQTT);
 `FtpsRawIO`/`FtpsTls`/`FtpsFactory` are FTPS's independent pair (defaulted, configured via
-[`.with_ftps()`](Self::with_ftps)). Use [`PreConnected`] for both MQTT slots when wrapping
-an already-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) (see [`from_mqtt()`](Self::from_mqtt)), or a
+[`.with_ftps()`](#printerclient)). Use `PreConnected` for both MQTT slots when wrapping
+an already-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) (see [`from_mqtt()`](#printerclient)), or a
 platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
-`TokioRawStreamFactory`) for lazy connection via [`new()`](Self::new).
+`TokioRawStreamFactory`) for lazy connection via [`new()`](#printerclient).
 
 #### Implementations
 
@@ -301,14 +301,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Injects a pre-connected [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream) directly.
 
   Use this for test mocks or Embassy where the caller manages the camera
-  connection. For lazy connection, use [`.with_camera()`](Self::with_camera).
+  connection. For lazy connection, use [`.with_camera()`](#printerclient).
 
 - <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BinaryCameraStream<<CameraTls as >::Stream>, Error>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), auto-connecting if needed.
 
-  Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
-  [`.attach_camera()`](Self::attach_camera). Returns `Error::ProtocolViolation`
+  Requires prior camera configuration via [`.with_camera()`](#printerclient) or
+  [`.attach_camera()`](#printerclient). Returns `Error::ProtocolViolation`
   immediately for RTSPS models — see `ensure_camera()`'s doc
   comment.
 
@@ -318,8 +318,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Bounds the read against `self.timer` (see
   `BinaryCameraStream::read_next_frame_with_timer`), mirroring
-  [`poll_telemetry()`](Self::poll_telemetry)'s relationship to
-  [`.mqtt()`](Self::mqtt).
+  [`poll_telemetry()`](#printerclient)'s relationship to
+  [`.mqtt()`](#printerclient).
 
 - <span id="superprinterclient-disconnect-camera"></span>`async fn disconnect_camera(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -331,9 +331,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   keep handing back the same broken stream. There is no protocol-level teardown on
   `BinaryCameraStream` to call — this just clears the slot.
 
-  Idempotent. Reconnecting requires a fresh [`.with_camera()`](Self::with_camera) on a
+  Idempotent. Reconnecting requires a fresh [`.with_camera()`](#printerclient) on a
   new `PrinterClient`, the same caveat FTPS already documents for
-  [`disconnect_storage()`](Self::disconnect_storage).
+  [`disconnect_storage()`](#printerclient).
 
 - <span id="superprinterclient-connect-mqtt"></span>`async fn connect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -350,8 +350,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Injects a pre-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) directly.
 
   Use this for test mocks or Embassy where the caller manages the MQTT connection,
-  mirroring [`attach_camera()`](super::PrinterClient::attach_camera)/
-  [`attach_storage()`](super::PrinterClient::attach_storage).
+  mirroring [`attach_camera()`](#printerclient)/
+  [`attach_storage()`](#printerclient).
 
 - <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -359,13 +359,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   There is no protocol-level teardown on `MqttClient` to call — this just clears
   the slot, mirroring `disconnect_camera()`. Without this, a dead stream (a
-  [`tick_zombie_check()`](crate::mqtt::MqttClient::tick_zombie_check)-detected
+  [`tick_zombie_check()`](../mqtt/index.md)-detected
   zombie, a transport error) left `self.mqtt` stuck `Some(...)` forever, since
   `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken
   connection with no supported redial path.
 
-  Idempotent. Reconnecting requires [`.attach_mqtt()`](Self::attach_mqtt) with a fresh
-  `MqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
+  Idempotent. Reconnecting requires [`.attach_mqtt()`](#printerclient) with a fresh
+  `MqttClient` for a [`from_mqtt()`](#printerclient)-built client — its
   `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
   only recovers a `connect()`-built client, never one built via `from_mqtt()`.
 
@@ -373,8 +373,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets a [`TimerProvider`](../io/index.md#timerprovider) for wall-clock command-response timeouts.
 
-  Consuming builder — works on both [`new()`](PrinterClient::new) and
-  [`from_mqtt()`](PrinterClient::from_mqtt) construction paths.
+  Consuming builder — works on both [`new()`](#printerclient) and
+  [`from_mqtt()`](#printerclient) construction paths.
 
 - <span id="superprinterclient-with-mqtt-port"></span>`fn with_mqtt_port(self, port: u16) -> Self`
 
@@ -498,7 +498,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
   `None` means no telemetry carrying `home_flag` has been observed yet (via
-  [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed". Advisory only: the firmware does
+  [`poll_telemetry()`](#printerclient)) — not "unhomed". Advisory only: the firmware does
   not reject motion on unhomed axes [REF-MOTO-HOME].
 
 - <span id="superprinterclient-is-all-axes-homed"></span>`fn is_all_axes_homed(&self) -> Option<bool>`
@@ -511,7 +511,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Sends a G-code command with model-aware safety validation.
 
   Rejects commands that would be unsafe on the active model (e.g., partial-axis
-  homing on bed-on-Z platforms). Use [`send_gcode_raw()`](Self::send_gcode_raw)
+  homing on bed-on-Z platforms). Use [`send_gcode_raw()`](#printerclient)
   to bypass validation when you need unchecked access.
 
   # Example
@@ -572,10 +572,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Blocks until a `G28` homing cycle observed via telemetry has completed.
 
-  Standalone — does not require this client to have issued [`home_axes()`](Self::home_axes).
+  Standalone — does not require this client to have issued [`home_axes()`](#printerclient).
   Resolves correctly whether homing was triggered by this client, the touchscreen, slicer
   software, or another `PrinterClient` instance, since it only relies on `home_flag`
-  telemetry observed via [`poll_telemetry()`](Self::poll_telemetry).
+  telemetry observed via [`poll_telemetry()`](#printerclient).
 
   Only resolves successfully after observing a not-all-homed `home_flag` reading
   followed by an all-homed reading: an already-homed printer at call time does not
@@ -640,14 +640,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Injects a pre-connected [`FtpsClient`](../ftps/client/index.md#ftpsclient) directly.
 
   Use this for test mocks or Embassy where the caller manages the FTPS
-  connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps).
+  connection. For lazy connection, use [`.with_ftps()`](#printerclient).
 
 - <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`FtpsClient`](../ftps/client/index.md#ftpsclient), auto-connecting if needed.
 
-  Requires prior FTPS configuration via [`.with_ftps()`](Self::with_ftps) or
-  [`.attach_storage()`](Self::attach_storage).
+  Requires prior FTPS configuration via [`.with_ftps()`](#printerclient) or
+  [`.attach_storage()`](#printerclient).
 
 - <span id="superprinterclient-disconnect-storage"></span>`async fn disconnect_storage(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -656,7 +656,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `FtpsClient::disconnect()` is `&mut self` (non-consuming) and always poisons
   itself on the way out (see its doc comment) — every subsequent call on that instance
   would fail with `ProtocolViolation`. Without this method, nothing ever resets
-  `self.ftps` back to `None`, so a later [`storage()`](Self::storage) call would
+  `self.ftps` back to `None`, so a later [`storage()`](#printerclient) call would
   short-circuit `ensure_ftps()`'s `is_some()` check and hand back the now-poisoned
   client, surfacing a confusing low-level error instead of a clear one.
 
@@ -664,12 +664,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The next `storage()` call then falls through to `ensure_ftps()`'s existing "FTPS not
   configured" error (if `ftps_config` was already consumed by an earlier connect) rather
   than ever returning a poisoned client. Reconnecting still requires fresh FTPS
-  configuration — [`.with_ftps()`](Self::with_ftps) on a new `PrinterClient`, or
-  [`.attach_storage()`](Self::attach_storage) — since `ftps_config` is consumed on first
+  configuration — [`.with_ftps()`](#printerclient) on a new `PrinterClient`, or
+  [`.attach_storage()`](#printerclient) — since `ftps_config` is consumed on first
   connection.
 
   Idempotent — a no-op if no FTPS session is active. Always returns `Ok(())`; kept
-  fallible for API symmetry with [`connect_ftps()`](Self::connect_ftps) and to leave room
+  fallible for API symmetry with [`connect_ftps()`](#printerclient) and to leave room
   for a fallible teardown step in the future without a breaking signature change.
 
 - <span id="superprinterclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error>` — [`TelemetryEvent`](types/index.md#telemetryevent), [`Error`](../error/index.md#error)
@@ -677,7 +677,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Pulls the next telemetry event from the MQTT channel.
 
   Returns a [`Report`](https://docs.rs/std/latest/std/error/struct.Report.html) if the payload deserializes as a known
-  telemetry structure, or [`TelemetryEvent::Unknown`] otherwise. A payload that
+  telemetry structure, or [`TelemetryEvent::Unknown`](types/index.md#telemetryevent) otherwise. A payload that
   deserializes successfully but carries a `print.command` other than `"push_status"`/
   `"pushall"` is a command-echo response (e.g. `extrusion_cali_get`'s reply shares the
   `print` envelope and the `nozzle_diameter` field name with genuine telemetry) and is
@@ -702,12 +702,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](types/index.md#printstatus)
 
-  Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `gcode_state` has been observed yet.
 
 - <span id="superprinterclient-is-door-open"></span>`fn is_door_open(&self) -> Option<bool>`
 
-  Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
   Returns `None` on models without a door sensor (`ModelQuirks::has_door_sensor()`
   returns `false`, e.g. A1/A2), regardless of telemetry observed — distinct from
@@ -716,7 +716,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-active-fault"></span>`fn active_fault(&self) -> Option<DecodedPrintError>` — [`DecodedPrintError`](../diagnostics/hms/index.md#decodedprinterror)
 
-  Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](#printerclient)).
 
   `None` covers both "no telemetry carrying `print_error` observed yet" and "the
   register reads 0 (no fault)" — both warrant the same caller action, so they are not
@@ -724,26 +724,26 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-print-progress"></span>`fn print_progress(&self) -> PrintProgress` — [`PrintProgress`](types/index.md#printprogress)
 
-  Returns the print progress snapshot as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the print progress snapshot as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   Each field independently tracks its own "last observed" value — see [`PrintProgress`](types/index.md#printprogress)'s doc
   comment.
 
 - <span id="superprinterclient-bed-temperatures"></span>`fn bed_temperatures(&self) -> (u16, u16)`
 
-  Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   Returns `(0, 0)` before any telemetry carrying bed temperature has been observed.
 
   Shares its cross-model decode logic with
-  [`TelemetryReport::bed_temperatures()`](crate::types::TelemetryReport::bed_temperatures) —
+  `TelemetryReport::bed_temperatures()` —
   use that method instead if you already have a fresh `TelemetryReport` in hand.
 
 - <span id="superprinterclient-ams"></span>`fn ams(&self) -> Option<&AmsStatusReport>` — [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport)
 
-  Returns the cached AMS/tray status report as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the cached AMS/tray status report as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `print.ams` has been observed yet.
 
   This is the **raw** merged cache — every field independently keeps its most recently
-  observed value ([`AmsStatusReport::merge_from`](crate::types::telemetry::ams::AmsStatusReport)-level
+  observed value ([`AmsStatusReport::merge_from`](../types/telemetry/ams/index.md#amsstatusreport)-level
   detail), but stale per-tray material fields (`tray_type`, `tray_color`, `remain`, etc.)
   are **not** proactively cleared when a slot empties — confirmed against BambuStudio's
   own `DevFilaSystem.cpp`, whose structural equivalent (`DevAmsTray::reset()`) is dead
@@ -755,18 +755,18 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   approach: wiring proactive clearing into this cache would make it *less* faithful to
   on-wire state than BambuStudio's own model. Two opt-in ways to get sanitized output
   without losing that raw fidelity:
-  - Check [`AmsTray::state()`](crate::types::AmsTray::state) (or
-    [`evaluate_spool_presence`](crate::ams::evaluate_spool_presence)) before trusting a
+  - Check `AmsTray::state()` (or
+    `evaluate_spool_presence`) before trusting a
     tray's material fields — the same check-before-trust contract BambuStudio itself
     relies on.
-  - Call [`sanitized_ams()`](Self::sanitized_ams) for a cloned, scrubbed copy — mirrors
-    [`hms()`](Self::hms)/[`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache +
+  - Call [`sanitized_ams()`](#printerclient) for a cloned, scrubbed copy — mirrors
+    [`hms()`](#printerclient)/[`active_hms_alerts()`](#printerclient)'s raw-cache +
     opt-in-decoded accessor split.
 
 - <span id="superprinterclient-printing-tray-global-id"></span>`fn printing_tray_global_id(&self) -> Option<u8>`
 
   Returns the global tray ID of the spool currently feeding the active extruder, as of
-  the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
   Prefers `device.extruder.info[active].snow`, BambuStudio's own preferred resolution
   method (`DevExterSystem::ParseV2_0`, `DevExtderSystem.cpp:318-386`) — no
@@ -779,34 +779,34 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns a cloned copy of the cached AMS status report with every tray's stale material
   fields cleared via [`clean_stale_tray_data`](../ams/parser/index.md#clean-stale-tray-data)
-  (mirrors [`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache-decode-on-access
-  shape). `None` under the same condition as [`ams()`](Self::ams) — no telemetry carrying
-  `print.ams` observed yet. Does not mutate the underlying cache — [`ams()`](Self::ams)
+  (mirrors [`active_hms_alerts()`](#printerclient)'s raw-cache-decode-on-access
+  shape). `None` under the same condition as [`ams()`](#printerclient) — no telemetry carrying
+  `print.ams` observed yet. Does not mutate the underlying cache — [`ams()`](#printerclient)
   keeps returning the raw values; see its doc comment for why the raw cache is never
   proactively scrubbed.
 
 - <span id="superprinterclient-vt-tray"></span>`fn vt_tray(&self) -> Option<&VirtualTray>` — [`VirtualTray`](../types/telemetry/ams/index.md#virtualtray)
 
-  Returns the cached virtual/external spool holder state (single-nozzle models) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the cached virtual/external spool holder state (single-nozzle models) as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `print.vt_tray` has been observed yet — including on IDEX
-  models, which send [`vir_slot()`](Self::vir_slot) instead.
+  models, which send [`vir_slot()`](#printerclient) instead.
 
 - <span id="superprinterclient-vir-slot"></span>`fn vir_slot(&self) -> Option<&[VirtualTray]>` — [`VirtualTray`](../types/telemetry/ams/index.md#virtualtray)
 
-  Returns the cached IDEX external spool holder array as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the cached IDEX external spool holder array as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `print.vir_slot` has been observed yet — including on
-  single-nozzle models, which send [`vt_tray()`](Self::vt_tray) instead.
+  single-nozzle models, which send [`vt_tray()`](#printerclient) instead.
 
 - <span id="superprinterclient-nozzle-temperatures"></span>`fn nozzle_temperatures(&self) -> Vec<(u8, u16, u16)>`
 
-  Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) as `(id, actual, target)` tuples in °C.
+  Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)) as `(id, actual, target)` tuples in °C.
   Single-nozzle models return one entry (`id` 0); IDEX models return one entry per physical
   nozzle. See [`decode_nozzle_temperatures`](../types/telemetry/index.md#decode-nozzle-temperatures) for the cross-model decode (including the
   undocumented IDEX flat-field routing quirk).
 
 - <span id="superprinterclient-chamber-temperature"></span>`fn chamber_temperature(&self) -> Option<(u16, u16)>`
 
-  Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
   Returns `None` on models without an active chamber temperature sensor/heater
   (`ModelQuirks::ignores_chamber_temperature()` returns `true`, e.g. A1/A1 Mini/A2L/P1P/
@@ -815,12 +815,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-hms"></span>`fn hms(&self) -> Option<&[HmsEntry]>` — [`HmsEntry`](../types/telemetry/diagnostics/index.md#hmsentry)
 
-  Returns the cached active hardware-alert (HMS) entries as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the cached active hardware-alert (HMS) entries as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `print.hms` has been observed yet.
 
 - <span id="superprinterclient-ipcam"></span>`fn ipcam(&self) -> Option<&IpcamTelemetry>` — [`IpcamTelemetry`](../types/telemetry/diagnostics/index.md#ipcamtelemetry)
 
-  Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `print.ipcam` has been observed yet.
 
 - <span id="superprinterclient-active-hms-alerts"></span>`fn active_hms_alerts(&self) -> Vec<DecodedHmsAlert>` — [`DecodedHmsAlert`](../diagnostics/hms/index.md#decodedhmsalert)
@@ -831,7 +831,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-part-cooling-fan-speed"></span>`fn part_cooling_fan_speed(&self) -> Option<u8>`
 
-  Returns the part-cooling fan speed (Port 1) as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the part-cooling fan speed (Port 1) as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
 - <span id="superprinterclient-auxiliary-left-fan-speed"></span>`fn auxiliary_left_fan_speed(&self) -> Option<u8>`
 
@@ -856,21 +856,21 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-print-speed"></span>`fn print_speed(&self) -> Option<PrintSpeed>` — [`PrintSpeed`](types/index.md#printspeed)
 
-  Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` before any telemetry carrying `spd_lvl` has been observed, or if the observed value is
   out of the known 1-4 range.
 
 - <span id="superprinterclient-print-speed-magnitude"></span>`fn print_speed_magnitude(&self) -> Option<u16>`
 
-  Returns the printer's current print-speed magnitude (percentage of nominal feedrate) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the printer's current print-speed magnitude (percentage of nominal feedrate) as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
 - <span id="superprinterclient-wifi-signal"></span>`fn wifi_signal(&self) -> Option<&str>`
 
-  Returns the raw wireless signal strength string (e.g. `"-52dBm"`) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+  Returns the raw wireless signal strength string (e.g. `"-52dBm"`) as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
 - <span id="superprinterclient-is-ethernet-active-via-wifi-signal"></span>`fn is_ethernet_active_via_wifi_signal(&self) -> bool`
 
-  Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works off cached `home_flag`).
+  Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](#printerclient) works off cached `home_flag`).
 
 - <span id="superprinterclient-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
 
@@ -892,7 +892,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   per-model ceiling (e.g. 80°C for A1 Mini), but X1C's ceiling is voltage-dependent — 110°C
   on a 220V-region unit, 120°C on a 110V-region unit, per the official spec sheet. This is
   derived from the most recently observed `home_flag` telemetry
-  (`self.cache.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
+  (`self.cache.last_home_flag`, bit 3 — see `PrinterTelemetry::is_220v_power`);
   before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
   region is unknown and X1C conservatively clamps to 110°C.
 
@@ -932,15 +932,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Creates a lazy client that defers MQTT connection until first use.
 
   The MQTT session is established automatically on the first method call that
-  requires it (e.g. [`poll_telemetry()`](Self::poll_telemetry),
-  [`request_pushall()`](Self::request_pushall)), or eagerly via
-  [`connect_mqtt()`](Self::connect_mqtt). `tls`/`factory` mirror
-  [`.with_ftps(tls, factory, timer)`](Self::with_ftps)'s call shape — `factory.dial()` opens the
+  requires it (e.g. [`poll_telemetry()`](#printerclient),
+  [`request_pushall()`](#printerclient)), or eagerly via
+  [`connect_mqtt()`](#printerclient). `tls`/`factory` mirror
+  [`.with_ftps(tls, factory, timer)`](#printerclient)'s call shape — `factory.dial()` opens the
   raw TCP socket, then `tls.connect()` wraps it in TLS.
 
   Without a [`TimerProvider`](../io/index.md#timerprovider), command-response methods like
-  [`get_version()`](Self::get_version) rely on a message-count safety valve
-  instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
+  [`get_version()`](#printerclient) rely on a message-count safety valve
+  instead of wall-clock timeouts. Chain [`.with_timer()`](#printerclient)
   for real timeouts.
 
 - <span id="printerclient-from-mqtt"></span>`fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`PrinterModel`](../models/index.md#printermodel)
@@ -949,10 +949,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Use this when you have a pre-established MQTT session (tests, Embassy,
   or any context where the caller manages the connection). The resulting client uses
-  [`PreConnected`] for both the MQTT `Tls` and `Factory` slots — `ensure_mqtt()`
+  `PreConnected` for both the MQTT `Tls` and `Factory` slots — `ensure_mqtt()`
   short-circuits on `self.mqtt.is_some()` before either is ever called, so
   `PreConnected`'s `RawStreamFactory::dial` (which returns
-  [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
+  [`SocketError::NotConnected`](../io/index.md#socketerror)) is unreachable in
   practice.
 
 - <span id="printerclient-next-sequence-id"></span>`fn next_sequence_id(&mut self) -> u64`
@@ -966,7 +966,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="printerclient-set-command-timeout"></span>`fn set_command_timeout(&mut self, secs: u64)`
 
-  Sets the timeout (in seconds) used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
+  Sets the timeout (in seconds) used by command-response methods like [`get_version()`](#printerclient) and [`get_k_profiles()`](#printerclient).
 
   Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
   the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
@@ -992,7 +992,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Returns direct access to the underlying [`MqttClient`](../mqtt/client/index.md#mqttclient), auto-connecting if needed.
 
   Use this for sending custom MQTT payloads, managing zombie detection via
-  [`tick_zombie_check()`](MqttClient::tick_zombie_check), or inspecting
+  [`tick_zombie_check()`](../mqtt/client/index.md#mqttclient), or inspecting
   in-flight state — anything that [`PrinterClient`](#printerclient) doesn't expose directly.
 
   Pipelining multiple commands through this handle before awaiting a response forfeits
@@ -1014,7 +1014,7 @@ enum BuzzerMode {
 }
 ```
 
-Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`] [REF-MQTT-LIFECYCLE].
+Buzzer alarm/attention chime mode for [`super::PrinterClient::set_buzzer_mode`](#printerclient) [REF-MQTT-LIFECYCLE].
 Supported on models with a physical fire alarm buzzer (H2 series).
 
 #### Variants
@@ -1082,7 +1082,7 @@ Enumeration representing target onboard cooling fans [REF-CLIM-FANS].
   
   Despite the wire port number (M106 `P10`) and read-side airduct id (160) suggesting a
   "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` —
-  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](Self::AuxiliaryLeft)'s
+  a second left-side auxiliary fan, distinct from [`AuxiliaryLeft`](types/index.md#fantarget)'s
   primary port-2 fan (`FAN_REMOTE_COOLING_0_IDX`, mirrored into `big_fan1_speed`).
   Confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary
   part cooling fan" throughout (issue #60).
@@ -1144,7 +1144,7 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 
 - <span id="printspeed-from-level"></span>`fn from_level(level: u8) -> Option<Self>`
 
-  Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
+  Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](#printerclient) sends).
   Returns `None` for an out-of-range level.
 
 #### Trait Implementations
@@ -1260,7 +1260,7 @@ Typed telemetry event from the printer's MQTT channel.
 
 The library deserializes wire payloads into structured types so consumers don't
 have to reimplement JSON parsing and model-quirk handling. Raw access is always
-available via [`into_raw`](TelemetryEvent::into_raw).
+available via [`into_raw`](types/index.md#telemetryevent).
 
 #### Variants
 

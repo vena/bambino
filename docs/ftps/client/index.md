@@ -44,8 +44,8 @@ To make this safe, the client sets `poisoned = true` (originally only on the
 widest such window; now on every `write_command`/`read_response` failure in every method,
 including the single-reply metadata/filesystem commands, and unconditionally in
 `disconnect()`); every public method checks the flag first and returns
-[`Error::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
-reconnect via a fresh [`FtpsClient::connect`] call instead of reusing the instance.
+[`Error::ProtocolViolation`](../../error/index.md#error) immediately if set. A poisoned client must be discarded —
+reconnect via a fresh [`FtpsClient::connect`](#ftpsclient) call instead of reusing the instance.
 
 **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
 `FTPS_READ_TIMEOUT_SECS`/`FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS` in `protocol.rs`) — owned

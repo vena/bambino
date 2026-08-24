@@ -6,7 +6,7 @@
 
 # Error Types
 
-[`enum@Error`] is the single error type returned by all fallible operations in the
+[`Error`](#error) is the single error type returned by all fallible operations in the
 crate. It covers network failures, TLS handshake issues, protocol violations,
 authentication rejections, timeouts, and model capability mismatches.
 

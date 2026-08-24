@@ -21,7 +21,7 @@ a standard 16-byte length descriptor.
    against decoding crashes.
 2. Clamps incoming frame sizes to a reasonable upper boundary (10MB by default) to protect
    against unbounded memory allocation crashes on low-resource environments if transport
-   stream corruption occurs. Use [`BinaryCameraStream::with_max_frame_size`] to lower
+   stream corruption occurs. Use [`BinaryCameraStream::with_max_frame_size`](#binarycamerastream) to lower
    this cap on constrained (`no_std`/Embassy) targets.
 
 ## Quick Reference
@@ -58,8 +58,8 @@ to fully close before redialing.
   Instantiates a camera parser wrapper surrounding an active secure stream socket.
 
   The accepted frame size defaults to `CAMERA_FRAME_MAX_SIZE` (10MB). Use
-  [`Self::with_max_frame_size`] to lower it — useful on `no_std`/Embassy targets, where a
-  10MB transient allocation (see [`Self::read_next_frame`]) can exceed the entire SRAM
+  [`Self::with_max_frame_size`](#binarycamerastream) to lower it — useful on `no_std`/Embassy targets, where a
+  10MB transient allocation (see [`Self::read_next_frame`](#binarycamerastream)) can exceed the entire SRAM
   budget and trigger an uncatchable `alloc_error_handler` abort rather than a recoverable
   `Result`.
 
@@ -80,7 +80,7 @@ to fully close before redialing.
   means the packet was written and flushed to the socket, **not** that the printer accepted
   the access code. If the code is wrong, the printer's real-world response (closing the
   socket, or simply never sending a frame) only surfaces later, on the *next*
-  [`Self::read_next_frame`] call, as `Error::Network(SocketError::ConnectionReset)`
+  [`Self::read_next_frame`](#binarycamerastream) call, as `Error::Network(SocketError::ConnectionReset)`
   — the same error variant a mid-stream network blip would produce. Callers that need to
   distinguish "wrong access code" from "transient network hiccup" cannot do so from this
   API alone.
@@ -91,7 +91,7 @@ to fully close before redialing.
 
   Wholesale-replaces the user-supplied `Vec<u8>` with the decoded frame each call
   (`*frame_buf = payload`) — no buffer reuse. Delegates to `read_next_frame_with_timer` under
-  [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
+  `DummyTimer`, which degrades to a plain unbounded read — behavior-preserving for
   every existing caller not going through `PrinterClient`.
 
 #### Trait Implementations

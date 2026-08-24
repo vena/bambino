@@ -29,7 +29,7 @@ Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
 | [`BuzzerRequest`](#buzzerrequest) | struct | Controls the printer's buzzer alarm mode (silent, alarm, or chirp). |
 | [`LedCtrlPayload`](#ledctrlpayload) | struct | Chamber illumination and toolhead LED control configurations. |
 | [`LedCtrlRequest`](#ledctrlrequest) | struct | Turns chamber or toolhead LEDs on or off. |
-| [`PromptSoundPayload`](#promptsoundpayload) | struct | Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`]). |
+| [`PromptSoundPayload`](#promptsoundpayload) | struct | Controls structural notification sound output via speakers (Supported on A1, A1 Mini, and A2L only; H2-series buzzer alerts use the separate `buzzer_ctrl` command — see [`BuzzerPayload`](#buzzerpayload)). |
 | [`PromptSoundRequest`](#promptsoundrequest) | struct | Enables or disables the printer's notification sounds. |
 | [`AirductMode`](#airductmode) | enum | Airduct damper operating mode [REF-MQTT-LIFECYCLE]. |
 
@@ -60,7 +60,7 @@ Redirects internal climate airflows using active damper deflection plates.
 
 - **`submode`**: `i32`
 
-  Damper submode; always `-1` (unused) — [`AirductRequest::new`] never sets it otherwise.
+  Damper submode; always `-1` (unused) — [`AirductRequest::new`](#airductrequest) never sets it otherwise.
 
 - **`sequence_id`**: `String`
 
@@ -141,7 +141,7 @@ Modifies active alarm or attention chime parameters on the printer cabinet buzze
 
 - **`reason`**: `&'static str`
 
-  Reason string shown alongside the alarm; always empty in practice, per [`BuzzerRequest::new`].
+  Reason string shown alongside the alarm; always empty in practice, per [`BuzzerRequest::new`](#buzzerrequest).
 
 - **`sequence_id`**: `String`
 

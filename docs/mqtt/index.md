@@ -9,7 +9,7 @@
 Low-level MQTT v3.1.1 implementation for talking to Bambu Lab printers.
 
 [`MqttClient`](client/index.md#mqttclient) handles the connection handshake, QoS 1 publish/subscribe,
-keep-alive pings, and zombie detection. The [`commands`](commands/index.md#commands) submodule contains all
+keep-alive pings, and zombie detection. The [`commands`](commands/index.md) submodule contains all
 the serializable request structs (G-code dispatch, print control, AMS operations,
 LED/fan/buzzer commands, etc.) that get published to the printer's command topic.
 
@@ -20,13 +20,13 @@ directly — it wraps `MqttClient` with higher-level methods and safety checks.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`client`](#client) | mod | # Lightweight, Transport-Agnostic MQTT v3.1.1 Client Session |
-| [`commands`](#commands) | mod | # MQTT Command Payloads & Serialization Builders |
+| [`client`](client/index.md) | mod | # Lightweight, Transport-Agnostic MQTT v3.1.1 Client Session |
+| [`commands`](commands/index.md) | mod | # MQTT Command Payloads & Serialization Builders |
 
 ## Modules
 
-- [`client`](client/index.md#client) — # Lightweight, Transport-Agnostic MQTT v3.1.1 Client Session
-- [`commands`](commands/index.md#commands) — # MQTT Command Payloads & Serialization Builders
+- [`client`](client/index.md) — # Lightweight, Transport-Agnostic MQTT v3.1.1 Client Session
+- [`commands`](commands/index.md) — # MQTT Command Payloads & Serialization Builders
 
 
 ---
@@ -71,13 +71,13 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
   **In-flight Bounds Verification:**
   If the unacknowledged queue size equals or exceeds `MQTT_IN_FLIGHT_LIMIT`, this function
-  returns [`Error::Backpressure`] without sending, to protect memory space and prevent
+  returns [`Error::Backpressure`](../error/index.md#error) without sending, to protect memory space and prevent
   packet drift [REF-MQTT-CONN]. A saturated queue is not a timeout — retrying immediately
   will not clear it; drain it by servicing PUBACKs (`poll_wire`) or let
   `tick_zombie_check` age the entries out.
 
   Payloads larger than `MQTT_MAX_PAYLOAD_BYTES` are rejected with
-  [`Error::ProtocolViolation`] rather than encoded, mirroring the read path's own cap.
+  [`Error::ProtocolViolation`](../error/index.md#error) rather than encoded, mirroring the read path's own cap.
 
   `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
   `PrinterClient` callers get the new stalled-write protection via
@@ -337,7 +337,7 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by
   `extrusion_cali_sel` (K-profile binding, see
-  [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+  `crate::diagnostics::ExtrusionCaliSelRequest::new`):
   * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
     `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
     (`ams_id: 255`) require `tray_id: 254` (confirmed against
@@ -762,8 +762,8 @@ with named fields and sensible defaults for calibration flags.
 
   Extruder index per filament slot for tool-changer models, negative for unprinted slots.
   
-  Only consulted on a model whose quirks report [`uses_nozzle_rack`]. Set together with
-  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`]; either one alone resolves to no
+  Only consulted on a model whose quirks report `uses_nozzle_rack`. Set together with
+  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`](commands/print_job/index.md#printjobconfig); either one alone resolves to no
   `nozzle_mapping` on the wire, which is the safe outcome.
 
 - **`rack_nozzle_id`**: `Option<i32>`
@@ -1256,7 +1256,7 @@ Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical 
 printer currently reports as live, which only the caller can know — the mounted hotend can
 change between slicing and dispatch.
 
-Returns a [`RACK_WIRE_SLOTS`]-long vector of physical IDs, or `None` when the mapping cannot
+Returns a 32-slot vector of physical IDs (the fixed wire length), or `None` when it cannot
 be resolved with confidence. **`None` means "omit the field entirely" and is the deliberate
 failure mode, not an error path.** Omitting it returns the firmware to its own nozzle pick,
 which is merely suboptimal; a *wrong* physical ID makes the printer level with one nozzle and

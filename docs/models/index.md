@@ -7,9 +7,9 @@
 # Printer Model Identification
 
 Every Bambu Lab printer has a 3-character serial number prefix that identifies
-its model. [`PrinterModel`](#printermodel) enumerates all known models, and [`resolve_model()`]
+its model. [`PrinterModel`](#printermodel) enumerates all known models, and [`resolve_model()`](#resolve-model)
 maps serial prefixes (with an SSDP `DevModel` fallback) to the right variant.
-The resolved model drives behavioral dispatch through the [`quirks`](../quirks/index.md#quirks) engine.
+The resolved model drives behavioral dispatch through the [`quirks`](../quirks/index.md) engine.
 
 ## Quick Reference
 
@@ -153,6 +153,6 @@ unrecognized, the optional `DevModel` SSDP header provides a fallback path.
 
 Both `serial` and `dev_model` are matched case-insensitively: SSDP USN serial casing
 varies by firmware compile target (reference/01_network_discovery.md §1.6), and a
-caller can also pass either value straight into [`PrinterIdentity::new`] with no
+caller can also pass either value straight into [`PrinterIdentity::new`](../identity/index.md#printeridentity) with no
 discovery-layer normalization.
 

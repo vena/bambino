@@ -43,7 +43,7 @@ P2S printers on firmware `01.02.00.00` have an encoder bug where every H.264 fra
 carries the same RTP timestamp (~0.06s). Decoders interpret non-advancing timestamps as
 duplicates and drop frames, freezing the video. [`RtpTimestampCorrector`](#rtptimestampcorrector) replaces the
 frozen timestamps with host-computed values on the standard 90 kHz RTP clock. Use
-[`ModelQuirks::requires_wallclock_rtsp_timestamps()`](crate::quirks::ModelQuirks::requires_wallclock_rtsp_timestamps)
+[`ModelQuirks::requires_wallclock_rtsp_timestamps()`](../../quirks/index.md#modelquirks)
 to check whether the connected model needs this correction.
 
 ## Quick Reference
@@ -102,14 +102,14 @@ Digest authentication, or used as the target endpoint for a local decryption pro
 
 # Errors
 
-Returns [`Error::ProtocolViolation`] if `access_code` is empty or contains any
+Returns [`Error::ProtocolViolation`](../../error/index.md#error) if `access_code` is empty or contains any
 character outside ASCII letters/digits. Genuine printer-issued LAN access codes are
 always 8 uppercase ASCII alphanumeric characters, so a rejection here almost always
 means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
 valid-but-unusual code — surfacing it as an error catches that mistake instead of
 silently building a malformed URL.
 
-Also returns [`Error::ProtocolViolation`] if `ip` does not parse as a valid IPv4 or
+Also returns [`Error::ProtocolViolation`](../../error/index.md#error) if `ip` does not parse as a valid IPv4 or
 IPv6 address. Without this check, an `ip` containing an embedded `@` (e.g.
 `"1.2.3.4@attacker.example.com"`, spoofable by any device on the LAN via SSDP/mDNS
 discovery) would place everything up to the last `@` into the URL's userinfo component,
@@ -148,7 +148,7 @@ It is not a general-purpose URI parser.
 
 # Errors
 
-Returns [`Error::ProtocolViolation`] if `printer_ip` does not parse as a valid IPv4 or
+Returns [`Error::ProtocolViolation`](../../error/index.md#error) if `printer_ip` does not parse as a valid IPv4 or
 IPv6 address — the same check [`build_rtsps_url`](#build-rtsps-url) applies to its own `ip` parameter, and
 for the same reason: a `printer_ip` containing `@` or `/` (e.g. sourced from a
 spoofable SSDP/mDNS discovery response, same as [`build_rtsps_url`](#build-rtsps-url)'s hazard) could

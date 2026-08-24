@@ -24,8 +24,8 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
 ## Contents
 
 - [Modules](#modules)
-  - [`embassy`](#embassy)
-  - [`tokio`](#tokio)
+  - [`embassy`](embassy/index.md)
+  - [`tokio`](tokio/index.md)
 - [Types](#types)
   - [`SocketError`](#socketerror)
   - [`TimerError`](#timererror)
@@ -42,8 +42,8 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`embassy`](#embassy) | mod | # Bare-Metal Embassy Runtime Integration |
-| [`tokio`](#tokio) | mod | # Tokio Host Runtime Implementation |
+| [`embassy`](embassy/index.md) | mod | # Bare-Metal Embassy Runtime Integration |
+| [`tokio`](tokio/index.md) | mod | # Tokio Host Runtime Implementation |
 | [`SocketError`](#socketerror) | enum | Unified transport-level Socket Errors, agnostic of runtime implementations. |
 | [`TimerError`](#timererror) | enum | Unified timer/sleep errors, agnostic of runtime implementations. |
 | [`TlsVersion`](#tlsversion) | enum | TLS protocol version negotiated during a handshake. |
@@ -56,8 +56,8 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
 
 ## Modules
 
-- [`embassy`](embassy/index.md#embassy) — # Bare-Metal Embassy Runtime Integration
-- [`tokio`](tokio/index.md#tokio) — # Tokio Host Runtime Implementation
+- [`embassy`](embassy/index.md) — # Bare-Metal Embassy Runtime Integration
+- [`tokio`](tokio/index.md) — # Tokio Host Runtime Implementation
 
 
 ---
@@ -340,7 +340,7 @@ stack cannot support it (see that trait's doc comment).
 
   Implementations must not busy-spin: on a "no data yet" outcome, either genuinely
   block/wait for data, or internally yield for a bounded duration (e.g. via
-  [`TimerProvider::sleep`]) before reporting `Err`. A synchronous non-blocking read
+  [`TimerProvider::sleep`](#timerprovider)) before reporting `Err`. A synchronous non-blocking read
   that returns instantly on every "would block" call defeats the caller's own pacing
   — `discover_devices` (`src/discovery/mod.rs`) polls this in a tight loop relying on
   each call to provide some wait/yield, and an implementation that returns immediately
@@ -444,7 +444,7 @@ without burning processor cycles on embedded platforms.
   `EspIdfTimer`). Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.
 
   Exists so code that races an I/O operation against
-  [`sleep()`](Self::sleep) — e.g. `src/mqtt/client/mod.rs`'s `poll_wire`/
+  [`sleep()`](#timerprovider) — e.g. `src/mqtt/client/mod.rs`'s `poll_wire`/
   `src/mqtt/client/frame.rs`'s `read_exact_packet` per-read deadline — can tell whether
   doing so will actually bound anything. `DummyTimer::sleep()` intentionally completes
   instantly regardless of the requested duration (so it never blocks retry/backoff loops

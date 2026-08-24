@@ -22,12 +22,12 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 ## Contents
 
 - [Modules](#modules)
-  - [`ams`](#ams)
-  - [`control`](#control)
-  - [`gcode`](#gcode)
-  - [`hardware`](#hardware)
-  - [`print_job`](#print-job)
-  - [`status`](#status)
+  - [`ams`](ams/index.md)
+  - [`control`](control/index.md)
+  - [`gcode`](gcode/index.md)
+  - [`hardware`](hardware/index.md)
+  - [`print_job`](print_job/index.md)
+  - [`status`](status/index.md)
 - [Types](#types)
   - [`ClampedTaskId`](#clampedtaskid)
 - [Functions](#functions)
@@ -37,23 +37,23 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`ams`](#ams) | mod | AMS-related MQTT command payloads (filament change, drying, RFID scan, settings). |
-| [`control`](#control) | mod | Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration). |
-| [`gcode`](#gcode) | mod | G-code dispatch command payload. |
-| [`hardware`](#hardware) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound). |
-| [`print_job`](#print-job) | mod | Print job dispatch (file selection, AMS material mapping, plate/timelapse config). |
-| [`status`](#status) | mod | Status query commands (pushall, get_version, get_access_code, clean_print_error). |
-| [`ClampedTaskId`](#clampedtaskid) | struct | A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId), which always clamps. |
+| [`ams`](ams/index.md) | mod | AMS-related MQTT command payloads (filament change, drying, RFID scan, settings). |
+| [`control`](control/index.md) | mod | Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration). |
+| [`gcode`](gcode/index.md) | mod | G-code dispatch command payload. |
+| [`hardware`](hardware/index.md) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound). |
+| [`print_job`](print_job/index.md) | mod | Print job dispatch (file selection, AMS material mapping, plate/timelapse config). |
+| [`status`](status/index.md) | mod | Status query commands (pushall, get_version, get_access_code, clean_print_error). |
+| [`ClampedTaskId`](#clampedtaskid) | struct | A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via its `From<u64>` impl, which always clamps. |
 | [`clamp_task_id`](#clamp-task-id) | fn | Wraps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) into the strict boundary limits of a 32-bit signed integer (`2147483647`) via modulo, not saturation. |
 
 ## Modules
 
-- [`ams`](ams/index.md#ams) — AMS-related MQTT command payloads (filament change, drying, RFID scan, settings).
-- [`control`](control/index.md#control) — Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration).
-- [`gcode`](gcode/index.md#gcode) — G-code dispatch command payload.
-- [`hardware`](hardware/index.md#hardware) — Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
-- [`print_job`](print_job/index.md#print-job) — Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
-- [`status`](status/index.md#status) — Status query commands (pushall, get_version, get_access_code, clean_print_error).
+- [`ams`](ams/index.md) — AMS-related MQTT command payloads (filament change, drying, RFID scan, settings).
+- [`control`](control/index.md) — Print lifecycle commands (pause, resume, stop, speed, skip objects, calibration).
+- [`gcode`](gcode/index.md) — G-code dispatch command payload.
+- [`hardware`](hardware/index.md) — Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
+- [`print_job`](print_job/index.md) — Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
+- [`status`](status/index.md) — Status query commands (pushall, get_version, get_access_code, clean_print_error).
 
 
 ---
@@ -198,7 +198,7 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by
   `extrusion_cali_sel` (K-profile binding, see
-  [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+  `crate::diagnostics::ExtrusionCaliSelRequest::new`):
   * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
     `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
     (`ams_id: 255`) require `tray_id: 254` (confirmed against
@@ -721,8 +721,8 @@ with named fields and sensible defaults for calibration flags.
 
   Extruder index per filament slot for tool-changer models, negative for unprinted slots.
   
-  Only consulted on a model whose quirks report [`uses_nozzle_rack`]. Set together with
-  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`]; either one alone resolves to no
+  Only consulted on a model whose quirks report `uses_nozzle_rack`. Set together with
+  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`](print_job/index.md#printjobconfig); either one alone resolves to no
   `nozzle_mapping` on the wire, which is the safe outcome.
 
 - **`rack_nozzle_id`**: `Option<i32>`
@@ -975,7 +975,7 @@ Requests a full state dump from the printer (all telemetry fields at once).
 struct ClampedTaskId();
 ```
 
-A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId),
+A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via its `From<u64>` impl,
 which always clamps.
 
 A constructor that called `clamp_task_id()` on every field except one, and 24 constructors
@@ -1179,7 +1179,7 @@ Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical 
 printer currently reports as live, which only the caller can know — the mounted hotend can
 change between slicing and dispatch.
 
-Returns a [`RACK_WIRE_SLOTS`]-long vector of physical IDs, or `None` when the mapping cannot
+Returns a 32-slot vector of physical IDs (the fixed wire length), or `None` when it cannot
 be resolved with confidence. **`None` means "omit the field entirely" and is the deliberate
 failure mode, not an error path.** Omitting it returns the firmware to its own nozzle pick,
 which is merely suboptimal; a *wrong* physical ID makes the printer level with one nozzle and

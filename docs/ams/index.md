@@ -16,13 +16,13 @@ cleanup. Supports standard AMS units, AMS-HT dry chambers, and virtual external 
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`mapping`](#mapping) | mod | # AMS Slicer Mapping & Filament Change Builders |
-| [`parser`](#parser) | mod | # AMS Telemetry & Bitmask Parser |
+| [`mapping`](mapping/index.md) | mod | # AMS Slicer Mapping & Filament Change Builders |
+| [`parser`](parser/index.md) | mod | # AMS Telemetry & Bitmask Parser |
 
 ## Modules
 
-- [`mapping`](mapping/index.md#mapping) — # AMS Slicer Mapping & Filament Change Builders
-- [`parser`](parser/index.md#parser) — # AMS Telemetry & Bitmask Parser
+- [`mapping`](mapping/index.md) — # AMS Slicer Mapping & Filament Change Builders
+- [`parser`](parser/index.md) — # AMS Telemetry & Bitmask Parser
 
 
 ---
@@ -233,8 +233,8 @@ Builds the flat `ams_mapping` integer array from raw project allocations.
 
 `allocations` is a slice of `(filament_id, MaterialSource)` pairs where `filament_id`
 represents the 1-based index (1 to N) of the project material defined in the slicer.
-Ids above [`AMS_MAX_PROJECT_FILAMENTS`] are dropped with a warning rather than sizing the
-output array.
+Ids above the physical ceiling of 20 (16 flat channels plus the 4 an AMS-HT configuration
+adds) are dropped with a warning rather than sizing the output array.
 
 **Array Length Rule [REF-AMS-MAP]:**
 The length of the array is governed by the highest filament ID index present in the project,
@@ -389,7 +389,7 @@ their `tray_now` telemetry parameter. To resolve this back to a global index, th
 inspect the active extruder carriage and correlate it against the `ams_extruder_map` matrix.
 
 This is the *fallback* path — prefer
-[`crate::client::PrinterClient::printing_tray_global_id`], which decodes
+[`crate::client::PrinterClient::printing_tray_global_id`](../client/index.md#printerclient), which decodes
 `ExtruderInfo::current_ams_slot()` (`snow`) directly and needs no `ams_extruder_map` at all.
 This function remains unwired in the crate's own client code: `ams_extruder_map`'s
 construction from real wire data is itself an unresolved, unconfirmed design question

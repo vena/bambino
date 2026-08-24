@@ -238,7 +238,7 @@ rather than satisfying it.
   `set_client_config` then fails the connection with `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
   Failing loudly there is deliberate: this crate no longer falls back to ESP-IDF's
   public-root CA bundle, which could never validate a self-signed printer certificate
-  anyway (GitHub issue #62). Prefer [`Self::with_certs`] wherever the caller can supply
+  anyway (GitHub issue #62). Prefer [`Self::with_certs`](#espidftlsconnector) wherever the caller can supply
   the printer's CA — it needs no sdkconfig change and actually verifies the peer.
   The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
   bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
@@ -265,7 +265,7 @@ rather than satisfying it.
   fail the handshake, now with the extra confusion of being base64'd a second time.
 
   An empty `ca_certs` yields an anchor-less connector, behaving exactly like
-  [`Self::new`] rather than failing later inside the handshake.
+  [`Self::new`](#espidftlsconnector) rather than failing later inside the handshake.
 
   `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
   `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.

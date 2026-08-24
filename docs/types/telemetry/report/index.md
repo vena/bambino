@@ -630,7 +630,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
 
-  Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
+  Used by [`crate::quirks::ModelQuirks::bed_temp_max`](../../../quirks/index.md#modelquirks) on X1C, where the safe bed
   temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
   official spec sheet.
 

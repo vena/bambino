@@ -16,7 +16,7 @@ stack and `mbedtls-rs`.
 |------|------|-------------|
 | [`EmbassyRawStreamFactory`](#embassyrawstreamfactory) | struct | Raw (pre-TLS) connection factory for the Embassy network stack. |
 | [`EmbassyTimer`](#embassytimer) | struct | Timer implementation designed for the hardware microsecond clock in Embassy. |
-| [`EmbassyTlsConnector`](#embassytlsconnector) | struct | TLS Secure connector wrapping an `mbedtls-rs` async [`Session`](::mbedtls_rs::Session). |
+| [`EmbassyTlsConnector`](#embassytlsconnector) | struct | TLS Secure connector wrapping an `mbedtls-rs` async `Session`. |
 | [`EmbassyUdpSocket`](#embassyudpsocket) | struct | UDP Socket implementation designed for the Embassy network stack. |
 
 ## Types
@@ -98,14 +98,14 @@ struct EmbassyTlsConnector<'a> {
 }
 ```
 
-TLS Secure connector wrapping an `mbedtls-rs` async [`Session`](::mbedtls_rs::Session).
+TLS Secure connector wrapping an `mbedtls-rs` async `Session`.
 
 **One global `Tls` instance.** MbedTLS only permits one active library instance
 program-wide (enforced by `mbedtls-rs` itself — a second `Tls::new()` call errors while one
 is already live). The caller constructs that single `::mbedtls_rs::Tls` once at startup
 (e.g. behind a `static_cell::StaticCell`, mirroring `EmbassyRawStreamFactory`'s `'static`
 storage convention below — see the README's Embassy setup example) and passes a
-[`TlsReference`](::mbedtls_rs::TlsReference) — a cheap `Copy` handle, not the `Tls` itself —
+`TlsReference` — a cheap `Copy` handle, not the `Tls` itself —
 into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
 control/data connectors all share the one instance concurrently.
 
@@ -132,8 +132,8 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
 - <span id="embassytlsconnector-new"></span>`fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self`
 
-  Creates a new connector against the single active [`Tls`](::mbedtls_rs::Tls) instance
-  (via its [`TlsReference`](::mbedtls_rs::TlsReference)), defaulting to no certificate
+  Creates a new connector against the single active `Tls` instance
+  (via its `TlsReference`), defaulting to no certificate
   verification — matching this crate's existing unsafe-by-default convention on other
   platforms (`build_unsafe_client_config`), since Bambu printer certs chain to a private
   BBL CA that no OS trust store carries.
@@ -185,7 +185,7 @@ pool at boot time, so this type only implements [`AsyncUdpSocket`](../index.md#a
 already-existing socket) — it deliberately does not implement `BindableUdpSocket`,
 since embassy-net's `UdpSocket::new()` requires pre-allocated buffer slices and its
 `bind()` takes a typed `IpListenEndpoint`, not a `SocketAddr`. Construct one with
-[`EmbassyUdpSocket::new()`] from an already-bound `embassy_net::udp::UdpSocket`.
+[`EmbassyUdpSocket::new()`](#embassyudpsocket) from an already-bound `embassy_net::udp::UdpSocket`.
 
 #### Implementations
 

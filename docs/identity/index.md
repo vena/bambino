@@ -51,7 +51,7 @@ Address, serial number, and access code identifying one printer on the LAN.
 - **`model`**: `crate::models::PrinterModel`
 
   Printer model, used for quirks dispatch. Derivable from `serial` via
-  [`resolve_model`](../models/index.md#resolve-model); see [`PrinterIdentity::new`] for the common case.
+  [`resolve_model`](../models/index.md#resolve-model); see [`PrinterIdentity::new`](#printeridentity) for the common case.
 
 #### Implementations
 

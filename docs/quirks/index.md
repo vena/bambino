@@ -9,26 +9,26 @@
 Bambu Lab printers vary in hardware capabilities — door sensors, chamber heaters,
 fan step resolution, FTPS TLS requirements, camera protocols, and more. Rather than
 scattering `match model { ... }` blocks everywhere, the [`ModelQuirks`](#modelquirks) trait captures
-all model-specific behavior in one place. Call [`PrinterModel::quirks()`] to get the
+all model-specific behavior in one place. Call [`PrinterModel::quirks()`](../models/index.md#printermodel) to get the
 strategy implementation for any model.
 
-Per-model strategy structs live in the [`models`](../models/index.md#models) submodule. This module also provides
-shared helpers like [`fan_step_to_percentage()`] and [`FanSpeedDebouncer`](#fanspeeddebouncer) for dealing
+Per-model strategy structs live in the [`models`](../models/index.md) submodule. This module also provides
+shared helpers like [`fan_step_to_percentage()`](#fan-step-to-percentage) and [`FanSpeedDebouncer`](#fanspeeddebouncer) for dealing
 with the low-resolution PWM fan telemetry common across most models.
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`models`](#models) | mod | # Model-Specific Kinematic and Operational Configuration Submodules |
+| [`models`](models/index.md) | mod | # Model-Specific Kinematic and Operational Configuration Submodules |
 | [`FanSpeedDebouncer`](#fanspeeddebouncer) | struct | Filters out transient quantization oscillation artifacts emitted by physical fan controllers. |
 | [`ModelQuirks`](#modelquirks) | trait | Polymorphic interface tracking model-specific hardware variations and transport exceptions. |
-| [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`]. |
+| [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`](#fan-step-to-percentage). |
 | [`fan_step_to_percentage`](#fan-step-to-percentage) | fn | Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS]. |
 
 ## Modules
 
-- [`models`](models/index.md#models) — # Model-Specific Kinematic and Operational Configuration Submodules
+- [`models`](models/index.md) — # Model-Specific Kinematic and Operational Configuration Submodules
 
 
 ---
@@ -142,7 +142,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   Returns this model's physical AMS unit pool structure — whether standard AMS
   and AMS-HT units share one combined pool or draw from independent pools, and each
   pool's unit-count ceiling. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
-  See [`crate::ams::AmsPoolComposition`]'s doc comment for the AMS-lite modeling
+  See `crate::ams::AmsPoolComposition`'s doc comment for the AMS-lite modeling
   limitation.
 
 - `fn supports_nozzle_offset_calibration(&self) -> bool`
@@ -197,7 +197,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - `fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool`
 
   Returns true if `telemetry` carries the specific wire field this model's
-  [`is_door_open()`](Self::is_door_open) actually reads (`home_flag` for X1 series,
+  [`is_door_open()`](#modelquirks) actually reads (`home_flag` for X1 series,
   `stat` for H2/P2/X2 series) [REF-NET-DOOR].
 
   Used to gate telemetry-cache updates (`PrinterClient::update_state_cache`) so an
@@ -300,7 +300,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   ungated by model. The sole source is bambuddy `be18ebb3` ("Fix P2S printer support —
   disable vibration_cali and fix FTP SSL"), a single community commit whose *other* half
   is the P2S FTPS TLS-1.3 quirk this crate independently confirmed and implements in
-  [`models::p2::P2Quirks`]. That makes the contributor demonstrably right about the same
+  `models::p2::P2Quirks`. That makes the contributor demonstrably right about the same
   machine, which is corroboration of the source, not proof of this claim.
 
   No P2S has been available to verify it here. See issue #133 — if one ever is, confirm
@@ -313,7 +313,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   Only the H2C. A rack model addresses nozzles by *physical ID* rather than by extruder
   index, and the two namespaces overlap in a way that makes an untranslated value silently
   wrong rather than obviously wrong — see
-  [`crate::mqtt::resolve_rack_nozzle_mapping`] for the translation and why it matters.
+  [`crate::mqtt::resolve_rack_nozzle_mapping`](../mqtt/index.md) for the translation and why it matters.
 
 #### Implementors
 
@@ -343,7 +343,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 fn decode_fan_percentage(raw: Option<&str>) -> Option<u8>
 ```
 
-Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`].
+Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`](#fan-step-to-percentage).
 Returns `None` if `raw` is absent or not a valid `u8`.
 
 ### `fan_step_to_percentage`

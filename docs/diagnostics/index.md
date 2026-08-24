@@ -8,8 +8,8 @@
 
 Tools for interpreting printer health alerts and managing calibration data.
 
-The [`hms`](hms/index.md#hms) submodule decodes HMS (Health Management System) fault codes and print
-error registers into human-readable alerts with severity levels. The [`kprofile`](kprofile/index.md#kprofile)
+The [`hms`](hms/index.md) submodule decodes HMS (Health Management System) fault codes and print
+error registers into human-readable alerts with severity levels. The [`kprofile`](kprofile/index.md)
 submodule manages Linear Advance (K-factor) calibration profiles — querying the
 printer's stored profiles, creating new ones, and deleting them (with separate
 request types for standard and IDEX platforms).
@@ -18,13 +18,13 @@ request types for standard and IDEX platforms).
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`hms`](#hms) | mod | # HMS Diagnostic Telemetry Parsing & Unpacking Engine |
-| [`kprofile`](#kprofile) | mod | # Linear Advance (Pressure Advance / K-Profile) Calibration Database Builders |
+| [`hms`](hms/index.md) | mod | # HMS Diagnostic Telemetry Parsing & Unpacking Engine |
+| [`kprofile`](kprofile/index.md) | mod | # Linear Advance (Pressure Advance / K-Profile) Calibration Database Builders |
 
 ## Modules
 
-- [`hms`](hms/index.md#hms) — # HMS Diagnostic Telemetry Parsing & Unpacking Engine
-- [`kprofile`](kprofile/index.md#kprofile) — # Linear Advance (Pressure Advance / K-Profile) Calibration Database Builders
+- [`hms`](hms/index.md) — # HMS Diagnostic Telemetry Parsing & Unpacking Engine
+- [`kprofile`](kprofile/index.md) — # Linear Advance (Pressure Advance / K-Profile) Calibration Database Builders
 
 
 ---
@@ -240,7 +240,7 @@ database mislinking on the motion board.
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by
   `ams_filament_setting` (filament configuration, see
-  [`crate::mqtt::AmsFilamentSettingRequest::new`]):
+  [`crate::mqtt::AmsFilamentSettingRequest::new`](../mqtt/index.md)):
   * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
     `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
     Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong

@@ -21,10 +21,10 @@ for composite packed temperatures, home/status flags, and door sensors.
 ## Contents
 
 - [Modules](#modules)
-  - [`ams`](#ams)
-  - [`device`](#device)
-  - [`diagnostics`](#diagnostics)
-  - [`report`](#report)
+  - [`ams`](ams/index.md)
+  - [`device`](device/index.md)
+  - [`diagnostics`](diagnostics/index.md)
+  - [`report`](report/index.md)
 - [Types](#types)
   - [`TelemetryReport`](#telemetryreport)
 - [Functions](#functions)
@@ -35,20 +35,20 @@ for composite packed temperatures, home/status flags, and door sensors.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`ams`](#ams) | mod | AMS telemetry types (tray slots, units, dry settings, virtual trays). |
-| [`device`](#device) | mod | Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras). |
-| [`diagnostics`](#diagnostics) | mod | Diagnostic telemetry types (HMS alerts, light reports). |
-| [`report`](#report) | mod | Top-level telemetry report envelope (`print` and `device` wire locations). |
+| [`ams`](ams/index.md) | mod | AMS telemetry types (tray slots, units, dry settings, virtual trays). |
+| [`device`](device/index.md) | mod | Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras). |
+| [`diagnostics`](diagnostics/index.md) | mod | Diagnostic telemetry types (HMS alerts, light reports). |
+| [`report`](report/index.md) | mod | Top-level telemetry report envelope (`print` and `device` wire locations). |
 | [`TelemetryReport`](#telemetryreport) | struct | Unified top-level telemetry report received from the printer's local MQTT broker. |
-| [`decode_nozzle_temperatures`](#decode-nozzle-temperatures) | fn | Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived. |
+| [`decode_nozzle_temperatures`](#decode-nozzle-temperatures) | fn | Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived. |
 | [`is_developer_mode`](#is-developer-mode) | fn | Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1]. |
 
 ## Modules
 
-- [`ams`](ams/index.md#ams) — AMS telemetry types (tray slots, units, dry settings, virtual trays).
-- [`device`](device/index.md#device) — Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras).
-- [`diagnostics`](diagnostics/index.md#diagnostics) — Diagnostic telemetry types (HMS alerts, light reports).
-- [`report`](report/index.md#report) — Top-level telemetry report envelope (`print` and `device` wire locations).
+- [`ams`](ams/index.md) — AMS telemetry types (tray slots, units, dry settings, virtual trays).
+- [`device`](device/index.md) — Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras).
+- [`diagnostics`](diagnostics/index.md) — Diagnostic telemetry types (HMS alerts, light reports).
+- [`report`](report/index.md) — Top-level telemetry report envelope (`print` and `device` wire locations).
 
 
 ---
@@ -521,10 +521,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
 
-  Returns [`FilamentSwitchInlet::InB`] for `0` and [`FilamentSwitchInlet::InA`] for `1`;
+  Returns [`FilamentSwitchInlet::InB`](ams/index.md#filamentswitchinlet) for `0` and [`FilamentSwitchInlet::InA`](ams/index.md#filamentswitchinlet) for `1`;
   `None` for `info` absent, or any other value, which upstream treats as "not bound".
 
-  **Only meaningful when [`extruder_assignment`](Self::extruder_assignment) returns `None`
+  **Only meaningful when [`extruder_assignment`](ams/index.md#amsunit) returns `None`
   because the raw field is `0xE`.** An AMS wired to a fixed extruder reports that extruder
   directly and this field carries nothing; `0xE` means "not fixed", and when a Filament
   Track Switch is installed, this is the only way to recover which physical nozzle the unit
@@ -544,10 +544,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
 
-  Distinguishes the two cases [`extruder_assignment`](Self::extruder_assignment) folds into
+  Distinguishes the two cases [`extruder_assignment`](ams/index.md#amsunit) folds into
   `None`: a unit routed through a Filament Track Switch, versus one whose assignment the
   firmware simply has not initialized. Pair with
-  [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
+  [`filament_switch_inlet`](ams/index.md#amsunit) to tell them apart — an unbound
   `bind_switch_in` alongside `0xE` means uninitialized.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
@@ -1217,12 +1217,12 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
 
   Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
-  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+  [`ExtruderInfo::current_ams_slot`](device/index.md#extruderinfo)'s doc comment for the shared bit layout.
 
 - <span id="extruderinfo-target-ams-slot"></span>`fn target_ams_slot(&self) -> Option<(u8, u8)>`
 
   Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
-  [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
+  [`ExtruderInfo::current_ams_slot`](device/index.md#extruderinfo)'s doc comment for the shared bit layout.
 
 #### Trait Implementations
 
@@ -1342,7 +1342,7 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 
   Extruder carriage index (0 = Right/Main, 1 = Left/Deputy), or on H2C, a packed rack
   slot: high nibble (bits 4–7) `1` flags a rack-stored spare nozzle, low nibble (bits
-  0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`].
+  0–3) is the slot index within the rack — see [`NozzleInfo::is_rack_stored()`](device/index.md#nozzleinfo).
 
 - **`diameter`**: `Option<f32>`
 
@@ -2244,7 +2244,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
 
-  Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
+  Used by [`crate::quirks::ModelQuirks::bed_temp_max`](../../quirks/index.md#modelquirks) on X1C, where the safe bed
   temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
   official spec sheet.
 
@@ -2617,10 +2617,10 @@ fn decode_nozzle_temperatures(device: Option<&DeviceTelemetry>, nozzle_temper: O
 
 **Types:** [`DeviceTelemetry`](device/index.md#devicetelemetry)
 
-Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
+Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
 
 Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
-(composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`]).
+(composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`](device/index.md#extruderinfo)).
 Falls back to the flat `nozzle_temper`/`nozzle_target_temper` fields when absent: a single
 entry `(0, actual, target)` for a single-nozzle model, or — for a dual-nozzle (IDEX) model
 with no live extruder temps yet — the wire's undocumented routing quirk: `nozzle_temper` is

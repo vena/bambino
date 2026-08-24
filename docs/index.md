@@ -14,7 +14,7 @@ for printer discovery. It compiles to three targets from one codebase:
 | ESP-IDF (ESP32, FreeRTOS) | std threads | ESP-TLS | `esp-idf` |
 | Bare-metal (embassy) | embassy | mbedtls-rs | `embassy` (implies `no_std` + `alloc`) |
 
-All network I/O goes through abstract traits in the [`io`](io/index.md#io) module, so library
+All network I/O goes through abstract traits in the [`io`](io/index.md) module, so library
 code never touches `tokio::` or `std::net::` directly.
 
 # Quick start
@@ -68,37 +68,37 @@ async fn example() -> Result<(), bambino::Error> {
 
 # Module guide
 
-- [`identity`](identity/index.md#identity) — [`PrinterIdentity`](identity/index.md#printeridentity), the IP + serial + access code bundle every
+- [`identity`](identity/index.md) — [`PrinterIdentity`](identity/index.md#printeridentity), the IP + serial + access code bundle every
   connection is built from.
-- [`client`](client/index.md#client) — The main entry point. [`PrinterClient`](client/index.md#printerclient) wraps MQTT + FTPS into
+- [`client`](client/index.md) — The main entry point. [`PrinterClient`](client/index.md#printerclient) wraps MQTT + FTPS into
   one coordinated interface with methods for thermal control, motion, print jobs, etc.
-- [`mqtt`](mqtt/index.md#mqtt) — Low-level MQTT v3.1.1 client and command serialization.
-- [`ftps`](ftps/index.md#ftps) — Implicit FTPS client for SD card file operations.
-- [`discovery`](discovery/index.md#discovery) — SSDP-based printer discovery on the local network.
+- [`mqtt`](mqtt/index.md) — Low-level MQTT v3.1.1 client and command serialization.
+- [`ftps`](ftps/index.md) — Implicit FTPS client for SD card file operations.
+- [`discovery`](discovery/index.md) — SSDP-based printer discovery on the local network.
 - [`types`](client/types/index.md#types) — Telemetry schemas, version info, and shared data types.
-- [`models`](models/index.md#models) — Printer model identification from serial numbers.
-- [`quirks`](quirks/index.md#quirks) — Per-model behavioral differences (fan mapping, door sensors, temp limits, etc.).
-- [`io`](io/index.md#io) — Transport abstraction traits ([`AsyncIo`](io/index.md#asyncio), [`TlsConnector`](io/index.md#tlsconnector), etc.).
-- [`ams`](ams/index.md#ams) — AMS filament system helpers (slot mapping, presence detection).
-- [`camera`](camera/index.md#camera) — Camera streaming protocols (binary JPEG on port 6000, RTSPS on port 322).
-- [`diagnostics`](diagnostics/index.md#diagnostics) — HMS alert decoding and K-profile (Linear Advance) management.
+- [`models`](models/index.md) — Printer model identification from serial numbers.
+- [`quirks`](quirks/index.md) — Per-model behavioral differences (fan mapping, door sensors, temp limits, etc.).
+- [`io`](io/index.md) — Transport abstraction traits ([`AsyncIo`](io/index.md#asyncio), [`TlsConnector`](io/index.md#tlsconnector), etc.).
+- [`ams`](ams/index.md) — AMS filament system helpers (slot mapping, presence detection).
+- [`camera`](camera/index.md) — Camera streaming protocols (binary JPEG on port 6000, RTSPS on port 322).
+- [`diagnostics`](diagnostics/index.md) — HMS alert decoding and K-profile (Linear Advance) management.
 - [`error`](error/index.md#error) — The unified [`Error`](https://docs.rs/asn1_rs/latest/asn1_rs/error/enum.Error.html) type.
 
 ## Contents
 
 - [Modules](#modules)
-  - [`ams`](#ams)
-  - [`camera`](#camera)
-  - [`client`](#client)
-  - [`diagnostics`](#diagnostics)
-  - [`discovery`](#discovery)
+  - [`ams`](ams/index.md)
+  - [`camera`](camera/index.md)
+  - [`client`](client/index.md)
+  - [`diagnostics`](diagnostics/index.md)
+  - [`discovery`](discovery/index.md)
   - [`error`](#error)
-  - [`ftps`](#ftps)
-  - [`identity`](#identity)
-  - [`io`](#io)
-  - [`models`](#models)
-  - [`mqtt`](#mqtt)
-  - [`quirks`](#quirks)
+  - [`ftps`](ftps/index.md)
+  - [`identity`](identity/index.md)
+  - [`io`](io/index.md)
+  - [`models`](models/index.md)
+  - [`mqtt`](mqtt/index.md)
+  - [`quirks`](quirks/index.md)
   - [`types`](#types)
 - [Types](#types)
 
@@ -106,34 +106,34 @@ async fn example() -> Result<(), bambino::Error> {
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`ams`](#ams) | mod | # AMS Filament System |
-| [`camera`](#camera) | mod | # Camera & Video Streaming |
-| [`client`](#client) | mod | # Printer Client |
-| [`diagnostics`](#diagnostics) | mod | # Diagnostics & Calibration |
-| [`discovery`](#discovery) | mod | # Printer Discovery (SSDP) |
+| [`ams`](ams/index.md) | mod | # AMS Filament System |
+| [`camera`](camera/index.md) | mod | # Camera & Video Streaming |
+| [`client`](client/index.md) | mod | # Printer Client |
+| [`diagnostics`](diagnostics/index.md) | mod | # Diagnostics & Calibration |
+| [`discovery`](discovery/index.md) | mod | # Printer Discovery (SSDP) |
 | [`error`](#error) | mod | # Error Types |
-| [`ftps`](#ftps) | mod | # FTPS File Transfer Client |
-| [`identity`](#identity) | mod | # Printer Identity |
-| [`io`](#io) | mod | # Transport Abstraction Layer |
-| [`models`](#models) | mod | # Printer Model Identification |
-| [`mqtt`](#mqtt) | mod | # MQTT Client & Command Serialization |
-| [`quirks`](#quirks) | mod | # Model-Specific Quirks |
+| [`ftps`](ftps/index.md) | mod | # FTPS File Transfer Client |
+| [`identity`](identity/index.md) | mod | # Printer Identity |
+| [`io`](io/index.md) | mod | # Transport Abstraction Layer |
+| [`models`](models/index.md) | mod | # Printer Model Identification |
+| [`mqtt`](mqtt/index.md) | mod | # MQTT Client & Command Serialization |
+| [`quirks`](quirks/index.md) | mod | # Model-Specific Quirks |
 | [`types`](#types) | mod | # Types & Telemetry Schemas |
 
 ## Modules
 
-- [`ams`](ams/index.md#ams) — # AMS Filament System
-- [`camera`](camera/index.md#camera) — # Camera & Video Streaming
-- [`client`](client/index.md#client) — # Printer Client
-- [`diagnostics`](diagnostics/index.md#diagnostics) — # Diagnostics & Calibration
-- [`discovery`](discovery/index.md#discovery) — # Printer Discovery (SSDP)
+- [`ams`](ams/index.md) — # AMS Filament System
+- [`camera`](camera/index.md) — # Camera & Video Streaming
+- [`client`](client/index.md) — # Printer Client
+- [`diagnostics`](diagnostics/index.md) — # Diagnostics & Calibration
+- [`discovery`](discovery/index.md) — # Printer Discovery (SSDP)
 - [`error`](error/index.md#error) — # Error Types
-- [`ftps`](ftps/index.md#ftps) — # FTPS File Transfer Client
-- [`identity`](identity/index.md#identity) — # Printer Identity
-- [`io`](io/index.md#io) — # Transport Abstraction Layer
-- [`models`](models/index.md#models) — # Printer Model Identification
-- [`mqtt`](mqtt/index.md#mqtt) — # MQTT Client & Command Serialization
-- [`quirks`](quirks/index.md#quirks) — # Model-Specific Quirks
+- [`ftps`](ftps/index.md) — # FTPS File Transfer Client
+- [`identity`](identity/index.md) — # Printer Identity
+- [`io`](io/index.md) — # Transport Abstraction Layer
+- [`models`](models/index.md) — # Printer Model Identification
+- [`mqtt`](mqtt/index.md) — # MQTT Client & Command Serialization
+- [`quirks`](quirks/index.md) — # Model-Specific Quirks
 - [`types`](types/index.md#types) — # Types & Telemetry Schemas
 
 
@@ -173,7 +173,7 @@ Address, serial number, and access code identifying one printer on the LAN.
 - **`model`**: `crate::models::PrinterModel`
 
   Printer model, used for quirks dispatch. Derivable from `serial` via
-  [`resolve_model`](models/index.md#resolve-model); see [`PrinterIdentity::new`] for the common case.
+  [`resolve_model`](models/index.md#resolve-model); see [`PrinterIdentity::new`](identity/index.md#printeridentity) for the common case.
 
 #### Implementations
 

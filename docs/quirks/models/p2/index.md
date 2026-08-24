@@ -91,7 +91,7 @@ Quirks for the P2S CoreXY platform.
 
   P2S does not run vibration compensation the way the X1/P1 series does, so the flag is
   forced off. Rests on bambuddy `be18ebb3` alone and is unverified on hardware here — see
-  [`crate::quirks::ModelQuirks::supports_vibration_compensation`] and issue #133.
+  [`crate::quirks::ModelQuirks::supports_vibration_compensation`](../../index.md#modelquirks) and issue #133.
 
 - <span id="p2quirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
 

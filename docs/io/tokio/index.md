@@ -245,7 +245,7 @@ Raw (pre-TLS) connection factory for the Tokio runtime.
 
 Creates raw TCP connections wrapped in [`TokioIo`](#tokioio) — used for MQTT's lazy connect and
 FTPS passive-mode data transfers alike (the Tokio counterpart to
-[`DummyFactory`](crate::client::dummy::DummyFactory)).
+[`DummyFactory`](../../client/dummy/index.md)).
 
 #### Trait Implementations
 

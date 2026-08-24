@@ -41,20 +41,20 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`ExtrusionCaliGetPayload`](#extrusioncaligetpayload) | struct | Inner payload for [`ExtrusionCaliGetRequest`]. |
+| [`ExtrusionCaliGetPayload`](#extrusioncaligetpayload) | struct | Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest). |
 | [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest) | struct | JSON request wrapper to trigger a complete dump of the stored calibration database. |
 | [`ExtrusionCaliGetResponse`](#extrusioncaligetresponse) | struct | JSON response wrapper containing the printer's stored calibration profile database. |
 | [`ExtrusionCaliGetResponsePayload`](#extrusioncaligetresponsepayload) | struct | Payload envelope returned by the printer in response to `extrusion_cali_get`. |
-| [`ExtrusionCaliSelPayload`](#extrusioncaliselpayload) | struct | Inner payload for [`ExtrusionCaliSelRequest`]. |
+| [`ExtrusionCaliSelPayload`](#extrusioncaliselpayload) | struct | Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest). |
 | [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest) | struct | JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP]. |
-| [`ExtrusionCaliSetPayload`](#extrusioncalisetpayload) | struct | Inner payload for [`ExtrusionCaliSetRequest`]. |
+| [`ExtrusionCaliSetPayload`](#extrusioncalisetpayload) | struct | Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest). |
 | [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest) | struct | JSON request wrapper to create or overwrite calibration profile allocations. |
 | [`IdexCaliDelEntry`](#idexcalidelentry) | struct | Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B). |
-| [`IdexCaliDelPayload`](#idexcalidelpayload) | struct | Inner payload for [`IdexCaliDelRequest`]. |
+| [`IdexCaliDelPayload`](#idexcalidelpayload) | struct | Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest). |
 | [`IdexCaliDelRequest`](#idexcalidelrequest) | struct | JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF]. |
 | [`KProfileEntry`](#kprofileentry) | struct | Structured representation of a Linear Advance calibration profile entry on the printer. |
 | [`StandardCaliDelEntry`](#standardcalidelentry) | struct | Deletion data fields utilized by standard single-nozzle databases (Schema A). |
-| [`StandardCaliDelPayload`](#standardcalidelpayload) | struct | Inner payload for [`StandardCaliDelRequest`]. |
+| [`StandardCaliDelPayload`](#standardcalidelpayload) | struct | Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest). |
 | [`StandardCaliDelRequest`](#standardcalidelrequest) | struct | JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF]. |
 | [`is_setting_id_valid`](#is-setting-id-valid) | fn | Validates whether a provided calibration profile setting ID complies with EEPROM limits. |
 
@@ -244,7 +244,7 @@ Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest).
 
 - **`ams_id`**: `i32`
 
-  Target AMS/external-spool address — see the addressing cheat-sheet on [`ExtrusionCaliSelRequest::new`].
+  Target AMS/external-spool address — see the addressing cheat-sheet on [`ExtrusionCaliSelRequest::new`](#extrusioncaliselrequest).
 
 - **`tray_id`**: `i32`
 
@@ -309,7 +309,7 @@ database mislinking on the motion board.
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by
   `ams_filament_setting` (filament configuration, see
-  [`crate::mqtt::AmsFilamentSettingRequest::new`]):
+  [`crate::mqtt::AmsFilamentSettingRequest::new`](../../mqtt/index.md)):
   * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
     `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
     Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong

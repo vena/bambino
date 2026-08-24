@@ -61,13 +61,13 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
   **In-flight Bounds Verification:**
   If the unacknowledged queue size equals or exceeds `MQTT_IN_FLIGHT_LIMIT`, this function
-  returns [`Error::Backpressure`] without sending, to protect memory space and prevent
+  returns [`Error::Backpressure`](../../error/index.md#error) without sending, to protect memory space and prevent
   packet drift [REF-MQTT-CONN]. A saturated queue is not a timeout — retrying immediately
   will not clear it; drain it by servicing PUBACKs (`poll_wire`) or let
   `tick_zombie_check` age the entries out.
 
   Payloads larger than `MQTT_MAX_PAYLOAD_BYTES` are rejected with
-  [`Error::ProtocolViolation`] rather than encoded, mirroring the read path's own cap.
+  [`Error::ProtocolViolation`](../../error/index.md#error) rather than encoded, mirroring the read path's own cap.
 
   `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
   `PrinterClient` callers get the new stalled-write protection via

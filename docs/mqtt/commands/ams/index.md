@@ -369,11 +369,11 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
 - **`ams_id`**: `i32`
 
-  Target AMS unit or external-spool address — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
+  Target AMS unit or external-spool address — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`](#amsfilamentsettingrequest).
 
 - **`tray_id`**: `i32`
 
-  Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
+  Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`](#amsfilamentsettingrequest).
 
 - **`tray_info_idx`**: `String`
 
@@ -443,7 +443,7 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by
   `extrusion_cali_sel` (K-profile binding, see
-  [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+  `crate::diagnostics::ExtrusionCaliSelRequest::new`):
   * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
     `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
     (`ams_id: 255`) require `tray_id: 254` (confirmed against

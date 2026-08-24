@@ -11,7 +11,7 @@ Find Bambu Lab printers on the local network using SSDP (Simple Service Discover
 [`DiscoveryEngine`](#discoveryengine) sends M-SEARCH queries on UDP port 2021 (and the alternate port 1990)
 and parses incoming NOTIFY/response packets into [`SsdpDevice`](parser/index.md#ssdpdevice) records.
 [`DiscoveryEngine`](#discoveryengine) itself works across std, ESP-IDF, and Embassy via the
-[`AsyncUdpSocket`](../io/index.md#asyncudpsocket) trait. The [`discover_devices()`] convenience function runs a timed
+[`AsyncUdpSocket`](../io/index.md#asyncudpsocket) trait. The [`discover_devices()`](#discover-devices) convenience function runs a timed
 broadcast-and-listen sweep and returns all unique printers found, but is std-only
 (`BindableUdpSocket` isn't implemented on Embassy — see
 `.claude/rules/udp-socket-binding.md`); Embassy callers must drive `DiscoveryEngine`
@@ -20,7 +20,7 @@ directly instead.
 ## Contents
 
 - [Modules](#modules)
-  - [`parser`](#parser)
+  - [`parser`](parser/index.md)
 - [Types](#types)
   - [`DiscoveryEngine`](#discoveryengine)
 - [Functions](#functions)
@@ -34,7 +34,7 @@ directly instead.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`parser`](#parser) | mod | # Zero-Copy HTTP-style SSDP Parsing Engine |
+| [`parser`](parser/index.md) | mod | # Zero-Copy HTTP-style SSDP Parsing Engine |
 | [`DiscoveryEngine`](#discoveryengine) | struct | Asynchronous Discovery Engine providing search orchestration and passive monitoring. |
 | [`discover_devices`](#discover-devices) | fn | Broadcasts SSDP search queries and listens for printer responses for the given duration. |
 | [`MULTICAST_ADDR`](#multicast-addr) | const | Standard Bambu Lab multicast group target for SSDP operations. |
@@ -43,7 +43,7 @@ directly instead.
 
 ## Modules
 
-- [`parser`](parser/index.md#parser) — # Zero-Copy HTTP-style SSDP Parsing Engine
+- [`parser`](parser/index.md) — # Zero-Copy HTTP-style SSDP Parsing Engine
 
 
 ---
@@ -100,7 +100,7 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
   
   The port is not carried in the payload, so [`parse_ssdp_payload`](parser/index.md#parse-ssdp-payload) — which sees only the
   datagram bytes — always leaves this `0`. It is filled in by
-  [`DiscoveryEngine::poll_next_device`](crate::discovery::DiscoveryEngine::poll_next_device),
+  [`DiscoveryEngine::poll_next_device`](#discoveryengine),
   which knows which socket the datagram arrived on. Callers parsing captured datagrams
   directly must treat `0` as "unknown", not as a real port.
 

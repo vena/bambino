@@ -486,10 +486,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
 
-  Returns [`FilamentSwitchInlet::InB`] for `0` and [`FilamentSwitchInlet::InA`] for `1`;
+  Returns [`FilamentSwitchInlet::InB`](#filamentswitchinlet) for `0` and [`FilamentSwitchInlet::InA`](#filamentswitchinlet) for `1`;
   `None` for `info` absent, or any other value, which upstream treats as "not bound".
 
-  **Only meaningful when [`extruder_assignment`](Self::extruder_assignment) returns `None`
+  **Only meaningful when [`extruder_assignment`](#amsunit) returns `None`
   because the raw field is `0xE`.** An AMS wired to a fixed extruder reports that extruder
   directly and this field carries nothing; `0xE` means "not fixed", and when a Filament
   Track Switch is installed, this is the only way to recover which physical nozzle the unit
@@ -509,10 +509,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
   True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
 
-  Distinguishes the two cases [`extruder_assignment`](Self::extruder_assignment) folds into
+  Distinguishes the two cases [`extruder_assignment`](#amsunit) folds into
   `None`: a unit routed through a Filament Track Switch, versus one whose assignment the
   firmware simply has not initialized. Pair with
-  [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
+  [`filament_switch_inlet`](#amsunit) to tell them apart — an unbound
   `bind_switch_in` alongside `0xE` means uninitialized.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`

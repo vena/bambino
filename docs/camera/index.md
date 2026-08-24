@@ -13,25 +13,25 @@ Bambu Lab printers expose camera feeds through two protocols:
    ([`BinaryCameraStream`](binary/index.md#binarycamerastream)) that handles the handshake and frame extraction.
 
 2. **RTSPS (Port 322)** — X1, X2, H2, and P2S series. An RTSP server behind implicit TLS
-   with Digest authentication. This module provides helper utilities ([`rtsps`](rtsps/index.md#rtsps)) for
+   with Digest authentication. This module provides helper utilities ([`rtsps`](rtsps/index.md)) for
    integrating with external media frameworks (FFmpeg, GStreamer, VLC), including URL
    generation, proxy URI rewriting, and P2S timestamp correction. It does **not** include
-   an RTSP client or TLS proxy — see the [`rtsps`](rtsps/index.md#rtsps) module docs for the proxy architecture.
+   an RTSP client or TLS proxy — see the [`rtsps`](rtsps/index.md) module docs for the proxy architecture.
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`binary`](#binary) | mod | # Chamber Image Binary JPEG Socket Protocol (Port 6000) |
-| [`rtsps`](#rtsps) | mod | # RTSPS Stream Helpers (Port 322) |
+| [`binary`](binary/index.md) | mod | # Chamber Image Binary JPEG Socket Protocol (Port 6000) |
+| [`rtsps`](rtsps/index.md) | mod | # RTSPS Stream Helpers (Port 322) |
 | [`CameraProtocol`](#cameraprotocol) | enum | Which camera streaming protocol a printer model uses. |
 | [`CAMERA_PORT_BINARY_JPEG`](#camera-port-binary-jpeg) | const | Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series). |
 | [`CAMERA_PORT_RTSPS`](#camera-port-rtsps) | const | Default port for RTSPS camera streams (X1, X2, H2, P2S series). |
 
 ## Modules
 
-- [`binary`](binary/index.md#binary) — # Chamber Image Binary JPEG Socket Protocol (Port 6000)
-- [`rtsps`](rtsps/index.md#rtsps) — # RTSPS Stream Helpers (Port 322)
+- [`binary`](binary/index.md) — # Chamber Image Binary JPEG Socket Protocol (Port 6000)
+- [`rtsps`](rtsps/index.md) — # RTSPS Stream Helpers (Port 322)
 
 
 ---

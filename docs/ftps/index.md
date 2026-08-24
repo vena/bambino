@@ -11,19 +11,19 @@ Implicit FTPS client for reading and writing files on the printer's SD card.
 [`FtpsClient`](client/index.md#ftpsclient) handles the TLS control channel, passive-mode data connections,
 and FTP command sequencing. It supports listing directories, uploading/downloading
 files, checking free space, and basic file management (rename, delete, mkdir).
-The [`parser`](../ams/parser/index.md#parser) submodule handles UNIX-style directory listing output.
+The [`parser`](../ams/parser/index.md) submodule handles UNIX-style directory listing output.
 
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`client`](#client) | mod | # Implicit FTPS Client Implementation |
-| [`parser`](#parser) | mod | # UNIX Directory Listing Parsing Engine for FTPS |
+| [`client`](client/index.md) | mod | # Implicit FTPS Client Implementation |
+| [`parser`](parser/index.md) | mod | # UNIX Directory Listing Parsing Engine for FTPS |
 
 ## Modules
 
-- [`client`](client/index.md#client) — # Implicit FTPS Client Implementation
-- [`parser`](parser/index.md#parser) — # UNIX Directory Listing Parsing Engine for FTPS
+- [`client`](client/index.md) — # Implicit FTPS Client Implementation
+- [`parser`](parser/index.md) — # UNIX Directory Listing Parsing Engine for FTPS
 
 
 ---
@@ -55,8 +55,8 @@ To make this safe, the client sets `poisoned = true` (originally only on the
 widest such window; now on every `write_command`/`read_response` failure in every method,
 including the single-reply metadata/filesystem commands, and unconditionally in
 `disconnect()`); every public method checks the flag first and returns
-[`Error::ProtocolViolation`] immediately if set. A poisoned client must be discarded —
-reconnect via a fresh [`FtpsClient::connect`] call instead of reusing the instance.
+[`Error::ProtocolViolation`](../error/index.md#error) immediately if set. A poisoned client must be discarded —
+reconnect via a fresh [`FtpsClient::connect`](client/index.md#ftpsclient) call instead of reusing the instance.
 
 **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
 `FTPS_READ_TIMEOUT_SECS`/`FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS` in `protocol.rs`) — owned

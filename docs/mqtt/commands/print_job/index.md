@@ -111,8 +111,8 @@ with named fields and sensible defaults for calibration flags.
 
   Extruder index per filament slot for tool-changer models, negative for unprinted slots.
   
-  Only consulted on a model whose quirks report [`uses_nozzle_rack`]. Set together with
-  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`]; either one alone resolves to no
+  Only consulted on a model whose quirks report `uses_nozzle_rack`. Set together with
+  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`](#printjobconfig); either one alone resolves to no
   `nozzle_mapping` on the wire, which is the safe outcome.
 
 - **`rack_nozzle_id`**: `Option<i32>`
@@ -520,7 +520,7 @@ Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical 
 printer currently reports as live, which only the caller can know — the mounted hotend can
 change between slicing and dispatch.
 
-Returns a [`RACK_WIRE_SLOTS`]-long vector of physical IDs, or `None` when the mapping cannot
+Returns a 32-slot vector of physical IDs (the fixed wire length), or `None` when it cannot
 be resolved with confidence. **`None` means "omit the field entirely" and is the deliberate
 failure mode, not an error path.** Omitting it returns the firmware to its own nozzle pick,
 which is merely suboptimal; a *wrong* physical ID makes the printer level with one nozzle and

@@ -71,7 +71,7 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
   
   The port is not carried in the payload, so [`parse_ssdp_payload`](#parse-ssdp-payload) — which sees only the
   datagram bytes — always leaves this `0`. It is filled in by
-  [`DiscoveryEngine::poll_next_device`](crate::discovery::DiscoveryEngine::poll_next_device),
+  [`DiscoveryEngine::poll_next_device`](../index.md#discoveryengine),
   which knows which socket the datagram arrived on. Callers parsing captured datagrams
   directly must treat `0` as "unknown", not as a real port.
 
