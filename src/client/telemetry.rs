@@ -129,8 +129,10 @@ where
     /// loop {
     ///     match printer.poll_telemetry().await? {
     ///         TelemetryEvent::Report(report, _raw) => {
-    ///             if let Some(state) = &report.print.gcode_state {
-    ///                 println!("Printer state: {}", state);
+    ///             // `report.print` is an Option — absent on a report that carries only
+    ///             // top-level `device` data.
+    ///             if let Some(print) = &report.print {
+    ///                 println!("Printer state: {:?}", print.gcode_state);
     ///             }
     ///         }
     ///         TelemetryEvent::Unknown(_) => {}
