@@ -233,8 +233,8 @@ Builds the flat `ams_mapping` integer array from raw project allocations.
 
 `allocations` is a slice of `(filament_id, MaterialSource)` pairs where `filament_id`
 represents the 1-based index (1 to N) of the project material defined in the slicer.
-Ids above the physical ceiling of 20 (16 flat channels plus the 4 an AMS-HT configuration
-adds) are dropped with a warning rather than sizing the output array.
+Ids above the physical ceiling of `AMS_MAX_PROJECT_FILAMENTS` (16 flat channels plus the 8
+an AMS-HT configuration adds) are dropped with a warning rather than sizing the output array.
 
 **Array Length Rule [REF-AMS-MAP]:**
 The length of the array is governed by the highest filament ID index present in the project,

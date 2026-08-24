@@ -427,6 +427,11 @@ Structured representation of a Linear Advance calibration profile entry on the p
   Single-nozzle firmware omits this field per-entry (it only sets it once at the
   `ExtrusionCaliGetResponsePayload` envelope level) — callers reading a parsed response
   must fall back to the envelope's `nozzle_diameter` when this is `None`.
+  
+  `skip_serializing_if` matters on the write side: this same struct is the element type
+  of `extrusion_cali_set`'s `filaments` array, so round-tripping an entry read back from
+  single-nozzle firmware would otherwise emit `"nozzle_diameter":null` — a shape neither
+  the read side nor `reference/07_diagnostics_hms.md` §7.2 ever shows.
 
 - **`nozzle_id`**: `String`
 

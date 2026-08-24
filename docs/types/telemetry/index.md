@@ -829,7 +829,8 @@ Represents an individual auxiliary routing component.
 
 - **`id`**: `u32`
 
-  Part index matching hardware configurations (e.g., `160` for the right auxiliary fan).
+  Part index matching hardware configurations (e.g., `160` for the second left-side
+  auxiliary fan on X2D/P2S — despite the wire port number suggesting a "right" fan).
 
 - **`state`**: `Option<i32>`
 
