@@ -52,9 +52,32 @@ Once tokenized, the fields correspond to:
 *   `parts[8:]`: File or folder name — the raw remainder of the line after the 8th whitespace-delimited field, sliced out verbatim (not re-tokenized/rejoined) so runs of multiple consecutive spaces inside the real filename are preserved rather than collapsed to one (confirmed on a P1S).
 
 ##### Rollover Logic
-If `parts[7]` contains a time pattern (`HH:MM`), the modification year is omitted. In this scenario, the host's current calendar year is assumed. If the calculated datetime is in the future relative to the host machine's system clock (`parsed_time > current_time`), the year value must be decremented by 1 (`year = current_year - 1`) to account for rollover boundaries (e.g., parsing a December modification date in January).
+If `parts[7]` contains a time pattern (`HH:MM`), the modification year is omitted and must be reconstructed against a reference clock. If the calculated datetime is in the future relative to that reference (`parsed_time > reference_time`), the year value must be decremented by 1 (`year = reference_year - 1`) to account for rollover boundaries (e.g., parsing a December modification date in January).
 
-This rollover math anchors to the *host's* clock, but the `HH:MM`/month/day values themselves come from the printer's own onboard clock — which this heuristic implicitly assumes is roughly synced to real time. Confirmed on a P1S (BUG-042, `BACKLOG.md`): ESP32/FreeRTOS-class printers have no RTC battery, LAN-mode NTP sync is unreliable, and the clock falls back to the firmware build date on boot. Two `LIST` checks minutes apart against a fresh boot returned an identical, months-stale timestamp rather than an advancing one — this is the printer's default LAN-mode state, not a rare edge case. Unconfirmed on X1/H2-series printers with more capable AP controllers.
+The correct reference is the **printer's** clock, not the host's: vsFTPd chose the `HH:MM` form over `YYYY` by comparing the file's mtime against its own clock, so that clock is the only reference the omission is meaningful against. Supplying host time to a printer whose clock is years off yields wrong years, and inconsistently so: the rollover comparison then fires on an arbitrary subset of entries rather than all or none. bambino requires the caller to pass this reference explicitly (`CurrentDateTime`) and flags every entry whose year came from it (`FtpFile::year_is_inferred`) rather than presenting a reconstruction as fact.
+
+Recovering the printer's clock to use as that reference is itself awkward, which is why host time is the common fallback: the `HH:MM`/month/day values in any listing entry are already the printer's, but the year, the one component actually missing, is not obtainable from `LIST` at all for a recent file. `MDTM` (below) is the direct route if the firmware implements it. Confirmed on a P1S (BUG-042, `BACKLOG.md`): ESP32/FreeRTOS-class printers have no RTC battery, LAN-mode NTP sync is unreliable, and the clock restarts from a fixed base on boot (originally recorded here as the firmware build date; the `MDTM` measurements below disprove that, the base predates the build by ~2 months). Two `LIST` checks minutes apart against a fresh boot returned an identical, months-stale timestamp rather than an advancing one. This is the printer's default LAN-mode state, not a rare edge case. Unconfirmed on X1/H2-series printers with more capable AP controllers.
+
+#### Absolute Timestamps via MDTM
+
+`MDTM <path>` returns `213 YYYYMMDDHHMMSS`: an absolute mtime with an explicit four-digit year, no reference clock and no rollover heuristic involved. This is the only route to a file timestamp that doesn't depend on the reconstruction above, and it costs one control-channel round trip with no data channel and no write to the card.
+
+**Confirmed on a P1S** (firmware `01.10.00.00`): `MDTM` is implemented and returns a well-formed `213 YYYYMMDDHHMMSS`, matching the `LIST` reconstruction of the same file to the minute. Unverified on A1/X1/H2/P2S.
+
+Two probes of the same unit, five hours apart, show the clock is **not** a fixed offset from real time:
+
+| Host time (UTC) | `MDTM` reply | Printer clock | Behind host |
+| --- | --- | --- | --- |
+| `2026-08-24 15:14:40` | `20260212012638` | `2026-02-12 01:26:38` | 193 days |
+| `2026-08-24 20:35:36` | `20260202085730` | `2026-02-02 08:57:30` | 203 days |
+
+The second reading is ten days *earlier* than the first despite being taken later, so the printer rebooted in between and its clock restarted from a fixed base near `2026-02-02 08:5x`. The first reading is that base plus roughly 9d16h of uptime. The reset base is not the firmware build date: `01.10.00.00` was released `2026-03-30`, nearly two months after the value the clock returns to.
+
+The practical consequence is that a measured offset is only valid for the current power cycle. Anything that converts printer timestamps to real time must re-probe after a reboot rather than caching the correction.
+
+The `Ok(None)` path is still required rather than optional: these builds are trimmed, and the same unit that implements `AVBL` answers `502` to `STAT` (below), so per-model absence is plausible until each is checked. A client must treat `500`/`502` as "unsupported, fall back to the `LIST` heuristic" rather than as an error; bambino's `FtpsClient::modification_time` returns `Ok(None)` on those codes and `Err` on a genuine failure such as `550` (no such file). `bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check` prints which branch a given printer takes.
+
+Note the limit even when supported: `MDTM` reports what the printer believes, so an unsynced printer answers with a confidently-wrong absolute timestamp instead of an ambiguous one. It removes the reconstruction, not the clock skew.
 
 #### Space Evaluation via AVBL and STAT
 To query available storage capacity on the MicroSD card without performing expensive recursive directory traversals, the client must execute a direct hardware-level space query over the active control channel:

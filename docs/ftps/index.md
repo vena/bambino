@@ -81,9 +81,38 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Queries the storage server for raw directory listings and parses their structures.
 
+  `now` must carry the **printer's** wall-clock time, not the host's. A `LIST` line omits
+  the year for recently-modified files, and the printer's clock is the reference vsFTPd used
+  when deciding to omit it. Bambu printers in LAN mode routinely never sync time, so the two
+  clocks can be years apart; see [`CurrentDateTime`](parser/index.md#currentdatetime) for how to recover the printer's and what
+  passing host time instead costs. Entries whose year came from `now` are flagged with
+  [`FtpFile::year_is_inferred`](parser/index.md#ftpfile).
+
 - <span id="ftpsclient-get-file-size"></span>`async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, Error>` — [`Error`](../error/index.md#error)
 
   Queries the exact size of a file stored on the printer's MicroSD card.
+
+- <span id="ftpsclient-modification-time"></span>`async fn modification_time(&mut self, remote_path: &str) -> Result<Option<FtpTimestamp>, Error>` — [`FtpTimestamp`](parser/index.md#ftptimestamp), [`Error`](../error/index.md#error)
+
+  Queries a file's absolute modification time via `MDTM`, to one-second resolution.
+
+  This is the only path to a file timestamp that doesn't go through a reference clock: the
+  `213 YYYYMMDDHHMMSS` reply carries an explicit four-digit year, where a `LIST` line omits
+  the year entirely for recently-modified files (see [`CurrentDateTime`](parser/index.md#currentdatetime)). It's still the
+  printer's own notion of when the file was written; an unsynced printer answers
+  confidently and wrongly rather than ambiguously.
+
+  Confirmed working on a P1S (`reference/02_ftps.md` §2.2); unverified on other models, which
+  is why the return is an `Option`. These firmware builds are trimmed (the same P1S answers
+  `502` to `STAT` even though stock vsFTPd implements it), so `Ok(None)` is returned on
+  `500`/`502` and callers should treat it as "fall back to the `LIST` heuristic", not as an
+  error. A missing file still surfaces as `Err`, not `None`: unsupported and absent are
+  different answers.
+
+  This is a per-file query, not a listing strategy: it costs a round trip each, and a
+  well-used printer's card holds thousands of files. Resolving a directory this way is not
+  worth offering: use `list_directory` against a [`CurrentDateTime`](parser/index.md#currentdatetime) reference for that, and
+  reach for `MDTM` when one file's timestamp needs to be exact.
 
 - <span id="ftpsclient-delete-file"></span>`async fn delete_file(&mut self, remote_path: &str) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -162,29 +191,56 @@ struct CurrentDateTime {
 }
 ```
 
-Bundles the calendar-time components `parse_unix_listing`'s year-rollover heuristic needs.
+The printer's own wall-clock time, used as the reference for `parse_unix_listing`'s year-rollover heuristic.
+
+This must be the **printer's** believed current time, not the host's. vsFTPd decides whether
+to emit `HH:MM` or `YYYY` in a `LIST` line by comparing each file's mtime against the printer's
+clock, so that clock is the only reference against which an omitted year can be recovered.
+Bambu printers in LAN mode frequently never sync time; their clock restarts from a fixed base
+on every boot, so it reads months stale. Passing host time to such a printer stamps every
+year-omitted entry with the wrong year, and not even consistently wrong, because the rollover
+comparison below then fires on an arbitrary subset of entries.
+
+Recover it by uploading a throwaway file and asking
+[`FtpsClient::modification_time`](#) for its mtime:
+the printer stamps the file from its own clock as it writes, and `MDTM` reports that stamp with
+an explicit four-digit year, so the reply is the printer's current time outright. `bambino-cli`'s
+`files clock-check` does exactly this.
+
+Where the firmware doesn't implement `MDTM`, the same probe read back through `LIST` gives only
+a partial answer: month/day/HH:MM come off the printer's clock no matter what reference is
+passed here, but the year is whatever that reference supplied. An unsynced printer typically
+reads months behind real time. Host time is a fine fallback when the printer's clock is
+unknown, and [`FtpFile::year_is_inferred`](parser/index.md#ftpfile) marks every entry whose year came from this
+reference rather than from the wire.
+
+Note the limit of what this buys: it is the printer's *current* time, not evidence of when any
+given file was actually written. Every timestamp FTPS reports, whether reconstructed from
+`LIST` or read outright via `MDTM`, is what the printer believed when it wrote the file, so a
+clock that was wrong then is still wrong now. A better reference makes the reconstruction more
+likely to be right, never authoritative.
 
 #### Fields
 
 - **`year`**: `i32`
 
-  Current calendar year.
+  The printer's calendar year.
 
 - **`month`**: `u8`
 
-  Current month (1-12).
+  The printer's month (1-12).
 
 - **`day`**: `u8`
 
-  Current day of month (1-31).
+  The printer's day of month (1-31).
 
 - **`hour`**: `u8`
 
-  Current hour (0-23).
+  The printer's hour (0-23).
 
 - **`minute`**: `u8`
 
-  Current minute (0-59).
+  The printer's minute (0-59).
 
 #### Trait Implementations
 
@@ -235,7 +291,8 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 - **`year`**: `i32`
 
-  Reconstructed modification year, calculated using current time markers.
+  Reconstructed modification year: taken verbatim from the wire when the listing carried one,
+  otherwise inferred against the [`CurrentDateTime`](parser/index.md#currentdatetime) reference (see `year_is_inferred`).
 
 - **`month`**: `u8`
 
@@ -255,13 +312,13 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 - **`year_is_inferred`**: `bool`
 
-  `true` when `year` was inferred from the host's current date (the wire's HH:MM-recent-
-  file format, ambiguous by design — see this function's doc comment), `false` when the
-  wire reported an explicit `YYYY` directly. `year`'s rollover math always lands
-  in `{current_year, current_year - 1}` for an inferred entry by construction, so it can
-  never itself look implausible even when the printer's own clock (the source of the
-  month/day/HH:MM this was inferred from) is wrong — this flag is the only honest signal
-  available without an independent probe like `bambino-cli`'s `files clock-check`.
+  `true` when `year` was inferred from the [`CurrentDateTime`](parser/index.md#currentdatetime) reference (the wire's
+  HH:MM-recent-file format, ambiguous by design; see `parse_unix_listing`'s doc comment),
+  `false` when the wire reported an explicit `YYYY` directly. `year`'s rollover math always
+  lands in `{reference_year, reference_year - 1}` for an inferred entry by construction, so it
+  can never itself look implausible even when the reference is wrong. This flag is the only
+  honest signal available without an independent probe like `bambino-cli`'s
+  `files clock-check`.
 
 #### Trait Implementations
 
@@ -279,10 +336,91 @@ Standardized representation of an entry retrieved from physical printer storage.
 
 - <span id="ftpfile-partialeq-eq"></span>`fn eq(&self, other: &FtpFile) -> bool` — [`FtpFile`](parser/index.md#ftpfile)
 
+### `FtpTimestamp`
+
+```rust
+struct FtpTimestamp {
+    pub year: i32,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+```
+
+An absolute file modification time as reported by the `MDTM` command, to one-second resolution.
+
+Unlike everything derived from a `LIST` line, this carries an explicit four-digit year straight
+off the wire, with no reference clock and no inference. It is still the printer's *own* notion of
+when the file was written, so an unsynced printer yields a confidently-wrong absolute timestamp
+rather than an ambiguous one; `MDTM` removes the reconstruction, not the clock skew.
+
+See [`FtpsClient::modification_time`](#), which returns
+`None` when the printer's firmware doesn't implement the command.
+
+#### Fields
+
+- **`year`**: `i32`
+
+  Four-digit calendar year, as reported.
+
+- **`month`**: `u8`
+
+  Calendar month (1-12).
+
+- **`day`**: `u8`
+
+  Day of month (1-31).
+
+- **`hour`**: `u8`
+
+  Hour (0-23).
+
+- **`minute`**: `u8`
+
+  Minute (0-59).
+
+- **`second`**: `u8`
+
+  Second (0-59).
+
+#### Trait Implementations
+
+##### `impl Clone for FtpTimestamp`
+
+- <span id="ftptimestamp-clone"></span>`fn clone(&self) -> FtpTimestamp` — [`FtpTimestamp`](parser/index.md#ftptimestamp)
+
+##### `impl Copy for FtpTimestamp`
+
+##### `impl Debug for FtpTimestamp`
+
+- <span id="ftptimestamp-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for FtpTimestamp`
+
+##### `impl PartialEq for FtpTimestamp`
+
+- <span id="ftptimestamp-partialeq-eq"></span>`fn eq(&self, other: &FtpTimestamp) -> bool` — [`FtpTimestamp`](parser/index.md#ftptimestamp)
+
 
 ---
 
 ## Functions
+
+### `parse_mdtm_timestamp`
+
+```rust
+fn parse_mdtm_timestamp(body: &str) -> Option<FtpTimestamp>
+```
+
+**Types:** [`FtpTimestamp`](parser/index.md#ftptimestamp)
+
+Parses an `MDTM` reply body (`YYYYMMDDHHMMSS`) into an [`FtpTimestamp`](parser/index.md#ftptimestamp).
+
+Returns `None` when the body isn't exactly 14 ASCII digits or the fields fall outside a valid
+calendar date. The reply comes from the printer and is untrusted, same as a `LIST` line. Any
+fractional-second suffix RFC 3659 permits (`.sss`) is ignored.
 
 ### `parse_unix_listing`
 
@@ -303,8 +441,9 @@ runs exactly, rather than re-tokenizing and rejoining with a single space.
 
 **Temporal Rollover Mitigation:**
 UNIX listing formats omit the modification year and provide a timestamp (HH:MM) if the file
-was updated within the last six months. In this scenario, we default to the host system's
-`current_year`. If comparing the parsed datetime markers against our system context reveals
+was updated within the last six months. In this scenario the year is taken from `now`, which
+must carry the *printer's* clock and not the host's (see [`CurrentDateTime`](parser/index.md#currentdatetime)). If comparing the
+parsed datetime markers against that reference reveals
 that the parsed datetime is in the future, the file belongs to last year's calendar cycle
 (e.g., parsing a December modification date in January). In this event, we decrement the
 calculated year by 1.

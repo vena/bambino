@@ -70,9 +70,38 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Queries the storage server for raw directory listings and parses their structures.
 
+  `now` must carry the **printer's** wall-clock time, not the host's. A `LIST` line omits
+  the year for recently-modified files, and the printer's clock is the reference vsFTPd used
+  when deciding to omit it. Bambu printers in LAN mode routinely never sync time, so the two
+  clocks can be years apart; see [`CurrentDateTime`](../parser/index.md#currentdatetime) for how to recover the printer's and what
+  passing host time instead costs. Entries whose year came from `now` are flagged with
+  [`FtpFile::year_is_inferred`](../parser/index.md#ftpfile).
+
 - <span id="ftpsclient-get-file-size"></span>`async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, Error>` — [`Error`](../../error/index.md#error)
 
   Queries the exact size of a file stored on the printer's MicroSD card.
+
+- <span id="ftpsclient-modification-time"></span>`async fn modification_time(&mut self, remote_path: &str) -> Result<Option<FtpTimestamp>, Error>` — [`FtpTimestamp`](../parser/index.md#ftptimestamp), [`Error`](../../error/index.md#error)
+
+  Queries a file's absolute modification time via `MDTM`, to one-second resolution.
+
+  This is the only path to a file timestamp that doesn't go through a reference clock: the
+  `213 YYYYMMDDHHMMSS` reply carries an explicit four-digit year, where a `LIST` line omits
+  the year entirely for recently-modified files (see [`CurrentDateTime`](../parser/index.md#currentdatetime)). It's still the
+  printer's own notion of when the file was written; an unsynced printer answers
+  confidently and wrongly rather than ambiguously.
+
+  Confirmed working on a P1S (`reference/02_ftps.md` §2.2); unverified on other models, which
+  is why the return is an `Option`. These firmware builds are trimmed (the same P1S answers
+  `502` to `STAT` even though stock vsFTPd implements it), so `Ok(None)` is returned on
+  `500`/`502` and callers should treat it as "fall back to the `LIST` heuristic", not as an
+  error. A missing file still surfaces as `Err`, not `None`: unsupported and absent are
+  different answers.
+
+  This is a per-file query, not a listing strategy: it costs a round trip each, and a
+  well-used printer's card holds thousands of files. Resolving a directory this way is not
+  worth offering: use `list_directory` against a [`CurrentDateTime`](../parser/index.md#currentdatetime) reference for that, and
+  reach for `MDTM` when one file's timestamp needs to be exact.
 
 - <span id="ftpsclient-delete-file"></span>`async fn delete_file(&mut self, remote_path: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
