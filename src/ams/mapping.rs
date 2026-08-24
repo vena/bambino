@@ -161,17 +161,31 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
 /// caller-supplied data. On `alloc`/`embassy` that is an OOM abort in a fixed heap, not a
 /// recoverable error.
 ///
-/// `20` is the physical ceiling: 16 flat channels (4 standard units × 4 slots) plus the 4 further
-/// ids an AMS-HT configuration can add. Allocations above it are dropped through the same
-/// `log::warn!` path as any other out-of-range filament id.
-pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize = 20;
+/// The ceiling is the physical one: 16 flat channels (4 standard units × 4 slots) plus every id
+/// an AMS-HT configuration can add. H2C/H2D/H2D Pro/H2S/X2D report
+/// `AmsPoolComposition::Independent { max_standard: 4, max_ht: 8 }`, so the real maximum is 24,
+/// not the 20 this once assumed — the earlier value silently dropped ids 21-24 on a project
+/// using all 4 standard units plus all 8 AMS-HT units. Derived from the parser's id ranges
+/// rather than written as a literal so a future range change carries through here.
+///
+/// This is deliberately a single crate-wide cap rather than a per-model one: the mapping
+/// builders take raw project allocations with no `PrinterModel` in hand, so the quirks engine
+/// is not reachable from here. It bounds an allocation sized from untrusted input; a model that
+/// physically has fewer channels rejects the surplus ids on its own side.
+///
+/// Allocations above it are dropped through the same `log::warn!` path as any other
+/// out-of-range filament id.
+pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize = (super::parser::AMS_MAX_STANDARD_ID as usize
+    + 1)
+    * super::parser::AMS_SLOTS_PER_UNIT as usize
+    + (super::parser::AMS_HT_ID_MAX - super::parser::AMS_HT_ID_MIN + 1) as usize;
 
 /// Builds the flat `ams_mapping` integer array from raw project allocations.
 ///
 /// `allocations` is a slice of `(filament_id, MaterialSource)` pairs where `filament_id`
 /// represents the 1-based index (1 to N) of the project material defined in the slicer.
-/// Ids above the physical ceiling of 20 (16 flat channels plus the 4 an AMS-HT configuration
-/// adds) are dropped with a warning rather than sizing the output array.
+/// Ids above the physical ceiling of `AMS_MAX_PROJECT_FILAMENTS` (16 flat channels plus the 8
+/// an AMS-HT configuration adds) are dropped with a warning rather than sizing the output array.
 ///
 /// **Array Length Rule [REF-AMS-MAP]:**
 /// The length of the array is governed by the highest filament ID index present in the project,
@@ -648,6 +662,40 @@ mod tests {
         let allocations = [(1, MaterialSource::AmsHt { ams_id: 128 })];
         let flat_map = build_ams_mapping(&allocations);
         assert_eq!(flat_map, vec![128]);
+    }
+
+    #[test]
+    fn test_build_ams_mapping_keeps_all_24_channels_of_a_full_h2d_pool() {
+        // The cap used to be 20, derived from an assumption of at most 4 AMS-HT units. H2C,
+        // H2D, H2D Pro, H2S and X2D all report Independent { max_standard: 4, max_ht: 8 }, so
+        // a project using every unit reaches filament id 24 and ids 21-24 were silently
+        // dropped — and max_id.min(cap) shrank the array below what the project needed.
+        assert_eq!(AMS_MAX_PROJECT_FILAMENTS, 24);
+
+        let mut allocations = Vec::new();
+        for ams_id in 0..=3u8 {
+            for slot_id in 0..4u8 {
+                allocations.push((
+                    allocations.len() + 1,
+                    MaterialSource::StandardAms { ams_id, slot_id },
+                ));
+            }
+        }
+        for ams_id in 128..=135u8 {
+            allocations.push((allocations.len() + 1, MaterialSource::AmsHt { ams_id }));
+        }
+
+        let flat_map = build_ams_mapping(&allocations);
+        assert_eq!(flat_map.len(), 24, "no filament id may be dropped");
+        assert_eq!(flat_map[15], 15, "last standard flat channel");
+        assert_eq!(flat_map[16], 128, "first AMS-HT id");
+        assert_eq!(flat_map[23], 135, "eighth AMS-HT id");
+        assert!(
+            !flat_map.contains(&-1),
+            "every allocation is valid, so nothing should map to the unmapped sentinel"
+        );
+
+        assert_eq!(build_ams_mapping2(&allocations).len(), 24);
     }
 
     #[test]
