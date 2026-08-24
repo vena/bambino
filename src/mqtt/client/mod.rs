@@ -761,8 +761,20 @@ impl<IO: AsyncIo> MqttClient<IO> {
                         let id = packet_id.expect("QoS 1 always has packet_id");
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
+                        // Deliver the message even if the ack write fails: the payload is
+                        // already off the wire and parsed, and `write_frame_guarded` sets
+                        // `write_poisoned` internally, so propagating here would destroy
+                        // received data and then reject every subsequent QoS 1 PUBLISH the
+                        // same way, silently ending telemetry on a still-readable socket.
                         let ack = encode_puback(id);
-                        self.write_frame_guarded(&ack, timer).await?;
+                        if let Err(e) = self.write_frame_guarded(&ack, timer).await {
+                            log::warn!(
+                                "Failed to PUBACK packet_id {}: {:?} (write channel poisoned, \
+                                 message still delivered)",
+                                id,
+                                e
+                            );
+                        }
                     } else if qos >= 2 {
                         log::warn!(
                             "Received QoS {} PUBLISH (packet_id: {:?}) — QoS 2 handshake \
@@ -1140,6 +1152,72 @@ mod tests {
             assert_eq!(msg.payload, b"{\"print\":{}}");
 
             server_task.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn test_qos1_publish_delivered_when_puback_write_fails() {
+            // A failed automatic PUBACK used to `?` out of poll_wire *after* the PUBLISH had
+            // already been read off the wire and parsed, destroying the payload. Because
+            // write_frame_guarded poisons the write channel on failure and rejects every
+            // later write up front, every subsequent QoS 1 telemetry PUBLISH died the same
+            // way — telemetry stopped entirely on a socket that was still producing frames.
+            // Pre-poisoning the write channel is the deterministic stand-in for the real
+            // trigger (a stalled or reset TCP write).
+            let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+            let server_task = tokio::spawn(async move {
+                let mut discard = vec![0u8; 256];
+                let _ = server_stream.read(&mut discard).await;
+                server_stream
+                    .write_all(&[0x20, 0x02, 0x00, 0x00])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+                let _ = server_stream.read(&mut discard).await;
+                server_stream
+                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x01])
+                    .await
+                    .unwrap();
+                server_stream.flush().await.unwrap();
+
+                let frame =
+                    encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
+                server_stream.write_all(&frame).await.unwrap();
+                server_stream.flush().await.unwrap();
+
+                // Keep the server side alive so the duplex doesn't close under the client.
+                tokio::time::sleep(core::time::Duration::from_millis(500)).await;
+            });
+
+            let mut client =
+                MqttClient::connect(
+                    TokioIo(client_stream),
+                    &PrinterIdentity {
+                        ip: String::new(),
+                        serial: "01P000000000000".into(),
+                        access_code: "12345678".into(),
+                        model: PrinterModel::P1S,
+                    },
+                )
+                    .await
+                    .expect("connect should succeed");
+
+            // Poison the write channel so the automatic PUBACK write fails.
+            client.write_poisoned = true;
+
+            let timer = crate::io::tokio::TokioTimer::new();
+            let msg = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                client.poll_telemetry_with_timer(&timer),
+            )
+            .await
+            .expect("poll_telemetry_with_timer hung past the meta-safety timeout")
+            .expect("PUBLISH must still be delivered when its PUBACK write fails");
+
+            assert_eq!(msg.topic, "device/01P000000000000/report");
+            assert_eq!(msg.payload, b"{\"print\":{}}");
+
+            server_task.abort();
         }
 
         #[tokio::test]
