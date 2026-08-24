@@ -1096,9 +1096,15 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     // with_connect_timeout's doc comment and its precedent elsewhere in
                     // this crate), not "expire on the very first would-block poll" — skip the
                     // deadline check entirely in that case.
+                    // Saturate rather than truncate: as_millis() is u128, and `as u64` wraps
+                    // modulo 2^64. The is_zero() guard above is evaluated on the original
+                    // Duration, so a huge-but-nonzero "effectively no timeout" value passed
+                    // the guard and then wrapped down to an arbitrarily small deadline — the
+                    // opposite of what the caller asked for.
+                    let timeout_ms =
+                        u64::try_from(self.connect_timeout.as_millis()).unwrap_or(u64::MAX);
                     if !self.connect_timeout.is_zero()
-                        && timer.now_millis().saturating_sub(start)
-                            >= self.connect_timeout.as_millis() as u64
+                        && timer.now_millis().saturating_sub(start) >= timeout_ms
                     {
                         return Err(SocketError::TimedOut);
                     }

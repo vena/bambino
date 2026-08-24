@@ -69,7 +69,12 @@ pub struct KProfileEntry {
     /// Single-nozzle firmware omits this field per-entry (it only sets it once at the
     /// `ExtrusionCaliGetResponsePayload` envelope level) — callers reading a parsed response
     /// must fall back to the envelope's `nozzle_diameter` when this is `None`.
-    #[serde(default)]
+    ///
+    /// `skip_serializing_if` matters on the write side: this same struct is the element type
+    /// of `extrusion_cali_set`'s `filaments` array, so round-tripping an entry read back from
+    /// single-nozzle firmware would otherwise emit `"nozzle_diameter":null` — a shape neither
+    /// the read side nor `reference/07_diagnostics_hms.md` §7.2 ever shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nozzle_diameter: Option<String>,
     /// System designation of the target hotend profile structure (e.g. `"HS00-0.4"`).
     pub nozzle_id: String,
@@ -500,6 +505,35 @@ mod tests {
         assert!(json.contains(r#""sequence_id":"50004""#));
         // IDEX deletion must not contain setting_id
         assert!(!json.contains("setting_id"));
+    }
+
+    #[test]
+    fn test_nozzle_diameter_none_omitted_from_extrusion_cali_set() {
+        // KProfileEntry is both the extrusion_cali_get response element and the
+        // extrusion_cali_set request element. Single-nozzle firmware legitimately omits
+        // nozzle_diameter per-entry, so a caller round-tripping a profile back into a write
+        // (e.g. to edit k_value) used to emit "nozzle_diameter":null — a shape the read side
+        // never produces and reference/07_diagnostics_hms.md §7.2 never shows.
+        let profile = KProfileEntry {
+            cali_idx: -1,
+            filament_id: "GFA01".into(),
+            nozzle_diameter: None,
+            nozzle_id: "HS00-0.4".into(),
+            extruder_id: 0,
+            name: "Round-tripped".into(),
+            k_value: "0.022".into(),
+            n_coef: None,
+            setting_id: "PF12345678901234567".into(),
+            ams_id: None,
+            tray_id: None,
+        };
+
+        let req = ExtrusionCaliSetRequest::new(vec![profile], 50002).unwrap();
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(
+            !json.contains("nozzle_diameter"),
+            "None nozzle_diameter should be omitted, not sent as null: {json}"
+        );
     }
 
     #[test]

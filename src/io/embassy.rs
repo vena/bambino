@@ -20,7 +20,10 @@ pub struct EmbassyTimer;
 #[cfg(feature = "embassy")]
 impl TimerProvider for EmbassyTimer {
     async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
-        let micros = duration.as_micros() as u64;
+        // Saturate, not truncate — as_micros() is u128 and `as u64` wraps. Unreachable in
+        // practice (u64 micros is ~584,942 years), but it is the same defect class fixed in
+        // esp_idf.rs's connect_timeout conversion, where it is reachable.
+        let micros = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
         ::embassy_time::Timer::after(::embassy_time::Duration::from_micros(micros)).await;
         Ok(())
     }
