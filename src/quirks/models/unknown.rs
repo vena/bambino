@@ -1,6 +1,6 @@
 //! # Unrecognized Model Fallback Quirks
 //!
-//! Strategy used for [`PrinterModel::Unknown`](crate::types::PrinterModel::Unknown) — a printer
+//! Strategy used for [`PrinterModel::Unknown`](crate::PrinterModel::Unknown) — a printer
 //! whose model string this crate does not recognize (a new SKU, a malformed SSDP `DevModel`
 //! header, or a firmware that reports an unexpected token).
 //!

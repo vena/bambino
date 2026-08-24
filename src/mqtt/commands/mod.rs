@@ -54,7 +54,7 @@ pub fn clamp_task_id(raw_id: u64) -> u32 {
     (raw_id % TASK_ID_MAX) as u32
 }
 
-/// A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via [`From<u64>`](ClampedTaskId#impl-From<u64>-for-ClampedTaskId),
+/// A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via its `From<u64>` impl,
 /// which always clamps.
 ///
 /// A constructor that called `clamp_task_id()` on every field except one, and 24 constructors

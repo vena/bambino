@@ -40,11 +40,13 @@ install-hooks:
 # hook (post-commit can't include its own output in the triggering commit, and
 # every commit would pay the rebuild cost regardless of relevance).
 #
-# scripts/postprocess-docs.py runs three passes over the merged output: it
+# scripts/postprocess-docs.py runs five passes over the merged output: it
 # deletes blanket-impl noise cargo-docs-md doesn't filter on its own, undoes
 # the paragraph split --full-method-docs introduces between every source line
-# of a doc comment, and fills in trait *declaration* method bodies from the
-# rustdoc JSON (--full-method-docs only reaches methods inside impl blocks) --
+# of a doc comment, fills in trait *declaration* method bodies from the
+# rustdoc JSON (--full-method-docs only reaches methods inside impl blocks),
+# resolves the intra-doc links inside prose into real relative links, and
+# strips link fragments naming an anchor the target page doesn't have --
 # see that script's docstring. Both JSON files are passed because each doc
 # pass sees a different cfg-gated slice of the crate.
 #

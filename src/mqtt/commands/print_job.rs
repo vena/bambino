@@ -103,7 +103,7 @@ pub(crate) const RACK_WIRE_SLOTS: usize = 32;
 /// printer currently reports as live, which only the caller can know — the mounted hotend can
 /// change between slicing and dispatch.
 ///
-/// Returns a [`RACK_WIRE_SLOTS`]-long vector of physical IDs, or `None` when the mapping cannot
+/// Returns a 32-slot vector of physical IDs (the fixed wire length), or `None` when it cannot
 /// be resolved with confidence. **`None` means "omit the field entirely" and is the deliberate
 /// failure mode, not an error path.** Omitting it returns the firmware to its own nozzle pick,
 /// which is merely suboptimal; a *wrong* physical ID makes the printer level with one nozzle and
