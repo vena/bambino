@@ -59,6 +59,40 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
 }
 
 #[tokio::test]
+async fn test_first_lazy_command_carries_a_reseeded_sequence_id_with_a_real_clock() {
+    // The complement of the DummyTimer test above. dispatch() used to mint the sequence ID
+    // before publish_request() ran ensure_mqtt(), so the wall-clock reseed landed one command
+    // too late and the *first* command of every lazily-connecting session still published the
+    // fixed 10001 — precisely the cross-session collision the reseed exists to prevent, since
+    // MQTT connects lazily by default and "construct, then immediately send" is the common
+    // shape. With a real TimerProvider the first command must already be reseeded.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory::new(data_container);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_ne!(
+            json["print"]["sequence_id"], "10001",
+            "with a real clock the reseed must complete before the first command's \
+             sequence ID is minted, not after it"
+        );
+    });
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        factory,
+        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
+    )
+    .with_timer(bambino::io::tokio::TokioTimer::new());
+
+    client.send_gcode("G28").await.expect("send_gcode failed");
+
+    broker_task.await.expect("mock broker task panicked");
+}
+
+#[tokio::test]
 async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     // Before disconnect_mqtt()/attach_mqtt() existed, a dead MQTT session (a
     // tick_zombie_check()-detected zombie, a transport error) had no supported recovery

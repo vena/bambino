@@ -90,14 +90,20 @@ where
         nozzle_id: u8,
         target_temp: u16,
     ) -> Result<u16, Error> {
-        let nozzle_count = self.identity.model.quirks().physical_nozzle_count();
-        let nozzle_valid = if nozzle_count == 7 {
-            // H2C tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
-            nozzle_id == 0 || (16..=21).contains(&nozzle_id)
-        } else {
-            nozzle_id < nozzle_count
-        };
-        if !nozzle_valid {
+        // Rack-slot addressing is a quirks *predicate*, not something to infer from the
+        // nozzle count — `uses_nozzle_rack()` is passed explicitly by the H2 macro precisely
+        // so a future variant has to state whether it racks its hotends (see
+        // `quirks/models/h2.rs`), and `mqtt/commands/print_job.rs` already dispatches on it.
+        let quirks = self.identity.model.quirks();
+        if quirks.uses_nozzle_rack() {
+            // Tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
+            if nozzle_id != 0 && !(16..=21).contains(&nozzle_id) {
+                return Err(Error::ModelMismatch(
+                    "nozzle_id must be the fixed hotend (0) or a rack slot (16..=21) on this model"
+                        .into(),
+                ));
+            }
+        } else if nozzle_id >= quirks.physical_nozzle_count() {
             return Err(Error::ModelMismatch(
                 "nozzle_id exceeds this model's physical nozzle count".into(),
             ));

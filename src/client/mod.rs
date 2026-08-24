@@ -394,6 +394,13 @@ where
         &mut self,
         build: impl FnOnce(u64) -> T,
     ) -> Result<u16, Error> {
+        // Connect before minting: `ensure_mqtt()` reseeds `sequence_counter` from the wall
+        // clock on a successful lazy connect (see `connect.rs`), and MQTT connects lazily by
+        // default — so minting first meant the first command of every session carried the
+        // un-reseeded `INITIAL_SEQUENCE_ID + 1`, which is the exact collision between two
+        // independent sessions the reseed exists to prevent. Idempotent: `ensure_mqtt()`
+        // short-circuits when already connected, so `publish_request`'s own call is free.
+        self.ensure_mqtt().await?;
         let seq = self.next_sequence_id();
         let req = build(seq);
         self.publish_request(&req).await
