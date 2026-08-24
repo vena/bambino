@@ -181,6 +181,9 @@ Address, serial number, and access code identifying one printer on the LAN.
 
   Builds an identity, deriving `model` from `serial` via [`resolve_model`](models/index.md#resolve-model).
 
+  For callers who need a specific `model` regardless of what the serial
+  prefix implies, construct the struct literal directly instead.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterIdentity`
@@ -374,6 +377,9 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 - <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
 
   Returns the [`ModelQuirks`](quirks/index.md#modelquirks) strategy for this model variant.
+
+  This is the single dispatch point — all model-specific behavior goes through
+  the trait object returned here, rather than match-blocks scattered across the crate.
 
 #### Trait Implementations
 

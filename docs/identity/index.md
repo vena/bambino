@@ -59,6 +59,9 @@ Address, serial number, and access code identifying one printer on the LAN.
 
   Builds an identity, deriving `model` from `serial` via [`resolve_model`](../models/index.md#resolve-model).
 
+  For callers who need a specific `model` regardless of what the serial
+  prefix implies, construct the struct literal directly instead.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterIdentity`

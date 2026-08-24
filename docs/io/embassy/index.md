@@ -133,19 +133,14 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 - <span id="embassytlsconnector-new"></span>`fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self`
 
   Creates a new connector against the single active [`Tls`](::mbedtls_rs::Tls) instance
-
   (via its [`TlsReference`](::mbedtls_rs::TlsReference)), defaulting to no certificate
-
   verification — matching this crate's existing unsafe-by-default convention on other
-
   platforms (`build_unsafe_client_config`), since Bambu printer certs chain to a private
-
   BBL CA that no OS trust store carries.
 
 - <span id="embassytlsconnector-with-ca-chain"></span>`fn with_ca_chain(self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self`
 
   Enables server certificate verification against the given CA chain. Without this,
-
   the connector never checks the printer's certificate.
 
 - <span id="embassytlsconnector-with-client-credentials"></span>`fn with_client_credentials(self, creds: ::mbedtls_rs::Credentials<'a>) -> Self`
@@ -163,23 +158,16 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 - <span id="embassytlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
   `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this
-
   type's doc comment above. Return `None` honestly rather than hard-coding a guess.
 
 - <span id="embassytlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, _stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
 
   `mbedtls-rs` exposes neither a peer-certificate accessor nor the raw
-
   `mbedtls_ssl_context` pointer that would let this crate call
-
   `mbedtls_ssl_get_peer_cert` itself (confirmed by reading its source: the only
-
   post-handshake inspectors on `Session` are `tls_verification_details` and `tls_alpn`).
-
   The ESP-IDF backend can do this only because `esp_tls_get_ssl_context` hands out that
-
   pointer. Return `None` honestly — a consumer pinning certificates cannot do so on this
-
   backend today, and must fail closed rather than be handed a fabricated empty chain.
 
 ### `EmbassyUdpSocket<'a>`

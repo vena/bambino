@@ -190,6 +190,28 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
   Creates a request payload to update slot parameters.
 
+  **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
+  For standard physical slots, `ams_id` matches the expansion unit index (0-3).
+  For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
+  and `tray_id` must strictly be set to `254` to prevent command rejection.
+
+  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
+  addressing differs by command family — this rule is *not* the same one used by
+  `extrusion_cali_sel` (K-profile binding, see
+  [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+  * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
+    `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
+    (`ams_id: 255`) require `tray_id: 254` (confirmed against
+    `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
+    VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
+    `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
+  * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
+    Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
+    `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
+    Ext-R on IDEX machines mis-routes the pressure advance profile to the left
+    carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    uncalibrated.
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsFilamentSettingRequest`
@@ -441,6 +463,9 @@ Sends a raw G-code line to the printer for immediate execution.
 - <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Creates a request envelope wrapping a raw G-code payload.
+
+  **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
+  to ensure the physical controller's stream parser identifies the end-of-command boundary.
 
 #### Trait Implementations
 
@@ -717,6 +742,18 @@ with named fields and sensible defaults for calibration flags.
 
   Enables AMS and sets the flat slot-mapping array (`ams_mapping`).
 
+  Values outside the documented flat channel space (`0..=15` standard AMS, `128..=135`
+  AMS-HT, or `-1` unmapped) are folded to `-1` with a `log::warn!` — firmware rejects
+  out-of-range values (254/255 in particular) with a visible error (`0700_8012`/
+  `07FF_8012`, `reference/05_materials_ams.md:151`). The `with_ams_mapping2`-derived path
+  already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
+  (issue #56).
+
+  This is a convenience, not the enforcement point: `ams_mapping` is a public field, so
+  `ProjectFileRequest::from_config` re-runs the same sanitization at serialization time
+  (issue #120). Bypassing this builder cannot produce an out-of-range flat channel on the
+  wire.
+
 - <span id="printjobconfig-with-ams-mapping2"></span>`fn with_ams_mapping2(self, mapping2: Vec<AmsMapping2Entry>) -> Self` — [`AmsMapping2Entry`](../../ams/mapping/index.md#amsmapping2entry)
 
   Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
@@ -732,9 +769,7 @@ with named fields and sensible defaults for calibration flags.
 - <span id="printjobconfig-vibration-compensation"></span>`fn vibration_compensation(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](print_job/index.md#calibrationmode)
 
   Enables or disables vibration compensation calibration for this job. No tri-state
-
   companion field exists on the wire for this one, so `CalibrationMode::Auto` serializes
-
   identically to `Off`.
 
 - <span id="printjobconfig-timelapse"></span>`fn timelapse(self, enabled: bool) -> Self`
@@ -748,6 +783,11 @@ with named fields and sensible defaults for calibration flags.
 - <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self`
 
   Supplies the tool-changer rack routing for this job (H2C only).
+
+  `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
+  `rack_nozzle_id` is the physical ID of the live rack position (`16..=21`). Both are needed
+  — see [`resolve_rack_nozzle_mapping`](print_job/index.md#resolve-rack-nozzle-mapping) for how they combine and when the resulting
+  `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
 
 - <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](print_job/index.md#calibrationmode)
 
@@ -784,6 +824,18 @@ Submits a `.3mf` print job from the SD card for execution.
 - <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: PrinterModel) -> Self` — [`PrintJobConfig`](print_job/index.md#printjobconfig), [`ClampedTaskId`](#clampedtaskid), [`PrinterModel`](../../models/index.md#printermodel)
 
   Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
+
+  `nozzle_offset_cali` is gated on the model's `supports_nozzle_offset_calibration()`
+  quirk as a hard ceiling, not a default: it is enabled automatically on IDEX and
+  tool-changer platforms when the caller left it `None`, and forced off on every
+  single-nozzle model even when the caller explicitly asked for it — the printer has no
+  second carriage to calibrate.
+
+  **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
+  `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
+  serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
+  to treat the value as the physical carriage index (Target nozzle 1) instead of material
+  routing parameters.
 
 #### Trait Implementations
 

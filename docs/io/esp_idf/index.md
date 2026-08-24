@@ -94,6 +94,28 @@ give up ownership of the fd first or the fd would be double-closed.
 
   Dials a raw TCP connection to `host:port`.
 
+  Uses a non-blocking `connect()`, polled to completion by `.await`ing
+  `EspIdfTimer::sleep(TLS_POLL_INTERVAL)` between attempts, rather than a single
+  blocking `std::net::TcpStream::connect()` call. A blocking connect has no `.await`
+  yield point, so `race()` (`src/io/mod.rs`) can never preempt it — a printer that's
+  off, on another subnet, or behind a silent packet-dropping firewall used to hang the
+  whole task for however long the underlying OS/lwIP connect took, silently breaking
+  the `connect_timeout_secs` guarantee `race_against_connect_timeout`
+  (`src/client/connect.rs`) documents. This mirrors `EspIdfTlsConnector::connect`'s
+  existing non-blocking-handshake pattern, applied one layer earlier, to the TCP dial
+  itself. `std::net::TcpStream::connect()`'s all-in-one API can't be used here since
+  the non-blocking flag must be set *before* `connect()` is called on a not-yet-connected
+  socket — hence going through `socket2::Socket` instead.
+
+  The socket stays non-blocking after the connection completes — see
+  `EspIdfTcpStream`'s doc comment for why `read()`/`write()` need that.
+
+  Does not bound its own retry loop by a timeout — bounding is the responsibility of
+  the *outer* `race_against_connect_timeout` in `ensure_mqtt()`/`ensure_ftps()`/
+  `ensure_camera()`, which can now actually preempt this future because it has real
+  `.await` points, matching the plain (non-connector-owned) design
+  `RawStreamFactory::dial` has on every other platform.
+
 #### Trait Implementations
 
 ##### `impl AsyncIo for EspIdfTcpStream`
@@ -153,6 +175,11 @@ with the FreeRTOS scheduler instead of blocking the task thread.
 
   Constructs a new timer backed by a dedicated ESP-IDF high-resolution timer service.
 
+  `EspIdfTcpStream::connect` and `EspIdfTlsConnector::connect` each allocate their own
+  instance rather than sharing one — verified that 10,000 sequential
+  allocate/drop cycles on both ESP32-C6 and ESP32-C3 hit zero failures, so the
+  `esp_timer` slot cap isn't a practical concern here; see `esp32-hw-probe/`.
+
 #### Trait Implementations
 
 ##### `impl TimerProvider for EspIdfTimer`
@@ -205,73 +232,61 @@ rather than satisfying it.
 - <span id="espidftlsconnector-new"></span>`fn new() -> Self`
 
   Creates a connector that skips server certificate verification.
-
   Requires `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y` in the consuming app's sdkconfig
-
   (a sub-option of `CONFIG_ESP_TLS_INSECURE`; both are off by default). No library call
-
   can enable it — ESP-IDF compiles the no-verification branch out otherwise, and
-
   `set_client_config` then fails the connection with `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
-
   Failing loudly there is deliberate: this crate no longer falls back to ESP-IDF's
-
   public-root CA bundle, which could never validate a self-signed printer certificate
-
   anyway (GitHub issue #62). Prefer [`Self::with_certs`] wherever the caller can supply
-
   the printer's CA — it needs no sdkconfig change and actually verifies the peer.
-
   The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
-
   bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
-
   `.with_connect_timeout(d)`.
 
 - <span id="espidftlsconnector-with-certs"></span>`fn with_certs(ca_certs: impl IntoIterator<Item = Vec<u8>>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self`
 
   Creates a connector that verifies the server certificate against one or more CA certs.
-
   The supplied CAs are the sole trust anchors: ESP-IDF's bundled public root CAs are
-
   explicitly disabled, so these bytes reach mbedTLS as `cacert_buf` rather than being
-
   silently overridden by the bundle (GitHub issue #62). Certificates are a runtime
-
   input — nothing is embedded in this crate.
+
+  **Takes many anchors, mirroring the tokio backend** (`build_verified_client_config`'s
+  `ca_certs: impl IntoIterator<..>`). Bambu is mid-PKI-rollover: a P1S chains to the
+  legacy `BBL CA` root while newer models chain through `BBL Device CA <model>-V2` to
+  `BBL CA2 RSA`/`BBL CA2 ECC`, so a caller covering the model range needs several
+  anchors at once and cannot pick one. See GitHub issue #145.
+
+  **Still DER in, despite the PEM bundle used internally.** DER is this crate's public
+  convention throughout; the certs are re-encoded once here into the NUL-terminated PEM
+  bundle that is the only form mbedTLS will parse as more than one certificate — see
+  `crate::io::der_certs_to_pem_bundle`. Passing PEM bytes in is still wrong and will
+  fail the handshake, now with the extra confusion of being base64'd a second time.
+
+  An empty `ca_certs` yields an anchor-less connector, behaving exactly like
+  [`Self::new`] rather than failing later inside the handshake.
+
+  `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
+  `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
 
 - <span id="espidftlsconnector-with-connect-timeout"></span>`fn with_connect_timeout(self, connect_timeout: core::time::Duration) -> Self`
 
   Overrides the default handshake deadline, which bounds how long the poll loop keeps
-
   retrying rather than how long any single attempt may take.
-
   The deadline is checked *between* iterations, so it cannot preempt a stall *inside*
-
   one: the `EspTls::negotiate` FFI call is not interruptible from this task once entered.
-
   `connect` pins `Config::timeout_ms = 0` so each call is a single handshake step, which
-
   keeps that window near-instant and gives this deadline ~`TLS_POLL_INTERVAL` granularity
-
   (GitHub issue #67) — but a call that blocks internally is still unbounded regardless of
-
   what is passed here, and the calling task is then lost with nothing logged (observed
-
   once on ESP32-P4, GitHub issue #66). Consumers running printer I/O on a dedicated task
-
   should subscribe it to the ESP-IDF Task Watchdog, which is the only layer that can
-
   recover from that; no in-crate timeout can, and this one does not claim to.
-
   Passing `Duration::ZERO` disables the
-
   deadline entirely, matching `set_command_timeout`'s "0 disables" convention
-
   and `client::connect::with_connect_timeout`'s precedent — otherwise the very
-
   first would-block poll would immediately exceed a zero-length budget.
-
   Non-consuming — chain onto `new()`/`with_certs()`.
 
 #### Trait Implementations
@@ -348,16 +363,26 @@ UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 
   Non-blocking send that reports transient lwIP buffer exhaustion as `TimedOut` rather than a terminal fault.
 
+  `bind` puts the socket in non-blocking mode, and under Wi-Fi load lwIP can momentarily
+  have no pbuf to hand this datagram. That surfaces as `ERR_MEM`/`ERR_BUF`, which lwIP's
+  `err_to_errno` table maps to `ENOMEM`/`ENOBUFS` (`lwip/src/api/err.c`) — *not* to
+  `EWOULDBLOCK`, which that table reserves for `ERR_TIMEOUT`/`ERR_WOULDBLOCK`. Both land in
+  `map_std_io_error`'s `_` arm as `SocketError::Other`, and `DiscoveryEngine::broadcast_search`
+  errors out when its multicast and broadcast sends both fail — which a single pbuf shortage
+  makes likely, since they go back to back. Discovery then aborted on a condition that would
+  have cleared on its own milliseconds later.
+
+  `TimedOut` is the right signal because `poll_next_device` already treats it as benign, so
+  the caller retries instead of giving up. `WouldBlock` is folded in for completeness: lwIP
+  is not expected to produce it for a UDP `sendto`, but a non-blocking socket returning it
+  means exactly the same "try again" as the buffer-exhaustion case.
+
 - <span id="espidfudpsocket-asyncudpsocket-recv-from"></span>`async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError>` — [`SocketError`](../index.md#socketerror)
 
   Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.
-
   `TokioUdpSocket::recv_from` achieves the same pacing via a 100ms timeout wrapping a
-
   genuinely-blocking OS call; this platform has no async socket-readiness primitive for an
-
   arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment for why), so pacing is applied explicitly
-
   here instead.
 
 ##### `impl BindableUdpSocket for EspIdfUdpSocket`

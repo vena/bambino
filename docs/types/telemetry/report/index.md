@@ -132,6 +132,10 @@ running a job with scheduled pauses — see issue #139.
 
   Returns the next pending pause — the point with the lowest `pause_index`.
 
+  Points with no `pause_index` are skipped rather than treated as index 0, which would make
+  a malformed entry masquerade as the next pause. Returns `None` when the list is absent,
+  empty, or entirely unindexed.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrintPauseList`
@@ -597,33 +601,56 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
 
+  Accepts `f64` because the wire sends both integers and floats depending on model.
+  Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
+  composite-packed: upper 16 bits = target, lower 16 bits = actual.
+
 - <span id="printertelemetry-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
 
   Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
+
+  Previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
+  pybambu-sourced heuristic. Both first-party clients (BambuStudio's
+  `DevPrintOptions.cpp:26`, OrcaSlicer identically) actually decode that bit as
+  `is_support_prompt_sound_detection`, unrelated to networking — confirmed wrong, not
+  merely disputed. Real wired-ethernet state comes from `print.net.conf` bit 0
+  (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
+  (not `None`) when `net`/`net.conf` haven't been observed yet, matching
+  `is_ethernet_active_via_wifi_signal()`'s existing no-signal-observed convention.
 
 - <span id="printertelemetry-is-ethernet-active-via-wifi-signal"></span>`fn is_ethernet_active_via_wifi_signal(&self) -> bool`
 
   Evaluates whether the physical printer is connected via wired Ethernet using the `wifi_signal` sentinel value [REF-NET-PORTS], as a fallback for firmware that doesn't populate `print.net.conf`.
 
+  A printer with no wifi signal to report (i.e. running wired-only) sends a fixed
+  `wifi_signal` of `"-90dBm"`. Prefer `is_ethernet_active()` — this heuristic is kept
+  only as a fallback for firmware that doesn't send `net.conf`.
+
 - <span id="printertelemetry-is-220v-power"></span>`fn is_220v_power(&self) -> bool`
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
 
+  Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
+  temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
+  official spec sheet.
+
 - <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](#sdcardstate)
 
   Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
-
   [`SdcardState`](#sdcardstate)'s doc comment for verification sources. Returns `None` before any
-
   telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
 
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
   Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
 
+  Used by X1 series models where the door sensor is wired to the home_flag bitmask.
+
 - <span id="printertelemetry-is-door-open-from-stat"></span>`fn is_door_open_from_stat(&self) -> bool`
 
   Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
+
+  Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
 
 #### Trait Implementations
 

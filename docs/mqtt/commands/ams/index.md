@@ -435,6 +435,28 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
   Creates a request payload to update slot parameters.
 
+  **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
+  For standard physical slots, `ams_id` matches the expansion unit index (0-3).
+  For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
+  and `tray_id` must strictly be set to `254` to prevent command rejection.
+
+  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
+  addressing differs by command family — this rule is *not* the same one used by
+  `extrusion_cali_sel` (K-profile binding, see
+  [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+  * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
+    `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
+    (`ams_id: 255`) require `tray_id: 254` (confirmed against
+    `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
+    VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
+    `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
+  * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
+    Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
+    `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
+    Ext-R on IDEX machines mis-routes the pressure advance profile to the left
+    carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    uncalibrated.
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsFilamentSettingRequest`

@@ -49,6 +49,18 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
   Executes a secure local network connection handshake and subscription loop with the printer.
 
+  **Authentication Note:** If the printer's physical broker rejects credentials due to
+  an invalid access code, this function returns `Error::AccessDenied`.
+
+  **Unbounded by design — callers must supply their own deadline.** The CONNECT/CONNACK
+  and SUBSCRIBE/SUBACK writes and reads inside this function have no internal timeout
+  (`DummyTimer` is used throughout, so a stalled peer hangs this call forever). This is
+  safe for `PrinterClient::ensure_mqtt()`, the sole production call site, because it
+  wraps the *entire* dial+connect sequence in `race_against_connect_timeout`. A caller
+  invoking `MqttClient::connect()` directly (bypassing `PrinterClient`) gets no such
+  bound and must wrap this call in its own timeout (e.g. `tokio::time::timeout`) against
+  a peer that stalls before CONNACK/SUBACK.
+
 - <span id="mqttclient-serial"></span>`fn serial(&self) -> &str`
 
   Returns the serial number this client authenticated with (`connect()`'s `serial` argument).
@@ -57,21 +69,62 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
   Submits a serialized JSON command payload to the printer's request channel.
 
+  **In-flight Bounds Verification:**
+  If the unacknowledged queue size equals or exceeds `MQTT_IN_FLIGHT_LIMIT`, this function
+  returns [`Error::Backpressure`] without sending, to protect memory space and prevent
+  packet drift [REF-MQTT-CONN]. A saturated queue is not a timeout — retrying immediately
+  will not clear it; drain it by servicing PUBACKs (`poll_wire`) or let
+  `tick_zombie_check` age the entries out.
+
+  Payloads larger than `MQTT_MAX_PAYLOAD_BYTES` are rejected with
+  [`Error::ProtocolViolation`] rather than encoded, mirroring the read path's own cap.
+
+  `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
+  `PrinterClient` callers get the new stalled-write protection via
+  `publish_command_with_timer()` instead, since they have a real `Timer` available.
+
 - <span id="mqttclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](client/index.md#mqttmessage), [`Error`](../error/index.md#error)
 
   Returns the next MQTT message, draining any buffered messages first.
+
+  Messages are buffered when request-response methods (e.g. `get_version()`) read
+  non-matching messages off the wire while waiting for a specific response. This
+  method drains those buffered messages in FIFO order before reading new packets
+  from the wire.
+
+  Handles MQTT protocol frames transparently: sends `PUBACK` for incoming QoS 1
+  publishes, clears matching packet IDs from the in-flight tracker on `PUBACK`,
+  and acknowledges `PINGRESP` — only application-level `PUBLISH` payloads are
+  returned.
 
 - <span id="mqttclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
 
+  `DummyTimer` makes the underlying write unbounded here, mirroring `publish_command()`.
+  `PrinterClient` callers get stalled-write protection via `send_ping_with_timer()`
+  instead.
+
 - <span id="mqttclient-is-poisoned"></span>`fn is_poisoned(&self) -> bool`
 
   Returns true once a write has failed and left the stream possibly desynced.
 
+  A poisoned client is permanently unusable: every later `publish_command`, `send_ping`,
+  and automatic PUBACK returns `ConnectionAborted` forever, because a failed write may have
+  put a partial frame on the wire and, unlike a read, has no resumable progress state.
+  Without this accessor a retry loop could not tell that error apart from a transient one
+  and would spin against a client that can never recover; the correct response is to drop
+  the connection and reconnect (`PrinterClient::disconnect_mqtt()`).
+
 - <span id="mqttclient-tick-zombie-check"></span>`fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Platform-agnostic timer tick update.
+
+  Evaluates two independent liveness conditions:
+  1. **Write zombie**: A published command has gone unanswered for 10+ seconds
+     [REF-MQTT-ZOMBIE].
+  2. **Connection staleness**: No packets of any kind received for 60+ seconds,
+     indicating a silently dropped connection — independent of (1) [REF-MQTT-CONN].
 
 - <span id="mqttclient-in-flight-count"></span>`fn in_flight_count(&self) -> usize`
 
@@ -276,6 +329,28 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
   Creates a request payload to update slot parameters.
 
+  **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
+  For standard physical slots, `ams_id` matches the expansion unit index (0-3).
+  For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
+  and `tray_id` must strictly be set to `254` to prevent command rejection.
+
+  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
+  addressing differs by command family — this rule is *not* the same one used by
+  `extrusion_cali_sel` (K-profile binding, see
+  [`crate::diagnostics::ExtrusionCaliSelRequest::new`]):
+  * `ams_filament_setting` (this command) — Single-Nozzle Platforms: `ams_id: 255` /
+    `tray_id: 254`. Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R
+    (`ams_id: 255`) require `tray_id: 254` (confirmed against
+    `command_ams_filament_settings`, `DeviceManager.cpp:1667-1693` — `tag_ams_id ==
+    VIRTUAL_TRAY_MAIN_ID(255) || VIRTUAL_TRAY_DEPUTY_ID(254)` always maps to
+    `tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID(254)`, never `0`).
+  * `extrusion_cali_sel` — Single-Nozzle Platforms: `ams_id: 254` / `tray_id: 254`.
+    Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`; Ext-R requires
+    `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong address for
+    Ext-R on IDEX machines mis-routes the pressure advance profile to the left
+    carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    uncalibrated.
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsFilamentSettingRequest`
@@ -455,6 +530,9 @@ Sends a raw G-code line to the printer for immediate execution.
 - <span id="gcoderequest-new"></span>`fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
 
   Creates a request envelope wrapping a raw G-code payload.
+
+  **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
+  to ensure the physical controller's stream parser identifies the end-of-command boundary.
 
 #### Trait Implementations
 
@@ -705,6 +783,18 @@ with named fields and sensible defaults for calibration flags.
 
   Enables AMS and sets the flat slot-mapping array (`ams_mapping`).
 
+  Values outside the documented flat channel space (`0..=15` standard AMS, `128..=135`
+  AMS-HT, or `-1` unmapped) are folded to `-1` with a `log::warn!` — firmware rejects
+  out-of-range values (254/255 in particular) with a visible error (`0700_8012`/
+  `07FF_8012`, `reference/05_materials_ams.md:151`). The `with_ams_mapping2`-derived path
+  already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
+  (issue #56).
+
+  This is a convenience, not the enforcement point: `ams_mapping` is a public field, so
+  `ProjectFileRequest::from_config` re-runs the same sanitization at serialization time
+  (issue #120). Bypassing this builder cannot produce an out-of-range flat channel on the
+  wire.
+
 - <span id="printjobconfig-with-ams-mapping2"></span>`fn with_ams_mapping2(self, mapping2: Vec<AmsMapping2Entry>) -> Self` — [`AmsMapping2Entry`](../ams/mapping/index.md#amsmapping2entry)
 
   Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
@@ -720,9 +810,7 @@ with named fields and sensible defaults for calibration flags.
 - <span id="printjobconfig-vibration-compensation"></span>`fn vibration_compensation(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
   Enables or disables vibration compensation calibration for this job. No tri-state
-
   companion field exists on the wire for this one, so `CalibrationMode::Auto` serializes
-
   identically to `Off`.
 
 - <span id="printjobconfig-timelapse"></span>`fn timelapse(self, enabled: bool) -> Self`
@@ -736,6 +824,11 @@ with named fields and sensible defaults for calibration flags.
 - <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self`
 
   Supplies the tool-changer rack routing for this job (H2C only).
+
+  `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
+  `rack_nozzle_id` is the physical ID of the live rack position (`16..=21`). Both are needed
+  — see [`resolve_rack_nozzle_mapping`](commands/print_job/index.md#resolve-rack-nozzle-mapping) for how they combine and when the resulting
+  `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
 
 - <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](commands/print_job/index.md#calibrationmode)
 
@@ -808,6 +901,18 @@ Submits a `.3mf` print job from the SD card for execution.
 - <span id="projectfilerequest-from-config"></span>`fn from_config(config: &PrintJobConfig, sequence_id: impl Into<ClampedTaskId>, model: PrinterModel) -> Self` — [`PrintJobConfig`](commands/print_job/index.md#printjobconfig), [`ClampedTaskId`](commands/index.md#clampedtaskid), [`PrinterModel`](../models/index.md#printermodel)
 
   Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
+
+  `nozzle_offset_cali` is gated on the model's `supports_nozzle_offset_calibration()`
+  quirk as a hard ceiling, not a default: it is enabled automatically on IDEX and
+  tool-changer platforms when the caller left it `None`, and forced off on every
+  single-nozzle model even when the caller explicitly asked for it — the printer has no
+  second carriage to calibrate.
+
+  **Polymorphic Warning [REF-MQTT-LIFECYCLE]:**
+  `use_ams` is serialized strictly as a JSON boolean. On dual-nozzle IDEX systems,
+  serializing this field as an integer (e.g., `1` / `0`) causes the printer's JSON engine
+  to treat the value as the physical carriage index (Target nozzle 1) instead of material
+  routing parameters.
 
 #### Trait Implementations
 

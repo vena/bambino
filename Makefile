@@ -40,31 +40,29 @@ install-hooks:
 # hook (post-commit can't include its own output in the triggering commit, and
 # every commit would pay the rebuild cost regardless of relevance).
 #
-# scripts/strip-doc-noise.py deletes blanket-impl noise cargo-docs-md doesn't
-# filter on its own (AsTaggedExplicit/AsTaggedImplicit/StructuralPartialEq/
-# StructuralEq showing up on every type) — see that script's docstring.
+# scripts/postprocess-docs.py runs three passes over the merged output: it
+# deletes blanket-impl noise cargo-docs-md doesn't filter on its own, undoes
+# the paragraph split --full-method-docs introduces between every source line
+# of a doc comment, and fills in trait *declaration* method bodies from the
+# rustdoc JSON (--full-method-docs only reaches methods inside impl blocks) --
+# see that script's docstring. Both JSON files are passed because each doc
+# pass sees a different cfg-gated slice of the crate.
 #
-# WHAT ENDS UP IN docs/: item signatures, links, and type structure — NOT the
-# prose bodies of /// doc comments. Verified 2026-08-23: rewriting several
-# paragraphs of TlsConnector::peer_chain_der's doc comment produced an empty
-# `git status`, while the commit that added the method itself changed 42 lines
-# across four docs/io/* files. So a regen is only worth running when the API
-# *shape* changes (items added/removed/renamed, signatures changed); a
-# prose-only doc-comment edit provably cannot change the output and does not
-# need this multi-minute Docker pass. Losing the prose is a real limitation of
-# the current pipeline rather than a deliberate choice — see issue #143.
+# WHAT ENDS UP IN docs/: item signatures, links, type structure, and the prose
+# bodies of /// doc comments. The prose was missing until #143; a doc-comment
+# edit now changes the output, so regen after prose edits too, not only after
+# the API *shape* changes.
 docs:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: docker unreachable — the esp-idf doc pass (scripts/doc-esp-idf.sh) needs it. A host-only regen silently DELETES docs/io/esp_idf/*: the esp-idf pass is what creates those files, and this target starts with 'rm -rf docs'. If that has already happened, revert docs/ rather than committing it. Start Docker and retry." >&2; exit 1; }
 	rm -rf docs
 	RUSTC_BOOTSTRAP=1 cargo rustdoc --features embassy --lib -- -Z unstable-options --output-format json
-	cargo docs-md --path target/doc/bambino.json -o docs --format nested
+	cargo docs-md --path target/doc/bambino.json -o docs --format nested --full-method-docs
 	scripts/doc-esp-idf.sh $(CHIP)
 	rm -rf target/doc-md-esp-idf
-	cargo docs-md --path target/esp-idf-doc-$(CHIP).json -o target/doc-md-esp-idf --format nested
+	cargo docs-md --path target/esp-idf-doc-$(CHIP).json -o target/doc-md-esp-idf --format nested --full-method-docs
 	rsync -a --ignore-existing target/doc-md-esp-idf/ docs/
 	rm -rf target/doc-md-esp-idf
 	rm -rf host-target
-	scripts/strip-doc-noise.py docs
+	scripts/postprocess-docs.py docs target/doc/bambino.json target/esp-idf-doc-$(CHIP).json
 	@echo
-	@echo "make docs: regenerated signatures/links only — /// prose bodies are not emitted (issue #143)."
-	@git diff --quiet -- docs && echo "make docs: no changes to docs/ — expected if this edit only touched doc-comment prose." || true
+	@git diff --quiet -- docs && echo "make docs: no changes to docs/." || true

@@ -71,12 +71,13 @@ Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freez
 - <span id="rtptimestampcorrector-new"></span>`fn new(embedded_rtp: u32) -> Self`
 
   Initializes the corrector by capturing the stream's first embedded RTP timestamp as the base coordinate for all subsequent corrections.
-
   This preserves alignment with the SDP stream definition.
 
 - <span id="rtptimestampcorrector-correct"></span>`fn correct(&self, elapsed_secs: f64) -> u32`
 
   Computes the corrected RTP timestamp from host-observed elapsed time.
+
+  * `elapsed_secs`: Total accumulated seconds since the first stream packet arrived.
 
 #### Trait Implementations
 

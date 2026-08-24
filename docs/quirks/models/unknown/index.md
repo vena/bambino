@@ -50,9 +50,7 @@ Conservative quirks for an unrecognized printer model — see the module docs.
 - <span id="unknownquirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, _telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
   Always false — `home_flag` bit assignments are only known for recognized models, so
-
   reading a door state out of an unrecognized machine's flags would be fabricating a
-
   sensor reading rather than reporting one.
 
 - <span id="unknownquirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
@@ -64,7 +62,6 @@ Conservative quirks for an unrecognized printer model — see the module docs.
 - <span id="unknownquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
 
   Assumes the bug is present — treating a real `stg_cur` idle report as suspect costs a
-
   redundant state check, while missing the bug reports a running print as finished.
 
 - <span id="unknownquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
@@ -76,9 +73,7 @@ Conservative quirks for an unrecognized printer model — see the module docs.
 - <span id="unknownquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
   True so axis-constrained `G28` is rejected — a bed-slinger tolerates the homing variants
-
   a bed-on-Z machine crashes on, so assuming bed-on-Z is the direction that cannot break
-
   hardware.
 
 - <span id="unknownquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
@@ -94,7 +89,6 @@ Conservative quirks for an unrecognized printer model — see the module docs.
 - <span id="unknownquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
   `None` — an unrecognized machine gets no active chamber heater, so `M141` is refused
-
   rather than sent to a printer that may have no heater to receive it.
 
 

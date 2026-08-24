@@ -100,11 +100,8 @@ walker to `x509-parser`'s parsed fields.
 - <span id="cnfallbackserververifier-new"></span>`fn new(ca_certs: impl IntoIterator<Item = CertificateDer<'static>>) -> Result<Self, RustlsError>`
 
   Builds the verifier from a set of trusted root certs. Fails if `ca_certs` is empty or
-
   any supplied cert fails to parse — there is nothing to validate a chain against
-
   otherwise, so failing fast at config-build time (rather than silently succeeding and
-
   only failing later at handshake time) is deliberate.
 
 #### Trait Implementations
@@ -204,7 +201,6 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 - <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
 
   rustls retains the peer chain on the connection after the handshake, so this is a
-
   straight copy of what the server sent, in wire order (leaf first).
 
 ##### `impl<T: ::tokio::io::AsyncWrite + Unpin> Write for TokioIo<T>`
@@ -314,7 +310,6 @@ TLS Secure connector wrapping Tokio-Rustls.
 - <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
 
   rustls retains the peer chain on the connection after the handshake, so this is a
-
   straight copy of what the server sent, in wire order (leaf first).
 
 ### `TokioUdpSocket`
@@ -336,6 +331,12 @@ UDP socket interface wrapping a native Tokio UdpSocket.
 - <span id="tokioudpsocket-asyncudpsocket-recv-from"></span>`async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError>` — [`SocketError`](../index.md#socketerror)
 
   Asynchronously reads an incoming datagram, bounding the wait block with a timeout.
+
+  **Why this is critical:**
+  By default, `tokio::net::UdpSocket::recv_from` blocks indefinitely if no packet is available.
+  During sweeps where some network environments drop unicast discovery replies, this blocks
+  execution threads forever. Wrapping the call in a 100ms timeout enables standard polling
+  loops to proceed and exit gracefully.
 
 ##### `impl BindableUdpSocket for TokioUdpSocket`
 

@@ -57,17 +57,42 @@ to fully close before redialing.
 
   Instantiates a camera parser wrapper surrounding an active secure stream socket.
 
+  The accepted frame size defaults to `CAMERA_FRAME_MAX_SIZE` (10MB). Use
+  [`Self::with_max_frame_size`] to lower it — useful on `no_std`/Embassy targets, where a
+  10MB transient allocation (see [`Self::read_next_frame`]) can exceed the entire SRAM
+  budget and trigger an uncatchable `alloc_error_handler` abort rather than a recoverable
+  `Result`.
+
 - <span id="binarycamerastream-with-max-frame-size"></span>`fn with_max_frame_size(self, max: usize) -> Self`
 
   Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
+
+  Consuming builder, matching the `PrinterClient::with_mqtt_port`/`with_ftps_port`
+  convention (`src/client/connect.rs`). Embedded callers should clamp this to a value that
+  fits their actual JPEG resolution and buffer budget (e.g. 64-256KB) rather than relying
+  on the desktop-sized default.
 
 - <span id="binarycamerastream-authenticate"></span>`async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
 
   Transmits the 80-byte authentication handshake to activate the continuous frame-push process.
 
+  Per [REF-CAM-BINARY], this handshake protocol has no ack byte: a successful return only
+  means the packet was written and flushed to the socket, **not** that the printer accepted
+  the access code. If the code is wrong, the printer's real-world response (closing the
+  socket, or simply never sending a frame) only surfaces later, on the *next*
+  [`Self::read_next_frame`] call, as `Error::Network(SocketError::ConnectionReset)`
+  — the same error variant a mid-stream network blip would produce. Callers that need to
+  distinguish "wrong access code" from "transient network hiccup" cannot do so from this
+  API alone.
+
 - <span id="binarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Asynchronously extracts the next complete frame from the stream.
+
+  Wholesale-replaces the user-supplied `Vec<u8>` with the decoded frame each call
+  (`*frame_buf = payload`) — no buffer reuse. Delegates to `read_next_frame_with_timer` under
+  [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
+  every existing caller not going through `PrinterClient`.
 
 #### Trait Implementations
 

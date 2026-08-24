@@ -272,7 +272,6 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 - <span id="printspeed-from-level"></span>`fn from_level(level: u8) -> Option<Self>`
 
   Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
-
   Returns `None` for an out-of-range level.
 
 #### Trait Implementations

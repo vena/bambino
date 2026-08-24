@@ -80,6 +80,9 @@ Sends a raw G-code line to the printer for immediate execution.
 
   Creates a request envelope wrapping a raw G-code payload.
 
+  **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
+  to ensure the physical controller's stream parser identifies the end-of-command boundary.
+
 #### Trait Implementations
 
 ##### `impl Clone for GCodeRequest`

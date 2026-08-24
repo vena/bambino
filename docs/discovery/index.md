@@ -164,9 +164,19 @@ Asynchronous Discovery Engine providing search orchestration and passive monitor
 
   Dispatches active search queries to trigger local printer reports.
 
+  **Dual Multicast/Broadcast Fallback:**
+  Sends the query to both standard SSDP multicast (`239.255.255.250`) and global subnet
+  broadcast (`255.255.255.255`). This ensures that even if local routers filter IGMP multicast,
+  or if OS network interface routing routes multicast to inactive adapters, the query is
+  successfully broadcast across all active local interfaces.
+
 - <span id="discoveryengine-poll-next-device"></span>`async fn poll_next_device(&self, buf: &mut [u8]) -> Result<Option<SsdpDevice>, Error>` — [`SsdpDevice`](parser/index.md#ssdpdevice), [`Error`](../error/index.md#error)
 
   Listens on the bound socket interface and processes the next incoming SSDP packet.
+
+  Returns `Ok(Some(SsdpDevice))` if a valid printer signature was parsed,
+  `Ok(None)` if a timeout occurred or a non-printer packet was received,
+  and `Err(Error)` for terminal network socket faults.
 
 #### Trait Implementations
 

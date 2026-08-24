@@ -195,6 +195,17 @@ Enumeration of possible physical feed locations for loaded spools.
 
   Computes the flat channel integer value used in standard `ams_mapping` arrays.
 
+  **External Spool Flat-Mapping Restrictions [REF-AMS-MAP]:**
+  The printer's motion controller rejects absolute external virtual spool IDs (such as
+  254 or 255) if passed inside the flat `ams_mapping` array, throwing a `0700_8012`
+  "Failed to get AMS mapping table" error. Virtual external spools and unused slots
+  must strictly be mapped to the `-1` (unmapped) sentinel in the flat array.
+
+  `StandardAms`/`AmsHt` fields are public `u8`s a caller can hand-build with an
+  out-of-range `ams_id`/`slot_id` (unlike `parser.rs`'s inbound-side bounds-checking on
+  wire data) — validated here the same way, falling back to the `-1` sentinel rather than
+  producing a bogus flat channel value.
+
 - <span id="materialsource-to-mapping2-entry"></span>`fn to_mapping2_entry(&self) -> AmsMapping2Entry` — [`AmsMapping2Entry`](#amsmapping2entry)
 
   Converts this source location into a structured `ams_mapping2` JSON entry.

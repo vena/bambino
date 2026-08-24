@@ -59,9 +59,9 @@ Zero open `P-critical`, zero open `P-high`. `P-low` doesn't block. (This bar its
 
 ## Docs regen
 
-Before ending a session that closed one or more issues, check whether any changed the **shape of the public API** — items added, removed, or renamed, or signatures changed. If so, run `make docs` and commit the result in its own commit, not folded into a fix commit (same batching-cost reasoning as above).
+Before ending a session that closed one or more issues, check whether any changed the **shape of the public API** — items added, removed, or renamed, or signatures changed — **or the prose inside a `///` block**. If so, run `make docs` and commit the result in its own commit, not folded into a fix commit (same batching-cost reasoning as above).
 
-Editing the prose inside an existing `///` block is *not* a trigger: `make docs` emits signatures, links, and type structure, not doc-comment bodies, so a prose-only edit provably produces an empty diff and the multi-minute Docker pass buys nothing. The Makefile's `docs` target documents this at the point of use and the run prints it back at you; issue #143 tracks making the pipeline actually carry the prose, which would change this rule.
+Doc-comment prose counts as of #143: `make docs` now emits `///` bodies, so a prose-only edit does change `docs/` and skipping the regen leaves the generated reference stale. Before that fix the pipeline emitted signatures and type structure only, and this rule told sessions to skip the multi-minute Docker pass for prose edits — it no longer does.
 
 ## Relationship to a future `CHANGELOG.md`
 

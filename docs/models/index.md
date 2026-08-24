@@ -107,6 +107,9 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
   Returns the [`ModelQuirks`](../quirks/index.md#modelquirks) strategy for this model variant.
 
+  This is the single dispatch point — all model-specific behavior goes through
+  the trait object returned here, rather than match-blocks scattered across the crate.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterModel`

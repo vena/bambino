@@ -124,9 +124,7 @@ yourself.
 - <span id="extrusioncaligetrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
 
   Builds an `extrusion_cali_get` request.
-
   Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
-
   documented above.
 
 #### Trait Implementations
@@ -306,8 +304,21 @@ database mislinking on the motion board.
 - <span id="extrusioncaliselrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
 
   Creates a request payload to bind a stored K-profile calibration entry to an AMS
-
   material slot.
+
+  **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
+  addressing differs by command family — this rule is *not* the same one used by
+  `ams_filament_setting` (filament configuration, see
+  [`crate::mqtt::AmsFilamentSettingRequest::new`]):
+  * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
+    `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
+    Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong
+    address for Ext-R on IDEX machines mis-routes the pressure advance profile to
+    the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    uncalibrated.
+  * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
+    Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
+    `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
 
 #### Trait Implementations
 
@@ -384,6 +395,9 @@ JSON request wrapper to create or overwrite calibration profile allocations.
 - <span id="extrusioncalisetrequest-new"></span>`fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error>` — [`KProfileEntry`](#kprofileentry), [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid), [`Error`](../../error/index.md#error)
 
   Builds a secure write-transaction payload targeting physical EEPROM slots.
+
+  Verifies that all target profiles carry valid setting identifiers to protect local
+  database health. Supports multi-profile writes for IDEX platforms.
 
 #### Trait Implementations
 

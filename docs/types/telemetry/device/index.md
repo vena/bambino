@@ -523,23 +523,18 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - <span id="extruderinfo-current-ams-slot"></span>`fn current_ams_slot(&self) -> Option<(u8, u8)>`
 
   Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
-
   resolving which physical tray is feeding this extruder right now, confirmed
-
   against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
-
   decodes `snow` directly with no extruder-map inversion needed.
 
 - <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
 
   Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
-
   [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
 
 - <span id="extruderinfo-target-ams-slot"></span>`fn target_ams_slot(&self) -> Option<(u8, u8)>`
 
   Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
-
   [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
 
 #### Trait Implementations
@@ -715,6 +710,18 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - <span id="nozzleinfo-is-rack-stored"></span>`fn is_rack_stored(&self) -> bool`
 
   Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
+
+  Confirmed directly against BambuStudio's source
+  (`DevNozzleSystem.cpp:769`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
+  nozzles are appended to the *same* `nozzle.info` array as installed ones, distinguished
+  by `DevUtil::get_hex_bits(id, 1) == 1`. `get_hex_bits(num, pos, base=10)` extracts the
+  4-bit **nibble** at `pos*4` (`(num >> (pos*4)) & 0xF`), not a single bit — so this
+  checks the *high* nibble (bits 4–7) of `id`, matching `reference/04_toolhead_thermal_
+  motion.md`'s independently-documented H2C rack range of ids `16`-`21` (all of which
+  have high nibble `1`; the low nibble `id & 0xF` is the rack slot index). Reachable on
+  real hardware: H2C ("2 Slots, up to 7 active nozzles" per `MODEL_MATRIX.csv`) is a
+  currently-modeled printer with existing rack-aware code elsewhere
+  (`src/client/thermal.rs`'s H2C nozzle-ID validation, `src/quirks/mod.rs`).
 
 #### Trait Implementations
 

@@ -71,11 +71,8 @@ Quirks for the P1P CoreXY platform.
 - <span id="p1pquirks-modelquirks-supports-auxiliary-left-fan"></span>`fn supports_auxiliary_left_fan(&self) -> bool`
 
   `MODEL_MATRIX.csv`'s Aux Part Cooling Fan row lists P1P as `Optional`
-
   (not guaranteed present) vs. P1S's `Yes` — the shared `P1Quirks` struct this
-
   split from couldn't distinguish the two and unconditionally reported `true`,
-
   which would over-report support on a P1P without the physical fan installed.
 
 ### `P1SQuirks`
@@ -129,11 +126,8 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 - <span id="p1squirks-modelquirks-supports-auxiliary-left-fan"></span>`fn supports_auxiliary_left_fan(&self) -> bool`
 
   `MODEL_MATRIX.csv`'s Aux Part Cooling Fan row lists P1P as `Optional`
-
   (not guaranteed present) vs. P1S's `Yes` — the shared `P1Quirks` struct this
-
   split from couldn't distinguish the two and unconditionally reported `true`,
-
   which would over-report support on a P1P without the physical fan installed.
 
 

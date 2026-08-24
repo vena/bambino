@@ -36,14 +36,20 @@ Quirks for the P2S CoreXY platform.
 - <span id="p2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
   P2S firmware `01.02.00.00`'s embedded vsFTPd can't process TLS 1.3's asynchronous session-ticket model on the FTPS data channel — transfers truncate mid-stream with `426 "Failure reading network stream"`.
-
   This is a firmware bug, not a real TLS-1.3 incompatibility: independently confirmed by the
-
   `bambuddy` project (reporter `@iitazz`, upstream issue #1401), which hit the identical symptom
-
   only after its own client started defaulting to TLS 1.3. See [REF-FTPS-CONN] in
-
   `reference/02_ftps.md` §2.1.
+
+  The cap narrows the race, it doesn't close it: `bambuddy`'s own
+  follow-up (issue #1417) found P2S can still return a transient `426` on
+  the final post-upload response even under TLS 1.2 — the data-channel
+  close still occasionally races the `226` confirmation, just later and
+  less often than the pre-cap mid-stream truncation. What actually closes
+  it is verifying the transfer via `SIZE` regardless of which reply code
+  came back, which `FtpsClient::upload_file` already does
+  unconditionally (see its doc comment in `src/ftps/client.rs`) — this
+  quirk alone would not have been a complete fix.
 
 - <span id="p2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
@@ -84,9 +90,7 @@ Quirks for the P2S CoreXY platform.
 - <span id="p2quirks-modelquirks-supports-vibration-compensation"></span>`fn supports_vibration_compensation(&self) -> bool`
 
   P2S does not run vibration compensation the way the X1/P1 series does, so the flag is
-
   forced off. Rests on bambuddy `be18ebb3` alone and is unverified on hardware here — see
-
   [`crate::quirks::PrinterQuirks::supports_vibration_compensation`] and issue #133.
 
 - <span id="p2quirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`

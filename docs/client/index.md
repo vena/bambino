@@ -187,53 +187,159 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
+  * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or `254`/`255`
+    for external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
+  * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
+    load, or `255` to unload/retract (see `ams_change_filament` examples in
+    `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
+  * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
+
+  The wire's `target` field is derived internally rather than caller-supplied —
+  confirmed against BambuStudio's `command_ams_change_filament`
+  (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
+  any AMS-HT/external-spool unit (`ams_id >= 16`), or the flat global tray ID
+  (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
+  match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
+  class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
+  `ams_id: 0`, the sole worked example in the reference doc.
+
 - <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
+
+  * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
+    `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`); anything else is treated as
+    an AMS 2 Pro / standard-AMS drying unit.
+  * `temp`: Drying temperature in degrees Celsius. Clamped to this AMS unit's
+    documented ceiling — this is a property of the *attached AMS unit*, not the host
+    printer model: AMS-HT's built-in heater is rated to 85°C, AMS 2 Pro's to 65°C
+    (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
+    `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
+    variation is documented, so this does not go through `ModelQuirks`).
+  * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) —
+    the wire field is `duration` in hours, not the old `dry_time` in minutes. No
+    documented maximum duration was found to validate against.
+  * `humidity`: Target humidity (`0` = firmware default / no target).
+  * `rotate_tray`: Whether to rotate trays during the cycle.
+  * `cooling_temp`: Cooling temperature applied after the drying cycle completes.
+  * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
+  * `filament`: Filament type string (e.g., "PA-CF").
+
+  Returns `Error::ModelMismatch` on hosts where `ModelQuirks::supports_ams_remote_drying()`
+  is `false` (P1P/P1S) — the firmware acks this command `result: success` and silently
+  discards it rather than actually driving the AMS heater; see `[REF-AMS-DRYER]`.
 
 - <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
 
+  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
+  every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
+
 - <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
+
+  * `ams_id`: AMS unit index (`0..=3`) or AMS-HT unit bus ID (`128..=135`). Only
+    documented against a physical bus unit (`reference/03_mqtt_telemetry.md`
+    `ams_get_rfid` example) — external spools have no RFID reader node, so no
+    external-spool sentinel value applies here.
+  * `slot_id`: Slot within the AMS (`0..=3`).
 
 - <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
 
+  **IDEX External-Spool Addressing Cheat-Sheet:** this command (`extrusion_cali_sel`)
+  uses different `ams_id`/`tray_id` external-spool addressing than
+  `ams_filament_setting` (filament configuration) — do not reuse one rule for both:
+  * `extrusion_cali_sel` (this command) — Single-Nozzle Platforms: `ams_id: 254` /
+    `tray_id: 254`. Dual-Nozzle IDEX: Ext-L requires `ams_id: 254` / `tray_id: 254`;
+    Ext-R requires `ams_id: 255` / `tray_id: 255`. **Warning:** targeting the wrong
+    address for Ext-R on IDEX machines mis-routes the pressure advance profile to
+    the left carriage (Ext-L) EEPROM, leaving the primary right carriage completely
+    uncalibrated.
+  * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
+    Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
+    `tray_id: 254`.
+
+  **Validation note:** the cheat-sheet above documents only the *external-spool* case.
+  `reference/05_materials_ams.md` §5.3's own primary `extrusion_cali_sel` example binds a
+  perfectly ordinary AMS slot (`"ams_id": 0, "tray_id": 1`) — `tray_id` there is the
+  *global* tray ID (the same `(ams_id * 4) + slot_id` / `128..=135` AMS-HT composite the
+  flat `ams_mapping` array uses, per §5.3's "Hardware Channel Identifiers"), not a
+  per-unit slot index. The validation below therefore accepts the full documented
+  address space — standard AMS units, AMS-HT units, and the external-spool sentinels —
+  not just the two cheat-sheet pairs; restricting to only `(254,254)`/`(255,255)` (as an
+  earlier draft of this check assumed) would incorrectly reject this exact primary example.
+
 - <span id="superprinterclient-get-version"></span>`async fn get_version(&mut self) -> Result<VersionInfo, Error>` — [`VersionInfo`](../types/version/index.md#versioninfo), [`Error`](../error/index.md#error)
 
   Queries the printer's expansion bus version database and returns typed module info.
+
+  Sends a `get_version` command and waits for the response, buffering any
+  telemetry messages that arrive in the interim. Wrap in a platform-specific
+  timeout if you need a shorter deadline than `command_timeout_secs`.
 
 - <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
 
   Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
 
+  Automatically sends a priming request on the first call after connection, because the
+  firmware silently ignores the initial `extrusion_cali_get` command. Use
+  `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
+
 - <span id="superprinterclient-set-k-profile-primed"></span>`fn set_k_profile_primed(&mut self, primed: bool)`
 
   Controls whether `get_k_profiles()` sends an automatic priming request.
+
+  Set to `true` to skip the firmware priming quirk — useful if you handle priming
+  yourself or target firmware that does not require it.
 
 - <span id="superprinterclient-attach-camera"></span>`fn attach_camera(&mut self, camera: BinaryCameraStream<<CameraTls as >::Stream>)` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector)
 
   Injects a pre-connected [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream) directly.
 
+  Use this for test mocks or Embassy where the caller manages the camera
+  connection. For lazy connection, use [`.with_camera()`](Self::with_camera).
+
 - <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BinaryCameraStream<<CameraTls as >::Stream>, Error>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), auto-connecting if needed.
+
+  Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
+  [`.attach_camera()`](Self::attach_camera). Returns `Error::ProtocolViolation`
+  immediately for RTSPS models — see `ensure_camera()`'s doc
+  comment.
 
 - <span id="superprinterclient-read-camera-frame"></span>`async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Reads the next camera frame, auto-connecting (and authenticating) if needed.
 
+  Bounds the read against `self.timer` (see
+  `BinaryCameraStream::read_next_frame_with_timer`), mirroring
+  [`poll_telemetry()`](Self::poll_telemetry)'s relationship to
+  [`.mqtt()`](Self::mqtt).
+
 - <span id="superprinterclient-disconnect-camera"></span>`async fn disconnect_camera(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Disconnects the camera session, if one exists, and clears it from the client.
 
+  Once `camera_config` is consumed by `ensure_camera()`, a dead
+  stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
+  stuck `Some(...)` forever, since `ensure_camera()`'s `is_some()` short-circuit would
+  keep handing back the same broken stream. There is no protocol-level teardown on
+  `BinaryCameraStream` to call — this just clears the slot.
+
+  Idempotent. Reconnecting requires a fresh [`.with_camera()`](Self::with_camera) on a
+  new `PrinterClient`, the same caveat FTPS already documents for
+  [`disconnect_storage()`](Self::disconnect_storage).
+
 - <span id="superprinterclient-connect-mqtt"></span>`async fn connect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Eagerly establishes the MQTT connection.
+
+  Idempotent — returns `Ok(())` if already connected.
 
 - <span id="superprinterclient-is-mqtt-connected"></span>`fn is_mqtt_connected(&self) -> bool`
 
@@ -243,13 +349,32 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Injects a pre-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) directly.
 
+  Use this for test mocks or Embassy where the caller manages the MQTT connection,
+  mirroring [`attach_camera()`](super::PrinterClient::attach_camera)/
+  [`attach_storage()`](super::PrinterClient::attach_storage).
+
 - <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Disconnects the MQTT session, if one exists, and clears it from the client.
 
+  There is no protocol-level teardown on `MqttClient` to call — this just clears
+  the slot, mirroring `disconnect_camera()`. Without this, a dead stream (a
+  [`tick_zombie_check()`](crate::mqtt::MqttClient::tick_zombie_check)-detected
+  zombie, a transport error) left `self.mqtt` stuck `Some(...)` forever, since
+  `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken
+  connection with no supported redial path.
+
+  Idempotent. Reconnecting requires [`.attach_mqtt()`](Self::attach_mqtt) with a fresh
+  `MqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
+  `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
+  only recovers a `connect()`-built client, never one built via `from_mqtt()`.
+
 - <span id="superprinterclient-with-timer"></span>`fn with_timer<NewTimer: TimerProvider>(self, timer: NewTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, NewTimer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`PrinterClient`](#printerclient)
 
   Sets a [`TimerProvider`](../io/index.md#timerprovider) for wall-clock command-response timeouts.
+
+  Consuming builder — works on both [`new()`](PrinterClient::new) and
+  [`from_mqtt()`](PrinterClient::from_mqtt) construction paths.
 
 - <span id="superprinterclient-with-mqtt-port"></span>`fn with_mqtt_port(self, port: u16) -> Self`
 
@@ -258,14 +383,33 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-with-connect-timeout"></span>`fn with_connect_timeout(self, secs: u64) -> Self`
 
   Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
-
   Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
-
   convention. Non-consuming — chain onto any construction path.
+
+  On ESP-IDF, this budget is structurally independent from `EspIdfTlsConnector`'s own
+  internal handshake timeout (default 10s) — the connector is an opaque generic by the
+  time it reaches `PrinterClient::new()`, so this outer setting can't see or influence it.
+  Set `EspIdfTlsConnector::with_connect_timeout` directly and keep the two in sync,
+  including the `0` case (both treat `0` as "disabled", but neither number implies the
+  other). Not an issue on `tokio`/`embassy`, where the handshake is bounded solely by
+  this outer race.
 
 - <span id="superprinterclient-with-ftps"></span>`fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(self, tls: NewFtpsTls, factory: NewFtpsFactory, timer: NewFtpsTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`PrinterClient`](#printerclient)
 
   Configures FTPS for lazy connection on first storage method call.
+
+  Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, `FtpsFactory`, and `FtpsTimer`
+  type parameters. The FTPS [`TlsConnector`](../io/index.md#tlsconnector) is independent from MQTT's (some models
+  require different TLS settings for FTPS, e.g. `force_tls_1_2`). `timer` is
+  constructed fresh by the caller (e.g. `TokioTimer::new()`) — `FtpsClient` owns it
+  independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
+  out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
+  so there's no call site to thread `self.timer` through the way MQTT/camera do.
+
+  Must not be called on a client with an already-connected FTPS session — the existing
+  connection is dropped (not explicitly disconnected) when the new struct is built.
+  Functionally safe (LAN-only TCP/TLS, `Drop`-based teardown), but callers should
+  disconnect first if they want an explicit, orderly teardown.
 
 - <span id="superprinterclient-with-ftps-port"></span>`fn with_ftps_port(self, port: u16) -> Self`
 
@@ -275,9 +419,18 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Overrides the default `false` for `FtpsClient`'s TLS-1.2-enforcement bypass.
 
+  Only meaningful for the `embassy` feature talking to P2S/X2D, where no available TLS
+  backend can honestly satisfy `require_tls_1_2_if_enforced`'s exact-version check —
+  see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. On `tokio`/`esp-idf`, use
+  `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually
+  satisfy the check for real.
+  Non-consuming — chain onto any construction path.
+
 - <span id="superprinterclient-connect-ftps"></span>`async fn connect_ftps(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Eagerly establishes the FTPS connection.
+
+  Idempotent — returns `Ok(())` if already connected.
 
 - <span id="superprinterclient-is-ftps-connected"></span>`fn is_ftps_connected(&self) -> bool`
 
@@ -287,6 +440,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Eagerly establishes the camera connection.
 
+  Idempotent — returns `Ok(())` if already connected.
+
 - <span id="superprinterclient-is-camera-connected"></span>`fn is_camera_connected(&self) -> bool`
 
   Returns whether the camera session is currently established.
@@ -294,6 +449,12 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-with-camera"></span>`fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(self, tls: NewCameraTls, factory: NewCameraFactory) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, NewCameraRawIO, NewCameraTls, NewCameraFactory>` — [`PrinterClient`](#printerclient)
 
   Configures the binary-JPEG camera for lazy connection on first camera method call.
+
+  Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
+  parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
+
+  Must not be called on a client with an already-connected camera session — see
+  `.with_ftps()`'s doc comment for why.
 
 - <span id="superprinterclient-with-camera-port"></span>`fn with_camera_port(self, port: u16) -> Self`
 
@@ -307,6 +468,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
 
+  Translates percentage input to standard PWM ranges (0 to 255) in the G-code envelope.
+  For models with unique secondary cooling configurations (like the X2D), directs commands
+  to the correct target port ID.
+
 - <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
@@ -315,81 +480,117 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
 
+  Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
+
 - <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
+
+  Supported on models with onboard speakers (A1, A1 Mini, A2L).
 
 - <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, Error>` — [`BuzzerMode`](types/index.md#buzzermode), [`Error`](../error/index.md#error)
 
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
 
+  Supported on models with a physical fire alarm buzzer (H2 series).
+
 - <span id="superprinterclient-is-axis-homed"></span>`fn is_axis_homed(&self, axis: char) -> Option<bool>`
 
   Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
-
   `None` means no telemetry carrying `home_flag` has been observed yet (via
-
   [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed". Advisory only: the firmware does
-
   not reject motion on unhomed axes [REF-MOTO-HOME].
 
 - <span id="superprinterclient-is-all-axes-homed"></span>`fn is_all_axes_homed(&self) -> Option<bool>`
 
   Returns whether X, Y, and Z were all homed as of the last-observed `home_flag` telemetry.
-
   `None` means no telemetry carrying `home_flag` has been observed yet.
 
 - <span id="superprinterclient-send-gcode"></span>`async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sends a G-code command with model-aware safety validation.
 
-  
-
   Rejects commands that would be unsafe on the active model (e.g., partial-axis
-
   homing on bed-on-Z platforms). Use [`send_gcode_raw()`](Self::send_gcode_raw)
-
   to bypass validation when you need unchecked access.
-
-  
 
   # Example
 
-  
-
   ```rust,ignore
-
   // Turn on the part cooling fan at 100%
-
   printer.send_gcode("M106 P1 S255").await?;
 
-  
-
   // This will be rejected on CoreXY printers (unsafe partial homing):
-
   // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
-
   ```
 
 - <span id="superprinterclient-send-gcode-raw"></span>`async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a raw G-code string without model safety checks [REF-MOTO-GCODE].
 
+  Returns the MQTT packet identifier assigned to track publication delivery status.
+
 - <span id="superprinterclient-home-axes"></span>`async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches safe homing operations to prevent hardware collisions.
+
+  **Z-Axis Homing Crash Hazards [REF-MOTO-GCODE]:**
+  * **Bed-on-Z models** (X1, X2D, P1, H2, P2S series) must strictly be homed using a bare `G28`
+    to execute the safe firmware-defined toolhead parking sequence. Specifying axis constraints
+    (such as `G28 Z`) bypasses this and risks driving the bed directly into a misplaced toolhead.
+  * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
+    highly recommended for standard configurations.
 
 - <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: char, distance: f32, feedrate: u32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a manual relative axis movement block.
 
+  **Relative Axis Movement Safety [REF-MOTO-GCODE]:**
+  For relative movements on the Z-axis, this method wraps the move in a client-side
+  `z_max` distance cap (bounding how far a single command can travel — not true
+  position-aware crash prevention, since the printer reports no absolute axis position
+  over MQTT) and safe reference-mode push/pop blocks (`M1002 push_ref_mode` /
+  `M1002 pop_ref_mode`) to prevent frame shifting. `M211 S1` is also sent, but per real
+  H2D hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
+  software travel limits on G-code received over MQTT regardless of `M211` state — it is
+  not a source of crash protection here. X/Y moves get the same kind of client-side
+  `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
+
+  A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
+  returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a
+  real publish, so it unambiguously signals "nothing was sent"). This avoids surfacing
+  the Z-axis travel-limit error for a request that isn't actually out of range.
+
 - <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a manual relative extrusion command sequence [REF-GCODE-EXTRUDE].
 
+  Configures the active extruder drive gear to relative mode (`M83`) and feeds
+  the specified length of filament (in mm) at the designated feedrate (in mm/min).
+
 - <span id="superprinterclient-wait-for-homing"></span>`async fn wait_for_homing(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Blocks until a `G28` homing cycle observed via telemetry has completed.
+
+  Standalone — does not require this client to have issued [`home_axes()`](Self::home_axes).
+  Resolves correctly whether homing was triggered by this client, the touchscreen, slicer
+  software, or another `PrinterClient` instance, since it only relies on `home_flag`
+  telemetry observed via [`poll_telemetry()`](Self::poll_telemetry).
+
+  Only resolves successfully after observing a not-all-homed `home_flag` reading
+  followed by an all-homed reading: an already-homed printer at call time does not
+  resolve instantly, and a call where nothing ever homes times out rather than
+  returning early.
+
+  Like `poll_until` (`src/client/mod.rs`), `wait_for_homing_inner`'s own
+  wall-clock timeout (`HOMING_WAIT_TIMEOUT_SECS`) and message-count valve
+  (`POLL_UNTIL_MAX_MESSAGES`) only run *after* each `poll_telemetry().await` below
+  has already returned — neither protects against that single call stalling
+  forever on a connection that stops delivering bytes mid-homing (printer powered
+  off, network drop). That protection is a distinct, lower layer: the underlying
+  `MqttClient::poll_wire()` (`src/mqtt/client/mod.rs`) races each low-level read
+  step against `self.timer` internally, bounding a single call regardless of what
+  this loop does above it.
 
 - <span id="superprinterclient-pause-print"></span>`async fn pause_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -419,192 +620,213 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Triggers automated physical calibration routines on the printer chassis [REF-MQTT-LIFECYCLE].
 
-  
-
   Use `CalibrationOption` flags combined with `|` to select routines:
-
   ```rust,ignore
-
   client.start_calibration(
-
       CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
-
   ).await?;
-
   ```
 
 - <span id="superprinterclient-start-print"></span>`async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error>` — [`PrintJobConfig`](../mqtt/commands/print_job/index.md#printjobconfig), [`Error`](../error/index.md#error)
 
   Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
 
+  The model's quirks engine gates `nozzle_offset_cali`: it resolves the default when the
+  config left it `None`, and forces it off on a single-nozzle model even if the caller set
+  it explicitly.
+
 - <span id="superprinterclient-attach-storage"></span>`fn attach_storage(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
 
   Injects a pre-connected [`FtpsClient`](../ftps/client/index.md#ftpsclient) directly.
+
+  Use this for test mocks or Embassy where the caller manages the FTPS
+  connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps).
 
 - <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`FtpsClient`](../ftps/client/index.md#ftpsclient), auto-connecting if needed.
 
+  Requires prior FTPS configuration via [`.with_ftps()`](Self::with_ftps) or
+  [`.attach_storage()`](Self::attach_storage).
+
 - <span id="superprinterclient-disconnect-storage"></span>`async fn disconnect_storage(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Disconnects the FTPS session, if one exists, and clears it from the client.
+
+  `FtpsClient::disconnect()` is `&mut self` (non-consuming) and always poisons
+  itself on the way out (see its doc comment) — every subsequent call on that instance
+  would fail with `ProtocolViolation`. Without this method, nothing ever resets
+  `self.ftps` back to `None`, so a later [`storage()`](Self::storage) call would
+  short-circuit `ensure_ftps()`'s `is_some()` check and hand back the now-poisoned
+  client, surfacing a confusing low-level error instead of a clear one.
+
+  `disconnect_storage()` takes `self.ftps`, disconnects it, and leaves the slot `None`.
+  The next `storage()` call then falls through to `ensure_ftps()`'s existing "FTPS not
+  configured" error (if `ftps_config` was already consumed by an earlier connect) rather
+  than ever returning a poisoned client. Reconnecting still requires fresh FTPS
+  configuration — [`.with_ftps()`](Self::with_ftps) on a new `PrinterClient`, or
+  [`.attach_storage()`](Self::attach_storage) — since `ftps_config` is consumed on first
+  connection.
+
+  Idempotent — a no-op if no FTPS session is active. Always returns `Ok(())`; kept
+  fallible for API symmetry with [`connect_ftps()`](Self::connect_ftps) and to leave room
+  for a fallible teardown step in the future without a breaking signature change.
 
 - <span id="superprinterclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error>` — [`TelemetryEvent`](types/index.md#telemetryevent), [`Error`](../error/index.md#error)
 
   Pulls the next telemetry event from the MQTT channel.
 
-  
-
   Returns a [`Report`](https://docs.rs/std/latest/std/error/struct.Report.html) if the payload deserializes as a known
-
   telemetry structure, or [`TelemetryEvent::Unknown`] otherwise. A payload that
-
   deserializes successfully but carries a `print.command` other than `"push_status"`/
-
   `"pushall"` is a command-echo response (e.g. `extrusion_cali_get`'s reply shares the
-
   `print` envelope and the `nozzle_diameter` field name with genuine telemetry) and is
-
   also routed to `Unknown` rather than misreported as a report. Drains any
-
   internally buffered messages (from command-response round-trips) before
-
   reading from the wire.
-
-  
 
   # Example
 
-  
-
   ```rust,ignore
-
   loop {
-
       match printer.poll_telemetry().await? {
-
           TelemetryEvent::Report(report, _raw) => {
-
               if let Some(state) = &report.print.gcode_state {
-
                   println!("Printer state: {}", state);
-
               }
-
           }
-
           TelemetryEvent::Unknown(_) => {}
-
       }
-
   }
-
   ```
 
 - <span id="superprinterclient-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](types/index.md#printstatus)
 
   Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` means no telemetry carrying `gcode_state` has been observed yet.
 
 - <span id="superprinterclient-is-door-open"></span>`fn is_door_open(&self) -> Option<bool>`
 
   Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 
+  Returns `None` on models without a door sensor (`ModelQuirks::has_door_sensor()`
+  returns `false`, e.g. A1/A2), regardless of telemetry observed — distinct from
+  `Some(false)`, which means a sensor-equipped model's telemetry confirms the door is
+  closed. Also `None` before any telemetry carrying `print` has been observed.
+
 - <span id="superprinterclient-active-fault"></span>`fn active_fault(&self) -> Option<DecodedPrintError>` — [`DecodedPrintError`](../diagnostics/hms/index.md#decodedprinterror)
 
   Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 
+  `None` covers both "no telemetry carrying `print_error` observed yet" and "the
+  register reads 0 (no fault)" — both warrant the same caller action, so they are not
+  distinguished here.
+
 - <span id="superprinterclient-print-progress"></span>`fn print_progress(&self) -> PrintProgress` — [`PrintProgress`](types/index.md#printprogress)
 
   Returns the print progress snapshot as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   Each field independently tracks its own "last observed" value — see [`PrintProgress`](types/index.md#printprogress)'s doc
-
   comment.
 
 - <span id="superprinterclient-bed-temperatures"></span>`fn bed_temperatures(&self) -> (u16, u16)`
 
   Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   Returns `(0, 0)` before any telemetry carrying bed temperature has been observed.
+
+  Shares its cross-model decode logic with
+  [`TelemetryReport::bed_temperatures()`](crate::types::TelemetryReport::bed_temperatures) —
+  use that method instead if you already have a fresh `TelemetryReport` in hand.
 
 - <span id="superprinterclient-ams"></span>`fn ams(&self) -> Option<&AmsStatusReport>` — [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport)
 
   Returns the cached AMS/tray status report as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` means no telemetry carrying `print.ams` has been observed yet.
+
+  This is the **raw** merged cache — every field independently keeps its most recently
+  observed value ([`AmsStatusReport::merge_from`](crate::types::telemetry::ams::AmsStatusReport)-level
+  detail), but stale per-tray material fields (`tray_type`, `tray_color`, `remain`, etc.)
+  are **not** proactively cleared when a slot empties — confirmed against BambuStudio's
+  own `DevFilaSystem.cpp`, whose structural equivalent (`DevAmsTray::reset()`) is dead
+  code with zero call sites in its own current codebase; the shipped BambuStudio/
+  OrcaSlicer UI instead gates every read of a tray's material fields on
+  `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::state()` here) and
+  never scrubs the raw cache. This crate mirrors that design rather than
+  [`clean_stale_tray_data`](../ams/parser/index.md#clean-stale-tray-data)'s proactive-clearing
+  approach: wiring proactive clearing into this cache would make it *less* faithful to
+  on-wire state than BambuStudio's own model. Two opt-in ways to get sanitized output
+  without losing that raw fidelity:
+  - Check [`AmsTray::state()`](crate::types::AmsTray::state) (or
+    [`evaluate_spool_presence`](crate::ams::evaluate_spool_presence)) before trusting a
+    tray's material fields — the same check-before-trust contract BambuStudio itself
+    relies on.
+  - Call [`sanitized_ams()`](Self::sanitized_ams) for a cloned, scrubbed copy — mirrors
+    [`hms()`](Self::hms)/[`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache +
+    opt-in-decoded accessor split.
 
 - <span id="superprinterclient-printing-tray-global-id"></span>`fn printing_tray_global_id(&self) -> Option<u8>`
 
   Returns the global tray ID of the spool currently feeding the active extruder, as of
-
   the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+
+  Prefers `device.extruder.info[active].snow`, BambuStudio's own preferred resolution
+  method (`DevExterSystem::ParseV2_0`, `DevExtderSystem.cpp:318-386`) — no
+  `ams_extruder_map` inversion needed, since `snow` self-identifies both the AMS unit and
+  slot directly. `None` when `device.extruder` telemetry hasn't been observed yet (common
+  on single-nozzle models, which may not populate this sub-object at all) or the active
+  extruder's `snow` is the unmapped sentinel.
 
 - <span id="superprinterclient-sanitized-ams"></span>`fn sanitized_ams(&self) -> Option<AmsStatusReport>` — [`AmsStatusReport`](../types/telemetry/ams/index.md#amsstatusreport)
 
   Returns a cloned copy of the cached AMS status report with every tray's stale material
-
   fields cleared via [`clean_stale_tray_data`](../ams/parser/index.md#clean-stale-tray-data)
-
   (mirrors [`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache-decode-on-access
-
   shape). `None` under the same condition as [`ams()`](Self::ams) — no telemetry carrying
-
   `print.ams` observed yet. Does not mutate the underlying cache — [`ams()`](Self::ams)
-
   keeps returning the raw values; see its doc comment for why the raw cache is never
-
   proactively scrubbed.
 
 - <span id="superprinterclient-vt-tray"></span>`fn vt_tray(&self) -> Option<&VirtualTray>` — [`VirtualTray`](../types/telemetry/ams/index.md#virtualtray)
 
   Returns the cached virtual/external spool holder state (single-nozzle models) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` means no telemetry carrying `print.vt_tray` has been observed yet — including on IDEX
-
   models, which send [`vir_slot()`](Self::vir_slot) instead.
 
 - <span id="superprinterclient-vir-slot"></span>`fn vir_slot(&self) -> Option<&[VirtualTray]>` — [`VirtualTray`](../types/telemetry/ams/index.md#virtualtray)
 
   Returns the cached IDEX external spool holder array as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` means no telemetry carrying `print.vir_slot` has been observed yet — including on
-
   single-nozzle models, which send [`vt_tray()`](Self::vt_tray) instead.
 
 - <span id="superprinterclient-nozzle-temperatures"></span>`fn nozzle_temperatures(&self) -> Vec<(u8, u16, u16)>`
 
   Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) as `(id, actual, target)` tuples in °C.
-
   Single-nozzle models return one entry (`id` 0); IDEX models return one entry per physical
-
   nozzle. See [`decode_nozzle_temperatures`](../types/telemetry/index.md#decode-nozzle-temperatures) for the cross-model decode (including the
-
   undocumented IDEX flat-field routing quirk).
 
 - <span id="superprinterclient-chamber-temperature"></span>`fn chamber_temperature(&self) -> Option<(u16, u16)>`
 
   Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
 
+  Returns `None` on models without an active chamber temperature sensor/heater
+  (`ModelQuirks::ignores_chamber_temperature()` returns `true`, e.g. A1/A1 Mini/A2L/P1P/
+  P1S) — mirrors `is_door_open()`'s sensor-capability gate. `Some((0, 0))` before any
+  telemetry carrying `chamber_temper` has been observed on a chamber-equipped model.
+
 - <span id="superprinterclient-hms"></span>`fn hms(&self) -> Option<&[HmsEntry]>` — [`HmsEntry`](../types/telemetry/diagnostics/index.md#hmsentry)
 
   Returns the cached active hardware-alert (HMS) entries as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` means no telemetry carrying `print.hms` has been observed yet.
 
 - <span id="superprinterclient-ipcam"></span>`fn ipcam(&self) -> Option<&IpcamTelemetry>` — [`IpcamTelemetry`](../types/telemetry/diagnostics/index.md#ipcamtelemetry)
 
   Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` means no telemetry carrying `print.ipcam` has been observed yet.
 
 - <span id="superprinterclient-active-hms-alerts"></span>`fn active_hms_alerts(&self) -> Vec<DecodedHmsAlert>` — [`DecodedHmsAlert`](../diagnostics/hms/index.md#decodedhmsalert)
 
   Returns every cached HMS entry decoded and filtered to genuine faults (mirrors `active_fault()`'s raw-cache-decode-on-access shape).
-
   Empty when nothing is cached or nothing currently decodes as a genuine fault — there's no caller
-
   action that would differ between those two cases.
 
 - <span id="superprinterclient-part-cooling-fan-speed"></span>`fn part_cooling_fan_speed(&self) -> Option<u8>`
@@ -622,27 +844,20 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-heatbreak-fan-speed"></span>`fn heatbreak_fan_speed(&self) -> Option<u8>`
 
   Returns the toolhead heatbreak fan speed as a percentage (0-100).
-
   Not independently controllable (no corresponding `FanTarget` variant/M106 port) — read-only
-
   telemetry.
 
 - <span id="superprinterclient-auxiliary-left2-fan-speed"></span>`fn auxiliary_left2_fan_speed(&self) -> Option<u8>`
 
   Returns the X2D/P2S second left-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryLeft2`) as a percentage (0-100).
-
   Reported at a different wire location than the other four fans —
-
   `device.airduct.parts[id=160].state` — already a direct percentage, no 0-15 step conversion
-
   [REF-CLIM-FANS].
 
 - <span id="superprinterclient-print-speed"></span>`fn print_speed(&self) -> Option<PrintSpeed>` — [`PrintSpeed`](types/index.md#printspeed)
 
   Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-
   `None` before any telemetry carrying `spd_lvl` has been observed, or if the observed value is
-
   out of the known 1-4 range.
 
 - <span id="superprinterclient-print-speed-magnitude"></span>`fn print_speed_magnitude(&self) -> Option<u16>`
@@ -660,13 +875,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
 
   Returns whether the printer is on wired Ethernet, per the cached `print.net.conf` bit 0
-
   (mirrors `PrinterTelemetry::is_ethernet_active()`, the documented-preferred,
-
   confirmed-authoritative source) but works between polls off the cached
-
   value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
-
   `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it.
 
 - <span id="superprinterclient-poll-raw"></span>`async fn poll_raw(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage), [`Error`](../error/index.md#error)
@@ -677,57 +888,88 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sets the heated bed target temperature.
 
-  
-
   Values exceeding the model's maximum are clamped automatically. Most models have a flat
-
   per-model ceiling (e.g. 80°C for A1 Mini), but X1C's ceiling is voltage-dependent — 110°C
-
   on a 220V-region unit, 120°C on a 110V-region unit, per the official spec sheet. This is
-
   derived from the most recently observed `home_flag` telemetry
-
   (`self.cache.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
-
   before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
-
   region is unknown and X1C conservatively clamps to 110°C.
-
-  
 
   # Example
 
-  
-
   ```rust,ignore
-
   printer.set_bed_temperature(60).await?;
-
   ```
 
 - <span id="superprinterclient-set-nozzle-temperature"></span>`async fn set_nozzle_temperature(&mut self, nozzle_id: u8, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
 
+  * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on
+    IDEX). **Tool-changer exception (H2C):** per `reference/04_toolhead_thermal_motion.md`
+    §4's "Nozzle & Carriage Kinematics", H2C addresses its dedicated fixed hotend as `0`
+    (same `M104 T0` convention as every other model) but its 6 passive tool-changer rack
+    slots as `16..=21` — NOT a simple `0..physical_nozzle_count()` linear index, despite
+    `physical_nozzle_count()` returning `7` for this model. The reference doc only
+    confirms `16..=21` for the rack slots' telemetry-side `stat` field, not that
+    `M104 T16`-style writes are actually meaningful for a passively-stored (unmounted)
+    tool — validation below is deliberately permissive on H2C for exactly that reason.
+
+  Values exceeding the model's maximum nozzle temperature are clamped automatically.
+
 - <span id="superprinterclient-set-chamber-temperature"></span>`async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
+
+  **Chamber Temperature Safety Check [REF-THER-DECODE]:**
+  Only supported on models with active PTC chamber heaters (X1E, X2D, H2 series).
+  Models with passive chamber sensors but no heater (X1C, P2S) will return a capability
+  mismatch error — their firmware silently ignores M141.
 
 - <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity)
 
   Creates a lazy client that defers MQTT connection until first use.
 
+  The MQTT session is established automatically on the first method call that
+  requires it (e.g. [`poll_telemetry()`](Self::poll_telemetry),
+  [`request_pushall()`](Self::request_pushall)), or eagerly via
+  [`connect_mqtt()`](Self::connect_mqtt). `tls`/`factory` mirror
+  [`.with_ftps(tls, factory, timer)`](Self::with_ftps)'s call shape — `factory.dial()` opens the
+  raw TCP socket, then `tls.connect()` wraps it in TLS.
+
+  Without a [`TimerProvider`](../io/index.md#timerprovider), command-response methods like
+  [`get_version()`](Self::get_version) rely on a message-count safety valve
+  instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
+  for real timeouts.
+
 - <span id="printerclient-from-mqtt"></span>`fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`PrinterModel`](../models/index.md#printermodel)
 
   Wraps an already-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) in a `PrinterClient`.
+
+  Use this when you have a pre-established MQTT session (tests, Embassy,
+  or any context where the caller manages the connection). The resulting client uses
+  [`PreConnected`] for both the MQTT `Tls` and `Factory` slots — `ensure_mqtt()`
+  short-circuits on `self.mqtt.is_some()` before either is ever called, so
+  `PreConnected`'s `RawStreamFactory::dial` (which returns
+  [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
+  practice.
 
 - <span id="printerclient-next-sequence-id"></span>`fn next_sequence_id(&mut self) -> u64`
 
   Increments and returns the next transaction/sequence identifier tracking commands.
 
+  Wraps via `clamp_task_id()` (32-bit signed integer limit) to stay within firmware
+  parsing constraints [REF-MQTT-ENV] — on overflow this continues as
+  `(sequence_counter + 1) % TASK_ID_MAX` rather than resetting to
+  `INITIAL_SEQUENCE_ID`, so a session never revisits the same starting value mid-flight.
+
 - <span id="printerclient-set-command-timeout"></span>`fn set_command_timeout(&mut self, secs: u64)`
 
   Sets the timeout (in seconds) used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
+
+  Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
+  the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
 
 - <span id="printerclient-request-pushall"></span>`async fn request_pushall(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -748,6 +990,17 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut MqttClient<<MqttTls as >::Stream>, Error>` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`MqttClient`](../mqtt/client/index.md#mqttclient), auto-connecting if needed.
+
+  Use this for sending custom MQTT payloads, managing zombie detection via
+  [`tick_zombie_check()`](MqttClient::tick_zombie_check), or inspecting
+  in-flight state — anything that [`PrinterClient`](#printerclient) doesn't expose directly.
+
+  Pipelining multiple commands through this handle before awaiting a response forfeits
+  write-zombie coverage beyond the first outstanding command: `tick_zombie_check()` tracks
+  only one armed `(sequence_id, elapsed_secs)` pair at a time, so a second `publish_command`
+  issued while the first is still unanswered gets no tracking of its own — if the broker
+  acks the first but silently drops the second, the second can hang forever undetected.
+  The default [`PrinterClient`](#printerclient) request flow awaits each command in turn and isn't affected.
 
 #### Trait Implementations
 
@@ -892,7 +1145,6 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 - <span id="printspeed-from-level"></span>`fn from_level(level: u8) -> Option<Self>`
 
   Classifies a raw `spd_lvl` telemetry value (`1`-`4`, matching the same wire values [`PrinterClient::set_print_speed()`](crate::client::PrinterClient::set_print_speed) sends).
-
   Returns `None` for an out-of-range level.
 
 #### Trait Implementations

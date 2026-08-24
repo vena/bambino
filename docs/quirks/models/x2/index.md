@@ -42,17 +42,11 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 - <span id="x2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
   X2D firmware `01.01.00.00` fails the implicit-FTPS handshake on port 990 with `[SSL: WRONG_VERSION_NUMBER]` against a TLS 1.3 `ClientHello`.
-
   **Root cause unconfirmed** — the independent `bambuddy` project (reporter `@vasmarfas`, upstream
-
   issue #1638) capped X2D to TLS 1.2 "by analogy" with the P2S session-ticket bug (see
-
   `P2Quirks::enforces_ftps_tls_1_2`), explicitly noting the X2D failure could be a distinct bug
-
   (different FTPS auth variant or port) rather than the same one. Treat this as
-
   confirmed-by-symptom, not confirmed-by-root-cause. See [REF-FTPS-CONN] in `reference/02_ftps.md`
-
   §2.1.
 
 - <span id="x2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)

@@ -103,7 +103,6 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 - <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](#tlsconnector)
 
   rustls retains the peer chain on the connection after the handshake, so this is a
-
   straight copy of what the server sent, in wire order (leaf first).
 
 ##### `impl<T: ::tokio::io::AsyncWrite + Unpin> Write for TokioIo<T>`
@@ -339,6 +338,15 @@ stack cannot support it (see that trait's doc comment).
 
   Listens for incoming datagrams, populating the buffer and returning the source address.
 
+  Implementations must not busy-spin: on a "no data yet" outcome, either genuinely
+  block/wait for data, or internally yield for a bounded duration (e.g. via
+  [`TimerProvider::sleep`]) before reporting `Err`. A synchronous non-blocking read
+  that returns instantly on every "would block" call defeats the caller's own pacing
+  — `discover_devices` (`src/discovery/mod.rs`) polls this in a tight loop relying on
+  each call to provide some wait/yield, and an implementation that returns immediately
+  turns that loop into a genuine busy-spin, burning 100% CPU and potentially starving
+  other tasks on single-core/cooperative-scheduler platforms.
+
 #### Implementors
 
 - [`EmbassyUdpSocket`](embassy/index.md#embassyudpsocket)
@@ -416,15 +424,38 @@ without burning processor cycles on embedded platforms.
 
   Suspends execution of the calling task for the specified duration.
 
+  Returns an error on platforms where sleep scheduling can genuinely fail
+  (e.g. ESP-IDF's FreeRTOS timer/task resources). Infallible platforms
+  (tokio, embassy) always return `Ok(())`.
+
 - `fn now_millis(&self) -> u64`
 
   Returns the current monotonic clock value in milliseconds.
+
+  The epoch is platform-specific (process start, system boot, etc.) — only
+  *differences* between two calls are meaningful.
 
 #### Provided Methods 
 
 - `fn has_real_clock(&self) -> bool`
 
   Whether this timer provides genuine wall-clock timing.
+  `true` (the default) for every real platform implementation (`TokioTimer`, `EmbassyTimer`,
+  `EspIdfTimer`). Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.
+
+  Exists so code that races an I/O operation against
+  [`sleep()`](Self::sleep) — e.g. `src/mqtt/client/mod.rs`'s `poll_wire`/
+  `src/mqtt/client/frame.rs`'s `read_exact_packet` per-read deadline — can tell whether
+  doing so will actually bound anything. `DummyTimer::sleep()` intentionally completes
+  instantly regardless of the requested duration (so it never blocks retry/backoff loops
+  that happen to be generic over `TimerProvider`); racing against it would make
+  such a race resolve to "timed out" on essentially every call that doesn't also
+  complete synchronously, silently turning "no wall-clock timeout configured" into
+  "everything times out immediately" instead of the intended "no wall-clock
+  protection here, fall back to other safety valves" (the same tradeoff
+  `PrinterClient::poll_until`'s elapsed-time check already documents for
+  `DummyTimer`). Callers should check this before racing against `sleep()` and
+  skip the race entirely (plain unbounded await) when it's `false`.
 
 #### Implementors
 
@@ -459,9 +490,38 @@ without enforcing a static library provider.
 
   Returns the TLS protocol version negotiated on the given stream.
 
+  Platforms that cannot inspect the negotiated version return `None`. This does **not**
+  mean "skip validation" — a caller enforcing a specific version (e.g.
+  `FtpsClient::require_tls_1_2_if_enforced`, which P2S/X2D need) treats an
+  undetermined `None` as a failure to confirm the required version and rejects the
+  connection, the same as a confirmed wrong version. `None` only means "this platform
+  has nothing useful to report" — whether that's fail-open or fail-closed is entirely
+  up to the caller.
+
 - `fn peer_chain_der(&self, _stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>`
 
   Returns the peer's certificate chain exactly as presented during the handshake,
+  DER-encoded, leaf first.
+
+  Exists so a consumer can pin a printer's certificate — this crate ships no CA material
+  and deliberately treats certificates as runtime input, so trust-on-first-use has to be
+  built on top of it. Storage and policy (where a pin lives, what happens on a mismatch)
+  belong to the caller; all this provides is read access to what the peer actually sent.
+
+  Returns `None` where the platform cannot report it — a *lack of information*, never
+  "the peer sent nothing" and never "skip validation". A caller enforcing a pin must treat
+  `None` as a failure to confirm, exactly as `negotiated_version` documents above.
+
+  Whether the chain contains the issuing CA or only the leaf is up to the peer, and that
+  decides what pinning is possible. Confirmed on a P1S: two certificates, the `CN=<serial>`
+  leaf followed by the self-signed `CN=BBL CA` root (`CA:TRUE`) — so an anchor *can* be
+  captured at first contact and fed back through `with_certs(..)` for genuine chain
+  verification, rather than being limited to a leaf-fingerprint comparison. Only the P1S has
+  been checked; use `bambino-cli inspect-cert` to confirm any other model rather than
+  assuming it generalizes.
+
+  The returned DER is copied out of the live session: on ESP-IDF the chain is owned by the
+  SSL context and is freed on drop or renegotiation, so borrowing it would dangle.
 
 #### Implementors
 

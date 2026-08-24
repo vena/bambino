@@ -395,20 +395,16 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
   Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
 
+  This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
+
 - <span id="amstray-remaining-weight-grams"></span>`fn remaining_weight_grams(&self) -> Option<u32>`
 
   Accurate remaining weight in grams, translating `remain_g`'s raw wire
-
   sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
-
   (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
-
   `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
-
   returned. Does not replicate BambuStudio's percentage-based fallback (`weight * remain
-
   / 100`) when `remain_g` is absent — callers needing that estimate already have
-
   `tray_weight`/`remain` to compute it themselves.
 
 #### Trait Implementations
@@ -519,16 +515,40 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - <span id="amsunit-extruder-assignment"></span>`fn extruder_assignment(&self) -> Option<u8>`
 
   Extruder assignment from bits 8–11 (0 = right/main, 1 = left/deputy).
-
   Returns `None` when `info` is absent or the value is 0xE (uninitialized).
 
 - <span id="amsunit-filament-switch-inlet"></span>`fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet>` — [`FilamentSwitchInlet`](ams/index.md#filamentswitchinlet)
 
   Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
 
+  Returns [`FilamentSwitchInlet::InB`] for `0` and [`FilamentSwitchInlet::InA`] for `1`;
+  `None` for `info` absent, or any other value, which upstream treats as "not bound".
+
+  **Only meaningful when [`extruder_assignment`](Self::extruder_assignment) returns `None`
+  because the raw field is `0xE`.** An AMS wired to a fixed extruder reports that extruder
+  directly and this field carries nothing; `0xE` means "not fixed", and when a Filament
+  Track Switch is installed, this is the only way to recover which physical nozzle the unit
+  actually feeds. That matters beyond display: BambuStudio uses the resolved inlet to pick
+  the K-profile for the feeding nozzle. Note `extruder_assignment` collapses `0xE` into
+  `None` and cannot distinguish "uninitialized" from "routed through a switch", so a caller
+  wanting that distinction must consult this method as well.
+
+  The field is four bits, not the two this crate documented before BUG-136 — a 2-bit read
+  aliases values 4–15 into 0–3 and reports a valid inlet for a unit that has none.
+
+  **Unverified against hardware.** No Filament Track Switch has been available; the decode
+  follows BambuStudio's `DevFilaSystem.cpp:598-609`, corroborated by bambuddy (`c5e00558`,
+  `7a42e0a7`). See issue #137.
+
 - <span id="amsunit-has-unfixed-extruder"></span>`fn has_unfixed_extruder(&self) -> bool`
 
   True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
+
+  Distinguishes the two cases [`extruder_assignment`](Self::extruder_assignment) folds into
+  `None`: a unit routed through a Filament Track Switch, versus one whose assignment the
+  firmware simply has not initialized. Pair with
+  [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
+  `bind_switch_in` alongside `0xE` means uninitialized.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
 
@@ -537,17 +557,13 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
 
   Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
-
   `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
-
   `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
 
 - <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
 
   Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
-
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
-
   `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
 
 #### Trait Implementations
@@ -1194,23 +1210,18 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - <span id="extruderinfo-current-ams-slot"></span>`fn current_ams_slot(&self) -> Option<(u8, u8)>`
 
   Currently routed `(ams_id, slot_id)`, decoded from `snow` — the preferred source for
-
   resolving which physical tray is feeding this extruder right now, confirmed
-
   against BambuStudio's `DevExterSystem::ParseV2_0` (`DevExtderSystem.cpp:318-386`), which
-
   decodes `snow` directly with no extruder-map inversion needed.
 
 - <span id="extruderinfo-previous-ams-slot"></span>`fn previous_ams_slot(&self) -> Option<(u8, u8)>`
 
   Previously routed `(ams_id, slot_id)`, decoded from `spre`. See
-
   [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
 
 - <span id="extruderinfo-target-ams-slot"></span>`fn target_ams_slot(&self) -> Option<(u8, u8)>`
 
   Target `(ams_id, slot_id)` for an in-progress filament change, decoded from `star`. See
-
   [`ExtruderInfo::current_ams_slot`]'s doc comment for the shared bit layout.
 
 #### Trait Implementations
@@ -1386,6 +1397,18 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - <span id="nozzleinfo-is-rack-stored"></span>`fn is_rack_stored(&self) -> bool`
 
   Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
+
+  Confirmed directly against BambuStudio's source
+  (`DevNozzleSystem.cpp:769`, `DevNozzleSystemParser::ParseV2_0`) — rack-stored spare
+  nozzles are appended to the *same* `nozzle.info` array as installed ones, distinguished
+  by `DevUtil::get_hex_bits(id, 1) == 1`. `get_hex_bits(num, pos, base=10)` extracts the
+  4-bit **nibble** at `pos*4` (`(num >> (pos*4)) & 0xF`), not a single bit — so this
+  checks the *high* nibble (bits 4–7) of `id`, matching `reference/04_toolhead_thermal_
+  motion.md`'s independently-documented H2C rack range of ids `16`-`21` (all of which
+  have high nibble `1`; the low nibble `id & 0xF` is the rack slot index). Reachable on
+  real hardware: H2C ("2 Slots, up to 7 active nozzles" per `MODEL_MATRIX.csv`) is a
+  currently-modeled printer with existing rack-aware code elsewhere
+  (`src/client/thermal.rs`'s H2C nozzle-ID validation, `src/quirks/mod.rs`).
 
 #### Trait Implementations
 
@@ -1722,6 +1745,10 @@ running a job with scheduled pauses — see issue #139.
 - <span id="printpauselist-next-pause"></span>`fn next_pause(&self) -> Option<&PrintPausePoint>` — [`PrintPausePoint`](report/index.md#printpausepoint)
 
   Returns the next pending pause — the point with the lowest `pause_index`.
+
+  Points with no `pause_index` are skipped rather than treated as index 0, which would make
+  a malformed entry masquerade as the next pause. Returns `None` when the list is absent,
+  empty, or entirely unindexed.
 
 #### Trait Implementations
 
@@ -2188,33 +2215,56 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
 
+  Accepts `f64` because the wire sends both integers and floats depending on model.
+  Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
+  composite-packed: upper 16 bits = target, lower 16 bits = actual.
+
 - <span id="printertelemetry-is-ethernet-active"></span>`fn is_ethernet_active(&self) -> bool`
 
   Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
+
+  Previously inspected bit 18 (`0x00040000`) of `home_flag`, following a
+  pybambu-sourced heuristic. Both first-party clients (BambuStudio's
+  `DevPrintOptions.cpp:26`, OrcaSlicer identically) actually decode that bit as
+  `is_support_prompt_sound_detection`, unrelated to networking — confirmed wrong, not
+  merely disputed. Real wired-ethernet state comes from `print.net.conf` bit 0
+  (`DeviceManager.cpp:3053`: `network_wired = (net.conf & 0x1) != 0`). Returns `false`
+  (not `None`) when `net`/`net.conf` haven't been observed yet, matching
+  `is_ethernet_active_via_wifi_signal()`'s existing no-signal-observed convention.
 
 - <span id="printertelemetry-is-ethernet-active-via-wifi-signal"></span>`fn is_ethernet_active_via_wifi_signal(&self) -> bool`
 
   Evaluates whether the physical printer is connected via wired Ethernet using the `wifi_signal` sentinel value [REF-NET-PORTS], as a fallback for firmware that doesn't populate `print.net.conf`.
 
+  A printer with no wifi signal to report (i.e. running wired-only) sends a fixed
+  `wifi_signal` of `"-90dBm"`. Prefer `is_ethernet_active()` — this heuristic is kept
+  only as a fallback for firmware that doesn't send `net.conf`.
+
 - <span id="printertelemetry-is-220v-power"></span>`fn is_220v_power(&self) -> bool`
 
   Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
 
+  Used by [`crate::quirks::ModelQuirks::bed_temp_max`] on X1C, where the safe bed
+  temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
+  official spec sheet.
+
 - <span id="printertelemetry-sdcard-state"></span>`fn sdcard_state(&self) -> Option<SdcardState>` — [`SdcardState`](report/index.md#sdcardstate)
 
   Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
-
   [`SdcardState`](report/index.md#sdcardstate)'s doc comment for verification sources. Returns `None` before any
-
   telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
 
 - <span id="printertelemetry-is-door-open-from-home-flag"></span>`fn is_door_open_from_home_flag(&self) -> bool`
 
   Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
 
+  Used by X1 series models where the door sensor is wired to the home_flag bitmask.
+
 - <span id="printertelemetry-is-door-open-from-stat"></span>`fn is_door_open_from_stat(&self) -> bool`
 
   Reads door sensor state from bit 23 of the parsed hexadecimal `stat` field [REF-NET-DOOR].
+
+  Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
 
 #### Trait Implementations
 
@@ -2272,37 +2322,34 @@ top-level domains depending on which micro-system published the frame.
 
   Returns the bed's (actual, target) temperatures in °C.
 
-  
-
   Handles the different wire formats across printer generations automatically:
-
   new-gen composite-packed `device.bed`, pushall-nested `print.device.bed`, and
-
   old-gen direct `bed_temper`/`bed_target_temper` fields. Returns (0, 0) if absent.
-
-  
 
   # Example
 
-  
-
   ```rust,ignore
-
   let (actual, target) = report.bed_temperatures();
-
   println!("Bed: {}°C (target {}°C)", actual, target);
-
   ```
 
 - <span id="telemetryreport-device"></span>`fn device(&self) -> Option<&DeviceTelemetry>` — [`DeviceTelemetry`](device/index.md#devicetelemetry)
 
   Returns the `DeviceTelemetry` sub-object, checking both wire locations it can arrive at.
 
+  Mirrors `bed_temperatures()`'s first-found-wins fallback: top-level `device` (incremental
+  updates) is checked first, falling back to pushall-nested `print.device` (H2/P2/X2
+  models). Returns `None` if neither location is present. Use this instead of manually
+  checking both locations for nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
+
 - <span id="telemetryreport-fun"></span>`fn fun(&self) -> Option<&str>`
 
   Returns the `fun` Developer LAN Mode bitmask, checking both wire locations it can
-
   arrive at.
+
+  Mirrors `device()`'s fallback order — top-level `fun` is checked first,
+  falling back to `print.fun` [REF-MQTT-ENV §3.2.1]. Prefer this over reading `self.fun`
+  directly, the same way `device()` is preferred over `self.device`.
 
 #### Trait Implementations
 

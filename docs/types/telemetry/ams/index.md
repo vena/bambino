@@ -360,20 +360,16 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
   Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
 
+  This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
+
 - <span id="amstray-remaining-weight-grams"></span>`fn remaining_weight_grams(&self) -> Option<u32>`
 
   Accurate remaining weight in grams, translating `remain_g`'s raw wire
-
   sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
-
   (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
-
   `remain_g == 0` means "confirmed empty," both `None` here; only a positive value is
-
   returned. Does not replicate BambuStudio's percentage-based fallback (`weight * remain
-
   / 100`) when `remain_g` is absent — callers needing that estimate already have
-
   `tray_weight`/`remain` to compute it themselves.
 
 #### Trait Implementations
@@ -484,16 +480,40 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - <span id="amsunit-extruder-assignment"></span>`fn extruder_assignment(&self) -> Option<u8>`
 
   Extruder assignment from bits 8–11 (0 = right/main, 1 = left/deputy).
-
   Returns `None` when `info` is absent or the value is 0xE (uninitialized).
 
 - <span id="amsunit-filament-switch-inlet"></span>`fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet>` — [`FilamentSwitchInlet`](#filamentswitchinlet)
 
   Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
 
+  Returns [`FilamentSwitchInlet::InB`] for `0` and [`FilamentSwitchInlet::InA`] for `1`;
+  `None` for `info` absent, or any other value, which upstream treats as "not bound".
+
+  **Only meaningful when [`extruder_assignment`](Self::extruder_assignment) returns `None`
+  because the raw field is `0xE`.** An AMS wired to a fixed extruder reports that extruder
+  directly and this field carries nothing; `0xE` means "not fixed", and when a Filament
+  Track Switch is installed, this is the only way to recover which physical nozzle the unit
+  actually feeds. That matters beyond display: BambuStudio uses the resolved inlet to pick
+  the K-profile for the feeding nozzle. Note `extruder_assignment` collapses `0xE` into
+  `None` and cannot distinguish "uninitialized" from "routed through a switch", so a caller
+  wanting that distinction must consult this method as well.
+
+  The field is four bits, not the two this crate documented before BUG-136 — a 2-bit read
+  aliases values 4–15 into 0–3 and reports a valid inlet for a unit that has none.
+
+  **Unverified against hardware.** No Filament Track Switch has been available; the decode
+  follows BambuStudio's `DevFilaSystem.cpp:598-609`, corroborated by bambuddy (`c5e00558`,
+  `7a42e0a7`). See issue #137.
+
 - <span id="amsunit-has-unfixed-extruder"></span>`fn has_unfixed_extruder(&self) -> bool`
 
   True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
+
+  Distinguishes the two cases [`extruder_assignment`](Self::extruder_assignment) folds into
+  `None`: a unit routed through a Filament Track Switch, versus one whose assignment the
+  firmware simply has not initialized. Pair with
+  [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
+  `bind_switch_in` alongside `0xE` means uninitialized.
 
 - <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
 
@@ -502,17 +522,13 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 - <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
 
   Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
-
   `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
-
   `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
 
 - <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
 
   Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
-
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
-
   `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
 
 #### Trait Implementations
