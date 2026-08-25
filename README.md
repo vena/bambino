@@ -13,7 +13,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 - **Discovery**: find printers on your LAN via SSDP (ports 2021/1990)
 - **MQTT control**: connect to the printer's local broker (port 8883), send commands, receive telemetry
 - **File transfer**: implicit FTPS (port 990) for listing, uploading, downloading, and managing files on the SD card
-- **Camera**: complete binary JPEG streaming client (port 6000, A1/P1 series, A2L); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
+- **Camera**: binary JPEG streaming client (port 6000, A1/P1 series, A2L); RTSPS helpers for proxy integration and timestamp correction (port 322, X1/X2/H2/P2S series)
 - **Model quirks**: per-model differences handled polymorphically: FTPS TLS requirements, fan step resolution, Z-axis homing safety, door sensors, camera protocols, nozzle counts (single/IDEX/tool changer), temperature limits, and chamber heater capabilities
 
 ## Two levels of API
@@ -92,11 +92,12 @@ let mut printer = PrinterClient::from_mqtt(mqtt_client, model);
 
 ```rust
 printer.request_pushall().await?;              // request full state dump
+                                               // warning: calling this too often may slow older models!
 printer.home_axes(false).await?;               // false = bare G28; true = Z-only (rejected on bed-on-Z models)
 printer.set_bed_temperature(60).await?;        // clamped to model max
 printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
-printer.set_led("chamber_light", true).await?;
-printer.send_gcode("M106 P1 S255").await?;     // validated against model quirks
+printer.set_led("chamber_light", true).await?; // turn on the chamber light
+printer.send_gcode("M106 P1 S255").await?;     // with PrinterClient, gcode is checked against unsafe homing
 ```
 
 ### Read telemetry
@@ -142,7 +143,7 @@ let config = PrintJobConfig::new(
 printer.start_print(&config).await?;
 ```
 
-Bed leveling, flow calibration, and vibration compensation run automatically as part of the print (all enabled by default in `PrintJobConfig`). Use the builder methods to change them—they take either a `bool` or a `CalibrationMode` (`Off`/`On`/`Auto`, matching BambuStudio's tri-state encoding):
+Bed leveling, flow calibration, and vibration compensation run automatically as part of the print (all enabled by default in `PrintJobConfig`); vibration compensation is forced off on models that don't support it, regardless of the config. Use the builder methods to change them—they take either a `bool` or a `CalibrationMode` (`Off`/`On`/`Auto`, matching BambuStudio's tri-state encoding):
 
 ```rust
 use bambino::mqtt::CalibrationMode;
@@ -180,7 +181,7 @@ printer.change_filament(0, 255, -1, -1).await?; // unload whatever AMS 0 current
 
 // start_drying(ams_id, temp, duration_hours, humidity, rotate_tray, cooling_temp,
 //              close_power_conflict, filament)
-//   temp:                 °C, clamped to the attached unit's ceiling (AMS-HT 85, AMS 2 Pro 65)
+//   temp:                 °C, clamped to 85 for AMS-HT bus IDs (128..=135), 65 otherwise
 //   duration_hours:       hours, not minutes
 //   humidity:             target %; 0 = firmware default
 //   rotate_tray:          rotate trays during the cycle
