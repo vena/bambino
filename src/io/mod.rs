@@ -66,8 +66,163 @@ pub enum SocketError {
     AddressNotAvailable,
     /// Supplied connection or routing parameters are malformed.
     InvalidInput,
+    /// Peer's certificate was rejected during the TLS handshake, with the reason it failed.
+    ///
+    /// Separate from `Other` so a consumer can *act* on the distinction — offering
+    /// trust-on-first-use certificate capture is only correct for
+    /// [`CertificateFailure::UntrustedAnchor`], and prompting on any other cause would be a
+    /// security-relevant misfire, not just poor UX. Every backend that can name the cause
+    /// populates this; a backend that only knows "the handshake failed" still returns the
+    /// error it always did rather than guessing a cause (GitHub issue #157).
+    CertificateInvalid(CertificateFailure),
     /// Catch-all variant for atypical OS-specific networking errors.
     Other(Cow<'static, str>),
+}
+
+/// Why a peer's certificate was rejected, in terms every backend can express.
+///
+/// Deliberately coarser than any one backend's native error type: rustls names ~20 distinct
+/// certificate errors and mbedTLS reports a bitmask of ~14 flags, but a caller acts on far
+/// fewer distinctions than that. What matters is that "the chain reached no trusted anchor"
+/// and "the chain verified and the name did not match" never collapse into each other — they
+/// are different problems with different remedies.
+///
+/// `Unspecified` means the backend rejected the certificate for a reason with no portable
+/// counterpart here (rustls's `UnhandledCriticalExtension`, mbedTLS's `BADCERT_OTHER`, …). It
+/// is a *lack of detail*, never "probably fine" — the handshake failed either way.
+///
+/// Revocation *status* has no variant: [`Revoked`](Self::Revoked) means a certificate was
+/// positively revoked, and nothing here reports "revocation could not be checked". That is
+/// deliberate — this crate performs no CRL or OCSP lookup and Bambu certificates carry no CRL
+/// distribution points, so a variant for it could never be produced. Add one only alongside a
+/// backend that can actually reach that state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertificateFailure {
+    /// Chain terminated at no anchor the caller supplied. The one cause for which offering
+    /// to capture and pin the presented certificate is a sensible remedy.
+    ///
+    /// Broader than "the peer is self-signed": the tokio backend's `CnFallbackServerVerifier`
+    /// also reports a chain hop rejected for a *non-CA-capable* intermediate this way (see
+    /// `check_ca_capable` in `io/tokio/cert_verify.rs`, which chooses `UnknownIssuer`
+    /// deliberately). Trust-on-first-use is unauthenticated at first contact by construction,
+    /// so this doesn't weaken it — but don't read this variant as "a benign self-signed
+    /// printer certificate".
+    UntrustedAnchor,
+    /// Chain verified, but no name in the certificate matched the host that was dialed.
+    NameMismatch,
+    /// A certificate in the chain is past its `notAfter`.
+    Expired,
+    /// A certificate in the chain is before its `notBefore` — on an embedded target this is
+    /// far more often an unset system clock than a genuinely premature certificate.
+    NotYetValid,
+    /// A certificate in the chain was revoked by its issuer.
+    Revoked,
+    /// The chain uses a signature algorithm, key type, or key size the backend refuses.
+    UnsupportedAlgorithm,
+    /// Chain and name are fine, but a certificate is not authorized for this use — key usage,
+    /// extended key usage, or Netscape cert type forbids TLS server authentication.
+    ///
+    /// Explicitly *not* a trust-on-first-use candidate, unlike
+    /// [`UntrustedAnchor`](Self::UntrustedAnchor): capturing and pinning the certificate
+    /// changes nothing, because it will be rejected for the same reason on every later
+    /// connection. Usually the wrong certificate installed, or one mis-issued by a proxy.
+    InvalidPurpose,
+    /// Peer presented no certificate at all — there is nothing to evaluate, and nothing a
+    /// caller could capture or pin.
+    Missing,
+    /// A certificate could not be parsed at all.
+    Malformed,
+    /// Rejected for a reason with no portable counterpart above.
+    Unspecified,
+}
+
+/// mbedTLS `MBEDTLS_X509_BADCERT_*` verification flags, as returned by
+/// `mbedtls_ssl_get_verify_result`.
+///
+/// Redeclared here rather than imported from `esp_idf_svc::sys` or `mbedtls_rs_sys` so one
+/// mapping serves both mbedTLS-backed platforms (ESP-IDF and Embassy) and stays unit-testable
+/// on the host, where neither `-sys` crate is even built. These are stable public mbedTLS API
+/// constants (`x509.h`), not internal values.
+#[cfg(any(feature = "esp-idf", feature = "embassy", test))]
+pub(crate) mod mbedtls_badcert {
+    pub(crate) const EXPIRED: u32 = 0x01;
+    pub(crate) const REVOKED: u32 = 0x02;
+    pub(crate) const CN_MISMATCH: u32 = 0x04;
+    pub(crate) const NOT_TRUSTED: u32 = 0x08;
+    pub(crate) const MISSING: u32 = 0x40;
+    pub(crate) const SKIP_VERIFY: u32 = 0x80;
+    pub(crate) const FUTURE: u32 = 0x200;
+    pub(crate) const KEY_USAGE: u32 = 0x800;
+    pub(crate) const EXT_KEY_USAGE: u32 = 0x1000;
+    pub(crate) const NS_CERT_TYPE: u32 = 0x2000;
+    pub(crate) const BAD_MD: u32 = 0x4000;
+    pub(crate) const BAD_PK: u32 = 0x8000;
+    pub(crate) const BAD_KEY: u32 = 0x10000;
+}
+
+/// Reduces an mbedTLS verification bitmask to a single [`CertificateFailure`].
+///
+/// Returns `None` when the mask carries no verdict, so the caller keeps whatever error it
+/// already had rather than being handed an invented certificate cause. Three masks mean that:
+/// `0` (verification passed, so the handshake failed for some other reason), `u32::MAX`
+/// (mbedTLS's "verification was never performed"), and — less obviously — a mask whose only
+/// bit is `BADCERT_SKIP_VERIFY`, which mbedTLS sets when it *deliberately skipped* the check.
+/// Reporting that as a rejection would assert a verdict about a check that never ran, the same
+/// false statement the other two guards exist to prevent. `SKIP_VERIFY` is masked off rather
+/// than short-circuited, so if real flags accompany it those were still measured and are still
+/// reported.
+///
+/// mbedTLS sets *every* flag that applies, so the order below is a precedence, not a match:
+/// the most fundamental defect wins, where "fundamental" means how early it makes the
+/// certificate unusable regardless of everything else.
+///
+/// - `Missing` first — nothing was presented, so no other flag can mean anything.
+/// - Then the defects no remediation reaches: an unusable key or digest, then a certificate
+///   not authorized for this use at all.
+/// - Then lifecycle: revoked, expired, not yet valid.
+/// - Then `NOT_TRUSTED` above `CN_MISMATCH`. A self-signed proxy presenting the wrong name
+///   sets both, and reporting the anchor problem is what lets a caller route it to
+///   certificate capture. An *expired* untrusted certificate reports `Expired` for the mirror
+///   reason: capturing it would pin something already invalid.
+///
+/// The full mask is logged at debug so nothing is lost.
+#[cfg(any(feature = "esp-idf", feature = "embassy", test))]
+pub(crate) fn map_mbedtls_verify_flags(flags: u32) -> Option<CertificateFailure> {
+    use mbedtls_badcert as f;
+
+    if flags == 0 || flags == u32::MAX {
+        return None;
+    }
+
+    log::debug!("mbedTLS certificate verification flags: {flags:#x}");
+
+    let measured = flags & !f::SKIP_VERIFY;
+    if measured == 0 {
+        log::debug!("mbedTLS skipped certificate verification; reporting no certificate verdict");
+        return None;
+    }
+
+    let failure = if measured & f::MISSING != 0 {
+        CertificateFailure::Missing
+    } else if measured & (f::BAD_MD | f::BAD_PK | f::BAD_KEY) != 0 {
+        CertificateFailure::UnsupportedAlgorithm
+    } else if measured & (f::KEY_USAGE | f::EXT_KEY_USAGE | f::NS_CERT_TYPE) != 0 {
+        CertificateFailure::InvalidPurpose
+    } else if measured & f::REVOKED != 0 {
+        CertificateFailure::Revoked
+    } else if measured & f::EXPIRED != 0 {
+        CertificateFailure::Expired
+    } else if measured & f::FUTURE != 0 {
+        CertificateFailure::NotYetValid
+    } else if measured & f::NOT_TRUSTED != 0 {
+        CertificateFailure::UntrustedAnchor
+    } else if measured & f::CN_MISMATCH != 0 {
+        CertificateFailure::NameMismatch
+    } else {
+        CertificateFailure::Unspecified
+    };
+
+    Some(failure)
 }
 
 /// Maps standard library IO error kinds to the runtime-agnostic `SocketError` enum.
@@ -585,6 +740,148 @@ mod redacted_host_tests {
     fn multibyte_name_splits_on_a_char_boundary_without_panicking() {
         // Each 'e' here is 2 bytes, so a byte-indexed split at 3 would panic.
         assert_eq!(RedactedHost("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}").to_string(), "\u{e9}\u{e9}\u{e9}***");
+    }
+}
+
+#[cfg(test)]
+mod verify_flag_tests {
+    use super::mbedtls_badcert as f;
+    use super::*;
+
+    #[test]
+    fn test_no_verdict_masks_return_none() {
+        // 0 = verification passed (so the handshake failed for some other reason);
+        // u32::MAX = mbedTLS never performed verification. Neither may be reported as a
+        // certificate failure, or the caller would be told a cause that wasn't measured.
+        assert_eq!(map_mbedtls_verify_flags(0), None);
+        assert_eq!(map_mbedtls_verify_flags(u32::MAX), None);
+    }
+
+    #[test]
+    fn test_skip_verify_alone_is_not_a_rejection() {
+        // mbedTLS sets SKIP_VERIFY when it deliberately did not check. Reporting that as a
+        // certificate rejection asserts a verdict about a check that never ran.
+        assert_eq!(map_mbedtls_verify_flags(f::SKIP_VERIFY), None);
+    }
+
+    #[test]
+    fn test_skip_verify_does_not_suppress_real_flags() {
+        // Masked off, not short-circuited: anything accompanying it was still measured.
+        assert_eq!(
+            map_mbedtls_verify_flags(f::SKIP_VERIFY | f::NOT_TRUSTED),
+            Some(CertificateFailure::UntrustedAnchor)
+        );
+    }
+
+    #[test]
+    fn test_missing_outranks_every_other_flag() {
+        // Nothing was presented, so no other flag can mean anything.
+        assert_eq!(
+            map_mbedtls_verify_flags(f::MISSING),
+            Some(CertificateFailure::Missing)
+        );
+        assert_eq!(
+            map_mbedtls_verify_flags(f::MISSING | f::BAD_KEY | f::NOT_TRUSTED),
+            Some(CertificateFailure::Missing)
+        );
+    }
+
+    #[test]
+    fn test_purpose_flags_do_not_reach_untrusted_anchor() {
+        // The distinction that matters here is against `UntrustedAnchor`: a certificate barred
+        // from server auth is not a trust-on-first-use candidate, so it must never arrive as
+        // the one verdict that opens a capture prompt.
+        for purpose_flag in [f::KEY_USAGE, f::EXT_KEY_USAGE, f::NS_CERT_TYPE] {
+            assert_eq!(
+                map_mbedtls_verify_flags(purpose_flag),
+                Some(CertificateFailure::InvalidPurpose)
+            );
+            assert_eq!(
+                map_mbedtls_verify_flags(purpose_flag | f::NOT_TRUSTED),
+                Some(CertificateFailure::InvalidPurpose)
+            );
+        }
+    }
+
+    #[test]
+    fn test_trust_and_name_never_collapse() {
+        // The distinction GitHub issue #157 exists for.
+        assert_eq!(
+            map_mbedtls_verify_flags(f::NOT_TRUSTED),
+            Some(CertificateFailure::UntrustedAnchor)
+        );
+        assert_eq!(
+            map_mbedtls_verify_flags(f::CN_MISMATCH),
+            Some(CertificateFailure::NameMismatch)
+        );
+    }
+
+    #[test]
+    fn test_combined_flags_follow_documented_precedence() {
+        // A self-signed proxy with the wrong name sets both; the anchor problem is the one a
+        // caller can act on with certificate capture, so it wins.
+        assert_eq!(
+            map_mbedtls_verify_flags(f::NOT_TRUSTED | f::CN_MISMATCH),
+            Some(CertificateFailure::UntrustedAnchor)
+        );
+        // Expiry outranks the anchor problem: capturing an already-expired certificate would
+        // pin something invalid.
+        assert_eq!(
+            map_mbedtls_verify_flags(f::NOT_TRUSTED | f::EXPIRED),
+            Some(CertificateFailure::Expired)
+        );
+        // A bad key/digest outranks everything else.
+        assert_eq!(
+            map_mbedtls_verify_flags(f::BAD_KEY | f::EXPIRED | f::NOT_TRUSTED),
+            Some(CertificateFailure::UnsupportedAlgorithm)
+        );
+    }
+
+    #[test]
+    fn test_remaining_single_flags() {
+        assert_eq!(
+            map_mbedtls_verify_flags(f::EXPIRED),
+            Some(CertificateFailure::Expired)
+        );
+        assert_eq!(
+            map_mbedtls_verify_flags(f::FUTURE),
+            Some(CertificateFailure::NotYetValid)
+        );
+        assert_eq!(
+            map_mbedtls_verify_flags(f::REVOKED),
+            Some(CertificateFailure::Revoked)
+        );
+        for algo_flag in [f::BAD_MD, f::BAD_PK, f::BAD_KEY] {
+            assert_eq!(
+                map_mbedtls_verify_flags(algo_flag),
+                Some(CertificateFailure::UnsupportedAlgorithm)
+            );
+        }
+    }
+
+    #[test]
+    fn test_unmapped_flag_is_unspecified_not_none() {
+        // MBEDTLS_X509_BADCERT_OTHER (0x100) has no portable counterpart, but the certificate
+        // was still rejected — degrading it to `None` would let a caller read the failure as
+        // something other than a certificate problem.
+        assert_eq!(
+            map_mbedtls_verify_flags(0x100),
+            Some(CertificateFailure::Unspecified)
+        );
+    }
+
+    #[test]
+    fn test_crl_flags_do_not_masquerade_as_revoked() {
+        // The BADCRL_* family means "revocation status could not be established", which is not
+        // the same claim as BADCERT_REVOKED. This crate does no CRL lookup, so these are
+        // unreachable today — the assertion is that if one ever does arrive it degrades to
+        // `Unspecified` rather than asserting a certificate was positively revoked.
+        const BADCRL_NOT_TRUSTED: u32 = 0x10;
+        const BADCRL_EXPIRED: u32 = 0x20;
+        assert_eq!(
+            map_mbedtls_verify_flags(BADCRL_NOT_TRUSTED | BADCRL_EXPIRED),
+            Some(CertificateFailure::Unspecified)
+        );
     }
 }
 

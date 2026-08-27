@@ -5,8 +5,8 @@
 //! and the Rustls TLS stack.
 
 use crate::io::{
-    AsyncUdpSocket, BindableUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
-    TlsConnector, TlsVersion,
+    AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
+    TimerError, TimerProvider, TlsConnector, TlsVersion,
 };
 
 pub(crate) const UDP_RECV_TIMEOUT_MS: u64 = 100;
@@ -98,6 +98,70 @@ impl AsyncUdpSocket for TokioUdpSocket {
 impl From<std::io::Error> for SocketError {
     fn from(err: std::io::Error) -> Self {
         crate::io::map_std_io_error(err, "Native OS platform IO error occurred")
+    }
+}
+
+/// Maps a failed `tokio_rustls` handshake to a `SocketError`, keeping rustls's certificate
+/// verdict instead of flattening it into an opaque IO error (GitHub issue #157).
+///
+/// `tokio_rustls` surfaces the handshake failure as a `std::io::Error` with the real
+/// `rustls::Error` boxed inside it, so the typed verdict is there but only reachable by
+/// downcast — without this, `CertificateError::UnknownIssuer` and
+/// `CertificateError::NotValidForName` both arrived as `SocketError::Other`, distinguishable
+/// only by matching on a display string. Anything that is not a certificate rejection falls
+/// through to the existing `std::io::ErrorKind` mapping unchanged.
+///
+/// `NoCertificatesPresented` is matched alongside `InvalidCertificate` because rustls puts it
+/// at the top level of `Error` rather than under `CertificateError` — an easy variant to miss,
+/// and the one case where there is no certificate for a caller to capture at all.
+fn map_tls_handshake_error(err: std::io::Error) -> SocketError {
+    if let Some(rustls_err) = err
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+    {
+        match rustls_err {
+            rustls::Error::InvalidCertificate(cert_err) => {
+                log::debug!("rustls rejected the peer certificate: {cert_err:?}");
+                return SocketError::CertificateInvalid(map_rustls_certificate_error(cert_err));
+            }
+            rustls::Error::NoCertificatesPresented => {
+                log::debug!("rustls reports the peer sent no certificates");
+                return SocketError::CertificateInvalid(CertificateFailure::Missing);
+            }
+            _ => {}
+        }
+    }
+
+    SocketError::from(err)
+}
+
+/// Collapses rustls's certificate errors onto the portable [`CertificateFailure`] set.
+///
+/// `rustls::CertificateError` is `#[non_exhaustive]` and pairs several variants with a
+/// `*Context` twin carrying extra detail; both members of each pair mean the same thing to a
+/// caller, so they map together. The wildcard arm covers the rest as `Unspecified` — losing
+/// detail, never softening the verdict.
+// `UnsupportedSignatureAlgorithm` is deprecated in favor of its `*Context` twin but still
+// constructible and still reachable, so it stays matched explicitly — dropping it would send it
+// to the `Unspecified` wildcard, silently coarsening a verdict that is available.
+#[allow(deprecated)]
+fn map_rustls_certificate_error(err: &rustls::CertificateError) -> CertificateFailure {
+    use rustls::CertificateError as E;
+
+    match err {
+        E::UnknownIssuer => CertificateFailure::UntrustedAnchor,
+        E::NotValidForName | E::NotValidForNameContext { .. } => CertificateFailure::NameMismatch,
+        E::Expired | E::ExpiredContext { .. } => CertificateFailure::Expired,
+        E::NotValidYet | E::NotValidYetContext { .. } => CertificateFailure::NotYetValid,
+        E::Revoked => CertificateFailure::Revoked,
+        E::UnsupportedSignatureAlgorithm
+        | E::UnsupportedSignatureAlgorithmContext { .. }
+        | E::UnsupportedSignatureAlgorithmForPublicKeyContext { .. } => {
+            CertificateFailure::UnsupportedAlgorithm
+        }
+        E::InvalidPurpose | E::InvalidPurposeContext { .. } => CertificateFailure::InvalidPurpose,
+        E::BadEncoding => CertificateFailure::Malformed,
+        _ => CertificateFailure::Unspecified,
     }
 }
 
@@ -213,7 +277,7 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
             .connector
             .connect(server_name, raw_stream.0)
             .await
-            .map_err(SocketError::from)?;
+            .map_err(map_tls_handshake_error)?;
 
         Ok(TokioIo(tls_stream))
     }

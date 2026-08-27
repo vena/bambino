@@ -5,8 +5,8 @@
 
 #[cfg(feature = "esp-idf")]
 use crate::io::{
-    AsyncUdpSocket, BindableUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
-    TlsConnector, TlsVersion,
+    AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
+    TimerError, TimerProvider, TlsConnector, TlsVersion, map_mbedtls_verify_flags,
 };
 
 #[cfg(feature = "esp-idf")]
@@ -828,6 +828,38 @@ fn query_peer_chain_der<S: ::esp_idf_svc::tls::Socket>(
     if chain.is_empty() { None } else { Some(chain) }
 }
 
+/// Reads mbedTLS's certificate-verification verdict off a failed handshake, if it has one.
+///
+/// mbedTLS reports *which* check failed out of band rather than in the return value: every
+/// verification failure comes back as `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` (`-0x2700`), which
+/// esp-tls in turn flattens to `ESP_FAIL`, so "no trusted anchor" and "name mismatch" were
+/// indistinguishable to a caller (GitHub issue #157). The detail lives in
+/// `mbedtls_ssl_get_verify_result`, reached through the same `esp_tls_get_ssl_context` route
+/// `query_peer_chain_der` already uses.
+///
+/// Returns `None` — leaving the caller's existing error untouched — whenever the context is
+/// gone or the mask carries no verdict. That matters more here than the accessor's shape
+/// suggests: `mbedtls_ssl_get_peer_cert` is documented to return `NULL` after a *failed*
+/// handshake, so a failed context demonstrably does not retain everything, and whether the
+/// verify result specifically survives to this point has not been confirmed on hardware. The
+/// fallback is the pre-existing opaque error, never a fabricated cause, so an unconfirmed
+/// answer degrades to today's behavior rather than to a wrong one.
+#[cfg(feature = "esp-idf")]
+fn query_verify_failure<S: ::esp_idf_svc::tls::Socket>(
+    tls: &::esp_idf_svc::tls::EspTls<S>,
+) -> Option<CertificateFailure> {
+    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
+        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
+
+    if ssl_ctx.is_null() {
+        return None;
+    }
+
+    let flags = unsafe { ::esp_idf_svc::sys::mbedtls_ssl_get_verify_result(ssl_ctx) };
+
+    map_mbedtls_verify_flags(flags)
+}
+
 /// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
 #[cfg(feature = "esp-idf")]
 #[derive(Debug)]
@@ -1287,6 +1319,13 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         "ESP-TLS handshake with {} failed: {e}",
                         RedactedHost(host)
                     );
+                    // Checked before the code-based mapping: every certificate rejection
+                    // reaches this point as the same opaque `ESP_FAIL`, so the error code
+                    // cannot route it. `None` means mbedTLS has no verdict to give and the
+                    // code-based mapping stands.
+                    if let Some(failure) = query_verify_failure(&tls) {
+                        return Err(SocketError::CertificateInvalid(failure));
+                    }
                     return Err(map_esp_tls_connect_error(&e));
                 }
             }

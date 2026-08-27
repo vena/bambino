@@ -410,3 +410,97 @@ fn test_build_verified_client_config_bad_key_returns_error() {
         "garbage PKCS#8 key bytes must fail client config construction"
     );
 }
+
+#[test]
+fn test_handshake_error_preserves_rustls_certificate_verdict() {
+    // tokio-rustls reports a handshake failure as `io::Error::new(InvalidData, rustls::Error)`
+    // (`tokio_rustls::common::Stream::read_io`), so the typed verdict survives only if the
+    // mapping downcasts for it — `InvalidData` itself maps to `Other` (GitHub issue #157).
+    let unknown_issuer = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+    );
+    assert_eq!(
+        map_tls_handshake_error(unknown_issuer),
+        SocketError::CertificateInvalid(CertificateFailure::UntrustedAnchor)
+    );
+
+    let bad_name = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        rustls::Error::InvalidCertificate(rustls::CertificateError::NotValidForName),
+    );
+    assert_eq!(
+        map_tls_handshake_error(bad_name),
+        SocketError::CertificateInvalid(CertificateFailure::NameMismatch)
+    );
+}
+
+#[test]
+fn test_handshake_error_non_certificate_paths_unchanged() {
+    // A rustls error that isn't a certificate rejection, and a plain socket error, both keep
+    // the pre-existing mapping rather than being forced into a certificate verdict.
+    let protocol_err =
+        std::io::Error::new(std::io::ErrorKind::InvalidData, rustls::Error::DecryptError);
+    assert!(matches!(
+        map_tls_handshake_error(protocol_err),
+        SocketError::Other(_)
+    ));
+
+    let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+    assert_eq!(
+        map_tls_handshake_error(refused),
+        SocketError::ConnectionRefused
+    );
+}
+
+#[test]
+#[allow(deprecated)] // Same reason as `map_rustls_certificate_error`'s own allow.
+fn test_rustls_certificate_error_mapping_covers_context_twins() {
+    // Each `*Context` variant carries extra detail but means the same thing to a caller, so it
+    // must not fall through to `Unspecified` alongside its plain twin.
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::Expired),
+        CertificateFailure::Expired
+    );
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::NotValidYet),
+        CertificateFailure::NotYetValid
+    );
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::Revoked),
+        CertificateFailure::Revoked
+    );
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::BadEncoding),
+        CertificateFailure::Malformed
+    );
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::UnsupportedSignatureAlgorithm),
+        CertificateFailure::UnsupportedAlgorithm
+    );
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::InvalidPurpose),
+        CertificateFailure::InvalidPurpose
+    );
+    // No portable counterpart — still a rejection, so `Unspecified`, never a softer verdict.
+    assert_eq!(
+        map_rustls_certificate_error(&rustls::CertificateError::UnhandledCriticalExtension),
+        CertificateFailure::Unspecified
+    );
+}
+
+#[test]
+fn test_peer_sent_no_certificates_is_reported_as_missing() {
+    // rustls puts `NoCertificatesPresented` at the top level of `Error`, not under
+    // `CertificateError`, so it is only reached by the second match arm — without it this
+    // lands in `Other` and a caller cannot tell "nothing to capture" from an unrelated
+    // transport failure.
+    let none_presented = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        rustls::Error::NoCertificatesPresented,
+    );
+    assert_eq!(
+        map_tls_handshake_error(none_presented),
+        SocketError::CertificateInvalid(CertificateFailure::Missing)
+    );
+}

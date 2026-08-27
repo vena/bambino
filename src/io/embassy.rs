@@ -7,7 +7,7 @@
 #[cfg(feature = "embassy")]
 use crate::io::{
     AsyncIo, AsyncUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
-    TlsConnector, TlsVersion,
+    TlsConnector, TlsVersion, map_mbedtls_verify_flags,
 };
 
 #[cfg(all(feature = "embassy", not(feature = "std")))]
@@ -225,13 +225,17 @@ where
                 SocketError::ConnectionAborted
             })?;
 
-        session
-            .connect()
-            .await
-            .map_err(|e| {
-                log::debug!("mbedtls-rs Session::connect failed: {e:?}");
-                SocketError::ConnectionAborted
-            })?;
+        // `tls_verification_details()` is the one post-handshake inspector `mbedtls-rs` does
+        // expose (unlike a peer-cert accessor or the raw `mbedtls_ssl_context` pointer, whose
+        // absence is why `peer_chain_der` returns `None` below) — it wraps
+        // `mbedtls_ssl_get_verify_result`, so this backend can name *why* a certificate was
+        // rejected even though it cannot hand the certificate itself back (GitHub issue #157).
+        // A mask with no verdict keeps the pre-existing `ConnectionAborted`.
+        if let Err(e) = session.connect().await {
+            log::debug!("mbedtls-rs Session::connect failed: {e:?}");
+            return Err(map_mbedtls_verify_flags(session.tls_verification_details())
+                .map_or(SocketError::ConnectionAborted, SocketError::CertificateInvalid));
+        }
 
         Ok(session)
     }
