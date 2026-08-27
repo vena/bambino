@@ -27,6 +27,7 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
   - [`embassy`](embassy/index.md)
   - [`tokio`](tokio/index.md)
 - [Types](#types)
+  - [`CertificateFailure`](#certificatefailure)
   - [`SocketError`](#socketerror)
   - [`TimerError`](#timererror)
   - [`TlsVersion`](#tlsversion)
@@ -44,6 +45,7 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
 |------|------|-------------|
 | [`embassy`](embassy/index.md) | mod | # Bare-Metal Embassy Runtime Integration |
 | [`tokio`](tokio/index.md) | mod | # Tokio Host Runtime Implementation |
+| [`CertificateFailure`](#certificatefailure) | enum | Why a peer's certificate was rejected, in terms every backend can express. |
 | [`SocketError`](#socketerror) | enum | Unified transport-level Socket Errors, agnostic of runtime implementations. |
 | [`TimerError`](#timererror) | enum | Unified timer/sleep errors, agnostic of runtime implementations. |
 | [`TlsVersion`](#tlsversion) | enum | TLS protocol version negotiated during a handshake. |
@@ -137,6 +139,117 @@ Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trai
 
 - <span id="tokioioerror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
+### `CertificateFailure`
+
+```rust
+enum CertificateFailure {
+    UntrustedAnchor,
+    NameMismatch,
+    Expired,
+    NotYetValid,
+    Revoked,
+    UnsupportedAlgorithm,
+    InvalidPurpose,
+    Missing,
+    Malformed,
+    Unspecified,
+}
+```
+
+Why a peer's certificate was rejected, in terms every backend can express.
+
+Deliberately coarser than any one backend's native error type: rustls names ~20 distinct
+certificate errors and mbedTLS reports a bitmask of ~14 flags, but a caller acts on far
+fewer distinctions than that. What matters is that "the chain reached no trusted anchor"
+and "the chain verified and the name did not match" never collapse into each other — they
+are different problems with different remedies.
+
+`Unspecified` means the backend rejected the certificate for a reason with no portable
+counterpart here (rustls's `UnhandledCriticalExtension`, mbedTLS's `BADCERT_OTHER`, …). It
+is a *lack of detail*, never "probably fine" — the handshake failed either way.
+
+Revocation *status* has no variant: [`Revoked`](#certificatefailure) means a certificate was
+positively revoked, and nothing here reports "revocation could not be checked". That is
+deliberate — this crate performs no CRL or OCSP lookup and Bambu certificates carry no CRL
+distribution points, so a variant for it could never be produced. Add one only alongside a
+backend that can actually reach that state.
+
+#### Variants
+
+- **`UntrustedAnchor`**
+
+  Chain terminated at no anchor the caller supplied. The one cause for which offering
+  to capture and pin the presented certificate is a sensible remedy.
+  
+  Broader than "the peer is self-signed": the tokio backend's `CnFallbackServerVerifier`
+  also reports a chain hop rejected for a *non-CA-capable* intermediate this way (see
+  `check_ca_capable` in `io/tokio/cert_verify.rs`, which chooses `UnknownIssuer`
+  deliberately). Trust-on-first-use is unauthenticated at first contact by construction,
+  so this doesn't weaken it — but don't read this variant as "a benign self-signed
+  printer certificate".
+
+- **`NameMismatch`**
+
+  Chain verified, but no name in the certificate matched the host that was dialed.
+
+- **`Expired`**
+
+  A certificate in the chain is past its `notAfter`.
+
+- **`NotYetValid`**
+
+  A certificate in the chain is before its `notBefore` — on an embedded target this is
+  far more often an unset system clock than a genuinely premature certificate.
+
+- **`Revoked`**
+
+  A certificate in the chain was revoked by its issuer.
+
+- **`UnsupportedAlgorithm`**
+
+  The chain uses a signature algorithm, key type, or key size the backend refuses.
+
+- **`InvalidPurpose`**
+
+  Chain and name are fine, but a certificate is not authorized for this use — key usage,
+  extended key usage, or Netscape cert type forbids TLS server authentication.
+  
+  Explicitly *not* a trust-on-first-use candidate, unlike
+  [`UntrustedAnchor`](#certificatefailure): capturing and pinning the certificate
+  changes nothing, because it will be rejected for the same reason on every later
+  connection. Usually the wrong certificate installed, or one mis-issued by a proxy.
+
+- **`Missing`**
+
+  Peer presented no certificate at all — there is nothing to evaluate, and nothing a
+  caller could capture or pin.
+
+- **`Malformed`**
+
+  A certificate could not be parsed at all.
+
+- **`Unspecified`**
+
+  Rejected for a reason with no portable counterpart above.
+
+#### Trait Implementations
+
+##### `impl Clone for CertificateFailure`
+
+- <span id="certificatefailure-clone"></span>`fn clone(&self) -> CertificateFailure` — [`CertificateFailure`](#certificatefailure)
+
+##### `impl Copy for CertificateFailure`
+
+##### `impl Debug for CertificateFailure`
+
+- <span id="certificatefailure-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for CertificateFailure`
+
+##### `impl PartialEq for CertificateFailure`
+
+- <span id="certificatefailure-partialeq-eq"></span>`fn eq(&self, other: &CertificateFailure) -> bool` — [`CertificateFailure`](#certificatefailure)
+
 ### `SocketError`
 
 ```rust
@@ -149,6 +262,7 @@ enum SocketError {
     AddressInUse,
     AddressNotAvailable,
     InvalidInput,
+    CertificateInvalid(CertificateFailure),
     Other(std::borrow::Cow<'static, str>),
 }
 ```
@@ -195,6 +309,17 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 - **`InvalidInput`**
 
   Supplied connection or routing parameters are malformed.
+
+- **`CertificateInvalid`**
+
+  Peer's certificate was rejected during the TLS handshake, with the reason it failed.
+  
+  Separate from `Other` so a consumer can *act* on the distinction — offering
+  trust-on-first-use certificate capture is only correct for
+  [`CertificateFailure::UntrustedAnchor`](#certificatefailure), and prompting on any other cause would be a
+  security-relevant misfire, not just poor UX. Every backend that can name the cause
+  populates this; a backend that only knows "the handshake failed" still returns the
+  error it always did rather than guessing a cause (GitHub issue #157).
 
 - **`Other`**
 
