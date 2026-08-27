@@ -1,32 +1,48 @@
-//! Current investigation: GitHub issue #145's multi-anchor CA bundle.
+//! Current investigation: GitHub issue #157's certificate-failure reporting.
 //!
-//! `EspIdfTlsConnector::with_certs` now takes many DER certificates and re-encodes
-//! them into one NUL-terminated PEM bundle, because `X509::der` stores a slice with
-//! no trailing NUL and mbedTLS reads that as "single DER cert" — parsing the first
-//! certificate and silently dropping the rest. Nothing on the host can observe that:
-//! the encoder is unit-tested in `src/io/mod.rs`, but whether *mbedTLS* actually
-//! loads every anchor out of the bundle needs a real handshake against a real
-//! printer. See `.claude/rules/wire-framing-hardware-verification.md`.
+//! `SocketError::CertificateInvalid(CertificateFailure)` now carries *why* a peer's
+//! certificate was rejected, and on ESP-IDF that detail is read out of band: mbedTLS
+//! returns the same `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` (`-0x2700`) for every
+//! verification failure — which esp-tls in turn flattens to `ESP_FAIL` — and the
+//! flags naming the actual defect live in `mbedtls_ssl_get_verify_result`.
+//! `query_verify_failure` in `src/io/esp_idf.rs` reads them off the live SSL context
+//! via `esp_tls_get_ssl_context`.
 //!
-//! **Why the anchor order makes this decisive.** BambuStudio's `printer.cer` ships
-//! five certificates and the self-signed legacy `CN=BBL CA` root — the only one a
-//! P1S chains to — is **last** in that file. So a parser that stops after the first
-//! certificate loads `BBL CA2 RSA` and cannot verify a P1S at all.
+//! **The open question this probe answers.** `mbedtls_ssl_get_peer_cert` is documented
+//! to return `NULL` after a *failed* handshake, so a failed context demonstrably does
+//! not retain everything. Whether the *verify result* specifically survives to the
+//! point `EspIdfTlsConnector::connect` builds its error is not something the host
+//! unit tests or `scripts/check-esp-idf.sh` can observe — the flag-to-verdict mapping
+//! is tested on the host, but only real mbedTLS can say whether there are any flags
+//! left to map. See `.claude/rules/wire-framing-hardware-verification.md`.
+//!
+//! The code fails safe either way (no flags → `None` → the pre-existing opaque error),
+//! so a negative result here is not a regression — it means the ESP-IDF half of #157
+//! cannot work as written and needs the flags captured earlier, inside the negotiate
+//! loop, before esp-tls tears anything down.
 //!
 //! Four cases, run back to back against one printer:
 //!
-//! | # | Anchors passed          | Expected | What a wrong result would mean          |
-//! |---|-------------------------|----------|-----------------------------------------|
-//! | 1 | all 5, file order       | OK       | the fix works: parse reached anchor #5  |
-//! | 2 | certs 1-4 (no BBL CA)   | FAIL     | if OK, verification isn't enforced      |
-//! | 3 | cert 1 only             | FAIL     | if OK, the P1S didn't need anchor #5    |
-//! | 4 | cert 5 only (BBL CA)    | OK       | if FAIL, anchor #5 isn't the right one  |
+//! | # | Anchors        | TLS name | Expected                      |
+//! |---|----------------|----------|-------------------------------|
+//! | 1 | all 5          | serial   | handshake OK                  |
+//! | 2 | 1-4 (no BBL CA)| serial   | `CertificateInvalid(UntrustedAnchor)` |
+//! | 3 | all 5          | bogus    | `CertificateInvalid(NameMismatch)`    |
+//! | 4 | 1 only         | bogus    | `CertificateInvalid(UntrustedAnchor)` |
 //!
-//! Case 1 is the fix. Case 3 is what the *old* code effectively loaded, so 1-vs-3 is
-//! the A/B. Cases 2 and 4 are the controls that stop case 1 from being a false pass:
-//! without case 2 failing, a success in case 1 could just mean mbedTLS is verifying
-//! nothing (bundle-attach left on, or an insecure sdkconfig), and case 1 would prove
-//! nothing at all.
+//! **Cases 2 and 3 are the whole probe.** Before #157 both produced the byte-identical
+//! `Other("ESP-IDF TLS handshake failed: ESP_FAIL")`. If they still match each other —
+//! whatever they say — the verify result did not survive and nothing was gained. If
+//! either comes back as `Other(..)`, the flags were already gone.
+//!
+//! Case 1 is the control: without a handshake that *succeeds*, cases 2-4 failing could
+//! just mean the probe cannot reach the printer at all, and would prove nothing.
+//!
+//! Case 4 sets `NOT_TRUSTED` and `CN_MISMATCH` together and checks the precedence
+//! documented on `map_mbedtls_verify_flags` holds against real mbedTLS. It matters for
+//! more than tidiness: `UntrustedAnchor` is the one verdict a trust-on-first-use flow
+//! may offer certificate capture for, so if mbedTLS reports this combination as a mere
+//! name mismatch, a genuinely untrusted chain would be routed away from that prompt.
 //!
 //! **Setup.** Certificates are not committed (see `.gitignore`) — regenerate with:
 //!
@@ -49,11 +65,12 @@
 //! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee run.log
 //! ```
 //!
-//! Prior investigations (e.g. issue #65's concurrent-sleep probe) are recoverable via
-//! `git log -- esp32-hw-probe/src/main.rs`, not kept live here.
+//! Prior investigations (e.g. issue #145's multi-anchor bundle probe, issue #65's
+//! concurrent-sleep probe) are recoverable via `git log -- esp32-hw-probe/src/main.rs`,
+//! not kept live here.
 
 use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTlsConnector};
-use bambino::io::{RawStreamFactory, TlsConnector};
+use bambino::io::{CertificateFailure, RawStreamFactory, SocketError, TlsConnector};
 use core::time::Duration;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -62,8 +79,8 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
 /// The five BambuStudio trust anchors, in the order they appear in `printer.cer`.
-/// Index 4 (`bbl_5.der`) is the legacy self-signed `CN=BBL CA` a P1S chains to — last,
-/// which is exactly what makes case 1 discriminating.
+/// Index 4 (`bbl_5.der`) is the legacy self-signed `CN=BBL CA` a P1S chains to, so
+/// withholding it (case 2) is what produces a genuine untrusted-anchor rejection.
 const BBL_ANCHORS: [&[u8]; 5] = [
     include_bytes!("../certs/bbl_1.der"), // CN=BBL CA2 RSA, self-signed
     include_bytes!("../certs/bbl_2.der"), // CN=BBL CA2 ECC, self-signed
@@ -80,48 +97,84 @@ const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 /// would fail the common-name check for reasons that have nothing to do with anchors.
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
 
+/// The name for cases 3 and 4. Deliberately *not* serial-shaped: a wrong-but-plausible
+/// serial in a tracked file reads like a leaked one, and `.invalid` is reserved by
+/// RFC 2606 so it can never collide with a real printer's common name.
+const BOGUS_TLS_NAME: &str = "not-this-printer.invalid";
+
 /// MQTT over TLS. Chosen over FTPS because the handshake is the whole test and this port
 /// needs no access code to reach it.
 const PRINTER_TLS_PORT: u16 = 8883;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// What a case should produce. `Ok` is the successful-handshake control; every other case
+/// names the exact `CertificateFailure` the backend is expected to report.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Expect {
+    Ok,
+    Cert(CertificateFailure),
+}
+
+/// What a case actually produced, reduced to the same shape for comparison. `Opaque` is
+/// the pre-#157 behavior and the signature of the verify result *not* surviving.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Outcome {
+    Ok,
+    Cert(CertificateFailure),
+    /// Rejected, but with no certificate verdict attached — `Other(..)`, `TimedOut`, etc.
+    Opaque,
+    /// The printer was not reachable, so this case yielded no evidence either way.
+    NoEvidence,
+}
+
 /// One row of the table in this file's header.
 struct Case {
     name: &'static str,
     anchors: &'static [usize],
-    expect_ok: bool,
+    /// `true` to dial with `BOGUS_TLS_NAME` instead of the real serial.
+    bogus_name: bool,
+    expect: Expect,
     /// Printed only when the case comes out the other way, so a failing run explains itself.
     on_surprise: &'static str,
 }
 
 const CASES: [Case; 4] = [
     Case {
-        name: "1. all 5 anchors, printer.cer order",
+        name: "1. all 5 anchors, real serial (control)",
         anchors: &[0, 1, 2, 3, 4],
-        expect_ok: true,
-        on_surprise: "the bundle did NOT reach anchor #5 — issue #145's fix is not working",
+        bogus_name: false,
+        expect: Expect::Ok,
+        on_surprise: "the control handshake failed, so cases 2-4 failing says nothing about \
+                      certificate reporting — check reachability, anchors, and the clock \
+                      before reading anything else in this transcript",
     },
     Case {
-        name: "2. anchors 1-4 only, BBL CA withheld",
+        name: "2. anchors 1-4, BBL CA withheld, real serial",
         anchors: &[0, 1, 2, 3],
-        expect_ok: false,
-        on_surprise: "handshake succeeded with no valid anchor: verification is NOT being \
-                      enforced, so case 1 proves nothing (check sdkconfig for ESP_TLS_INSECURE \
-                      / a still-attached cert bundle)",
+        bogus_name: false,
+        expect: Expect::Cert(CertificateFailure::UntrustedAnchor),
+        on_surprise: "an untrusted chain was not reported as UntrustedAnchor. If this is \
+                      Opaque, the verify result did not survive to where connect() builds \
+                      its error and the ESP-IDF half of #157 does not work as written",
     },
     Case {
-        name: "3. anchor 1 only (what pre-fix DER loaded)",
+        name: "3. all 5 anchors, bogus TLS name",
+        anchors: &[0, 1, 2, 3, 4],
+        bogus_name: true,
+        expect: Expect::Cert(CertificateFailure::NameMismatch),
+        on_surprise: "a verified chain with a wrong name was not reported as NameMismatch. \
+                      If this is Opaque, see case 2's note — same cause",
+    },
+    Case {
+        name: "4. anchor 1 only, bogus TLS name (both flags)",
         anchors: &[0],
-        expect_ok: false,
-        on_surprise: "the P1S verified against BBL CA2 RSA alone, so this printer never needed \
-                      anchor #5 and cases 1/3 do not form a valid A/B",
-    },
-    Case {
-        name: "4. anchor 5 only (BBL CA)",
-        anchors: &[4],
-        expect_ok: true,
-        on_surprise: "BBL CA alone cannot verify this printer — the premise of the whole probe \
-                      is wrong, re-check which root the P1S chains to",
+        bogus_name: true,
+        expect: Expect::Cert(CertificateFailure::UntrustedAnchor),
+        on_surprise: "mbedTLS resolved a chain that is BOTH untrusted and wrongly named \
+                      differently than map_mbedtls_verify_flags' documented precedence. If \
+                      this reported NameMismatch, a genuinely untrusted chain would be \
+                      routed away from a trust-on-first-use capture prompt — fix the \
+                      precedence, not this probe",
     },
 ];
 
@@ -129,8 +182,8 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("esp32-hw-probe: issue #145 multi-anchor CA bundle probe");
-    log::info!("target {PRINTER_IP}:{PRINTER_TLS_PORT}, TLS name = <serial>");
+    log::info!("esp32-hw-probe: issue #157 certificate-failure reporting probe");
+    log::info!("target {PRINTER_IP}:{PRINTER_TLS_PORT}");
 
     let peripherals = match Peripherals::take() {
         Ok(p) => p,
@@ -165,55 +218,71 @@ fn main() {
     };
 
     let mut surprises = 0u32;
-    let mut results: [(&'static str, bool, bool); 4] = [("", false, false); 4];
+    let mut results: [(&'static str, Expect, Outcome); 4] =
+        [("", Expect::Ok, Outcome::NoEvidence); 4];
 
     for (slot, case) in CASES.iter().enumerate() {
         log::info!("--- {} ---", case.name);
-        let outcome = run_case(case.anchors);
-        let matched = outcome == case.expect_ok;
+        let outcome = run_case(case);
+        let matched = match (case.expect, outcome) {
+            (Expect::Ok, Outcome::Ok) => true,
+            (Expect::Cert(expected), Outcome::Cert(actual)) => expected == actual,
+            _ => false,
+        };
 
-        match (outcome, matched) {
-            (true, true) => log::info!("PASS {}: handshake OK, as expected", case.name),
-            (false, true) => log::info!("PASS {}: handshake rejected, as expected", case.name),
-            (true, false) => {
-                log::error!("SURPRISE {}: handshake OK, expected failure", case.name);
-                log::error!("    -> {}", case.on_surprise);
-            }
-            (false, false) => {
-                log::error!("SURPRISE {}: handshake failed, expected OK", case.name);
-                log::error!("    -> {}", case.on_surprise);
-            }
-        }
-
-        if !matched {
+        if matched {
+            log::info!("PASS {}: got {outcome:?}, as expected", case.name);
+        } else {
+            log::error!(
+                "SURPRISE {}: expected {:?}, got {outcome:?}",
+                case.name,
+                case.expect
+            );
+            log::error!("    -> {}", case.on_surprise);
             surprises += 1;
         }
-        results[slot] = (case.name, case.expect_ok, outcome);
+        results[slot] = (case.name, case.expect, outcome);
 
         // The printer drops an unauthenticated MQTT session on its own; give it a moment
         // so a lingering half-open connection can't perturb the next case.
         std::thread::sleep(Duration::from_secs(2));
     }
 
-    log::info!("================ issue #145 probe summary ================");
+    log::info!("================ issue #157 probe summary ================");
     for (name, expected, actual) in results {
-        log::info!(
-            "  {name}: expected {}, got {}",
-            if expected { "OK" } else { "FAIL" },
-            if actual { "OK" } else { "FAIL" }
-        );
+        log::info!("  {name}: expected {expected:?}, got {actual:?}");
+    }
+
+    // The headline comparison, stated separately from the pass/fail tally because it is
+    // the one thing the whole probe exists to establish: these two were byte-identical
+    // before #157, and if they are still identical the change bought nothing on ESP-IDF.
+    let (_, _, case2) = results[1];
+    let (_, _, case3) = results[2];
+    match (case2, case3) {
+        (Outcome::Cert(a), Outcome::Cert(b)) if a != b => log::info!(
+            "KEY RESULT: cases 2 and 3 are distinguishable ({a:?} vs {b:?}). The mbedTLS \
+             verify result DOES survive a failed handshake, and the ESP-IDF backend can \
+             report why a certificate was rejected."
+        ),
+        (Outcome::Opaque, _) | (_, Outcome::Opaque) => log::error!(
+            "KEY RESULT: at least one of cases 2/3 came back with no certificate verdict. \
+             The verify result does NOT survive to where connect() builds its error — the \
+             flags must be captured earlier, inside the negotiate loop, or the ESP-IDF half \
+             of #157 cannot work."
+        ),
+        (a, b) => log::error!(
+            "KEY RESULT: cases 2 and 3 did not separate ({a:?} vs {b:?}). Whatever else this \
+             transcript says, a consumer still cannot tell an untrusted anchor from a name \
+             mismatch on this backend."
+        ),
     }
 
     if surprises == 0 {
-        log::info!(
-            "RESULT: all 4 cases matched. mbedTLS loads every anchor from the PEM bundle, \
-             verification is enforced, and anchor #5 (last in the file) is what verifies \
-             this printer — which the pre-fix single-DER path could not have loaded."
-        );
+        log::info!("RESULT: all 4 cases matched.");
     } else {
         log::error!(
-            "RESULT: {surprises} of 4 cases did not match. The multi-anchor claim is NOT \
-             confirmed — read the SURPRISE lines above before drawing any conclusion."
+            "RESULT: {surprises} of 4 cases did not match — read the SURPRISE lines above \
+             before drawing any conclusion."
         );
     }
     log::info!("=========================================================");
@@ -221,15 +290,31 @@ fn main() {
     park();
 }
 
-/// Runs one handshake against the printer with `anchors` as the trust set.
+/// Runs one handshake against the printer and reduces the result to an [`Outcome`].
 ///
-/// Returns whether the TLS handshake completed; every failure mode (dial, handshake)
-/// collapses to `false` deliberately — the cases only ask "did TLS verify or not", and
-/// the underlying error is logged for a human reading the transcript.
-fn run_case(anchors: &[usize]) -> bool {
-    let certs: std::vec::Vec<std::vec::Vec<u8>> =
-        anchors.iter().map(|&i| BBL_ANCHORS[i].to_vec()).collect();
-    log::info!("    passing {} anchor(s) to with_certs", certs.len());
+/// The full `SocketError` is logged verbatim in every failing case: `Other("ESP-IDF TLS
+/// handshake failed: ESP_FAIL")` is exactly the pre-#157 string, so seeing it in the
+/// transcript is the direct evidence that the verify result was already gone.
+fn run_case(case: &Case) -> Outcome {
+    let certs: std::vec::Vec<std::vec::Vec<u8>> = case
+        .anchors
+        .iter()
+        .map(|&i| BBL_ANCHORS[i].to_vec())
+        .collect();
+    let tls_name = if case.bogus_name {
+        BOGUS_TLS_NAME
+    } else {
+        PRINTER_SERIAL
+    };
+    log::info!(
+        "    {} anchor(s), TLS name = {}",
+        certs.len(),
+        if case.bogus_name {
+            BOGUS_TLS_NAME
+        } else {
+            "<serial>"
+        }
+    );
 
     let connector =
         EspIdfTlsConnector::with_certs(certs, None).with_connect_timeout(HANDSHAKE_TIMEOUT);
@@ -241,24 +326,26 @@ fn run_case(anchors: &[usize]) -> bool {
         {
             Ok(stream) => stream,
             Err(e) => {
-                // Distinct from a verification failure: the printer was not reachable at all,
-                // so this case yielded no evidence either way.
                 log::error!("    TCP dial to {PRINTER_IP}:{PRINTER_TLS_PORT} failed: {e:?}");
-                return false;
+                return Outcome::NoEvidence;
             }
         };
 
-        match connector.connect(PRINTER_SERIAL, raw).await {
+        match connector.connect(tls_name, raw).await {
             Ok(stream) => {
                 log::info!(
                     "    handshake OK, negotiated {:?}",
                     connector.negotiated_version(&stream)
                 );
-                true
+                Outcome::Ok
+            }
+            Err(SocketError::CertificateInvalid(failure)) => {
+                log::info!("    handshake rejected: CertificateInvalid({failure:?})");
+                Outcome::Cert(failure)
             }
             Err(e) => {
-                log::info!("    handshake rejected: {e:?}");
-                false
+                log::info!("    handshake rejected with no certificate verdict: {e:?}");
+                Outcome::Opaque
             }
         }
     })
