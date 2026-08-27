@@ -838,12 +838,19 @@ fn query_peer_chain_der<S: ::esp_idf_svc::tls::Socket>(
 /// `query_peer_chain_der` already uses.
 ///
 /// Returns `None` — leaving the caller's existing error untouched — whenever the context is
-/// gone or the mask carries no verdict. That matters more here than the accessor's shape
-/// suggests: `mbedtls_ssl_get_peer_cert` is documented to return `NULL` after a *failed*
-/// handshake, so a failed context demonstrably does not retain everything, and whether the
-/// verify result specifically survives to this point has not been confirmed on hardware. The
-/// fallback is the pre-existing opaque error, never a fabricated cause, so an unconfirmed
-/// answer degrades to today's behavior rather than to a wrong one.
+/// gone or the mask carries no verdict, so a missing answer degrades to the pre-existing
+/// opaque error rather than to a fabricated cause.
+///
+/// **Confirmed on an ESP32-C6 against a P1-series printer:** the verify result *does* survive
+/// to this point. Withholding the anchor the printer chains to reported `UntrustedAnchor`, and
+/// a correct anchor set with a deliberately wrong TLS name reported `NameMismatch` — the two
+/// cases that were byte-identical `ESP_FAIL` before GitHub issue #157. This was worth measuring
+/// rather than assuming: `mbedtls_ssl_get_peer_cert` is documented to return `NULL` after a
+/// *failed* handshake, so a failed context demonstrably does not retain everything, and the
+/// verify result surviving does not follow from the peer certificate surviving. A chain that
+/// was both untrusted *and* wrongly named reported `UntrustedAnchor`, confirming that mbedTLS
+/// really does set both flags and that `map_mbedtls_verify_flags`' precedence — not just its
+/// unit tests — decides the answer.
 #[cfg(feature = "esp-idf")]
 fn query_verify_failure<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
