@@ -433,11 +433,22 @@ impl EspIdfTlsCerts {
             Some((cert, key)) => (Some(cert), Some(key)),
             None => (None, None),
         };
+        // Collected rather than streamed straight into the bundle builder so the anchor count
+        // is known: `report_anchor_bundle_parse` needs the denominator to say "3 of 5 anchors
+        // failed" instead of just "3 failed".
+        let ca_certs: Vec<Vec<u8>> = ca_certs.into_iter().collect();
+        let anchor_count = ca_certs.len();
+        // `None` for an empty iterator, which `build_tls_config` treats exactly like
+        // `new()` — an anchor-less connector, not a connector with an empty anchor set
+        // that mbedTLS would reject at handshake time with nothing pointing at the cause.
+        let ca_pem = crate::io::der_certs_to_pem_bundle(ca_certs);
+
+        if let Some(pem) = ca_pem.as_deref() {
+            report_anchor_bundle_parse(pem, anchor_count);
+        }
+
         Self {
-            // `None` for an empty iterator, which `build_tls_config` treats exactly like
-            // `new()` — an anchor-less connector, not a connector with an empty anchor set
-            // that mbedTLS would reject at handshake time with nothing pointing at the cause.
-            ca_pem: crate::io::der_certs_to_pem_bundle(ca_certs),
+            ca_pem,
             client_cert,
             client_key,
         }
@@ -445,6 +456,141 @@ impl EspIdfTlsCerts {
 
     fn build_config(&self) -> ::esp_idf_svc::tls::Config<'_> {
         build_tls_config(&self.ca_pem, &self.client_cert, &self.client_key)
+    }
+}
+
+/// Parses the trust-anchor bundle exactly as `esp-tls` will, and logs how many anchors loaded.
+///
+/// **This is what makes silencing the `esp-tls` tag during the handshake safe** (see
+/// `EspTlsLogQuiet`). ESP-IDF's `set_ca_cert` (`components/esp-tls/esp_tls_mbedtls.c`)
+/// tolerates a partial trust-store parse: when `mbedtls_x509_crt_parse` returns a positive
+/// count of failed certificates it logs `mbedtls_x509_crt_parse was partly successful` at
+/// **warning** level on the `esp-tls` tag and continues, so the handshake can succeed against
+/// a partially-loaded store. The absence of that warning is otherwise the only signal that
+/// every anchor loaded — load-bearing for a multi-anchor bundle (GitHub issue #145: five BBL
+/// anchors spanning two CA generations, where a P1S chains to one and newer models chain to
+/// another), because holding four of five silently verifies some models and fails others while
+/// the successful handshake looks identical either way.
+///
+/// Running the same parse here, at construction time, moves that signal *outside* the
+/// suppressed window and reports it more precisely than `esp-tls` does (`n of m`, and at
+/// `error` level rather than `warn`). Same call, same buffer, same length — `set_ca_cert`
+/// passes `cacert_buf`/`cacert_bytes` straight through, and `X509::pem_until_nul` sets those to
+/// this slice up to and including its single trailing NUL — so the result is the same integer
+/// `set_ca_cert` will get. Reported, not returned as an error: mbedTLS's own policy is that a
+/// partial store is still usable, and failing the connector here would reject a configuration
+/// ESP-IDF accepts.
+///
+/// `expected` is the number of DER certificates that went into the bundle.
+#[cfg(feature = "esp-idf")]
+fn report_anchor_bundle_parse(ca_pem: &[u8], expected: usize) {
+    // SAFETY: `chain` is zeroed and then initialized by `mbedtls_x509_crt_init` before any
+    // other call touches it, `ca_pem` is a live NUL-terminated buffer for the whole call, and
+    // `mbedtls_x509_crt_free` runs on every path before the storage is dropped.
+    let ret = unsafe {
+        let mut chain = core::mem::MaybeUninit::<::esp_idf_svc::sys::mbedtls_x509_crt>::zeroed();
+        ::esp_idf_svc::sys::mbedtls_x509_crt_init(chain.as_mut_ptr());
+        let ret = ::esp_idf_svc::sys::mbedtls_x509_crt_parse(
+            chain.as_mut_ptr(),
+            ca_pem.as_ptr(),
+            ca_pem.len(),
+        );
+        ::esp_idf_svc::sys::mbedtls_x509_crt_free(chain.as_mut_ptr());
+        ret
+    };
+
+    match ret {
+        0 => log::debug!("TLS trust store: all {expected} anchor(s) parsed"),
+        failed if failed > 0 => log::error!(
+            "TLS trust store: {failed} of {expected} anchor(s) failed to parse; handshakes will \
+             verify only the printer models that chain to a surviving anchor"
+        ),
+        // Negative: nothing parsed. mbedTLS returns the first error it hit, negated by
+        // convention when printed (matching `set_ca_cert`'s own `-0x%04X`).
+        err => log::error!(
+            "TLS trust store: none of {expected} anchor(s) parsed (mbedtls_x509_crt_parse \
+             -0x{:04X}); every handshake will fail verification",
+            -err
+        ),
+    }
+}
+
+/// `esp-tls`'s log tag, as a NUL-terminated C string for `esp_log_level_set`/`_get`.
+#[cfg(feature = "esp-idf")]
+const ESP_TLS_LOG_TAG: &[u8] = b"esp-tls\0";
+
+/// Nesting depth of live [`EspTlsLogQuiet`] guards; only the outermost touches the log level.
+#[cfg(feature = "esp-idf")]
+static ESP_TLS_LOG_QUIET_DEPTH: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// The `esp-tls` tag's log level as it was before the outermost guard lowered it.
+#[cfg(feature = "esp-idf")]
+static ESP_TLS_LOG_SAVED_LEVEL: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Lowers the `esp-tls` tag to `ESP_LOG_ERROR` for the length of a handshake, restoring it on drop.
+///
+/// A **successful** handshake emitted ~60 `W esp-tls: Failed to open new connection in
+/// specified timeout` lines before this existed (measured: 62 lines on a 1.42s ESP32-P4
+/// handshake that connected first try). Nothing had failed and no timeout had been exceeded —
+/// `esp_tls_conn_new_sync` logs that line on every step that does not *complete* the
+/// handshake, and `connect` pins `Config::timeout_ms = 0` so every step returns immediately
+/// (GitHub issue #67). The count therefore scales with handshake duration, one line per
+/// `TLS_POLL_INTERVAL`. bambino is the only layer that knows those warnings are expected; a
+/// consumer reading the log cannot tell them from real ones (GitHub issue #156).
+///
+/// `ESP_LOG_ERROR`, not `ESP_LOG_NONE`: `esp_tls_handshake`'s real failures
+/// (`mbedtls_ssl_handshake returned -0x%04X`) and `conn_new_sync`'s own
+/// `Failed to open new connection` are `ESP_LOGE`, and those must still reach the consumer.
+/// The only `esp-tls` warnings that survive being dropped here are the two emitted from
+/// `create_ssl_handle` — the partial-anchor-parse one, which
+/// [`report_anchor_bundle_parse`] re-reports at construction time and at higher severity, and
+/// a "TLS 1.3 is not enabled in config" notice about the peer's offered protocol, not the
+/// trust store.
+///
+/// Nesting-counted because MQTT and FTPS can handshake concurrently on separate tasks: without
+/// it the inner guard's drop would un-silence the tag while the outer handshake was still
+/// stepping.
+///
+/// No-op where `CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` is disabled — `esp_log_level_set` does
+/// nothing there and the old noise comes back, which is a degraded log, not a broken
+/// handshake.
+#[cfg(feature = "esp-idf")]
+struct EspTlsLogQuiet;
+
+#[cfg(feature = "esp-idf")]
+impl EspTlsLogQuiet {
+    fn enter() -> Self {
+        use core::sync::atomic::Ordering;
+        if ESP_TLS_LOG_QUIET_DEPTH.fetch_add(1, Ordering::SeqCst) == 0 {
+            // SAFETY: `ESP_TLS_LOG_TAG` is a `'static` NUL-terminated byte string; both calls
+            // take it as a read-only C string and copy what they need.
+            unsafe {
+                let previous =
+                    ::esp_idf_svc::sys::esp_log_level_get(ESP_TLS_LOG_TAG.as_ptr().cast());
+                ESP_TLS_LOG_SAVED_LEVEL.store(previous, Ordering::SeqCst);
+                ::esp_idf_svc::sys::esp_log_level_set(
+                    ESP_TLS_LOG_TAG.as_ptr().cast(),
+                    ::esp_idf_svc::sys::esp_log_level_t_ESP_LOG_ERROR,
+                );
+            }
+        }
+        Self
+    }
+}
+
+#[cfg(feature = "esp-idf")]
+impl Drop for EspTlsLogQuiet {
+    fn drop(&mut self) {
+        use core::sync::atomic::Ordering;
+        if ESP_TLS_LOG_QUIET_DEPTH.fetch_sub(1, Ordering::SeqCst) == 1 {
+            let previous = ESP_TLS_LOG_SAVED_LEVEL.load(Ordering::SeqCst);
+            // SAFETY: as in `enter`.
+            unsafe {
+                ::esp_idf_svc::sys::esp_log_level_set(ESP_TLS_LOG_TAG.as_ptr().cast(), previous);
+            }
+        }
     }
 }
 
@@ -1066,13 +1212,14 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // of a single step. That branch is unreachable from here, but a shared default would
         // reach it.
         //
-        // Expected side effect: `conn_new_sync`'s early-return path logs
+        // Side effect: `conn_new_sync`'s early-return path logs
         // `W esp-tls: Failed to open new connection in specified timeout` on every step that
-        // does not complete the handshake, so a normal ~1.3s connect emits ~55 `W` lines.
-        // Noisy but correct, and not worth trading away — `timeout_ms = 1` would spin ~1ms
-        // per call before logging the identical warning, reintroducing the busy-wait #67
-        // removed without silencing anything. Consumers who want a quiet log should raise the
-        // `esp-tls` tag's log level, not this value.
+        // does not complete the handshake, so a normal ~1.3s connect emits ~55 `W` lines on a
+        // handshake that is going perfectly. That is not worth trading the pacing away for —
+        // `timeout_ms = 1` would spin ~1ms per call before logging the identical warning,
+        // reintroducing the busy-wait #67 removed without silencing anything — so the noise is
+        // handled where it belongs instead, by `EspTlsLogQuiet` around the loop below
+        // (GitHub issue #156).
         cfg.timeout_ms = 0;
 
         let timer = EspIdfTimer::new().map_err(|e| {
@@ -1088,9 +1235,22 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
 
         let start = timer.now_millis();
 
+        // Silences the ~60 false `esp-tls` warnings a *successful* handshake would otherwise
+        // emit, leaving this function's own summary log as the only account of the handshake.
+        // Real `esp-tls` errors still get through — see the type's doc comment for why
+        // `ESP_LOG_ERROR` rather than `ESP_LOG_NONE`, and why the one warning that matters is
+        // re-reported by `report_anchor_bundle_parse` at construction time instead.
+        let _quiet = EspTlsLogQuiet::enter();
+
         loop {
             match tls.negotiate(host, &cfg) {
-                Ok(_) => break,
+                Ok(_) => {
+                    log::info!(
+                        "ESP-TLS handshake with {host} completed in {}ms",
+                        timer.now_millis().saturating_sub(start)
+                    );
+                    break;
+                }
                 Err(e) if is_would_block(&e) => {
                     // connect_timeout == 0 means "disabled" (matching
                     // with_connect_timeout's doc comment and its precedent elsewhere in
@@ -1106,6 +1266,9 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     if !self.connect_timeout.is_zero()
                         && timer.now_millis().saturating_sub(start) >= timeout_ms
                     {
+                        log::error!(
+                            "ESP-TLS handshake with {host} timed out after {timeout_ms}ms"
+                        );
                         return Err(SocketError::TimedOut);
                     }
                     timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
@@ -1114,7 +1277,10 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         )
                     })?;
                 }
-                Err(e) => return Err(map_esp_tls_connect_error(&e)),
+                Err(e) => {
+                    log::error!("ESP-TLS handshake with {host} failed: {e}");
+                    return Err(map_esp_tls_connect_error(&e));
+                }
             }
         }
 
