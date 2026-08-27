@@ -473,8 +473,10 @@ impl EspIdfTlsCerts {
 /// the successful handshake looks identical either way.
 ///
 /// Running the same parse here, at construction time, moves that signal *outside* the
-/// suppressed window and reports it more precisely than `esp-tls` does (`n of m`, and at
-/// `error` level rather than `warn`). Same call, same buffer, same length — `set_ca_cert`
+/// suppressed window and reports it more precisely than `esp-tls` does (`n of m`, failures at
+/// `error` level rather than `warn`, and the all-parsed confirmation at `info` so a consumer
+/// running at the default level can tell a complete trust store from an unreported one). Same
+/// call, same buffer, same length — `set_ca_cert`
 /// passes `cacert_buf`/`cacert_bytes` straight through, and `X509::pem_until_nul` sets those to
 /// this slice up to and including its single trailing NUL — so the result is the same integer
 /// `set_ca_cert` will get. Reported, not returned as an error: mbedTLS's own policy is that a
@@ -500,7 +502,7 @@ fn report_anchor_bundle_parse(ca_pem: &[u8], expected: usize) {
     };
 
     match ret {
-        0 => log::debug!("TLS trust store: all {expected} anchor(s) parsed"),
+        0 => log::info!("TLS trust store: all {expected} anchor(s) parsed"),
         failed if failed > 0 => log::error!(
             "TLS trust store: {failed} of {expected} anchor(s) failed to parse; handshakes will \
              verify only the printer models that chain to a surviving anchor"
