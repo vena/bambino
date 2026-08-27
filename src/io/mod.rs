@@ -515,6 +515,79 @@ pub(crate) fn der_certs_to_pem_bundle(
     Some(out)
 }
 
+/// Wraps a TLS peer name so `Display` renders a short prefix and masks the rest.
+///
+/// The `host` handed to a `TlsConnector::connect` is the printer's **serial number**, not its
+/// IP — MQTT connects by serial for SNI and FTPS follows. A serial is treated as a credential
+/// in this crate (root `CLAUDE.md`: never write one into a file here), so a log line naming
+/// the peer must not print it whole: consumer logs get pasted into bug reports, and on
+/// ESP-IDF they also go straight out the UART to whoever is watching.
+///
+/// Keeps the first three characters because that prefix is the model code
+/// (`crate::models::resolve_model` keys off it) — useful when triaging, and not a secret. The
+/// mask is fixed-width rather than one character per elided byte, so the serial's length
+/// doesn't leak either. An empty name renders `<empty>` rather than a bare mask, keeping
+/// "nothing was passed" distinguishable from "it was hidden".
+///
+/// Lives here rather than in `io/esp_idf.rs` (its only caller today) for the same reason
+/// `der_certs_to_pem_bundle` does: this module compiles on the host, so the boundary cases
+/// below are actually covered by `cargo test`, while nothing inside `io/esp_idf.rs` can be.
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) struct RedactedHost<'a>(pub(crate) &'a str);
+
+#[cfg(any(feature = "esp-idf", test))]
+impl core::fmt::Display for RedactedHost<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0.is_empty() {
+            return f.write_str("<empty>");
+        }
+        // `char_indices`, not byte slicing: a non-ASCII name would panic on a split landing
+        // mid-codepoint, and one caller is a handshake-failure path where a panic is worst.
+        let split = self.0.char_indices().nth(3).map_or(self.0.len(), |(i, _)| i);
+        write!(f, "{}***", &self.0[..split])
+    }
+}
+
+#[cfg(test)]
+mod redacted_host_tests {
+    use super::RedactedHost;
+    #[cfg(not(feature = "std"))]
+    use alloc::string::ToString as _;
+
+    #[test]
+    fn keeps_the_model_prefix_and_masks_the_rest() {
+        // Shaped like a serial, not a real one.
+        assert_eq!(RedactedHost("03WABCDEFGHIJ").to_string(), "03W***");
+    }
+
+    #[test]
+    fn mask_width_does_not_track_the_hidden_length() {
+        assert_eq!(
+            RedactedHost("03WA").to_string(),
+            RedactedHost("03WABCDEFGHIJKLMNOP").to_string()
+        );
+    }
+
+    #[test]
+    fn names_at_or_below_the_prefix_length_are_still_masked() {
+        // No early return for a short name: the mask must not signal "nothing was elided",
+        // or a 3-character name would be readable in full and marked as if it weren't.
+        assert_eq!(RedactedHost("03W").to_string(), "03W***");
+        assert_eq!(RedactedHost("0").to_string(), "0***");
+    }
+
+    #[test]
+    fn empty_name_is_distinguishable_from_a_hidden_one() {
+        assert_eq!(RedactedHost("").to_string(), "<empty>");
+    }
+
+    #[test]
+    fn multibyte_name_splits_on_a_char_boundary_without_panicking() {
+        // Each 'e' here is 2 bytes, so a byte-indexed split at 3 would panic.
+        assert_eq!(RedactedHost("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}").to_string(), "\u{e9}\u{e9}\u{e9}***");
+    }
+}
+
 #[cfg(test)]
 mod pem_bundle_tests {
     use super::*;

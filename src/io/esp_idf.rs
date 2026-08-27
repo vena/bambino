@@ -515,6 +515,9 @@ fn report_anchor_bundle_parse(ca_pem: &[u8], expected: usize) {
     }
 }
 
+#[cfg(feature = "esp-idf")]
+use crate::io::RedactedHost;
+
 /// `esp-tls`'s log tag, as a NUL-terminated C string for `esp_log_level_set`/`_get`.
 #[cfg(feature = "esp-idf")]
 const ESP_TLS_LOG_TAG: &[u8] = b"esp-tls\0";
@@ -1246,7 +1249,8 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             match tls.negotiate(host, &cfg) {
                 Ok(_) => {
                     log::info!(
-                        "ESP-TLS handshake with {host} completed in {}ms",
+                        "ESP-TLS handshake with {} completed in {}ms",
+                        RedactedHost(host),
                         timer.now_millis().saturating_sub(start)
                     );
                     break;
@@ -1267,7 +1271,8 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         && timer.now_millis().saturating_sub(start) >= timeout_ms
                     {
                         log::error!(
-                            "ESP-TLS handshake with {host} timed out after {timeout_ms}ms"
+                            "ESP-TLS handshake with {} timed out after {timeout_ms}ms",
+                            RedactedHost(host)
                         );
                         return Err(SocketError::TimedOut);
                     }
@@ -1278,7 +1283,10 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     })?;
                 }
                 Err(e) => {
-                    log::error!("ESP-TLS handshake with {host} failed: {e}");
+                    log::error!(
+                        "ESP-TLS handshake with {} failed: {e}",
+                        RedactedHost(host)
+                    );
                     return Err(map_esp_tls_connect_error(&e));
                 }
             }
