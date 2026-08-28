@@ -476,6 +476,18 @@ let mut printer = printer.with_ftps(ftps_tls, factory, EmbassyTimer);
 
 **Expect `esp-tls` warnings during a normal ESP-IDF handshake.** `EspIdfTlsConnector::connect` pins `Config::timeout_ms = 0` so each `negotiate()` performs exactly one handshake step and then yields. That is what makes the 20ms poll interval and the connect deadline meaningful, since otherwise esp-tls busy-spins internally for up to 4s per call. The cost is that esp-tls logs `W esp-tls: Failed to open new connection in specified timeout` on every step that doesn't complete the handshake, roughly 55 lines for a typical 1.3s connect. They are expected and harmless: a real failure surfaces as `SocketError::TimedOut` from `connect`, not as these warnings. Raise the `esp-tls` tag's log level if they are noisy.
 
+**Faster ESP32 handshakes: pick a curve the chip can accelerate.** Add this to your `sdkconfig.defaults`:
+
+```
+CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=n
+```
+
+By default mbedTLS asks for Curve25519 first and the printer agrees to it, but the ESP32's crypto accelerator only handles P-192 and P-256 — so the key exchange runs in software. Turning Curve25519 off leaves P-256 at the front of the list, which the hardware does accelerate. Measured on an ESP32-C6 against a P1S, changing nothing else: client-side crypto dropped from 409 ms to 180 ms, and the whole handshake from 1318 ms to 1136 ms. Reproduced across two runs, and all three of the printer's TLS services (MQTT, FTPS, camera) connect normally without it.
+
+Two things to check before you rely on it. This was only tested against a P1S, and printer models differ in their TLS behavior — P2S and X2D already need special handling elsewhere in this README. And the setting applies to your entire firmware image: if your device also talks to a server that requires Curve25519, that connection will break. It is a compile-time option, so it cannot be varied per connection.
+
+There is no equivalent knob for the ~800 ms the printer itself takes to reply, which is the larger half of the handshake and is the same from a laptop. See [REF-NET-SECURE](reference/01_network_discovery.md) for the full measured breakdown, including why TLS session resumption does not help (the printer offers a session ID and then refuses to resume it).
+
 **ESP-IDF TLS version query:** `EspIdfTlsConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`); wolfSSL builds aren't supported yet.
 
 **ESP-IDF FTPS/MQTT:** `EspIdfTlsConnector` wraps an already-connected raw stream (via `esp_idf_svc::tls::EspTls::adopt()`), used for FTPS's control/data channels and MQTT's lazy connect alike, paired with `EspIdfRawStreamFactory` for the raw dial. Models where `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS on the FTPS data channel entirely:

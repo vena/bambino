@@ -43,6 +43,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 *   **[REF-NET-SECURE] Section 1.3: Cryptographic Context & Handshakes**
     *   TLS 1.2 / TLS 1.3 contexts, SNI hostname overrides, and X.509 constraints
     *   BBL CA trust-anchor bundle [REF-NET-CABUNDLE] — the five upstream anchors, their load-bearing file order (the legacy root a P1S needs is last), and the multi-certificate encoding constraint
+    *   Where handshake time actually goes (measured), why session resumption does not work with these printers, and the ESP32 build setting that saves ~230 ms per handshake by picking a curve the chip can accelerate
 *   **Section 1.4: SSDP Hardware Model Code Mapping**
     *   Hardware capabilities and camera interface allocations
 *   **Section 1.5: Printer Serial Prefix Mapping Table**

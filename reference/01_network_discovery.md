@@ -167,6 +167,44 @@ Because this bundle is vendored from an upstream that rotates it (CA2 landed in 
 #### Handshake Latency & RTOS Process Limits
 ESP32-based RTOS hardware lines (P1 and A1 series) exhibit significant cryptographic latency during secure MQTTS (Port 8883) handshakes, requiring up to 5.0 seconds to return an MQTT `CONNACK` on a cold session.
 
+#### Where the handshake time actually goes
+
+Measured on an ESP32-C6 client against a P1S over Wi-Fi, using TLS 1.2 and the full five-anchor bundle. A typical handshake took about 1.4 seconds, split like this:
+
+| Part | Time | Notes |
+|---|---|---|
+| Waiting for the printer to reply | ~800 ms | The printer is simply slow. A laptop on the same network, with a 4.7 ms round trip, also needs 805 ms (±2%), so this is not specific to small clients. |
+| Client-side crypto | ~400 ms | Key exchange plus certificate checks. |
+| Setting up TLS and parsing the five trust anchors | ~26 ms | Happens once at the start of each handshake. |
+| Waiting between poll attempts | ~0 ms | Not a real cost — see below. |
+
+Three things that look like they should help, but don't:
+
+*   **Polling faster.** Making the client check four times as often changed total polling time by 0.4%. Each poll is already waiting on a printer that has not answered yet.
+*   **Turning off Nagle (`TCP_NODELAY`).** One round appeared to save ~97 ms, but a repeat run with identical code gave it all back. Two runs of the same build differ by more than that, so there is no measurable effect. It is still set, because it is standard practice for small-message protocols, not because it was shown to help.
+*   **Shipping fewer trust anchors.** Parsing all five costs 26 ms, so this could never save more than that — and a partial bundle verifies some printer models while failing others, which is much worse than 26 ms. See [REF-NET-CABUNDLE].
+
+**TLS session resumption does not work with these printers.** The printer offers a 32-byte session ID but never issues a session ticket, and it refuses to resume when the client offers that exact ID back. This was confirmed by reading the handshake messages, not guessed from timing: the client sent the printer's own session ID byte for byte, and the printer started a brand new session anyway. So each connection pays the full cost. This matters more than it first appears, because MQTT, FTPS, and the camera are three separate connections.
+
+#### Choosing an elliptic curve that the ESP32 can accelerate
+
+By default mbedTLS asks for Curve25519 first, and Bambu printers accept it. But the ESP32's crypto accelerator only handles the P-192 and P-256 curves, so Curve25519 runs in software and the hardware sits idle.
+
+Building with `CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=n` leaves P-256 at the front of the list instead. Measured effect on the same ESP32-C6 and P1S, changing nothing else:
+
+| | Curve25519 | P-256 |
+|---|---|---|
+| Client-side crypto | 409.5 ms | **179.9 ms** |
+| Slowest single step | 260–316 ms | 56–57 ms |
+| Whole handshake | 1318 ms | **1136 ms** |
+
+That is about 230 ms of crypto work saved per handshake, and it was reproduced in two separate runs. Verified against all three of the printer's TLS services — MQTT (8883), FTPS (990), and the camera (6000) — all of which connected normally with Curve25519 turned off.
+
+Two caveats before relying on this:
+
+1.  **Only a P1S has been checked.** Other models run different firmware, and this chapter and [REF-FTPS-CONN] already document TLS differences between models (P2S and X2D both need TLS 1.2 for unrelated reasons). Test your model before assuming it works.
+2.  **This setting applies to the whole firmware image, not just printer connections.** If the same device also talks to a server that requires Curve25519, that connection will stop working. It is a compile-time option, so it cannot be turned on and off per connection.
+
 #### Authentication Credentials
 Local MQTTS and FTPS sessions utilize a unified credential pair:
 *   **Username**: `bblp`

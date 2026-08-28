@@ -48,8 +48,14 @@ CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 # CONFIG_LOG_MAXIMUM_LEVEL change needed. Level 3 was used to settle resumption and dumps
 # hex per record, which inflated handshake timings roughly 3x and made that round's numbers
 # unusable for measurement. Do not raise this while measuring.
-CONFIG_MBEDTLS_DEBUG=y
-CONFIG_MBEDTLS_DEBUG_LEVEL_INFO=y
+#
+# OFF while measuring, and this is not a nicety. mbedTLS prints from *inside*
+# `esp_tls_low_level_conn`, so its serial output lands inside the region the handshake
+# instrumentation measures. Level 2 inflated `us in esp_tls` from ~409ms to ~1450ms and
+# collapsed the step count from ~50 to 9 — a distortion larger than any effect being
+# measured. Turn it on to answer a protocol question, read the answer, turn it back off
+# before believing a single number.
+CONFIG_MBEDTLS_DEBUG=n
 
 # THE POINT OF THIS ROUND. mbedTLS ranks x25519 first among supported groups, so a stock
 # build negotiates `ECDH curve: x25519` — and the ESP32-C6's ECC accelerator handles
