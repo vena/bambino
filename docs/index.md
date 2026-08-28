@@ -101,6 +101,7 @@ async fn example() -> Result<(), bambino::Error> {
   - [`quirks`](quirks/index.md)
   - [`types`](#types)
 - [Types](#types)
+- [Functions](#functions)
 
 ## Quick Reference
 
@@ -374,6 +375,20 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 #### Implementations
 
+- <span id="printermodel-display-name"></span>`fn display_name(self) -> &'static str`
+
+  Returns the human-readable model name, e.g. `"H2D Pro"` or `"A1 mini"`.
+
+  Follows Bambu's own naming, so it is safe to show to a user directly.
+  [`PrinterModel::Unknown`](models/index.md#printermodel) renders as `"Unknown"`.
+
+- <span id="printermodel-serial-prefix"></span>`fn serial_prefix(self) -> Option<&'static str>`
+
+  Returns the 3-character serial number prefix identifying this model.
+
+  `None` for [`PrinterModel::Unknown`](models/index.md#printermodel). Useful for validating a serial before
+  attempting a connection.
+
 - <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
 
   Returns the [`ModelQuirks`](quirks/index.md#modelquirks) strategy for this model variant.
@@ -393,6 +408,10 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 - <span id="printermodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Display for PrinterModel`
+
+- <span id="printermodel-display-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
 ##### `impl Eq for PrinterModel`
 
 ##### `impl Hash for PrinterModel`
@@ -402,4 +421,27 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 ##### `impl PartialEq for PrinterModel`
 
 - <span id="printermodel-partialeq-eq"></span>`fn eq(&self, other: &PrinterModel) -> bool` — [`PrinterModel`](models/index.md#printermodel)
+
+##### `impl ToString for PrinterModel`
+
+- <span id="printermodel-tostring-to-string"></span>`fn to_string(&self) -> String`
+
+
+---
+
+## Functions
+
+### `supported_models`
+
+```rust
+fn supported_models() -> impl Iterator<Item = PrinterModel>
+```
+
+**Types:** [`PrinterModel`](models/index.md#printermodel)
+
+Returns every printer model this crate supports, in table order.
+
+[`PrinterModel::Unknown`](models/index.md#printermodel) is excluded: it is the fallback for targets this crate does
+not recognize, not a supported model. Pair each item with [`quirks`](quirks/index.md) to
+build a capability matrix without matching on variants.
 
