@@ -108,4 +108,4 @@ pub use error::Error;
 #[doc(inline)]
 pub use identity::PrinterIdentity;
 #[doc(inline)]
-pub use models::PrinterModel;
+pub use models::{PrinterModel, supported_models};
