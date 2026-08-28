@@ -1,48 +1,60 @@
-//! Current investigation: GitHub issue #157's certificate-failure reporting.
+//! Current investigation: GitHub issue #160's TLS handshake cost breakdown.
 //!
-//! `SocketError::CertificateInvalid(CertificateFailure)` now carries *why* a peer's
-//! certificate was rejected, and on ESP-IDF that detail is read out of band: mbedTLS
-//! returns the same `MBEDTLS_ERR_X509_CERT_VERIFY_FAILED` (`-0x2700`) for every
-//! verification failure — which esp-tls in turn flattens to `ESP_FAIL` — and the
-//! flags naming the actual defect live in `mbedtls_ssl_get_verify_result`.
-//! `query_verify_failure` in `src/io/esp_idf.rs` reads them off the live SSL context
-//! via `esp_tls_get_ssl_context`.
+//! A downstream consumer measured the printer connect path phase by phase and found the
+//! TLS handshake to be 94-98% of the interval (1.2-2.4s per handshake). Nothing measured
+//! so far separates the two things that could account for it, and the fix is opposite in
+//! each case:
 //!
-//! **The open question this probe answers.** `mbedtls_ssl_get_peer_cert` is documented
-//! to return `NULL` after a *failed* handshake, so a failed context demonstrably does
-//! not retain everything. Whether the *verify result* specifically survives to the
-//! point `EspIdfTlsConnector::connect` builds its error is not something the host
-//! unit tests or `scripts/check-esp-idf.sh` can observe — the flag-to-verdict mapping
-//! is tested on the host, but only real mbedTLS can say whether there are any flags
-//! left to map. See `.claude/rules/wire-framing-hardware-verification.md`.
+//! - **Poll pacing.** `EspIdfTlsConnector::connect` pins `Config::timeout_ms = 0` (issue
+//!   #67), so each `esp_tls_low_level_conn` call takes exactly one handshake step and
+//!   returns; the loop then sleeps `TLS_POLL_INTERVAL` (20ms) before the next. If the
+//!   steps are essentially free, ~60 steps x 20ms *is* the handshake, and the fix is an
+//!   adaptive or readiness-driven poll.
+//! - **Genuine compute.** Chain verification three deep against five anchors, plus the
+//!   key exchange, on a small RISC-V core could plausibly be hundreds of milliseconds of
+//!   real work. Then the interval is irreducible at this layer and #160 closes.
 //!
-//! The code fails safe either way (no flags → `None` → the pre-existing opaque error),
-//! so a negative result here is not a regression — it means the ESP-IDF half of #157
-//! cannot work as written and needs the flags captured earlier, inside the negotiate
-//! loop, before esp-tls tears anything down.
+//! `src/io/esp_idf.rs`'s handshake loop now counts steps and accumulates the two halves
+//! separately, reporting them on its existing summary line:
 //!
-//! Four cases, run back to back against one printer:
+//! ```text
+//! ESP-TLS handshake with <host> completed in 1264ms (63 steps, 4821us in esp_tls, 1259402us polling)
+//! ```
 //!
-//! | # | Anchors        | TLS name | Expected                      |
-//! |---|----------------|----------|-------------------------------|
-//! | 1 | all 5          | serial   | handshake OK                  |
-//! | 2 | 1-4 (no BBL CA)| serial   | `CertificateInvalid(UntrustedAnchor)` |
-//! | 3 | all 5          | bogus    | `CertificateInvalid(NameMismatch)`    |
-//! | 4 | 1 only         | bogus    | `CertificateInvalid(UntrustedAnchor)` |
+//! **What this probe adds** is the repetition. The known range for the whole interval is
+//! 1.7-4.0s across 26 real sessions downstream, so a single handshake cannot distinguish
+//! a real difference from noise — #160 asks for the spread over several. This runs
+//! [`RUNS`] handshakes back to back against one printer, each a fresh TCP dial and a
+//! fresh connector, and stopwatches each one independently so the caller-side number can
+//! be cross-checked against the crate's own (downstream saw them agree within 1ms).
 //!
-//! **Cases 2 and 3 are the whole probe.** Before #157 both produced the byte-identical
-//! `Other("ESP-IDF TLS handshake failed: ESP_FAIL")`. If they still match each other —
-//! whatever they say — the verify result did not survive and nothing was gained. If
-//! either comes back as `Other(..)`, the flags were already gone.
+//! **Reading the result.** The ratio is the answer, not the total. Tally the breakdowns
+//! straight out of the transcript:
 //!
-//! Case 1 is the control: without a handshake that *succeeds*, cases 2-4 failing could
-//! just mean the probe cannot reach the printer at all, and would prove nothing.
+//! ```sh
+//! grep -o '([0-9]* steps, [0-9]*us in esp_tls, [0-9]*us polling)' run.log
+//! ```
 //!
-//! Case 4 sets `NOT_TRUSTED` and `CN_MISMATCH` together and checks the precedence
-//! documented on `map_mbedtls_verify_flags` holds against real mbedTLS. It matters for
-//! more than tidiness: `UntrustedAnchor` is the one verdict a trust-on-first-use flow
-//! may offer certificate capture for, so if mbedTLS reports this combination as a mere
-//! name mismatch, a genuinely untrusted chain would be routed away from that prompt.
+//! - `us polling` dominating → the poll interval is the cost. Worth then checking whether
+//!   the fd is selectable, since waiting on readability removes the 20ms quantisation
+//!   entirely rather than shrinking it.
+//! - `us in esp_tls` dominating → the interval is a rounding error, #160 closes as
+//!   irreducible here, and the follow-up is a consumer-side progress concern.
+//!
+//! The two sums should add to roughly the reported duration; if they do not, the time is
+//! going somewhere neither counter covers and that is itself the finding.
+//!
+//! **Treat run 1 as suspect.** Downstream saw run 1 come out slowest and explicitly
+//! declined to build on it — within one boot it may be warm-up, run order, or proximity
+//! to Wi-Fi association rather than anything about TLS. The summary below separates it
+//! from the rest for that reason; do not read a first-run difference as signal.
+//!
+//! **Chip caveat.** The downstream measurement was an ESP32-P4 at 360MHz. This probe
+//! defaults to an ESP32-C6 (160MHz, single core) — see this directory's `CLAUDE.md` for
+//! retargeting. The polling half is fixed at 20ms per step on any chip and only the
+//! compute half scales with clock, so the inference runs one way only: if a C6 shows
+//! polling dominant, a P4 is more so and the conclusion carries. If a C6 shows compute
+//! dominant, that says nothing about the P4, which would do the same work faster.
 //!
 //! **Setup.** Certificates are not committed (see `.gitignore`) — regenerate with:
 //!
@@ -65,13 +77,14 @@
 //! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee run.log
 //! ```
 //!
-//! Prior investigations (e.g. issue #145's multi-anchor bundle probe, issue #65's
-//! concurrent-sleep probe) are recoverable via `git log -- esp32-hw-probe/src/main.rs`,
-//! not kept live here.
+//! Prior investigations (e.g. issue #157's certificate-failure probe, issue #145's
+//! multi-anchor bundle probe, issue #65's concurrent-sleep probe) are recoverable via
+//! `git log -- esp32-hw-probe/src/main.rs`, not kept live here.
 
 use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTlsConnector};
-use bambino::io::{CertificateFailure, RawStreamFactory, SocketError, TlsConnector};
+use bambino::io::{RawStreamFactory, TlsConnector};
 use core::time::Duration;
+use std::time::Instant;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
@@ -79,8 +92,11 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
 /// The five BambuStudio trust anchors, in the order they appear in `printer.cer`.
-/// Index 4 (`bbl_5.der`) is the legacy self-signed `CN=BBL CA` a P1S chains to, so
-/// withholding it (case 2) is what produces a genuine untrusted-anchor rejection.
+///
+/// All five are used on every run here, unlike issue #157's probe which withheld some to
+/// force rejections: #160 measures the *successful* path, and the anchor count is part of
+/// what is being measured — chain verification against the full bundle is one of the two
+/// candidate explanations for the handshake cost.
 const BBL_ANCHORS: [&[u8]; 5] = [
     include_bytes!("../certs/bbl_1.der"), // CN=BBL CA2 RSA, self-signed
     include_bytes!("../certs/bbl_2.der"), // CN=BBL CA2 ECC, self-signed
@@ -94,96 +110,34 @@ const WIFI_PASS: &str = env!("PROBE_WIFI_PASS");
 const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 /// Passed to `TlsConnector::connect` as the TLS hostname, mirroring `src/client/connect.rs`.
 /// The printer's leaf is `CN=<serial>` with no SAN, so verifying against the dialled IP
-/// would fail the common-name check for reasons that have nothing to do with anchors.
+/// would fail the common-name check and this probe would measure a rejection, not a
+/// handshake.
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
-
-/// The name for cases 3 and 4. Deliberately *not* serial-shaped: a wrong-but-plausible
-/// serial in a tracked file reads like a leaked one, and `.invalid` is reserved by
-/// RFC 2606 so it can never collide with a real printer's common name.
-const BOGUS_TLS_NAME: &str = "not-this-printer.invalid";
 
 /// MQTT over TLS. Chosen over FTPS because the handshake is the whole test and this port
 /// needs no access code to reach it.
 const PRINTER_TLS_PORT: u16 = 8883;
+
+/// Generous enough that a slow-but-succeeding handshake still yields a breakdown rather
+/// than a `TimedOut`. The observed worst case downstream is ~4s.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// What a case should produce. `Ok` is the successful-handshake control; every other case
-/// names the exact `CertificateFailure` the backend is expected to report.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Expect {
-    Ok,
-    Cert(CertificateFailure),
-}
+/// How many handshakes to run. #160 asks for a spread rather than a single figure, and
+/// eight is enough to see one against a 1.7-4.0s known range while still being a short
+/// enough transcript to read by eye.
+const RUNS: usize = 8;
 
-/// What a case actually produced, reduced to the same shape for comparison. `Opaque` is
-/// the pre-#157 behavior and the signature of the verify result *not* surviving.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Outcome {
-    Ok,
-    Cert(CertificateFailure),
-    /// Rejected, but with no certificate verdict attached — `Other(..)`, `TimedOut`, etc.
-    Opaque,
-    /// The printer was not reachable, so this case yielded no evidence either way.
-    NoEvidence,
-}
-
-/// One row of the table in this file's header.
-struct Case {
-    name: &'static str,
-    anchors: &'static [usize],
-    /// `true` to dial with `BOGUS_TLS_NAME` instead of the real serial.
-    bogus_name: bool,
-    expect: Expect,
-    /// Printed only when the case comes out the other way, so a failing run explains itself.
-    on_surprise: &'static str,
-}
-
-const CASES: [Case; 4] = [
-    Case {
-        name: "1. all 5 anchors, real serial (control)",
-        anchors: &[0, 1, 2, 3, 4],
-        bogus_name: false,
-        expect: Expect::Ok,
-        on_surprise: "the control handshake failed, so cases 2-4 failing says nothing about \
-                      certificate reporting — check reachability, anchors, and the clock \
-                      before reading anything else in this transcript",
-    },
-    Case {
-        name: "2. anchors 1-4, BBL CA withheld, real serial",
-        anchors: &[0, 1, 2, 3],
-        bogus_name: false,
-        expect: Expect::Cert(CertificateFailure::UntrustedAnchor),
-        on_surprise: "an untrusted chain was not reported as UntrustedAnchor. If this is \
-                      Opaque, the verify result did not survive to where connect() builds \
-                      its error and the ESP-IDF half of #157 does not work as written",
-    },
-    Case {
-        name: "3. all 5 anchors, bogus TLS name",
-        anchors: &[0, 1, 2, 3, 4],
-        bogus_name: true,
-        expect: Expect::Cert(CertificateFailure::NameMismatch),
-        on_surprise: "a verified chain with a wrong name was not reported as NameMismatch. \
-                      If this is Opaque, see case 2's note — same cause",
-    },
-    Case {
-        name: "4. anchor 1 only, bogus TLS name (both flags)",
-        anchors: &[0],
-        bogus_name: true,
-        expect: Expect::Cert(CertificateFailure::UntrustedAnchor),
-        on_surprise: "mbedTLS resolved a chain that is BOTH untrusted and wrongly named \
-                      differently than map_mbedtls_verify_flags' documented precedence. If \
-                      this reported NameMismatch, a genuinely untrusted chain would be \
-                      routed away from a trust-on-first-use capture prompt — fix the \
-                      precedence, not this probe",
-    },
-];
+/// Settle time between runs. The printer drops an unauthenticated MQTT session on its own;
+/// this keeps a lingering half-open connection from perturbing the next run's timing,
+/// which is the whole measurement here.
+const BETWEEN_RUNS: Duration = Duration::from_secs(3);
 
 fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("esp32-hw-probe: issue #157 certificate-failure reporting probe");
-    log::info!("target {PRINTER_IP}:{PRINTER_TLS_PORT}");
+    log::info!("esp32-hw-probe: issue #160 TLS handshake cost breakdown");
+    log::info!("target {PRINTER_IP}:{PRINTER_TLS_PORT}, {RUNS} runs, all 5 anchors");
 
     let peripherals = match Peripherals::take() {
         Ok(p) => p,
@@ -208,7 +162,7 @@ fn main() {
     };
 
     // Held for the rest of `main`: dropping the wifi driver tears down the interface and
-    // every later connect would fail for reasons unrelated to certificates.
+    // every later connect would fail for reasons unrelated to the handshake.
     let _wifi = match connect_wifi(peripherals.modem, sysloop, nvs) {
         Ok(wifi) => wifi,
         Err(e) => {
@@ -217,109 +171,39 @@ fn main() {
         }
     };
 
-    let mut surprises = 0u32;
-    let mut results: [(&'static str, Expect, Outcome); 4] =
-        [("", Expect::Ok, Outcome::NoEvidence); 4];
+    // `None` marks a run that produced no timing — an unreachable printer or a rejected
+    // handshake measures nothing and must not be averaged in as if it were a fast run.
+    let mut totals: [Option<u128>; RUNS] = [None; RUNS];
 
-    for (slot, case) in CASES.iter().enumerate() {
-        log::info!("--- {} ---", case.name);
-        let outcome = run_case(case);
-        let matched = match (case.expect, outcome) {
-            (Expect::Ok, Outcome::Ok) => true,
-            (Expect::Cert(expected), Outcome::Cert(actual)) => expected == actual,
-            _ => false,
-        };
-
-        if matched {
-            log::info!("PASS {}: got {outcome:?}, as expected", case.name);
-        } else {
-            log::error!(
-                "SURPRISE {}: expected {:?}, got {outcome:?}",
-                case.name,
-                case.expect
-            );
-            log::error!("    -> {}", case.on_surprise);
-            surprises += 1;
-        }
-        results[slot] = (case.name, case.expect, outcome);
-
-        // The printer drops an unauthenticated MQTT session on its own; give it a moment
-        // so a lingering half-open connection can't perturb the next case.
-        std::thread::sleep(Duration::from_secs(2));
+    for (slot, total) in totals.iter_mut().enumerate() {
+        log::info!("--- run {} of {RUNS} ---", slot + 1);
+        *total = run_handshake();
+        std::thread::sleep(BETWEEN_RUNS);
     }
 
-    log::info!("================ issue #157 probe summary ================");
-    for (name, expected, actual) in results {
-        log::info!("  {name}: expected {expected:?}, got {actual:?}");
-    }
-
-    // The headline comparison, stated separately from the pass/fail tally because it is
-    // the one thing the whole probe exists to establish: these two were byte-identical
-    // before #157, and if they are still identical the change bought nothing on ESP-IDF.
-    let (_, _, case2) = results[1];
-    let (_, _, case3) = results[2];
-    match (case2, case3) {
-        (Outcome::Cert(a), Outcome::Cert(b)) if a != b => log::info!(
-            "KEY RESULT: cases 2 and 3 are distinguishable ({a:?} vs {b:?}). The mbedTLS \
-             verify result DOES survive a failed handshake, and the ESP-IDF backend can \
-             report why a certificate was rejected."
-        ),
-        (Outcome::Opaque, _) | (_, Outcome::Opaque) => log::error!(
-            "KEY RESULT: at least one of cases 2/3 came back with no certificate verdict. \
-             The verify result does NOT survive to where connect() builds its error — the \
-             flags must be captured earlier, inside the negotiate loop, or the ESP-IDF half \
-             of #157 cannot work."
-        ),
-        (a, b) => log::error!(
-            "KEY RESULT: cases 2 and 3 did not separate ({a:?} vs {b:?}). Whatever else this \
-             transcript says, a consumer still cannot tell an untrusted anchor from a name \
-             mismatch on this backend."
-        ),
-    }
-
-    if surprises == 0 {
-        log::info!("RESULT: all 4 cases matched.");
-    } else {
-        log::error!(
-            "RESULT: {surprises} of 4 cases did not match — read the SURPRISE lines above \
-             before drawing any conclusion."
-        );
-    }
-    log::info!("=========================================================");
-
+    report(&totals);
     park();
 }
 
-/// Runs one handshake against the printer and reduces the result to an [`Outcome`].
+/// Runs one full dial-and-handshake and returns the caller-side wall time in milliseconds.
 ///
-/// The full `SocketError` is logged verbatim in every failing case: `Other("ESP-IDF TLS
-/// handshake failed: ESP_FAIL")` is exactly the pre-#157 string, so seeing it in the
-/// transcript is the direct evidence that the verify result was already gone.
-fn run_case(case: &Case) -> Outcome {
-    let certs: std::vec::Vec<std::vec::Vec<u8>> = case
-        .anchors
-        .iter()
-        .map(|&i| BBL_ANCHORS[i].to_vec())
-        .collect();
-    let tls_name = if case.bogus_name {
-        BOGUS_TLS_NAME
-    } else {
-        PRINTER_SERIAL
-    };
-    log::info!(
-        "    {} anchor(s), TLS name = {}",
-        certs.len(),
-        if case.bogus_name {
-            BOGUS_TLS_NAME
-        } else {
-            "<serial>"
-        }
-    );
+/// Returns `None` for anything that isn't a completed handshake: a rejection or a dial
+/// failure yields no breakdown to read, and its elapsed time is not comparable to a
+/// successful run's.
+///
+/// The connector is rebuilt every run rather than hoisted out of the loop. That is
+/// deliberate: it keeps each run a from-scratch connect exactly as a consumer performs it,
+/// and it means the anchor-bundle work (five PEM anchors decoded, re-encoded, and parsed —
+/// ~10ms downstream) is inside no run's stopwatch but repeated identically for all of them.
+fn run_handshake() -> Option<u128> {
+    let certs: std::vec::Vec<std::vec::Vec<u8>> =
+        BBL_ANCHORS.iter().map(|anchor| anchor.to_vec()).collect();
 
     let connector =
         EspIdfTlsConnector::with_certs(certs, None).with_connect_timeout(HANDSHAKE_TIMEOUT);
 
     esp_idf_svc::hal::task::block_on(async {
+        let dial_start = Instant::now();
         let raw = match EspIdfRawStreamFactory
             .dial(PRINTER_IP, PRINTER_TLS_PORT)
             .await
@@ -327,28 +211,100 @@ fn run_case(case: &Case) -> Outcome {
             Ok(stream) => stream,
             Err(e) => {
                 log::error!("    TCP dial to {PRINTER_IP}:{PRINTER_TLS_PORT} failed: {e:?}");
-                return Outcome::NoEvidence;
+                return None;
             }
         };
+        log::info!("    tcp connect {}ms", dial_start.elapsed().as_millis());
 
-        match connector.connect(tls_name, raw).await {
+        // Stopwatched on this side as well as inside the crate so the two can be compared:
+        // if the caller's figure and the crate's `completed in Xms` disagree, time is being
+        // spent outside the loop the breakdown covers and the breakdown is not the whole
+        // story.
+        let handshake_start = Instant::now();
+        let outcome = connector.connect(PRINTER_SERIAL, raw).await;
+        let elapsed = handshake_start.elapsed().as_millis();
+
+        match outcome {
             Ok(stream) => {
                 log::info!(
-                    "    handshake OK, negotiated {:?}",
+                    "    handshake OK in {elapsed}ms (caller stopwatch), negotiated {:?}",
                     connector.negotiated_version(&stream)
                 );
-                Outcome::Ok
-            }
-            Err(SocketError::CertificateInvalid(failure)) => {
-                log::info!("    handshake rejected: CertificateInvalid({failure:?})");
-                Outcome::Cert(failure)
+                // Dropped here rather than at the end of the run so the TCP teardown is not
+                // counted against `BETWEEN_RUNS`' settle time.
+                drop(stream);
+                Some(elapsed)
             }
             Err(e) => {
-                log::info!("    handshake rejected with no certificate verdict: {e:?}");
-                Outcome::Opaque
+                log::error!("    handshake failed after {elapsed}ms: {e:?}");
+                log::error!(
+                    "    -> no breakdown from this run. A run that does not complete \
+                     measures nothing; check reachability, anchors, and the clock."
+                );
+                None
             }
         }
     })
+}
+
+/// Prints the run-total summary, with run 1 held apart per this file's header.
+///
+/// Only totals are summarised here. The step/compute/poll breakdown is emitted by the
+/// crate itself on its `ESP-TLS handshake with ...` line, one per run above — this
+/// function deliberately does not try to scrape those back out of the log, since parsing
+/// a log line the crate is free to reword would make the probe silently wrong later.
+fn report(totals: &[Option<u128>; RUNS]) {
+    log::info!("================ issue #160 probe summary ================");
+
+    for (slot, total) in totals.iter().enumerate() {
+        match total {
+            Some(ms) => log::info!("  run {}: {ms}ms", slot + 1),
+            None => log::info!("  run {}: no measurement", slot + 1),
+        }
+    }
+
+    let completed: std::vec::Vec<u128> = totals.iter().flatten().copied().collect();
+    if completed.is_empty() {
+        log::error!(
+            "RESULT: no handshake completed, so there is nothing to read. This transcript \
+             says nothing about #160 either way."
+        );
+        log::info!("=========================================================");
+        return;
+    }
+
+    let min = completed.iter().min().copied().unwrap_or(0);
+    let max = completed.iter().max().copied().unwrap_or(0);
+    let mean = completed.iter().sum::<u128>() / completed.len() as u128;
+    log::info!(
+        "  {} of {RUNS} completed: min {min}ms, max {max}ms, mean {mean}ms",
+        completed.len()
+    );
+
+    // Run 1 is reported separately rather than excluded: downstream saw it come out
+    // slowest within a single boot and could not tell warm-up from noise at n=1. Naming
+    // the gap is useful; averaging it in silently, or dropping it silently, is not.
+    if let Some(first) = totals[0] {
+        let rest: std::vec::Vec<u128> = totals[1..].iter().flatten().copied().collect();
+        if !rest.is_empty() {
+            let rest_mean = rest.iter().sum::<u128>() / rest.len() as u128;
+            log::info!(
+                "  run 1 was {first}ms against a {rest_mean}ms mean for runs 2-{RUNS}. \
+                 One boot cannot separate warm-up from noise — do not build on this gap."
+            );
+        }
+    }
+
+    log::info!(
+        "KEY RESULT: the totals above are NOT the answer — the ratio inside each run is. \
+         Read the crate's own per-run line: `grep -o '([0-9]* steps, [0-9]*us in esp_tls, \
+         [0-9]*us polling)' run.log`. Polling dominant means the 20ms TLS_POLL_INTERVAL is \
+         the cost and an adaptive or readiness-driven poll is the fix; esp_tls dominant \
+         means the handshake is genuine compute and #160 closes as irreducible at this \
+         layer. If the two sums do not add to roughly the reported duration, the time is \
+         going somewhere neither counter covers and that is the finding."
+    );
+    log::info!("=========================================================");
 }
 
 fn connect_wifi(

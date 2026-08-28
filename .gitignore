@@ -27,5 +27,8 @@ probe_report*.json
 # ack-probe reports carry the printer serial in a `serial` field — same handling as above.
 ack_probe_report*.json
 
+# Local MQTT field-mapping scratch notes, not a reference doc.
+/MQTT_FIELDS.md
+
 # libreoffice lock files
 .~lock.*.csv#

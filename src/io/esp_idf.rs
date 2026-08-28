@@ -83,6 +83,19 @@ impl TimerProvider for EspIdfTimer {
     }
 }
 
+/// Microseconds since boot, for the handshake-loop instrumentation in `EspIdfTlsConnector::connect`.
+///
+/// `TimerProvider::now_millis` is too coarse for that particular measurement: a single
+/// `esp_tls_low_level_conn` step can cost well under a millisecond, so summing per-step
+/// millisecond deltas across ~60 steps truncates the compute half of the handshake to zero and
+/// cannot distinguish "compute is negligible" from "compute was rounded away" (GitHub issue
+/// #160). Nothing else should need this — use `TimerProvider::now_millis` for timeouts and
+/// pacing.
+#[cfg(feature = "esp-idf")]
+fn now_micros() -> u64 {
+    unsafe { ::esp_idf_svc::sys::esp_timer_get_time() as u64 }
+}
+
 /// Pacing sleep for `EspIdfUdpSocket::recv_from`'s WouldBlock path.
 ///
 /// `EspIdfUdpSocket::recv_from` wraps a synchronous, non-blocking socket read with no
@@ -1285,11 +1298,30 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // re-reported by `report_anchor_bundle_parse` at construction time instead.
         let _quiet = EspTlsLogQuiet::enter();
 
+        // Handshake-loop instrumentation (GitHub issue #160). The interval as a whole is known
+        // to be 1.2-2.4s on an ESP32-P4 against a P1S, but nothing measured so far separates
+        // time spent inside `esp_tls_low_level_conn` from time spent sleeping
+        // `TLS_POLL_INTERVAL` between steps -- and the fix is opposite in each case (an adaptive
+        // or readiness-driven poll if the sleeping dominates; nothing fixable at this layer if
+        // the compute does). Step count plus the two sums is what settles it, and the two sums
+        // should add to roughly the reported duration. Microseconds rather than milliseconds
+        // because the per-step compute may well be sub-millisecond; see `now_micros`. Three
+        // clock reads per step on a path that already sleeps 20ms per step, so this stays on in
+        // normal builds rather than hiding behind a feature flag.
+        let mut steps: u32 = 0;
+        let mut negotiate_us: u64 = 0;
+        let mut sleep_us: u64 = 0;
+
         loop {
-            match tls.negotiate(host, &cfg) {
+            let step_start = now_micros();
+            let step = tls.negotiate(host, &cfg);
+            negotiate_us += now_micros().saturating_sub(step_start);
+            steps += 1;
+
+            match step {
                 Ok(_) => {
                     log::info!(
-                        "ESP-TLS handshake with {} completed in {}ms",
+                        "ESP-TLS handshake with {} completed in {}ms ({steps} steps, {negotiate_us}us in esp_tls, {sleep_us}us polling)",
                         RedactedHost(host),
                         timer.now_millis().saturating_sub(start)
                     );
@@ -1311,12 +1343,15 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         && timer.now_millis().saturating_sub(start) >= timeout_ms
                     {
                         log::error!(
-                            "ESP-TLS handshake with {} timed out after {timeout_ms}ms",
+                            "ESP-TLS handshake with {} timed out after {timeout_ms}ms ({steps} steps, {negotiate_us}us in esp_tls, {sleep_us}us polling)",
                             RedactedHost(host)
                         );
                         return Err(SocketError::TimedOut);
                     }
-                    timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
+                    let sleep_start = now_micros();
+                    let slept = timer.sleep(TLS_POLL_INTERVAL).await;
+                    sleep_us += now_micros().saturating_sub(sleep_start);
+                    slept.map_err(|_| {
                         SocketError::Other(
                             "ESP-IDF timer failed while polling TLS handshake".into(),
                         )
