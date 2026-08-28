@@ -354,6 +354,16 @@ async fn poll_connect_until_complete(
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
+/// Upper bounds, in microseconds, of the per-step cost buckets `EspIdfTlsConnector::connect` reports.
+///
+/// A step falling below the first bound lands in bucket 0; one at or above the last bound lands in
+/// the final bucket, so there is one more bucket than there are bounds here. The boundaries are
+/// chosen to separate causes rather than to be evenly spaced: under a millisecond is a poll that
+/// found nothing, single-digit milliseconds is per-call overhead, tens of milliseconds is record
+/// processing or a parse, and anything past 100ms is an asymmetric-crypto operation.
+#[cfg(feature = "esp-idf")]
+const STEP_COST_BUCKETS_US: [u64; 4] = [1_000, 5_000, 20_000, 100_000];
+
 /// Default upper bound on the handshake loop in `EspIdfTlsConnector::connect`, used when the caller doesn't supply one via `.with_connect_timeout(d)`.
 /// Chosen generously — printers on a healthy LAN handshake in well under a second, but a 10s budget
 /// avoids false timeouts on congested Wi-Fi.
@@ -971,6 +981,25 @@ impl EspIdfTcpStream {
 
         socket.set_nonblocking(true).map_err(to_esp_socket_error)?;
 
+        // Nagle off: every protocol this crate dials is small-request/response over TLS, which
+        // is the exact shape Nagle penalises. A TLS handshake writes several small records, and
+        // Nagle holds a second small write until the peer ACKs the first — pairing with the
+        // peer's delayed-ACK timer for a stall of up to ~200ms per occurrence, on a link whose
+        // real RTT is single-digit milliseconds (GitHub issue #160). MQTT command traffic has
+        // the same shape afterwards, so this is a property of the socket, not of the handshake.
+        //
+        // Not fatal on failure, unlike `set_nonblocking` above: non-blocking is a correctness
+        // requirement here (the poll loops retry on WouldBlock and would otherwise hang the
+        // task), whereas Nagle-off is a latency optimisation. A platform that refuses it should
+        // still connect, just more slowly — so this warns and continues rather than failing a
+        // connection that would otherwise work.
+        // `set_tcp_nodelay`, not `set_nodelay`: that is socket2's spelling. Tokio's
+        // `TcpStream` calls the same option `set_nodelay`, so the two backends read slightly
+        // differently on purpose.
+        if let Err(e) = socket.set_tcp_nodelay(true) {
+            log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {e}");
+        }
+
         match socket.connect(&addr.into()) {
             Ok(()) => {}
             Err(e) if is_connect_in_progress(&e) => {}
@@ -1311,19 +1340,64 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         let mut steps: u32 = 0;
         let mut negotiate_us: u64 = 0;
         let mut sleep_us: u64 = 0;
+        // The single most expensive step, which separates two shapes the summed compute cannot:
+        // one blocking asymmetric operation (a ~400ms max means the cost is a single ECDHE or
+        // RSA op and no poll interval can overlap it) versus the same total spread thinly over
+        // every step (a ~10ms max means it is per-call overhead, which *is* reducible).
+        let mut max_step_us: u64 = 0;
+        let mut max_step_at: u32 = 0;
+        // Where the compute that is *not* in the slowest step goes. On an ESP32-C6 the slowest
+        // step accounts for ~280ms of ~410ms, and per-call overhead measured from the poll-rate
+        // experiment (~0.17ms x ~46 calls) explains only ~8ms of the rest — so ~120ms sits in a
+        // handful of mid-sized steps that a single maximum cannot locate. Bucket counts and sums
+        // rather than a line per step: ~50 steps per handshake would otherwise bury the summary
+        // this is attached to, and the distribution is the whole question.
+        let mut step_buckets: [u32; 5] = [0; 5];
+        let mut step_bucket_us: [u64; 5] = [0; 5];
+        // Reported on its own because the first step is where the trust store is parsed: esp-tls
+        // builds the SSL context on the first `negotiate` call, so a 5-anchor bundle re-parsed
+        // per *handshake* rather than once per connector would show up here and nowhere else.
+        let mut first_step_us: u64 = 0;
 
         loop {
             let step_start = now_micros();
             let step = tls.negotiate(host, &cfg);
-            negotiate_us += now_micros().saturating_sub(step_start);
+            let step_us = now_micros().saturating_sub(step_start);
+            negotiate_us += step_us;
             steps += 1;
+            if step_us > max_step_us {
+                max_step_us = step_us;
+                max_step_at = steps;
+            }
+            if steps == 1 {
+                first_step_us = step_us;
+            }
+            let bucket = STEP_COST_BUCKETS_US
+                .iter()
+                .position(|&bound| step_us < bound)
+                .unwrap_or(STEP_COST_BUCKETS_US.len());
+            step_buckets[bucket] += 1;
+            step_bucket_us[bucket] += step_us;
 
             match step {
                 Ok(_) => {
                     log::info!(
-                        "ESP-TLS handshake with {} completed in {}ms ({steps} steps, {negotiate_us}us in esp_tls, {sleep_us}us polling)",
+                        "ESP-TLS handshake with {} completed in {}ms ({steps} steps, {negotiate_us}us in esp_tls, {sleep_us}us polling, slowest step {max_step_us}us at #{max_step_at}, first step {first_step_us}us)",
                         RedactedHost(host),
                         timer.now_millis().saturating_sub(start)
+                    );
+                    log::info!(
+                        "ESP-TLS step cost distribution: <1ms {}x/{}us, 1-5ms {}x/{}us, 5-20ms {}x/{}us, 20-100ms {}x/{}us, >=100ms {}x/{}us",
+                        step_buckets[0],
+                        step_bucket_us[0],
+                        step_buckets[1],
+                        step_bucket_us[1],
+                        step_buckets[2],
+                        step_bucket_us[2],
+                        step_buckets[3],
+                        step_bucket_us[3],
+                        step_buckets[4],
+                        step_bucket_us[4],
                     );
                     break;
                 }

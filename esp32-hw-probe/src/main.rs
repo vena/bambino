@@ -1,25 +1,70 @@
 //! Current investigation: GitHub issue #160's TLS handshake cost breakdown.
 //!
 //! A downstream consumer measured the printer connect path phase by phase and found the
-//! TLS handshake to be 94-98% of the interval (1.2-2.4s per handshake). Nothing measured
-//! so far separates the two things that could account for it, and the fix is opposite in
-//! each case:
+//! TLS handshake to be 94-98% of the interval (1.2-2.4s per handshake). Two rounds on an
+//! ESP32-C6 against a P1S have already settled the question #160 was opened to ask, and
+//! this run follows up on what they left over.
 //!
-//! - **Poll pacing.** `EspIdfTlsConnector::connect` pins `Config::timeout_ms = 0` (issue
-//!   #67), so each `esp_tls_low_level_conn` call takes exactly one handshake step and
-//!   returns; the loop then sleeps `TLS_POLL_INTERVAL` (20ms) before the next. If the
-//!   steps are essentially free, ~60 steps x 20ms *is* the handshake, and the fix is an
-//!   adaptive or readiness-driven poll.
-//! - **Genuine compute.** Chain verification three deep against five anchors, plus the
-//!   key exchange, on a small RISC-V core could plausibly be hundreds of milliseconds of
-//!   real work. Then the interval is irreducible at this layer and #160 closes.
+//! **Round 1 (8 runs, 20ms poll interval).** Mean 1415ms: ~409ms inside
+//! `esp_tls_low_level_conn`, ~1005ms sleeping, the two summing to the reported duration.
+//!
+//! **Round 2 (8 runs, 5ms poll interval).** Steps scaled 3.94x, poll time moved 0.4%
+//! (1004.8ms -> 1008.9ms). **`TLS_POLL_INTERVAL` is not the cost** — the loop was waiting
+//! for a peer that had not answered, not sleeping through one that had. 5ms was in fact
+//! marginally *worse*, since ~150 extra calls cost ~26ms of per-call overhead.
+//!
+//! **Host control.** The same handshake from a laptop on the same LAN (4.7ms RTT) takes
+//! 805ms +/- 2%. The printer is slow for everyone, so ~790ms of the wait is the peer.
+//! That leaves roughly: ~790ms peer, ~435ms local mbedTLS compute, ~190ms unexplained.
+//!
+//! **Rounds 3 and 4 (8 runs each, `TCP_NODELAY` on).** Round 3 looked like a win — polling
+//! mean 1004.8ms -> 904.8ms, median 1052.6ms -> 842.4ms. Round 4, on *identical* code, came
+//! back at 1029.9ms mean / 962.3ms median, i.e. round 1's numbers. **`TCP_NODELAY` has no
+//! demonstrated effect on this path**: the spread between two identical configurations
+//! (141ms) is larger than the 97ms round 3 appeared to save. It stays in the crate as
+//! hygiene — standard for small-message protocols, and MQTT command traffic after the
+//! handshake has exactly the shape Nagle penalises — not as a measured improvement.
+//!
+//! The general lesson for anyone extending this probe: at n=8 against a peer that swings
+//! 820-1644ms, only effects larger than ~200ms are visible at all. Do not read a single
+//! round's mean or median as signal; run the control configuration twice before believing
+//! any change, which is exactly what rounds 3 and 4 accidentally did.
+//!
+//! **Round 4 also closed the compute accounting**, and the per-step buckets sum to the
+//! reported compute total to the microsecond. Local work per handshake is:
+//!
+//! | part | cost | what it is |
+//! |---|---|---|
+//! | first step | 26.0ms (+/-0.2 across 8 runs) | SSL setup and trust-store parse |
+//! | 1-2 mid steps | 54-57ms each | discrete crypto operations |
+//! | one big step | 260-315ms | the burst, at step #30-65 |
+//! | `<1ms` polls | 33-72 of them, 1.6-6.0ms total | polls that found nothing |
+//!
+//! Two things fall out. Per-call overhead is ~0.05ms, so the poll loop costs essentially
+//! nothing — a third independent confirmation that `TLS_POLL_INTERVAL` is not the problem.
+//! And the chunking is fluid: two 54ms steps pair with a 265ms burst, one 57ms step pairs
+//! with a 315ms burst, for a constant ~398ms of client crypto either way. That is the same
+//! work arriving in different numbers of records, not different work.
+//!
+//! **The trust-store parse is 26ms**, not the ~120ms it was hypothesised to be before this
+//! round. That kills the idea of trimming the anchor bundle to the one anchor a printer
+//! chains to — it could never have saved more than 26ms, and the reliability cost is real:
+//! only the P1S has been verified (see `src/io/CLAUDE.md`), the bundle's `BBL CA` plus four
+//! `BBL CA2` entries look like an in-progress migration, and issue #145 is precisely the
+//! failure where a partial store verifies some models, fails others, and looks identical to
+//! a clean handshake in the log. Do not revive this; the prize is small and a firmware
+//! update can move a printer onto a chain the trimmed store no longer covers.
 //!
 //! `src/io/esp_idf.rs`'s handshake loop now counts steps and accumulates the two halves
 //! separately, reporting them on its existing summary line:
 //!
 //! ```text
-//! ESP-TLS handshake with <host> completed in 1264ms (63 steps, 4821us in esp_tls, 1259402us polling)
+//! ESP-TLS handshake with <host> completed in 1264ms (63 steps, 4821us in esp_tls, 1259402us polling, slowest step 391204us at #7)
 //! ```
+//!
+//! `slowest step` is what separates one blocking asymmetric operation from the same total
+//! spread thinly across every call: a ~400ms maximum means a single ECDHE or RSA op that no
+//! poll interval can overlap, a ~10ms maximum means per-call overhead, which is reducible.
 //!
 //! **What this probe adds** is the repetition. The known range for the whole interval is
 //! 1.7-4.0s across 26 real sessions downstream, so a single handshake cannot distinguish
@@ -32,14 +77,18 @@
 //! straight out of the transcript:
 //!
 //! ```sh
-//! grep -o '([0-9]* steps, [0-9]*us in esp_tls, [0-9]*us polling)' run.log
+//! grep -o '([0-9]* steps.*)' run.log
 //! ```
 //!
-//! - `us polling` dominating → the poll interval is the cost. Worth then checking whether
-//!   the fd is selectable, since waiting on readability removes the 20ms quantisation
-//!   entirely rather than shrinking it.
-//! - `us in esp_tls` dominating → the interval is a rounding error, #160 closes as
-//!   irreducible here, and the follow-up is a consumer-side progress concern.
+//! - **Total drops toward ~1225ms** (peer + compute, with the residual gone) → Nagle was
+//!   the residual and `TCP_NODELAY` is the fix. Expect polling time, not compute, to fall.
+//! - **Total unchanged at ~1415ms** → the residual is elsewhere: Wi-Fi power save
+//!   (`WIFI_PS_MIN_MODEM` is ESP-IDF's default and nothing here overrides it) is the next
+//!   suspect, testable with one `esp_wifi_set_ps(WIFI_PS_NONE)` call.
+//! - **`slowest step` near ~400ms** → the local compute is one blocking asymmetric
+//!   operation, irreducible without hardware acceleration that is already enabled.
+//!   **Near ~10ms** → it is spread across calls as per-call overhead, and fewer, larger
+//!   steps would recover it.
 //!
 //! The two sums should add to roughly the reported duration; if they do not, the time is
 //! going somewhere neither counter covers and that is itself the finding.
@@ -51,10 +100,9 @@
 //!
 //! **Chip caveat.** The downstream measurement was an ESP32-P4 at 360MHz. This probe
 //! defaults to an ESP32-C6 (160MHz, single core) — see this directory's `CLAUDE.md` for
-//! retargeting. The polling half is fixed at 20ms per step on any chip and only the
-//! compute half scales with clock, so the inference runs one way only: if a C6 shows
-//! polling dominant, a P4 is more so and the conclusion carries. If a C6 shows compute
-//! dominant, that says nothing about the P4, which would do the same work faster.
+//! retargeting. Only the ~435ms compute term scales with clock; the ~790ms peer term does
+//! not, and is why the C6's totals land inside the P4's measured range despite less than
+//! half the clock. Do not expect a faster chip to move the dominant term.
 //!
 //! **Setup.** Certificates are not committed (see `.gitignore`) — regenerate with:
 //!
@@ -297,8 +345,8 @@ fn report(totals: &[Option<u128>; RUNS]) {
 
     log::info!(
         "KEY RESULT: the totals above are NOT the answer — the ratio inside each run is. \
-         Read the crate's own per-run line: `grep -o '([0-9]* steps, [0-9]*us in esp_tls, \
-         [0-9]*us polling)' run.log`. Polling dominant means the 20ms TLS_POLL_INTERVAL is \
+         Read the crate's own per-run line: `grep -o '([0-9]* steps.*)' run.log`. \
+         Polling dominant means the 20ms TLS_POLL_INTERVAL is \
          the cost and an adaptive or readiness-driven poll is the fix; esp_tls dominant \
          means the handshake is genuine compute and #160 closes as irreducible at this \
          layer. If the two sums do not add to roughly the reported duration, the time is \

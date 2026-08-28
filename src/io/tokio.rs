@@ -314,6 +314,16 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
         let stream = ::tokio::net::TcpStream::connect(format!("{}:{}", host, port))
             .await
             .map_err(SocketError::from)?;
+
+        // Nagle off, for the same reason and with the same non-fatal handling as
+        // `EspIdfTcpStream::connect` — see that function for the full rationale (GitHub issue
+        // #160). Kept in step across both backends deliberately: a latency characteristic that
+        // holds on the printer but not on the host, or the reverse, makes every cross-platform
+        // timing comparison misleading, which is exactly what #160 spent its measurements on.
+        if let Err(e) = stream.set_nodelay(true) {
+            log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {e}");
+        }
+
         Ok(TokioIo(stream))
     }
 }
