@@ -1,5 +1,20 @@
-//! Current investigation: GitHub issue #160, round 6 — does forcing the ECDH curve onto
-//! P-256 recover the local crypto cost?
+//! Current investigation: GitHub issue #161 — does connecting MQTT, FTPS and the camera
+//! concurrently actually beat connecting them one at a time, against a real printer?
+//!
+//! `PrinterClient::connect_all()` interleaves the three dial+TLS sequences on one task. The
+//! model says that should cost one peer wait plus three compute terms rather than three of
+//! each, because #160 established the peer wait dominates and overlaps freely. The open
+//! question is whether the printer agrees: it runs three separate TLS daemons, but on one
+//! embedded SoC, so three simultaneous handshakes may contend on *its* CPU and give the
+//! overlap back. Phases E and F below measure exactly that, and a null or negative result
+//! is a real outcome — see `report_connect`.
+//!
+//! Everything below this point is issue #160's completed investigation, kept because its
+//! phases still run and because its findings are what make #161's prediction falsifiable.
+//!
+//! ## Issue #160 (closed): is the handshake poll-paced or compute-bound?
+//!
+//! Round 6 asked whether forcing the ECDH curve onto P-256 recovers the local crypto cost.
 //!
 //! **The finding this round tests.** A stock ESP-IDF build enables Curve25519 and mbedTLS
 //! ranks x25519 first among supported groups, so every handshake negotiated
@@ -47,12 +62,18 @@
 //! step (fatal under `timeout_ms = 0`), and a non-NULL `esp_tls_get_client_session()` does
 //! not mean the peer offered anything resumable.
 //!
-//! **Still untested**, for whoever picks this up next: Wi-Fi power save is at ESP-IDF's
-//! `WIFI_PS_MIN_MODEM` default and nothing overrides it, which is a live candidate for the
-//! ~190ms this device waits beyond the laptop's ~790ms — one `esp_wifi_set_ps(WIFI_PS_NONE)`
-//! call tests it. `esp_tls_cfg_t.ciphersuites_list` could pin a non-ECDHE suite, dropping
-//! the key exchange on both sides, but costs forward secrecy and so would have to be an
-//! opt-in rather than a default.
+//! **Wi-Fi power save: tested, and it buys nothing.** ESP-IDF's `WIFI_PS_MIN_MODEM` default
+//! was the last standing candidate for the ~190ms this device waits beyond the laptop's
+//! ~790ms, on the theory that a dozing station has inbound frames held at the AP until the
+//! next DTIM beacon. Measured with `esp_wifi_set_ps(WIFI_PS_NONE)` against the default, back
+//! to back in one boot: the difference was not significant against this rig's ~200ms floor.
+//! Deliberately not written up in `reference/` — the crate owns no Wi-Fi code and cannot set
+//! this, so leaving power save to the consumer is the right default and there is no bambino
+//! recommendation to make either way. Recorded here only so it does not get re-run.
+//!
+//! **Still untested:** `esp_tls_cfg_t.ciphersuites_list` could pin a non-ECDHE suite,
+//! dropping the key exchange on both sides, but costs forward secrecy and so would have to
+//! be an opt-in rather than a default.
 //!
 //! **Rounds 3 and 4 (8 runs each, `TCP_NODELAY` on).** Round 3 looked like a win — polling
 //! mean 1004.8ms -> 904.8ms, median 1052.6ms -> 842.4ms. Round 4, on *identical* code, came
@@ -166,8 +187,11 @@
 //! multi-anchor bundle probe, issue #65's concurrent-sleep probe) are recoverable via
 //! `git log -- esp32-hw-probe/src/main.rs`, not kept live here.
 
-use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTlsConnector};
+use bambino::client::PrinterClient;
+use bambino::identity::PrinterIdentity;
+use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTimer, EspIdfTlsConnector};
 use bambino::io::{RawStreamFactory, TlsConnector};
+use bambino::models::PrinterModel;
 use core::time::Duration;
 use std::time::Instant;
 
@@ -237,6 +261,39 @@ const RUNS: usize = 8;
 /// which is the whole measurement here.
 const BETWEEN_RUNS: Duration = Duration::from_secs(3);
 
+/// Model assumed by the issue #161 connect phases.
+///
+/// This is not cosmetic. `connect_all()` dials the camera only when the model's quirks
+/// report `CameraProtocol::BinaryJpeg`; on an RTSPS model it reports that channel as "not
+/// attempted" and the phases below would silently compare two channels instead of three.
+/// Change this if the target is not a P1S, and read the guard in `run_connect` — it says so
+/// out loud rather than letting a two-channel number be read as a three-channel one.
+const PROBE_MODEL: PrinterModel = PrinterModel::P1S;
+
+/// Runs per connect phase. Each run is three full handshakes, so this is 3x as expensive per
+/// run as the #160 timing phase. Four is enough here because the predicted effect (~2s) is an
+/// order of magnitude above this rig's ~200ms measurement floor — unlike #160's rounds, which
+/// were chasing effects near that floor and needed eight.
+const CONNECT_RUNS: usize = 4;
+
+/// Outer per-channel connect budget for the #161 phases, in seconds.
+///
+/// Deliberately far above the ~1.4s a handshake costs. The question these phases ask is
+/// whether three concurrent handshakes make each other *slower*; a tight budget would convert
+/// exactly that outcome into a `TimedOut` and destroy the measurement instead of recording it.
+/// Kept in step with `HANDSHAKE_TIMEOUT`, which bounds the same handshake from inside the
+/// connector — the two are structurally independent, per `with_connect_timeout`'s doc comment.
+const CONNECT_BUDGET_SECS: u64 = 30;
+
+/// Stack for the thread running the issue #161 phases.
+///
+/// The main task's 8KB is not enough: a three-channel `PrinterClient` overflowed it by more
+/// than 14KB. 64KB is chosen with a wide margin rather than tuned — this is a measurement rig
+/// and a second stack-protection panic mid-run would cost another flash cycle to discover.
+/// It is not evidence about what a consumer needs; a consumer that builds its client once at
+/// startup and does not hold the builder chain live has a different profile entirely.
+const CONNECT_PHASE_STACK: usize = 64 * 1024;
+
 fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -288,36 +345,6 @@ fn main() {
 
     report(&totals);
 
-    // ---- Wi-Fi power save ----
-    //
-    // `WIFI_PS_MIN_MODEM` is ESP-IDF's default and nothing in this probe or in bambino
-    // overrides it: bambino owns no Wi-Fi code at all, so this is a consumer-side setting the
-    // crate can only document. A dozing station has inbound frames held at the AP until the
-    // next DTIM beacon, which is a candidate for the ~150ms this device waits beyond a
-    // laptop's ~790ms on the same network. Phases run back to back in one boot so the AP,
-    // signal and printer state are as close to identical as they can be.
-    log::info!("=== phase B: {RUNS} runs with Wi-Fi power save OFF ===");
-    if let Err(e) = unsafe { esp_idf_svc::sys::esp!(esp_idf_svc::sys::esp_wifi_set_ps(
-        esp_idf_svc::sys::wifi_ps_type_t_WIFI_PS_NONE,
-    )) } {
-        log::error!("esp_wifi_set_ps(WIFI_PS_NONE) failed: {e:?}; phase B is not a real test");
-    }
-
-    let mut ps_off: [Option<u128>; RUNS] = [None; RUNS];
-    for (slot, total) in ps_off.iter_mut().enumerate() {
-        log::info!("--- power-save-off run {} of {RUNS} ---", slot + 1);
-        *total = run_handshake(PRINTER_TLS_PORT);
-        std::thread::sleep(BETWEEN_RUNS);
-    }
-    report(&ps_off);
-
-    log::info!(
-        "COMPARE: phase A (power save on) vs phase B (off). Read `us polling`, not compute — \
-         power save delays inbound frames, it does not slow this chip down. Watch the spread as \
-         well as the mean: a dozing station misses whole DTIM windows, so the signature is a \
-         few runs several hundred milliseconds slow rather than every run slightly slower."
-    );
-
     // Curve compatibility across the printer's three TLS daemons. The timing phase above only
     // proves the MQTT broker accepts what the ClientHello now offers; this proves the other
     // two do too, on this model. It is a pass/fail check, not a measurement — one handshake
@@ -352,7 +379,238 @@ fn main() {
         );
     }
 
+    // Last, because it is the only phase that authenticates and therefore the only one that
+    // can leave real sessions on the printer. Everything above measures handshakes and is
+    // unaffected by whether this phase runs at all.
+    //
+    // On its own thread because it does not fit in the main task's 8KB. Measured: it
+    // overflowed with a stack pointer ~14KB below the bounds ESP-IDF reported, and it did so
+    // in the *serial* phase, before `connect_all()` ran at all — so this is the cost of a
+    // three-channel `PrinterClient`, not a cost of concurrency. `with_ftps`/`with_camera` are
+    // consuming builders that each return a differently-typed `PrinterClient` by value, so
+    // several copies of a large generic struct can be live at once while the chain is
+    // evaluated. Raising `CONFIG_ESP_MAIN_TASK_STACK_SIZE` would work too, but a dedicated
+    // stack is what `sdkconfig.defaults` recommends for exactly this, and it keeps the
+    // requirement attached to the code that has it rather than to every task in the image.
+    match std::thread::Builder::new()
+        .stack_size(CONNECT_PHASE_STACK)
+        .spawn(run_connect_phases)
+    {
+        Ok(handle) => {
+            if handle.join().is_err() {
+                log::error!("issue #161 phases panicked; see the backtrace above");
+            }
+        }
+        Err(e) => log::error!("could not spawn the issue #161 phase thread: {e:?}"),
+    }
+
     park();
+}
+
+/// Runs both issue #161 connect phases and reports the serial-vs-concurrent comparison.
+///
+/// Returns without measuring anything if `PROBE_ACCESS_CODE` is unset: unlike the handshake
+/// phases above, these reach past TLS into MQTT/FTPS/camera authentication, so the access
+/// code is genuinely required rather than merely nice to have.
+fn run_connect_phases() {
+    if option_env!("PROBE_ACCESS_CODE").is_none() {
+        log::warn!(
+            "SKIP issue #161 phases: PROBE_ACCESS_CODE is not set. These phases authenticate \
+             on all three channels, so unlike the handshake phases above they cannot run \
+             without it. Uncomment it in esp32-hw-probe/.env and reflash."
+        );
+        return;
+    }
+
+    log::info!("=== issue #161: three channels, serial vs concurrent ===");
+    log::info!(
+        "Each run connects MQTT + FTPS + camera on a fresh client. Phase E does it the way \
+         the crate has always done it (one after another); phase F calls connect_all(), which \
+         interleaves the three on one task. Both phases run in the same boot, back to back, so \
+         the AP, signal and printer state are as close to identical as they can be."
+    );
+
+    let mut serial_totals: [Option<u128>; CONNECT_RUNS] = [None; CONNECT_RUNS];
+    for (slot, total) in serial_totals.iter_mut().enumerate() {
+        log::info!(
+            "--- phase E (serial) run {} of {CONNECT_RUNS} ---",
+            slot + 1
+        );
+        *total = run_connect(false);
+        std::thread::sleep(BETWEEN_RUNS);
+    }
+
+    let mut concurrent_totals: [Option<u128>; CONNECT_RUNS] = [None; CONNECT_RUNS];
+    for (slot, total) in concurrent_totals.iter_mut().enumerate() {
+        log::info!(
+            "--- phase F (connect_all) run {} of {CONNECT_RUNS} ---",
+            slot + 1
+        );
+        *total = run_connect(true);
+        std::thread::sleep(BETWEEN_RUNS);
+    }
+
+    report_connect(&serial_totals, &concurrent_totals);
+}
+
+/// Connects all three channels on a fresh client and returns total wall time in milliseconds.
+///
+/// `concurrent` selects `connect_all()` over the three sequential `connect_*` calls. Both
+/// paths end in the same state, which is the point: the only variable is whether the three
+/// dial+TLS sequences overlap.
+///
+/// Returns `None` unless **all three** channels connected. A run where the camera was refused
+/// is not comparable to one where it succeeded — it skipped a whole handshake's worth of work
+/// and would look like a win. Partial outcomes are logged in full before being discarded,
+/// because a channel that fails only under concurrency is itself the finding.
+///
+/// The client is rebuilt every run for the same reason `run_handshake` rebuilds its connector:
+/// every run is a from-scratch connect exactly as a consumer performs it.
+fn run_connect(concurrent: bool) -> Option<u128> {
+    // Checked per run rather than once, so the transcript carries the reason next to the
+    // numbers it invalidates. On an RTSPS model connect_all() skips the camera entirely and
+    // the two phases would be comparing two channels, not three.
+    if PROBE_MODEL.quirks().camera_protocol() != bambino::camera::CameraProtocol::BinaryJpeg {
+        log::error!(
+            "PROBE_MODEL {PROBE_MODEL:?} uses RTSPS for its camera, so connect_all() will not \
+             dial a camera channel and this comparison covers two channels, not three. Set \
+             PROBE_MODEL to the actual target before reading these numbers."
+        );
+    }
+
+    let certs: std::vec::Vec<std::vec::Vec<u8>> =
+        BBL_ANCHORS.iter().map(|anchor| anchor.to_vec()).collect();
+    let connector = || {
+        EspIdfTlsConnector::with_certs(certs.clone(), None).with_connect_timeout(HANDSHAKE_TIMEOUT)
+    };
+
+    // Three independent connectors and three independent timers, matching how a real consumer
+    // wires this up: `with_ftps`/`with_camera` take their own TLS connector precisely because
+    // some models need different TLS settings per channel.
+    let (timer, ftps_timer) = match (EspIdfTimer::new(), EspIdfTimer::new()) {
+        (Ok(timer), Ok(ftps_timer)) => (timer, ftps_timer),
+        _ => {
+            log::error!("    EspIdfTimer::new() failed; no measurement from this run");
+            return None;
+        }
+    };
+
+    let mut client = PrinterClient::new(
+        connector(),
+        EspIdfRawStreamFactory,
+        PrinterIdentity {
+            ip: PRINTER_IP.into(),
+            serial: PRINTER_SERIAL.into(),
+            access_code: option_env!("PROBE_ACCESS_CODE").unwrap_or_default().into(),
+            model: PROBE_MODEL,
+        },
+    )
+    .with_timer(timer)
+    .with_connect_timeout(CONNECT_BUDGET_SECS)
+    .with_ftps(connector(), EspIdfRawStreamFactory, ftps_timer)
+    .with_camera(connector(), EspIdfRawStreamFactory);
+
+    esp_idf_svc::hal::task::block_on(async {
+        let start = Instant::now();
+
+        let (mqtt, ftps, camera) = if concurrent {
+            let outcome = client.connect_all().await;
+            (outcome.mqtt, outcome.ftps, outcome.camera)
+        } else {
+            // Sequential on purpose, each awaited to completion before the next starts —
+            // this is the baseline the crate has always had, not a strawman.
+            let mqtt = Some(client.connect_mqtt().await);
+            let ftps = Some(client.connect_ftps().await);
+            let camera = Some(client.connect_camera().await);
+            (mqtt, ftps, camera)
+        };
+
+        let elapsed = start.elapsed().as_millis();
+
+        for (name, result) in [("mqtt", &mqtt), ("ftps", &ftps), ("camera", &camera)] {
+            match result {
+                Some(Ok(())) => log::info!("    {name}: connected"),
+                Some(Err(e)) => log::error!("    {name}: FAILED {e:?}"),
+                None => log::warn!("    {name}: not attempted"),
+            }
+        }
+
+        let all_up = matches!(
+            (&mqtt, &ftps, &camera),
+            (Some(Ok(())), Some(Ok(())), Some(Ok(())))
+        );
+        if !all_up {
+            log::error!(
+                "    -> no measurement from this run: a run that did not bring up all three \
+                 channels did less work than one that did, and averaging it in would read as \
+                 a speed-up. If this only happens in phase F, the printer is refusing \
+                 concurrent connections and THAT is the result."
+            );
+            return None;
+        }
+
+        log::info!("    all three channels up in {elapsed}ms");
+        Some(elapsed)
+    })
+}
+
+/// Prints the issue #161 serial-vs-concurrent comparison.
+fn report_connect(serial: &[Option<u128>], concurrent: &[Option<u128>]) {
+    log::info!("================ issue #161 connect summary ================");
+
+    let mean = |runs: &[Option<u128>]| -> Option<u128> {
+        let completed: std::vec::Vec<u128> = runs.iter().flatten().copied().collect();
+        match completed.is_empty() {
+            true => None,
+            false => Some(completed.iter().sum::<u128>() / completed.len() as u128),
+        }
+    };
+
+    for (label, runs) in [
+        ("phase E serial", serial),
+        ("phase F connect_all", concurrent),
+    ] {
+        for (slot, total) in runs.iter().enumerate() {
+            match total {
+                Some(ms) => log::info!("  {label} run {}: {ms}ms", slot + 1),
+                None => log::info!("  {label} run {}: no measurement", slot + 1),
+            }
+        }
+    }
+
+    let (Some(serial_mean), Some(concurrent_mean)) = (mean(serial), mean(concurrent)) else {
+        log::error!(
+            "RESULT: at least one phase produced no complete run, so there is nothing to \
+             compare. Check the per-channel lines above: if phase F alone is empty, the \
+             printer refused concurrent connections and #161 should be closed as measured."
+        );
+        log::info!("===========================================================");
+        return;
+    };
+
+    log::info!("  phase E (serial) mean:      {serial_mean}ms");
+    log::info!("  phase F (connect_all) mean: {concurrent_mean}ms");
+
+    if concurrent_mean < serial_mean {
+        log::info!("  saved {}ms per connect", serial_mean - concurrent_mean);
+    } else {
+        log::warn!(
+            "  concurrent was {}ms SLOWER",
+            concurrent_mean - serial_mean
+        );
+    }
+
+    log::info!(
+        "KEY RESULT: the means above are only half of it — read the crate's own per-handshake \
+         lines in both phases before concluding anything. The model predicts phase F costs one \
+         peer wait plus three compute terms instead of three of each. If the totals improved \
+         but each individual handshake got slower, the printer is contending on its own CPU \
+         and the win will not hold on a busier machine. If individual handshake times are \
+         unchanged and only the total dropped, the overlap is real and free. A phase F that is \
+         slower, or that fails channels phase E connects, closes #161 as measured-and-rejected \
+         rather than landing it — that is a legitimate outcome, not a failed run."
+    );
+    log::info!("===========================================================");
 }
 
 /// Runs one full dial-and-handshake and returns the caller-side wall time in milliseconds.
