@@ -488,6 +488,22 @@ Two things to check before you rely on it. This was only tested against a P1S, a
 
 There is no equivalent knob for the ~800 ms the printer itself takes to reply, which is the larger half of the handshake and is the same from a laptop. See [REF-NET-SECURE](reference/01_network_discovery.md) for the full measured breakdown, including why TLS session resumption does not help (the printer offers a session ID and then refuses to resume it).
 
+**Connecting more than one channel: do it concurrently.** You cannot make the printer answer faster, but you can wait on it once instead of three times. `PrinterClient::connect_all()` connects MQTT, FTPS, and the camera at the same time rather than one after another:
+
+```rust
+let outcome = printer.connect_all().await;
+```
+
+It only dials the channels you configured, and skips the camera on models that use RTSPS. Each channel reports its own result, so a camera that refuses does not hide a working MQTT session:
+
+```rust
+if let Some(Err(e)) = outcome.camera {
+    log::warn!("camera unavailable: {e}");  // MQTT and FTPS may still be up
+}
+```
+
+Measured on an ESP32-C6 against a P1S: 3972 ms for all three in sequence, 2535 ms concurrently — a 36% saving. The gain comes from overlapping the printer's reply time, not from reducing it. Per-handshake crypto cost was unchanged, so the three simultaneous connections did not slow the printer down.
+
 **ESP-IDF TLS version query:** `EspIdfTlsConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`); wolfSSL builds aren't supported yet.
 
 **ESP-IDF FTPS/MQTT:** `EspIdfTlsConnector` wraps an already-connected raw stream (via `esp_idf_svc::tls::EspTls::adopt()`), used for FTPS's control/data channels and MQTT's lazy connect alike, paired with `EspIdfRawStreamFactory` for the raw dial. Models where `model.quirks().uses_plaintext_ftps_data_channel()` is true skip TLS on the FTPS data channel entirely:

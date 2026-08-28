@@ -23,6 +23,88 @@ use common::mock_mqtt::{
 };
 
 #[tokio::test]
+async fn test_connect_all_reports_rtsps_camera_as_not_attempted() {
+    // ensure_camera() returns ProtocolViolation on an RTSPS model, but connect_all() must
+    // report that channel as None ("not attempted") instead. An RTSPS camera is a channel
+    // that does not apply to this printer rather than a failure, and surfacing it as an
+    // Err would hand every P2S/X2D consumer a guaranteed error on an otherwise clean
+    // connect. This is the one place connect_all() deliberately diverges from the
+    // sequential path, so it gets its own test.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P2S).await;
+    let outcome = client.connect_all().await;
+
+    assert!(
+        outcome.camera.is_none(),
+        "RTSPS camera must be reported as not attempted, got {:?}",
+        outcome.camera
+    );
+    assert!(
+        outcome.mqtt.is_none(),
+        "MQTT was already connected via from_mqtt(), so it must not be re-attempted"
+    );
+    assert!(
+        outcome.ftps.is_none(),
+        "FTPS was never configured, so it must be reported as not attempted, not as an error"
+    );
+
+    broker_task.await.expect("broker task panicked");
+}
+
+#[tokio::test]
+async fn test_connect_all_connects_mqtt_and_skips_unconfigured_channels() {
+    // The common consumer shape: MQTT configured for a lazy dial, no .with_ftps() and no
+    // .with_camera(). Configuration is the selection, so the two unconfigured channels are
+    // skipped silently and only MQTT is dialled — and it must actually end up installed,
+    // not merely reported as Ok.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let factory = MockDataStreamFactory::new(data_container);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        factory,
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: "12345678".into(),
+            model: PrinterModel::P1S,
+        },
+    );
+
+    assert!(
+        !client.is_mqtt_connected(),
+        "precondition: lazy, not yet dialled"
+    );
+    let outcome = client.connect_all().await;
+
+    assert!(
+        matches!(outcome.mqtt, Some(Ok(()))),
+        "MQTT should have been dialled and connected, got {:?}",
+        outcome.mqtt
+    );
+    assert!(
+        client.is_mqtt_connected(),
+        "a Some(Ok(())) outcome must mean the session is installed on the client"
+    );
+    assert!(outcome.ftps.is_none(), "FTPS was never configured");
+    assert!(
+        outcome.camera.is_none(),
+        "camera was never configured, even though P1S uses the BinaryJpeg protocol"
+    );
+
+    broker_task.await.expect("broker task panicked");
+}
+
+#[tokio::test]
 async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
     // The wall-clock sequence-counter reseed in ensure_mqtt() is meant to stop two
     // independent sessions connecting to the same printer from both starting at the same

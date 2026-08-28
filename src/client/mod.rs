@@ -27,6 +27,7 @@ mod telemetry;
 mod thermal;
 pub mod types;
 
+pub use connect::ConnectAllOutcome;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
 pub use types::{

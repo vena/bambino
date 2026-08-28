@@ -5,7 +5,9 @@ use crate::camera::CameraProtocol;
 use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
 use crate::ftps::FtpsClient;
-use crate::io::{AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, race};
+use crate::io::{
+    AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, join3, race,
+};
 use crate::mqtt::MqttClient;
 
 use super::PrinterClient;
@@ -42,6 +44,33 @@ where
         Raced::Left(result) => result,
         Raced::Right(_) => Err(E::from(SocketError::TimedOut)),
     }
+}
+
+/// Per-channel outcome of [`PrinterClient::connect_all`], one field per connection channel.
+///
+/// Each field distinguishes three states, which is the whole reason this is a struct rather
+/// than a plain `Result`:
+///
+/// - `None` — the channel was **not attempted**. Either it was already connected, it was
+///   never configured (no `.with_ftps()`/`.with_camera()`), or it cannot apply to this
+///   printer at all (the camera on an RTSPS model). Not an error, and not a failure to
+///   report to a user.
+/// - `Some(Ok(()))` — connected, and the session is installed on the client.
+/// - `Some(Err(e))` — that channel's own error, including its own
+///   [`SocketError::TimedOut`] if it alone exceeded the connect timeout.
+///
+/// Every channel is reported independently and none of them short-circuits the others, so
+/// partial success is a normal result rather than an edge case: a client whose MQTT session
+/// came up and whose camera refused the connection has a usable MQTT session, and the
+/// camera error is still visible instead of being swallowed or masking the success.
+#[derive(Debug, Clone)]
+pub struct ConnectAllOutcome {
+    /// MQTT channel result — see the struct docs for what each state means.
+    pub mqtt: Option<Result<(), Error>>,
+    /// FTPS channel result — see the struct docs for what each state means.
+    pub ftps: Option<Result<(), Error>>,
+    /// Camera channel result — see the struct docs for what each state means.
+    pub camera: Option<Result<(), Error>>,
 }
 
 impl<
@@ -440,6 +469,188 @@ where
     /// Returns whether the camera session is currently established.
     pub fn is_camera_connected(&self) -> bool {
         self.camera.is_some()
+    }
+
+    /// Connects every configured channel concurrently, overlapping their TLS handshakes.
+    ///
+    /// Same end state as calling [`connect_mqtt()`](Self::connect_mqtt),
+    /// [`connect_ftps()`](Self::connect_ftps) and [`connect_camera()`](Self::connect_camera)
+    /// in sequence, but the three dial+TLS sequences are interleaved on this task instead of
+    /// running one after another, and the result is reported per channel via
+    /// [`ConnectAllOutcome`] rather than as a single `Result`.
+    ///
+    /// # Which channels are attempted
+    ///
+    /// Configuration *is* the selection — there is no channel argument. A channel is dialled
+    /// only when it is configured and applicable, and is otherwise reported as `None`
+    /// (not attempted) rather than as an error:
+    ///
+    /// - **MQTT** — attempted unless already connected.
+    /// - **FTPS** — attempted only if `.with_ftps()` supplied a config and it is not already
+    ///   connected. A consumer that never configured FTPS simply gets `None`.
+    /// - **Camera** — attempted only if `.with_camera()` supplied a config *and* the model's
+    ///   [`CameraProtocol`] is `BinaryJpeg`. Note the deliberate difference from
+    ///   [`ensure_camera()`](Self::ensure_camera), which returns
+    ///   [`Error::ProtocolViolation`] on an RTSPS model: here an RTSPS camera is a channel
+    ///   that does not apply to this printer, not a failure, so reporting it as an error
+    ///   would hand every P2S/X2D consumer a guaranteed `Err` on an otherwise clean connect.
+    ///   Those models use `camera::rtsps::build_rtsps_url()` and have no client-managed
+    ///   connection to establish.
+    ///
+    /// # Timeouts
+    ///
+    /// `connect_timeout_secs` is applied **per channel**, matching the individual
+    /// `ensure_*` methods, so a slow or unreachable camera can never cause an otherwise
+    /// healthy MQTT dial to be reported as timed out. Because the channels run concurrently
+    /// the worst-case wall clock for the whole call is still one timeout, not three. A
+    /// shared deadline around the joined future was rejected precisely because it cannot
+    /// express partial success: it would discard an already-completed MQTT session when a
+    /// hung camera pushed the *combined* future past the deadline.
+    ///
+    /// # Failure isolation
+    ///
+    /// A channel that fails installs nothing and leaves its config intact, so a later
+    /// `connect_*`/`ensure_*` call retries it — the same "a failed attempt must not
+    /// permanently report 'not configured'" rule the sequential paths follow. One channel's
+    /// failure never prevents another from being installed.
+    ///
+    /// # Why this exists
+    ///
+    /// A handshake against a Bambu printer is dominated by waiting on the peer (~800ms,
+    /// measured on an ESP32-C6 against a P1S and reproduced from a laptop on the same LAN,
+    /// so it is the printer being slow rather than the client). That wait overlaps freely;
+    /// only the smaller per-handshake compute term still serialises on a single core.
+    /// Connecting three channels therefore costs roughly one peer wait plus three compute
+    /// terms instead of three of each. TLS session resumption would have attacked the peer
+    /// term directly, but the printer declines to resume its own session IDs, so overlapping
+    /// the waits is the available lever.
+    pub async fn connect_all(&mut self) -> ConnectAllOutcome {
+        let timer = &self.timer;
+        let secs = self.connect_timeout_secs;
+        let identity = &self.identity;
+
+        let mqtt_wanted = self.mqtt.is_none();
+        let mqtt_factory = &self.mqtt_factory;
+        let mqtt_tls = &self.mqtt_tls;
+        let mqtt_port = self.mqtt_port;
+        let mqtt_fut = async move {
+            if !mqtt_wanted {
+                return None;
+            }
+            Some(
+                race_against_connect_timeout(timer, secs, async {
+                    let raw = mqtt_factory.dial(&identity.ip, mqtt_port).await?;
+                    let stream = mqtt_tls.connect(&identity.serial, raw).await?;
+                    MqttClient::connect(stream, identity).await
+                })
+                .await,
+            )
+        };
+
+        // `as_ref()` only — `ftps_config` is consumed after the join, and only on success,
+        // so a failed attempt still leaves it available for a retry.
+        let ftps_slot = if self.ftps.is_none() {
+            self.ftps_config.as_ref()
+        } else {
+            None
+        };
+        let ftps_port = self.ftps_port;
+        let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
+        let ftps_fut = async move {
+            let (tls, factory, ftps_timer) = ftps_slot?;
+            Some(
+                race_against_connect_timeout(timer, secs, async {
+                    let raw_stream = factory.dial(&identity.ip, ftps_port).await?;
+                    FtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
+                        raw_stream,
+                        tls,
+                        identity,
+                        ftps_timer,
+                        allow_unverified_tls_1_2,
+                    )
+                    .await
+                })
+                .await,
+            )
+        };
+
+        let camera_slot = if self.camera.is_none()
+            && identity.model.quirks().camera_protocol() == CameraProtocol::BinaryJpeg
+        {
+            self.camera_config.as_ref()
+        } else {
+            None
+        };
+        let camera_port = self.camera_port;
+        let max_frame_size = self.camera_max_frame_size;
+        let camera_fut = async move {
+            let (tls, factory) = camera_slot?;
+            Some(
+                race_against_connect_timeout(timer, secs, async {
+                    let raw = factory.dial(&identity.ip, camera_port).await?;
+                    let stream = tls.connect(&identity.serial, raw).await?;
+                    let mut cam = BinaryCameraStream::new(stream);
+                    if let Some(max) = max_frame_size {
+                        cam = cam.with_max_frame_size(max);
+                    }
+                    cam.authenticate(identity).await?;
+                    Ok::<_, Error>(cam)
+                })
+                .await,
+            )
+        };
+
+        let (mqtt_res, ftps_res, camera_res) = join3(mqtt_fut, ftps_fut, camera_fut).await;
+
+        // Every borrow above ends with the joined future; installing the results is the
+        // only part that needs `&mut self`, which is why the three `ensure_*` methods did
+        // not have to be restructured to make this concurrent.
+        let mqtt = match mqtt_res {
+            None => None,
+            Some(Err(e)) => Some(Err(e)),
+            Some(Ok(client)) => {
+                self.mqtt = Some(client);
+                // Same wall-clock reseed `ensure_mqtt()` performs, and for the same reason —
+                // see its comment on colliding sequence IDs between independent sessions.
+                if self.timer.has_real_clock() {
+                    self.sequence_counter =
+                        crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
+                }
+                Some(Ok(()))
+            }
+        };
+
+        let ftps = match ftps_res {
+            None => None,
+            Some(Err(e)) => Some(Err(e)),
+            Some(Ok((control_stream, fill_buf))) => {
+                // Safe to consume now — the handshake above already succeeded, and
+                // `ftps_res` is only `Some` when `ftps_slot` was.
+                let (tls, factory, ftps_timer) = self.ftps_config.take().unwrap();
+                self.ftps = Some(FtpsClient::from_control_stream(
+                    control_stream,
+                    tls,
+                    factory,
+                    &self.identity,
+                    ftps_timer,
+                    allow_unverified_tls_1_2,
+                    fill_buf,
+                ));
+                Some(Ok(()))
+            }
+        };
+
+        let camera = match camera_res {
+            None => None,
+            Some(Err(e)) => Some(Err(e)),
+            Some(Ok(cam)) => {
+                self.camera_config = None;
+                self.camera = Some(cam);
+                Some(Ok(()))
+            }
+        };
+
+        ConnectAllOutcome { mqtt, ftps, camera }
     }
 
     /// Configures the binary-JPEG camera for lazy connection on first camera method call.

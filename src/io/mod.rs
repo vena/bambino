@@ -498,6 +498,65 @@ where
     .await
 }
 
+/// Polls three futures concurrently, resolving once all three have completed.
+///
+/// The all-must-finish counterpart to [`race`], built on the same
+/// `core::future`/`core::task` primitives (`poll_fn` + `pin!`) rather than
+/// `tokio::join!` or `embassy_futures::join`, so one implementation serves tokio (host),
+/// ESP-IDF (std), and bare-metal Embassy (no_std) with no `#[cfg]` branching. Each future
+/// is polled at most once per wake after it completes — its slot is filled and skipped
+/// thereafter, so a `Future` that would panic on being polled past completion never is.
+///
+/// Concurrency here is interleaving on one task, not parallelism: it overlaps time the
+/// futures spend *waiting*, which is the whole point at the only call site
+/// (`PrinterClient::connect_all`, `src/client/connect.rs`) — three TLS handshakes against
+/// the same printer are dominated by a ~800ms peer wait that overlaps freely, while the
+/// per-handshake compute still serialises on a single core.
+///
+/// This deliberately takes no error shortcut: it does not return early when one future
+/// resolves to an `Err`. `connect_all` reports every channel's own outcome, so an early
+/// return would discard results that had already been paid for.
+pub(crate) async fn join3<A, B, C>(a: A, b: B, c: C) -> (A::Output, B::Output, C::Output)
+where
+    A: Future,
+    B: Future,
+    C: Future,
+{
+    let mut a = pin!(a);
+    let mut b = pin!(b);
+    let mut c = pin!(c);
+    let mut out_a = None;
+    let mut out_b = None;
+    let mut out_c = None;
+    poll_fn(move |cx| {
+        if out_a.is_none()
+            && let Poll::Ready(v) = a.as_mut().poll(cx)
+        {
+            out_a = Some(v);
+        }
+        if out_b.is_none()
+            && let Poll::Ready(v) = b.as_mut().poll(cx)
+        {
+            out_b = Some(v);
+        }
+        if out_c.is_none()
+            && let Poll::Ready(v) = c.as_mut().poll(cx)
+        {
+            out_c = Some(v);
+        }
+        if out_a.is_some() && out_b.is_some() && out_c.is_some() {
+            Poll::Ready((
+                out_a.take().unwrap(),
+                out_b.take().unwrap(),
+                out_c.take().unwrap(),
+            ))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
 /// Maps an `embedded_io_async::ErrorKind` (the only info a generic `AsyncIo::read()` error
 /// exposes across every platform, std or no_std) to the closest `SocketError` variant.
 ///
