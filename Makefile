@@ -4,7 +4,18 @@ CHIP ?= esp32c6
 
 # Default host build/test + both feature-gate checks from CLAUDE.md + clippy.
 # This is the full local verification gate short of the esp-idf Docker check.
+#
+# `cargo fmt --check` runs first: it is the cheapest check here, and formatting
+# drift is otherwise invisible. The PostToolUse rustfmt hook in
+# .claude/settings.local.json formats one file per edit, and rustfmt recurses
+# through `mod` declarations, so a leaf-module edit never reaches the rest of
+# the crate. Before this check existed the tree drifted to 270 diff sites
+# unnoticed, and the first src/lib.rs edit triggered a crate-wide pass that
+# rewrote 41 untouched files into an unrelated commit. Use `cargo fmt` (not a
+# bare `rustfmt <file>`) to fix a failure -- it covers the CLI binary and
+# tests/, which a pass rooted at src/lib.rs cannot reach.
 check-fast:
+	cargo fmt --check
 	cargo build
 	cargo build --bin bambino-cli --features cli
 	cargo test
