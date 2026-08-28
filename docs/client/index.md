@@ -39,6 +39,58 @@ The client applies model-aware safety checks automatically:
 
 ## Types
 
+### `ConnectAllOutcome`
+
+```rust
+struct ConnectAllOutcome {
+    pub mqtt: Option<Result<(), crate::error::Error>>,
+    pub ftps: Option<Result<(), crate::error::Error>>,
+    pub camera: Option<Result<(), crate::error::Error>>,
+}
+```
+
+Per-channel outcome of [`PrinterClient::connect_all`](#printerclient), one field per connection channel.
+
+Each field distinguishes three states, which is the whole reason this is a struct rather
+than a plain `Result`:
+
+- `None` — the channel was **not attempted**. Either it was already connected, it was
+  never configured (no `.with_ftps()`/`.with_camera()`), or it cannot apply to this
+  printer at all (the camera on an RTSPS model). Not an error, and not a failure to
+  report to a user.
+- `Some(Ok(()))` — connected, and the session is installed on the client.
+- `Some(Err(e))` — that channel's own error, including its own
+  [`SocketError::TimedOut`](../io/index.md#socketerror) if it alone exceeded the connect timeout.
+
+Every channel is reported independently and none of them short-circuits the others, so
+partial success is a normal result rather than an edge case: a client whose MQTT session
+came up and whose camera refused the connection has a usable MQTT session, and the
+camera error is still visible instead of being swallowed or masking the success.
+
+#### Fields
+
+- **`mqtt`**: `Option<Result<(), crate::error::Error>>`
+
+  MQTT channel result — see the struct docs for what each state means.
+
+- **`ftps`**: `Option<Result<(), crate::error::Error>>`
+
+  FTPS channel result — see the struct docs for what each state means.
+
+- **`camera`**: `Option<Result<(), crate::error::Error>>`
+
+  Camera channel result — see the struct docs for what each state means.
+
+#### Trait Implementations
+
+##### `impl Clone for ConnectAllOutcome`
+
+- <span id="connectalloutcome-clone"></span>`fn clone(&self) -> ConnectAllOutcome` — [`ConnectAllOutcome`](#connectalloutcome)
+
+##### `impl Debug for ConnectAllOutcome`
+
+- <span id="connectalloutcome-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
 ### `CalibrationOption`
 
 ```rust
@@ -445,6 +497,70 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-is-camera-connected"></span>`fn is_camera_connected(&self) -> bool`
 
   Returns whether the camera session is currently established.
+
+- <span id="superprinterclient-connect-all"></span>`async fn connect_all(&mut self) -> ConnectAllOutcome` — [`ConnectAllOutcome`](#connectalloutcome)
+
+  Connects every configured channel concurrently, overlapping their TLS handshakes.
+
+  Same end state as calling [`connect_mqtt()`](#printerclient),
+  [`connect_ftps()`](#printerclient) and [`connect_camera()`](#printerclient)
+  in sequence, but the three dial+TLS sequences are interleaved on this task instead of
+  running one after another, and the result is reported per channel via
+  [`ConnectAllOutcome`](#connectalloutcome) rather than as a single `Result`.
+
+  # Which channels are attempted
+
+  Configuration *is* the selection — there is no channel argument. A channel is dialled
+  only when it is configured and applicable, and is otherwise reported as `None`
+  (not attempted) rather than as an error:
+
+  - **MQTT** — attempted unless already connected.
+  - **FTPS** — attempted only if `.with_ftps()` supplied a config and it is not already
+    connected. A consumer that never configured FTPS simply gets `None`.
+  - **Camera** — attempted only if `.with_camera()` supplied a config *and* the model's
+    [`CameraProtocol`](../camera/index.md#cameraprotocol) is `BinaryJpeg`. Note the deliberate difference from
+    [`connect_camera()`](#printerclient), which returns
+    [`Error::ProtocolViolation`](../error/index.md#error) on an RTSPS model: here an RTSPS camera is a channel
+    that does not apply to this printer, not a failure, so reporting it as an error
+    would hand every P2S/X2D consumer a guaranteed `Err` on an otherwise clean connect.
+    Those models use `camera::rtsps::build_rtsps_url()` and have no client-managed
+    connection to establish.
+
+  # Timeouts
+
+  `connect_timeout_secs` is applied **per channel**, matching the individual
+  `ensure_*` methods, so a slow or unreachable camera can never cause an otherwise
+  healthy MQTT dial to be reported as timed out. Because the channels run concurrently
+  the worst-case wall clock for the whole call is still one timeout, not three. A
+  shared deadline around the joined future was rejected precisely because it cannot
+  express partial success: it would discard an already-completed MQTT session when a
+  hung camera pushed the *combined* future past the deadline.
+
+  # Cost
+
+  This future holds all three handshakes alive at once, so it costs roughly 4x the
+  stack of connecting individually — measured on an ESP32-C6, 20296 bytes against a
+  4808-byte peak for the largest single `connect_*`, in exchange for ~1.3s. Irrelevant
+  on desktop; on Embassy, where task stacks are sized up front, connect one at a time
+  if stack is tighter than time.
+
+  # Failure isolation
+
+  A channel that fails installs nothing and leaves its config intact, so a later
+  `connect_*`/`ensure_*` call retries it — the same "a failed attempt must not
+  permanently report 'not configured'" rule the sequential paths follow. One channel's
+  failure never prevents another from being installed.
+
+  # Why this exists
+
+  A handshake against a Bambu printer is dominated by waiting on the peer (~800ms,
+  measured on an ESP32-C6 against a P1S and reproduced from a laptop on the same LAN,
+  so it is the printer being slow rather than the client). That wait overlaps freely;
+  only the smaller per-handshake compute term still serialises on a single core.
+  Connecting three channels therefore costs roughly one peer wait plus three compute
+  terms instead of three of each. TLS session resumption would have attacked the peer
+  term directly, but the printer declines to resume its own session IDs, so overlapping
+  the waits is the available lever.
 
 - <span id="superprinterclient-with-camera"></span>`fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(self, tls: NewCameraTls, factory: NewCameraFactory) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, NewCameraRawIO, NewCameraTls, NewCameraFactory>` — [`PrinterClient`](#printerclient)
 
