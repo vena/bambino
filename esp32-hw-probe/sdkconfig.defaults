@@ -23,3 +23,43 @@ CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
 # rejected. Trading away the error strings would save space by destroying the evidence.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# Generates the esp-tls client-session bindings (`esp_tls_get_client_session`,
+# `esp_tls_cfg_t.client_session`) that the GitHub issue #160 follow-up needs to test TLS
+# session resumption. Off by ESP-IDF default, which is why those symbols are absent from
+# `bindings.rs` in a stock build; the mbedTLS half (CONFIG_MBEDTLS_CLIENT_SSL_SESSION_TICKETS)
+# is already on without asking. Consumers wanting resumption would have to set this too, so
+# any bambino code using those symbols must be `#[cfg(esp_idf_esp_tls_client_session_tickets)]`
+# gated rather than assumed present.
+CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
+
+# mbedTLS's own account of the handshake. esp-tls installs the debug callback only under
+# CONFIG_MBEDTLS_DEBUG (`esp_tls_mbedtls.c:188`), so this is the switch that makes any of
+# mbedTLS's reasoning visible. It earned its place twice: at level 3 it settled session
+# resumption (the ClientHello hex dump proved we offered the printer's own session ID back
+# and it declined — timing alone could not separate that from never having offered it), and
+# at level 2 it exposes the negotiated ECDH curve, which is what the round below is about.
+#
+# Diagnostic only. Both options cost binary size and print per handshake; turn them off for
+# a clean timing run.
+# Level 2 (INFO), not 3. Level 2 still prints `ssl_tls12_client.c:1805 ECDH curve: <name>`,
+# which is the line this round turns on, and it maps to ESP_LOGI
+# (`port/mbedtls_debug.c:73`) so the default log ceiling already passes it — no
+# CONFIG_LOG_MAXIMUM_LEVEL change needed. Level 3 was used to settle resumption and dumps
+# hex per record, which inflated handshake timings roughly 3x and made that round's numbers
+# unusable for measurement. Do not raise this while measuring.
+CONFIG_MBEDTLS_DEBUG=y
+CONFIG_MBEDTLS_DEBUG_LEVEL_INFO=y
+
+# THE POINT OF THIS ROUND. mbedTLS ranks x25519 first among supported groups, so a stock
+# build negotiates `ECDH curve: x25519` — and the ESP32-C6's ECC accelerator handles
+# P-192/P-256 only (`components/mbedtls/port/ecc/ecc_alt.c:56`), so that key exchange runs
+# entirely in software while the hardware idles. Measured cost on a P1S handshake: one
+# ~265ms step out of ~410ms of local compute. Turning the curve off leaves secp256r1 at the
+# head of the list, which does route to `esp_mbedtls_ecp_point_multiply`.
+#
+# This is a consumer-side sdkconfig setting, not something bambino can set for anyone — the
+# crate can only document it. Confirm the negotiated curve in the log rather than assuming
+# the substitution happened, and watch for a handshake that now fails outright, which would
+# mean the printer cannot do P-256 and the curve has to stay.
+CONFIG_MBEDTLS_ECP_DP_CURVE25519_ENABLED=n
