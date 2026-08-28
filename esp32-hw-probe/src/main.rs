@@ -288,6 +288,36 @@ fn main() {
 
     report(&totals);
 
+    // ---- Wi-Fi power save ----
+    //
+    // `WIFI_PS_MIN_MODEM` is ESP-IDF's default and nothing in this probe or in bambino
+    // overrides it: bambino owns no Wi-Fi code at all, so this is a consumer-side setting the
+    // crate can only document. A dozing station has inbound frames held at the AP until the
+    // next DTIM beacon, which is a candidate for the ~150ms this device waits beyond a
+    // laptop's ~790ms on the same network. Phases run back to back in one boot so the AP,
+    // signal and printer state are as close to identical as they can be.
+    log::info!("=== phase B: {RUNS} runs with Wi-Fi power save OFF ===");
+    if let Err(e) = unsafe { esp_idf_svc::sys::esp!(esp_idf_svc::sys::esp_wifi_set_ps(
+        esp_idf_svc::sys::wifi_ps_type_t_WIFI_PS_NONE,
+    )) } {
+        log::error!("esp_wifi_set_ps(WIFI_PS_NONE) failed: {e:?}; phase B is not a real test");
+    }
+
+    let mut ps_off: [Option<u128>; RUNS] = [None; RUNS];
+    for (slot, total) in ps_off.iter_mut().enumerate() {
+        log::info!("--- power-save-off run {} of {RUNS} ---", slot + 1);
+        *total = run_handshake(PRINTER_TLS_PORT);
+        std::thread::sleep(BETWEEN_RUNS);
+    }
+    report(&ps_off);
+
+    log::info!(
+        "COMPARE: phase A (power save on) vs phase B (off). Read `us polling`, not compute — \
+         power save delays inbound frames, it does not slow this chip down. Watch the spread as \
+         well as the mean: a dozing station misses whole DTIM windows, so the signature is a \
+         few runs several hundred milliseconds slow rather than every run slightly slower."
+    );
+
     // Curve compatibility across the printer's three TLS daemons. The timing phase above only
     // proves the MQTT broker accepts what the ClientHello now offers; this proves the other
     // two do too, on this model. It is a pass/fail check, not a measurement — one handshake
