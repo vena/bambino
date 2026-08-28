@@ -80,6 +80,24 @@ let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity)
 printer.connect_mqtt().await?;
 ```
 
+**Connecting more than one channel.** If you also add FTPS or the camera (below), connect them together rather than one at a time. `connect_all()` overlaps the three TLS handshakes instead of paying for each end to end:
+
+```rust
+let outcome = printer.connect_all().await;
+```
+
+It dials only the channels you configured, and skips the camera on models that use RTSPS. Each channel reports its own result, so one failure does not hide the others:
+
+```rust
+if let Some(Err(e)) = outcome.camera {
+    log::warn!("camera unavailable: {e}");  // MQTT and FTPS may still be up
+}
+```
+
+A `None` result means the channel was not attempted — not configured, already connected, or not applicable to the model.
+
+The saving is largest where the network is slowest, because most of a handshake is spent waiting for the printer to reply, and that wait overlaps. Measured on an ESP32-C6 against a P1S: 3972 ms for all three in sequence against 2535 ms concurrently, a 36% saving. Per-handshake crypto cost was unchanged, so the three simultaneous connections did not slow the printer down.
+
 If you already have a connected `MqttClient` (tests, Embassy), wrap it directly:
 
 ```rust
@@ -488,21 +506,17 @@ Two things to check before you rely on it. This was only tested against a P1S, a
 
 There is no equivalent knob for the ~800 ms the printer itself takes to reply, which is the larger half of the handshake and is the same from a laptop. See [REF-NET-SECURE](reference/01_network_discovery.md) for the full measured breakdown, including why TLS session resumption does not help (the printer offers a session ID and then refuses to resume it).
 
-**Connecting more than one channel: do it concurrently.** You cannot make the printer answer faster, but you can wait on it once instead of three times. `PrinterClient::connect_all()` connects MQTT, FTPS, and the camera at the same time rather than one after another:
+If you connect more than one channel, `connect_all()` overlaps these handshakes instead of paying for each in turn — see [Connect](#connect). That is the only lever on the ~800 ms, since it cannot be shortened, only waited on once.
+
+**Give a multi-channel client its own stack.** Building and connecting a `PrinterClient` with MQTT, FTPS, and the camera all configured does not fit in ESP-IDF's default 8 KB main task: on an ESP32-C6 it overflowed by more than 14 KB and hit a stack-protection panic. Run it on a thread with room:
 
 ```rust
-let outcome = printer.connect_all().await;
+std::thread::Builder::new()
+    .stack_size(64 * 1024)
+    .spawn(|| { /* build the client and connect here */ })?;
 ```
 
-It only dials the channels you configured, and skips the camera on models that use RTSPS. Each channel reports its own result, so a camera that refuses does not hide a working MQTT session:
-
-```rust
-if let Some(Err(e)) = outcome.camera {
-    log::warn!("camera unavailable: {e}");  // MQTT and FTPS may still be up
-}
-```
-
-Measured on an ESP32-C6 against a P1S: 3972 ms for all three in sequence, 2535 ms concurrently — a 36% saving. The gain comes from overlapping the printer's reply time, not from reducing it. Per-handshake crypto cost was unchanged, so the three simultaneous connections did not slow the printer down.
+Raising `CONFIG_ESP_MAIN_TASK_STACK_SIZE` works too. This is not specific to `connect_all()` — the sequential path overflows the same way.
 
 **ESP-IDF TLS version query:** `EspIdfTlsConnector::negotiated_version` reads the real negotiated version via `esp_tls_get_ssl_context()` + mbedTLS's `mbedtls_ssl_get_version()`. Assumes the default mbedTLS backend (`CONFIG_ESP_TLS_USING_MBEDTLS=y`); wolfSSL builds aren't supported yet.
 

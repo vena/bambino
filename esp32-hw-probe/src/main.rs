@@ -510,18 +510,59 @@ fn run_connect(concurrent: bool) -> Option<u128> {
     .with_ftps(connector(), EspIdfRawStreamFactory, ftps_timer)
     .with_camera(connector(), EspIdfRawStreamFactory);
 
+    // Settles what actually needed the 64KB stack. The first run of these phases panicked
+    // on a stack protection fault, and the builder chain was *assumed* to be the cause
+    // (with_ftps/with_camera each consume the client and return a differently-typed one, so
+    // several copies could be live at once). That was never measured, and the async futures
+    // below are an equally good suspect: the backtrace only localised the fault to
+    // `run_connect`, which contains both. These three numbers separate them. A large client
+    // and small futures means the builder chain; the reverse means the future, and a
+    // builder-style construction API would not have helped.
+    log::info!(
+        "    size_of PrinterClient: {} bytes",
+        core::mem::size_of_val(&client)
+    );
+
     esp_idf_svc::hal::task::block_on(async {
         let start = Instant::now();
 
         let (mqtt, ftps, camera) = if concurrent {
-            let outcome = client.connect_all().await;
+            let fut = client.connect_all();
+            log::info!(
+                "    size_of connect_all() future: {} bytes",
+                core::mem::size_of_val(&fut)
+            );
+            let outcome = fut.await;
             (outcome.mqtt, outcome.ftps, outcome.camera)
         } else {
             // Sequential on purpose, each awaited to completion before the next starts —
             // this is the baseline the crate has always had, not a strawman.
-            let mqtt = Some(client.connect_mqtt().await);
-            let ftps = Some(client.connect_ftps().await);
-            let camera = Some(client.connect_camera().await);
+            // Each future is scoped so its &mut borrow of `client` ends before the next
+            // one starts, rather than relying on NLL to end it at the await.
+            let mqtt = {
+                let fut = client.connect_mqtt();
+                log::info!(
+                    "    size_of connect_mqtt() future: {} bytes",
+                    core::mem::size_of_val(&fut)
+                );
+                Some(fut.await)
+            };
+            let ftps = {
+                let fut = client.connect_ftps();
+                log::info!(
+                    "    size_of connect_ftps() future: {} bytes",
+                    core::mem::size_of_val(&fut)
+                );
+                Some(fut.await)
+            };
+            let camera = {
+                let fut = client.connect_camera();
+                log::info!(
+                    "    size_of connect_camera() future: {} bytes",
+                    core::mem::size_of_val(&fut)
+                );
+                Some(fut.await)
+            };
             (mqtt, ftps, camera)
         };
 
