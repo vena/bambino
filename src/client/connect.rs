@@ -507,6 +507,14 @@ where
     /// express partial success: it would discard an already-completed MQTT session when a
     /// hung camera pushed the *combined* future past the deadline.
     ///
+    /// # Cost
+    ///
+    /// This future holds all three handshakes alive at once, so it costs roughly 4x the
+    /// stack of connecting individually — measured on an ESP32-C6, 20296 bytes against a
+    /// 4808-byte peak for the largest single `connect_*`, in exchange for ~1.3s. Irrelevant
+    /// on desktop; on Embassy, where task stacks are sized up front, connect one at a time
+    /// if stack is tighter than time.
+    ///
     /// # Failure isolation
     ///
     /// A channel that fails installs nothing and leaves its config intact, so a later

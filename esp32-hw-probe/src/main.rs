@@ -287,12 +287,15 @@ const CONNECT_BUDGET_SECS: u64 = 30;
 
 /// Stack for the thread running the issue #161 phases.
 ///
-/// The main task's 8KB is not enough: a three-channel `PrinterClient` overflowed it by more
-/// than 14KB. 64KB is chosen with a wide margin rather than tuned — this is a measurement rig
-/// and a second stack-protection panic mid-run would cost another flash cycle to discover.
-/// It is not evidence about what a consumer needs; a consumer that builds its client once at
-/// startup and does not hold the builder chain live has a different profile entirely.
-const CONNECT_PHASE_STACK: usize = 64 * 1024;
+/// The main task's 8KB is nowhere near enough, and neither was 64KB on the first attempt —
+/// though that attempt was measuring an artefact of this probe rather than the crate (see
+/// the comment in `run_connect` about the enclosing `async` block). 128KB is a wide margin
+/// rather than a tuned figure: this is a measurement rig, and a stack-protection panic
+/// mid-run costs a whole flash cycle to discover.
+///
+/// Not evidence about what a consumer needs. Read the `size_of` lines in the transcript for
+/// that — they report the client and each connect future directly.
+const CONNECT_PHASE_STACK: usize = 128 * 1024;
 
 fn main() {
     esp_idf_svc::sys::link_patches();
@@ -510,89 +513,92 @@ fn run_connect(concurrent: bool) -> Option<u128> {
     .with_ftps(connector(), EspIdfRawStreamFactory, ftps_timer)
     .with_camera(connector(), EspIdfRawStreamFactory);
 
-    // Settles what actually needed the 64KB stack. The first run of these phases panicked
-    // on a stack protection fault, and the builder chain was *assumed* to be the cause
-    // (with_ftps/with_camera each consume the client and return a differently-typed one, so
-    // several copies could be live at once). That was never measured, and the async futures
-    // below are an equally good suspect: the backtrace only localised the fault to
-    // `run_connect`, which contains both. These three numbers separate them. A large client
-    // and small futures means the builder chain; the reverse means the future, and a
-    // builder-style construction API would not have helped.
+    // Settled: the builder chain is NOT what costs stack. The first run of these phases hit
+    // a stack-protection fault and the chain was *assumed* to be the cause -- with_ftps and
+    // with_camera each consume the client and return a differently-typed one, so several
+    // copies could in principle be live at once. Measured on an ESP32-C6, the whole client
+    // is 1640 bytes, and the intermediate ones are smaller still (unconfigured channels are
+    // zero-sized Dummy types). The futures are where the stack goes. Left in place because
+    // it is the number that settles it, and because a change to PrinterClient's shape would
+    // show up here first.
     log::info!(
         "    size_of PrinterClient: {} bytes",
         core::mem::size_of_val(&client)
     );
 
-    esp_idf_svc::hal::task::block_on(async {
-        let start = Instant::now();
+    // Each path is driven as its own top-level future rather than from inside one enclosing
+    // `async` block holding both. That is not a detail: an async block's state machine is
+    // sized to hold every branch it contains, so wrapping both paths in one block measured a
+    // future no consumer ever builds -- and overflowed a 64KB stack doing it. Driving each
+    // future separately measures what a consumer actually awaits. The sequential arm calls
+    // block_on three times, which is exactly what awaiting them one after another costs.
+    let start = Instant::now();
 
-        let (mqtt, ftps, camera) = if concurrent {
-            let fut = client.connect_all();
+    let (mqtt, ftps, camera) = if concurrent {
+        let fut = client.connect_all();
+        log::info!(
+            "    size_of connect_all() future: {} bytes",
+            core::mem::size_of_val(&fut)
+        );
+        let outcome = esp_idf_svc::hal::task::block_on(fut);
+        (outcome.mqtt, outcome.ftps, outcome.camera)
+    } else {
+        // Sequential on purpose, each driven to completion before the next starts — this is
+        // the baseline the crate has always had, not a strawman. Each is scoped so its
+        // &mut borrow of `client` ends before the next begins.
+        let mqtt = {
+            let fut = client.connect_mqtt();
             log::info!(
-                "    size_of connect_all() future: {} bytes",
+                "    size_of connect_mqtt() future: {} bytes",
                 core::mem::size_of_val(&fut)
             );
-            let outcome = fut.await;
-            (outcome.mqtt, outcome.ftps, outcome.camera)
-        } else {
-            // Sequential on purpose, each awaited to completion before the next starts —
-            // this is the baseline the crate has always had, not a strawman.
-            // Each future is scoped so its &mut borrow of `client` ends before the next
-            // one starts, rather than relying on NLL to end it at the await.
-            let mqtt = {
-                let fut = client.connect_mqtt();
-                log::info!(
-                    "    size_of connect_mqtt() future: {} bytes",
-                    core::mem::size_of_val(&fut)
-                );
-                Some(fut.await)
-            };
-            let ftps = {
-                let fut = client.connect_ftps();
-                log::info!(
-                    "    size_of connect_ftps() future: {} bytes",
-                    core::mem::size_of_val(&fut)
-                );
-                Some(fut.await)
-            };
-            let camera = {
-                let fut = client.connect_camera();
-                log::info!(
-                    "    size_of connect_camera() future: {} bytes",
-                    core::mem::size_of_val(&fut)
-                );
-                Some(fut.await)
-            };
-            (mqtt, ftps, camera)
+            Some(esp_idf_svc::hal::task::block_on(fut))
         };
-
-        let elapsed = start.elapsed().as_millis();
-
-        for (name, result) in [("mqtt", &mqtt), ("ftps", &ftps), ("camera", &camera)] {
-            match result {
-                Some(Ok(())) => log::info!("    {name}: connected"),
-                Some(Err(e)) => log::error!("    {name}: FAILED {e:?}"),
-                None => log::warn!("    {name}: not attempted"),
-            }
-        }
-
-        let all_up = matches!(
-            (&mqtt, &ftps, &camera),
-            (Some(Ok(())), Some(Ok(())), Some(Ok(())))
-        );
-        if !all_up {
-            log::error!(
-                "    -> no measurement from this run: a run that did not bring up all three \
-                 channels did less work than one that did, and averaging it in would read as \
-                 a speed-up. If this only happens in phase F, the printer is refusing \
-                 concurrent connections and THAT is the result."
+        let ftps = {
+            let fut = client.connect_ftps();
+            log::info!(
+                "    size_of connect_ftps() future: {} bytes",
+                core::mem::size_of_val(&fut)
             );
-            return None;
-        }
+            Some(esp_idf_svc::hal::task::block_on(fut))
+        };
+        let camera = {
+            let fut = client.connect_camera();
+            log::info!(
+                "    size_of connect_camera() future: {} bytes",
+                core::mem::size_of_val(&fut)
+            );
+            Some(esp_idf_svc::hal::task::block_on(fut))
+        };
+        (mqtt, ftps, camera)
+    };
 
-        log::info!("    all three channels up in {elapsed}ms");
-        Some(elapsed)
-    })
+    let elapsed = start.elapsed().as_millis();
+
+    for (name, result) in [("mqtt", &mqtt), ("ftps", &ftps), ("camera", &camera)] {
+        match result {
+            Some(Ok(())) => log::info!("    {name}: connected"),
+            Some(Err(e)) => log::error!("    {name}: FAILED {e:?}"),
+            None => log::warn!("    {name}: not attempted"),
+        }
+    }
+
+    let all_up = matches!(
+        (&mqtt, &ftps, &camera),
+        (Some(Ok(())), Some(Ok(())), Some(Ok(())))
+    );
+    if !all_up {
+        log::error!(
+            "    -> no measurement from this run: a run that did not bring up all three \
+             channels did less work than one that did, and averaging it in would read as \
+             a speed-up. If this only happens in phase F, the printer is refusing \
+             concurrent connections and THAT is the result."
+        );
+        return None;
+    }
+
+    log::info!("    all three channels up in {elapsed}ms");
+    Some(elapsed)
 }
 
 /// Prints the issue #161 serial-vs-concurrent comparison.
