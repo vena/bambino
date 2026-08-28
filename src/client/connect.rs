@@ -490,7 +490,7 @@ where
     ///   connected. A consumer that never configured FTPS simply gets `None`.
     /// - **Camera** — attempted only if `.with_camera()` supplied a config *and* the model's
     ///   [`CameraProtocol`] is `BinaryJpeg`. Note the deliberate difference from
-    ///   [`ensure_camera()`](Self::ensure_camera), which returns
+    ///   [`connect_camera()`](Self::connect_camera), which returns
     ///   [`Error::ProtocolViolation`] on an RTSPS model: here an RTSPS camera is a channel
     ///   that does not apply to this printer, not a failure, so reporting it as an error
     ///   would hand every P2S/X2D consumer a guaranteed `Err` on an otherwise clean connect.
