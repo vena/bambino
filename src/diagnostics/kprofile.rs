@@ -47,8 +47,7 @@ fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::ProtocolViolation(
-            "Setting ID violates the strict 19-character numeric calibration boundary rule"
-                .into(),
+            "Setting ID violates the strict 19-character numeric calibration boundary rule".into(),
         ))
     }
 }
@@ -195,7 +194,10 @@ impl ExtrusionCaliSetRequest {
     ///
     /// Verifies that all target profiles carry valid setting identifiers to protect local
     /// database health. Supports multi-profile writes for IDEX platforms.
-    pub fn new(profiles: Vec<KProfileEntry>, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error> {
+    pub fn new(
+        profiles: Vec<KProfileEntry>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Result<Self, Error> {
         for profile in &profiles {
             ensure_valid_setting_id(&profile.setting_id)?;
         }
@@ -332,7 +334,10 @@ pub struct StandardCaliDelRequest {
 
 impl StandardCaliDelRequest {
     /// Builds a single-nozzle deletion transaction keyed on the setting identifier.
-    pub fn new(target: StandardCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Result<Self, Error> {
+    pub fn new(
+        target: StandardCaliDelEntry,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Result<Self, Error> {
         ensure_valid_setting_id(&target.setting_id)?;
 
         Ok(Self {

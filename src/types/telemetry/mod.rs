@@ -157,7 +157,14 @@ pub fn decode_nozzle_temperatures(
     // rack) misclassifies as IDEX.
     let is_idex = device
         .and_then(|d| d.nozzle.as_ref())
-        .map(|n| n.info.iter().flatten().filter(|nz| !nz.is_rack_stored()).count() >= 2)
+        .map(|n| {
+            n.info
+                .iter()
+                .flatten()
+                .filter(|nz| !nz.is_rack_stored())
+                .count()
+                >= 2
+        })
         .unwrap_or(false);
 
     let actual = nozzle_temper.unwrap_or(0.0) as u16;

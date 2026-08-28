@@ -89,8 +89,8 @@
 extern crate alloc;
 
 pub mod error;
-pub mod io;
 pub mod identity;
+pub mod io;
 pub mod models;
 
 pub mod ams;

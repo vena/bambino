@@ -404,7 +404,12 @@ where
     pub fn printing_tray_global_id(&self) -> Option<u8> {
         let extruder = self.cache.last_device.as_ref()?.extruder.as_ref()?;
         let active_idx = extruder.active_extruder_index();
-        let info = extruder.info.as_deref().unwrap_or(&[]).iter().find(|e| e.id == active_idx)?;
+        let info = extruder
+            .info
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .find(|e| e.id == active_idx)?;
         let (ams_id, slot_id) = info.current_ams_slot()?;
         crate::ams::resolve_global_tray_id(ams_id, slot_id)
     }

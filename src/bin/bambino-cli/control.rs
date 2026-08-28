@@ -11,8 +11,8 @@
 use std::io::{self, Write};
 use std::time::Duration;
 
-use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
 use bambino::Error;
+use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
 use bambino::mqtt::AirductMode;
 use clap::{Subcommand, ValueEnum};
 
@@ -159,7 +159,9 @@ pub enum ControlAction {
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop")]
     Stop,
     /// Send G-code with model safety checks
-    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>")]
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>"
+    )]
     Gcode { gcode_line: String },
     /// Send raw G-code bypassing safety checks
     #[command(
@@ -178,9 +180,7 @@ pub enum ControlAction {
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error")]
     ClearError,
     /// Switch airduct damper mode
-    #[command(
-        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>"
-    )]
+    #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>")]
     Airduct { mode: AirductModeArg },
     /// Trigger one or more calibration routines
     #[command(

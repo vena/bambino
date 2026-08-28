@@ -323,11 +323,15 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
             let separator = line_buf[FTP_REPLY_SEPARATOR_OFFSET];
 
             if separator == b' ' {
-                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
+                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..])
+                    .unwrap_or("")
+                    .trim();
                 return Ok((code, text.to_string()));
             } else if separator == b'-' {
                 header_code = Some(code);
-                let line_text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
+                let line_text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..])
+                    .unwrap_or("")
+                    .trim();
                 accumulated.push_str(line_text);
             } else {
                 // A header line whose 4th byte is neither ' ' nor '-' (e.g. "200\r\n",
@@ -358,7 +362,9 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
 
         match (prefix_code, line_buf.get(FTP_REPLY_SEPARATOR_OFFSET)) {
             (Some(_), Some(b' ')) => {
-                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
+                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..])
+                    .unwrap_or("")
+                    .trim();
                 if !text.is_empty() {
                     accumulated.push('\n');
                     accumulated.push_str(text);
@@ -366,7 +372,9 @@ pub(crate) async fn read_response<IO: AsyncIo, T: TimerProvider>(
                 return Ok((code, accumulated));
             }
             (Some(_), Some(b'-')) => {
-                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..]).unwrap_or("").trim();
+                let text = core::str::from_utf8(&line_buf[FTP_REPLY_TEXT_OFFSET..])
+                    .unwrap_or("")
+                    .trim();
                 accumulated.push('\n');
                 accumulated.push_str(text);
             }
@@ -400,20 +408,18 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, Error> {
 
     let mut parts = parts.skip(4);
 
-    let p1 =
-        parts
-            .next()
-            .and_then(|p| p.parse::<u16>().ok())
-            .ok_or(Error::ProtocolViolation(
-                "Failed to parse PORT_1 in PASV".into(),
-            ))?;
-    let p2 =
-        parts
-            .next()
-            .and_then(|p| p.parse::<u16>().ok())
-            .ok_or(Error::ProtocolViolation(
-                "Failed to parse PORT_2 in PASV".into(),
-            ))?;
+    let p1 = parts
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .ok_or(Error::ProtocolViolation(
+            "Failed to parse PORT_1 in PASV".into(),
+        ))?;
+    let p2 = parts
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .ok_or(Error::ProtocolViolation(
+            "Failed to parse PORT_2 in PASV".into(),
+        ))?;
 
     let port = (p1 as u32) * (FTPS_PASV_PORT_MULTIPLIER as u32) + (p2 as u32);
     if port > u16::MAX as u32 {
@@ -435,7 +441,10 @@ pub(crate) fn parse_pasv_port(text: &str) -> Result<u16, Error> {
 /// them to server-supplied names in `parse_unix_listing` silently deleted legitimately named
 /// files (e.g. `-timelapse.mp4`) from every listing.
 pub(crate) fn validate_ftp_path_bytes(path: &str) -> Result<(), Error> {
-    if path.bytes().any(|b| b < FTP_PATH_CONTROL_CHAR_MAX || b == FTP_PATH_DEL_CHAR) {
+    if path
+        .bytes()
+        .any(|b| b < FTP_PATH_CONTROL_CHAR_MAX || b == FTP_PATH_DEL_CHAR)
+    {
         return Err(Error::ProtocolViolation(
             "FTP path contains an illegal control character".into(),
         ));

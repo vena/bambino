@@ -10,9 +10,7 @@ use std::path::Path;
 
 use bambino::Error;
 use bambino::ftps::CurrentDateTime;
-use bambino::io::tokio::{
-    TokioRawStreamFactory, TokioTimer, TokioTlsConnector,
-};
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
 use clap::Subcommand;
 
 use crate::connection::create_printer;
@@ -39,7 +37,9 @@ pub enum FilesAction {
         remote_path: String,
     },
     /// Remove a file from the remote filesystem path
-    #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>")]
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>"
+    )]
     Delete { remote_path: String },
     /// Uploads a tiny probe file, diffs its printer-reported mtime against host wall-clock
     /// time, then deletes it — checks whether the printer's onboard clock is usably accurate.
@@ -238,9 +238,7 @@ where
             "Printer MDTM mtime (absolute): {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
             t.year, t.month, t.day, t.hour, t.minute, t.second
         ),
-        Ok(None) => println!(
-            "Printer MDTM mtime (absolute): not implemented by this firmware"
-        ),
+        Ok(None) => println!("Printer MDTM mtime (absolute): not implemented by this firmware"),
         Err(e) => println!("Printer MDTM mtime (absolute): query failed ({e})"),
     }
 

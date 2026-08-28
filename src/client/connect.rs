@@ -95,7 +95,10 @@ where
         }
         let mqtt_client =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-                let raw = self.mqtt_factory.dial(&self.identity.ip, self.mqtt_port).await?;
+                let raw = self
+                    .mqtt_factory
+                    .dial(&self.identity.ip, self.mqtt_port)
+                    .await?;
                 let stream = self.mqtt_tls.connect(&self.identity.serial, raw).await?;
                 MqttClient::connect(stream, &self.identity).await
             })

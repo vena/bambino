@@ -158,7 +158,11 @@ fn test_ipcam_telemetry_merge_from_preserves_fields_on_absence() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.ipcam_record.as_deref(), Some("disable"), "new field applies");
+    assert_eq!(
+        cached.ipcam_record.as_deref(),
+        Some("disable"),
+        "new field applies"
+    );
     assert_eq!(
         cached.ipcam_dev.as_deref(),
         Some("1"),

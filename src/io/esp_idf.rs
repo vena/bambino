@@ -1271,11 +1271,10 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             SocketError::Other("failed to create ESP-IDF async timer for TLS".into())
         })?;
 
-        let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream)
-            .map_err(|e| {
-                log::debug!("ESP-TLS adopt of raw socket failed: {e}");
-                SocketError::Other("ESP-TLS adopt of raw socket failed".into())
-            })?;
+        let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream).map_err(|e| {
+            log::debug!("ESP-TLS adopt of raw socket failed: {e}");
+            SocketError::Other("ESP-TLS adopt of raw socket failed".into())
+        })?;
 
         let start = timer.now_millis();
 
@@ -1324,10 +1323,7 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     })?;
                 }
                 Err(e) => {
-                    log::error!(
-                        "ESP-TLS handshake with {} failed: {e}",
-                        RedactedHost(host)
-                    );
+                    log::error!("ESP-TLS handshake with {} failed: {e}", RedactedHost(host));
                     // Checked before the code-based mapping: every certificate rejection
                     // reaches this point as the same opaque `ESP_FAIL`, so the error code
                     // cannot route it. `None` means mbedTLS has no verdict to give and the

@@ -3,8 +3,8 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bambino::client::{FanTarget, PrintStatus};
 use bambino::Error;
+use bambino::client::{FanTarget, PrintStatus};
 use serde::Serialize;
 
 use crate::connection::{Printer, create_printer};
@@ -620,7 +620,10 @@ pub async fn run(
                         };
                         eprintln!("  {} — {}{}", t.name(), t.description(), manual);
                     }
-                    return Err(CliError::InvalidArgs(format!("Unknown test name: '{}'", name)));
+                    return Err(CliError::InvalidArgs(format!(
+                        "Unknown test name: '{}'",
+                        name
+                    )));
                 }
             }
         }
@@ -653,7 +656,11 @@ pub async fn run(
 
     let entries = run_test_loop(&mut client, &tests).await;
 
-    eprintln!("Probing {} (serial {})", format_args!("{:?}", model), serial_owned);
+    eprintln!(
+        "Probing {} (serial {})",
+        format_args!("{:?}", model),
+        serial_owned
+    );
 
     let report = ProbeReport {
         model: format!("{:?}", model),

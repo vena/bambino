@@ -175,10 +175,9 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
 ///
 /// Allocations above it are dropped through the same `log::warn!` path as any other
 /// out-of-range filament id.
-pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize = (super::parser::AMS_MAX_STANDARD_ID as usize
-    + 1)
-    * super::parser::AMS_SLOTS_PER_UNIT as usize
-    + (super::parser::AMS_HT_ID_MAX - super::parser::AMS_HT_ID_MIN + 1) as usize;
+pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize =
+    (super::parser::AMS_MAX_STANDARD_ID as usize + 1) * super::parser::AMS_SLOTS_PER_UNIT as usize
+        + (super::parser::AMS_HT_ID_MAX - super::parser::AMS_HT_ID_MIN + 1) as usize;
 
 /// Builds the flat `ams_mapping` integer array from raw project allocations.
 ///
@@ -276,8 +275,8 @@ pub fn is_external_spool_safety_valid(
 
     let mut has_physical_ams = false;
     for entry in mapping2 {
-        let is_unmapped =
-            entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID && entry.slot_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
+        let is_unmapped = entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID
+            && entry.slot_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
         // Checks both external-spool IDs (254 and 255), matching is_external_spool_safety_valid_flat's
         // uniform treatment — AmsMapping2Entry's fields are public, so a caller can hand-build
         // an entry with ams_id 254 (normally IDEX-only, via MaterialSource::ExternalSpoolLeft)
@@ -293,7 +292,8 @@ pub fn is_external_spool_safety_valid(
         // generally.
         let is_valid_physical = (entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
             && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT)
-            || (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id);
+            || (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
+                .contains(&entry.ams_id);
         if !is_unmapped && !is_external && is_valid_physical {
             has_physical_ams = true;
             break;
@@ -346,8 +346,8 @@ pub fn is_ams_pool_composition_valid(
     let mut standard_ids = Vec::new();
     let mut ht_ids = Vec::new();
     for entry in mapping2 {
-        let is_external_sentinel =
-            entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
+        let is_external_sentinel = entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID
+            || entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
         if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
             if !standard_ids.contains(&entry.ams_id) {
                 standard_ids.push(entry.ams_id);

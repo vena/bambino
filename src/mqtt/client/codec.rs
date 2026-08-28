@@ -61,9 +61,18 @@ pub(crate) fn encode_connect(client_id: &str, username: &str, password: &str) ->
     // String length prefixes below are u16 wire fields; these `as u16` casts
     // silently truncate/wrap past 65535 bytes instead of erroring. Not reachable today (all
     // values derive from short serials/fixed strings) — debug_assert as insurance.
-    debug_assert!(client_id.len() <= u16::MAX as usize, "client_id exceeds u16::MAX");
-    debug_assert!(username.len() <= u16::MAX as usize, "username exceeds u16::MAX");
-    debug_assert!(password.len() <= u16::MAX as usize, "password exceeds u16::MAX");
+    debug_assert!(
+        client_id.len() <= u16::MAX as usize,
+        "client_id exceeds u16::MAX"
+    );
+    debug_assert!(
+        username.len() <= u16::MAX as usize,
+        "username exceeds u16::MAX"
+    );
+    debug_assert!(
+        password.len() <= u16::MAX as usize,
+        "password exceeds u16::MAX"
+    );
 
     // Protocol Name length prefix and string
     payload.extend_from_slice(&[0x00, 0x04]);

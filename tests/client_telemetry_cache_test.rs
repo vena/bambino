@@ -4,19 +4,13 @@
 
 mod common;
 
-
-use bambino::client::{
-    PrintProgress,
-    PrintSpeed, PrintStatus,
-};
+use bambino::client::{PrintProgress, PrintSpeed, PrintStatus};
 use bambino::diagnostics::DecodedPrintError;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use common::client::{connect_test_client, SERIAL};
-use common::mock_mqtt::{
-    handle_mqtt_handshake, read_puback, send_publish_payload,
-};
+use common::client::{SERIAL, connect_test_client};
+use common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
 
 #[tokio::test]
 async fn test_print_status_cache_from_telemetry() {
@@ -132,7 +126,8 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
     });
 
     // X1C has a door sensor, read from home_flag bit 23.
-    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     // No telemetry observed yet — cache must read as unknown, not "closed".
     assert_eq!(client.is_door_open(), None);
@@ -186,7 +181,8 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     client
         .poll_telemetry()
@@ -513,15 +509,41 @@ async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
         Some("PLA"),
         "id-only follow-up must not clobber cached tray_type"
     );
-    assert_eq!(vt_tray.remain, Some(80), "id-only follow-up must not clobber cached remain");
+    assert_eq!(
+        vt_tray.remain,
+        Some(80),
+        "id-only follow-up must not clobber cached remain"
+    );
 
     let vir_slot = client.vir_slot().expect("vir_slot must still be cached");
-    assert_eq!(vir_slot.len(), 2, "partial push must not drop the other extruder's cached tray");
-    let slot0 = vir_slot.iter().find(|s| s.id.as_deref() == Some("0")).unwrap();
-    assert_eq!(slot0.remain, Some(70), "matched entry must merge in the new remain value");
-    assert_eq!(slot0.tray_type.as_deref(), Some("PLA"), "matched entry must preserve tray_type");
-    let slot1 = vir_slot.iter().find(|s| s.id.as_deref() == Some("1")).unwrap();
-    assert_eq!(slot1.tray_type.as_deref(), Some("PETG"), "unreferenced entry must survive untouched");
+    assert_eq!(
+        vir_slot.len(),
+        2,
+        "partial push must not drop the other extruder's cached tray"
+    );
+    let slot0 = vir_slot
+        .iter()
+        .find(|s| s.id.as_deref() == Some("0"))
+        .unwrap();
+    assert_eq!(
+        slot0.remain,
+        Some(70),
+        "matched entry must merge in the new remain value"
+    );
+    assert_eq!(
+        slot0.tray_type.as_deref(),
+        Some("PLA"),
+        "matched entry must preserve tray_type"
+    );
+    let slot1 = vir_slot
+        .iter()
+        .find(|s| s.id.as_deref() == Some("1"))
+        .unwrap();
+    assert_eq!(
+        slot1.tray_type.as_deref(),
+        Some("PETG"),
+        "unreferenced entry must survive untouched"
+    );
     assert_eq!(slot1.remain, Some(60));
 
     broker_task.await.expect("Broker task panicked");
@@ -650,7 +672,8 @@ async fn test_chamber_temperature_cache() {
     });
 
     // P1S has no chamber heater/sensor — always None regardless of telemetry.
-    let mut sensorless_client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut sensorless_client =
+        connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
     assert_eq!(sensorless_client.chamber_temperature(), None);
     sensorless_client
         .poll_telemetry()
@@ -671,7 +694,8 @@ async fn test_chamber_temperature_cache() {
         .await;
         read_puback(&mut server_stream2).await;
     });
-    let mut heated_client = connect_test_client(TokioIo(client_stream2), SERIAL, PrinterModel::H2D).await;
+    let mut heated_client =
+        connect_test_client(TokioIo(client_stream2), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(heated_client.chamber_temperature(), Some((0, 0)));
     heated_client

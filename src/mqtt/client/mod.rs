@@ -391,14 +391,10 @@ impl<IO: AsyncIo> MqttClient<IO> {
         );
 
         if packet_type != PACKET_TYPE_CONNACK {
-            return Err(Error::ProtocolViolation(
-                "Expected CONNACK frame".into(),
-            ));
+            return Err(Error::ProtocolViolation("Expected CONNACK frame".into()));
         }
         if payload_buf.len() < 2 {
-            return Err(Error::ProtocolViolation(
-                "Short CONNACK payload".into(),
-            ));
+            return Err(Error::ProtocolViolation("Short CONNACK payload".into()));
         }
         let connack_code = payload_buf[1];
 
@@ -457,9 +453,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         log::debug!("Received raw packet header type: {}", sub_type);
 
         if sub_type != PACKET_TYPE_SUBACK {
-            return Err(Error::ProtocolViolation(
-                "Expected SUBACK frame".into(),
-            ));
+            return Err(Error::ProtocolViolation("Expected SUBACK frame".into()));
         }
         if payload_buf.len() < 3 {
             return Err(Error::ProtocolViolation("Short SUBACK payload".into()));
@@ -710,9 +704,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     let qos = (header & 0x06) >> 1;
 
                     if payload_buf.len() < 2 {
-                        return Err(Error::ProtocolViolation(
-                            "Short publish payload".into(),
-                        ));
+                        return Err(Error::ProtocolViolation("Short publish payload".into()));
                     }
                     let topic_len = u16::from_be_bytes([payload_buf[0], payload_buf[1]]) as usize;
                     if payload_buf.len() < 2 + topic_len {
@@ -794,7 +786,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     // has no echoed ack, see `wrapper_key`) falls back to clearing on any
                     // PUBLISH, matching pre-correlation behavior for that case only.
                     let should_clear = match &self.write_pending_sequence_id {
-                        Some(expected) => extract_sequence_id(&payload).as_deref() == Some(expected.as_str()),
+                        Some(expected) => {
+                            extract_sequence_id(&payload).as_deref() == Some(expected.as_str())
+                        }
                         None => self.write_pending_secs.is_some(),
                     };
                     if should_clear {
@@ -806,9 +800,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                 }
                 PACKET_TYPE_PUBACK => {
                     if payload_buf.len() < 2 {
-                        return Err(Error::ProtocolViolation(
-                            "Invalid PUBACK length".into(),
-                        ));
+                        return Err(Error::ProtocolViolation("Invalid PUBACK length".into()));
                     }
                     let ack_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
 
@@ -978,17 +970,16 @@ mod tests {
                 server_stream.flush().await.unwrap();
             });
 
-            let result =
-                MqttClient::connect(
-                    TokioIo(client_stream),
-                    &PrinterIdentity {
-                        ip: String::new(),
-                        serial: "01P000000000000".into(),
-                        access_code: "12345678".into(),
-                        model: PrinterModel::P1S,
-                    },
-                )
-                    .await;
+            let result = MqttClient::connect(
+                TokioIo(client_stream),
+                &PrinterIdentity {
+                    ip: String::new(),
+                    serial: "01P000000000000".into(),
+                    access_code: "12345678".into(),
+                    model: PrinterModel::P1S,
+                },
+            )
+            .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
                 matches!(err, crate::error::Error::AccessDenied),
@@ -1018,17 +1009,16 @@ mod tests {
                 server_stream.flush().await.unwrap();
             });
 
-            let result =
-                MqttClient::connect(
-                    TokioIo(client_stream),
-                    &PrinterIdentity {
-                        ip: String::new(),
-                        serial: "01P000000000000".into(),
-                        access_code: "12345678".into(),
-                        model: PrinterModel::P1S,
-                    },
-                )
-                    .await;
+            let result = MqttClient::connect(
+                TokioIo(client_stream),
+                &PrinterIdentity {
+                    ip: String::new(),
+                    serial: "01P000000000000".into(),
+                    access_code: "12345678".into(),
+                    model: PrinterModel::P1S,
+                },
+            )
+            .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
                 matches!(err, crate::error::Error::ProtocolViolation(_)),
@@ -1063,17 +1053,16 @@ mod tests {
                 server_stream.flush().await.unwrap();
             });
 
-            let result =
-                MqttClient::connect(
-                    TokioIo(client_stream),
-                    &PrinterIdentity {
-                        ip: String::new(),
-                        serial: "01P000000000000".into(),
-                        access_code: "12345678".into(),
-                        model: PrinterModel::P1S,
-                    },
-                )
-                    .await;
+            let result = MqttClient::connect(
+                TokioIo(client_stream),
+                &PrinterIdentity {
+                    ip: String::new(),
+                    serial: "01P000000000000".into(),
+                    access_code: "12345678".into(),
+                    model: PrinterModel::P1S,
+                },
+            )
+            .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
                 matches!(err, crate::error::Error::ProtocolViolation(_)),
@@ -1114,7 +1103,8 @@ mod tests {
                 // Split a real PUBLISH QoS 1 frame across two write_all calls with a real sleep
                 // between them, so the client's first poll attempt reads a partial frame,
                 // stashes it in self.read_state, and the second attempt must resume from there.
-                let frame = encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
+                let frame =
+                    encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
                 let split = frame.len() / 2;
                 server_stream.write_all(&frame[..split]).await.unwrap();
                 server_stream.flush().await.unwrap();
@@ -1126,18 +1116,17 @@ mod tests {
                 let _ = server_stream.read(&mut discard).await;
             });
 
-            let mut client =
-                MqttClient::connect(
-                    TokioIo(client_stream),
-                    &PrinterIdentity {
-                        ip: String::new(),
-                        serial: "01P000000000000".into(),
-                        access_code: "12345678".into(),
-                        model: PrinterModel::P1S,
-                    },
-                )
-                    .await
-                    .expect("connect should succeed");
+            let mut client = MqttClient::connect(
+                TokioIo(client_stream),
+                &PrinterIdentity {
+                    ip: String::new(),
+                    serial: "01P000000000000".into(),
+                    access_code: "12345678".into(),
+                    model: PrinterModel::P1S,
+                },
+            )
+            .await
+            .expect("connect should succeed");
 
             let timer = crate::io::tokio::TokioTimer::new();
             let msg = tokio::time::timeout(
@@ -1189,18 +1178,17 @@ mod tests {
                 tokio::time::sleep(core::time::Duration::from_millis(500)).await;
             });
 
-            let mut client =
-                MqttClient::connect(
-                    TokioIo(client_stream),
-                    &PrinterIdentity {
-                        ip: String::new(),
-                        serial: "01P000000000000".into(),
-                        access_code: "12345678".into(),
-                        model: PrinterModel::P1S,
-                    },
-                )
-                    .await
-                    .expect("connect should succeed");
+            let mut client = MqttClient::connect(
+                TokioIo(client_stream),
+                &PrinterIdentity {
+                    ip: String::new(),
+                    serial: "01P000000000000".into(),
+                    access_code: "12345678".into(),
+                    model: PrinterModel::P1S,
+                },
+            )
+            .await
+            .expect("connect should succeed");
 
             // Poison the write channel so the automatic PUBACK write fails.
             client.write_poisoned = true;
@@ -1373,7 +1361,9 @@ mod tests {
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
-                in_flight: (0..MQTT_IN_FLIGHT_LIMIT as u16).map(|id| (id + 1, 0)).collect(),
+                in_flight: (0..MQTT_IN_FLIGHT_LIMIT as u16)
+                    .map(|id| (id + 1, 0))
+                    .collect(),
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
@@ -1505,7 +1495,9 @@ mod tests {
             };
 
             client
-                .publish_command(b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"20001\"}}")
+                .publish_command(
+                    b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"20001\"}}",
+                )
                 .await
                 .expect("pushall publish failed");
             assert_eq!(client.write_pending_secs, Some(0));

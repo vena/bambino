@@ -553,7 +553,9 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
             Ok(n) => Ok(n),
             Err(e) => {
                 log::trace!("read failed: {:?}", e);
-                Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(&e)))
+                Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+                    &e,
+                )))
             }
         };
     };
@@ -571,7 +573,9 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
         Raced::Left(Ok(n)) => Ok(n),
         Raced::Left(Err(e)) => {
             log::trace!("read failed: {:?}", e);
-            Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(&e)))
+            Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+                &e,
+            )))
         }
         Raced::Right(Ok(())) => Err(SocketError::TimedOut),
         // A failing timer is not a timeout. `EspIdfTimer::sleep` returns `Err(TimerError)`
@@ -649,9 +653,7 @@ fn append_base64_wrapped(data: &[u8], out: &mut Vec<u8>) {
 /// The trailing NUL is part of the contract: `esp_idf_svc::tls::X509::pem_until_nul` panics
 /// without one, and mbedTLS's own format sniff requires it.
 #[cfg(any(feature = "esp-idf", test))]
-pub(crate) fn der_certs_to_pem_bundle(
-    certs: impl IntoIterator<Item = Vec<u8>>,
-) -> Option<Vec<u8>> {
+pub(crate) fn der_certs_to_pem_bundle(certs: impl IntoIterator<Item = Vec<u8>>) -> Option<Vec<u8>> {
     const HEADER: &[u8] = b"-----BEGIN CERTIFICATE-----\n";
     const FOOTER: &[u8] = b"-----END CERTIFICATE-----\n";
 
@@ -698,7 +700,11 @@ impl core::fmt::Display for RedactedHost<'_> {
         }
         // `char_indices`, not byte slicing: a non-ASCII name would panic on a split landing
         // mid-codepoint, and one caller is a handshake-failure path where a panic is worst.
-        let split = self.0.char_indices().nth(3).map_or(self.0.len(), |(i, _)| i);
+        let split = self
+            .0
+            .char_indices()
+            .nth(3)
+            .map_or(self.0.len(), |(i, _)| i);
         write!(f, "{}***", &self.0[..split])
     }
 }
@@ -739,7 +745,10 @@ mod redacted_host_tests {
     #[test]
     fn multibyte_name_splits_on_a_char_boundary_without_panicking() {
         // Each 'e' here is 2 bytes, so a byte-indexed split at 3 would panic.
-        assert_eq!(RedactedHost("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}").to_string(), "\u{e9}\u{e9}\u{e9}***");
+        assert_eq!(
+            RedactedHost("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}").to_string(),
+            "\u{e9}\u{e9}\u{e9}***"
+        );
     }
 }
 
@@ -931,7 +940,8 @@ mod pem_bundle_tests {
             let v = BASE64_ALPHABET
                 .iter()
                 .position(|&a| a == c)
-                .unwrap_or_else(|| panic!("non-base64 byte {c:#x} in PEM body")) as u32;
+                .unwrap_or_else(|| panic!("non-base64 byte {c:#x} in PEM body"))
+                as u32;
             bits = (bits << 6) | v;
             nbits += 6;
             if nbits >= 8 {
@@ -950,7 +960,11 @@ mod pem_bundle_tests {
     #[test]
     fn bundle_is_nul_terminated_and_pem_framed() {
         let bundle = der_certs_to_pem_bundle([vec![1u8, 2, 3]]).expect("one cert");
-        assert_eq!(bundle.last(), Some(&0), "X509::pem_until_nul requires a NUL");
+        assert_eq!(
+            bundle.last(),
+            Some(&0),
+            "X509::pem_until_nul requires a NUL"
+        );
         let text = core::str::from_utf8(&bundle[..bundle.len() - 1]).unwrap();
         assert!(text.starts_with("-----BEGIN CERTIFICATE-----\n"));
         assert!(text.ends_with("-----END CERTIFICATE-----\n"));

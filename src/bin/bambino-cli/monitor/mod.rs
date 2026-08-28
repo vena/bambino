@@ -19,12 +19,7 @@ use crate::error::CliError;
 /// as pretty JSON (default) or, with `follow`, keeps printing every subsequent `print`-bearing
 /// push as one compact NDJSON line until interrupted (Ctrl+C) — for capturing a sequence of
 /// incremental pushes (e.g. across a tray-load event) rather than a single snapshot.
-pub async fn dump(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-    follow: bool,
-) -> Result<(), CliError> {
+pub async fn dump(ip: &str, serial: &str, access_code: &str, follow: bool) -> Result<(), CliError> {
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;

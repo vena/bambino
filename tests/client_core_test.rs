@@ -5,10 +5,7 @@
 
 mod common;
 
-
-use bambino::client::{
-    BuzzerMode, FanTarget,
-};
+use bambino::client::{BuzzerMode, FanTarget};
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -36,7 +33,8 @@ async fn test_homing_safety_interlocks() {
     });
 
     // CoreXY Bed-on-Z initialization
-    let mut client_x1c = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
+    let mut client_x1c =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     // Assert public serial and model getters expose the correct fields
     assert_eq!(client_x1c.serial(), "00M000000000000");
@@ -62,7 +60,12 @@ async fn test_homing_safety_interlocks() {
         assert_eq!(json["print"]["param"], "G28 Z\n");
     });
 
-    let mut client_a1 = connect_test_client(TokioIo(client_stream_a1), "039000000000000", PrinterModel::A1).await;
+    let mut client_a1 = connect_test_client(
+        TokioIo(client_stream_a1),
+        "039000000000000",
+        PrinterModel::A1,
+    )
+    .await;
 
     // Bed-Slingers do not share upward bed collision hazards; G28 Z homing is permitted
     client_a1
@@ -97,7 +100,8 @@ async fn test_kinematic_and_extrusion_moves() {
         assert_eq!(json_e["print"]["param"], "M83\nG0 E10.00 F900\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .move_relative('z', 10.0, 3000)
@@ -127,7 +131,8 @@ async fn test_move_relative_zero_distance_is_noop() {
         assert_eq!(json_x["print"]["param"], "G91\nG0 X5.00 F1000\nG90\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // Zero-distance Z move: must be a no-op (Ok(0), no travel-limit error, no wire traffic) —
     // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
@@ -165,7 +170,8 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
     // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
@@ -187,7 +193,8 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     let result = client.move_relative('x', 300.0, 3000).await;
     assert!(matches!(result, Err(Error::ModelMismatch(_))));
@@ -214,7 +221,8 @@ async fn test_thermal_guards_and_temperatures() {
         assert_eq!(json_chamber["print"]["param"], "M141 S45\n");
     });
 
-    let mut client_x1e = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
+    let mut client_x1e =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
 
     client_x1e
         .set_bed_temperature(60)
@@ -237,7 +245,12 @@ async fn test_thermal_guards_and_temperatures() {
         handle_mqtt_handshake(&mut server_stream_x1c).await;
     });
 
-    let mut client_x1c = connect_test_client(TokioIo(client_stream_x1c), "00M000000000000", PrinterModel::X1C).await;
+    let mut client_x1c = connect_test_client(
+        TokioIo(client_stream_x1c),
+        "00M000000000000",
+        PrinterModel::X1C,
+    )
+    .await;
 
     let err_res = client_x1c.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
@@ -248,7 +261,12 @@ async fn test_thermal_guards_and_temperatures() {
         handle_mqtt_handshake(&mut server_stream_a1).await;
     });
 
-    let mut client_a1 = connect_test_client(TokioIo(client_stream_a1), "039000000000000", PrinterModel::A1).await;
+    let mut client_a1 = connect_test_client(
+        TokioIo(client_stream_a1),
+        "039000000000000",
+        PrinterModel::A1,
+    )
+    .await;
 
     let err_res = client_a1.set_chamber_temperature(40).await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
@@ -302,7 +320,8 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
         assert_eq!(json["print"]["param"], "M140 S120\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
     client
         .set_bed_temperature(999)
@@ -344,7 +363,8 @@ async fn test_cooling_fans_and_peripheral_switches() {
         assert_eq!(json_aux["print"]["param"], "M106 P2 S255\n"); // 100% PWM
     });
 
-    let mut client_p1s = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client_p1s =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client_p1s
         .set_fan_speed(FanTarget::PartCooling, 50)
@@ -369,7 +389,12 @@ async fn test_cooling_fans_and_peripheral_switches() {
         assert_eq!(json_aux_r["print"]["param"], "M106 P10 S204\n"); // 80% PWM
     });
 
-    let mut client_x2 = connect_test_client(TokioIo(client_stream_x2), "20P000000000000", PrinterModel::X2D).await;
+    let mut client_x2 = connect_test_client(
+        TokioIo(client_stream_x2),
+        "20P000000000000",
+        PrinterModel::X2D,
+    )
+    .await;
 
     client_x2
         .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
@@ -393,7 +418,8 @@ async fn test_set_fan_speed_clamps_above_100_percent() {
         assert_eq!(json["print"]["param"], "M106 P1 S255\n"); // clamped to 100% PWM
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
         .set_fan_speed(FanTarget::PartCooling, 150)
@@ -418,7 +444,8 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
         assert_eq!(json["print"]["param"], "M106 P3 S204\n"); // 80% PWM
     });
 
-    let mut client_h2d = connect_test_client(TokioIo(client_stream), "09P000000000000", PrinterModel::H2D).await;
+    let mut client_h2d =
+        connect_test_client(TokioIo(client_stream), "09P000000000000", PrinterModel::H2D).await;
 
     client_h2d
         .set_fan_speed(FanTarget::ChamberExhaust, 80)
@@ -432,9 +459,16 @@ async fn test_chamber_exhaust_fan_success_and_model_mismatch() {
     let broker_task_p1s = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
-    let mut client_p1s = connect_test_client(TokioIo(client_stream_p1s), "01P000000000000", PrinterModel::P1S).await;
+    let mut client_p1s = connect_test_client(
+        TokioIo(client_stream_p1s),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
-    let err_res = client_p1s.set_fan_speed(FanTarget::ChamberExhaust, 80).await;
+    let err_res = client_p1s
+        .set_fan_speed(FanTarget::ChamberExhaust, 80)
+        .await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     broker_task_p1s.await.expect("P1S broker task panicked");
@@ -457,7 +491,8 @@ async fn test_queue_lifecycle_control_blocks() {
         assert_eq!(json_stop["print"]["command"], "stop");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client.pause_print().await.expect("Pause failed");
     client.resume_print().await.expect("Resume failed");
@@ -483,7 +518,8 @@ async fn test_peripheral_signals_and_climate_controls() {
         assert_eq!(json_buzzer["print"]["mode"], 2);
     });
 
-    let mut client_h2d = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::H2D).await;
+    let mut client_h2d =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::H2D).await;
 
     client_h2d
         .set_airduct_mode(bambino::mqtt::commands::AirductMode::Cooling)
@@ -507,7 +543,12 @@ async fn test_peripheral_signals_and_climate_controls() {
         assert_eq!(json_sound["print"]["sound_enable"], true);
     });
 
-    let mut client_a1 = connect_test_client(TokioIo(client_stream_a1), "039000000000000", PrinterModel::A1).await;
+    let mut client_a1 = connect_test_client(
+        TokioIo(client_stream_a1),
+        "039000000000000",
+        PrinterModel::A1,
+    )
+    .await;
 
     client_a1
         .set_prompt_sound(true)
@@ -522,7 +563,12 @@ async fn test_peripheral_signals_and_climate_controls() {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
 
-    let mut client_p1s = connect_test_client(TokioIo(client_stream_p1s), "01P000000000000", PrinterModel::P1S).await;
+    let mut client_p1s = connect_test_client(
+        TokioIo(client_stream_p1s),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     assert!(matches!(
         client_p1s
@@ -541,4 +587,3 @@ async fn test_peripheral_signals_and_climate_controls() {
 
     broker_task_p1s.await.expect("P1S broker task panicked");
 }
-

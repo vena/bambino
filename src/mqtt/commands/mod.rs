@@ -33,7 +33,8 @@ pub use hardware::{
     AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
 };
 pub use print_job::{
-    AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest, resolve_rack_nozzle_mapping,
+    AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest,
+    resolve_rack_nozzle_mapping,
 };
 pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
 
@@ -205,7 +206,10 @@ mod tests {
         )
         .with_ams(vec![0, 15, 128, 135, 254, 255, 16, -5, -1]);
 
-        assert_eq!(config.ams_mapping, vec![0, 15, 128, 135, -1, -1, -1, -1, -1]);
+        assert_eq!(
+            config.ams_mapping,
+            vec![0, 15, 128, 135, -1, -1, -1, -1, -1]
+        );
     }
 
     #[test]
@@ -456,7 +460,10 @@ mod tests {
     #[test]
     fn test_rack_mapping_declines_rather_than_guessing() {
         // Every one of these omits nozzle_mapping so firmware picks — never a wrong physical id.
-        assert!(resolve_rack_nozzle_mapping(&[], 16).is_none(), "empty slots");
+        assert!(
+            resolve_rack_nozzle_mapping(&[], 16).is_none(),
+            "empty slots"
+        );
         assert!(
             resolve_rack_nozzle_mapping(&[0; 33], 16).is_none(),
             "more slots than the wire carries"
@@ -481,8 +488,9 @@ mod tests {
 
     #[test]
     fn test_nozzle_mapping_omitted_on_non_rack_models_and_present_on_h2c() {
-        let with_rack = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
-            .with_nozzle_rack(vec![0, 1], 17);
+        let with_rack =
+            PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
+                .with_nozzle_rack(vec![0, 1], 17);
 
         let h2c = ProjectFileRequest::from_config(&with_rack, 1, PrinterModel::H2C);
         assert_eq!(h2c.print.nozzle_mapping.as_ref().map(|m| m.len()), Some(32));
@@ -499,7 +507,11 @@ mod tests {
         let bare = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured");
         let h2c_bare = ProjectFileRequest::from_config(&bare, 1, PrinterModel::H2C);
         assert!(h2c_bare.print.nozzle_mapping.is_none());
-        assert!(!serde_json::to_string(&h2c_bare).unwrap().contains("nozzle_mapping"));
+        assert!(
+            !serde_json::to_string(&h2c_bare)
+                .unwrap()
+                .contains("nozzle_mapping")
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 #![cfg(feature = "cli")]
 
 use bambino::client::PrinterClient;
-use bambino::identity::PrinterIdentity;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
+use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
 
@@ -52,7 +52,10 @@ pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Print
 
 pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
     if ip.parse::<std::net::IpAddr>().is_err() {
-        return Err(CliError::InvalidArgs(format!("Invalid IP address: '{}'", ip)));
+        return Err(CliError::InvalidArgs(format!(
+            "Invalid IP address: '{}'",
+            ip
+        )));
     }
 
     if serial.is_empty() || serial.len() > 20 || !serial.bytes().all(|b| b.is_ascii_alphanumeric())

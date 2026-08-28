@@ -257,8 +257,14 @@ mod tests {
     fn test_h2_dev_model_fallback() {
         assert_eq!(resolve_model("999000000", Some("O1D")), PrinterModel::H2D);
         assert_eq!(resolve_model("999000000", Some("O1S")), PrinterModel::H2S);
-        assert_eq!(resolve_model("999000000", Some("O1E")), PrinterModel::H2DPro);
-        assert_eq!(resolve_model("999000000", Some("O2D")), PrinterModel::H2DPro);
+        assert_eq!(
+            resolve_model("999000000", Some("O1E")),
+            PrinterModel::H2DPro
+        );
+        assert_eq!(
+            resolve_model("999000000", Some("O2D")),
+            PrinterModel::H2DPro
+        );
         assert_eq!(resolve_model("999000000", Some("O1C")), PrinterModel::H2C);
         assert_eq!(resolve_model("999000000", Some("O1C2")), PrinterModel::H2C);
     }
@@ -282,7 +288,10 @@ mod tests {
 
     #[test]
     fn test_dev_model_fallback() {
-        assert_eq!(resolve_model("999000000", Some("BL-P001")), PrinterModel::X1C);
+        assert_eq!(
+            resolve_model("999000000", Some("BL-P001")),
+            PrinterModel::X1C
+        );
         assert_eq!(resolve_model("999000000", Some("C13")), PrinterModel::X1E);
         assert_eq!(resolve_model("999000000", Some("N6")), PrinterModel::X2D);
         assert_eq!(resolve_model("999000000", Some("N1")), PrinterModel::A1Mini);
@@ -317,11 +326,17 @@ mod tests {
         assert_eq!(resolve_model("999000000", Some("P1P")), PrinterModel::P1P);
         assert_eq!(resolve_model("999000000", Some("P2S")), PrinterModel::P2S);
         assert_eq!(resolve_model("999000000", Some("A1")), PrinterModel::A1);
-        assert_eq!(resolve_model("999000000", Some("A1 Mini")), PrinterModel::A1Mini);
+        assert_eq!(
+            resolve_model("999000000", Some("A1 Mini")),
+            PrinterModel::A1Mini
+        );
         assert_eq!(resolve_model("999000000", Some("A2L")), PrinterModel::A2L);
         assert_eq!(resolve_model("999000000", Some("H2C")), PrinterModel::H2C);
         assert_eq!(resolve_model("999000000", Some("H2D")), PrinterModel::H2D);
-        assert_eq!(resolve_model("999000000", Some("H2D Pro")), PrinterModel::H2DPro);
+        assert_eq!(
+            resolve_model("999000000", Some("H2D Pro")),
+            PrinterModel::H2DPro
+        );
         assert_eq!(resolve_model("999000000", Some("H2S")), PrinterModel::H2S);
     }
 

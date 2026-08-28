@@ -743,7 +743,11 @@ pub async fn run(
         clear_project_file_error(&mut client).await;
     }
 
-    eprintln!("Probing {} (serial {})", format_args!("{:?}", model), serial_owned);
+    eprintln!(
+        "Probing {} (serial {})",
+        format_args!("{:?}", model),
+        serial_owned
+    );
 
     let report = AckReport {
         model: format!("{:?}", model),
@@ -760,4 +764,3 @@ pub async fn run(
     eprintln!("\nReport written to {}", output);
     Ok(())
 }
-

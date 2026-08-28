@@ -64,7 +64,9 @@ fn deep_merge(target: &mut serde_json::Value, incoming: &serde_json::Value) {
         (serde_json::Value::Object(target_map), serde_json::Value::Object(incoming_map)) => {
             for (key, value) in incoming_map {
                 deep_merge(
-                    target_map.entry(key.clone()).or_insert(serde_json::Value::Null),
+                    target_map
+                        .entry(key.clone())
+                        .or_insert(serde_json::Value::Null),
                     value,
                 );
             }
@@ -125,7 +127,8 @@ pub(super) fn render_dashboard(
     render_ams(state, &mut w);
     render_external_spool(state, &mut w);
 
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "======================================================================="
     );
 
@@ -170,14 +173,19 @@ fn render_print_status(state: &serde_json::Map<String, serde_json::Value>, w: &m
         String::from("--")
     };
 
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "================== Bambu Lab Printer Live Dashboard ==================="
     );
     dwriteln!(w, "{:<20} : {}", "Operational State", gcode_state);
     dwriteln!(w, "{:<20} : {}", "Active Job Name", subtask_name);
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "{:<20} : {:.1}%  ({}/{})",
-        "Print Progress", progress, layer_num, total_layers
+        "Print Progress",
+        progress,
+        layer_num,
+        total_layers
     );
     dwriteln!(w, "{:<20} : {}", "Time Remaining", remaining_formatted);
 
@@ -259,7 +267,8 @@ fn render_nozzles(state: &serde_json::Map<String, serde_json::Value>, w: &mut im
     // Populate temperatures from extruder.info (IDEX) or top-level fields
     populate_nozzle_temps(state, &mut nozzles);
 
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "\n--- Nozzles -----------------------------------------------------------"
     );
     for row in nozzles.chunks(2) {
@@ -317,7 +326,8 @@ fn render_thermal(
         .and_then(|t| t.as_f64())
         .unwrap_or(0.0) as u16;
 
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "\n--- Thermal -----------------------------------------------------------"
     );
     dwriteln!(w, "{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt);
@@ -328,28 +338,22 @@ fn render_thermal(
             .and_then(|t| t.as_f64())
             .unwrap_or(0.0);
         let (chamber_act, chamber_tgt) = PrinterTelemetry::unpack_temperature(chamber_temper);
-        dwriteln!(w,
+        dwriteln!(
+            w,
             "{:<20} : {:>3}°C / {:>3}°C",
-            "Chamber", chamber_act, chamber_tgt
+            "Chamber",
+            chamber_act,
+            chamber_tgt
         );
     }
 }
 
-fn render_fans_and_system(
-    state: &serde_json::Map<String, serde_json::Value>,
-    w: &mut impl Write,
-) {
+fn render_fans_and_system(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
     let fan_values = [
-        (
-            "Part Cooling",
-            get_fan_pct(state, "cooling_fan_speed"),
-        ),
+        ("Part Cooling", get_fan_pct(state, "cooling_fan_speed")),
         ("Aux Fan", get_fan_pct(state, "big_fan1_speed")),
         ("Chamber Fan", get_fan_pct(state, "big_fan2_speed")),
-        (
-            "Heatbreak Fan",
-            get_fan_pct(state, "heatbreak_fan_speed"),
-        ),
+        ("Heatbreak Fan", get_fan_pct(state, "heatbreak_fan_speed")),
     ];
 
     let wifi = state
@@ -384,13 +388,19 @@ fn render_fans_and_system(
         ("Timelapse", timelapse),
     ];
 
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "\n--- Fans & System -----------------------------------------------------"
     );
     for i in 0..4 {
-        dwriteln!(w,
+        dwriteln!(
+            w,
             "{:<14} : {:<6} {:>3} {:<14} : {}",
-            fan_values[i].0, fan_values[i].1, "│", sys_values[i].0, sys_values[i].1
+            fan_values[i].0,
+            fan_values[i].1,
+            "│",
+            sys_values[i].0,
+            sys_values[i].1
         );
     }
 }
@@ -484,12 +494,17 @@ fn render_external_spool(state: &serde_json::Map<String, serde_json::Value>, w: 
         .and_then(|t| t.as_str())
         .unwrap_or("--");
     let color_swatch = format_color_swatch(tray_color);
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "\n--- External Spool ----------------------------------------------------"
     );
-    dwriteln!(w,
+    dwriteln!(
+        w,
         "{:<20} : {} {} (max {}°C)",
-        "Material", tray_type, color_swatch, nozzle_temp
+        "Material",
+        tray_type,
+        color_swatch,
+        nozzle_temp
     );
 }
 
@@ -498,7 +513,8 @@ fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mu
         && let Some(decoded_err) = decode_print_error(err_val as u32)
         && decoded_err.is_genuine_fault
     {
-        dwriteln!(w,
+        dwriteln!(
+            w,
             "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
             decoded_err.short_code
         );
@@ -521,9 +537,12 @@ fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mu
         if !active_hms.is_empty() {
             dwriteln!(w, "Active Hardware Alerts:");
             for decoded in &active_hms {
-                dwriteln!(w,
+                dwriteln!(
+                    w,
                     "  \x1B[1;33m[{}] Severity: {:?} (Module: {})\x1B[0m",
-                    decoded.short_code, decoded.severity, decoded.module_id
+                    decoded.short_code,
+                    decoded.severity,
+                    decoded.module_id
                 );
             }
         }
@@ -571,7 +590,6 @@ fn format_color_swatch(hex_color: &str) -> String {
     let b = u8::from_str_radix(&hex_color[4..6], 16).unwrap_or(0);
     format!("\x1B[48;2;{};{};{}m  \x1B[0m", r, g, b)
 }
-
 
 #[cfg(test)]
 mod deep_merge_tests {

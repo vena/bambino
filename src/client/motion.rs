@@ -93,7 +93,12 @@ where
     /// // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
     /// ```
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error> {
-        if self.identity.model.quirks().is_unsafe_homing_command(gcode_line) {
+        if self
+            .identity
+            .model
+            .quirks()
+            .is_unsafe_homing_command(gcode_line)
+        {
             return Err(Error::ModelMismatch(
                 "partial-axis homing unsafe on bed-on-Z model".into(),
             ));
@@ -178,7 +183,8 @@ where
         }
         if axis_upper == 'Z' {
             let gcode = self
-                .identity.model
+                .identity
+                .model
                 .quirks()
                 .relative_z_move_gcode(distance, feedrate);
             if gcode.is_empty() {
@@ -189,7 +195,8 @@ where
             self.send_gcode_raw(&gcode).await
         } else {
             let gcode = self
-                .identity.model
+                .identity
+                .model
                 .quirks()
                 .relative_xy_move_gcode(axis_upper, distance, feedrate);
             if gcode.is_empty() {

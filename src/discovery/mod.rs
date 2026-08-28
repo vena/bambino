@@ -257,7 +257,10 @@ where
         // TimerError on this 50ms inter-burst pause used to abort the entire sweep with both
         // sockets already bound and the listen loop never entered.
         if let Err(e) = timer.sleep(core::time::Duration::from_millis(50)).await {
-            log::debug!("Inter-burst pacing sleep failed: {:?} (continuing sweep)", e);
+            log::debug!(
+                "Inter-burst pacing sleep failed: {:?} (continuing sweep)",
+                e
+            );
         }
     }
 
@@ -310,9 +313,7 @@ where
                         e
                     );
                     let _ = timer
-                        .sleep(core::time::Duration::from_millis(
-                            SSDP_POLL_BACKOFF_MS,
-                        ))
+                        .sleep(core::time::Duration::from_millis(SSDP_POLL_BACKOFF_MS))
                         .await;
                 }
             }
@@ -325,9 +326,7 @@ where
         // window. Costs nothing when the socket really does block — the branch is not taken.
         if timer.now_millis().saturating_sub(pass_start) == 0 {
             let _ = timer
-                .sleep(core::time::Duration::from_millis(
-                    SSDP_POLL_BACKOFF_MS,
-                ))
+                .sleep(core::time::Duration::from_millis(SSDP_POLL_BACKOFF_MS))
                 .await;
         }
     }

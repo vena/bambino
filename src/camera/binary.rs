@@ -61,9 +61,7 @@ pub(crate) const CAMERA_DISCARD_CHUNK_SIZE: usize = 512;
 /// * Offset 8-15 (8 bytes): Zero-padding block
 /// * Offset 16-47 (32 bytes): Null-padded ASCII username (`"bblp"`)
 /// * Offset 48-79 (32 bytes): Null-padded ASCII LAN access code
-pub fn build_handshake_packet(
-    access_code: &str,
-) -> Result<[u8; CAMERA_HANDSHAKE_SIZE], Error> {
+pub fn build_handshake_packet(access_code: &str) -> Result<[u8; CAMERA_HANDSHAKE_SIZE], Error> {
     let mut packet = [0u8; CAMERA_HANDSHAKE_SIZE];
 
     packet[0..4].copy_from_slice(&CAMERA_HANDSHAKE_MAGIC.to_le_bytes());
@@ -501,10 +499,7 @@ mod tests {
             let mut buf = Vec::new();
 
             let oversized_result = camera.read_next_frame(&mut buf).await;
-            assert!(matches!(
-                oversized_result,
-                Err(Error::ProtocolViolation(_))
-            ));
+            assert!(matches!(oversized_result, Err(Error::ProtocolViolation(_))));
 
             let resynced_result = camera.read_next_frame(&mut buf).await;
             assert!(

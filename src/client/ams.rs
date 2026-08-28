@@ -208,9 +208,7 @@ where
             ));
         }
         self.dispatch(|seq| {
-            crate::mqtt::AmsFilamentDryingRequest::new(
-                ams_id, 0, "", 0, 0, 0, false, 0, false, seq,
-            )
+            crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, "", 0, 0, 0, false, 0, false, seq)
         })
         .await
     }

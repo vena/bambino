@@ -62,7 +62,6 @@ pub trait ModelQuirks {
     /// Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
     fn has_stg_cur_idle_bug(&self) -> bool;
 
-
     /// Returns the number of physical extruder carriages present on the machine carriage bus.
     ///
     /// * `1` for standard single-nozzle configurations.
@@ -341,7 +340,10 @@ fn executable_gcode(line: &str) -> &str {
     let trimmed = code.trim_start();
     let is_m117 = trimmed.len() >= 4
         && trimmed[..4].eq_ignore_ascii_case("M117")
-        && trimmed[4..].chars().next().is_none_or(|c| !c.is_ascii_alphanumeric());
+        && trimmed[4..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
     if is_m117 { "" } else { code }
 }
 
@@ -380,7 +382,12 @@ pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> S
 /// not applicable to X/Y.
 ///
 /// Returns an empty string if `distance` is zero, non-finite, or exceeds `axis_max`.
-pub(crate) fn format_xy_move_gcode(axis: char, distance: f32, feedrate: u32, axis_max: f32) -> String {
+pub(crate) fn format_xy_move_gcode(
+    axis: char,
+    distance: f32,
+    feedrate: u32,
+    axis_max: f32,
+) -> String {
     if !distance.is_finite() || distance == 0.0 || distance.abs() > axis_max {
         return String::new();
     }
@@ -879,7 +886,10 @@ mod tests {
         let gcode = format_xy_move_gcode('X', 10.0, 3000, 256.0);
         assert!(gcode.contains("G0 X10.00"));
         assert!(gcode.contains("F3000"));
-        assert!(!gcode.contains("M211"), "X/Y moves don't need Z's M211/reference-mode wrapping");
+        assert!(
+            !gcode.contains("M211"),
+            "X/Y moves don't need Z's M211/reference-mode wrapping"
+        );
     }
 
     #[test]

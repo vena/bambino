@@ -61,11 +61,12 @@ where
     /// [`.attach_camera()`](Self::attach_camera). Returns `Error::ProtocolViolation`
     /// immediately for RTSPS models — see `ensure_camera()`'s doc
     /// comment.
-    pub async fn camera(
-        &mut self,
-    ) -> Result<&mut BinaryCameraStream<CameraTls::Stream>, Error> {
+    pub async fn camera(&mut self) -> Result<&mut BinaryCameraStream<CameraTls::Stream>, Error> {
         self.ensure_camera().await?;
-        Ok(self.camera.as_mut().expect("ensure_camera() just verified self.camera is Some"))
+        Ok(self
+            .camera
+            .as_mut()
+            .expect("ensure_camera() just verified self.camera is Some"))
     }
 
     /// Reads the next camera frame, auto-connecting (and authenticating) if needed.

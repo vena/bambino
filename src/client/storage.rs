@@ -62,7 +62,10 @@ where
         &mut self,
     ) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error> {
         self.ensure_ftps().await?;
-        Ok(self.ftps.as_mut().expect("ensure_ftps() just verified self.ftps is Some"))
+        Ok(self
+            .ftps
+            .as_mut()
+            .expect("ensure_ftps() just verified self.ftps is Some"))
     }
 
     /// Disconnects the FTPS session, if one exists, and clears it from the client.

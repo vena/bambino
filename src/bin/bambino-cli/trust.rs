@@ -98,7 +98,11 @@ pub(crate) fn load_trust_anchors(path: &str) -> Result<Vec<CertificateDer<'stati
     let mut anchors = Vec::new();
     let mut origins: Vec<String> = Vec::new();
     for file in &files {
-        let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let bytes = std::fs::read(file)
             .map_err(|e| CliError::InvalidArgs(format!("--with-certs {}: {e}", file.display())))?;
 

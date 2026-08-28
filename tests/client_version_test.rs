@@ -4,12 +4,11 @@
 
 mod common;
 
-
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use common::client::{connect_test_client, SERIAL};
+use common::client::{SERIAL, connect_test_client};
 use common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
 };

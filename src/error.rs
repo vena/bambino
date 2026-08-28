@@ -103,7 +103,10 @@ impl From<crate::io::TimerError> for Error {
 /// call it directly under the default `std` test profile and actually exercise the exact code
 /// path the no_std/embassy build uses, rather than only the thiserror-generated impl.
 #[cfg_attr(all(feature = "std", not(test)), allow(dead_code))]
-pub(crate) fn format_error_no_std(e: &Error, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+pub(crate) fn format_error_no_std(
+    e: &Error,
+    f: &mut core::fmt::Formatter<'_>,
+) -> core::fmt::Result {
     match e {
         Error::Network(e) => write!(f, "Network transport failure: {:?}", e),
         Error::TimerFailure(e) => write!(f, "Timer scheduling failure: {:?}", e),

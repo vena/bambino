@@ -99,7 +99,9 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
             // for the received datagram), no matching `SocketError` variant exists, so this
             // stays `Other` rather than the misleading `ConnectionReset` it was before.
             .map_err(|_| {
-                SocketError::Other("embassy UDP recv: buffer too small for received datagram".into())
+                SocketError::Other(
+                    "embassy UDP recv: buffer too small for received datagram".into(),
+                )
             })?;
 
         // Under embassy-net 0.9.1, UdpMetadata wraps its IpEndpoint target inside the
@@ -218,12 +220,10 @@ where
         // `mbedtls_ssl_set_hostname` before `set_server_name` returns, so the `CString` below
         // doesn't need to outlive this function.
         let host_cstring = alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
-        session
-            .set_server_name(&host_cstring)
-            .map_err(|e| {
-                log::debug!("mbedtls-rs set_server_name failed: {e:?}");
-                SocketError::ConnectionAborted
-            })?;
+        session.set_server_name(&host_cstring).map_err(|e| {
+            log::debug!("mbedtls-rs set_server_name failed: {e:?}");
+            SocketError::ConnectionAborted
+        })?;
 
         // `tls_verification_details()` is the one post-handshake inspector `mbedtls-rs` does
         // expose (unlike a peer-cert accessor or the raw `mbedtls_ssl_context` pointer, whose
@@ -233,8 +233,12 @@ where
         // A mask with no verdict keeps the pre-existing `ConnectionAborted`.
         if let Err(e) = session.connect().await {
             log::debug!("mbedtls-rs Session::connect failed: {e:?}");
-            return Err(map_mbedtls_verify_flags(session.tls_verification_details())
-                .map_or(SocketError::ConnectionAborted, SocketError::CertificateInvalid));
+            return Err(
+                map_mbedtls_verify_flags(session.tls_verification_details()).map_or(
+                    SocketError::ConnectionAborted,
+                    SocketError::CertificateInvalid,
+                ),
+            );
         }
 
         Ok(session)

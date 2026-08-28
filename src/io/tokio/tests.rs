@@ -1,7 +1,7 @@
 use super::*;
 use rustls::client::danger::ServerCertVerifier;
-use x509_parser::prelude::FromDer;
 use rustls_pki_types::UnixTime;
+use x509_parser::prelude::FromDer;
 
 #[test]
 fn test_build_unsafe_client_config() {
@@ -257,8 +257,7 @@ fn test_cn_fallback_verifier_accepts_leaf_via_intermediate() {
     let (root_der, root_issuer, ..) = test_support::generate_test_ca();
     let (intermediate_der, intermediate_issuer) =
         test_support::generate_test_intermediate_ca(&root_issuer, "bambino test intermediate CA");
-    let leaf =
-        test_support::generate_test_leaf(&intermediate_issuer, "TESTSERIAL0001", Vec::new());
+    let leaf = test_support::generate_test_leaf(&intermediate_issuer, "TESTSERIAL0001", Vec::new());
 
     let verifier = CnFallbackServerVerifier::new([root_der]).unwrap();
     let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
@@ -287,8 +286,7 @@ fn test_cn_fallback_verifier_rejects_leaf_via_untrusted_intermediate() {
         &other_root_issuer,
         "bambino test rogue intermediate CA",
     );
-    let leaf =
-        test_support::generate_test_leaf(&intermediate_issuer, "TESTSERIAL0001", Vec::new());
+    let leaf = test_support::generate_test_leaf(&intermediate_issuer, "TESTSERIAL0001", Vec::new());
 
     let verifier = CnFallbackServerVerifier::new([root_der]).unwrap();
     let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
@@ -319,8 +317,11 @@ fn test_cn_fallback_verifier_skips_wrong_signature_for_duplicate_subject_interme
         test_support::generate_test_intermediate_ca(&decoy_root_issuer, "shared-subject-name");
     let (genuine_intermediate_der, genuine_intermediate_issuer) =
         test_support::generate_test_intermediate_ca(&root_issuer, "shared-subject-name");
-    let leaf =
-        test_support::generate_test_leaf(&genuine_intermediate_issuer, "TESTSERIAL0001", Vec::new());
+    let leaf = test_support::generate_test_leaf(
+        &genuine_intermediate_issuer,
+        "TESTSERIAL0001",
+        Vec::new(),
+    );
 
     let verifier = CnFallbackServerVerifier::new([root_der]).unwrap();
     let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
@@ -398,12 +399,10 @@ fn test_build_verified_client_config_bad_key_returns_error() {
     // this one). A well-typed-but-garbage PKCS#8 key bypasses try_from's format sniffing so
     // the bogus bytes reach rustls' own key validation inside with_client_auth_cert.
     let (ca_der, ..) = test_support::generate_test_ca();
-    let bogus_key =
-        PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(vec![0u8; 10]));
+    let bogus_key = PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(vec![0u8; 10]));
     let bogus_cert = CertificateDer::from(vec![0u8; 10]);
 
-    let result =
-        build_verified_client_config([ca_der], Some((vec![bogus_cert], bogus_key)));
+    let result = build_verified_client_config([ca_der], Some((vec![bogus_cert], bogus_key)));
 
     assert!(
         result.is_err(),

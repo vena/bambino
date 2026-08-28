@@ -365,5 +365,9 @@ fn test_decode_nozzle_temperatures_h2c_rack_nozzle_not_misclassified_as_idex() {
         report.print.as_ref().unwrap().nozzle_temper,
         report.print.as_ref().unwrap().nozzle_target_temper,
     );
-    assert_eq!(temps, vec![(0, 210, 220)], "must resolve as single-nozzle, not IDEX");
+    assert_eq!(
+        temps,
+        vec![(0, 210, 220)],
+        "must resolve as single-nozzle, not IDEX"
+    );
 }

@@ -412,7 +412,10 @@ mod tests {
                 FrameReadState::ReadingPayload {
                     buf, target_len, ..
                 } => {
-                    assert_eq!(*target_len, declared, "the declared length is still tracked");
+                    assert_eq!(
+                        *target_len, declared,
+                        "the declared length is still tracked"
+                    );
                     assert_eq!(buf.len(), 2, "only delivered bytes are held");
                     // The documented contract is "never more than one chunk of slack" beyond
                     // what has been received — not "never more than one chunk total". The

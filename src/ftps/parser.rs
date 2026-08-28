@@ -439,7 +439,16 @@ mod tests {
         // only the control-character check belongs on this side.
         let payload = "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 -timelapse.mp4\r\n";
 
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
 
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "-timelapse.mp4");
@@ -447,9 +456,19 @@ mod tests {
 
     #[test]
     fn test_control_character_filename_still_dropped() {
-        let payload = "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 bad\u{7}name.mp4\r\n";
+        let payload =
+            "-rw-r--r--    1 1000     1000      1632221 Jun 17 12:14 bad\u{7}name.mp4\r\n";
 
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
 
         assert!(files.is_empty());
     }
@@ -460,7 +479,16 @@ mod tests {
                        drwxr-xr-x    2 1000     1000         4096 Jun 17  2025 cache\n";
 
         // Baseline: We evaluate these listings at Jun 17, 2026, 15:00
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
 
         assert_eq!(files.len(), 2);
 
@@ -474,7 +502,10 @@ mod tests {
         assert_eq!(file.day, 17);
         assert_eq!(file.hour, 12);
         assert_eq!(file.minute, 14);
-        assert!(file.year_is_inferred, "HH:MM-format entry must be flagged as inferred");
+        assert!(
+            file.year_is_inferred,
+            "HH:MM-format entry must be flagged as inferred"
+        );
 
         // Verify standard directory node properties
         let dir = &files[1];
@@ -500,7 +531,16 @@ mod tests {
         // silently breaking delete_file/download_file for that file.
         let payload =
             "-rwxrwxrwx   1 root     root           12 Jan  1  2030  weird_spacing   name.3mf";
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 12, minute: 0 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 12,
+                minute: 0,
+            },
+        );
 
         assert_eq!(files.len(), 1);
         let f = &files[0];
@@ -511,13 +551,31 @@ mod tests {
 
     #[test]
     fn test_empty_listing() {
-        let files = parse_unix_listing("", CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            "",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
         assert!(files.is_empty());
     }
 
     #[test]
     fn test_whitespace_only_listing() {
-        let files = parse_unix_listing("   \n  \n\r\n", CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            "   \n  \n\r\n",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
         assert!(files.is_empty());
     }
 
@@ -526,7 +584,16 @@ mod tests {
         let payload = "not a valid listing line\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 valid.3mf\n\
                        truncated\n";
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "valid.3mf");
     }
@@ -539,7 +606,16 @@ mod tests {
                        -rw-r--r--    1 1000     1000      1024 Jun 17 88:00 bad_hour.gcode\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 12:70 bad_minute.gcode\n\
                        -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 valid.gcode\n";
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 6, day: 17, hour: 15, minute: 0 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        );
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].name, "valid.gcode");
     }
@@ -552,7 +628,16 @@ mod tests {
         // Because that datetime resides in our system's relative future, rollover math must
         // automatically correct this to December 31st, 2025.
         let payload = "-rw-r--r--    1 1000     1000          100 Dec 31 23:59 print_job.gcode";
-        let files = parse_unix_listing(payload, CurrentDateTime { year: 2026, month: 1, day: 2, hour: 1, minute: 15 });
+        let files = parse_unix_listing(
+            payload,
+            CurrentDateTime {
+                year: 2026,
+                month: 1,
+                day: 2,
+                hour: 1,
+                minute: 15,
+            },
+        );
 
         assert_eq!(files.len(), 1);
         let file = &files[0];

@@ -85,9 +85,8 @@ async fn test_read_line_raw_carries_leftover_bytes_across_calls() {
     // `read_line_raw` must return only the first line; the second call must return the
     // second line using the bytes already buffered from the first read, without issuing
     // any further socket read (the mock's queue only has one chunk).
-    let reader = ChunkedReader::with_chunks(&[
-        b"150 Opening data connection\r\n226 Transfer complete\r\n",
-    ]);
+    let reader =
+        ChunkedReader::with_chunks(&[b"150 Opening data connection\r\n226 Transfer complete\r\n"]);
     let mut stream = TokioIo(reader);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
@@ -125,17 +124,15 @@ async fn test_read_response_multiline_in_single_socket_read() {
     // socket read must still parse into the correct accumulated text across all three
     // lines — exercising the leftover-carry path via the public entry point rather than
     // calling `read_line_raw` directly.
-    let reader = ChunkedReader::with_chunks(&[
-        b"213-First line\r\n213-Second line\r\n213 Final line\r\n",
-    ]);
+    let reader =
+        ChunkedReader::with_chunks(&[b"213-First line\r\n213-Second line\r\n213 Final line\r\n"]);
     let mut stream = TokioIo(reader);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
-    let (code, text) =
-        read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
-            .await
-            .expect("multi-line response");
+    let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+        .await
+        .expect("multi-line response");
     assert_eq!(code, 213);
     assert_eq!(text, "First line\nSecond line\nFinal line");
 }
@@ -152,10 +149,9 @@ async fn test_read_response_intermediate_line_matching_terminator_shape_not_mist
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
-    let (code, text) =
-        read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
-            .await
-            .expect("multi-line response");
+    let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+        .await
+        .expect("multi-line response");
     assert_eq!(code, 213);
     assert_eq!(
         text,
@@ -173,10 +169,9 @@ async fn test_read_response_free_text_intermediate_line_preserved() {
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
-    let (code, text) =
-        read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
-            .await
-            .expect("multi-line response");
+    let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+        .await
+        .expect("multi-line response");
     assert_eq!(code, 213);
     assert_eq!(text, "Header\nplain free text, no code\nEnd");
 }
@@ -191,10 +186,9 @@ async fn test_read_response_header_with_no_separator_treated_as_terminal() {
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
-    let (code, text) =
-        read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
-            .await
-            .expect("non-conformant header line should still produce a reply");
+    let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &DummyTimer, None)
+        .await
+        .expect("non-conformant header line should still produce a reply");
     assert_eq!(code, 200);
     assert_eq!(text, "");
 }
@@ -244,7 +238,14 @@ async fn test_read_response_keeps_partial_line_across_a_timeout() {
         .expect("partial reply write");
 
     let deadline_ms = Some(timer.now_millis().saturating_add(50));
-    let result = read_response(&mut stream, &mut line_buf, &mut fill_buf, &timer, deadline_ms).await;
+    let result = read_response(
+        &mut stream,
+        &mut line_buf,
+        &mut fill_buf,
+        &timer,
+        deadline_ms,
+    )
+    .await;
     assert!(
         matches!(result, Err(Error::Network(SocketError::TimedOut))),
         "expected the stall deadline to fire, got {:?}",
@@ -257,9 +258,15 @@ async fn test_read_response_keeps_partial_line_across_a_timeout() {
         .expect("remainder write");
 
     let deadline_ms = Some(timer.now_millis().saturating_add(5_000));
-    let (code, text) = read_response(&mut stream, &mut line_buf, &mut fill_buf, &timer, deadline_ms)
-        .await
-        .expect("second read must complete the line held over from the timed-out call");
+    let (code, text) = read_response(
+        &mut stream,
+        &mut line_buf,
+        &mut fill_buf,
+        &timer,
+        deadline_ms,
+    )
+    .await
+    .expect("second read must complete the line held over from the timed-out call");
     assert_eq!(code, 226);
     assert_eq!(text, "Transfer complete.");
 }
@@ -459,8 +466,7 @@ async fn test_write_command_stalled_connection_times_out() {
 
 #[test]
 fn test_valid_pasv_response() {
-    let port =
-        parse_pasv_port("Entering Passive Mode (127,0,0,1,192,168).").expect("valid PASV");
+    let port = parse_pasv_port("Entering Passive Mode (127,0,0,1,192,168).").expect("valid PASV");
     assert_eq!(port, 49320);
 }
 

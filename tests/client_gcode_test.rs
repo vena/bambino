@@ -4,15 +4,12 @@
 
 mod common;
 
-
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
 use common::client::connect_test_client;
-use common::mock_mqtt::{
-    handle_mqtt_handshake, read_publish_payload,
-};
+use common::mock_mqtt::{handle_mqtt_handshake, read_publish_payload};
 
 // ============================================================================
 // G-code Safety Validation Tests
@@ -30,7 +27,8 @@ async fn test_send_gcode_rejects_unsafe_homing() {
         assert_eq!(json["print"]["param"], "G28\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
     let err = client.send_gcode("G28 Z").await;
@@ -57,7 +55,8 @@ async fn test_send_gcode_raw_bypasses_safety() {
         assert_eq!(json["print"]["param"], "G28 Z\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     // send_gcode_raw should bypass safety checks
     client
@@ -88,7 +87,8 @@ async fn test_temperature_clamping() {
         assert_eq!(json_chamber["print"]["param"], "M141 S60\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
 
     client
         .set_bed_temperature(500)
@@ -117,19 +117,29 @@ async fn test_temperature_clamping_lower_bound() {
         handle_mqtt_handshake(&mut server_stream).await;
 
         let json_bed = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_bed["print"]["param"], "M140 S0
-");
+        assert_eq!(
+            json_bed["print"]["param"],
+            "M140 S0
+"
+        );
 
         let json_nozzle = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_nozzle["print"]["param"], "M104 T0 S0
-");
+        assert_eq!(
+            json_nozzle["print"]["param"],
+            "M104 T0 S0
+"
+        );
 
         let json_chamber = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_chamber["print"]["param"], "M141 S0
-");
+        assert_eq!(
+            json_chamber["print"]["param"],
+            "M141 S0
+"
+        );
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
 
     client
         .set_bed_temperature(0)
@@ -146,4 +156,3 @@ async fn test_temperature_clamping_lower_bound() {
 
     broker_task.await.expect("Broker task panicked");
 }
-

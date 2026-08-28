@@ -45,8 +45,8 @@ use crate::camera::CameraProtocol;
 use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
 use crate::ftps::FtpsClient;
-use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::identity::PrinterIdentity;
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::models::PrinterModel;
 use crate::mqtt::{MqttClient, MqttMessage};
 
@@ -169,11 +169,7 @@ where
     /// [`get_version()`](Self::get_version) rely on a message-count safety valve
     /// instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
     /// for real timeouts.
-    pub fn new(
-        tls: MqttTls,
-        factory: MqttFactory,
-        identity: PrinterIdentity,
-    ) -> Self {
+    pub fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self {
         Self {
             mqtt: None,
             ftps: None,
@@ -414,7 +410,11 @@ where
     /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
     pub async fn send_ping(&mut self) -> Result<(), Error> {
         self.ensure_mqtt().await?;
-        self.mqtt.as_mut().unwrap().send_ping_with_timer(&self.timer).await
+        self.mqtt
+            .as_mut()
+            .unwrap()
+            .send_ping_with_timer(&self.timer)
+            .await
     }
 
     /// Returns a reference to the printer's unique hardware serial number.

@@ -182,7 +182,8 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
 #[must_use]
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-    let is_external = ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
+    let is_external =
+        ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
 
     if is_ht || is_external {
         Some(ams_id)

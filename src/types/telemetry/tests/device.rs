@@ -404,7 +404,10 @@ fn test_device_both_present_top_level_wins() {
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     let device = report.device().unwrap();
-    assert_eq!(device.airduct.as_ref().unwrap().parts.as_ref().unwrap()[0].id, 1);
+    assert_eq!(
+        device.airduct.as_ref().unwrap().parts.as_ref().unwrap()[0].id,
+        1
+    );
 }
 
 #[test]
@@ -476,7 +479,10 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
         cached.nozzle.is_some(),
         "nozzle must survive a ctc-only partial push"
     );
-    assert_eq!(cached.nozzle.as_ref().unwrap().info.as_ref().unwrap().len(), 1);
+    assert_eq!(
+        cached.nozzle.as_ref().unwrap().info.as_ref().unwrap().len(),
+        1
+    );
     assert_eq!(cached.ctc.unwrap().state, Some(2), "new field applies");
 }
 
@@ -742,7 +748,11 @@ fn test_airduct_collection_merge_from_upserts_parts_by_id_on_partial_frame() {
     cached.merge_from(&partial);
 
     let parts = cached.parts.as_ref().unwrap();
-    assert_eq!(parts.len(), 2, "id 10 must survive a partial frame missing it");
+    assert_eq!(
+        parts.len(),
+        2,
+        "id 10 must survive a partial frame missing it"
+    );
     assert_eq!(
         parts.iter().find(|p| p.id == 10).unwrap().state,
         Some(40),
@@ -797,7 +807,11 @@ fn test_ctc_info_merge_from_preserves_target_on_absence() {
     cached.merge_from(&partial);
 
     assert_eq!(cached.temp, Some(2000000), "new field applies");
-    assert_eq!(cached.target, Some(30), "target must survive a temp-only push");
+    assert_eq!(
+        cached.target,
+        Some(30),
+        "target must survive a temp-only push"
+    );
 }
 
 #[test]
@@ -806,7 +820,9 @@ fn test_bed_telemetry_merge_from_preserves_info_on_absence() {
     // layer — device.bed.info can be absent while device.bed.state is present (and changes)
     // in the same push, same shape as `CtcTelemetry`'s device.ctc.info/.state.
     let mut cached = BedTelemetry {
-        info: Some(BedInfo { temp: Some(1900000) }),
+        info: Some(BedInfo {
+            temp: Some(1900000),
+        }),
         state: Some(0),
     };
 
@@ -847,7 +863,11 @@ fn test_ext_tool_telemetry_merge_from_preserves_fields_independently() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.mount, Some(1), "mount must survive a th_temp-only push");
+    assert_eq!(
+        cached.mount,
+        Some(1),
+        "mount must survive a th_temp-only push"
+    );
     assert_eq!(cached.tool_type.as_deref(), Some("LB00"));
     assert_eq!(cached.calib, Some(1));
     assert_eq!(cached.low_prec, Some(false));

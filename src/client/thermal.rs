@@ -122,7 +122,12 @@ where
     /// Models with passive chamber sensors but no heater (X1C, P2S) will return a capability
     /// mismatch error — their firmware silently ignores M141.
     pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
-        let Some(max) = self.identity.model.quirks().active_chamber_heater_max_temp_c() else {
+        let Some(max) = self
+            .identity
+            .model
+            .quirks()
+            .active_chamber_heater_max_temp_c()
+        else {
             return Err(Error::ModelMismatch(
                 "active chamber heater not available on this model".into(),
             ));

@@ -154,6 +154,30 @@ macro_rules! impl_h2_shared {
 }
 
 impl_h2_shared!(H2SQuirks, 1, false, H2S_Z_MAX, H2S_X_MAX, H2S_Y_MAX, false);
-impl_h2_shared!(H2DQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX, false);
-impl_h2_shared!(H2DProQuirks, 2, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX, false);
-impl_h2_shared!(H2CQuirks, 7, true, H2_DUAL_Z_MAX, H2_DUAL_X_MAX, H2_DUAL_Y_MAX, true);
+impl_h2_shared!(
+    H2DQuirks,
+    2,
+    true,
+    H2_DUAL_Z_MAX,
+    H2_DUAL_X_MAX,
+    H2_DUAL_Y_MAX,
+    false
+);
+impl_h2_shared!(
+    H2DProQuirks,
+    2,
+    true,
+    H2_DUAL_Z_MAX,
+    H2_DUAL_X_MAX,
+    H2_DUAL_Y_MAX,
+    false
+);
+impl_h2_shared!(
+    H2CQuirks,
+    7,
+    true,
+    H2_DUAL_Z_MAX,
+    H2_DUAL_X_MAX,
+    H2_DUAL_Y_MAX,
+    true
+);

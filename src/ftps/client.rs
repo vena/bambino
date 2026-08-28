@@ -18,8 +18,8 @@ use crate::error::Error;
 use crate::ftps::parser::{
     CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
 };
-use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
 use crate::identity::PrinterIdentity;
+use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::PrinterModel;
 
 use super::protocol::*;
@@ -153,7 +153,14 @@ async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
     on_reject: F,
 ) -> Result<(), Error> {
     write_command(ctx.stream, cmd, ctx.timer, ctx.deadline_ms).await?;
-    let (code, text) = read_response(ctx.stream, ctx.buf, ctx.fill_buf, ctx.timer, ctx.deadline_ms).await?;
+    let (code, text) = read_response(
+        ctx.stream,
+        ctx.buf,
+        ctx.fill_buf,
+        ctx.timer,
+        ctx.deadline_ms,
+    )
+    .await?;
     log::debug!("FTPS {log_label} response: code={code} text={text:?}");
     if code != expected_code {
         return Err(on_reject());
@@ -261,54 +268,34 @@ where
             ));
         }
 
-        send_and_expect(
-            &mut ctx,
-            "USER bblp",
-            "USER",
-            FTP_PASSWORD_NEEDED,
-            || Error::ProtocolViolation("USER authentication phase rejected".into()),
-        )
+        send_and_expect(&mut ctx, "USER bblp", "USER", FTP_PASSWORD_NEEDED, || {
+            Error::ProtocolViolation("USER authentication phase rejected".into())
+        })
         .await?;
 
         let pass_cmd = format!("PASS {}", access_code);
-        send_and_expect(
-            &mut ctx,
-            &pass_cmd,
-            "PASS",
-            FTP_LOGIN_OK,
-            || Error::AccessDenied,
-        )
+        send_and_expect(&mut ctx, &pass_cmd, "PASS", FTP_LOGIN_OK, || {
+            Error::AccessDenied
+        })
         .await?;
 
-        send_and_expect(
-            &mut ctx,
-            "PBSZ 0",
-            "PBSZ",
-            FTP_COMMAND_OK,
-            || Error::ProtocolViolation("PBSZ protection sizing configuration failed".into()),
-        )
+        send_and_expect(&mut ctx, "PBSZ 0", "PBSZ", FTP_COMMAND_OK, || {
+            Error::ProtocolViolation("PBSZ protection sizing configuration failed".into())
+        })
         .await?;
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !identity.model.quirks().uses_plaintext_ftps_data_channel() {
-            send_and_expect(
-                &mut ctx,
-                "PROT P",
-                "PROT P",
-                FTP_COMMAND_OK,
-                || Error::ProtocolViolation("Failed to enable TLS data channel protection".into()),
-            )
+            send_and_expect(&mut ctx, "PROT P", "PROT P", FTP_COMMAND_OK, || {
+                Error::ProtocolViolation("Failed to enable TLS data channel protection".into())
+            })
             .await?;
         }
 
         // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
-        send_and_expect(
-            &mut ctx,
-            "TYPE I",
-            "TYPE I",
-            FTP_COMMAND_OK,
-            || Error::ProtocolViolation("TYPE I binary mode configuration failed".into()),
-        )
+        send_and_expect(&mut ctx, "TYPE I", "TYPE I", FTP_COMMAND_OK, || {
+            Error::ProtocolViolation("TYPE I binary mode configuration failed".into())
+        })
         .await?;
 
         Ok((control_stream, fill_buf))
@@ -385,7 +372,10 @@ where
     /// — was duplicated verbatim across 13 call sites. Owns its own scratch `line_buf`, safe
     /// since only `control_fill_buf` needs to persist across calls (see `read_response`'s doc
     /// comment).
-    async fn read_response_poisoning(&mut self, deadline_ms: Option<u64>) -> Result<(u16, String), Error> {
+    async fn read_response_poisoning(
+        &mut self,
+        deadline_ms: Option<u64>,
+    ) -> Result<(u16, String), Error> {
         let mut buf = Vec::new();
         match read_response(
             &mut self.control_stream,
@@ -555,9 +545,8 @@ where
             ));
         }
 
-        let payload_str = core::str::from_utf8(&listing_payload).map_err(|_| {
-            Error::ProtocolViolation("Non-UTF8 directory listings response".into())
-        })?;
+        let payload_str = core::str::from_utf8(&listing_payload)
+            .map_err(|_| Error::ProtocolViolation("Non-UTF8 directory listings response".into()))?;
 
         Ok(parse_unix_listing(payload_str, now))
     }
@@ -578,9 +567,8 @@ where
             ));
         }
 
-        text.parse::<u64>().map_err(|_| {
-            Error::ProtocolViolation("Invalid file size parameter returned".into())
-        })
+        text.parse::<u64>()
+            .map_err(|_| Error::ProtocolViolation("Invalid file size parameter returned".into()))
     }
 
     /// Queries a file's absolute modification time via `MDTM`, to one-second resolution.
@@ -627,9 +615,9 @@ where
             ));
         }
 
-        parse_mdtm_timestamp(&text).map(Some).ok_or_else(|| {
-            Error::ProtocolViolation("Malformed MDTM timestamp returned".into())
-        })
+        parse_mdtm_timestamp(&text)
+            .map(Some)
+            .ok_or_else(|| Error::ProtocolViolation("Malformed MDTM timestamp returned".into()))
     }
 
     /// Removes a targeted file from non-volatile storage.
@@ -916,9 +904,8 @@ where
         let (code, text) = self.read_response_poisoning(deadline_ms).await?;
 
         if code == FTP_SIZE_OK {
-            text.parse::<u64>().map_err(|_| {
-                Error::ProtocolViolation("Malformed AVBL numeric response".into())
-            })
+            text.parse::<u64>()
+                .map_err(|_| Error::ProtocolViolation("Malformed AVBL numeric response".into()))
         } else {
             Err(Error::ProtocolViolation(
                 "Hardware capacity queries rejected".into(),

@@ -558,7 +558,11 @@ pub async fn run_mock_server_list_426_recovery(
     server_data.flush().await.expect("LIST data flush");
     drop(server_data);
     // 426 instead of 226 — the TLS 1.3 close race, tolerated the same as upload/download.
-    respond(&mut server_control, b"426 Connection closed; transfer aborted.\r\n").await;
+    respond(
+        &mut server_control,
+        b"426 Connection closed; transfer aborted.\r\n",
+    )
+    .await;
 }
 
 /// Mock server for the regression test: a `426` on `LIST` whose listing was cut mid-line.
@@ -593,7 +597,11 @@ pub async fn run_mock_server_list_426_truncated(
         .expect("LIST data write");
     server_data.flush().await.expect("LIST data flush");
     drop(server_data);
-    respond(&mut server_control, b"426 Connection closed; transfer aborted.\r\n").await;
+    respond(
+        &mut server_control,
+        b"426 Connection closed; transfer aborted.\r\n",
+    )
+    .await;
 }
 
 /// Mock server for the regression test: `LIST`'s *initial* write/read (the `150`/`125`

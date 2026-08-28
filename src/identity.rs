@@ -30,10 +30,19 @@ impl PrinterIdentity {
     ///
     /// For callers who need a specific `model` regardless of what the serial
     /// prefix implies, construct the struct literal directly instead.
-    pub fn new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Self {
+    pub fn new(
+        ip: impl Into<String>,
+        serial: impl Into<String>,
+        access_code: impl Into<String>,
+    ) -> Self {
         let serial = serial.into();
         let model = resolve_model(&serial, None);
-        Self { ip: ip.into(), serial, access_code: access_code.into(), model }
+        Self {
+            ip: ip.into(),
+            serial,
+            access_code: access_code.into(),
+            model,
+        }
     }
 }
 
@@ -62,7 +71,10 @@ mod tests {
         let identity = PrinterIdentity::new("192.168.1.50", "00M00A000000000", secret);
         let rendered = format!("{:?}", identity);
 
-        assert!(!rendered.contains(secret), "access code leaked into Debug: {rendered}");
+        assert!(
+            !rendered.contains(secret),
+            "access code leaked into Debug: {rendered}"
+        );
         assert!(rendered.contains("<redacted>"));
         assert!(rendered.contains("192.168.1.50"));
         assert!(rendered.contains("00M00A000000000"));

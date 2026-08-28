@@ -403,7 +403,6 @@ impl SdcardState {
     }
 }
 
-
 impl PrinterTelemetry {
     /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
     ///

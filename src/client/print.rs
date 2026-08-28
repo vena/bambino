@@ -97,10 +97,7 @@ where
     ///     CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
     /// ).await?;
     /// ```
-    pub async fn start_calibration(
-        &mut self,
-        options: CalibrationOption,
-    ) -> Result<u16, Error> {
+    pub async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error> {
         self.dispatch(|seq| crate::mqtt::CalibrationRequest::new(options.0, seq))
             .await
     }

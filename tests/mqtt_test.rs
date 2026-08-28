@@ -34,21 +34,22 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
 
     let mut client = MqttClient::connect(
         TokioIo(client_stream),
-        &PrinterIdentity { ip: String::new(), serial: serial.to_string(), access_code: "12345678".to_string(), model: PrinterModel::P1S },
+        &PrinterIdentity {
+            ip: String::new(),
+            serial: serial.to_string(),
+            access_code: "12345678".to_string(),
+            model: PrinterModel::P1S,
+        },
     )
-        .await
-        .expect("Failed to execute MQTT login and subscription handshake");
+    .await
+    .expect("Failed to execute MQTT login and subscription handshake");
 
     let _packet_id = client
         .publish_command(b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"1\"}}")
         .await
         .expect("QoS 1 command publish failed");
 
-    assert_eq!(
-        client.in_flight_count(),
-        1,
-        "Expected 1 in-flight packet"
-    );
+    assert_eq!(client.in_flight_count(), 1, "Expected 1 in-flight packet");
 
     // Block the test thread until the broker has directly observed, acknowledged,
     // and flushed the PUBACK to the client stream buffer. This replaces fragile "magic delays".

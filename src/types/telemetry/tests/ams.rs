@@ -472,7 +472,10 @@ fn test_filament_switch_inlet_decodes_four_bits_not_two() {
     };
 
     // 0x00000E03: bits 24-27 = 0 => In-B, and bits 8-11 = 0xE => unfixed.
-    assert_eq!(unit("E03").filament_switch_inlet(), Some(FilamentSwitchInlet::InB));
+    assert_eq!(
+        unit("E03").filament_switch_inlet(),
+        Some(FilamentSwitchInlet::InB)
+    );
     assert!(unit("E03").has_unfixed_extruder());
 
     // 0x01000E03: bits 24-27 = 1 => In-A.
@@ -610,10 +613,18 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.ams.len(), 1, "unit array must survive a partial push");
+    assert_eq!(
+        cached.ams.len(),
+        1,
+        "unit array must survive a partial push"
+    );
     assert_eq!(cached.ams[0].id, "0");
     assert_eq!(cached.tray_tar.as_deref(), Some("3"), "new field applies");
-    assert_eq!(cached.tray_now.as_deref(), Some("3"), "untouched field stays cached");
+    assert_eq!(
+        cached.tray_now.as_deref(),
+        Some("3"),
+        "untouched field stays cached"
+    );
     assert_eq!(cached.ams_exist_bits.as_deref(), Some("1"));
     assert_eq!(cached.version, Some(20));
 }
@@ -686,7 +697,11 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.ams.len(), 2, "unit 0 must survive a unit-1-only push");
+    assert_eq!(
+        cached.ams.len(),
+        2,
+        "unit 0 must survive a unit-1-only push"
+    );
     assert!(cached.ams.iter().any(|u| u.id == "0"));
     assert!(cached.ams.iter().any(|u| u.id == "1"));
 }
@@ -727,7 +742,10 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
     cached.merge_from(&partial);
 
     assert_eq!(cached.temp, "27.0", "temp always takes the incoming value");
-    assert_eq!(cached.humidity, "4", "humidity always takes the incoming value");
+    assert_eq!(
+        cached.humidity, "4",
+        "humidity always takes the incoming value"
+    );
     assert_eq!(
         cached.humidity_raw.as_deref(),
         Some("42"),
@@ -736,7 +754,11 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
     assert_eq!(cached.dry_time, Some(120), "dry_time must survive");
     assert!(cached.dry_setting.is_some(), "dry_setting must survive");
     assert_eq!(cached.info.as_deref(), Some("10001003"));
-    assert_eq!(cached.dry_sf_reason, Some(vec![1, 2]), "dry_sf_reason must survive");
+    assert_eq!(
+        cached.dry_sf_reason,
+        Some(vec![1, 2]),
+        "dry_sf_reason must survive"
+    );
 }
 
 #[test]
@@ -811,7 +833,11 @@ fn test_ams_tray_merge_from_preserves_fields_on_absence() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.state, Some(10), "state always takes the incoming value");
+    assert_eq!(
+        cached.state,
+        Some(10),
+        "state always takes the incoming value"
+    );
     assert_eq!(
         cached.tray_type.as_deref(),
         Some("PLA"),
@@ -949,7 +975,11 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
     cached.merge_from(&partial);
 
     let trays = cached.tray.as_ref().unwrap();
-    assert_eq!(trays.len(), 2, "tray 1 must be pruned, tray 2 must be added");
+    assert_eq!(
+        trays.len(),
+        2,
+        "tray 1 must be pruned, tray 2 must be added"
+    );
     assert!(
         !trays.iter().any(|t| t.id == "1"),
         "tray absent from a present incoming array must be pruned"

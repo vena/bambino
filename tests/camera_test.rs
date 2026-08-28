@@ -16,8 +16,8 @@ use tokio::sync::Mutex;
 use bambino::camera::binary::BinaryCameraStream;
 use bambino::client::{DummyFactory, DummyTls, PrinterClient};
 use bambino::error::Error;
-use bambino::io::TokioIo;
 use bambino::identity::PrinterIdentity;
+use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
 use common::io::{DummyTlsConnector, MockDataStreamFactory};
@@ -43,7 +43,12 @@ async fn test_binary_camera_handshake_and_streaming() {
     // This transmits the 80-byte block. The mock server will panic and fail the test
     // if the magic identifiers or access code do not match expectations.
     camera_client
-        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
+        .authenticate(&PrinterIdentity {
+            ip: String::new(),
+            serial: String::new(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        })
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
@@ -113,7 +118,12 @@ async fn test_printer_client_camera_end_to_end() {
     let mut printer = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: access_code.to_string(), model: PrinterModel::P1S },
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        },
     )
     .with_camera(DummyTlsConnector, factory);
 
@@ -145,7 +155,12 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
     let mut printer = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::X1C },
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: "12345678".into(),
+            model: PrinterModel::X1C,
+        },
     );
 
     let mut frame_buf = Vec::new();
@@ -174,7 +189,12 @@ async fn test_ensure_camera_retries_after_failed_dial() {
     let mut printer = PrinterClient::new(
         DummyTls,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: "12345678".into(), model: PrinterModel::P1S },
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: "12345678".into(),
+            model: PrinterModel::P1S,
+        },
     )
     .with_camera(DummyTlsConnector, factory);
 
@@ -210,7 +230,12 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
         BinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
-        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
+        .authenticate(&PrinterIdentity {
+            ip: String::new(),
+            serial: String::new(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        })
         .await
         .expect("authenticate() only confirms the handshake write, must still succeed here");
 
@@ -248,7 +273,12 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
         BinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
-        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
+        .authenticate(&PrinterIdentity {
+            ip: String::new(),
+            serial: String::new(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        })
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
@@ -276,14 +306,24 @@ async fn test_attach_and_disconnect_camera() {
     let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
         BinaryCameraStream::new(TokioIo(client_stream));
     camera_stream
-        .authenticate(&PrinterIdentity { ip: String::new(), serial: String::new(), access_code: access_code.to_string(), model: PrinterModel::P1S })
+        .authenticate(&PrinterIdentity {
+            ip: String::new(),
+            serial: String::new(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        })
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         DummyFactory,
-        PrinterIdentity { ip: "127.0.0.1".into(), serial: SERIAL.into(), access_code: access_code.to_string(), model: PrinterModel::P1S },
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        },
     )
     .with_camera(
         DummyTlsConnector,
@@ -305,7 +345,10 @@ async fn test_attach_and_disconnect_camera() {
         .disconnect_camera()
         .await
         .expect("disconnect_camera should succeed");
-    assert!(!client.is_camera_connected(), "disconnect_camera must clear self.camera");
+    assert!(
+        !client.is_camera_connected(),
+        "disconnect_camera must clear self.camera"
+    );
 
     server_handle
         .await
