@@ -537,15 +537,13 @@ use crate::io::RedactedHost;
 #[cfg(feature = "esp-idf")]
 const ESP_TLS_LOG_TAG: &[u8] = b"esp-tls\0";
 
-/// Nesting depth of live [`EspTlsLogQuiet`] guards; only the outermost touches the log level.
+/// Nesting depth of live [`EspTlsLogQuiet`] guards and the `esp-tls` tag's log level as it was
+/// before the outermost guard lowered it. Held behind one lock so "decide whether I am the
+/// outermost guard, then read/write the saved level" is one atomic transaction — two separate
+/// atomics for depth and saved level let an outer guard's drop interleave with an inner guard's
+/// enter and clobber the saved level (see the enter/exit race this replaced).
 #[cfg(feature = "esp-idf")]
-static ESP_TLS_LOG_QUIET_DEPTH: core::sync::atomic::AtomicUsize =
-    core::sync::atomic::AtomicUsize::new(0);
-
-/// The `esp-tls` tag's log level as it was before the outermost guard lowered it.
-#[cfg(feature = "esp-idf")]
-static ESP_TLS_LOG_SAVED_LEVEL: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(0);
+static ESP_TLS_LOG_QUIET: std::sync::Mutex<(usize, u32)> = std::sync::Mutex::new((0, 0));
 
 /// Lowers the `esp-tls` tag to `ESP_LOG_ERROR` for the length of a handshake, restoring it on drop.
 ///
@@ -580,14 +578,17 @@ struct EspTlsLogQuiet;
 #[cfg(feature = "esp-idf")]
 impl EspTlsLogQuiet {
     fn enter() -> Self {
-        use core::sync::atomic::Ordering;
-        if ESP_TLS_LOG_QUIET_DEPTH.fetch_add(1, Ordering::SeqCst) == 0 {
+        // Lock scope covers the "am I outermost, then read/write saved level" decision as one
+        // step — see the static's doc comment for why splitting it into two atomics was wrong.
+        let mut state = ESP_TLS_LOG_QUIET.lock().unwrap_or_else(|e| e.into_inner());
+        state.0 += 1;
+        if state.0 == 1 {
             // SAFETY: `ESP_TLS_LOG_TAG` is a `'static` NUL-terminated byte string; both calls
             // take it as a read-only C string and copy what they need.
             unsafe {
                 let previous =
                     ::esp_idf_svc::sys::esp_log_level_get(ESP_TLS_LOG_TAG.as_ptr().cast());
-                ESP_TLS_LOG_SAVED_LEVEL.store(previous, Ordering::SeqCst);
+                state.1 = previous;
                 ::esp_idf_svc::sys::esp_log_level_set(
                     ESP_TLS_LOG_TAG.as_ptr().cast(),
                     ::esp_idf_svc::sys::esp_log_level_t_ESP_LOG_ERROR,
@@ -601,9 +602,10 @@ impl EspTlsLogQuiet {
 #[cfg(feature = "esp-idf")]
 impl Drop for EspTlsLogQuiet {
     fn drop(&mut self) {
-        use core::sync::atomic::Ordering;
-        if ESP_TLS_LOG_QUIET_DEPTH.fetch_sub(1, Ordering::SeqCst) == 1 {
-            let previous = ESP_TLS_LOG_SAVED_LEVEL.load(Ordering::SeqCst);
+        let mut state = ESP_TLS_LOG_QUIET.lock().unwrap_or_else(|e| e.into_inner());
+        state.0 -= 1;
+        if state.0 == 0 {
+            let previous = state.1;
             // SAFETY: as in `enter`.
             unsafe {
                 ::esp_idf_svc::sys::esp_log_level_set(ESP_TLS_LOG_TAG.as_ptr().cast(), previous);
