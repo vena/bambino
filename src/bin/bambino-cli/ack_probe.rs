@@ -164,7 +164,10 @@ impl AckTest {
     /// an interactive confirmation, so `ack-probe` with no `-t` is safe to run unattended on an
     /// idle machine.
     fn is_physically_actuating(&self) -> bool {
-        matches!(self, Self::AmsChangeFilament | Self::ProjectFile)
+        matches!(
+            self,
+            Self::AmsGetRfid | Self::AmsChangeFilament | Self::ProjectFile
+        )
     }
 
     fn all_known() -> &'static [AckTest] {
