@@ -57,6 +57,19 @@ CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS=y
 # before believing a single number.
 CONFIG_MBEDTLS_DEBUG=n
 
+# bambino reports its per-handshake breakdown (steps, compute, polling) at debug level, and
+# that line is the whole instrument for a timing round. CONFIG_LOG_MAXIMUM_LEVEL is a
+# compile-time ceiling, so leaving it at the Info default strips those calls from the binary
+# and no runtime esp_log_level_set / set_target_level call can bring them back.
+#
+# This raises only the ceiling. Per-target levels stay where they are, and main() lifts just
+# `bambino::io::esp_idf` -- ESP-IDF's own components keep logging at their default level
+# rather than flooding the transcript this probe exists to read.
+#
+# Unrelated to CONFIG_MBEDTLS_DEBUG above: that one prints from inside the region being
+# measured and distorts it. This one only widens what the Rust log facade will emit.
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
 # THE POINT OF THIS ROUND. mbedTLS ranks x25519 first among supported groups, so a stock
 # build negotiates `ECDH curve: x25519` — and the ESP32-C6's ECC accelerator handles
 # P-192/P-256 only (`components/mbedtls/port/ecc/ecc_alt.c:56`), so that key exchange runs

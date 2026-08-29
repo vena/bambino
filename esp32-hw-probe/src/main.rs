@@ -71,9 +71,17 @@
 //! this, so leaving power save to the consumer is the right default and there is no bambino
 //! recommendation to make either way. Recorded here only so it does not get re-run.
 //!
-//! **Still untested:** `esp_tls_cfg_t.ciphersuites_list` could pin a non-ECDHE suite,
-//! dropping the key exchange on both sides, but costs forward secrecy and so would have to
-//! be an opt-in rather than a default.
+//! **Nothing local is left to win, and that is a measurement rather than an opinion.** At
+//! 409ms of compute the curve fix converted nearly fully into wall clock (-230ms compute ->
+//! -182ms total). At 172ms the handshake is peer-bound, and the ESP-IDF global CA store
+//! proved it: compute 172.2 -> 132.7ms, total unchanged at 998 -> 1010ms. Finishing sooner
+//! just buys more polls while the printer catches up.
+//!
+//! So do not spend a flash cycle on `esp_tls_cfg_t.ciphersuites_list` pinning a non-ECDHE
+//! suite. It is a local compute saving, which is the one category shown to convert to
+//! nothing, and it would trade away forward secrecy to get there. The ~800ms peer term is
+//! not the printer's key exchange either -- the same handshake takes 805ms +/-2% from a
+//! laptop, where ECDHE is free.
 //!
 //! **Rounds 3 and 4 (8 runs each, `TCP_NODELAY` on).** Round 3 looked like a win — polling
 //! mean 1004.8ms -> 904.8ms, median 1052.6ms -> 842.4ms. Round 4, on *identical* code, came
@@ -113,16 +121,16 @@
 //! a clean handshake in the log. Do not revive this; the prize is small and a firmware
 //! update can move a printer onto a chain the trimmed store no longer covers.
 //!
-//! `src/io/esp_idf.rs`'s handshake loop now counts steps and accumulates the two halves
-//! separately, reporting them on its existing summary line:
+//! `src/io/esp_idf.rs`'s handshake loop counts steps and accumulates compute and polling
+//! separately, reported at **debug** level (raise the `bambino::io::esp_idf` target to see it):
 //!
 //! ```text
-//! ESP-TLS handshake with <host> completed in 1264ms (63 steps, 4821us in esp_tls, 1259402us polling, slowest step 391204us at #7)
+//! ESP-TLS handshake with <host> completed in 1264ms (63 steps, 4821us in esp_tls, 1259402us polling)
 //! ```
 //!
-//! `slowest step` is what separates one blocking asymmetric operation from the same total
-//! spread thinly across every call: a ~400ms maximum means a single ECDHE or RSA op that no
-//! poll interval can overlap, a ~10ms maximum means per-call overhead, which is reducible.
+//! #160's finer instrumentation -- per-step cost buckets, and the slowest and first step --
+//! was removed once it had answered the question, having been two `info!` lines on every
+//! production handshake. Recover it from that file's history rather than rebuilding it.
 //!
 //! **What this probe adds** is the repetition. The known range for the whole interval is
 //! 1.7-4.0s across 26 real sessions downstream, so a single handshake cannot distinguish
@@ -138,18 +146,9 @@
 //! grep -o '([0-9]* steps.*)' run.log
 //! ```
 //!
-//! - **Total drops toward ~1225ms** (peer + compute, with the residual gone) → Nagle was
-//!   the residual and `TCP_NODELAY` is the fix. Expect polling time, not compute, to fall.
-//! - **Total unchanged at ~1415ms** → the residual is elsewhere: Wi-Fi power save
-//!   (`WIFI_PS_MIN_MODEM` is ESP-IDF's default and nothing here overrides it) is the next
-//!   suspect, testable with one `esp_wifi_set_ps(WIFI_PS_NONE)` call.
-//! - **`slowest step` near ~400ms** → the local compute is one blocking asymmetric
-//!   operation, irreducible without hardware acceleration that is already enabled.
-//!   **Near ~10ms** → it is spread across calls as per-call overhead, and fewer, larger
-//!   steps would recover it.
-//!
 //! The two sums should add to roughly the reported duration; if they do not, the time is
-//! going somewhere neither counter covers and that is itself the finding.
+//! going somewhere neither counter covers and that is itself the finding. The branches this
+//! once listed -- Nagle, Wi-Fi power save, the slowest step's shape -- are all settled above.
 //!
 //! **Treat run 1 as suspect.** Downstream saw run 1 come out slowest and explicitly
 //! declined to build on it — within one boot it may be warm-up, run order, or proximity
@@ -299,7 +298,16 @@ const CONNECT_PHASE_STACK: usize = 128 * 1024;
 
 fn main() {
     esp_idf_svc::sys::link_patches();
-    esp_idf_svc::log::EspLogger::initialize_default();
+    // The crate reports its handshake breakdown at debug level, so raise just that target --
+    // this probe exists to read those lines. Only this target, so ESP-IDF's own components
+    // stay at their default level and do not bury the transcript. Needs
+    // CONFIG_LOG_MAXIMUM_LEVEL_DEBUG in sdkconfig.defaults as well, or debug is compiled out
+    // and this call silently achieves nothing.
+    let logger = esp_idf_svc::log::init_from_esp_idf();
+    if let Err(e) = logger.set_target_level("bambino::io::esp_idf", log::LevelFilter::Debug) {
+        log::error!("could not raise the bambino::io::esp_idf log level: {e:?}");
+        log::error!("-> the per-handshake breakdown lines will be missing from this run");
+    }
 
     log::info!("esp32-hw-probe: issue #160 TLS handshake cost breakdown");
     log::info!("target {PRINTER_IP}:{PRINTER_TLS_PORT}, {RUNS} runs, all 5 anchors");
