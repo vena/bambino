@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 
 use bambino::client::DummyTimer;
 use bambino::error::Error;
-use bambino::ftps::{CurrentDateTime, FtpsClient};
+use bambino::ftps::{CurrentDateTime, FtpTimestamp, FtpsClient};
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -390,6 +390,98 @@ async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
         matches!(result, Err(Error::ProtocolViolation(_))),
         "expected ProtocolViolation on a non-success AVBL reply, got {:?}",
         result.map(|_| ())
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_mdtm_success() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_success(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client
+        .modification_time("/model/job.3mf")
+        .await
+        .expect("MDTM should succeed");
+    assert_eq!(
+        result,
+        Some(FtpTimestamp {
+            year: 2023,
+            month: 4,
+            day: 15,
+            hour: 10,
+            minute: 15,
+            second: 30,
+        })
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_mdtm_unsupported_returns_none() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_unsupported(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client
+        .modification_time("/model/job.3mf")
+        .await
+        .expect("unsupported MDTM should degrade to Ok(None), not Err");
+    assert_eq!(result, None);
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_mdtm_not_found_returns_error() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_not_found(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client.modification_time("/model/gone.3mf").await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "expected ProtocolViolation on a 550 MDTM reply, got {:?}",
+        result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+#[tokio::test]
+async fn test_ftps_mdtm_malformed_body_returns_error() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_mdtm_malformed(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client.modification_time("/model/job.3mf").await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "expected ProtocolViolation on a malformed 213 body, got {:?}",
+        result
     );
 
     server_handle.await.expect("Mock server panicked");

@@ -376,6 +376,71 @@ pub async fn run_mock_server_avbl_unsupported(
     .await;
 }
 
+/// Mock server for `modification_time()` (`MDTM`) success — a well-formed `213 YYYYMMDDHHMMSS`
+/// reply.
+pub async fn run_mock_server_mdtm_success(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "MDTM /model/job.3mf\r\n");
+    respond(&mut server_control, b"213 20230415101530\r\n").await;
+}
+
+/// Mock server for `modification_time()` when the firmware doesn't implement `MDTM` (`500`).
+pub async fn run_mock_server_mdtm_unsupported(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "MDTM /model/job.3mf\r\n");
+    respond(
+        &mut server_control,
+        b"500 Syntax error, command unrecognized.\r\n",
+    )
+    .await;
+}
+
+/// Mock server for `modification_time()` on an absent file (`550`).
+pub async fn run_mock_server_mdtm_not_found(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "MDTM /model/gone.3mf\r\n");
+    respond(
+        &mut server_control,
+        b"550 Failed to get modification time.\r\n",
+    )
+    .await;
+}
+
+/// Mock server for `modification_time()` with a malformed `213` body (not `YYYYMMDDHHMMSS`).
+pub async fn run_mock_server_mdtm_malformed(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "MDTM /model/job.3mf\r\n");
+    respond(&mut server_control, b"213 not-a-timestamp\r\n").await;
+}
+
 /// Mock server for upload with 426 (TLS 1.3 close race) + SIZE recovery.
 ///
 /// `expected_len` is the caller's independently-known payload length, and the SIZE reply is

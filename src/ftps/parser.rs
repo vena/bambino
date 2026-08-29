@@ -399,8 +399,29 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
         // actual month length (leap-year-aware, using the now-finalized `year`) so a
         // calendar-invalid line (e.g. "Feb 30") from the untrusted printer LIST output is
         // rejected instead of silently accepted.
+        //
+        // For the inferred-year (HH:MM) branch, an invalid day here doesn't mean the line is
+        // calendar-invalid — it can mean the rollover heuristic picked the wrong one of its two
+        // candidate years (e.g. a Feb 29 entry landing in a non-leap `current_year - 1`). Retry
+        // against the other candidate before dropping the entry.
         if day > days_in_month(month, year) {
-            continue;
+            if year_is_inferred {
+                let alternate_year = if year == current_year {
+                    current_year - 1
+                } else {
+                    current_year
+                };
+                if day <= days_in_month(month, alternate_year) {
+                    year = alternate_year;
+                } else {
+                    log::warn!(
+                        "Dropping LIST entry with calendar-invalid date under either rollover-candidate year"
+                    );
+                    continue;
+                }
+            } else {
+                continue;
+            }
         }
 
         if files.len() >= FTP_MAX_LISTING_ENTRIES {
