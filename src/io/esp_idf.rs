@@ -1149,14 +1149,19 @@ pub struct EspIdfTlsConnector {
 #[cfg(feature = "esp-idf")]
 impl EspIdfTlsConnector {
     /// Creates a connector that skips server certificate verification.
-    /// Requires `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y` in the consuming app's sdkconfig
-    /// (a sub-option of `CONFIG_ESP_TLS_INSECURE`; both are off by default). No library call
-    /// can enable it — ESP-IDF compiles the no-verification branch out otherwise, and
-    /// `set_client_config` then fails the connection with `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
-    /// Failing loudly there is deliberate: this crate no longer falls back to ESP-IDF's
-    /// public-root CA bundle, which could never validate a self-signed printer certificate
-    /// anyway (GitHub issue #62). Prefer [`Self::with_certs`] wherever the caller can supply
-    /// the printer's CA — it needs no sdkconfig change and actually verifies the peer.
+    ///
+    /// **Always fails at `connect()`, currently.** ESP-IDF's `esp_tls_set_client_config`
+    /// requires one of `cacert_buf`, `crt_bundle_attach`, or the Kconfig-gated
+    /// `skip_server_cert_verify` before it will build an SSL context at all, and
+    /// `esp_idf_svc::tls::Config` (0.52.1) has no field for the third option --
+    /// `skip_common_name` only suppresses the hostname check, it does not touch chain
+    /// verification. So this constructor can set none of the three, and `connect()` returns
+    /// `SocketError::Other` up front rather than let ESP-IDF fail deep inside the handshake
+    /// with an opaque `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED` (confirmed on real ESP32-P4 hardware,
+    /// GitHub issue #168). Reaching this path needs either an upstream `esp-idf-svc` field for
+    /// `skip_server_cert_verify`, or bambino building the raw `sys::esp_tls_cfg` itself --
+    /// neither exists yet. Prefer [`Self::with_certs`] wherever the caller can supply the
+    /// printer's CA — it needs no sdkconfig change and actually verifies the peer.
     /// The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
     /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
     /// `.with_connect_timeout(d)`.
@@ -1186,7 +1191,8 @@ impl EspIdfTlsConnector {
     /// fail the handshake, now with the extra confusion of being base64'd a second time.
     ///
     /// An empty `ca_certs` yields an anchor-less connector, behaving exactly like
-    /// [`Self::new`] rather than failing later inside the handshake.
+    /// [`Self::new`] -- which means `connect()` fails immediately rather than verifying
+    /// nothing; see that constructor's doc comment (GitHub issue #168).
     ///
     /// `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
     /// `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
@@ -1241,6 +1247,20 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         host: &str,
         raw_stream: EspIdfTcpStream,
     ) -> Result<Self::Stream, SocketError> {
+        // Fail before touching the socket at all when this connector has no trust anchor: see
+        // `Self::new`'s doc comment for why ESP-IDF cannot build an unverified SSL context
+        // through `esp_idf_svc::tls::Config` today (GitHub issue #168). Without this check the
+        // handshake below runs anyway and dies inside `EspTls::negotiate` with an opaque
+        // `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`, which is what a real ESP32-P4 capture showed.
+        if self.certs.ca_pem.is_none() {
+            return Err(SocketError::Other(
+                "EspIdfTlsConnector has no trust anchor: esp_idf_svc::tls::Config (0.52.1) \
+                 cannot express skip_server_cert_verify, so ESP-IDF refuses to build an SSL \
+                 context at all (GitHub issue #168). Use with_certs() with a real CA instead."
+                    .into(),
+            ));
+        }
+
         // The adopted fd must be non-blocking: it is what makes mbedTLS's read/write calls
         // inside `negotiate()` (and inside `EspIdfTlsStream`'s later read/write) return
         // `WANT_READ`/`WANT_WRITE` instead of blocking the FreeRTOS task, which is what the
