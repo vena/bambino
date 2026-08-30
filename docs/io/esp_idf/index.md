@@ -232,14 +232,27 @@ rather than satisfying it.
 - <span id="espidftlsconnector-new"></span>`fn new() -> Self`
 
   Creates a connector that skips server certificate verification.
-  Requires `CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y` in the consuming app's sdkconfig
-  (a sub-option of `CONFIG_ESP_TLS_INSECURE`; both are off by default). No library call
-  can enable it — ESP-IDF compiles the no-verification branch out otherwise, and
-  `set_client_config` then fails the connection with `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
-  Failing loudly there is deliberate: this crate no longer falls back to ESP-IDF's
-  public-root CA bundle, which could never validate a self-signed printer certificate
-  anyway (GitHub issue #62). Prefer [`Self::with_certs`](#espidftlsconnector) wherever the caller can supply
-  the printer's CA — it needs no sdkconfig change and actually verifies the peer.
+
+  Reached via `build_unverified_tls_cfg`'s `crt_bundle_attach` hook
+  (`accept_any_certificate`), which forces `MBEDTLS_SSL_VERIFY_NONE` directly on the
+  mbedTLS config -- `esp_idf_svc::tls::Config` (0.52.1) has no field for ESP-IDF's own
+  `skip_server_cert_verify` flag, and that flag only exists in `esp_tls_cfg` at all when
+  the consuming app's sdkconfig sets `CONFIG_ESP_TLS_INSECURE` (off by default) -- a
+  build-time condition bambino cannot see or require. See `accept_any_certificate`'s doc
+  comment for the full mechanism and why this needed bypassing `esp_idf_svc::tls::Config`
+  entirely (GitHub issue #168).
+
+  **Requires `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`** (on by ESP-IDF default) -- the Kconfig
+  option that makes the `crt_bundle_attach` field exist on `esp_tls_cfg` in the first
+  place. If a build has it disabled, `connect()` fails immediately with a `SocketError`
+  explaining why, rather than reaching ESP-IDF's opaque
+  `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
+
+  **Not yet verified against real hardware** -- flash `esp32-hw-probe` (see its
+  `CLAUDE.md`) against a real printer before relying on this in a shipped app.
+
+  Prefer [`Self::with_certs`](#espidftlsconnector) wherever the caller can supply the
+  printer's CA — it needs no sdkconfig change and actually verifies the peer.
   The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
   bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
   `.with_connect_timeout(d)`.
@@ -265,7 +278,9 @@ rather than satisfying it.
   fail the handshake, now with the extra confusion of being base64'd a second time.
 
   An empty `ca_certs` yields an anchor-less connector, behaving exactly like
-  [`Self::new`](#espidftlsconnector) rather than failing later inside the handshake.
+  [`Self::new`](#espidftlsconnector) -- verification is disabled outright via a `crt_bundle_attach` hook rather
+  than failing later inside the handshake; see that constructor's doc comment (GitHub
+  issue #168).
 
   `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
   `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
