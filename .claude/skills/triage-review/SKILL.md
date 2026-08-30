@@ -7,6 +7,8 @@ description: Converts a deep-review sweep's staged findings into GitHub Issues �
 
 Sits between `deep-review` (discovers + stages, never files) and `backlog` (owns live-issue rules) — this skill's only job is the conversion step, done on its own schedule, in its own session, so a completed review file can sit for however long before anyone decides to act on it without polluting GitHub mid-sweep.
 
+Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native.
+
 **Step 0:** `gh auth status` first — stop and tell the user if it fails.
 
 ## Which file
@@ -16,6 +18,7 @@ No file named: find the most recently modified `*-REVIEW.md`. More than one plau
 ## Filing
 
 For each staged finding in the file that doesn't yet have an issue number recorded:
+
 1. Already noted as triaged-not-a-bug — skip, nothing to file (see `backlog`'s "What counts as an issue").
 2. Otherwise — `gh issue create` per the `backlog` skill's Issue format and label scheme (`P-critical`/`P-high`/`P-low`/`needs-verification` + `bug`). Don't re-derive those rules here, invoke them directly.
 3. Record the new issue number back into that finding's line in the review file (`ctx_patch`, not a full rewrite) — this is what makes the file resumable if filing gets interrupted partway: a finding with an issue # recorded is done, one without isn't, regardless of session boundaries.
