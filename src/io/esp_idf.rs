@@ -658,6 +658,121 @@ fn build_tls_config<'a>(
     cfg
 }
 
+/// `crt_bundle_attach` hook that disables mbedTLS server-certificate verification outright,
+/// used by `build_unverified_tls_cfg` for `EspIdfTlsConnector::new()`/`with_certs` with an
+/// empty anchor set.
+///
+/// `esp_idf_svc::tls::Config` (0.52.1) has no field for ESP-IDF's own `skip_server_cert_verify`
+/// flag, and that flag only exists in the generated `esp_tls_cfg` at all when the consuming
+/// app's sdkconfig sets `CONFIG_ESP_TLS_INSECURE` (off by default) -- a build-time condition
+/// bambino cannot see or require (GitHub issue #168). `crt_bundle_attach` has neither
+/// limitation: confirmed against ESP-IDF v5.2.3's `esp_tls_mbedtls.c` `set_client_config`, it is
+/// checked *before* `cacert_buf`/`use_global_ca_store`/`skip_server_cert_verify`, gated only by
+/// `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` (on by ESP-IDF default), and `set_client_config` sets
+/// `MBEDTLS_SSL_VERIFY_REQUIRED` immediately *before* invoking this hook -- so overriding it
+/// back to `MBEDTLS_SSL_VERIFY_NONE` here is what actually takes effect. `conf` is the
+/// `mbedtls_ssl_config*` `set_client_config` builds, passed through as `void*`; ESP-IDF's own
+/// `esp_crt_bundle_attach` (the implementation this replaces) receives and casts the same
+/// pointer. The C call site never inspects this function's return value, so `ESP_OK` is
+/// returned unconditionally.
+#[cfg(esp_idf_mbedtls_certificate_bundle)]
+unsafe extern "C" fn accept_any_certificate(
+    conf: *mut ::core::ffi::c_void,
+) -> ::esp_idf_svc::sys::esp_err_t {
+    // SAFETY: `set_client_config` only ever calls a configured `crt_bundle_attach` with a live,
+    // correctly-typed `mbedtls_ssl_config*` for the connection currently being negotiated --
+    // the same contract `esp_crt_bundle_attach` itself relies on.
+    unsafe {
+        ::esp_idf_svc::sys::mbedtls_ssl_conf_authmode(
+            conf.cast(),
+            ::esp_idf_svc::sys::MBEDTLS_SSL_VERIFY_NONE as ::core::ffi::c_int,
+        );
+    }
+    0
+}
+
+/// Builds a raw, anchor-less `esp_tls_cfg` for `EspIdfTlsConnector::connect`'s no-anchor case.
+///
+/// Bypasses `esp_idf_svc::tls::Config` and its private `Config::try_into_raw` entirely -- see
+/// `accept_any_certificate`'s doc comment for why `esp_idf_svc` leaves no other way to reach
+/// this. Not `#[cfg(esp_idf_mbedtls_certificate_bundle)]` itself: `esp_tls_cfg::default()` and
+/// the client-cert/key fields always exist, so this stays callable from every build: it just
+/// comes back without a working `crt_bundle_attach` hook when the Kconfig is off, and
+/// `EspIdfTlsConnector::connect` never reaches this function in that case (see its own
+/// anchor-less-but-no-bundle early return).
+///
+/// Client cert/key field names mirror `esp_idf_svc::tls::Config::try_into_raw`'s mapping onto
+/// the same bindgen anonymous unions, so the two cfg-building paths stay easy to compare.
+#[cfg(feature = "esp-idf")]
+fn build_unverified_tls_cfg(
+    client_cert: &Option<Vec<u8>>,
+    client_key: &Option<Vec<u8>>,
+) -> ::esp_idf_svc::sys::esp_tls_cfg {
+    let mut rcfg = ::esp_idf_svc::sys::esp_tls_cfg::default();
+
+    #[cfg(esp_idf_mbedtls_certificate_bundle)]
+    {
+        rcfg.crt_bundle_attach = Some(accept_any_certificate);
+    }
+
+    if let (Some(cert), Some(key)) = (client_cert, client_key) {
+        rcfg.__bindgen_anon_3.clientcert_buf = cert.as_ptr();
+        rcfg.__bindgen_anon_4.clientcert_bytes = cert.len() as u32;
+        rcfg.__bindgen_anon_5.clientkey_buf = key.as_ptr();
+        rcfg.__bindgen_anon_6.clientkey_bytes = key.len() as u32;
+    }
+
+    rcfg
+}
+
+/// One raw handshake step for `EspIdfTlsConnector::connect`'s no-anchor case -- the
+/// raw-`esp_tls_cfg` equivalent of `EspTls::negotiate`, which can't be used here because it
+/// always converts through the private `Config::try_into_raw` (see `build_unverified_tls_cfg`).
+///
+/// Mirrors `esp_idf_svc::tls::EspTls::internal_connect`'s exact return-code mapping --
+/// `internal_connect` is private, so it can't be called directly, and `context_handle()` is the
+/// one seam `esp_idf_svc` exposes to reach the same `*mut esp_tls` it uses internally. Keep this
+/// in sync with `internal_connect` if `esp-idf-svc` is ever upgraded.
+#[cfg(feature = "esp-idf")]
+fn negotiate_unverified_step<S: ::esp_idf_svc::tls::Socket>(
+    tls: &mut ::esp_idf_svc::tls::EspTls<S>,
+    host: &str,
+    rcfg: &::esp_idf_svc::sys::esp_tls_cfg,
+) -> Result<(), ::esp_idf_svc::sys::EspError> {
+    // SAFETY: `tls.context_handle()` is a live `esp_tls` handle owned by `tls`, which outlives
+    // this call; `host` is a valid UTF-8 `&str` and `rcfg` a live `esp_tls_cfg` for the
+    // duration of the call, both borrowed from the caller's stack frame.
+    let ret = unsafe {
+        ::esp_idf_svc::sys::esp_tls_conn_new_sync(
+            host.as_bytes().as_ptr().cast(),
+            host.len() as ::core::ffi::c_int,
+            0,
+            rcfg,
+            tls.context_handle(),
+        )
+    };
+
+    match ret {
+        1 => Ok(()),
+        ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_READ => {
+            Err(::esp_idf_svc::sys::EspError::from_infallible::<
+                { ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_READ },
+            >())
+        }
+        ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_WRITE => {
+            Err(::esp_idf_svc::sys::EspError::from_infallible::<
+                { ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_WRITE },
+            >())
+        }
+        0 => Err(::esp_idf_svc::sys::EspError::from_infallible::<
+            { ::esp_idf_svc::sys::EWOULDBLOCK as i32 },
+        >()),
+        _ => Err(::esp_idf_svc::sys::EspError::from_infallible::<
+            { ::esp_idf_svc::sys::ESP_FAIL },
+        >()),
+    }
+}
+
 /// Non-blocking TLS stream adapting `esp_idf_svc::tls::EspTls` to `embedded-io-async`.
 ///
 /// `EspTls`'s own `read`/`write` are synchronous calls, but the underlying fd runs
@@ -1150,17 +1265,25 @@ pub struct EspIdfTlsConnector {
 impl EspIdfTlsConnector {
     /// Creates a connector that skips server certificate verification.
     ///
-    /// **Always fails at `connect()`, currently.** ESP-IDF's `esp_tls_set_client_config`
-    /// requires one of `cacert_buf`, `crt_bundle_attach`, or the Kconfig-gated
-    /// `skip_server_cert_verify` before it will build an SSL context at all, and
-    /// `esp_idf_svc::tls::Config` (0.52.1) has no field for the third option --
-    /// `skip_common_name` only suppresses the hostname check, it does not touch chain
-    /// verification. So this constructor can set none of the three, and `connect()` returns
-    /// `SocketError::Other` up front rather than let ESP-IDF fail deep inside the handshake
-    /// with an opaque `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED` (confirmed on real ESP32-P4 hardware,
-    /// GitHub issue #168). Reaching this path needs either an upstream `esp-idf-svc` field for
-    /// `skip_server_cert_verify`, or bambino building the raw `sys::esp_tls_cfg` itself --
-    /// neither exists yet. Prefer [`Self::with_certs`] wherever the caller can supply the
+    /// Reached via `build_unverified_tls_cfg`'s `crt_bundle_attach` hook
+    /// (`accept_any_certificate`), which forces `MBEDTLS_SSL_VERIFY_NONE` directly on the
+    /// mbedTLS config -- `esp_idf_svc::tls::Config` (0.52.1) has no field for ESP-IDF's own
+    /// `skip_server_cert_verify` flag, and that flag only exists in `esp_tls_cfg` at all when
+    /// the consuming app's sdkconfig sets `CONFIG_ESP_TLS_INSECURE` (off by default) -- a
+    /// build-time condition bambino cannot see or require. See `accept_any_certificate`'s doc
+    /// comment for the full mechanism and why this needed bypassing `esp_idf_svc::tls::Config`
+    /// entirely (GitHub issue #168).
+    ///
+    /// **Requires `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`** (on by ESP-IDF default) -- the Kconfig
+    /// option that makes the `crt_bundle_attach` field exist on `esp_tls_cfg` in the first
+    /// place. If a build has it disabled, `connect()` fails immediately with a `SocketError`
+    /// explaining why, rather than reaching ESP-IDF's opaque
+    /// `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
+    ///
+    /// **Not yet verified against real hardware** -- flash `esp32-hw-probe` (see its
+    /// `CLAUDE.md`) against a real printer before relying on this in a shipped app.
+    ///
+    /// Prefer [`Self::with_certs`] wherever the caller can supply the
     /// printer's CA — it needs no sdkconfig change and actually verifies the peer.
     /// The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
     /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
@@ -1191,8 +1314,9 @@ impl EspIdfTlsConnector {
     /// fail the handshake, now with the extra confusion of being base64'd a second time.
     ///
     /// An empty `ca_certs` yields an anchor-less connector, behaving exactly like
-    /// [`Self::new`] -- which means `connect()` fails immediately rather than verifying
-    /// nothing; see that constructor's doc comment (GitHub issue #168).
+    /// [`Self::new`] -- verification is disabled outright via a `crt_bundle_attach` hook rather
+    /// than failing later inside the handshake; see that constructor's doc comment (GitHub
+    /// issue #168).
     ///
     /// `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
     /// `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
@@ -1247,16 +1371,20 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         host: &str,
         raw_stream: EspIdfTcpStream,
     ) -> Result<Self::Stream, SocketError> {
-        // Fail before touching the socket at all when this connector has no trust anchor: see
-        // `Self::new`'s doc comment for why ESP-IDF cannot build an unverified SSL context
-        // through `esp_idf_svc::tls::Config` today (GitHub issue #168). Without this check the
-        // handshake below runs anyway and dies inside `EspTls::negotiate` with an opaque
-        // `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`, which is what a real ESP32-P4 capture showed.
-        if self.certs.ca_pem.is_none() {
+        // Fail before touching the socket at all when this connector has no trust anchor and
+        // this build can't reach the one path that lets it skip verification either: see
+        // `Self::new`'s doc comment for the `crt_bundle_attach` mechanism `connect` uses below,
+        // and why `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is what makes that mechanism exist at all
+        // (GitHub issue #168). `cfg!` (not `#[cfg]`) here: this is a runtime decision over a
+        // compile-time constant, not a choice between two code paths that reference different
+        // (possibly-absent) struct fields -- `build_unverified_tls_cfg` stays callable either
+        // way, it just comes back without a working hook when the Kconfig is off.
+        if self.certs.ca_pem.is_none() && !cfg!(esp_idf_mbedtls_certificate_bundle) {
             return Err(SocketError::Other(
-                "EspIdfTlsConnector has no trust anchor: esp_idf_svc::tls::Config (0.52.1) \
-                 cannot express skip_server_cert_verify, so ESP-IDF refuses to build an SSL \
-                 context at all (GitHub issue #168). Use with_certs() with a real CA instead."
+                "EspIdfTlsConnector has no trust anchor and this build has \
+                 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE disabled, so there is no crt_bundle_attach \
+                 seam left to skip server-certificate verification through (GitHub issue #168). \
+                 Use with_certs() with a real CA, or enable CONFIG_MBEDTLS_CERTIFICATE_BUNDLE."
                     .into(),
             ));
         }
@@ -1273,6 +1401,14 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             .map_err(to_esp_socket_error)?;
 
         let mut cfg = self.certs.build_config();
+        // Only used when this connector has no trust anchor -- see `build_unverified_tls_cfg`
+        // and `Self::new`'s doc comment for why this bypasses `cfg`/`Config` entirely rather
+        // than being expressible as another field on it.
+        let unverified_cfg = self
+            .certs
+            .ca_pem
+            .is_none()
+            .then(|| build_unverified_tls_cfg(&self.certs.client_cert, &self.certs.client_key));
 
         // Force `non_block` off for the adopted-socket path (GitHub issue #61). ESP-IDF's
         // `esp_tls_low_level_conn` populates `tls->rset`/`tls->wset` only in its
@@ -1356,7 +1492,11 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
 
         loop {
             let step_start = now_micros();
-            let step = tls.negotiate(host, &cfg);
+            let step = if let Some(rcfg) = unverified_cfg.as_ref() {
+                negotiate_unverified_step(&mut tls, host, rcfg)
+            } else {
+                tls.negotiate(host, &cfg).map(|_| ())
+            };
             negotiate_us += now_micros().saturating_sub(step_start);
             steps += 1;
 
