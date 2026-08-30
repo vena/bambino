@@ -520,7 +520,7 @@ std::thread::Builder::new()
 use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer};
 
 // Prefer with_certs; see "ESP-IDF certificate verification" below for why
-// EspIdfTlsConnector::new() additionally requires two sdkconfig options.
+// EspIdfTlsConnector::new() should be reserved for TOFU/pinning flows.
 // Takes every anchor you want to trust, not just one (DER, one Vec per cert).
 let ftps_tls = EspIdfTlsConnector::with_certs(ca_certs, None);
 let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTimer::new()?);
@@ -532,16 +532,7 @@ let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTime
 
 It accepts an iterator of DER certificates rather than a single one, matching the tokio backend, because Bambu is mid-PKI-rollover: a P1S chains to the legacy `BBL CA` root, while newer models chain through a `BBL Device CA <model>-V2` intermediate to `BBL CA2 RSA`/`BBL CA2 ECC`, so covering the model range means trusting several roots at once. The certs are re-encoded internally into a single NUL-terminated PEM bundle, the only form mbedTLS parses as more than one certificate; concatenated DER would silently load just the first.
 
-`EspIdfTlsConnector::new()` skips verification, which on ESP-IDF requires **both** of these in the consuming app's `sdkconfig`:
-
-```
-CONFIG_ESP_TLS_INSECURE=y
-CONFIG_ESP_TLS_SKIP_SERVER_CERT_VERIFY=y
-```
-
-Both are off by default, and no library call can enable them; ESP-IDF compiles the no-verification branch out otherwise. Without them, `set_client_config` returns `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED` and the connection fails immediately. That is the intended, documented outcome rather than a defect: the alternative is verifying against a trust anchor the caller never asked for. If you see that error, supply CAs via `with_certs` or enable the two options above.
-
-This is the one place the ESP-IDF backend diverges from `io::tokio`, where `build_unsafe_client_config()` skips verification with no target configuration required.
+`EspIdfTlsConnector::new()` skips verification by installing a `crt_bundle_attach` hook that turns off certificate checking directly, rather than using ESP-IDF's `skip_server_cert_verify` flag (which `esp_idf_svc::tls::Config` can't reach, and which needs `CONFIG_ESP_TLS_INSECURE` set anyway). This needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`, which is on by ESP-IDF's default — so no sdkconfig change is needed for the common case. Confirmed on a real ESP32-C6 against a live P1S: the handshake completes and `peer_chain_der` returns the printer's certificate chain, which is what this constructor is for (TOFU/pinning). If that Kconfig option is off, `connect()` fails immediately with a clear error instead of ESP-IDF's opaque `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
 
 ## bambino-cli
 
