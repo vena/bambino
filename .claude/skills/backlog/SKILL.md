@@ -7,7 +7,7 @@ description: Rules for filing, triaging, and closing this repo's bug/finding tra
 
 The tracker is GitHub Issues, not a file in this repo. `gh issue` is the interface. There is no local BACKLOG.md — don't recreate one; a bulk-imported history of hundreds of closed nits reads as noise to anyone landing on the repo, which is exactly why it was retired (see git history for `BACKLOG.md` if the old rationale is ever needed).
 
-Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native.
+Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native. Instruct any sub-agents to do the same.
 
 **Step 0, every invocation:** run `gh auth status` first. If it fails, stop and tell the user — don't silently fall back to guessing or to a local file.
 

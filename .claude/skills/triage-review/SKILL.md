@@ -7,7 +7,7 @@ description: Converts a deep-review sweep's staged findings into GitHub Issues �
 
 Sits between `deep-review` (discovers + stages, never files) and `backlog` (owns live-issue rules) — this skill's only job is the conversion step, done on its own schedule, in its own session, so a completed review file can sit for however long before anyone decides to act on it without polluting GitHub mid-sweep.
 
-Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native.
+Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native. Instruct any sub-agents to do the same.
 
 **Step 0:** `gh auth status` first — stop and tell the user if it fails.
 
