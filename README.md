@@ -255,7 +255,7 @@ Telemetry is pushed as it happens, so for anything you watch occur (a state chan
 
 That only covers events you were connected for. Two fields report things that may have happened well before then, and arrival time says nothing about either:
 
-- [`PrinterTelemetry::gcode_start_time`](src/types/telemetry/report.rs): unix epoch string for when the current job started, which for a long print can be many hours before you connect.
+- [`PrinterTelemetry::gcode_start_time`](src/types/telemetry/report.rs): unix epoch string for when the current job started, which for a long print can be many hours before you connect. Never observed in a full local-print capture — may be cloud-print-only or otherwise unsent on LAN-dispatched jobs; don't rely on it being present.
 - [`HmsEntry::ts_unix`](src/types/telemetry/diagnostics.rs): `YYYYMMDDHHMMSS` UTC string for when an HMS alert was raised, including alerts still active from earlier.
 
 Both come from the printer's clock and may be incorrect. The only way to place them in real time is to measure the offset once with the FTPS probe described below and compare it.
