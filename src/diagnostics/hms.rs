@@ -9,9 +9,12 @@
 //!    both 16-character Wiki slugs and 8-character local short-codes.
 //!
 //! ## Technical Specifications
-//! * **Fault Isolation**: Filters out non-error statuses (low 16-bit word < `0x4000`)
-//!   and user action confirmation echoes (such as user-initiated cancellation events)
-//!   to isolate genuine hardware failures from routine system state updates.
+//! * **Fault Isolation**: Filters out non-error statuses and user action confirmation
+//!   echoes (such as user-initiated cancellation events) to isolate genuine hardware
+//!   failures from routine system state updates. The threshold differs per path: the
+//!   low 16-bit word (< `0x4000`) gates the `print_error` register, while `hms[]`
+//!   entries compare the full 32-bit `code` — a low-word-only check there would
+//!   misclassify nearly every real fault.
 
 #[cfg(not(feature = "std"))]
 use alloc::format;

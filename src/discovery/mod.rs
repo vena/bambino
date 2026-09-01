@@ -177,7 +177,10 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 /// Broadcasts SSDP search queries and listens for printer responses for the given duration.
 ///
 /// Returns a deduplicated list of all printers found. The timer parameter drives sleep
-/// timing, making this work across std, ESP-IDF, and Embassy.
+/// timing, making this work across std and ESP-IDF (not Embassy — this function is
+/// `#[cfg(feature = "std")]` and bounded on `U: BindableUdpSocket`, which
+/// `EmbassyUdpSocket` does not implement; see the module-level doc. Embassy callers
+/// must drive `DiscoveryEngine` directly).
 ///
 /// # Example
 ///
