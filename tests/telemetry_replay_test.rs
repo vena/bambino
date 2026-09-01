@@ -79,6 +79,11 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
 
     let mut reports_parsed = 0usize;
 
+    // P1S quirks ignore the chamber temperature entirely — the accessor is None
+    // unconditionally, which is exactly why the chamber plausibility check cannot live in
+    // the loop below and is exercised by the X1C test instead.
+    assert!(client.chamber_temperature().is_none());
+
     for (i, _line) in lines.iter().enumerate() {
         let event = client
             .poll_telemetry()
@@ -135,12 +140,10 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
             );
         }
 
-        if let Some((actual, target)) = client.chamber_temperature() {
-            assert!(
-                actual < PLAUSIBLE_MAX_TEMP_C && target < PLAUSIBLE_MAX_TEMP_C,
-                "chamber_temperature implausible at message {i}: ({actual}, {target})"
-            );
-        }
+        // P1S has no chamber sensor: `chamber_temperature()` is None unconditionally
+        // (asserted before the loop), so the plausibility check for it lives in the X1C
+        // test below instead.
+        let _ = client.chamber_temperature();
 
         let _ = client.ams();
         let _ = client.vt_tray();
@@ -189,6 +192,84 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
     assert_eq!(
         reports_parsed, expected_reports,
         "every non-command-echo line should parse as a Report"
+    );
+
+    drop(client);
+    broker_task.await.expect("mock broker task panicked");
+}
+
+#[tokio::test]
+async fn test_x1c_chamber_temperature_decode_and_plausibility_check() {
+    // X1C carries a chamber sensor, so this test hosts the chamber plausibility check that
+    // the P1S replay above cannot: P1S quirks return None unconditionally, which left the
+    // check unreachable there.
+    let (client_stream, mut server_stream) = tokio::io::duplex(1 << 16);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Direct temperature (≤ 500): target assumed 0°C.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            2000,
+            br#"{"print":{"chamber_temper":35.5}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // Composite-packed temperature: upper 16 bits = target, lower 16 bits = actual.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            2001,
+            br#"{"print":{"chamber_temper":65571.0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mqtt_client = MqttClient::connect(
+        TokioIo(client_stream),
+        &PrinterIdentity {
+            ip: String::new(),
+            serial: SERIAL.into(),
+            access_code: "12345678".into(),
+            model: PrinterModel::X1C,
+        },
+    )
+    .await
+    .expect("MQTT connect handshake failed");
+    let mut client = PrinterClient::from_mqtt(mqtt_client, PrinterModel::X1C);
+
+    // Chamber-equipped model: Some((0, 0)) before any chamber_temper is observed.
+    assert_eq!(client.chamber_temperature(), Some((0, 0)));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse the direct-temperature report");
+    let (actual, target) = client
+        .chamber_temperature()
+        .expect("X1C must report chamber temperatures");
+    assert_eq!((actual, target), (35, 0));
+    assert!(
+        actual < PLAUSIBLE_MAX_TEMP_C && target < PLAUSIBLE_MAX_TEMP_C,
+        "chamber_temperature implausible: ({actual}, {target})"
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse the composite-temperature report");
+    let (actual, target) = client
+        .chamber_temperature()
+        .expect("X1C must report chamber temperatures");
+    assert_eq!((actual, target), (35, 1));
+    assert!(
+        actual < PLAUSIBLE_MAX_TEMP_C && target < PLAUSIBLE_MAX_TEMP_C,
+        "chamber_temperature implausible: ({actual}, {target})"
     );
 
     drop(client);
