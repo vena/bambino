@@ -79,6 +79,42 @@ async fn test_get_version_round_trip() {
 }
 
 #[tokio::test]
+async fn test_get_version_huge_command_timeout_saturates_without_panic() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["info"]["command"], "get_version");
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            1000,
+            VERSION_RESPONSE.as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+
+    // `secs * 1000` overflowed (debug: panic, release: wrap) before the multiplication
+    // became saturating; a saturated timeout behaves as "effectively disabled".
+    client.set_command_timeout(u64::MAX);
+    let info = client
+        .get_version()
+        .await
+        .expect("get_version should not panic on a saturated timeout");
+
+    assert_eq!(info.command, "get_version");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_get_version_ignores_mismatched_sequence_id() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{}/report", SERIAL);

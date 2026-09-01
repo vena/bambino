@@ -204,6 +204,27 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
 }
 
 #[tokio::test]
+async fn test_move_relative_rejects_invalid_axis() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+
+    // A non-X/Y/Z axis must be rejected as an invalid argument before any command is
+    // sent — not reported as a travel-limit error (the pre-validation behavior) and not
+    // dispatched to the wire.
+    let result = client.move_relative('q', 10.0, 3000).await;
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_thermal_guards_and_temperatures() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 

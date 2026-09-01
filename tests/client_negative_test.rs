@@ -693,6 +693,34 @@ async fn test_select_k_profile_rejects_invalid_combo() {
     broker_task.await.expect("Broker task panicked");
 }
 
+#[tokio::test]
+async fn test_select_k_profile_rejects_standard_tray_id_above_15() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Only the valid (0, 15) call below dispatches — if the rejected (0, 16) call
+        // had leaked a publish, this read would see tray_id 16 and fail the assert.
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "extrusion_cali_sel");
+        assert_eq!(json["print"]["tray_id"], 15);
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+
+    // Standard-AMS global tray IDs are 0..=15 (4 units × 4 slots); 16..=103 used to
+    // slip through and dispatch an address the firmware rejects or mis-routes.
+    let result = client.select_k_profile(0, 16, 4, "GFA01", "0.4").await;
+    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+
+    // The upper documented standard boundary (15) must still be accepted.
+    let result = client.select_k_profile(0, 15, 4, "GFA01", "0.4").await;
+    assert!(result.is_ok());
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 const K_PROFILE_RESPONSE: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10002","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
 
 // Second `get_k_profiles()` call on an already-primed client: sequence ID advances

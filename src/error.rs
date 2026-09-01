@@ -84,6 +84,11 @@ pub enum Error {
         error("Command queue saturated with unacknowledged commands")
     )]
     Backpressure,
+
+    /// Emitted when a caller-supplied argument fails client-side validation (e.g. an unknown
+    /// axis name) before any command is sent to the printer.
+    #[cfg_attr(feature = "std", error("Invalid argument: {0}"))]
+    InvalidArgument(Cow<'static, str>),
 }
 
 impl From<crate::io::SocketError> for Error {
@@ -129,6 +134,7 @@ pub(crate) fn format_error_no_std(
         Error::Backpressure => {
             write!(f, "Command queue saturated with unacknowledged commands")
         }
+        Error::InvalidArgument(s) => write!(f, "Invalid argument: {}", s),
     }
 }
 
@@ -167,6 +173,7 @@ mod tests {
             Error::DiskWriteFailure => {}
             Error::ModelMismatch(_) => {}
             Error::Backpressure => {}
+            Error::InvalidArgument(_) => {}
         }
     }
 
@@ -209,6 +216,10 @@ mod tests {
             (
                 Error::Backpressure,
                 "Command queue saturated with unacknowledged commands",
+            ),
+            (
+                Error::InvalidArgument("unknown axis".into()),
+                "Invalid argument: unknown axis",
             ),
         ];
 

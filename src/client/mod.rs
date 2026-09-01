@@ -349,7 +349,9 @@ where
         }
 
         let start = self.timer.now_millis();
-        let timeout_ms = self.command_timeout_secs * 1000;
+        // Saturating: a caller-set `command_timeout_secs` above u64::MAX / 1000 would
+        // otherwise overflow in debug builds (panic) and wrap in release builds.
+        let timeout_ms = self.command_timeout_secs.saturating_mul(1000);
         let mut count: usize = 0;
 
         loop {

@@ -24,6 +24,13 @@ fn is_valid_ams_id(ams_id: i32) -> bool {
     (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id) || ams_id == 254 || ams_id == 255
 }
 
+/// Highest standard-AMS global tray ID accepted by tray-id addressing commands:
+/// `AMS_MAX_STANDARD_ID + 1` units × `AMS_SLOTS_PER_UNIT` slots, zero-indexed (i.e. `15`).
+pub(crate) const STANDARD_AMS_MAX_GLOBAL_TRAY_ID: i32 =
+    (crate::ams::parser::AMS_MAX_STANDARD_ID as i32 + 1)
+        * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
+        - 1;
+
 impl<
     MqttRawIO,
     MqttTls,
@@ -266,7 +273,7 @@ where
         nozzle_diameter: &str,
     ) -> Result<u16, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
-        let tray_valid = (0..=103).contains(&tray_id)
+        let tray_valid = (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
             || (128..=135).contains(&tray_id)
             || tray_id == 254
             || tray_id == 255;

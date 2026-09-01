@@ -165,6 +165,14 @@ where
         feedrate: u32,
     ) -> Result<u16, Error> {
         let axis_upper = axis.to_ascii_uppercase();
+        if !matches!(axis_upper, 'X' | 'Y' | 'Z') {
+            // Reject invalid axes up front — otherwise `relative_xy_move_gcode` collapses
+            // them to an empty string and the call reports a travel-limit error that has
+            // nothing to do with the actual distance.
+            return Err(Error::InvalidArgument(
+                format!("unknown axis '{axis}' (expected X, Y, or Z)").into(),
+            ));
+        }
         if self.is_axis_homed(axis_upper) == Some(false) {
             log::warn!(
                 "{} axis is not homed (last-known state) — move_relative proceeding anyway",
@@ -253,7 +261,7 @@ where
 
     async fn wait_for_homing_inner(&mut self) -> Result<(), Error> {
         let start = self.timer.now_millis();
-        let timeout_ms = self.command_timeout_secs * 1000;
+        let timeout_ms = self.command_timeout_secs.saturating_mul(1000);
         let mut count: usize = 0;
         let mut saw_not_all_homed = false;
 
