@@ -564,7 +564,9 @@ where
 /// `embedded_io_async::ErrorKind`, which every `AsyncIo` implementor (tokio, ESP-IDF, Embassy)
 /// already produces via `embedded_io_async::Error::kind()`. Used by `read_chunk` so a genuine
 /// `ConnectionRefused`/`TimedOut`/etc. isn't collapsed to a generic `ConnectionReset` the way it
-/// was before this mapping existed.
+/// was before this mapping existed. Non-network kinds (`Interrupted`, `OutOfMemory`,
+/// `PermissionDenied`, and the rest below) map to `Other` rather than `ConnectionReset`, so a
+/// caller's reconnect/retry loop is not driven by a local failure that reconnecting cannot fix.
 pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError {
     match kind {
         embedded_io_async::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
@@ -575,6 +577,25 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
         embedded_io_async::ErrorKind::AddrInUse => SocketError::AddressInUse,
         embedded_io_async::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
         embedded_io_async::ErrorKind::InvalidInput => SocketError::InvalidInput,
+        // Connection-shaped: the peer closed its end, the same "peer dropped — reconnect/retry"
+        // outcome `ConnectionReset` describes.
+        embedded_io_async::ErrorKind::BrokenPipe => SocketError::ConnectionReset,
+        // Not network failures: an allocation failure, a permission error, an interrupted
+        // operation, an unsupported call, malformed data, etc. Surfacing these as
+        // `ConnectionReset` drives a reconnect/retry loop that can never succeed, or masks a
+        // retryable local condition (`Interrupted`) as a dropped link. `Other` is the honest
+        // catch-all, matching `mqtt/client/mod.rs`'s write-side mapping.
+        embedded_io_async::ErrorKind::Interrupted
+        | embedded_io_async::ErrorKind::OutOfMemory
+        | embedded_io_async::ErrorKind::PermissionDenied
+        | embedded_io_async::ErrorKind::Unsupported
+        | embedded_io_async::ErrorKind::InvalidData
+        | embedded_io_async::ErrorKind::NotFound
+        | embedded_io_async::ErrorKind::AlreadyExists
+        | embedded_io_async::ErrorKind::WriteZero
+        | embedded_io_async::ErrorKind::Other => SocketError::Other("non-network I/O error".into()),
+        // Future kinds (`ErrorKind` is `non_exhaustive`) default to the connection-shaped
+        // outcome, preserving the pre-existing catch-all.
         _ => SocketError::ConnectionReset,
     }
 }
@@ -1071,5 +1092,59 @@ mod pem_bundle_tests {
         assert_eq!(out.len(), PEM_LINE_WIDTH + 1);
         assert_eq!(out.last(), Some(&b'\n'));
         assert_eq!(out.iter().filter(|&&b| b == b'\n').count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod error_kind_mapping_tests {
+    use super::{SocketError, map_embedded_io_error_kind};
+    use embedded_io_async::ErrorKind;
+
+    #[test]
+    fn non_network_kinds_map_to_other_not_connection_reset() {
+        // These are not "the peer dropped" and must not surface as `ConnectionReset`, or a
+        // caller's reconnect/retry loop churns forever against a local failure it cannot fix.
+        for kind in [
+            ErrorKind::Interrupted,
+            ErrorKind::OutOfMemory,
+            ErrorKind::PermissionDenied,
+            ErrorKind::Unsupported,
+            ErrorKind::InvalidData,
+            ErrorKind::NotFound,
+            ErrorKind::AlreadyExists,
+            ErrorKind::WriteZero,
+            ErrorKind::Other,
+        ] {
+            let mapped = map_embedded_io_error_kind(kind);
+            assert!(
+                matches!(&mapped, SocketError::Other(_)),
+                "{kind:?} mapped to {mapped:?}, expected SocketError::Other"
+            );
+        }
+    }
+
+    #[test]
+    fn broken_pipe_is_connection_shaped() {
+        // The peer closed its end — the same "reconnect/retry" outcome `ConnectionReset` names.
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::BrokenPipe),
+            SocketError::ConnectionReset
+        );
+    }
+
+    #[test]
+    fn connection_kinds_still_map_to_their_named_variants() {
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::ConnectionRefused),
+            SocketError::ConnectionRefused
+        );
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::TimedOut),
+            SocketError::TimedOut
+        );
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::InvalidInput),
+            SocketError::InvalidInput
+        );
     }
 }
