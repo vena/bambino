@@ -1070,60 +1070,82 @@ impl EspIdfTcpStream {
     /// `ensure_camera()`, which can now actually preempt this future because it has real
     /// `.await` points, matching the plain (non-connector-owned) design
     /// `RawStreamFactory::dial` has on every other platform.
+    ///
+    /// Iterates every resolved address, matching `TokioRawStreamFactory::dial`
+    /// (`tokio::net::TcpStream::connect`) — a hostname resolving to multiple addresses
+    /// (mDNS `.local`, A + AAAA) whose first entry is unreachable falls through to the next
+    /// instead of failing the dial.
     pub async fn connect(host: &str, port: u16) -> Result<Self, SocketError> {
         use std::net::ToSocketAddrs;
 
-        let addr = (host, port)
+        let addrs = (host, port)
             .to_socket_addrs()
-            .map_err(to_esp_socket_error)?
-            .next()
-            .ok_or(SocketError::AddressNotAvailable)?;
-
-        let socket = ::socket2::Socket::new(
-            ::socket2::Domain::for_address(addr),
-            ::socket2::Type::STREAM,
-            Some(::socket2::Protocol::TCP),
-        )
-        .map_err(to_esp_socket_error)?;
-
-        socket.set_nonblocking(true).map_err(to_esp_socket_error)?;
-
-        // Nagle off: every protocol this crate dials is small-request/response over TLS, which
-        // is the exact shape Nagle penalises. A TLS handshake writes several small records, and
-        // Nagle holds a second small write until the peer ACKs the first — pairing with the
-        // peer's delayed-ACK timer for a stall of up to ~200ms per occurrence, on a link whose
-        // real RTT is single-digit milliseconds (GitHub issue #160). MQTT command traffic has
-        // the same shape afterwards, so this is a property of the socket, not of the handshake.
-        //
-        // Not fatal on failure, unlike `set_nonblocking` above: non-blocking is a correctness
-        // requirement here (the poll loops retry on WouldBlock and would otherwise hang the
-        // task), whereas Nagle-off is a latency optimisation. A platform that refuses it should
-        // still connect, just more slowly — so this warns and continues rather than failing a
-        // connection that would otherwise work.
-        // `set_tcp_nodelay`, not `set_nodelay`: that is socket2's spelling. Tokio's
-        // `TcpStream` calls the same option `set_nodelay`, so the two backends read slightly
-        // differently on purpose.
-        if let Err(e) = socket.set_tcp_nodelay(true) {
-            log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {e}");
-        }
-
-        match socket.connect(&addr.into()) {
-            Ok(()) => {}
-            Err(e) if is_connect_in_progress(&e) => {}
-            Err(e) => return Err(to_esp_socket_error(e)),
-        }
+            .map_err(to_esp_socket_error)?;
 
         let timer = EspIdfTimer::new().map_err(|e| {
             log::debug!("failed to create ESP-IDF async timer for TCP connect: {e}");
             SocketError::Other("failed to create ESP-IDF async timer for TCP connect".into())
         })?;
 
-        poll_connect_until_complete(&socket, &timer).await?;
+        let mut last_err = None;
+        for addr in addrs {
+            let socket = match ::socket2::Socket::new(
+                ::socket2::Domain::for_address(addr),
+                ::socket2::Type::STREAM,
+                Some(::socket2::Protocol::TCP),
+            ) {
+                Ok(socket) => socket,
+                Err(e) => {
+                    last_err = Some(to_esp_socket_error(e));
+                    continue;
+                }
+            };
 
-        Ok(Self {
-            stream: Some(socket.into()),
-            timer,
-        })
+            if let Err(e) = socket.set_nonblocking(true) {
+                last_err = Some(to_esp_socket_error(e));
+                continue;
+            }
+
+            // Nagle off: every protocol this crate dials is small-request/response over TLS, which
+            // is the exact shape Nagle penalises. A TLS handshake writes several small records, and
+            // Nagle holds a second small write until the peer ACKs the first — pairing with the
+            // peer's delayed-ACK timer for a stall of up to ~200ms per occurrence, on a link whose
+            // real RTT is single-digit milliseconds (GitHub issue #160). MQTT command traffic has
+            // the same shape afterwards, so this is a property of the socket, not of the handshake.
+            //
+            // Not fatal on failure, unlike `set_nonblocking` above: non-blocking is a correctness
+            // requirement here (the poll loops retry on WouldBlock and would otherwise hang the
+            // task), whereas Nagle-off is a latency optimisation. A platform that refuses it should
+            // still connect, just more slowly — so this warns and continues rather than failing a
+            // connection that would otherwise work.
+            // `set_tcp_nodelay`, not `set_nodelay`: that is socket2's spelling. Tokio's
+            // `TcpStream` calls the same option `set_nodelay`, so the two backends read slightly
+            // differently on purpose.
+            if let Err(e) = socket.set_tcp_nodelay(true) {
+                log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {e}");
+            }
+
+            match socket.connect(&addr.into()) {
+                Ok(()) => {}
+                Err(e) if is_connect_in_progress(&e) => {}
+                Err(e) => {
+                    last_err = Some(to_esp_socket_error(e));
+                    continue;
+                }
+            }
+
+            match poll_connect_until_complete(&socket, &timer).await {
+                Ok(()) => {
+                    return Ok(Self {
+                        stream: Some(socket.into()),
+                        timer,
+                    });
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        Err(last_err.unwrap_or(SocketError::AddressNotAvailable))
     }
 
     fn inner(&self) -> &std::net::TcpStream {

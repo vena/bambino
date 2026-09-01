@@ -88,6 +88,27 @@ mod test_support {
         params.signed_by(&key, issuer).unwrap().der().clone()
     }
 
+    /// Builds a v3 leaf cert signed by `issuer` with a SAN extension carrying only
+    /// non-DNS entries (an rfc822Name) — the RFC 6125 §6.4.4 "SAN present, no matching
+    /// dNSName" hard-failure shape.
+    pub(super) fn generate_test_leaf_email_san(
+        issuer: &Issuer<'_, KeyPair>,
+        common_name: &str,
+    ) -> CertificateDer<'static> {
+        use rcgen::SanType;
+        use rcgen::string::Ia5String;
+
+        let mut params = CertificateParams::new(Vec::new()).unwrap();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        params.subject_alt_names.push(SanType::Rfc822Name(
+            Ia5String::try_from("printer@example.com").unwrap(),
+        ));
+        let key = KeyPair::generate().unwrap();
+        params.signed_by(&key, issuer).unwrap().der().clone()
+    }
+
     /// Builds a v3 leaf cert signed by `issuer` with an explicit (possibly expired)
     /// validity window, for the expiry-rejection test.
     pub(super) fn generate_test_leaf_with_validity(
@@ -229,6 +250,23 @@ fn test_cn_fallback_verifier_prefers_san_over_mismatched_cn() {
 
     let result = verifier.verify_server_cert(&leaf, &[], &server_name, &[], UnixTime::now());
     assert!(result.is_ok(), "expected SAN match, got {result:?}");
+}
+
+#[test]
+fn test_cn_fallback_verifier_rejects_cn_match_when_san_has_no_dns_names() {
+    let (ca_der, issuer, ..) = test_support::generate_test_ca();
+    // SAN present but carrying only an rfc822Name, CN matching the expected identity.
+    // RFC 6125 §6.4.4: any present SAN with no matching dNSName is a hard failure —
+    // CN fallback applies only to an absent SAN, never to a present-but-non-DNS one.
+    let leaf = test_support::generate_test_leaf_email_san(&issuer, "TESTSERIAL0001");
+    let verifier = CnFallbackServerVerifier::new([ca_der]).unwrap();
+    let server_name = ServerName::try_from("TESTSERIAL0001").unwrap();
+
+    let result = verifier.verify_server_cert(&leaf, &[], &server_name, &[], UnixTime::now());
+    assert!(
+        result.is_err(),
+        "a SAN with no dNSName entries must reject even a matching CN, got {result:?}"
+    );
 }
 
 #[test]

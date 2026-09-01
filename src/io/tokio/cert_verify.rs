@@ -478,7 +478,13 @@ fn verify_name_matches_leaf_cert(
                 ))
             }
         } else {
-            match_subject_cn(leaf, expected)
+            // SAN present but with no dNSName entries (only iPAddress/rfc822Name/URI):
+            // RFC 6125 §6.4.4 and mbedtls's `x509_crt_verify_name` treat any present SAN
+            // with no matching DNS entry as a hard failure — CN fallback applies only to
+            // an absent SAN.
+            Err(RustlsError::InvalidCertificate(
+                CertificateError::NotValidForName,
+            ))
         };
     }
 
