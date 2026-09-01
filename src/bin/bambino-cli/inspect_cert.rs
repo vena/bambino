@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config};
 use bambino::io::{RawStreamFactory, TlsConnector};
 
+use crate::connection::validate_ip_serial;
 use crate::error::CliError;
 
 /// Builds the on-disk path for chain position `index`, counting the leaf as 0.
@@ -67,6 +68,8 @@ fn chain_member_path(output: &str, index: usize) -> PathBuf {
 /// `.chain<N>` paths `chain_member_path` derives. No FTPS/MQTT protocol traffic is exchanged
 /// beyond the handshake itself — the connection is dropped as soon as the chain is read off it.
 pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), CliError> {
+    validate_ip_serial(ip, serial)?;
+
     let addr = format!("{ip}:{port}");
 
     let raw_stream = TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {

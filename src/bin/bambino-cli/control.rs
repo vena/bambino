@@ -207,19 +207,34 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), C
 
     match tokio::time::timeout(Duration::from_secs(10), printer.get_version()).await {
         Ok(Ok(info)) => {
+            // Module serials are device identity (redact::REDACTED_KEYS includes `sn`), and a
+            // stdout redirect writes them to a file — the table on stdout gets a redacted
+            // placeholder, while the operator-facing serials go to stderr like probe.rs routes
+            // them.
             let mut table = crate::table::Table::new(vec![
                 "Product", "Module", "Hardware", "Firmware", "Serial",
             ]);
 
+            let mut module_serials: Vec<(&str, &str)> = Vec::new();
             for m in &info.module {
                 if !m.visible && !is_verbose {
                     continue;
                 }
-                table.add_row(vec![&m.product_name, &m.name, &m.hw_ver, &m.sw_ver, &m.sn]);
+                table.add_row(vec![
+                    &m.product_name,
+                    &m.name,
+                    &m.hw_ver,
+                    &m.sw_ver,
+                    "<redacted>",
+                ]);
+                module_serials.push((&m.name, &m.sn));
             }
 
             println!();
             table.print();
+            for (name, sn) in &module_serials {
+                eprintln!("  {name} serial: {sn}");
+            }
             if !is_verbose {
                 println!("\n  Use -v to show all internal modules.");
             }

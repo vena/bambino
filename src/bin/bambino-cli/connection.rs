@@ -51,20 +51,7 @@ pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Print
 }
 
 pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
-    if ip.parse::<std::net::IpAddr>().is_err() {
-        return Err(CliError::InvalidArgs(format!(
-            "Invalid IP address: '{}'",
-            ip
-        )));
-    }
-
-    if serial.is_empty() || serial.len() > 20 || !serial.bytes().all(|b| b.is_ascii_alphanumeric())
-    {
-        return Err(CliError::InvalidArgs(format!(
-            "Invalid serial number: '{}' (expected 1-20 alphanumeric characters)",
-            serial
-        )));
-    }
+    validate_ip_serial(ip, serial)?;
 
     // Must match CAMERA_PASSWORD_MAX_LEN (camera/binary.rs) and the alphanumeric requirement
     // camera/rtsps.rs and camera/binary.rs both enforce downstream — a narrower CLI-only
@@ -77,6 +64,28 @@ pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Resu
             "Invalid access code: expected 1-{} alphanumeric characters, got {}",
             bambino::camera::binary::CAMERA_PASSWORD_MAX_LEN,
             access_code.len()
+        )));
+    }
+
+    Ok(())
+}
+
+/// Validates just the `ip`/`serial` pair, for subcommands that take no access code at all
+/// (e.g. `verify-tls`, `inspect-cert`) — they must still reject malformed IPs/serials with
+/// `InvalidArgs` before anything reaches the network/TLS layer.
+pub(crate) fn validate_ip_serial(ip: &str, serial: &str) -> Result<(), CliError> {
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return Err(CliError::InvalidArgs(format!(
+            "Invalid IP address: '{}'",
+            ip
+        )));
+    }
+
+    if serial.is_empty() || serial.len() > 20 || !serial.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Err(CliError::InvalidArgs(format!(
+            "Invalid serial number: '{}' (expected 1-20 alphanumeric characters)",
+            serial
         )));
     }
 

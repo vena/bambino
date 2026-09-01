@@ -11,6 +11,7 @@
 use bambino::io::tokio::build_verified_client_config;
 use rustls_pki_types::ServerName;
 
+use crate::connection::validate_ip_serial;
 use crate::error::CliError;
 use crate::trust::trusted_roots;
 
@@ -23,6 +24,8 @@ use crate::trust::trusted_roots;
 /// silently kept only its *first* certificate, which quietly discarded 4 of the 5 anchors in a
 /// bundle and made a failure look like the printer's fault rather than the loader's.
 pub async fn run(ip: &str, serial: &str, port: u16) -> Result<(), CliError> {
+    validate_ip_serial(ip, serial)?;
+
     let Some(anchors) = trusted_roots() else {
         return Err(CliError::InvalidArgs(
             "verify-tls needs trust anchors: pass --with-certs <PATH> (a cert file or a directory \
