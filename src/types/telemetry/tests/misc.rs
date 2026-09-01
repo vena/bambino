@@ -97,6 +97,29 @@ fn test_hms_entry_tolerates_hex_string_attr_and_code() {
 }
 
 #[test]
+fn test_hms_entry_missing_attr_code_defaults_to_zero() {
+    // A key absent from the wire message must default to 0, not fail the whole
+    // `hms` vec — the permissive deserializer only absorbs present-but-wrong-typed
+    // values, so absence needs #[serde(default)] on the fields themselves.
+    let json_data = r#"{
+            "print": {
+                "hms": [
+                    { "code": 65543 },
+                    { "attr": 50331904 }
+                ]
+            }
+        }"#;
+
+    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let hms = report.print.unwrap().hms.unwrap();
+    assert_eq!(hms.len(), 2);
+    assert_eq!(hms[0].attr, 0);
+    assert_eq!(hms[0].code, 65543);
+    assert_eq!(hms[1].attr, 50331904);
+    assert_eq!(hms[1].code, 0);
+}
+
+#[test]
 fn test_hms_absent_vs_empty() {
     let absent = r#"{ "print": {} }"#;
     let report: TelemetryReport = serde_json::from_str(absent).unwrap();
@@ -373,6 +396,10 @@ fn test_deserialize_permissive_bool_variants() {
 
     // Missing → default false
     let r: TelemetryReport = serde_json::from_str(r#"{ "print": {} }"#).unwrap();
+    assert!(!r.print.unwrap().sdcard);
+
+    // Null → default false (field varies structurally across firmwares)
+    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": null } }"#).unwrap();
     assert!(!r.print.unwrap().sdcard);
 }
 

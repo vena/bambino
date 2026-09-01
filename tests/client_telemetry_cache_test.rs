@@ -878,6 +878,38 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
 }
 
 #[tokio::test]
+async fn test_auxiliary_left2_fan_negative_state_is_none() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5707,
+            br#"{"print":{"cooling_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":-1}]}}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    // A negative `state` is a firmware sentinel for "off/unknown"; it must report
+    // None, not be masked into 100% by `& 0xFF`.
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse fan speed report");
+
+    assert_eq!(client.auxiliary_left2_fan_speed(), None);
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_print_speed_cache_from_telemetry() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");

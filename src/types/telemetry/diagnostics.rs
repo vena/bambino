@@ -135,10 +135,10 @@ impl IpcamTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HmsEntry {
     /// Packed attribute word encoding module ID, severity, and subsystem address.
-    #[serde(deserialize_with = "deserialize_permissive_hms_u32")]
+    #[serde(default, deserialize_with = "deserialize_permissive_hms_u32")]
     pub attr: u32,
     /// Packed code word encoding fault category and error index.
-    #[serde(deserialize_with = "deserialize_permissive_hms_u32")]
+    #[serde(default, deserialize_with = "deserialize_permissive_hms_u32")]
     pub code: u32,
     /// Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
     #[serde(default)]

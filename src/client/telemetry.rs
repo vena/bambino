@@ -539,7 +539,12 @@ where
             .iter()
             .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_LEFT2)?
             .state?;
-        Some((state & 0xFF).clamp(0, 100) as u8)
+        // Negative states are firmware sentinels for "off/unknown"; None here matches
+        // decode_fan_percentage's None on an unparseable/negative step value.
+        if state < 0 {
+            return None;
+        }
+        Some(state.clamp(0, 100) as u8)
     }
 
     fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {

@@ -199,12 +199,14 @@ where
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum RawSdValue {
+        Null,
         Bool(bool),
         Int(i64),
         String(String),
     }
 
     match RawSdValue::deserialize(deserializer) {
+        Ok(RawSdValue::Null) => Ok(false),
         Ok(RawSdValue::Bool(b)) => Ok(b),
         Ok(RawSdValue::Int(i)) => Ok(i != 0),
         Ok(RawSdValue::String(s)) => {
