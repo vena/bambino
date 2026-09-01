@@ -116,6 +116,11 @@ give up ownership of the fd first or the fd would be double-closed.
   `.await` points, matching the plain (non-connector-owned) design
   `RawStreamFactory::dial` has on every other platform.
 
+  Iterates every resolved address, matching `TokioRawStreamFactory::dial`
+  (`tokio::net::TcpStream::connect`) — a hostname resolving to multiple addresses
+  (mDNS `.local`, A + AAAA) whose first entry is unreachable falls through to the next
+  instead of failing the dial.
+
 #### Trait Implementations
 
 ##### `impl AsyncIo for EspIdfTcpStream`

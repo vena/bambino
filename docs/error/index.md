@@ -38,6 +38,7 @@ enum Error {
     DiskWriteFailure,
     ModelMismatch(std::borrow::Cow<'static, str>),
     Backpressure,
+    InvalidArgument(std::borrow::Cow<'static, str>),
 }
 ```
 
@@ -94,6 +95,11 @@ and source error tracing are derived automatically via `thiserror`.
   natural retry-on-timeout policy is exactly the wrong response — a caller that keeps
   retrying spins against a queue only inbound PUBACKs (or the in-flight entries aging out)
   can drain.
+
+- **`InvalidArgument`**
+
+  Emitted when a caller-supplied argument fails client-side validation (e.g. an unknown
+  axis name) before any command is sent to the printer.
 
 #### Trait Implementations
 
