@@ -215,7 +215,7 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
         };
     }
 
-    // Payload bytes (resumes from `filled` if a prior call stalled mid-payload).
+    // Payload bytes (resumes mid-payload if a prior call stalled; `buf.len()` counts valid bytes).
     if let FrameReadState::ReadingPayload {
         header,
         buf,
@@ -230,21 +230,20 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
             // for. Exact growth in bounded steps costs a few more reallocs and never more than
             // one chunk of slack.
             let want = core::cmp::min(*target_len - buf.len(), PAYLOAD_GROWTH_CHUNK);
-            let filled = buf.len();
+            // `reserve_exact` grows capacity but not length, so it is cancellation-safe; the
+            // previous `resize` did not have that property.
             buf.reserve_exact(want);
-            buf.resize(filled + want, 0);
 
-            // A short read is normal; truncate back so `buf.len()` keeps meaning "bytes actually
-            // received". This must hold on every early return too, or a timeout would leave zero
-            // padding in the buffer and desync the frame on resume. `read_chunk` maps EOF to
-            // `ConnectionReset` rather than `Ok(0)`, so this cannot spin.
-            match read_chunk(stream, &mut buf[filled..], timer, deadline_ms).await {
-                Ok(n) => buf.truncate(filled + n),
-                Err(e) => {
-                    buf.truncate(filled);
-                    return Err(e);
-                }
-            }
+            // Read into a scratch buffer and append only after the await resolves. Resizing
+            // `buf` up front committed `want` zero-padded tail bytes before the await, and only
+            // the `truncate` in the `Ok`/`Err` arms restored the length — neither runs if the
+            // future is dropped mid-read (e.g. `tokio::select!` in the CLI monitor), so a
+            // cancelled read left those zeros committed and corrupted the frame on resume. A
+            // short read is normal; `read_chunk` maps EOF to `ConnectionReset` rather than
+            // `Ok(0)`, so this cannot spin.
+            let mut chunk = [0u8; PAYLOAD_GROWTH_CHUNK];
+            let n = read_chunk(stream, &mut chunk[..want], timer, deadline_ms).await?;
+            buf.extend_from_slice(&chunk[..n]);
         }
         let hdr = *header;
         let payload = core::mem::take(buf);
