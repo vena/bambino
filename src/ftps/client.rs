@@ -535,20 +535,29 @@ where
         // passes; this narrows the window rather than closing it, which is why 426 is not
         // tolerated here as freely as on the byte-exact-verifiable transfer paths.
         if code == FTP_TRANSFER_ABORTED
-            && !listing_payload.is_empty()
-            && !listing_payload.ends_with(b"\n")
+            && (listing_payload.is_empty() || !listing_payload.ends_with(b"\n"))
         {
             // Not poisoned: the final reply was read, so the control channel is in sync —
             // per `.claude/rules/ftps-poisoning.md`, only a transport-level failure desyncs it.
+            // A 426 with zero bytes is not the close race (vsFTPd reports a genuinely empty
+            // directory with `226` + zero bytes) — the data channel died before delivering
+            // anything, and accepting it would silently map that failure to "empty directory".
             return Err(Error::ProtocolViolation(
-                "LIST aborted (426) with a truncated final entry".into(),
+                "LIST aborted (426) with an empty or truncated payload".into(),
             ));
         }
 
-        let payload_str = core::str::from_utf8(&listing_payload)
-            .map_err(|_| Error::ProtocolViolation("Non-UTF8 directory listings response".into()))?;
+        // One undecodable filename (e.g. a Latin-1 name on a FAT microSD) must skip just that
+        // entry, not fail the whole directory — the same per-line leniency as the parser's
+        // drop-malformed-lines contract. Filtered here rather than loosening the parser to
+        // lossy `&str` conversion, which would surface U+FFFD mojibake as a real name.
+        let payload_str: String = listing_payload
+            .split(|&b| b == b'\n')
+            .filter_map(|line| core::str::from_utf8(line).ok())
+            .collect::<Vec<_>>()
+            .join("\n");
 
-        Ok(parse_unix_listing(payload_str, now))
+        Ok(parse_unix_listing(&payload_str, now))
     }
 
     /// Queries the exact size of a file stored on the printer's MicroSD card.

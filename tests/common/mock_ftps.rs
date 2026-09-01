@@ -669,6 +669,70 @@ pub async fn run_mock_server_list_426_truncated(
     .await;
 }
 
+/// Mock server for the regression test: a `426` on `LIST` with **zero** data bytes delivered.
+///
+/// vsFTPd reports a genuinely empty directory as `226` + zero bytes, so a 426 with an empty
+/// payload means the data channel died before delivering anything — accepting it would map a
+/// failed transfer onto "empty directory", the exact silent-truncation class the framing guard
+/// exists to catch.
+pub async fn run_mock_server_list_426_empty(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "LIST /model\r\n");
+    respond(
+        &mut server_control,
+        b"150 Here comes directory listing.\r\n",
+    )
+    .await;
+    // No data bytes at all — the data channel dies before delivering anything.
+    drop(server_data);
+    respond(
+        &mut server_control,
+        b"426 Connection closed; transfer aborted.\r\n",
+    )
+    .await;
+}
+
+/// Mock server for the regression test: a listing carrying one valid line and one
+/// non-UTF-8 filename (a Latin-1 byte on a FAT microSD). The whole listing completes
+/// normally (`226`), so only the per-line decoding is under test.
+pub async fn run_mock_server_list_non_utf8_line(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "LIST /model\r\n");
+    respond(
+        &mut server_control,
+        b"150 Here comes directory listing.\r\n",
+    )
+    .await;
+    server_data
+        .write_all(b"-rw-r--r--    1 1000     1000      102400 Jun 17 12:14 job.3mf\r\n")
+        .await
+        .expect("LIST data write");
+    // 0xE9 is not valid UTF-8 on its own; the whole line must be skipped, not fail the LIST.
+    server_data
+        .write_all(b"-rw-r--r--    1 1000     1000      512 Jun 17 12:15 caf\xE9.3mf\r\n")
+        .await
+        .expect("LIST data write");
+    server_data.flush().await.expect("LIST data flush");
+    drop(server_data);
+    respond(&mut server_control, b"226 Transfer complete.\r\n").await;
+}
+
 /// Mock server for the regression test: `LIST`'s *initial* write/read (the `150`/`125`
 /// negotiation, before the data-transfer window the single-reply-command case already covered) must
 /// poison the client on failure too. Drops the control stream right after reading the `LIST`

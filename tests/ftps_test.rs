@@ -685,6 +685,72 @@ async fn test_ftps_list_directory_426_with_truncated_entry_rejected() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// A 426 with **zero** data bytes is not the close race — vsFTPd reports a genuinely empty
+/// directory as `226` + zero bytes, so this must error rather than read as "empty directory".
+#[tokio::test]
+async fn test_ftps_list_directory_426_with_empty_payload_rejected() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_list_426_empty(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "a 426-aborted LIST with no data must error, not return an empty listing, got {:?}",
+        result.map(|l| l.len())
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// One non-UTF-8 filename must skip just that entry, not fail the whole directory — the same
+/// per-line leniency as the parser's drop-malformed-lines contract.
+#[tokio::test]
+async fn test_ftps_list_directory_skips_non_utf8_line() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_list_non_utf8_line(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let list = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await
+        .expect("LIST with one non-UTF-8 line should still succeed");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].name, "job.3mf");
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 #[tokio::test]
 async fn test_ftps_upload_426_recovery_via_size() {
     let (client_control, server_control, data_container, factory) = setup();
