@@ -543,11 +543,13 @@ pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
 /// [REF-AMS-DECODE]. On H2D-generation firmware this is one of the two explicit
 /// "not loaded" signals alongside `AMS_TRAY_STATE_EMPTY` — a spool present in state 10 may
 /// still have unconfirmed/stale metadata attached, so it's treated as an absent-equivalent
-/// state for stale-data cleansing purposes, same as `AMS_TRAY_STATE_EMPTY`. Verified against
-/// `pybambu`/`Bambuddy`'s independent reverse-engineering (`bambu_mqtt.py`'s
-/// `apply_tray_exist_bits` and incremental-merge handler, `main.py`'s `on_ams_change` —
-/// `loaded = cur_state == 11 or (cur_state not in (9, 10) and cur_type.strip())`, cross-tested
-/// against H2D, A1 Mini, and P1S firmware, citing upstream issues #784/#1322).
+/// state for stale-data cleansing purposes, same as `AMS_TRAY_STATE_EMPTY`. On AMS-HT units
+/// (`ams_id` 128-135) neither state 9 nor state 10 is a clearing signal (issue #181) — see
+/// `clean_stale_tray_data`. Verified against `pybambu`/`Bambuddy`'s independent
+/// reverse-engineering (`bambu_mqtt.py`'s `apply_tray_exist_bits` and incremental-merge
+/// handler, `main.py`'s `on_ams_change` — `loaded = cur_state == 11 or (cur_state not in
+/// (9, 10) and cur_type.strip())`, cross-tested against H2D, A1 Mini, and P1S firmware,
+/// citing upstream issues #784/#1322).
 pub(crate) const AMS_TRAY_STATE_SPOOL_NOT_FED: u8 = 10;
 
 /// Material spool state descriptor representing a single physical tray slot.

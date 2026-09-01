@@ -130,19 +130,22 @@ pub fn evaluate_spool_presence(
 /// of whether `tray_type` was repeated in that update, so clearing on absence alone would
 /// wipe a currently-printing tray's material data.
 ///
-/// `ams_id` gates the state-9 heuristic: on AMS-HT units (`ams_id` 128-135), state 9 on a
-/// partial power-on frame means *loaded*, not empty — the opposite of its meaning on a
-/// standard 4-slot AMS — so state 9 alone is not treated as a clearing signal for HT units.
-/// Independently corroborated by Bambuddy's incremental-merge handler, which skips the same
-/// heuristic for `ams_id >= 128` after a live H2D Pro wiped an HT spool on every power-on
-/// (their issue #2594); the exception is recorded in `reference/05_materials_ams.md`, which
-/// also explains why `AMS_TRAY_STATE_POWER_OFF` (0) is deliberately *not* gated the same way.
+/// `ams_id` gates the state heuristic: on AMS-HT units (`ams_id` 128-135), a partial
+/// power-on frame reports its *loaded* tray as state 9 — the opposite of its meaning on a
+/// standard 4-slot AMS — and its state field is firmware-variant, so neither state 9 nor
+/// state 10 is treated as a clearing signal for HT units. Independently corroborated by
+/// Bambuddy's incremental-merge handler, which skips the same heuristic for `ams_id >= 128`
+/// after a live H2D Pro wiped an HT spool on every power-on (their issue #2594); the
+/// exception is recorded in `reference/05_materials_ams.md`, which also explains why
+/// `AMS_TRAY_STATE_POWER_OFF` (0) is deliberately *not* gated the same way.
 pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-    let is_absent_state = matches!(
-        tray.state,
-        Some(AMS_TRAY_STATE_SPOOL_NOT_FED) | Some(AMS_TRAY_STATE_POWER_OFF) | None
-    ) || (!is_ht && tray.state == Some(AMS_TRAY_STATE_EMPTY));
+    let is_absent_state = matches!(tray.state, Some(AMS_TRAY_STATE_POWER_OFF) | None)
+        || (!is_ht
+            && matches!(
+                tray.state,
+                Some(AMS_TRAY_STATE_SPOOL_NOT_FED) | Some(AMS_TRAY_STATE_EMPTY)
+            ));
 
     let is_type_cleared = tray
         .tray_type
@@ -569,6 +572,27 @@ mod tests {
         let mut tray = AmsTray {
             id: "0".into(),
             state: Some(9),
+            tray_type: Some("PLA".into()),
+            tray_color: Some("FF0000FF".into()),
+            remain: Some(85),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray, 128);
+
+        assert_eq!(tray.tray_type, Some("PLA".into()));
+        assert_eq!(tray.tray_color, Some("FF0000FF".into()));
+        assert_eq!(tray.remain, Some(85));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_ams_ht_state_10_not_cleared() {
+        // State 10 on an AMS-HT (ams_id 128) is a spool-present-but-retracted signal, not a
+        // "not loaded" one — like state 9, an HT tray must not have its live spool data wiped.
+        // Bambuddy skips the state heuristic for HT units entirely (issue #181).
+        let mut tray = AmsTray {
+            id: "0".into(),
+            state: Some(10),
             tray_type: Some("PLA".into()),
             tray_color: Some("FF0000FF".into()),
             remain: Some(85),
