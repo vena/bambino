@@ -465,23 +465,17 @@ fn verify_name_matches_leaf_cert(
     };
 
     if let Some(general_names) = san {
-        let dns_names = general_names.iter().filter_map(|gn| match gn {
+        // RFC 6125 §6.4.4 and mbedtls's `x509_crt_verify_name`: any *present* SAN is a hard
+        // match-or-fail against its dNSName entries, whether it has none (only iPAddress/
+        // rfc822Name/URI) or several that don't match — CN fallback applies only to an absent
+        // SAN, so both cases return the same error rather than falling through to CN.
+        let mut dns_names = general_names.iter().filter_map(|gn| match gn {
             x509_parser::extensions::GeneralName::DNSName(name) => Some(*name),
             _ => None,
         });
-        return if dns_names.clone().next().is_some() {
-            if dns_names.clone().any(|n| n.eq_ignore_ascii_case(expected)) {
-                Ok(())
-            } else {
-                Err(RustlsError::InvalidCertificate(
-                    CertificateError::NotValidForName,
-                ))
-            }
+        return if dns_names.any(|n| n.eq_ignore_ascii_case(expected)) {
+            Ok(())
         } else {
-            // SAN present but with no dNSName entries (only iPAddress/rfc822Name/URI):
-            // RFC 6125 §6.4.4 and mbedtls's `x509_crt_verify_name` treat any present SAN
-            // with no matching DNS entry as a hard failure — CN fallback applies only to
-            // an absent SAN.
             Err(RustlsError::InvalidCertificate(
                 CertificateError::NotValidForName,
             ))
