@@ -87,6 +87,10 @@ enum Commands {
         /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
         #[arg(default_value = "")]
         access_code: String,
+        /// Print expansion bus module serials in the table (they identify physical hardware,
+        /// so they're hidden by default; a stdout redirect captures whatever this prints)
+        #[arg(long)]
+        show_serials: bool,
     },
 
     /// Stream real-time status telemetry and HMS warnings
@@ -262,7 +266,16 @@ async fn main() {
             ip,
             serial,
             access_code,
-        } => control::run_info(&ip, &serial, &resolve_access_code(access_code)).await,
+            show_serials,
+        } => {
+            control::run_info(
+                &ip,
+                &serial,
+                &resolve_access_code(access_code),
+                show_serials,
+            )
+            .await
+        }
         Commands::Monitor {
             ip,
             serial,

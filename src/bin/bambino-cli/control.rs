@@ -199,7 +199,17 @@ pub enum ControlAction {
 }
 
 /// Connects to the printer, sends a `get_version` command, and displays expansion bus modules.
-pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
+///
+/// Module serials identify physical hardware, so they're omitted by default (the `Serial`
+/// column doesn't appear at all — a placeholder would just be a column of noise). Pass
+/// `show_serials` to print the real values, on stdout, as an explicit opt-in: that's what
+/// makes a subsequent redirect the operator's own decision rather than a surprise.
+pub async fn run_info(
+    ip: &str,
+    serial: &str,
+    access_code: &str,
+    show_serials: bool,
+) -> Result<(), CliError> {
     let is_verbose = crate::is_verbose();
     let mut printer = create_printer(ip, serial, access_code)?;
 
@@ -207,36 +217,35 @@ pub async fn run_info(ip: &str, serial: &str, access_code: &str) -> Result<(), C
 
     match tokio::time::timeout(Duration::from_secs(10), printer.get_version()).await {
         Ok(Ok(info)) => {
-            // Module serials are device identity (redact::REDACTED_KEYS includes `sn`), and a
-            // stdout redirect writes them to a file — the table on stdout gets a redacted
-            // placeholder, while the operator-facing serials go to stderr like probe.rs routes
-            // them.
-            let mut table = crate::table::Table::new(vec![
-                "Product", "Module", "Hardware", "Firmware", "Serial",
-            ]);
+            let mut headers = vec!["Product", "Module", "Hardware", "Firmware"];
+            if show_serials {
+                headers.push("Serial");
+            }
+            let mut table = crate::table::Table::new(headers);
 
-            let mut module_serials: Vec<(&str, &str)> = Vec::new();
             for m in &info.module {
                 if !m.visible && !is_verbose {
                     continue;
                 }
-                table.add_row(vec![
-                    &m.product_name,
-                    &m.name,
-                    &m.hw_ver,
-                    &m.sw_ver,
-                    "<redacted>",
-                ]);
-                module_serials.push((&m.name, &m.sn));
+                let mut row = vec![
+                    m.product_name.as_str(),
+                    m.name.as_str(),
+                    m.hw_ver.as_str(),
+                    m.sw_ver.as_str(),
+                ];
+                if show_serials {
+                    row.push(m.sn.as_str());
+                }
+                table.add_row(row);
             }
 
             println!();
             table.print();
-            for (name, sn) in &module_serials {
-                eprintln!("  {name} serial: {sn}");
-            }
             if !is_verbose {
                 println!("\n  Use -v to show all internal modules.");
+            }
+            if !show_serials {
+                println!("  Use --show-serials to include module serial numbers.");
             }
             println!();
         }
