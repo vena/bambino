@@ -40,6 +40,9 @@ use alloc::borrow::Cow;
 #[cfg(all(not(feature = "std"), feature = "alloc"))]
 use alloc::vec::Vec;
 
+#[cfg(all(not(feature = "std"), feature = "alloc"))]
+use alloc::format;
+
 /// Unified transport-level Socket Errors, agnostic of runtime implementations.
 ///
 /// `Other` carries `Cow<'static, str>` (not `Copy`, hence the enum overall isn't either)
@@ -584,8 +587,12 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
         // operation, an unsupported call, malformed data, etc. Surfacing these as
         // `ConnectionReset` drives a reconnect/retry loop that can never succeed, or masks a
         // retryable local condition (`Interrupted`) as a dropped link. `Other` is the honest
-        // catch-all, matching `mqtt/client/mod.rs`'s write-side mapping.
-        embedded_io_async::ErrorKind::Interrupted
+        // catch-all, matching `mqtt/client/mod.rs`'s write-side mapping — but the specific kind
+        // is carried into the message rather than collapsed to one opaque string, since nothing
+        // in the crate today matches on `SocketError` variants to decide whether to retry (so
+        // `Interrupted` doesn't need its own variant; a caller that wants to retry on it can
+        // still tell from the message).
+        kind @ (embedded_io_async::ErrorKind::Interrupted
         | embedded_io_async::ErrorKind::OutOfMemory
         | embedded_io_async::ErrorKind::PermissionDenied
         | embedded_io_async::ErrorKind::Unsupported
@@ -593,7 +600,9 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
         | embedded_io_async::ErrorKind::NotFound
         | embedded_io_async::ErrorKind::AlreadyExists
         | embedded_io_async::ErrorKind::WriteZero
-        | embedded_io_async::ErrorKind::Other => SocketError::Other("non-network I/O error".into()),
+        | embedded_io_async::ErrorKind::Other) => {
+            SocketError::Other(format!("non-network I/O error: {kind:?}").into())
+        }
         // Future kinds (`ErrorKind` is `non_exhaustive`) default to the connection-shaped
         // outcome, preserving the pre-existing catch-all.
         _ => SocketError::ConnectionReset,
@@ -1116,10 +1125,13 @@ mod error_kind_mapping_tests {
             ErrorKind::Other,
         ] {
             let mapped = map_embedded_io_error_kind(kind);
-            assert!(
-                matches!(&mapped, SocketError::Other(_)),
-                "{kind:?} mapped to {mapped:?}, expected SocketError::Other"
-            );
+            match &mapped {
+                SocketError::Other(msg) => assert!(
+                    msg.contains(&format!("{kind:?}")),
+                    "{kind:?} mapped to message {msg:?}, which doesn't name the kind"
+                ),
+                other => panic!("{kind:?} mapped to {other:?}, expected SocketError::Other"),
+            }
         }
     }
 
