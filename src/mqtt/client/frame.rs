@@ -62,6 +62,14 @@ pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
 /// 64 KiB-ceiling targets.
 pub(crate) const PAYLOAD_GROWTH_CHUNK: usize = 2048;
 
+/// Size of the scratch buffer held across the read `.await` in [`read_exact_packet`].
+///
+/// Kept far smaller than [`PAYLOAD_GROWTH_CHUNK`] because this buffer is live across an await
+/// point, so it becomes part of the generated future's size — on the `embassy` target that size
+/// sets the per-task arena at compile time. `want` (up to `PAYLOAD_GROWTH_CHUNK`) is filled by
+/// looping this scratch buffer rather than reading it in one pass.
+const READ_SCRATCH_BYTES: usize = 256;
+
 /// Per-call deadline for `write_frame_with_timer` when a genuine wall-clock [`TimerProvider`]
 /// is available — the write-side counterpart to [`MQTT_READ_TIMEOUT_SECS`]. A stalled write
 /// (e.g. the peer stopped reading its socket buffer) would otherwise block `write_all()`/
@@ -241,9 +249,20 @@ pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
             // cancelled read left those zeros committed and corrupted the frame on resume. A
             // short read is normal; `read_chunk` maps EOF to `ConnectionReset` rather than
             // `Ok(0)`, so this cannot spin.
-            let mut chunk = [0u8; PAYLOAD_GROWTH_CHUNK];
-            let n = read_chunk(stream, &mut chunk[..want], timer, deadline_ms).await?;
-            buf.extend_from_slice(&chunk[..n]);
+            //
+            // The scratch buffer is `READ_SCRATCH_BYTES`, not `want` (up to a full
+            // `PAYLOAD_GROWTH_CHUNK`): it is live across the await, so its size becomes part of
+            // this function's generated future, and that future's size sets the per-task arena
+            // on `embassy` at compile time. Looping a small scratch buffer keeps that future
+            // small while still filling `want` bytes before growing `buf` again.
+            let mut remaining = want;
+            while remaining > 0 {
+                let mut scratch = [0u8; READ_SCRATCH_BYTES];
+                let take = core::cmp::min(remaining, READ_SCRATCH_BYTES);
+                let n = read_chunk(stream, &mut scratch[..take], timer, deadline_ms).await?;
+                buf.extend_from_slice(&scratch[..n]);
+                remaining -= n;
+            }
         }
         let hdr = *header;
         let payload = core::mem::take(buf);
@@ -559,6 +578,23 @@ mod tests {
             assert!(
                 matches!(state, FrameReadState::Idle),
                 "state must reset to Idle after a fully-assembled frame is returned"
+            );
+        }
+
+        #[test]
+        fn read_exact_packet_future_stays_small() {
+            // Guards against a large buffer being held across an await inside this future:
+            // `embassy` sizes its per-task arena from this number at compile time, so a
+            // regression back to a `PAYLOAD_GROWTH_CHUNK`-sized scratch buffer would silently
+            // inflate every task that awaits an MQTT frame read.
+            let mut stream = TokioIo(std::io::Cursor::new(Vec::<u8>::new()));
+            let mut state = FrameReadState::default();
+            let timer = DummyTimer;
+            let future = read_exact_packet(&mut stream, &mut state, &timer, 0);
+            assert!(
+                core::mem::size_of_val(&future) < 1024,
+                "read_exact_packet's future grew to {} bytes",
+                core::mem::size_of_val(&future)
             );
         }
     }
