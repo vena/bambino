@@ -832,6 +832,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `Some(false)`, which means a sensor-equipped model's telemetry confirms the door is
   closed. Also `None` before any telemetry carrying `print` has been observed.
 
+- <span id="superprinterclient-is-220v-power"></span>`fn is_220v_power(&self) -> Option<bool>`
+
+  Returns the printer's mains region as of the last-observed `home_flag` telemetry.
+  `None` means no telemetry carrying `home_flag` has been observed yet — distinct from
+  `Some(false)`. Feed this straight into
+  [`ModelQuirks::bed_temp_max`](../quirks/index.md#modelquirks) (reachable via
+  [`PrinterClient::quirks()`](#printerclient)) to read a printer's bed
+  ceiling before issuing a command; `set_bed_temperature` uses this same accessor.
+
 - <span id="superprinterclient-active-fault"></span>`fn active_fault(&self) -> Option<DecodedPrintError>` — [`DecodedPrintError`](../diagnostics/hms/index.md#decodedprinterror)
 
   Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](#printerclient)).
@@ -1104,6 +1113,16 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="printerclient-model"></span>`fn model(&self) -> PrinterModel` — [`PrinterModel`](../models/index.md#printermodel)
 
   Returns the resolved printer hardware model.
+
+- <span id="printerclient-quirks"></span>`fn quirks(&self) -> &'static dyn crate::quirks::ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+
+  Returns the model quirks for this printer's resolved model.
+
+  Equivalent to `client.model().quirks()` but skips the intermediate `model()` call —
+  the single entry point for every model-level limit (`nozzle_temp_max()`, axis travel
+  bounds, fan/AMS predicates, etc.). `bed_temp_max()` additionally needs the printer's
+  mains region, which lives on the client, not the model — see
+  [`is_220v_power()`](#printerclient).
 
 - <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut MqttClient<<MqttTls as >::Stream>, Error>` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
