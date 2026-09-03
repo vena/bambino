@@ -13,6 +13,7 @@ use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::MqttMessage;
 use crate::quirks::decode_fan_percentage;
+use crate::types::telemetry::report::POWER_220V_BITMASK;
 use crate::types::telemetry::{decode_bed_temperatures, decode_nozzle_temperatures};
 use crate::types::{
     AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, TelemetryReport,
@@ -333,6 +334,18 @@ where
             return None;
         }
         self.cache.last_door_open
+    }
+
+    /// Returns the printer's mains region as of the last-observed `home_flag` telemetry.
+    /// `None` means no telemetry carrying `home_flag` has been observed yet — distinct from
+    /// `Some(false)`. Feed this straight into
+    /// [`ModelQuirks::bed_temp_max`](crate::quirks::ModelQuirks::bed_temp_max) (reachable via
+    /// [`PrinterClient::quirks()`](super::PrinterClient::quirks)) to read a printer's bed
+    /// ceiling before issuing a command; `set_bed_temperature` uses this same accessor.
+    pub fn is_220v_power(&self) -> Option<bool> {
+        self.cache
+            .last_home_flag
+            .map(|flag| flag & POWER_220V_BITMASK != 0)
     }
 
     /// Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).

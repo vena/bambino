@@ -114,6 +114,8 @@ printer.set_led("chamber_light", true).await?; // turn on the chamber light
 printer.send_gcode("M106 P1 S255").await?;     // with PrinterClient, gcode is checked against unsafe homing
 ```
 
+Every model-level limit is reachable through `printer.quirks()` (a shortcut for `printer.model().quirks()`) — e.g. `printer.quirks().nozzle_temp_max()`. The one exception, `bed_temp_max()`, additionally needs the printer's mains region: `printer.quirks().bed_temp_max(printer.is_220v_power())`.
+
 ### Read telemetry
 
 ```rust

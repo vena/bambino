@@ -3,7 +3,6 @@ use alloc::format;
 
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
-use crate::types::telemetry::report::POWER_220V_BITMASK;
 
 use super::PrinterClient;
 
@@ -62,10 +61,7 @@ where
     /// printer.set_bed_temperature(60).await?;
     /// ```
     pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
-        let mains_220v = self
-            .cache
-            .last_home_flag
-            .map(|flag| flag & POWER_220V_BITMASK != 0);
+        let mains_220v = self.is_220v_power();
         let max = self.identity.model.quirks().bed_temp_max(mains_220v);
         let target_temp = super::clamp_temp(target_temp, max, "Bed");
         let gcode = format!("M140 S{}", target_temp);

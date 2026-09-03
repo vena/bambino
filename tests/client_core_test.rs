@@ -344,6 +344,7 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
     let mut client =
         connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
 
+    assert_eq!(client.is_220v_power(), None);
     client
         .set_bed_temperature(999)
         .await
@@ -353,6 +354,7 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse home_flag=8");
+    assert_eq!(client.is_220v_power(), Some(true));
     client
         .set_bed_temperature(999)
         .await
@@ -362,6 +364,7 @@ async fn test_x1c_bed_temp_ceiling_voltage_dependent() {
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse home_flag=0");
+    assert_eq!(client.is_220v_power(), Some(false));
     client
         .set_bed_temperature(999)
         .await

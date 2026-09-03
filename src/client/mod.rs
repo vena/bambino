@@ -430,6 +430,17 @@ where
         self.identity.model
     }
 
+    /// Returns the model quirks for this printer's resolved model.
+    ///
+    /// Equivalent to `client.model().quirks()` but skips the intermediate `model()` call —
+    /// the single entry point for every model-level limit (`nozzle_temp_max()`, axis travel
+    /// bounds, fan/AMS predicates, etc.). `bed_temp_max()` additionally needs the printer's
+    /// mains region, which lives on the client, not the model — see
+    /// [`is_220v_power()`](Self::is_220v_power).
+    pub fn quirks(&self) -> &'static dyn crate::quirks::ModelQuirks {
+        self.identity.model.quirks()
+    }
+
     /// Returns direct access to the underlying [`MqttClient`], auto-connecting if needed.
     ///
     /// Use this for sending custom MQTT payloads, managing zombie detection via
