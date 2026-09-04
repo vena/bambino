@@ -25,6 +25,7 @@ directly instead.
   - [`DiscoveryEngine`](#discoveryengine)
 - [Functions](#functions)
   - [`discover_devices`](#discover-devices)
+  - [`discover_devices_with`](#discover-devices-with)
 - [Constants](#constants)
   - [`MULTICAST_ADDR`](#multicast-addr)
   - [`SSDP_PORT`](#ssdp-port)
@@ -37,6 +38,7 @@ directly instead.
 | [`parser`](parser/index.md) | mod | # Zero-Copy HTTP-style SSDP Parsing Engine |
 | [`DiscoveryEngine`](#discoveryengine) | struct | Asynchronous Discovery Engine providing search orchestration and passive monitoring. |
 | [`discover_devices`](#discover-devices) | fn | Broadcasts SSDP search queries and listens for printer responses for the given duration. |
+| [`discover_devices_with`](#discover-devices-with) | fn | Runs the same sweep as [`discover_devices()`](#discover-devices), reporting each printer as it is found. |
 | [`MULTICAST_ADDR`](#multicast-addr) | const | Standard Bambu Lab multicast group target for SSDP operations. |
 | [`SSDP_PORT`](#ssdp-port) | const | Primary UDP port allocated to physical Bambu Lab printer local services [REF-NET-PORTS]. |
 | [`SSDP_PORT_ALT`](#ssdp-port-alt) | const | Alternative SSDP port listed in Bambu Lab documentation [REF-NET-PORTS]. |
@@ -218,6 +220,9 @@ timing, making this work across std and ESP-IDF (not Embassy — this function i
 `EmbassyUdpSocket` does not implement; see the module-level doc. Embassy callers
 must drive `DiscoveryEngine` directly).
 
+See [`discover_devices_with()`](#discover-devices-with) for a variant that reports each printer to a callback as
+it is found, instead of only returning the whole set once the window has elapsed.
+
 # Example
 
 ```rust,ignore
@@ -236,6 +241,49 @@ let printers = discover_devices::<TokioUdpSocket, _>(
 for printer in &printers {
     println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
 }
+```
+
+### `discover_devices_with`
+
+```rust
+async fn discover_devices_with<U, T, F>(timeout: core::time::Duration, timer: &T, on_device: F) -> Result<Vec<SsdpDevice>, crate::error::Error>
+where
+    U: BindableUdpSocket,
+    T: TimerProvider,
+    F: FnMut(&SsdpDevice)
+```
+
+**Types:** [`SsdpDevice`](parser/index.md#ssdpdevice), [`Error`](../error/index.md#error)
+
+Runs the same sweep as [`discover_devices()`](#discover-devices), reporting each printer as it is found.
+
+`on_device` is called once per unique printer, immediately after the serial passes the
+dedup check and before the printer is pushed onto the returned `Vec`. The set and the
+order are identical to what [`discover_devices()`](#discover-devices) returns — the only difference is that
+delivery is incremental instead of deferred to the end of the window. A caller rendering a
+picker can therefore show a printer that answered in the first few hundred milliseconds
+without shortening the window, which would trade away the models that are only found
+through their ~10.1s NOTIFY advertisements.
+
+The callback is synchronous, so it cannot `.await`. Hand the device to a channel (or push
+it onto shared state) if delivery needs to do async work.
+
+The sweep holds no state outside this future, so dropping the future cancels it — a caller
+that wants to stop early, because someone picked a printer at the three-second mark, just
+stops polling. There is no separate cancellation handle to plumb through.
+
+# Example
+
+```rust,ignore
+use bambino::discovery::discover_devices_with;
+use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
+
+let timer = TokioTimer::new();
+let printers = discover_devices_with::<TokioUdpSocket, _, _>(
+    std::time::Duration::from_secs(20),
+    &timer,
+    |printer| println!("found {} at {}", printer.name, printer.ip),
+).await?;
 ```
 
 
