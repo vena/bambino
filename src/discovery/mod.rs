@@ -182,6 +182,9 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 /// `EmbassyUdpSocket` does not implement; see the module-level doc. Embassy callers
 /// must drive `DiscoveryEngine` directly).
 ///
+/// See [`discover_devices_with()`] for a variant that reports each printer to a callback as
+/// it is found, instead of only returning the whole set once the window has elapsed.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -209,6 +212,50 @@ pub async fn discover_devices<U, T>(
 where
     U: BindableUdpSocket,
     T: TimerProvider,
+{
+    discover_devices_with::<U, T, _>(timeout, timer, |_| {}).await
+}
+
+/// Runs the same sweep as [`discover_devices()`], reporting each printer as it is found.
+///
+/// `on_device` is called once per unique printer, immediately after the serial passes the
+/// dedup check and before the printer is pushed onto the returned `Vec`. The set and the
+/// order are identical to what [`discover_devices()`] returns — the only difference is that
+/// delivery is incremental instead of deferred to the end of the window. A caller rendering a
+/// picker can therefore show a printer that answered in the first few hundred milliseconds
+/// without shortening the window, which would trade away the models that are only found
+/// through their ~10.1s NOTIFY advertisements.
+///
+/// The callback is synchronous, so it cannot `.await`. Hand the device to a channel (or push
+/// it onto shared state) if delivery needs to do async work.
+///
+/// The sweep holds no state outside this future, so dropping the future cancels it — a caller
+/// that wants to stop early, because someone picked a printer at the three-second mark, just
+/// stops polling. There is no separate cancellation handle to plumb through.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use bambino::discovery::discover_devices_with;
+/// use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
+///
+/// let timer = TokioTimer::new();
+/// let printers = discover_devices_with::<TokioUdpSocket, _, _>(
+///     std::time::Duration::from_secs(20),
+///     &timer,
+///     |printer| println!("found {} at {}", printer.name, printer.ip),
+/// ).await?;
+/// ```
+#[cfg(feature = "std")]
+pub async fn discover_devices_with<U, T, F>(
+    timeout: core::time::Duration,
+    timer: &T,
+    mut on_device: F,
+) -> Result<Vec<SsdpDevice>, Error>
+where
+    U: BindableUdpSocket,
+    T: TimerProvider,
+    F: FnMut(&SsdpDevice),
 {
     // Bind sockets on both SSDP ports. Using the specific port is required because
     // printers send NOTIFY advertisements to 239.255.255.250:<port>, and the OS only
@@ -302,6 +349,7 @@ where
                 Ok(Some(device)) => {
                     if seen_serials.insert(device.serial.clone()) {
                         log::debug!("Discovered '{}' via port {}", device.serial, port);
+                        on_device(&device);
                         devices.push(device);
                     }
                 }
@@ -587,6 +635,77 @@ mod tests {
             elapsed.as_millis() >= 200,
             "discovery should run for approximately the timeout duration"
         );
+    }
+
+    #[tokio::test]
+    async fn test_discover_devices_with_reports_each_unique_device_once() {
+        use crate::io::tokio::TokioTimer;
+
+        // Every bound port gets its own socket, so both engines replay this same sequence:
+        // the first printer twice, then a second printer. The callback must fire once per
+        // unique serial after dedup — not once per datagram, and not once per port.
+        struct RepeatingSocket {
+            recv_counter: AtomicUsize,
+        }
+
+        impl BindableUdpSocket for RepeatingSocket {
+            async fn bind(_addr: SocketAddr) -> Result<Self, SocketError> {
+                Ok(Self {
+                    recv_counter: AtomicUsize::new(0),
+                })
+            }
+        }
+
+        impl AsyncUdpSocket for RepeatingSocket {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
+                Ok(100)
+            }
+
+            async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
+                let response: &[u8] = match self.recv_counter.fetch_add(1, Ordering::SeqCst) {
+                    0 | 1 => {
+                        b"HTTP/1.1 200 OK\r\n\
+                               LOCATION: http://192.168.1.150:80/\r\n\
+                               USN: 01P06A521703222\r\n\
+                               DevModel.bambu.com: C12\r\n\r\n"
+                    }
+                    2 => {
+                        b"HTTP/1.1 200 OK\r\n\
+                           LOCATION: http://192.168.1.151:80/\r\n\
+                           USN: 01P06A521703223\r\n\
+                           DevModel.bambu.com: C12\r\n\r\n"
+                    }
+                    _ => return Err(SocketError::TimedOut),
+                };
+                buf[..response.len()].copy_from_slice(response);
+                Ok((
+                    response.len(),
+                    SocketAddr::from((IpAddr::V4(Ipv4Addr::new(192, 168, 1, 150)), 2021)),
+                ))
+            }
+        }
+
+        let timer = TokioTimer::new();
+        let mut reported: Vec<String> = Vec::new();
+        let devices = discover_devices_with::<RepeatingSocket, TokioTimer, _>(
+            core::time::Duration::from_millis(200),
+            &timer,
+            |device| reported.push(device.serial.clone()),
+        )
+        .await
+        .expect("discovery should succeed");
+
+        // Same set, same order as the returned Vec — the callback only changes *when*
+        // delivery happens, never what is delivered.
+        let returned: Vec<String> = devices.iter().map(|d| d.serial.clone()).collect();
+        assert_eq!(reported, returned);
+        assert_eq!(reported.len(), 2);
+        assert_eq!(reported[0], "01P06A521703222");
+        assert_eq!(reported[1], "01P06A521703223");
     }
 
     #[tokio::test]

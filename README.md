@@ -53,6 +53,18 @@ for p in &printers {
 }
 ```
 
+Use `discover_devices_with` instead when printers should appear as they answer — it runs the
+same sweep and returns the same `Vec`, but also hands each unique printer to a callback the
+moment it is found, so a picker need not wait out the full window:
+
+```rust
+let printers = discover_devices_with::<TokioUdpSocket, _, _>(
+    Duration::from_secs(20),
+    &timer,
+    |p| println!("found {} at {}", p.name, p.ip),
+).await?;
+```
+
 ### Connect
 
 ```rust
