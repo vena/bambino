@@ -34,17 +34,20 @@ pub struct AmsFilamentSettingPayload {
     pub ams_id: i32,
     /// Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
     pub tray_id: i32,
-    /// Standard filament preset index code (e.g. `"GFL05"`, or a `"PF"`-prefixed preset id)
-    /// [REF-AMS-SP_CFG].
+    /// **Short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"` [REF-AMS-SP_CFG].
     ///
-    /// **Length caution, unconfirmed:** an A1 was measured storing a 19-character `PFUS…`
-    /// cloud id as only its first 8 characters, uppercased, while acking the command as
-    /// `"success"`; the slot then resolves to Generic and drops out of the calibration table,
-    /// which is keyed on the same field. Eight characters is exactly the width of a local
-    /// preset id and less than half a cloud one, so cloud-derived ids are the ones at risk.
-    /// This rests on a single measurement on one model — whether the width is model- or
-    /// firmware-dependent, and whether the field itself truncates or only the readback, is
-    /// unestablished, so bambino neither truncates nor rejects on this basis. See issue #202.
+    /// This is *not* where a long `"PF"`-prefixed preset id belongs — that goes in
+    /// [`setting_id`](Self::setting_id), which is a separate wire field. Putting a 19-character
+    /// cloud id here is what produced the "truncation" an A1 was measured doing: it stored only
+    /// the first 8 characters, uppercased, while acking the command as `"success"`, after which
+    /// the slot resolves to Generic and drops out of the calibration table (which is keyed on
+    /// this field).
+    ///
+    /// Both upstreams agree on the split: BambuStudio's `command_ams_filament_settings`
+    /// (`DeviceManager.cpp:1723-1724`) assigns `tray_info_idx = filament_id` and
+    /// `setting_id = setting_id` as two separate keys, and bambuddy's `ams_set_filament_setting`
+    /// documents this parameter as "Filament ID short format (e.g. `GFL05`)" against its own
+    /// distinct `setting_id`.
     pub tray_info_idx: String,
     /// Material type string (e.g. "PLA", "PETG").
     pub tray_type: String,
@@ -59,6 +62,16 @@ pub struct AmsFilamentSettingPayload {
     pub nozzle_temp_min: u32,
     /// Maximum safe nozzle temperature (°C) for this filament.
     pub nozzle_temp_max: u32,
+    /// Full preset identifier — the long form, e.g. `"GFSL05_07"` or a `"PF"`-prefixed id.
+    ///
+    /// Omitted from the wire when `None`, matching both upstreams: BambuStudio always sends the
+    /// key, bambuddy includes it only when non-empty, and the firmware accepts its absence.
+    /// Supplying it helps the slicer resolve the correct profile for the slot.
+    ///
+    /// Distinct from [`tray_info_idx`](Self::tray_info_idx), which takes the *short* code — see
+    /// that field for what goes wrong when the two are conflated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setting_id: Option<String>,
 }
 
 /// Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
@@ -127,8 +140,24 @@ impl AmsFilamentSettingRequest {
                 tray_color: normalize_tray_color(color_hex),
                 nozzle_temp_min: temp_min,
                 nozzle_temp_max: temp_max,
+                setting_id: None,
             },
         }
+    }
+
+    /// Attaches the full preset identifier, which is a separate wire field from
+    /// `tray_info_idx` and is omitted entirely when not set.
+    ///
+    /// Follows the `with_*` convention [`PrintJobConfig`](super::PrintJobConfig) already uses,
+    /// rather than a tenth positional argument on [`new`](Self::new).
+    ///
+    /// Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
+    /// code in `tray_info_idx`. See [`AmsFilamentSettingPayload::tray_info_idx`] for what the
+    /// printer does when a long id is put in the short field instead.
+    #[must_use]
+    pub fn with_setting_id(mut self, setting_id: &str) -> Self {
+        self.print.setting_id = Some(String::from(setting_id));
+        self
     }
 }
 

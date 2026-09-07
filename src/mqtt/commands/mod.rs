@@ -728,6 +728,27 @@ mod tests {
     }
 
     #[test]
+    fn test_ams_filament_setting_omits_setting_id_by_default() {
+        // setting_id is a separate optional wire field; absent, not null, when unset.
+        let req =
+            AmsFilamentSettingRequest::new(0, 1, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10022);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("setting_id"));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_with_setting_id() {
+        // The long preset id belongs here, not in tray_info_idx — a 19-character id in the
+        // short field is what an A1 stored as 8 characters while acking success.
+        let req =
+            AmsFilamentSettingRequest::new(0, 1, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10023)
+                .with_setting_id("PF12345678901234567");
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""tray_info_idx":"GFA01""#));
+        assert!(json.contains(r#""setting_id":"PF12345678901234567""#));
+    }
+
+    #[test]
     fn test_ams_change_filament_omits_extruder_id_when_none() {
         // Without a Filament Track Switch the payload must be byte-identical to the pre-FTS
         // form: the key is absent, not null.

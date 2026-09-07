@@ -162,9 +162,14 @@ For spools equipped with proprietary Bambu Lab RFID tags, the printer automatica
 *   `tray_uuid`: Unique 32-character hexadecimal string representing the globally unique ID of the filament spool.
 
 #### Preset Identifiers (`tray_info_idx`)
-The `"tray_info_idx"` property contains the short-format preset ID (e.g., `"GFA01"` for Bambu PLA Matte). Custom user presets created in the slicer are assigned a unique, randomized setting ID prefixed with `"PF"` followed by 17 numeric digits (e.g., `"PF12345678901234567"`).
+These are **two separate wire fields**, and conflating them is a real failure mode:
 
-**Width caution (single-model measurement):** an A1 was observed storing a 19-character `PFUS…` cloud id as only its first 8 characters, uppercased, while acking the `ams_filament_setting` command as `"success"`. The slot then resolves to Generic, and the calibration table — keyed on the same field — loses it. Eight characters is exactly the width of a local preset id and less than half a cloud one, so cloud-derived ids are the ones this would break. Whether the width is model- or firmware-dependent, and whether the field itself is truncated or only the readback, has not been established; bambino neither truncates nor rejects on this basis. Source: bambuddy issue #3003.
+*   `"tray_info_idx"` carries the **short-format** preset ID (e.g. `"GFA01"` for Bambu PLA Matte, `"GFL05"`).
+*   `"setting_id"` carries the **full** preset identifier — the long form, such as `"GFSL05_07"`, or the unique randomized id the slicer assigns a custom user preset (`"PF"` followed by 17 numeric digits, e.g. `"PF12345678901234567"`). It is optional and may be omitted entirely.
+
+**A long id does not belong in `tray_info_idx`.** An A1 sent a 19-character `PFUS…` cloud id in that field and stored only its first 8 characters, uppercased, while acking the command as `"success"`; the slot then resolves to Generic and drops out of the calibration table, which is keyed on the same field (bambuddy issue #3003). This is the printer reacting to the wrong field, not a general width limit worth working around — put the long id in `setting_id` and the short code in `tray_info_idx`.
+
+**Verification source:** BambuStudio's `command_ams_filament_settings` (`DeviceManager.cpp:1723-1724`) assigns the two keys from separate arguments — `j["print"]["tray_info_idx"] = filament_id;` and `j["print"]["setting_id"] = setting_id;`. bambuddy's `ams_set_filament_setting` agrees independently, documenting its `tray_info_idx` parameter as "Filament ID short format (e.g. `GFL05`)" against a distinct optional `setting_id` it includes only when non-empty.
 
 #### Color Encoding
 Color parameters (`"tray_color"` and `"cols"`) are formatted as 8-character hexadecimal strings representing RRGGBBAA. Empty or unconfigured slots transmit `"00000000"` (zeroed alpha channel), whereas configured filaments use `"RRGGBBAA"` with `"FF"` alpha (e.g., `"FF0000FF"`).
