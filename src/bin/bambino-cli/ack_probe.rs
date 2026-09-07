@@ -207,9 +207,9 @@ impl AckTest {
         let value = match self {
             Self::AmsControl => serde_json::to_value(AmsControlRequest::new("resume", seq)),
             Self::AmsGetRfid => serde_json::to_value(AmsGetRfidRequest::new(0, 0, seq)),
-            Self::AmsChangeFilament => {
-                serde_json::to_value(AmsChangeFilamentRequest::new(0, 255, 255, -1, -1, seq))
-            }
+            Self::AmsChangeFilament => serde_json::to_value(AmsChangeFilamentRequest::new(
+                0, 255, 255, -1, -1, None, seq,
+            )),
             Self::SkipObjects => serde_json::to_value(SkipObjectsRequest::new(vec![1], seq)),
             Self::ProjectFile => {
                 let config = PrintJobConfig::new(

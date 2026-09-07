@@ -413,7 +413,7 @@ async fn test_change_filament_load_wire_payload() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
-        .change_filament(0, 1, -1, -1)
+        .change_filament(0, 1, -1, -1, None)
         .await
         .expect("change_filament failed");
 
@@ -440,7 +440,7 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
-        .change_filament(1, 2, -1, -1)
+        .change_filament(1, 2, -1, -1, None)
         .await
         .expect("change_filament failed");
 
@@ -466,7 +466,7 @@ async fn test_change_filament_derives_target_for_external_spool() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client
-        .change_filament(255, 254, -1, -1)
+        .change_filament(255, 254, -1, -1, None)
         .await
         .expect("change_filament failed");
 
@@ -483,7 +483,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
     let mut client =
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
-    let result = client.change_filament(99, 1, -1, -1).await;
+    let result = client.change_filament(99, 1, -1, -1, None).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");
@@ -784,7 +784,7 @@ async fn test_get_k_profiles_auto_priming() {
 
     // First call triggers auto-prime (2 publishes)
     let resp = client
-        .get_k_profiles()
+        .get_k_profiles(None)
         .await
         .expect("get_k_profiles failed");
     assert_eq!(resp.print.filaments.len(), 1);
@@ -792,7 +792,7 @@ async fn test_get_k_profiles_auto_priming() {
 
     // Second call skips prime (1 publish)
     let resp2 = client
-        .get_k_profiles()
+        .get_k_profiles(None)
         .await
         .expect("get_k_profiles second call failed");
     assert_eq!(resp2.print.filaments.len(), 1);
@@ -827,7 +827,7 @@ async fn test_get_k_profiles_manual_prime_skip() {
     client.set_k_profile_primed(true);
 
     let resp = client
-        .get_k_profiles()
+        .get_k_profiles(None)
         .await
         .expect("get_k_profiles failed");
     assert_eq!(resp.print.command, "extrusion_cali_get");
@@ -875,7 +875,7 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
     client.set_k_profile_primed(true);
 
     let resp = client
-        .get_k_profiles()
+        .get_k_profiles(None)
         .await
         .expect("get_k_profiles should skip the decoy and find the real response");
 

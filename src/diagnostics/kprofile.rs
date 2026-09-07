@@ -76,6 +76,24 @@ pub struct KProfileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nozzle_diameter: Option<String>,
     /// System designation of the target hotend profile structure (e.g. `"HS00-0.4"`).
+    ///
+    /// **The leading two characters are a flow code**, not a hardware id: `HH` = high flow,
+    /// `HS` = standard. A printer can hold profiles for both against one diameter — an H2D was
+    /// observed with 102 high-flow entries against 6 standard ones — and the same filament
+    /// reads a different `k_value` through each, so the code is load-bearing when resolving a
+    /// slot to a profile.
+    ///
+    /// Two traps follow from that:
+    ///
+    /// * The **fitted** nozzle reports `HH01`, not `HH00`. Compare on the first **two**
+    ///   characters only; the trailing digits are a hardware variant that the calibration table
+    ///   normalizes to `00`.
+    /// * Some models declare this **empty on every profile** — an X1C was probed live with all
+    ///   eight entries empty here, against a four-digit `cali_idx` and a populated `setting_id`.
+    ///   Handle the emptiness directly; a model-capability flag is the wrong thing to gate on.
+    ///
+    /// See `reference/07_diagnostics_hms.md` §7.2 for the full slot-resolution rule, including
+    /// why `cali_idx` alone does not identify a profile.
     pub nozzle_id: String,
     /// Carriage layout indicator (0 = Right/Primary extruder, 1 = Left/Deputy extruder).
     pub extruder_id: u8,
@@ -110,6 +128,20 @@ pub struct ExtrusionCaliGetPayload {
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
+    /// Filament preset to scope the query to (e.g. `"GFA01"`), or `None` for the whole table.
+    ///
+    /// Upstream sends an empty string here when it wants every filament; both shapes are
+    /// accepted, and omitting the key entirely reproduces the pre-existing bare request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filament_id: Option<String>,
+    /// Nozzle diameter to scope the query to (e.g. `"0.4"`).
+    ///
+    /// **A response is the complete table for exactly one nozzle diameter**, and it echoes the
+    /// *requested* diameter rather than reflecting installed hardware. On a dual-diameter
+    /// machine a single bare request therefore returns a partial table that looks complete.
+    /// Query once per fitted diameter and merge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nozzle_diameter: Option<String>,
 }
 
 /// JSON request wrapper to trigger a complete dump of the stored calibration database.
@@ -129,13 +161,25 @@ pub struct ExtrusionCaliGetRequest {
 
 impl ExtrusionCaliGetRequest {
     /// Builds an `extrusion_cali_get` request.
+    ///
+    /// `filament_id` and `nozzle_diameter` scope the query; both are omitted from the wire when
+    /// `None`, which reproduces the bare request shape exactly. Pass a `nozzle_diameter` on any
+    /// machine that can hold more than one — see [`ExtrusionCaliGetPayload::nozzle_diameter`]
+    /// for why a bare request returns a silently partial table there.
+    ///
     /// Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
     /// documented above.
-    pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
+    pub fn new(
+        filament_id: Option<&str>,
+        nozzle_diameter: Option<&str>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
         Self {
             print: ExtrusionCaliGetPayload {
                 command: "extrusion_cali_get",
                 sequence_id: sequence_id.into().to_string(),
+                filament_id: filament_id.map(String::from),
+                nozzle_diameter: nozzle_diameter.map(String::from),
             },
         }
     }
@@ -402,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_extrusion_cali_get_json() {
-        let req = ExtrusionCaliGetRequest::new(50001);
+        let req = ExtrusionCaliGetRequest::new(None, None, 50001);
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
@@ -648,7 +692,9 @@ mod tests {
         };
 
         assert_clamped(
-            &ExtrusionCaliGetRequest::new(raw).print.sequence_id,
+            &ExtrusionCaliGetRequest::new(None, None, raw)
+                .print
+                .sequence_id,
             "ExtrusionCaliGetRequest",
         );
 

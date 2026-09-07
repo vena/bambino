@@ -82,6 +82,23 @@ The printer publishes both hardware failures and non-error state indications (su
 ##### User-Action Echoes
 During user-initiated print cancellations, the firmware raises specific confirmation codes (such as `0300_400C` and `0500_400E`) to confirm cancellation has completed. These are status confirmations, not active faults, and must not be treated as actual system errors.
 
+##### `0500_0500_0001_0007` — Control Commands Silently Refused
+
+Firmware from roughly `01.08.03.00beta` / `01.08.05.00` onward can reject a control command whose authorization it cannot verify, and reports it as an HMS entry with `attr = 0x05000500`, `code = 0x00010007`.
+
+The failure mode is nasty for a client, because **queries keep answering while control commands are dropped**. `get_version`, `extrusion_cali_get` and `pushall` all respond normally, so the connection looks healthy and the printer looks idle — while `project_file`, `gcode_line` and `ams_change_filament` are discarded in silence. No amount of waiting or re-uploading changes it, and a consumer polling telemetry sees nothing wrong.
+
+**The 16-character form is load-bearing here.** The meaning lives in `attr`'s low half (`0500`) and `code`'s high half (`0001`):
+
+```
+16-char (MMMM_MMMM_CCCC_CCCC):  0500 0500 0001 0007   <- identifies the condition
+ 8-char (MMMM_CCCC):            0500      0007        <- matches nothing in any catalog
+```
+
+The 8-character LCD short code collapses it to `0500_0007`, which appears in no published HMS catalog. Anyone triaging from the short code alone will find nothing and conclude the entry is spurious. Use the 16-character key — `decode_hms_alert` (`src/diagnostics/hms.rs`) produces both, and `DecodedHmsAlert` exposes the 16-character form alongside the 8.
+
+*(Verification source: bambuddy, `backend/app/services/bambu_mqtt.py:705` — the constant, with the attr/code split explained in the comment above it — and their scheduler's `_mqtt_commands_rejected`, which acts on it. Source issue: bambuddy #2732. **The firmware version boundary is theirs and has not been independently checked here**; record it as reported, not established.)*
+
 ---
 
 ### 7.2 Pressure Advance (K-Profile) Calibration [REF-DIAG-KPROF]
@@ -95,10 +112,42 @@ To retrieve all stored profiles from the machine's database, publish the `"extru
 {
   "print": {
     "command": "extrusion_cali_get",
+    "filament_id": "",
+    "nozzle_diameter": "0.4",
     "sequence_id": "50001"
   }
 }
 ```
+
+**A response is the complete table for exactly one nozzle diameter, and it echoes the *requested* diameter rather than reflecting installed hardware.** The bare request shape (`command` + `sequence_id` only) is accepted, but on a dual-diameter machine its reply covers whichever single diameter the firmware picks — a partial table that looks complete to the caller, with no way to ask for the rest. Query once per fitted diameter and merge. `filament_id` scopes the query to one preset; upstream sends an empty string for "all filaments".
+
+Two consequences worth stating separately, both of which bambino already handles:
+
+*   Match responses on `sequence_id`. The report topic is shared, so an unmatched read can pick up BambuStudio's response to its own query.
+*   Do **not** feed the response's `nozzle_diameter` into live nozzle state. It is the echo of what was asked for, and folding it back in clobbers the real installed nozzle size (bambuddy #2663 — theirs typically left `0.8`, the last diameter probed).
+
+*(Verification source: bambuddy issue #2854. Their client buckets responses per diameter, queries only the fitted diameters, and deliberately keeps the response out of nozzle state.)*
+
+#### Resolving a Slot to a Profile
+
+The two facts below are exactly the traps a consumer falls into, and neither is inferable from the payload shapes above. bambino does no slot-to-K resolution itself, so nothing in the crate depends on them — but this is where a consumer would look.
+
+**1. `cali_idx` is not uniquely keyed per nozzle.** Both of these occur on real hardware:
+
+*   Two profiles share a `cali_idx` and differ only by `extruder_id`. Measured on an H2C: index 16 = left, black PLA, K=0.018; index 15 = right, K=0.020.
+*   One profile is what slots on *both* extruders point at. An X2D with one AMS 2 Pro per hotend filed every entry under a single extruder, so the second AMS's slots referenced the first's entries.
+
+Upstream's resolution rule: prefer a profile filed under the slot's own `extruder_id`; if that extruder appears nowhere in the table, match on `cali_idx` alone and accept only when every candidate agrees on one `k_value`. BambuStudio is looser — `CalibUtils::get_pa_k_n_value_by_cali_idx` matches `cali_idx` and nothing else.
+
+**2. `nozzle_id` encodes flow type, and is empty on some models.**
+
+*   `HH00-0.4` = high flow, `HS00-0.4` = standard. A printer can hold both for one diameter — an H2D was observed with 102 high-flow entries against 6 standard ones — and the same filament reads a different K through each.
+*   The **fitted** nozzle reports `HH01`, not `HH00`. Comparison must be on the first **two** characters; the trailing digits are a hardware variant that the calibration table normalizes to `00`.
+*   An **X1C declares an empty `nozzle_id` on every profile** (probed live: all eight, against a four-digit `cali_idx` and a populated `setting_id`). A model-capability flag is therefore the wrong thing to gate on — handle the emptiness directly.
+
+Note this is the *same* flow-code vocabulary as `NozzleInfo`'s `type` key on H2-generation printers, but `type` reports nozzle **material** on legacy printers — see §3's note on that key.
+
+*(Verification sources: bambuddy issue #3044 and commit `e5a18bf5`.)*
 
 #### Calibration Profiles Database Telemetry Schema (The Read Stream)
 The printer returns the complete onboard profile list over the report topic (`device/{serial_number}/report`). Parsers must inspect the payload to extract the `"filaments"` array nested inside the query response envelope:

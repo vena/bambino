@@ -138,9 +138,33 @@ pub fn evaluate_spool_presence(
 /// after a live H2D Pro wiped an HT spool on every power-on (their issue #2594); the
 /// exception is recorded in `reference/05_materials_ams.md`, which also explains why
 /// `AMS_TRAY_STATE_POWER_OFF` (0) is deliberately *not* gated the same way.
+///
+/// A tray whose update carries **no `state` field at all** is treated as absent only when it
+/// also carries no filament metadata. Some firmware reports a fully populated tray without a
+/// `state` key, and an omitted field is not a report of emptiness — see the inline note on the
+/// `has_filament_metadata` check below.
 pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-    let is_absent_state = matches!(tray.state, Some(AMS_TRAY_STATE_POWER_OFF) | None)
+
+    // An *absent* `state` is not a report of emptiness. Some firmware sends a complete tray
+    // payload (`tray_info_idx`, `tray_type`, `tray_color`, `remain`) with no `state` key at
+    // all, and treating that as absent-equivalent scrubbed the spool's material data on every
+    // `TelemetryCache::sanitized_ams()` call. Fall back to the filament metadata instead —
+    // the same fallback pybambu reaches for in `_has_filament_metadata` /
+    // `_resolve_loaded_state` (`models.py:3517-3538`), which gates on a `_state_reported`
+    // flag and accepts a non-empty `tray_info_idx`, or a `tray_type` that is neither empty
+    // nor `"Empty"`, as proof a spool is loaded.
+    let has_filament_metadata = tray
+        .tray_info_idx
+        .as_ref()
+        .is_some_and(|idx| !idx.is_empty())
+        || tray
+            .tray_type
+            .as_ref()
+            .is_some_and(|t| !t.is_empty() && t != "Empty");
+
+    let is_absent_state = matches!(tray.state, Some(AMS_TRAY_STATE_POWER_OFF))
+        || (tray.state.is_none() && !has_filament_metadata)
         || (!is_ht
             && matches!(
                 tray.state,
@@ -541,6 +565,65 @@ mod tests {
         clean_stale_tray_data(&mut tray, 0);
 
         assert_eq!(tray.state, Some(AMS_TRAY_STATE_EMPTY));
+        assert_eq!(tray.remain, Some(-1));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_absent_state_with_metadata_not_cleared() {
+        // Some firmware sends a complete tray payload with no `state` key at all. An omitted
+        // field is not a report of emptiness — falling back to the filament metadata is what
+        // pybambu's `_has_filament_metadata` does when `state` was never reported.
+        let mut tray = AmsTray {
+            id: "1".into(),
+            state: None,
+            tray_type: Some("PLA".into()),
+            tray_color: Some("09FF00FF".into()),
+            tray_info_idx: Some("GFA01".into()),
+            remain: Some(72),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray, 0);
+
+        assert_eq!(tray.state, None);
+        assert_eq!(tray.tray_type, Some("PLA".into()));
+        assert_eq!(tray.tray_color, Some("09FF00FF".into()));
+        assert_eq!(tray.tray_info_idx, Some("GFA01".into()));
+        assert_eq!(tray.remain, Some(72));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_absent_state_idx_alone_not_cleared() {
+        // `tray_info_idx` alone is sufficient metadata — pybambu accepts it without a
+        // `tray_type`.
+        let mut tray = AmsTray {
+            id: "1".into(),
+            state: None,
+            tray_info_idx: Some("GFA01".into()),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray, 0);
+
+        assert_eq!(tray.tray_info_idx, Some("GFA01".into()));
+    }
+
+    #[test]
+    fn test_clean_stale_tray_data_absent_state_empty_type_cleared() {
+        // A literal "Empty" tray_type is not filament metadata, so the absent state still
+        // clears — and `is_type_cleared` would fire on it regardless.
+        let mut tray = AmsTray {
+            id: "1".into(),
+            state: None,
+            tray_type: Some("Empty".into()),
+            tray_color: Some("FF0000FF".into()),
+            ..Default::default()
+        };
+
+        clean_stale_tray_data(&mut tray, 0);
+
+        assert_eq!(tray.state, Some(AMS_TRAY_STATE_EMPTY));
+        assert_eq!(tray.tray_color, None);
         assert_eq!(tray.remain, Some(-1));
     }
 

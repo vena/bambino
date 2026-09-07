@@ -87,12 +87,21 @@ where
     /// match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
     /// class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
     /// `ams_id: 0`, the sole worked example in the reference doc.
+    ///
+    /// `extruder_id` names the hotend to feed — `Some(0)` for right/main, `Some(1)` for
+    /// left/deputy. Pass `None` on any printer without a Filament Track Switch, where the
+    /// firmware derives the hotend from the AMS's own extruder binding and the payload is
+    /// byte-identical to the pre-FTS form. On a machine *with* a switch (an H2C, for example)
+    /// every AMS reports its extruder as "not fixed" (`0xE`) and can reach either hotend
+    /// through the switch, so a `None` here means the firmware has nothing to derive from and
+    /// **discards the command in silence** — load and unload simply do nothing.
     pub async fn change_filament(
         &mut self,
         ams_id: i32,
         slot_id: i32,
         curr_temp: i32,
         tar_temp: i32,
+        extruder_id: Option<u8>,
     ) -> Result<u16, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
@@ -120,7 +129,13 @@ where
 
         self.dispatch(|seq| {
             crate::mqtt::AmsChangeFilamentRequest::new(
-                ams_id, slot_id, target, curr_temp, tar_temp, seq,
+                ams_id,
+                slot_id,
+                target,
+                curr_temp,
+                tar_temp,
+                extruder_id,
+                seq,
             )
         })
         .await
@@ -343,16 +358,27 @@ where
     /// Automatically sends a priming request on the first call after connection, because the
     /// firmware silently ignores the initial `extrusion_cali_get` command. Use
     /// `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
-    pub async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, Error> {
+    ///
+    /// **A response is the complete table for exactly one nozzle diameter.** `nozzle_diameter`
+    /// scopes the query, and the reply echoes the diameter that was *requested* rather than
+    /// reflecting installed hardware. Passing `None` sends the bare request, whose reply covers
+    /// whichever single diameter the firmware picks — on a machine that can hold more than one,
+    /// that is a partial table which looks complete to the caller. Call once per fitted diameter
+    /// and merge the results.
+    pub async fn get_k_profiles(
+        &mut self,
+        nozzle_diameter: Option<&str>,
+    ) -> Result<ExtrusionCaliGetResponse, Error> {
         if !self.k_profile_primed {
             let prime_seq = self.next_sequence_id();
-            let prime_req = crate::diagnostics::ExtrusionCaliGetRequest::new(prime_seq);
+            let prime_req =
+                crate::diagnostics::ExtrusionCaliGetRequest::new(None, nozzle_diameter, prime_seq);
             self.publish_request(&prime_req).await?;
             self.k_profile_primed = true;
         }
 
         let seq = self.next_sequence_id();
-        let req = crate::diagnostics::ExtrusionCaliGetRequest::new(seq);
+        let req = crate::diagnostics::ExtrusionCaliGetRequest::new(None, nozzle_diameter, seq);
         self.publish_request(&req).await?;
 
         let expected_seq = seq.to_string();

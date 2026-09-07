@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_ams_change_filament_load_json() {
-        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, 40005);
+        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, None, 40005);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_change_filament"#));
         assert!(json.contains(r#""ams_id":0"#));
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_ams_change_filament_unload_json() {
-        let req = AmsChangeFilamentRequest::new(0, 255, 255, 210, 210, 40008);
+        let req = AmsChangeFilamentRequest::new(0, 255, 255, 210, 210, None, 40008);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""slot_id":255"#));
         assert!(json.contains(r#""target":255"#));
@@ -678,6 +678,71 @@ mod tests {
         );
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_sub_brands":"PLA Basic""#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_uppercases_tray_color() {
+        // The firmware parses a lowercase hex letter in tray_color as 0 and stores the
+        // corrupted value while acking success (P1S firmware 01.10.00.00). Normalizing at
+        // the point the command is assembled is the single fix point.
+        let req = AmsFilamentSettingRequest::new(
+            0,
+            1,
+            "GFA01",
+            "PLA",
+            Some("Bambu PLA Basic"),
+            "09ff00ff",
+            190,
+            220,
+            10019,
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""tray_color":"09FF00FF""#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_strips_color_hash_and_keeps_case_elsewhere() {
+        let req = AmsFilamentSettingRequest::new(
+            0,
+            1,
+            "GFA01",
+            "PLA",
+            Some("Bambu PLA Basic"),
+            "#ff5100ff",
+            190,
+            220,
+            10020,
+        );
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""tray_color":"FF5100FF""#));
+        // Case is meaningful in these two and must survive untouched.
+        assert!(json.contains(r#""tray_type":"PLA""#));
+        assert!(json.contains(r#""tray_sub_brands":"Bambu PLA Basic""#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_empty_color_stays_empty() {
+        let req = AmsFilamentSettingRequest::new(0, 1, "GFA01", "PLA", None, "", 190, 220, 10021);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""tray_color":"""#));
+    }
+
+    #[test]
+    fn test_ams_change_filament_omits_extruder_id_when_none() {
+        // Without a Filament Track Switch the payload must be byte-identical to the pre-FTS
+        // form: the key is absent, not null.
+        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, None, 40009);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("extruder_id"));
+    }
+
+    #[test]
+    fn test_ams_change_filament_emits_extruder_id_when_set() {
+        // On an FTS machine every AMS reports 0xE and a command naming no extruder is
+        // discarded in silence, so the key must reach the wire when the caller supplies it.
+        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, Some(1), 40010);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""extruder_id":1"#));
     }
 
     #[test]

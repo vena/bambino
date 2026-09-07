@@ -57,6 +57,13 @@ When the bitwise presence check indicates a spool has been removed (or when the 
 
 Additionally, some models (such as `H2D`) only emit `{id, state}` in incremental updates when a slot is not fully loaded. A transition to state `9` (empty) or `10` (present but retracted), or receiving an empty string for `tray_type`, must be treated as an explicit clearing signal. Without this active sanitization, stale material parameters from previously loaded spools will persist in the state representation.
 
+##### Absent `state` Field
+The table above assumes `state` is always present. It is not: some firmware sends a complete tray payload (`tray_info_idx`, `tray_type`, `tray_color`, `remain`) with **no `state` key at all**. An omitted field is not a report of emptiness, and treating it as absent-equivalent scrubs a loaded spool's material data.
+
+When `state` was never reported for a tray, fall back to the filament metadata: a non-empty `tray_info_idx`, or a `tray_type` that is neither empty nor `"Empty"`, means a spool is loaded. This is distinct from the AMS-HT exception below — it is not model-scoped, and it triggers on the field being *absent* rather than on a particular code.
+
+**Verification source:** pybambu tracks a `_state_reported` flag and resolves through `_has_filament_metadata` when `state` was never reported (`models.py:3517-3538`, ha-bambulab PR #2105), using exactly the `tray_info_idx` / `tray_type` test above. `src/ams/parser.rs::clean_stale_tray_data` implements the same gate.
+
 ##### AMS-HT State Exception (IDs 128-135)
 An AMS-HT is a single-tray high-temperature dry box, not a 4-slot multiplexer: it does not feed filament into a shared buffer, so it has no distinct "loaded past the hub" condition to report as `11`. On a partial power-on frame it reports its **loaded** tray as `state: 9` — the opposite of the standard-AMS meaning tabulated above. Applying the generic `state ∈ {9, 10} → empty` rule to an HT unit therefore wipes a physically present spool on every power-on.
 
@@ -157,8 +164,20 @@ For spools equipped with proprietary Bambu Lab RFID tags, the printer automatica
 #### Preset Identifiers (`tray_info_idx`)
 The `"tray_info_idx"` property contains the short-format preset ID (e.g., `"GFA01"` for Bambu PLA Matte). Custom user presets created in the slicer are assigned a unique, randomized setting ID prefixed with `"PF"` followed by 17 numeric digits (e.g., `"PF12345678901234567"`).
 
+**Width caution (single-model measurement):** an A1 was observed storing a 19-character `PFUS…` cloud id as only its first 8 characters, uppercased, while acking the `ams_filament_setting` command as `"success"`. The slot then resolves to Generic, and the calibration table — keyed on the same field — loses it. Eight characters is exactly the width of a local preset id and less than half a cloud one, so cloud-derived ids are the ones this would break. Whether the width is model- or firmware-dependent, and whether the field itself is truncated or only the readback, has not been established; bambino neither truncates nor rejects on this basis. Source: bambuddy issue #3003.
+
 #### Color Encoding
 Color parameters (`"tray_color"` and `"cols"`) are formatted as 8-character hexadecimal strings representing RRGGBBAA. Empty or unconfigured slots transmit `"00000000"` (zeroed alpha channel), whereas configured filaments use `"RRGGBBAA"` with `"FF"` alpha (e.g., `"FF0000FF"`).
+
+**Outbound hex digits must be uppercase.** The firmware parses a lowercase hex letter in an outbound `tray_color` as `0` and stores the corrupted value. The failure is silent — the `ams_filament_setting` ack echoes the value that was sent and reports `result: "success"`; only the next AMS push status reveals it:
+
+```
+sent 09ff00ff -> stored 09000000
+sent ff5100ff -> stored 00510000
+sent 090000FF -> stored 090000FF   (uppercase survives intact)
+```
+
+Measured on a P1S running firmware `01.10.00.00` (bambuddy issue #2987). Normalize at the point the command is assembled, stripping a leading `#` and leaving an empty string empty — bambino does this in `AmsFilamentSettingRequest::new`. Case is **not** to be normalized in `tray_type` or `tray_sub_brands`, where it is meaningful.
 
 ---
 
@@ -177,6 +196,10 @@ The `"ams_mapping"` parameter is a flat, 1-to-1, forward-mapped JSON array of in
 The integer values within the flat `ams_mapping` array represent absolute physical hardware channels:
 *   **`0` to `15`**: Standard AMS channels. Calculated via `(ams_id * 4) + slot_id` (`ams_id` 0-3, `slot_id` 0-3).
 *   **`128` to `135`**: Physical single-slot high-temperature AMS-HT units. Global channel ID equals the unit's bus ID (`ams_id`).
+
+    **Verification source:** BambuStudio's `DevMappingUtil::ams_filament_mapping` (`DevMapping.cpp:175`) computes the N3S tray index as `ams_id + tray_id`, yielding 128-135, and that value flows through `FilamentInfo::tray_id` into `mapping_v0_json` — the chain that actually builds this flat array. Corroborated independently by Bambuddy, whose `print_scheduler.py::_global_tray_id` returns `ams_id if ams_id >= 128 else ams_id * 4 + tray_id` and whose `bambu_mqtt.py` puts that `tray_id` straight into `command["print"]["ams_mapping"]`.
+
+    Do not confuse this with the **16-23** range: BambuStudio carries three different N3S index formulas for three different consumers, and `DevAms::GetTrayId` (`DevFilaSystem.cpp:248`) yields `16 + (ams_id - 128) + slot_id` — but that value is only ever used as a `tray_exist_bits` bit index (see §5.1), never as a flat `ams_mapping` channel. `DevFilaSystem::GetTrayIndexMap` uses `tray_index = ams_id` (128-135) for calibration `tray_id` and AMS settings. An upstream pybambu comment asserting 16-23 for the flat slot index traces to a **cloud** `amsDetailMapping` observation, a structure the LAN protocol never carries.
 *   **`-1`**: Omit/Unmapped. Mandatory marker for any unused project filament slot or any slot routed to an **External Spool** (non-bus tray).
 
 ##### External Spool Flat-Mapping Restrictions
@@ -230,6 +253,14 @@ Single-nozzle printers report `tray_now = 254` for the external spool on the tel
 Filament loading and unloading sequences are triggered directly by publishing an `"ams_change_filament"` command payload to the request topic.
 
 **`target` derivation (BUG-116)**, confirmed against BambuStudio's `command_ams_change_filament` (`DeviceManager.cpp:1602-1638`): `255` on unload; the `ams_id` itself for any AMS-HT/external-spool unit (`ams_id >= 16`, covers `128`-`135` and `254`/`255`); otherwise the flat global tray ID `(ams_id * 4) + slot_id` for a standard unit. `target` only coincidentally equals `slot_id` when `ams_id == 0` (example 1 below) — the earlier version of this doc generalized that coincidence into a wrong rule, and examples 2/3's `target` values below were wrong for the same reason (both should be `255`, the external-spool `ams_id`, not `slot_id`).
+
+**`extruder_id` (optional): `0` = right/main, `1` = left/deputy.** BambuStudio's `DeviceManager::command_ams_change_filament` takes it as an optional field and omits it unless a **Filament Track Switch** is fitted, and the omission is correct on any printer without one: each AMS is wired to exactly one hotend, and the firmware derives the target from that binding.
+
+With an FTS fitted the situation inverts. Every AMS reports its extruder as "not fixed" (`0xE` in the `info` bitfield — see §5.1's `filament_switch_inlet` notes), each unit is plumbed into one of the switch's two inlets, and from there it can reach *either* hotend. The firmware then has nothing to derive from, and a load or unload command naming neither extruder is **discarded in silence** — on an H2C this presents as load and unload simply doing nothing, with no error and no HMS entry.
+
+Omit the key entirely rather than sending a default when the target hotend is unknown; a wrong explicit value feeds the wrong nozzle. Consider refusing the operation up front when an AMS is unassigned to an inlet, mirroring BambuStudio's `DevFilaSwitch::IsReady`.
+
+**Verification source:** bambuddy commit `9500c046` ("Ask which nozzle to feed when a Filament Track Switch is fitted"), whose `ams_load_filament` attaches `extruder_id` only when the caller supplies one, verified on an H2C-1 with AMS-A slot 3 across all four load/unload combinations.
 
 ##### 1. Load Filament from standard AMS Slot
 Instructs the printer to heat the hotend and feed filament from the designated physical AMS tray to the toolhead.

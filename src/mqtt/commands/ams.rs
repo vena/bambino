@@ -9,6 +9,20 @@ use serde::Serialize;
 
 use super::ClampedTaskId;
 
+/// Normalizes a filament colour to the form the firmware actually stores.
+///
+/// Strips a leading `#` and uppercases the hex digits. The printer parses lowercase hex
+/// letters in `tray_color` as `0` — measured on a P1S running firmware `01.10.00.00`, where
+/// `09ff00ff` came back as `09000000` while `090000FF` survived intact — and the corruption is
+/// silent, because the `ams_filament_setting` ack echoes what was sent and reports success.
+/// An empty string stays empty. Mirrors bambuddy's single normalization point
+/// (`bambu_mqtt.py:139`), which applies the same strip-and-uppercase.
+fn normalize_tray_color(color_hex: &str) -> String {
+    let trimmed = color_hex.trim();
+    let trimmed = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    trimmed.to_uppercase()
+}
+
 /// Overwrites physical attributes or custom slicer presets assigned to a specific tray.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsFilamentSettingPayload {
@@ -20,13 +34,26 @@ pub struct AmsFilamentSettingPayload {
     pub ams_id: i32,
     /// Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
     pub tray_id: i32,
-    /// Standard filament preset index code (e.g. "GFL05" / "PF12345678901234567") [REF-AMS-SP_CFG].
+    /// Standard filament preset index code (e.g. `"GFL05"`, or a `"PF"`-prefixed preset id)
+    /// [REF-AMS-SP_CFG].
+    ///
+    /// **Length caution, unconfirmed:** an A1 was measured storing a 19-character `PFUS…`
+    /// cloud id as only its first 8 characters, uppercased, while acking the command as
+    /// `"success"`; the slot then resolves to Generic and drops out of the calibration table,
+    /// which is keyed on the same field. Eight characters is exactly the width of a local
+    /// preset id and less than half a cloud one, so cloud-derived ids are the ones at risk.
+    /// This rests on a single measurement on one model — whether the width is model- or
+    /// firmware-dependent, and whether the field itself truncates or only the readback, is
+    /// unestablished, so bambino neither truncates nor rejects on this basis. See issue #202.
     pub tray_info_idx: String,
     /// Material type string (e.g. "PLA", "PETG").
     pub tray_type: String,
     /// Sub-brand label (e.g. "Generic Basic"); defaults to `"{material_type} Basic"` when not given.
     pub tray_sub_brands: String,
     /// Structural hexadecimal color in RRGGBBAA format (e.g., "FFFF00FF").
+    ///
+    /// **Must be uppercase.** The firmware parses lowercase hex digits as `0` and stores the
+    /// corrupted value silently — [`AmsFilamentSettingRequest::new`] normalizes for you.
     pub tray_color: String,
     /// Minimum safe nozzle temperature (°C) for this filament.
     pub nozzle_temp_min: u32,
@@ -65,6 +92,13 @@ impl AmsFilamentSettingRequest {
     ///   Ext-R on IDEX machines mis-routes the pressure advance profile to the left
     ///   carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     ///   uncalibrated.
+    ///
+    /// **`color_hex` is normalized to uppercase**, with a leading `#` stripped. The printer
+    /// parses lowercase hex letters in `tray_color` as `0` and the corruption is silent: the
+    /// `ams_filament_setting` ack echoes the value that was sent and reports `result:
+    /// "success"`, and only the next AMS push status reveals it (measured on a P1S running
+    /// firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
+    /// `material_type` and `sub_brands` are deliberately left alone; case is meaningful there.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ams_id: i32,
@@ -90,7 +124,7 @@ impl AmsFilamentSettingRequest {
                 tray_info_idx: String::from(preset_code),
                 tray_type: String::from(material_type),
                 tray_sub_brands,
-                tray_color: String::from(color_hex),
+                tray_color: normalize_tray_color(color_hex),
                 nozzle_temp_min: temp_min,
                 nozzle_temp_max: temp_max,
             },
@@ -185,6 +219,19 @@ pub struct AmsChangeFilamentPayload {
     pub tar_temp: i32,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
+    /// Which hotend to feed — `0` = right/main, `1` = left/deputy. Omitted from the wire when
+    /// `None`, matching BambuStudio, whose `DeviceManager::command_ams_change_filament` takes
+    /// it as an optional field and leaves it out unless a Filament Track Switch is fitted.
+    ///
+    /// **Required on a Filament Track Switch machine.** Without a switch each AMS is wired to
+    /// exactly one hotend and the firmware derives the target from that binding, so naming it
+    /// is redundant. With one fitted the situation inverts: every AMS reports its extruder as
+    /// "not fixed" (`0xE`, see [`crate::types::telemetry::ExtruderInfo`]) and is plumbed into
+    /// one of the switch's two inlets, from which it can reach either hotend — so a command
+    /// naming neither extruder is **discarded in silence**. On an H2C that presents as load
+    /// and unload simply doing nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extruder_id: Option<u8>,
 }
 
 /// Loads or unloads filament from an AMS slot or external spool to the toolhead.
@@ -196,12 +243,17 @@ pub struct AmsChangeFilamentRequest {
 
 impl AmsChangeFilamentRequest {
     /// Builds an `ams_change_filament` request to load or unload filament.
+    ///
+    /// Pass `extruder_id: None` on any printer without a Filament Track Switch — the wire
+    /// payload is then byte-identical to the pre-FTS form. See
+    /// [`AmsChangeFilamentPayload::extruder_id`] for why an FTS machine requires it.
     pub fn new(
         ams_id: i32,
         slot_id: i32,
         target: i32,
         curr_temp: i32,
         tar_temp: i32,
+        extruder_id: Option<u8>,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
@@ -213,6 +265,7 @@ impl AmsChangeFilamentRequest {
                 curr_temp,
                 tar_temp,
                 sequence_id: sequence_id.into().to_string(),
+                extruder_id,
             },
         }
     }
