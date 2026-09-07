@@ -402,9 +402,16 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
         // MQTT v3.1.1 CONNACK codes 1-3 (unacceptable protocol version, identifier
         // rejected, server unavailable) are distinct from 4-5 (bad credentials/not authorized)
-        // — only the latter pair actually means the access code was rejected, matching
-        // AccessDenied's own doc comment. Collapsing 1-3 into AccessDenied too would misdiagnose
-        // e.g. a transient "server unavailable" as "check your access code."
+        // — only the latter pair is an authorization refusal, matching AccessDenied's own doc
+        // comment. Collapsing 1-3 into AccessDenied too would misdiagnose e.g. a transient
+        // "server unavailable" as "check your access code."
+        //
+        // Note what 4-5 does *not* prove. The usual cause is a rejected or rotated LAN access
+        // code (a factory reset regenerates it), but code 5 also comes back when the printer is
+        // simply powered off or still booting — unreachable at the application layer rather
+        // than refusing credentials. Nothing in the CONNACK distinguishes the two, so mapping
+        // both to AccessDenied stays correct; only a caller that renders it as "your access
+        // code is wrong" would be overclaiming.
         match connack_code {
             0 => {}
             4 | 5 => {
