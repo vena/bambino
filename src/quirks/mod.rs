@@ -26,11 +26,14 @@ pub trait ModelQuirks {
     /// Returns true if this model series requires plaintext transmissions on the FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
     fn uses_plaintext_ftps_data_channel(&self) -> bool;
 
-    /// Returns true if this model series must restrict its TLS version strictly to TLS 1.2 to prevent session resumption failure [REF-FTPS-CONN].
+    /// Returns true if this model series must restrict its TLS version strictly to TLS 1.2 [REF-FTPS-CONN].
     ///
-    /// This is a firmware bug workaround, not a real protocol ceiling — see the
-    /// doc comments on `P2Quirks`/`X2Quirks` (the only two implementers returning
-    /// `true`) for per-model evidence and confidence level.
+    /// This is a firmware bug workaround, not a real protocol ceiling. Both caps are
+    /// **confirmed by symptom with no confirmed mechanism** — each reporter saw the failure
+    /// clear when the cap was applied, but neither root cause has been traced, and the X2D's
+    /// original explanation has since been measured wrong. A cap costs nothing on a printer that
+    /// never offers TLS 1.3, so both are kept. See the doc comments on `P2Quirks`/`X2Quirks`
+    /// (the only two implementers returning `true`) for per-model evidence.
     fn enforces_ftps_tls_1_2(&self) -> bool;
 
     /// Evaluates whether the physical front enclosure door is open based on model-specific sensor routing [REF-NET-DOOR].

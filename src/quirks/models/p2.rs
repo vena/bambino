@@ -36,6 +36,17 @@ impl ModelQuirks for P2Quirks {
     /// came back, which `FtpsClient::upload_file` already does
     /// unconditionally (see its doc comment in `src/ftps/client.rs`) — this
     /// quirk alone would not have been a complete fix.
+    ///
+    /// **The session-ticket mechanism is firmware-version-scoped at best.** It presupposes the
+    /// printer negotiates TLS 1.3 in the first place, and `bambuddy`'s later nine-printer probe
+    /// (issue #2780) found six P2S units refusing 1.3 outright — correcting their own earlier
+    /// claim that "the P2S evidently does offer 1.3". On that firmware the negotiated version
+    /// was already 1.2 and this cap changes nothing. Either the firmware moved between the two
+    /// reports, or #1401 was fixed by something else in the same change. Kept because a reporter
+    /// confirmed the symptom cleared and nobody has hardware to re-test it on; treat it as
+    /// confirmed-by-symptom, not confirmed-by-mechanism. This remains the only one of bambino's
+    /// two TLS 1.2 caps whose symptom a session-ticket problem could explain at all — see
+    /// `X2Quirks::enforces_ftps_tls_1_2`, whose mechanism has been falsified outright.
     fn enforces_ftps_tls_1_2(&self) -> bool {
         true
     }
