@@ -250,7 +250,13 @@ and source error tracing are derived automatically via `thiserror`.
 
 - **`AccessDenied`**
 
-  Emitted when the provided 8-character LAN access code fails verification checks.
+  Emitted when the broker refuses the connection with MQTT CONNACK code 4 or 5.
+  
+  Most often the 8-character LAN access code was rejected or has been rotated (a factory
+  reset regenerates it). It is **not** proof of that, though: code 5 is also returned when
+  the printer is powered off or still booting, i.e. unreachable at the application layer.
+  Nothing in the CONNACK distinguishes the two cases, so a caller should not tell a user to
+  re-check their access code without also suggesting the printer may simply be off.
 
 - **`Timeout`**
 

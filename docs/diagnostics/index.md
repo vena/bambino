@@ -159,9 +159,15 @@ yourself.
 
 #### Implementations
 
-- <span id="extrusioncaligetrequest-new"></span>`fn new(sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid)
+- <span id="extrusioncaligetrequest-new"></span>`fn new(filament_id: Option<&str>, nozzle_diameter: Option<&str>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../mqtt/commands/index.md#clampedtaskid)
 
   Builds an `extrusion_cali_get` request.
+
+  `filament_id` and `nozzle_diameter` scope the query; both are omitted from the wire when
+  `None`, which reproduces the bare request shape exactly. Pass a `nozzle_diameter` on any
+  machine that can hold more than one — see [`ExtrusionCaliGetPayload::nozzle_diameter`](kprofile/index.md#extrusioncaligetpayload)
+  for why a bare request returns a silently partial table there.
+
   Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
   documented above.
 
@@ -436,6 +442,24 @@ Structured representation of a Linear Advance calibration profile entry on the p
 - **`nozzle_id`**: `String`
 
   System designation of the target hotend profile structure (e.g. `"HS00-0.4"`).
+  
+  **The leading two characters are a flow code**, not a hardware id: `HH` = high flow,
+  `HS` = standard. A printer can hold profiles for both against one diameter — an H2D was
+  observed with 102 high-flow entries against 6 standard ones — and the same filament
+  reads a different `k_value` through each, so the code is load-bearing when resolving a
+  slot to a profile.
+  
+  Two traps follow from that:
+  
+  * The **fitted** nozzle reports `HH01`, not `HH00`. Compare on the first **two**
+    characters only; the trailing digits are a hardware variant that the calibration table
+    normalizes to `00`.
+  * Some models declare this **empty on every profile** — an X1C was probed live with all
+    eight entries empty here, against a four-digit `cali_idx` and a populated `setting_id`.
+    Handle the emptiness directly; a model-capability flag is the wrong thing to gate on.
+  
+  See `reference/07_diagnostics_hms.md` §7.2 for the full slot-resolution rule, including
+  why `cali_idx` alone does not identify a profile.
 
 - **`extruder_id`**: `u8`
 

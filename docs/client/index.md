@@ -235,7 +235,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 #### Implementations
 
-- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
@@ -254,6 +254,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
   class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
   `ams_id: 0`, the sole worked example in the reference doc.
+
+  `extruder_id` names the hotend to feed — `Some(0)` for right/main, `Some(1)` for
+  left/deputy. Pass `None` on any printer without a Filament Track Switch, where the
+  firmware derives the hotend from the AMS's own extruder binding and the payload is
+  byte-identical to the pre-FTS form. On a machine *with* a switch (an H2C, for example)
+  every AMS reports its extruder as "not fixed" (`0xE`) and can reach either hotend
+  through the switch, so a `None` here means the firmware has nothing to derive from and
+  **discards the command in silence** — load and unload simply do nothing.
 
 - <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -333,13 +341,20 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   telemetry messages that arrive in the interim. Wrap in a platform-specific
   timeout if you need a shorter deadline than `command_timeout_secs`.
 
-- <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self, nozzle_diameter: Option<&str>) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
 
   Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
 
   Automatically sends a priming request on the first call after connection, because the
   firmware silently ignores the initial `extrusion_cali_get` command. Use
   `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
+
+  **A response is the complete table for exactly one nozzle diameter.** `nozzle_diameter`
+  scopes the query, and the reply echoes the diameter that was *requested* rather than
+  reflecting installed hardware. Passing `None` sends the bare request, whose reply covers
+  whichever single diameter the firmware picks — on a machine that can hold more than one,
+  that is a partial table which looks complete to the caller. Call once per fitted diameter
+  and merge the results.
 
 - <span id="superprinterclient-set-k-profile-primed"></span>`fn set_k_profile_primed(&mut self, primed: bool)`
 
@@ -1053,6 +1068,38 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Only supported on models with active PTC chamber heaters (X1E, X2D, H2 series).
   Models with passive chamber sensors but no heater (X1C, P2S) will return a capability
   mismatch error — their firmware silently ignores M141.
+
+  **This does not manage the airduct flap, and on a model that has one the target will not
+  be reached without it.** `M141` and the flap are independent: the flap stays wherever it
+  was last left, and its default cooling position actively vents the chamber, so a
+  chamber-heat request issued with the flap in cooling never converges — the heater is
+  fighting an open exhaust, and this method still returns `Ok`. Use
+  [`preheat_chamber()`](#printerclient) to drive both together, or call
+  [`set_airduct_mode()`](#printerclient) yourself.
+
+- <span id="superprinterclient-preheat-chamber"></span>`async fn preheat_chamber(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+
+  Sets the chamber target *and* the airduct flap that has to agree with it.
+
+  [`set_chamber_temperature()`](#printerclient) is the primitive: it emits
+  `M141` and nothing else. That is not enough on any model fitted with the cooling/heating
+  flap (H2C, H2D, H2D Pro, H2S, X2D, and P2S for the cooling direction only, having the
+  flap but no active chamber heater). The flap is independent of `M141` and **persists**
+  across jobs, and its default cooling position actively vents the chamber — so a heat
+  request with the flap left in cooling never converges.
+
+  This method sets the flap to [`AirductMode::Heating`](../mqtt/commands/hardware/index.md#airductmode) before raising the target, and back
+  to [`AirductMode::Cooling`](../mqtt/commands/hardware/index.md#airductmode) when `target_temp` is `0`. The second half is not optional:
+  a PLA job following an ABS job on the same machine would otherwise inherit the heating
+  flap and overheat.
+
+  On a model with no flap ([`ModelQuirks::supports_airduct_mode`](../quirks/index.md#modelquirks) false), this is exactly
+  `set_chamber_temperature`. On a model with a flap but no heater (P2S), a non-zero
+  `target_temp` still returns the same `ModelMismatch` the primitive would, and the flap is
+  left alone — the caller wanted heat this model cannot make.
+
+  Returns the sequence ID of the `M141` when one is sent, or of the `set_airduct` command
+  when `target_temp` is `0` on a flap-only model.
 
 - <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity)
 

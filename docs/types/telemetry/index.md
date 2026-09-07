@@ -1193,6 +1193,20 @@ values > 500 encode `(target << 16) | actual`, values <= 500 are direct actual t
 - **`info`**: `Option<u32>`
 
   Info bitmask.
+  
+  Three bits are known, decoded by BambuStudio's `DevExtruderSystem.cpp:354-356` via
+  `DevUtil::get_flag_bits(info, N)` (which reads a single bit at position `N`, its `count`
+  defaulting to 1):
+  
+  | Bit | Mask | Meaning |
+  |---|---|---|
+  | 1 | `0b0010` | The extruder holds filament |
+  | 2 | `0b0100` | The buffer holds filament |
+  | 3 | `0b1000` | A nozzle is fitted |
+  
+  Read out of BambuStudio's parser rather than from a wire capture; bit 1 is independently
+  corroborated by bambuddy's `ExtruderSlot`, which computes `has_filament` as
+  `bool(flags & 0b10)`. Bits 0 and 4+ have no recorded meaning.
 
 - **`filam_bak`**: `Vec<u32>`
 
@@ -1329,6 +1343,7 @@ struct NozzleInfo {
     pub filament_id: Option<String>,
     pub fila_id: Option<String>,
     pub stat: Option<u32>,
+    pub p_t: Option<u64>,
 }
 ```
 
@@ -1348,6 +1363,11 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - **`diameter`**: `Option<f32>`
 
   Nozzle orifice diameter in millimeters (e.g. 0.4).
+  
+  **Can be stale.** An empty hotend is still reported in `nozzle_info`, carrying the
+  diameter of the nozzle it last held — measured on an idle H2C, where an unoccupied
+  position read `diameter: 0.4` alongside `max_temp: 0` and serial `"N/A"`. Establish
+  presence with [`NozzleInfo::is_installed()`](device/index.md#nozzleinfo) before trusting this.
 
 - **`tm`**: `Option<u32>`
 
@@ -1360,6 +1380,13 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - **`nozzle_type`**: `Option<String>`
 
   Core physical nozzle composition or tool type designation.
+  
+  **Two vocabularies by generation.** Legacy printers report the nozzle *material* here
+  (e.g. `"hardened_steel"`, `"stainless_steel"`); H2-generation printers report a *flow
+  code* instead (`"HH"` = high flow, `"HS"` = standard, followed by a hardware-variant
+  digit pair). Do not assume one and parse the other. The related but distinct
+  `nozzle_id` on a K-profile entry uses the flow-code vocabulary only — see
+  `crate::diagnostics::KProfileEntry::nozzle_id`.
 
 - **`wear`**: `Option<u32>`
 
@@ -1392,6 +1419,17 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 - **`stat`**: `Option<u32>`
 
   Nozzle status bitmask.
+  
+  **Not a presence indicator.** It read `0` on every entry of an H2C's `nozzle_info`,
+  occupied and empty alike — use [`NozzleInfo::is_installed()`](device/index.md#nozzleinfo) instead.
+
+- **`p_t`**: `Option<u64>`
+
+  Cumulative print time for this individual hotend, in seconds.
+  
+  A wear/usage counter tied to the physical hotend rather than the position it sits in,
+  which is what makes it meaningful on a rack machine where hotends are swapped between
+  slots. Reported by H2C Vortek rack hotends; absent elsewhere. Divide by 3600 for hours.
 
 #### Implementations
 
@@ -1410,6 +1448,29 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   real hardware: H2C ("2 Slots, up to 7 active nozzles" per `MODEL_MATRIX.csv`) is a
   currently-modeled printer with existing rack-aware code elsewhere
   (`src/client/thermal.rs`'s H2C nozzle-ID validation, `src/quirks/mod.rs`).
+
+- <span id="nozzleinfo-is-installed"></span>`fn is_installed(&self) -> bool`
+
+  Returns whether a hotend is physically mounted in this position.
+
+  An empty hotend is **not** omitted from `nozzle_info` — it is still reported, keeping
+  the [`diameter`](device/index.md#nozzleinfo) of whatever it last held. Measured on an idle H2C, an
+  unoccupied position read `diameter: 0.4`, `max_temp: 0`, serial `"N/A"`. So presence has
+  to be *stated*, and neither field states it alone:
+
+  * the serial must be the firmware's explicit `"N/A"` sentinel, **and**
+  * the temperature rating must be absent or zero.
+
+  Either check on its own gives a wrong answer on some model, because a firmware that
+  reports neither field normalizes to the same shape as an empty hotend. Requiring both
+  means a not-reported entry reads as installed, which is the safe direction: it defers to
+  whatever the caller does with a present-but-unknown hotend rather than silently hiding
+  one.
+
+  [`stat`](device/index.md#nozzleinfo) is not usable for this — it read `0` on every entry, occupied and
+  empty alike. An empty **rack dock** is a different case: it is absent from the payload
+  entirely, so an id in `16..=21` already implies a nozzle is in it (see
+  [`is_rack_stored()`](device/index.md#nozzleinfo)).
 
 #### Trait Implementations
 
@@ -1908,6 +1969,7 @@ struct PrinterTelemetry {
     pub canvas_id: Option<String>,
     pub design_id: Option<String>,
     pub model_id: Option<String>,
+    pub plate_idx: Option<i32>,
     pub profile_id: Option<String>,
     pub project_id: Option<String>,
     pub batch_id: Option<String>,
@@ -2197,6 +2259,13 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`model_id`**: `Option<String>`
 
   Cloud model ID.
+
+- **`plate_idx`**: `Option<i32>`
+
+  Which plate of a multi-plate 3MF the current job was sliced for.
+  
+  Needed to pull the right plate's metadata — thumbnail, filament list, bed temperature —
+  out of the project file, since a 3MF's per-plate data is indexed on exactly this.
 
 - **`profile_id`**: `Option<String>`
 

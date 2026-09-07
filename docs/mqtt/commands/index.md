@@ -78,9 +78,13 @@ Loads or unloads filament from an AMS slot or external spool to the toolhead.
 
 #### Implementations
 
-- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+- <span id="amschangefilamentrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, target: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Builds an `ams_change_filament` request to load or unload filament.
+
+  Pass `extruder_id: None` on any printer without a Filament Track Switch — the wire
+  payload is then byte-identical to the pre-FTS form. See
+  [`AmsChangeFilamentPayload::extruder_id`](ams/index.md#amschangefilamentpayload) for why an FTS machine requires it.
 
 #### Trait Implementations
 
@@ -211,6 +215,13 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
     Ext-R on IDEX machines mis-routes the pressure advance profile to the left
     carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     uncalibrated.
+
+  **`color_hex` is normalized to uppercase**, with a leading `#` stripped. The printer
+  parses lowercase hex letters in `tray_color` as `0` and the corruption is silent: the
+  `ams_filament_setting` ack echoes the value that was sent and reports `result:
+  "success"`, and only the next AMS push status reveals it (measured on a P1S running
+  firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
+  `material_type` and `sub_brands` are deliberately left alone; case is meaningful there.
 
 #### Trait Implementations
 

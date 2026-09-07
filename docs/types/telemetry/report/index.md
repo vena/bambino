@@ -293,6 +293,7 @@ struct PrinterTelemetry {
     pub canvas_id: Option<String>,
     pub design_id: Option<String>,
     pub model_id: Option<String>,
+    pub plate_idx: Option<i32>,
     pub profile_id: Option<String>,
     pub project_id: Option<String>,
     pub batch_id: Option<String>,
@@ -582,6 +583,13 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`model_id`**: `Option<String>`
 
   Cloud model ID.
+
+- **`plate_idx`**: `Option<i32>`
+
+  Which plate of a multi-plate 3MF the current job was sliced for.
+  
+  Needed to pull the right plate's metadata — thumbnail, filament list, bed temperature —
+  out of the project file, since a 3MF's per-plate data is indexed on exactly this.
 
 - **`profile_id`**: `Option<String>`
 

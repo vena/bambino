@@ -60,6 +60,11 @@ after a live H2D Pro wiped an HT spool on every power-on (their issue #2594); th
 exception is recorded in `reference/05_materials_ams.md`, which also explains why
 `AMS_TRAY_STATE_POWER_OFF` (0) is deliberately *not* gated the same way.
 
+A tray whose update carries **no `state` field at all** is treated as absent only when it
+also carries no filament metadata. Some firmware reports a fully populated tray without a
+`state` key, and an omitted field is not a report of emptiness — see the inline note on the
+`has_filament_metadata` check below.
+
 ### `evaluate_spool_presence`
 
 ```rust

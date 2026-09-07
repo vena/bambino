@@ -41,13 +41,29 @@ Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 
 - <span id="x2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
 
-  X2D firmware `01.01.00.00` fails the implicit-FTPS handshake on port 990 with `[SSL: WRONG_VERSION_NUMBER]` against a TLS 1.3 `ClientHello`.
-  **Root cause unconfirmed** — the independent `bambuddy` project (reporter `@vasmarfas`, upstream
-  issue #1638) capped X2D to TLS 1.2 "by analogy" with the P2S session-ticket bug (see
-  `P2Quirks::enforces_ftps_tls_1_2`), explicitly noting the X2D failure could be a distinct bug
-  (different FTPS auth variant or port) rather than the same one. Treat this as
-  confirmed-by-symptom, not confirmed-by-root-cause. See [REF-FTPS-CONN] in `reference/02_ftps.md`
-  §2.1.
+  X2D firmware `01.01.00.00` fails the implicit-FTPS handshake on port 990 with `[SSL: WRONG_VERSION_NUMBER]`.
+
+  **Confirmed by symptom; the mechanism this cap was originally justified by has since been
+  falsified.** The earlier reading — that the error came from the client offering a TLS 1.3
+  `ClientHello` — does not survive measurement. `bambuddy`'s nine-printer farm probe
+  (issue #2780) pinned three results: a cleartext `421` banner on the TLS port produces
+  `[SSL: WRONG_VERSION_NUMBER]`, byte for byte what the field reports; a TLS-1.2-only server
+  answering a client forced to 1.3 produces `TLSV1_ALERT_PROTOCOL_VERSION` instead; and an
+  uncapped client reaches a 1.2-only peer unaided. So `WRONG_VERSION_NUMBER` means the
+  peer's first bytes were **not a TLS record at all**, a version mismatch cannot produce it,
+  and reaching a TLS-1.2-only peer needs no cap. The leading hypothesis is now an FTP-level
+  refusal sent in the clear (such as `421 Too many connections`) from a printer out of
+  connection slots.
+
+  The cap is kept anyway: the original reporter (`@vasmarfas`, bambuddy issue #1638) saw the
+  symptom clear, and a cap costs nothing on a printer that never offers TLS 1.3. What is
+  wrong is the recorded reasoning and the confidence it implied, not the setting. bambuddy
+  marked their own X2D entry RE-TEST WANTED for the same reason. **Re-test on X2D hardware**
+  — a packet capture of a port-990 connect showing whether the printer's first bytes are a
+  TLS record or a cleartext FTP reply would settle it, and if it is a cleartext `421` this
+  cap is unrelated to the fix and should be reconsidered.
+
+  See [REF-FTPS-CONN] in `reference/02_ftps.md` §2.1.
 
 - <span id="x2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
 
