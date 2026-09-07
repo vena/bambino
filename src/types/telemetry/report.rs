@@ -333,6 +333,13 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub model_id: Option<String>,
 
+    /// Which plate of a multi-plate 3MF the current job was sliced for.
+    ///
+    /// Needed to pull the right plate's metadata — thumbnail, filament list, bed temperature —
+    /// out of the project file, since a 3MF's per-plate data is indexed on exactly this.
+    #[serde(default)]
+    pub plate_idx: Option<i32>,
+
     /// Cloud profile ID.
     #[serde(default)]
     pub profile_id: Option<String>,

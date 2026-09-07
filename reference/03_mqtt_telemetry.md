@@ -27,6 +27,17 @@ Local broker interaction occurs via MQTT over TLS (MQTTS) on Port `8883`. The lo
 
 Status telemetry structures, string emission anomalies, and task-ID overflow limits are processed via the primary status channel.
 
+**`plate_idx`** identifies which plate of a multi-plate 3MF the current job was sliced for. A consumer needs it to pull the right plate's metadata — thumbnail, filament list, bed temperature — out of the project file, since a 3MF indexes per-plate data on exactly this. *(Verification source: ha-bambulab PR #2067.)*
+
+**`subtask_name` also carries the printer's own internal jobs.** A consumer asking "is this a real user print?" must filter these four names out:
+
+*   `auto_cali_for_user`
+*   `auto_pa_line_calib_mode`
+*   `pa_line_calib_mode` — manual flow dynamics
+*   `pa_pattern_calib_mode` — manual flow dynamics
+
+The last two are the ones most easily missed: bare subtask names with no `/usr/` path and **no `auto_` prefix**, so a filter keyed on the prefix or the path lets them through as user prints. Match the four **exactly**, after normalizing path, suffix and case — never on a `pa_` stem, or a user's own `pa_bracket.3mf` gets swallowed with them. *(Verification source: bambuddy issue #2957 and its follow-ups.)*
+
 ```json
 {
   "print": {
@@ -34,6 +45,7 @@ Status telemetry structures, string emission anomalies, and task-ID overflow lim
     "gcode_file": "/Metadata/plate_1.gcode.3mf",
     "subtask_name": "MyPrintJob",
     "subtask_id": "14852932",
+    "plate_idx": 2,
     "mc_print_sub_stage": 0,
     "mc_percent": 10,
     "layer_num": 12,
@@ -168,6 +180,22 @@ The structured array nested within `device.nozzle.info` contains nozzle characte
     *   `"sn"`: Unique serial number of the hotend assembly.
     *   `"color_m"`: Hex color of the loaded filament.
     *   `"fila_id"`: Filament profile preset identifier.
+    *   `"p_t"`: Cumulative print time **in seconds** for this individual hotend. A wear/usage counter tied to the physical hotend rather than the position it occupies, which is what makes it meaningful on a rack machine where hotends are swapped between slots. Divide by 3600 for hours. *(Verification source: ha-bambulab PR #2094, which surfaces it as an hours sensor.)*
+
+##### Empty Hotend Reporting and Stale `diameter`
+An **empty mounted position is still reported** in `nozzle_info`, and it keeps the **diameter of the nozzle it last held**. Measured on an idle H2C, an unoccupied position read `diameter: 0.4`, `max_temp: 0`, serial `"N/A"`. Two consequences:
+
+1.  `diameter` cannot be trusted without first establishing that a hotend is actually present.
+2.  Presence has to be **stated**, not inferred from one field. The serial must be the firmware's explicit `"N/A"` **and** the temperature rating must be absent or zero. Either check alone gives a wrong answer on some model, because a firmware that reports neither field normalizes to the same shape as an empty hotend.
+
+`stat` is **not** usable for this — it read `0` on every entry, occupied and empty alike.
+
+An empty **rack dock** is a different case: it is absent from the payload entirely, so an id in `16`-`21` already implies a nozzle is in it. The rule above is about a mounted position, not a rack slot.
+
+bambino implements the two-field test as `NozzleInfo::is_installed()`. *(Verification source: bambuddy issue #2885.)*
+
+##### `type` Carries Two Vocabularies by Generation
+The `"type"` key (bambino's `NozzleInfo::nozzle_type`) reports the nozzle **material** on legacy printers (e.g. `"hardened_steel"`) but a **flow code** on H2-generation printers (`"HH"` high flow / `"HS"` standard, plus a hardware-variant digit pair). Do not assume one and parse the other. This is the same flow-code vocabulary as a K-profile entry's `nozzle_id` — see §7.2 of `reference/07_diagnostics_hms.md` for its encoding and comparison rule.
 
 #### Fan Speed Telemetry Key Mapping [REF-CLIM-FANS]
 On-board cooling fan speeds are represented in telemetry via the following JSON keys:
@@ -358,6 +386,18 @@ On single-nozzle architectures, this field resolves to `0` to prevent the firmwa
 
 ###### Network Path Rule (`url`)
 When submitting direct local network print jobs, the `"url"` parameter universally utilizes the `ftp://` or `ftp:///` scheme across all current hardware series (e.g., `"ftp://job.3mf"`). The printer's onboard print processor automatically resolves this scheme over its local FTP server loop. Cloud-brokered formats such as `/mnt/sdcard/` or `file:///mnt/sdcard/` are exclusively evaluated during remote cloud execution and are rejected by the local command parser when dispatching via the local broker.
+
+###### Inbound `project_file` Response (Screen-Started Prints)
+The schemes above are the **outbound** rule. There is also an **inbound** `project_file` response, published unsolicited by the printer on the *report* topic roughly two seconds before `gcode_state` reaches `PREPARE`, carrying `url` and `result`. It fires for prints started from the printer's own touchscreen — which publish nothing on the request topic — as well as for dispatch echoes. It is the only announcement a LAN client gets that a screen-started print is about to begin, and where its file lives.
+
+Gate on `result == "SUCCESS"` **and** a non-empty `url`. Two internal-storage URL shapes appear here and mean different things:
+
+*   `file:///userdata/model/history/<name>.gcode.3mf` — a re-print of a file already on the printer. FTPS on port 990 does **not** serve `/userdata/`, so this file is unreachable over FTPS.
+*   `brtc://emmc/<name>` — a dispatch that chose internal storage.
+
+Related caveat from the same source: an H2S reports `sdcard: true` for its internal eMMC, so **the `sdcard` flag is not a proxy for FTPS reachability**. A consumer deciding whether to sweep FTPS for a 3MF needs both facts.
+
+*(Verification source: bambuddy issue #1820.)*
 
 ###### Polymorphic Schema Rule (`ams_mapping`)
 The `"ams_mapping"` field varies conditionally based on the operating mode:

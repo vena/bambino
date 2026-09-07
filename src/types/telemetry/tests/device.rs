@@ -444,6 +444,7 @@ fn test_device_telemetry_merge_from_preserves_absent_sub_objects() {
                 filament_id: None,
                 fila_id: None,
                 stat: None,
+                p_t: None,
             }]),
             exist: Some(1),
             state: None,
@@ -505,6 +506,7 @@ fn test_nozzle_collection_merge_from_preserves_info_on_absence() {
             filament_id: None,
             fila_id: None,
             stat: None,
+            p_t: None,
         }]),
         exist: Some(1),
         state: None,
@@ -552,6 +554,7 @@ fn test_nozzle_collection_merge_from_clears_info_on_present_empty() {
             filament_id: None,
             fila_id: None,
             stat: None,
+            p_t: None,
         }]),
         exist: Some(1),
         state: None,
@@ -873,4 +876,64 @@ fn test_ext_tool_telemetry_merge_from_preserves_fields_independently() {
     assert_eq!(cached.low_prec, Some(false));
     assert_eq!(cached.th_temp, Some(50), "new field applies");
     assert_eq!(cached.mount_3d, Some(0));
+}
+
+// An empty hotend is still reported in nozzle_info, keeping a stale diameter. Presence must be
+// stated by the "N/A" serial *and* an absent/zero temperature rating together — either check
+// alone gives a wrong answer on some model.
+#[test]
+fn test_nozzle_info_is_installed() {
+    let empty_h2c = NozzleInfo {
+        id: 0,
+        diameter: Some(0.4), // stale: the diameter of whatever it last held
+        tm: None,
+        max_temp: Some(0),
+        nozzle_type: None,
+        wear: None,
+        serial_number: None,
+        sn: Some("N/A".into()),
+        filament_colour: None,
+        color_m: None,
+        filament_id: None,
+        fila_id: None,
+        stat: Some(0), // reads 0 on occupied entries too; not usable for presence
+        p_t: None,
+    };
+    assert!(!empty_h2c.is_installed());
+
+    let occupied = NozzleInfo {
+        sn: Some("ABC12345".into()),
+        max_temp: Some(300),
+        ..empty_h2c.clone()
+    };
+    assert!(occupied.is_installed());
+
+    // Serial says empty but the rating is real — not an empty hotend.
+    let serial_only = NozzleInfo {
+        sn: Some("N/A".into()),
+        max_temp: Some(300),
+        ..empty_h2c.clone()
+    };
+    assert!(serial_only.is_installed());
+
+    // A firmware reporting neither field normalizes to the empty shape; requiring both means it
+    // reads as installed, which is the safe direction.
+    let reports_neither = NozzleInfo {
+        sn: None,
+        serial_number: None,
+        max_temp: None,
+        tm: None,
+        ..empty_h2c.clone()
+    };
+    assert!(reports_neither.is_installed());
+
+    // The verbose IDEX key pair must behave the same as the abbreviated one.
+    let empty_verbose = NozzleInfo {
+        sn: None,
+        serial_number: Some("N/A".into()),
+        max_temp: None,
+        tm: Some(0),
+        ..empty_h2c.clone()
+    };
+    assert!(!empty_verbose.is_installed());
 }
