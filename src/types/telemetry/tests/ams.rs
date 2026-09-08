@@ -88,7 +88,7 @@ fn test_ams_drying_fields() {
                             "dry_time": 142,
                             "dry_setting": {
                                 "dry_temperature": 55,
-                                "dry_duration": 480,
+                                "dry_duration": 8,
                                 "dry_filament": "PA-CF"
                             },
                             "tray": []
@@ -104,7 +104,7 @@ fn test_ams_drying_fields() {
     assert_eq!(unit.humidity_raw.as_deref(), Some("8"));
     let dry = unit.dry_setting.as_ref().unwrap();
     assert_eq!(dry.dry_temperature, Some(55));
-    assert_eq!(dry.dry_duration, Some(480));
+    assert_eq!(dry.dry_duration, Some(8));
     assert_eq!(dry.dry_filament.as_deref(), Some("PA-CF"));
 }
 
@@ -742,7 +742,7 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
         dry_time: Some(120),
         dry_setting: Some(AmsDrySetting {
             dry_temperature: Some(55),
-            dry_duration: Some(240),
+            dry_duration: Some(12),
             dry_filament: Some("PA-CF".into()),
         }),
         tray: None,

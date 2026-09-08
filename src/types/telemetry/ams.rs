@@ -400,7 +400,13 @@ impl AmsUnit {
 pub struct AmsDrySetting {
     /// Target drying temperature in degrees Celsius.
     pub dry_temperature: Option<i32>,
-    /// Configured drying duration in minutes.
+    /// Configured drying duration in hours (firmware range 1-24), not minutes.
+    ///
+    /// Confirmed against BambuStudio, which declares the same field as `dry_hour`
+    /// (`DeviceCore/DevFilaSystem.h`, comment "hours") and parses it unscaled
+    /// (`DevFilaSystem.cpp`), with a "1-24 h" UI input hint (`AMSDryControl.cpp`);
+    /// ha-bambulab likewise exposes it as a `UnitOfTime.HOURS` sensor with the value
+    /// taken unmodified off the wire.
     pub dry_duration: Option<i32>,
     /// Filament type string for the active drying profile (e.g. "PA-CF").
     pub dry_filament: Option<String>,
