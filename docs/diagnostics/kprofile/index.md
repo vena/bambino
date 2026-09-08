@@ -272,6 +272,9 @@ Payload envelope returned by the printer in response to `extrusion_cali_get`.
 - **`nozzle_diameter`**: `Option<String>`
 
   Nozzle diameter filter applied to the returned profile set.
+  
+  Permissive for the same reason as [`KProfileEntry::nozzle_diameter`](#kprofileentry) — a numeric form
+  here would otherwise fail the entire response envelope.
 
 - **`filaments`**: `Vec<KProfileEntry>`
 
@@ -654,6 +657,10 @@ Structured representation of a Linear Advance calibration profile entry on the p
   of `extrusion_cali_set`'s `filaments` array, so round-tripping an entry read back from
   single-nozzle firmware would otherwise emit `"nozzle_diameter":null` — a shape neither
   the read side nor `reference/07_diagnostics_hms.md` §7.2 ever shows.
+  
+  Bound permissively: firmware may send a diameter as a bare JSON number (`0.4`) rather
+  than the quoted form the captures show, and a strict `Option<String>` fails the whole
+  response on that shape rather than just this field.
 
 - **`nozzle_id`**: `String`
 
@@ -688,6 +695,10 @@ Structured representation of a Linear Advance calibration profile entry on the p
 - **`k_value`**: `String`
 
   Calibrated Linear Advance constant serialized as a float string.
+  
+  Bound permissively for the same reason as [`nozzle_diameter`](#kprofileentry):
+  firmware may send the numeric form (`0.02`) on the read side. A number is rendered back
+  to its decimal text, so callers see one representation either way.
 
 - **`n_coef`**: `Option<String>`
 

@@ -15,11 +15,13 @@ external spools [REF-AMS-USEAMS].
 
 - [Types](#types)
   - [`AmsMapping2Entry`](#amsmapping2entry)
+  - [`AmsEntryKind`](#amsentrykind)
   - [`AmsPoolComposition`](#amspoolcomposition)
   - [`MaterialSource`](#materialsource)
 - [Functions](#functions)
   - [`build_ams_mapping`](#build-ams-mapping)
   - [`build_ams_mapping2`](#build-ams-mapping2)
+  - [`classify_mapping2_entry`](#classify-mapping2-entry)
   - [`flat_channel_id_for_entry`](#flat-channel-id-for-entry)
   - [`is_ams_pool_composition_valid`](#is-ams-pool-composition-valid)
   - [`is_external_spool_safety_valid`](#is-external-spool-safety-valid)
@@ -30,10 +32,12 @@ external spools [REF-AMS-USEAMS].
 | Item | Kind | Description |
 |------|------|-------------|
 | [`AmsMapping2Entry`](#amsmapping2entry) | struct | Structured object detailing unit and slot coordinates within `ams_mapping2` arrays. |
+| [`AmsEntryKind`](#amsentrykind) | enum | What kind of feed location a raw [`AmsMapping2Entry`](#amsmapping2entry)'s `ams_id`/`slot_id` pair names. |
 | [`AmsPoolComposition`](#amspoolcomposition) | enum | Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row (user-supplied official Bambu documentation). |
 | [`MaterialSource`](#materialsource) | enum | Enumeration of possible physical feed locations for loaded spools. |
 | [`build_ams_mapping`](#build-ams-mapping) | fn | Builds the flat `ams_mapping` integer array from raw project allocations. |
 | [`build_ams_mapping2`](#build-ams-mapping2) | fn | Builds the structured `ams_mapping2` object array from raw project allocations. |
+| [`classify_mapping2_entry`](#classify-mapping2-entry) | fn | Classifies a raw `ams_mapping2` entry by the kind of feed location it names. |
 | [`flat_channel_id_for_entry`](#flat-channel-id-for-entry) | fn | Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to. |
 | [`is_ams_pool_composition_valid`](#is-ams-pool-composition-valid) | fn | Validates a constructed `ams_mapping2` against the model's actual AMS pool structure. |
 | [`is_external_spool_safety_valid`](#is-external-spool-safety-valid) | fn | Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle. |
@@ -87,6 +91,68 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 ##### `impl Serialize for AmsMapping2Entry`
 
 - <span id="amsmapping2entry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `AmsEntryKind`
+
+```rust
+enum AmsEntryKind {
+    Standard,
+    Ht,
+    AmsLite,
+    External,
+    Invalid,
+}
+```
+
+What kind of feed location a raw [`AmsMapping2Entry`](#amsmapping2entry)'s `ams_id`/`slot_id` pair names.
+
+Single place the "which `ams_id`s are real physical units" rule lives. `MaterialSource`'s
+own methods can rely on the enum variant to tell them, but every function that instead
+re-derives physical-ness from a hand-built `AmsMapping2Entry` has to reproduce the same
+range checks — and each one independently missed the A2L AMS Lite's physical id 16 when
+it was added (issue #221). Route those through [`classify_mapping2_entry`](#classify-mapping2-entry) so a new one
+cannot omit a unit type by hand.
+
+#### Variants
+
+- **`Standard`**
+
+  Standard 4-slot AMS unit, `ams_id` 0-3 with an in-range `slot_id`.
+
+- **`Ht`**
+
+  Single-slot AMS-HT unit, `ams_id` 128-135.
+
+- **`AmsLite`**
+
+  The A2L's 4-slot AMS Lite, carried on the wire as physical unit id 16.
+
+- **`External`**
+
+  One of the two external-spool sentinel ids (254/255), including the
+  `{255, 255}` unmapped sentinel.
+
+- **`Invalid`**
+
+  Neither a validly-ranged physical unit nor a recognized sentinel.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsEntryKind`
+
+- <span id="amsentrykind-clone"></span>`fn clone(&self) -> AmsEntryKind` — [`AmsEntryKind`](#amsentrykind)
+
+##### `impl Copy for AmsEntryKind`
+
+##### `impl Debug for AmsEntryKind`
+
+- <span id="amsentrykind-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsEntryKind`
+
+##### `impl PartialEq for AmsEntryKind`
+
+- <span id="amsentrykind-partialeq-eq"></span>`fn eq(&self, other: &AmsEntryKind) -> bool` — [`AmsEntryKind`](#amsentrykind)
 
 ### `AmsPoolComposition`
 
@@ -283,6 +349,21 @@ Builds the structured `ams_mapping2` object array from raw project allocations.
 
 Symmetrical to `build_ams_mapping`, this array provides detailed physical unit routing
 parameters to ensure correct material transitions on multi-AMS and IDEX platforms.
+
+### `classify_mapping2_entry`
+
+```rust
+fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind
+```
+
+**Types:** [`AmsMapping2Entry`](#amsmapping2entry), [`AmsEntryKind`](#amsentrykind)
+
+Classifies a raw `ams_mapping2` entry by the kind of feed location it names.
+
+`slot_id` is range-checked for the multi-slot unit types (standard and AMS Lite) but
+ignored for AMS-HT, which is single-slot and encodes nothing in the field, and for the
+external sentinels, whose `slot_id` is `0` or `255` depending on whether the entry means
+"external spool" or "unmapped".
 
 ### `flat_channel_id_for_entry`
 

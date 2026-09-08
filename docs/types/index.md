@@ -178,7 +178,13 @@ Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
 
 - **`dry_duration`**: `Option<i32>`
 
-  Configured drying duration in minutes.
+  Configured drying duration in hours (firmware range 1-24), not minutes.
+  
+  Confirmed against BambuStudio, which declares the same field as `dry_hour`
+  (`DeviceCore/DevFilaSystem.h`, comment "hours") and parses it unscaled
+  (`DevFilaSystem.cpp`), with a "1-24 h" UI input hint (`AMSDryControl.cpp`);
+  ha-bambulab likewise exposes it as a `UnitOfTime.HOURS` sensor with the value
+  taken unmodified off the wire.
 
 - **`dry_filament`**: `Option<String>`
 
@@ -1913,7 +1919,21 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`hw_switch_state`**: `Option<i32>`
 
-  Extruder filament sensor state (1 = filament present).
+  Legacy main-extruder filament sensor state -- **not** a boolean, and not
+  per-extruder.
+  
+  BambuStudio assigns this value unmodified to `MAIN_EXTRUDER_ID` only
+  (`DeviceManager.cpp`, `parse_json`) and never bitmask-decodes it, so no
+  interpretation beyond "non-zero means the main extruder reports filament" is
+  confirmed. Dual-nozzle hardware (H2S/P2S/X2D-class) is observed sending values
+  above 1 (`2` and `3` in captured telemetry), so a `== 1` comparison misreads
+  those models.
+  
+  For per-extruder filament state on dual-nozzle models, read
+  [`ExtruderCollection`](telemetry/device/index.md) /
+  [`ExtruderInfo`](telemetry/device/index.md) instead, which model the V2
+  per-extruder `info` bit field BambuStudio actually uses for the deputy extruder
+  (`DevExtruderSystem.cpp`, `ExterSystemParser::ParseV2_0`).
 
 - **`s_obj`**: `Option<Vec<i32>>`
 

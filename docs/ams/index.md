@@ -76,6 +76,68 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - <span id="amsmapping2entry-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `AmsEntryKind`
+
+```rust
+enum AmsEntryKind {
+    Standard,
+    Ht,
+    AmsLite,
+    External,
+    Invalid,
+}
+```
+
+What kind of feed location a raw [`AmsMapping2Entry`](mapping/index.md#amsmapping2entry)'s `ams_id`/`slot_id` pair names.
+
+Single place the "which `ams_id`s are real physical units" rule lives. `MaterialSource`'s
+own methods can rely on the enum variant to tell them, but every function that instead
+re-derives physical-ness from a hand-built `AmsMapping2Entry` has to reproduce the same
+range checks — and each one independently missed the A2L AMS Lite's physical id 16 when
+it was added (issue #221). Route those through [`classify_mapping2_entry`](mapping/index.md#classify-mapping2-entry) so a new one
+cannot omit a unit type by hand.
+
+#### Variants
+
+- **`Standard`**
+
+  Standard 4-slot AMS unit, `ams_id` 0-3 with an in-range `slot_id`.
+
+- **`Ht`**
+
+  Single-slot AMS-HT unit, `ams_id` 128-135.
+
+- **`AmsLite`**
+
+  The A2L's 4-slot AMS Lite, carried on the wire as physical unit id 16.
+
+- **`External`**
+
+  One of the two external-spool sentinel ids (254/255), including the
+  `{255, 255}` unmapped sentinel.
+
+- **`Invalid`**
+
+  Neither a validly-ranged physical unit nor a recognized sentinel.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsEntryKind`
+
+- <span id="amsentrykind-clone"></span>`fn clone(&self) -> AmsEntryKind` — [`AmsEntryKind`](mapping/index.md#amsentrykind)
+
+##### `impl Copy for AmsEntryKind`
+
+##### `impl Debug for AmsEntryKind`
+
+- <span id="amsentrykind-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsEntryKind`
+
+##### `impl PartialEq for AmsEntryKind`
+
+- <span id="amsentrykind-partialeq-eq"></span>`fn eq(&self, other: &AmsEntryKind) -> bool` — [`AmsEntryKind`](mapping/index.md#amsentrykind)
+
 ### `AmsPoolComposition`
 
 ```rust
@@ -272,6 +334,21 @@ Builds the structured `ams_mapping2` object array from raw project allocations.
 Symmetrical to `build_ams_mapping`, this array provides detailed physical unit routing
 parameters to ensure correct material transitions on multi-AMS and IDEX platforms.
 
+### `classify_mapping2_entry`
+
+```rust
+fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind
+```
+
+**Types:** [`AmsMapping2Entry`](mapping/index.md#amsmapping2entry), [`AmsEntryKind`](mapping/index.md#amsentrykind)
+
+Classifies a raw `ams_mapping2` entry by the kind of feed location it names.
+
+`slot_id` is range-checked for the multi-slot unit types (standard and AMS Lite) but
+ignored for AMS-HT, which is single-slot and encodes nothing in the field, and for the
+external sentinels, whose `slot_id` is `0` or `255` depending on whether the entry means
+"external spool" or "unmapped".
+
 ### `is_ams_pool_composition_valid`
 
 ```rust
@@ -414,6 +491,13 @@ The physical mapping aligns as:
 * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
+
+AMS-HT is single-slot, so its only valid `tray_id` is `0`; a non-zero one is rejected
+rather than silently ignored. Without that check this function and its sibling
+[`evaluate_spool_presence`](parser/index.md#evaluate-spool-presence) disagreed on the same `(ams_id, tray_id)` pair — an
+AMS-HT id paired with a bad `tray_id` (from a mis-decoded `tray_now`, say) got a
+silently-accepted `Some(ams_id)` here but `None` there, masking the caller bug the
+sibling catches. [`normalize_ams_unit_id`](parser/index.md#normalize-ams-unit-id)'s doc comment requires the two to agree.
 
 ### `resolve_printing_global_id`
 

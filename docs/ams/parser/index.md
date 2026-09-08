@@ -126,6 +126,13 @@ The physical mapping aligns as:
 * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 
+AMS-HT is single-slot, so its only valid `tray_id` is `0`; a non-zero one is rejected
+rather than silently ignored. Without that check this function and its sibling
+[`evaluate_spool_presence`](#evaluate-spool-presence) disagreed on the same `(ams_id, tray_id)` pair — an
+AMS-HT id paired with a bad `tray_id` (from a mis-decoded `tray_now`, say) got a
+silently-accepted `Some(ams_id)` here but `None` there, masking the caller bug the
+sibling catches. [`normalize_ams_unit_id`](#normalize-ams-unit-id)'s doc comment requires the two to agree.
+
 ### `resolve_printing_global_id`
 
 ```rust

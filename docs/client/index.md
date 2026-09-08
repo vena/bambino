@@ -1361,6 +1361,7 @@ Velocity and acceleration scaling presets for active print jobs [REF-MQTT-LIFECY
 enum PrintStatus {
     Idle,
     Preparing,
+    Slicing,
     Running,
     Paused,
     Finished,
@@ -1384,6 +1385,14 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
   Print preparing to start — homing, bed leveling, or priming, physical
   motion in progress (wire: `"PREPARE"`).
+
+- **`Slicing`**
+
+  Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
+  
+  Distinct from [`Preparing`](types/index.md#printstatus): nothing is moving yet. It is still a
+  busy state — a job is in flight — so treat it like the other active states when
+  deciding whether the printer can accept new work.
 
 - **`Running`**
 
@@ -1409,7 +1418,7 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
 - <span id="printstatus-from-gcode-state"></span>`fn from_gcode_state(state: &str) -> Self`
 
-  Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
+  Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"SLICING"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
 
 #### Trait Implementations
 
