@@ -1434,11 +1434,11 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   (`DevNozzleSystem.cpp:789-791`, parsing the same `device.nozzle` push this field comes
   from).
   
-  **Units are seconds per ha-bambulab only** — their sensor divides by 3600 to present
-  hours (`definitions.py:951`) and their field comment says seconds outright. BambuStudio
-  stores it as a bare `int` with no conversion, and bambuddy does not model it at all, so
-  no second reference client corroborates the unit. Treat a value as seconds, but do not
-  treat that as settled.
+  **Units are seconds.** BambuStudio's nozzle-rack panel names the value `usedSeconds` and
+  formats it as `usedSeconds / 3600` hours, falling back to `usedSeconds / 60` minutes
+  under an hour and displaying `"0 h"` below a minute
+  (`wgtDeviceNozzleRackUpdate.cpp:669-679`). ha-bambulab agrees independently, dividing by
+  3600 for an hours sensor (`definitions.py:951`).
 
 #### Implementations
 
