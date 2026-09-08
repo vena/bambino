@@ -191,6 +191,49 @@ fn test_ethernet_active_via_wifi_signal() {
 }
 
 #[test]
+fn test_plate_idx_accepts_number_and_string() {
+    // BambuStudio branches on is_number()/is_string() for this field
+    // (DeviceManager.cpp:2617-2626), so both forms are real. A bare Option<i32> would not
+    // merely miss the string form — it would fail the whole frame, losing every other field
+    // in that push to gain one.
+    let as_number = r#"{ "print": { "plate_idx": 2, "layer_num": 516 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(as_number)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.plate_idx, Some(2));
+    assert_eq!(print.layer_num, Some(516));
+
+    let as_string = r#"{ "print": { "plate_idx": "2", "layer_num": 516 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(as_string)
+        .expect("a string plate_idx must not fail the frame")
+        .print
+        .unwrap();
+    assert_eq!(print.plate_idx, Some(2));
+    assert_eq!(
+        print.layer_num,
+        Some(516),
+        "sibling fields must survive the string form"
+    );
+
+    // Unparseable degrades to None rather than discarding the frame.
+    let junk = r#"{ "print": { "plate_idx": "", "layer_num": 516 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(junk)
+        .expect("an unreadable plate_idx must not fail the frame")
+        .print
+        .unwrap();
+    assert_eq!(print.plate_idx, None);
+    assert_eq!(print.layer_num, Some(516));
+
+    let absent = r#"{ "print": {} }"#;
+    let print = serde_json::from_str::<TelemetryReport>(absent)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.plate_idx, None);
+}
+
+#[test]
 fn test_power_on_flag_deserialization() {
     let json_true = r#"{ "print": { "power_on_flag": true } }"#;
     let print = serde_json::from_str::<TelemetryReport>(json_true)

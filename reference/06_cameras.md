@@ -17,7 +17,9 @@ The state of the camera is reported on the report topic under the `"print"` or `
 *   `ipcam_dev`: Internal identifier or state of the hardware camera module.
 *   `ipcam_record`: Indicates whether the local user stream or camera live feed is active (`"enable"` or `"disable"`).
 *   `timelapse`: Indicates whether frame-by-layer timelapse recording is active (`"enable"` or `"disable"`).
-*   `rtsp_url`: The RTSPS streaming URL (e.g. `"rtsps://192.168.1.64/streaming/live/1"`) or `"disable"` when RTSP streaming is turned off. On the H2 series and the X2D, Port 322 is closed by default in factory firmware and this field reports `"disable"` until manually enabled via the physical touchscreen interface. Clients should check this field before attempting an RTSPS connection.
+*   `rtsp_url`: The RTSPS streaming URL (e.g. `"rtsps://192.168.1.64/streaming/live/1"`) or `"disable"` when RTSP streaming is turned off. On the H2 series and the X2D, Port 322 is closed by default in factory firmware and this field reports `"disable"` until "LAN Only LiveView" is enabled manually via the physical touchscreen interface. Clients should check this field before attempting an RTSPS connection.
+
+**Source note:** the model list here is **setup documentation, not protocol-confirmed.** It tracks ha-bambulab's own setup guide, which lists "H2D / H2S / X2D" (`docs/setup.mdx`, commit `fea1425`). Neither reference client encodes this requirement in code and neither could — it is a statement about a printer's factory default, not a wire shape, so the usual BambuStudio/bambuddy cross-check cannot reach it. Enabling LiveView does not require enabling LAN mode generally.
 
 ---
 

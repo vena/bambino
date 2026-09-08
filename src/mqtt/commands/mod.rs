@@ -674,10 +674,45 @@ mod tests {
     #[test]
     fn test_ams_filament_setting_default_sub_brands() {
         let req = AmsFilamentSettingRequest::new(
-            255, 254, "GFA01", "PLA", None, "FFFFFFFF", 190, 220, 10016,
+            255, 0, "GFA01", "PLA", None, "FFFFFFFF", 190, 220, 10016,
         );
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_sub_brands":"PLA Basic""#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_external_spool_derives_tray_id() {
+        // BambuStudio's call sites pass slot_id 0 for a virtual tray (`DeviceManager.cpp:4853`,
+        // `:4877` — `command_ams_filament_settings(vt_id, 0, ...)`) and the command derives
+        // tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID for either external address, never 0. bambuddy
+        // sends the same trio for a single external slot: ams 255, slot 0, tray 254.
+        for ams_id in [254, 255] {
+            let req = AmsFilamentSettingRequest::new(
+                ams_id, 0, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10024,
+            );
+            let json = serde_json::to_string(&req).unwrap();
+            assert!(json.contains(&format!(r#""ams_id":{ams_id}"#)));
+            assert!(
+                json.contains(r#""slot_id":0"#),
+                "slot_id must stay 0: {json}"
+            );
+            assert!(
+                json.contains(r#""tray_id":254"#),
+                "tray_id must derive to 254, never 0: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ams_filament_setting_standard_slot_and_tray_coincide() {
+        // On a standard AMS the two fields carry the same value, which is why omitting slot_id
+        // went unnoticed — it is only the virtual-tray and AMS-HT cases that diverge.
+        let req =
+            AmsFilamentSettingRequest::new(1, 3, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10025);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""ams_id":1"#));
+        assert!(json.contains(r#""slot_id":3"#));
+        assert!(json.contains(r#""tray_id":3"#));
     }
 
     #[test]

@@ -217,6 +217,37 @@ where
     }
 }
 
+/// Deserializes an optional integer that firmware may send as either a JSON number or a
+/// decimal string.
+///
+/// Needed where BambuStudio itself branches on the wire type rather than assuming one. A plain
+/// `Option<i32>` is not merely wrong for the string form — it fails the **whole frame**, so one
+/// field arriving as `"2"` instead of `2` costs every other field in that push.
+///
+/// An unparseable string degrades to `None` rather than erroring, on the same reasoning: a
+/// value this crate cannot read is not worth discarding a telemetry frame over.
+fn deserialize_permissive_opt_i32<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawIntValue {
+        Null,
+        Int(i64),
+        Float(f64),
+        String(String),
+    }
+
+    match RawIntValue::deserialize(deserializer) {
+        Ok(RawIntValue::Null) => Ok(None),
+        Ok(RawIntValue::Int(i)) => Ok(i32::try_from(i).ok()),
+        Ok(RawIntValue::Float(f)) => Ok(Some(f as i32)),
+        Ok(RawIntValue::String(s)) => Ok(s.trim().parse::<i32>().ok()),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

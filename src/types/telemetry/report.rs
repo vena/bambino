@@ -336,8 +336,15 @@ pub struct PrinterTelemetry {
     /// Which plate of a multi-plate 3MF the current job was sliced for.
     ///
     /// Needed to pull the right plate's metadata — thumbnail, filament list, bed temperature —
-    /// out of the project file, since a 3MF's per-plate data is indexed on exactly this.
-    #[serde(default)]
+    /// out of the project file, since a 3MF's per-plate data is indexed on exactly this. It is
+    /// also authoritative over the 3MF's own `slice_info`, which can name a different plate on
+    /// a retained or reused archive.
+    ///
+    /// Firmware sends this as **either a number or a decimal string** — BambuStudio branches on
+    /// `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp:2617-2626`), so
+    /// the permissive deserializer is load-bearing rather than defensive: a bare `Option<i32>`
+    /// would fail the entire telemetry frame on the string form.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
     pub plate_idx: Option<i32>,
 
     /// Cloud profile ID.

@@ -406,12 +406,15 @@ impl<IO: AsyncIo> MqttClient<IO> {
         // comment. Collapsing 1-3 into AccessDenied too would misdiagnose e.g. a transient
         // "server unavailable" as "check your access code."
         //
-        // Note what 4-5 does *not* prove. The usual cause is a rejected or rotated LAN access
-        // code (a factory reset regenerates it), but code 5 also comes back when the printer is
-        // simply powered off or still booting — unreachable at the application layer rather
-        // than refusing credentials. Nothing in the CONNACK distinguishes the two, so mapping
-        // both to AccessDenied stays correct; only a caller that renders it as "your access
-        // code is wrong" would be overclaiming.
+        // Both 4 and 5 are credential refusals. The usual cause is a rejected or rotated LAN
+        // access code (a factory reset regenerates it), though on some firmware it is the
+        // serial used as the username that was rejected — bambuddy collapses the two codes into
+        // one auth-rejected state for exactly this reason, so a caller surfacing this should
+        // name both inputs rather than only the access code.
+        //
+        // An ha-bambulab field report additionally attributes code 5 to a powered-off or
+        // still-booting printer. Neither reference client corroborates that, so it is not
+        // asserted here; see Error::AccessDenied's doc comment.
         match connack_code {
             0 => {}
             4 | 5 => {

@@ -346,11 +346,20 @@ pub struct NozzleInfo {
     #[serde(default)]
     pub stat: Option<u32>,
 
-    /// Cumulative print time for this individual hotend, in seconds.
+    /// Cumulative print time for this individual hotend.
     ///
     /// A wear/usage counter tied to the physical hotend rather than the position it sits in,
     /// which is what makes it meaningful on a rack machine where hotends are swapped between
-    /// slots. Reported by H2C Vortek rack hotends; absent elsewhere. Divide by 3600 for hours.
+    /// slots. Reported by H2C Vortek rack hotends; absent elsewhere — BambuStudio guards it with
+    /// `if (njon.contains("p_t"))` and a `/*maybe not contains*/` note
+    /// (`DevNozzleSystem.cpp:789-791`, parsing the same `device.nozzle` push this field comes
+    /// from).
+    ///
+    /// **Units are seconds per ha-bambulab only** — their sensor divides by 3600 to present
+    /// hours (`definitions.py:951`) and their field comment says seconds outright. BambuStudio
+    /// stores it as a bare `int` with no conversion, and bambuddy does not model it at all, so
+    /// no second reference client corroborates the unit. Treat a value as seconds, but do not
+    /// treat that as settled.
     #[serde(default)]
     pub p_t: Option<u64>,
 }
