@@ -18,7 +18,7 @@ pub mod diagnostics;
 pub mod report;
 
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::{vec, vec::Vec};
 
@@ -244,6 +244,37 @@ where
         Ok(RawIntValue::Int(i)) => Ok(i32::try_from(i).ok()),
         Ok(RawIntValue::Float(f)) => Ok(Some(f as i32)),
         Ok(RawIntValue::String(s)) => Ok(s.trim().parse::<i32>().ok()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Deserializes an optional string that firmware may send as either a JSON string or a bare
+/// number.
+///
+/// The mirror image of [`deserialize_permissive_opt_i32`], for the fields where the quoted form
+/// is the one seen in captures but BambuStudio still branches on `is_number()` — `mc_print_stage`
+/// is parsed with both an `is_string()` and an `is_number()` arm in `DeviceManager.cpp:3071-3076`.
+/// Binding it as a plain `Option<String>` would fail the whole frame on the numeric form.
+///
+/// A number is rendered back to its decimal text so callers see one consistent representation.
+fn deserialize_permissive_opt_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawStringValue {
+        Null,
+        Str(String),
+        Int(i64),
+        Float(f64),
+    }
+
+    match RawStringValue::deserialize(deserializer) {
+        Ok(RawStringValue::Null) => Ok(None),
+        Ok(RawStringValue::Str(s)) => Ok(Some(s)),
+        Ok(RawStringValue::Int(i)) => Ok(Some(i.to_string())),
+        Ok(RawStringValue::Float(f)) => Ok(Some(f.to_string())),
         Err(e) => Err(e),
     }
 }

@@ -690,7 +690,8 @@ mod print_status_tests {
 
         let progress = bambino::client::PrintProgress {
             percent: Some(68),
-            remaining_secs: Some(99),
+            // 99 wire minutes -> seconds, as `update_progress_cache` converts it.
+            remaining_secs: Some(5940),
             layer_num: Some(516),
             total_layers: Some(879),
         };
@@ -705,6 +706,10 @@ mod print_status_tests {
         );
         assert!(!rendered.contains("(516/0)"), "total_layers regressed to 0");
         assert!(!rendered.contains("0%  ("), "percent regressed to 0");
+        assert!(
+            rendered.contains("99m 0s"),
+            "expected the 99-minute wire value rendered as 99m, got: {rendered}"
+        );
     }
 
     #[test]

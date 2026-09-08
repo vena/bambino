@@ -465,6 +465,56 @@ fn test_mc_percent_deserialization() {
     assert_eq!(print.mc_percent, Some(100));
 }
 
+/// Firmware sends several progress fields as either a JSON number or a decimal string, and a
+/// plain numeric binding fails the *whole frame* on the quoted form rather than missing one
+/// field. BambuStudio branches on `is_string()` for `mc_percent` and `mc_remaining_time`;
+/// bambuddy coerces `layer_num`/`total_layer_num` the same way.
+#[test]
+fn test_progress_fields_accept_quoted_numbers() {
+    let json = r#"{ "print": {
+        "mc_percent": "68",
+        "mc_remaining_time": "99",
+        "layer_num": "516",
+        "total_layer_num": "879"
+    } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.mc_percent, Some(68));
+    assert_eq!(print.mc_remaining_time, Some(99));
+    assert_eq!(print.layer_num, Some(516));
+    assert_eq!(print.total_layers, Some(879));
+
+    // An unparseable value degrades to `None` instead of discarding every other field.
+    let junk = r#"{ "print": { "mc_percent": "n/a", "layer_num": 7 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(junk)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.mc_percent, None);
+    assert_eq!(print.layer_num, Some(7));
+}
+
+/// The mirror case: `mc_print_stage` arrives quoted in every capture, but BambuStudio parses a
+/// numeric arm too, so a bare number must not fail the frame.
+#[test]
+fn test_mc_print_stage_accepts_bare_number() {
+    let json = r#"{ "print": { "mc_print_stage": 2 } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.mc_print_stage.as_deref(), Some("2"));
+
+    let quoted = r#"{ "print": { "mc_print_stage": "2" } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(quoted)
+        .unwrap()
+        .print
+        .unwrap();
+    assert_eq!(print.mc_print_stage.as_deref(), Some("2"));
+}
+
 #[test]
 fn test_airduct_mode_telemetry() {
     let json_data = r#"{

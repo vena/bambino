@@ -300,7 +300,8 @@ async fn test_print_progress_cache_from_telemetry() {
         client.print_progress(),
         PrintProgress {
             percent: Some(42),
-            remaining_secs: Some(30),
+            // The wire sends 30 *minutes*; the cache converts it to seconds.
+            remaining_secs: Some(1800),
             layer_num: Some(5),
             total_layers: Some(100),
         }
@@ -314,7 +315,8 @@ async fn test_print_progress_cache_from_telemetry() {
         client.print_progress(),
         PrintProgress {
             percent: Some(50),
-            remaining_secs: Some(30),
+            // Cached from the first push, still in seconds.
+            remaining_secs: Some(1800),
             layer_num: Some(5),
             total_layers: Some(100),
         }

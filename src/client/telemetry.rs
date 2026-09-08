@@ -205,8 +205,12 @@ where
         if let Some(percent) = print.mc_percent {
             self.cache.last_progress.percent = Some(percent);
         }
+        // `mc_remaining_time` is in minutes on the wire, not seconds — both BambuStudio
+        // (`DeviceManager.cpp:3081-3086`) and bambuddy (`notification_service.py:1163-1169`)
+        // multiply by 60 to reach a seconds value. Convert here so `remaining_secs` is honest
+        // about its own name; storing the raw value understated every ETA by 60x.
         if let Some(remaining) = print.mc_remaining_time {
-            self.cache.last_progress.remaining_secs = Some(remaining);
+            self.cache.last_progress.remaining_secs = Some(remaining.saturating_mul(60));
         }
         if let Some(layer_num) = print.layer_num {
             self.cache.last_progress.layer_num = Some(layer_num);

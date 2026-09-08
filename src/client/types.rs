@@ -155,7 +155,9 @@ impl core::ops::BitOr for CalibrationOption {
 pub struct PrintProgress {
     /// Motion controller progress percentage (0-100).
     pub percent: Option<i32>,
-    /// Estimated remaining duration of the active layer sequence, in seconds.
+    /// Estimated remaining print duration, in seconds.
+    ///
+    /// Converted on ingest from `mc_remaining_time`, which the wire reports in **minutes**.
     pub remaining_secs: Option<i32>,
     /// Active layer progress tracker.
     pub layer_num: Option<i32>,

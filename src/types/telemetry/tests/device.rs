@@ -234,27 +234,38 @@ fn test_plate_idx_accepts_number_and_string() {
 }
 
 #[test]
-fn test_power_on_flag_deserialization() {
-    let json_true = r#"{ "print": { "power_on_flag": true } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_true)
+fn test_power_on_flag_and_tray_exist_bits_are_nested_under_ams() {
+    // Both keys live inside `print.ams`, never at `print.*` — verified against a P1S
+    // pushall capture and both upstreams (pybambu reads them off `data.get("ams", {})`,
+    // bambuddy off `ams_data`). `PrinterTelemetry` deliberately does not bind them.
+    let json = r#"{ "print": { "ams": { "power_on_flag": false, "tray_exist_bits": "c" } } }"#;
+    let ams = serde_json::from_str::<TelemetryReport>(json)
         .unwrap()
         .print
+        .unwrap()
+        .ams
         .unwrap();
-    assert_eq!(print.power_on_flag, Some(true));
+    assert_eq!(ams.power_on_flag, Some(false));
+    assert_eq!(ams.tray_exist_bits.as_deref(), Some("c"));
 
-    let json_false = r#"{ "print": { "power_on_flag": false } }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_false)
+    let json_true = r#"{ "print": { "ams": { "power_on_flag": true } } }"#;
+    let ams = serde_json::from_str::<TelemetryReport>(json_true)
         .unwrap()
         .print
+        .unwrap()
+        .ams
         .unwrap();
-    assert_eq!(print.power_on_flag, Some(false));
+    assert_eq!(ams.power_on_flag, Some(true));
 
-    let json_missing = r#"{ "print": {} }"#;
-    let print = serde_json::from_str::<TelemetryReport>(json_missing)
+    let json_missing = r#"{ "print": { "ams": {} } }"#;
+    let ams = serde_json::from_str::<TelemetryReport>(json_missing)
         .unwrap()
         .print
+        .unwrap()
+        .ams
         .unwrap();
-    assert_eq!(print.power_on_flag, None);
+    assert_eq!(ams.power_on_flag, None);
+    assert_eq!(ams.tray_exist_bits, None);
 }
 
 #[test]

@@ -104,14 +104,34 @@ pub struct PrinterTelemetry {
     pub subtask_id: Option<String>,
 
     /// Active layer progress tracker.
+    ///
+    /// Permissive: bambuddy's `_probe_number` coerces this because "firmware is inconsistent
+    /// about whether these arrive as ints or as numeric strings". BambuStudio reads it as a
+    /// bare `get<int>()` and does not corroborate the string form, so the permissive binding is
+    /// defensive rather than confirmed — it costs nothing and cannot fail a frame.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
     pub layer_num: Option<i32>,
 
     /// Total layers within the sliced print pipeline.
     /// Wire sends as `total_layer_num`; `total_layers` accepted for compatibility.
-    #[serde(alias = "total_layer_num")]
+    ///
+    /// Permissive on the same single-source basis as `layer_num`.
+    #[serde(
+        alias = "total_layer_num",
+        default,
+        deserialize_with = "super::deserialize_permissive_opt_i32"
+    )]
     pub total_layers: Option<i32>,
 
-    /// Estimated remaining duration of the active layer sequence, in seconds.
+    /// Estimated remaining print duration, in **minutes**.
+    ///
+    /// The wire unit is minutes, not seconds — BambuStudio multiplies by 60 on both parse arms
+    /// to reach its own seconds-based `mc_left_time` (`DeviceManager.cpp:3081-3086`), and
+    /// bambuddy does the same (`notification_service.py:1163-1169`, "in minutes, convert to
+    /// seconds"). Callers wanting seconds must multiply.
+    ///
+    /// Permissive: BambuStudio branches on `is_string()` here, so the quoted form is real.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
     pub mc_remaining_time: Option<i32>,
 
     /// Active speed profile level (1=Silent, 2=Standard, 3=Sport, 4=Ludicrous).
@@ -121,13 +141,21 @@ pub struct PrinterTelemetry {
     pub spd_mag: Option<u16>,
 
     /// Motion controller progress percentage (0–100).
+    ///
+    /// Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp:3060-3065`) and
+    /// bambuddy coerces via `float()`/`_probe_number`, so the quoted form is confirmed.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
     pub mc_percent: Option<i32>,
 
     /// Print sub-stage identifier tracking granular execution phases within the active print stage.
     pub mc_print_sub_stage: Option<i32>,
 
-    /// Motion controller print stage string.
-    #[serde(default)]
+    /// Motion controller print stage.
+    ///
+    /// Captures show the quoted form (`"2"`), but BambuStudio parses both an `is_string()` and
+    /// an `is_number()` arm, so a bare number must not fail the frame. A numeric wire value is
+    /// normalized to its decimal text.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub mc_print_stage: Option<String>,
 
     /// Kinematics flag field tracking homing states, networking interfaces, and door nodes.
@@ -195,13 +223,6 @@ pub struct PrinterTelemetry {
 
     /// Active chamber heater or sensor telemetry (actual, target, or composite packed).
     pub chamber_temper: Option<f64>,
-
-    /// Hexadecimal bitmask string representing the physical presence of loaded spools.
-    pub tray_exist_bits: Option<String>,
-
-    /// Power status of the printer core logic board.
-    #[serde(default)]
-    pub power_on_flag: Option<bool>,
 
     /// Camera and recording telemetry. Nested as `print.ipcam` on the wire.
     pub ipcam: Option<IpcamTelemetry>,
