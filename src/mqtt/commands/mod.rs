@@ -650,17 +650,11 @@ mod tests {
 
     #[test]
     fn test_ams_filament_setting_request_json() {
-        let req = AmsFilamentSettingRequest::new(
-            0,
-            1,
-            "GFA01",
-            "PLA",
-            Some("Bambu PLA Basic"),
-            "FF0000FF",
-            190,
-            220,
-            10015,
-        );
+        let req = AmsFilamentSettingRequest::new(0, 1, 10015)
+            .with_preset("GFA01")
+            .with_filament("PLA", Some("Bambu PLA Basic"))
+            .with_color("FF0000FF")
+            .with_temps(190, 220);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_filament_setting"#));
         assert!(json.contains(r#""tray_info_idx":"GFA01""#));
@@ -673,11 +667,23 @@ mod tests {
 
     #[test]
     fn test_ams_filament_setting_default_sub_brands() {
-        let req = AmsFilamentSettingRequest::new(
-            255, 0, "GFA01", "PLA", None, "FFFFFFFF", 190, 220, 10016,
-        );
+        let req = AmsFilamentSettingRequest::new(255, 0, 10016).with_filament("PLA", None);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_sub_brands":"PLA Basic""#));
+    }
+
+    #[test]
+    fn test_ams_filament_setting_unset_fields_serialize_empty() {
+        // `new()` carries addressing only; anything not set through a `with_*` goes out empty
+        // rather than omitted, since these are non-optional wire fields.
+        let req = AmsFilamentSettingRequest::new(0, 1, 10026);
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains(r#""tray_info_idx":"""#));
+        assert!(json.contains(r#""tray_type":"""#));
+        assert!(json.contains(r#""tray_color":"""#));
+        assert!(json.contains(r#""nozzle_temp_min":0"#));
+        assert!(json.contains(r#""nozzle_temp_max":0"#));
+        assert!(!json.contains("setting_id"));
     }
 
     #[test]
@@ -687,9 +693,11 @@ mod tests {
         // tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID for either external address, never 0. bambuddy
         // sends the same trio for a single external slot: ams 255, slot 0, tray 254.
         for ams_id in [254, 255] {
-            let req = AmsFilamentSettingRequest::new(
-                ams_id, 0, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10024,
-            );
+            let req = AmsFilamentSettingRequest::new(ams_id, 0, 10024)
+                .with_preset("GFA01")
+                .with_filament("PLA", None)
+                .with_color("FF0000FF")
+                .with_temps(190, 220);
             let json = serde_json::to_string(&req).unwrap();
             assert!(json.contains(&format!(r#""ams_id":{ams_id}"#)));
             assert!(
@@ -707,8 +715,11 @@ mod tests {
     fn test_ams_filament_setting_standard_slot_and_tray_coincide() {
         // On a standard AMS the two fields carry the same value, which is why omitting slot_id
         // went unnoticed — it is only the virtual-tray and AMS-HT cases that diverge.
-        let req =
-            AmsFilamentSettingRequest::new(1, 3, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10025);
+        let req = AmsFilamentSettingRequest::new(1, 3, 10025)
+            .with_preset("GFA01")
+            .with_filament("PLA", None)
+            .with_color("FF0000FF")
+            .with_temps(190, 220);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_id":1"#));
         assert!(json.contains(r#""slot_id":3"#));
@@ -718,36 +729,18 @@ mod tests {
     #[test]
     fn test_ams_filament_setting_uppercases_tray_color() {
         // The firmware parses a lowercase hex letter in tray_color as 0 and stores the
-        // corrupted value while acking success (P1S firmware 01.10.00.00). Normalizing at
-        // the point the command is assembled is the single fix point.
-        let req = AmsFilamentSettingRequest::new(
-            0,
-            1,
-            "GFA01",
-            "PLA",
-            Some("Bambu PLA Basic"),
-            "09ff00ff",
-            190,
-            220,
-            10019,
-        );
+        // corrupted value while acking success (P1S firmware 01.10.00.00). Normalizing inside
+        // `with_color` is the single fix point.
+        let req = AmsFilamentSettingRequest::new(0, 1, 10019).with_color("09ff00ff");
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_color":"09FF00FF""#));
     }
 
     #[test]
     fn test_ams_filament_setting_strips_color_hash_and_keeps_case_elsewhere() {
-        let req = AmsFilamentSettingRequest::new(
-            0,
-            1,
-            "GFA01",
-            "PLA",
-            Some("Bambu PLA Basic"),
-            "#ff5100ff",
-            190,
-            220,
-            10020,
-        );
+        let req = AmsFilamentSettingRequest::new(0, 1, 10020)
+            .with_filament("PLA", Some("Bambu PLA Basic"))
+            .with_color("#ff5100ff");
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_color":"FF5100FF""#));
         // Case is meaningful in these two and must survive untouched.
@@ -757,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_ams_filament_setting_empty_color_stays_empty() {
-        let req = AmsFilamentSettingRequest::new(0, 1, "GFA01", "PLA", None, "", 190, 220, 10021);
+        let req = AmsFilamentSettingRequest::new(0, 1, 10021).with_color("");
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_color":"""#));
     }
@@ -765,8 +758,7 @@ mod tests {
     #[test]
     fn test_ams_filament_setting_omits_setting_id_by_default() {
         // setting_id is a separate optional wire field; absent, not null, when unset.
-        let req =
-            AmsFilamentSettingRequest::new(0, 1, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10022);
+        let req = AmsFilamentSettingRequest::new(0, 1, 10022).with_preset("GFA01");
         let json = serde_json::to_string(&req).unwrap();
         assert!(!json.contains("setting_id"));
     }
@@ -775,9 +767,9 @@ mod tests {
     fn test_ams_filament_setting_with_setting_id() {
         // The long preset id belongs here, not in tray_info_idx — a 19-character id in the
         // short field is what an A1 stored as 8 characters while acking success.
-        let req =
-            AmsFilamentSettingRequest::new(0, 1, "GFA01", "PLA", None, "FF0000FF", 190, 220, 10023)
-                .with_setting_id("PF12345678901234567");
+        let req = AmsFilamentSettingRequest::new(0, 1, 10023)
+            .with_preset("GFA01")
+            .with_setting_id("PF12345678901234567");
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_info_idx":"GFA01""#));
         assert!(json.contains(r#""setting_id":"PF12345678901234567""#));

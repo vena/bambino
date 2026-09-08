@@ -46,6 +46,8 @@ pub struct AmsFilamentSettingPayload {
     pub tray_id: i32,
     /// **Short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"` [REF-AMS-SP_CFG].
     ///
+    /// Set via [`AmsFilamentSettingRequest::with_preset`].
+    ///
     /// This is *not* where a long `"PF"`-prefixed preset id belongs — that goes in
     /// [`setting_id`](Self::setting_id), which is a separate wire field. Putting a 19-character
     /// cloud id here is what produced the "truncation" an A1 was measured doing: it stored only
@@ -66,7 +68,7 @@ pub struct AmsFilamentSettingPayload {
     /// Structural hexadecimal color in RRGGBBAA format (e.g., "FFFF00FF").
     ///
     /// **Must be uppercase.** The firmware parses lowercase hex digits as `0` and stores the
-    /// corrupted value silently — [`AmsFilamentSettingRequest::new`] normalizes for you.
+    /// corrupted value silently — [`AmsFilamentSettingRequest::with_color`] normalizes for you.
     pub tray_color: String,
     /// Minimum safe nozzle temperature (°C) for this filament.
     pub nozzle_temp_min: u32,
@@ -129,28 +131,19 @@ impl AmsFilamentSettingRequest {
     ///   carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     ///   uncalibrated.
     ///
-    /// **`color_hex` is normalized to uppercase**, with a leading `#` stripped. The printer
-    /// parses lowercase hex letters in `tray_color` as `0` and the corruption is silent: the
-    /// `ams_filament_setting` ack echoes the value that was sent and reports `result:
-    /// "success"`, and only the next AMS push status reveals it (measured on a P1S running
-    /// firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
-    /// `material_type` and `sub_brands` are deliberately left alone; case is meaningful there.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        ams_id: i32,
-        slot_id: i32,
-        preset_code: &str,
-        material_type: &str,
-        sub_brands: Option<&str>,
-        color_hex: &str,
-        temp_min: u32,
-        temp_max: u32,
-        sequence_id: impl Into<ClampedTaskId>,
-    ) -> Self {
-        let tray_sub_brands = match sub_brands {
-            Some(s) => String::from(s),
-            None => format!("{} Basic", material_type),
-        };
+    /// Only the addressing is positional. Everything the command *describes* — the filament,
+    /// its color, its temperature window, its preset ids — is set through the `with_*` methods
+    /// below, following the convention [`PrintJobConfig`](super::PrintJobConfig) already
+    /// establishes in this crate.
+    ///
+    /// This replaced a 9-argument constructor. `nozzle_temp_min`/`nozzle_temp_max` were adjacent
+    /// `u32`s and `ams_id`/`slot_id` adjacent `i32`s, so transposing either pair compiled
+    /// cleanly and produced a silently wrong command — on a command whose failures are already
+    /// silent, since the printer acks a corrupted value as `"success"`.
+    ///
+    /// Fields left unset serialize as empty strings / zero temperatures; `setting_id` is omitted
+    /// from the wire entirely.
+    pub fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AmsFilamentSettingPayload {
                 command: "ams_filament_setting",
@@ -166,26 +159,76 @@ impl AmsFilamentSettingRequest {
                 } else {
                     slot_id
                 },
-                tray_info_idx: String::from(preset_code),
-                tray_type: String::from(material_type),
-                tray_sub_brands,
-                tray_color: normalize_tray_color(color_hex),
-                nozzle_temp_min: temp_min,
-                nozzle_temp_max: temp_max,
+                tray_info_idx: String::new(),
+                tray_type: String::new(),
+                tray_sub_brands: String::new(),
+                tray_color: String::new(),
+                nozzle_temp_min: 0,
+                nozzle_temp_max: 0,
                 setting_id: None,
             },
         }
     }
 
+    /// Sets the material type and its sub-brand label.
+    ///
+    /// `sub_brands` defaults to `"{material_type} Basic"` when `None`. Case is meaningful in
+    /// both and is left alone — unlike [`with_color`](Self::with_color).
+    #[must_use]
+    pub fn with_filament(mut self, material_type: &str, sub_brands: Option<&str>) -> Self {
+        self.print.tray_sub_brands = match sub_brands {
+            Some(s) => String::from(s),
+            None => format!("{} Basic", material_type),
+        };
+        self.print.tray_type = String::from(material_type);
+        self
+    }
+
+    /// Sets the tray color, **normalized to uppercase** with a leading `#` stripped.
+    ///
+    /// The printer parses lowercase hex letters in `tray_color` as `0` and the corruption is
+    /// silent: the `ams_filament_setting` ack echoes the value that was sent and reports
+    /// `result: "success"`, and only the next AMS push status reveals it (measured on a P1S
+    /// running firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
+    ///
+    /// The normalization lives here, at the one place the color is set, rather than in each
+    /// caller — a caller that forgets is exactly how the original bug arrived.
+    #[must_use]
+    pub fn with_color(mut self, color_hex: &str) -> Self {
+        self.print.tray_color = normalize_tray_color(color_hex);
+        self
+    }
+
+    /// Sets the safe nozzle temperature window, in °C.
+    ///
+    /// Taking both bounds in one call is the point: as two adjacent positional `u32`s they were
+    /// transposable without a compile error.
+    #[must_use]
+    pub fn with_temps(mut self, min: u32, max: u32) -> Self {
+        self.print.nozzle_temp_min = min;
+        self.print.nozzle_temp_max = max;
+        self
+    }
+
+    /// Sets the **short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"`.
+    ///
+    /// A long `"PF"`-prefixed cloud id does not belong here — pass that to
+    /// [`with_setting_id`](Self::with_setting_id). See
+    /// [`AmsFilamentSettingPayload::tray_info_idx`] for what the printer does when the two are
+    /// conflated.
+    #[must_use]
+    pub fn with_preset(mut self, preset_code: &str) -> Self {
+        self.print.tray_info_idx = String::from(preset_code);
+        self
+    }
+
     /// Attaches the full preset identifier, which is a separate wire field from
     /// `tray_info_idx` and is omitted entirely when not set.
     ///
-    /// Follows the `with_*` convention [`PrintJobConfig`](super::PrintJobConfig) already uses,
-    /// rather than a tenth positional argument on [`new`](Self::new).
-    ///
     /// Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
-    /// code in `tray_info_idx`. See [`AmsFilamentSettingPayload::tray_info_idx`] for what the
-    /// printer does when a long id is put in the short field instead.
+    /// code in [`with_preset`](Self::with_preset). See
+    /// [`AmsFilamentSettingPayload::tray_info_idx`] for what the printer does when a long id is
+    /// put in the short field instead.
     #[must_use]
     pub fn with_setting_id(mut self, setting_id: &str) -> Self {
         self.print.setting_id = Some(String::from(setting_id));
