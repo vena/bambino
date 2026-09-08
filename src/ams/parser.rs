@@ -20,6 +20,15 @@ pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
 /// decode doesn't corroborate 8 units either — it's simply unbounded, not evidence of an
 /// observed 8th unit.
 pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
+/// AMS-HT unit ids are capped at 135 (8 lettered units, "A"-"H"), not BambuStudio's wider
+/// `< 153` bound (`DevFilaSystem.cpp:411` `GetTrayNameByTrayId`, `CalibUtils.cpp:140-141`) —
+/// deliberately, not an oversight. That bound is defensive-margin coding, not a confirmed
+/// protocol ceiling: bambuddy's actual AMS-HT *operational* logic (not just a storage-layer
+/// check) caps at the same 135 bambino uses (`backend/app/api/routes/printers.py:2822,3073-3074`,
+/// `backend/app/main.py:7993-7995`'s 8-letter `HT-{A..H}` labeling). The two upstreams disagree
+/// with each other here; bambino follows the one with real operational AMS-HT-unit logic
+/// behind it. Raise this again only with hardware evidence for a 9th+ AMS-HT unit (id 136+) —
+/// re-litigated without new evidence in the 2026-09-08 telemetry review sweep, same conclusion.
 pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
 /// The unit id the A2L's 4-slot AMS Lite actually reports on the wire.

@@ -525,8 +525,19 @@ impl ExtruderInfo {
 
     /// Decodes an AMS-routing field (`snow`/`spre`/`star`) into `(ams_id, slot_id)`.
     /// Confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`
-    /// (`DevExtruderSystem.cpp:369-372`): low 8 bits = slot_id, next 8 bits = ams_id. The
-    /// sentinel `0xFFFF` (single-extruder system, unmapped) decodes to `None`.
+    /// (`DevExtruderSystem.cpp:369-372`): low 8 bits = slot_id, next 8 bits = ams_id.
+    ///
+    /// The sentinel `0xFFFF` decodes to `None` unconditionally, on every extruder count —
+    /// deliberately, not an oversight. BambuStudio's own parser only special-cases `0xffff`
+    /// when `m_total_extder_count == 1` (`DevExtruderSystem.cpp:360-374`); on a 2-extruder
+    /// (IDEX) system a raw `0xffff` there falls through to the normal decode instead
+    /// (`ams_id=255, slot_id=255`). bambuddy deliberately diverges from that literal gating
+    /// and matches this crate's unconditional treatment, with a stated rationale
+    /// (`bambu_mqtt.py:780-784`): "0xFFFF decodes to AMS 255 slot 255 and slot 255 is not a
+    /// real slot on any machine, so treating it as empty everywhere is strictly safer than
+    /// reading it as the external spool." Re-litigated without new evidence in the
+    /// 2026-09-08 telemetry review sweep, same conclusion — don't reopen without a wire
+    /// capture showing a genuine `ams_id=255, slot_id=255` combo in the wild.
     fn decode_ams_slot_field(raw: Option<u32>) -> Option<(u8, u8)> {
         let raw = raw?;
         if raw == 0xFFFF {
