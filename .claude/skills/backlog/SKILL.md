@@ -32,6 +32,21 @@ Not every finding gets one. A confirmed real bug or an outstanding needs-verific
 
 **The commit that fixes a bug — or lands an enhancement — closes its issue in the same commit's message** (`Closes #42`) — GitHub auto-closes on push to the default branch when the message contains that keyword. No separate "update the tracker" follow-up; that's exactly how the old file went stale, and an issue left open after its fix landed is worse than a file row, since it's publicly visible. Referencing the issue number in the commit message is the one direction `git blame` doesn't cover for free: blame on the _fixed source line_ doesn't find the issue that tracked it unless the message says so.
 
+## What counts as confirmation
+
+**BambuStudio + bambuddy + a capture from our own printer, all agreeing, is confirmation.** Not "strong evidence pending hardware" — confirmed. Say so plainly and drop the hedging; a finding that clears this bar should not keep `needs-verification`, and a claim that clears it should not be written up as provisional.
+
+The three are independent in the way that matters: BambuStudio is the vendor's own client (what the firmware was built against), bambuddy is an independent reverse-engineering of the same wire, and the capture is this hardware actually doing it. Agreement across all three is not three restatements of one guess.
+
+Corollaries worth stating, because each has bitten:
+
+- **One upstream is not two.** Checking bambuddy and stopping is the common failure — it looks thorough and isn't. Where BambuStudio has an opinion, read it; it is the authority when the two upstreams disagree (see #193's `target`, where bambuddy's own docstring flags its value as an unverified extrapolation and BambuStudio's `command_ams_change_filament` settles it the other way).
+- **A capture alone proves presence, never absence.** A key missing from one model's payload says nothing about other models — that is what the upstreams are for. Conversely a key *present* in a capture is real regardless of what upstream does with it.
+- **Upstream can be richer than the issue.** #195 shipped incomplete because bambuddy sends two fields and BambuStudio sends six; matching the first source found and stopping reproduced the original bug one axis over.
+- **Do not soften a cleared claim to sound careful.** Hedging a confirmed finding costs the next reader a full re-derivation to find out it was already settled.
+
+`needs-verification` is for what this bar genuinely cannot close: physical behavior on a model nobody here has, or a wire shape no upstream implements.
+
 **Reassigning `needs-verification`:** when hardware evidence lands, swap the label to a real priority tier (or close as not-a-bug — see "What counts as an issue" above; if it turns out not to be a bug, close it with a one-line comment stating why, `gh issue close <N> --comment "..."`, rather than leaving it open indefinitely). State what resolved it (wire capture, cross-reference to a known-good source) in the closing comment.
 
 **If applying these rules hits a genuine conflict or an undefined case, stop and flag it — don't resolve it silently and move on.** Same standing as any other design tradeoff on the actual code.
