@@ -171,6 +171,21 @@ yourself.
   Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
   documented above.
 
+- <span id="extrusioncaligetrequest-with-extruder-id"></span>`fn with_extruder_id(self, extruder_id: u8) -> Self`
+
+  Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` is not
+  unique across extruders. `0` = right/main, `1` = left/deputy.
+
+- <span id="extrusioncaligetrequest-with-nozzle-id"></span>`fn with_nozzle_id(self, nozzle_id: &str) -> Self`
+
+  Scopes the query to one flow type, e.g. `"HS00-0.4"` (standard) or `"HH00-0.4"` (high
+  flow) — see [`ExtrusionCaliGetPayload::nozzle_id`](kprofile/index.md#extrusioncaligetpayload).
+
+- <span id="extrusioncaligetrequest-with-nozzle-rack-position"></span>`fn with_nozzle_rack_position(self, nozzle_pos: i32, nozzle_sn: &str) -> Self`
+
+  Names a specific physical hotend by rack position and serial. BambuStudio sends these
+  two together and only for a non-negative position.
+
 #### Trait Implementations
 
 ##### `impl Clone for ExtrusionCaliGetRequest`

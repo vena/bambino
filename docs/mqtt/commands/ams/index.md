@@ -371,6 +371,7 @@ struct AmsFilamentSettingPayload {
     pub tray_color: String,
     pub nozzle_temp_min: u32,
     pub nozzle_temp_max: u32,
+    pub setting_id: Option<String>,
 }
 ```
 
@@ -396,17 +397,20 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
 - **`tray_info_idx`**: `String`
 
-  Standard filament preset index code (e.g. `"GFL05"`, or a `"PF"`-prefixed preset id)
-  [REF-AMS-SP_CFG].
+  **Short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"` [REF-AMS-SP_CFG].
   
-  **Length caution, unconfirmed:** an A1 was measured storing a 19-character `PFUS…`
-  cloud id as only its first 8 characters, uppercased, while acking the command as
-  `"success"`; the slot then resolves to Generic and drops out of the calibration table,
-  which is keyed on the same field. Eight characters is exactly the width of a local
-  preset id and less than half a cloud one, so cloud-derived ids are the ones at risk.
-  This rests on a single measurement on one model — whether the width is model- or
-  firmware-dependent, and whether the field itself truncates or only the readback, is
-  unestablished, so bambino neither truncates nor rejects on this basis. See issue #202.
+  This is *not* where a long `"PF"`-prefixed preset id belongs — that goes in
+  [`setting_id`](#amsfilamentsettingpayload), which is a separate wire field. Putting a 19-character
+  cloud id here is what produced the "truncation" an A1 was measured doing: it stored only
+  the first 8 characters, uppercased, while acking the command as `"success"`, after which
+  the slot resolves to Generic and drops out of the calibration table (which is keyed on
+  this field).
+  
+  Both upstreams agree on the split: BambuStudio's `command_ams_filament_settings`
+  (`DeviceManager.cpp:1723-1724`) assigns `tray_info_idx = filament_id` and
+  `setting_id = setting_id` as two separate keys, and bambuddy's `ams_set_filament_setting`
+  documents this parameter as "Filament ID short format (e.g. `GFL05`)" against its own
+  distinct `setting_id`.
 
 - **`tray_type`**: `String`
 
@@ -430,6 +434,17 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 - **`nozzle_temp_max`**: `u32`
 
   Maximum safe nozzle temperature (°C) for this filament.
+
+- **`setting_id`**: `Option<String>`
+
+  Full preset identifier — the long form, e.g. `"GFSL05_07"` or a `"PF"`-prefixed id.
+  
+  Omitted from the wire when `None`, matching both upstreams: BambuStudio always sends the
+  key, bambuddy includes it only when non-empty, and the firmware accepts its absence.
+  Supplying it helps the slicer resolve the correct profile for the slot.
+  
+  Distinct from [`tray_info_idx`](#amsfilamentsettingpayload), which takes the *short* code — see
+  that field for what goes wrong when the two are conflated.
 
 #### Trait Implementations
 
@@ -495,6 +510,18 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   "success"`, and only the next AMS push status reveals it (measured on a P1S running
   firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
   `material_type` and `sub_brands` are deliberately left alone; case is meaningful there.
+
+- <span id="amsfilamentsettingrequest-with-setting-id"></span>`fn with_setting_id(self, setting_id: &str) -> Self`
+
+  Attaches the full preset identifier, which is a separate wire field from
+  `tray_info_idx` and is omitted entirely when not set.
+
+  Follows the `with_*` convention [`PrintJobConfig`](../print_job/index.md#printjobconfig) already uses,
+  rather than a tenth positional argument on [`new`](#amsfilamentsettingrequest).
+
+  Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
+  code in `tray_info_idx`. See [`AmsFilamentSettingPayload::tray_info_idx`](#amsfilamentsettingpayload) for what the
+  printer does when a long id is put in the short field instead.
 
 #### Trait Implementations
 

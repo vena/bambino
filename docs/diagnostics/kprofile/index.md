@@ -68,6 +68,10 @@ struct ExtrusionCaliGetPayload {
     pub sequence_id: String,
     pub filament_id: Option<String>,
     pub nozzle_diameter: Option<String>,
+    pub extruder_id: Option<u8>,
+    pub nozzle_id: Option<String>,
+    pub nozzle_pos: Option<i32>,
+    pub nozzle_sn: Option<String>,
 }
 ```
 
@@ -98,6 +102,36 @@ Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest).
   *requested* diameter rather than reflecting installed hardware. On a dual-diameter
   machine a single bare request therefore returns a partial table that looks complete.
   Query once per fitted diameter and merge.
+
+- **`extruder_id`**: `Option<u8>`
+
+  Which hotend's table to return — `0` = right/main, `1` = left/deputy.
+  
+  Matters on a dual-nozzle machine, where a `cali_idx` is **not** unique across hotends:
+  two profiles can share an index and differ only by extruder. Sent by BambuStudio only
+  when it has an extruder to name (`use_extruder_id`).
+
+- **`nozzle_id`**: `Option<String>`
+
+  Flow-type-qualified hotend designation, e.g. `"HS00-0.4"` or `"HH00-0.4"`.
+  
+  The leading two characters are the flow code — `HH` high flow, `HS` standard — and a
+  printer can hold profiles for both against one diameter, with the same filament reading
+  a different K through each. Sent by BambuStudio only when the nozzle volume type is
+  known (`use_nozzle_volume_type`). See [`KProfileEntry::nozzle_id`](#kprofileentry) for the comparison
+  rule and the models that report this empty.
+
+- **`nozzle_pos`**: `Option<i32>`
+
+  Rack position of the target hotend, on a machine with a nozzle rack.
+  
+  BambuStudio sends this and [`nozzle_sn`](#extrusioncaligetpayload) together, and only when it has
+  a non-negative position — they identify a specific physical hotend rather than a
+  carriage.
+
+- **`nozzle_sn`**: `Option<String>`
+
+  Serial number of the target hotend, paired with [`nozzle_pos`](#extrusioncaligetpayload).
 
 #### Trait Implementations
 
@@ -150,6 +184,21 @@ yourself.
 
   Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
   documented above.
+
+- <span id="extrusioncaligetrequest-with-extruder-id"></span>`fn with_extruder_id(self, extruder_id: u8) -> Self`
+
+  Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` is not
+  unique across extruders. `0` = right/main, `1` = left/deputy.
+
+- <span id="extrusioncaligetrequest-with-nozzle-id"></span>`fn with_nozzle_id(self, nozzle_id: &str) -> Self`
+
+  Scopes the query to one flow type, e.g. `"HS00-0.4"` (standard) or `"HH00-0.4"` (high
+  flow) — see [`ExtrusionCaliGetPayload::nozzle_id`](#extrusioncaligetpayload).
+
+- <span id="extrusioncaligetrequest-with-nozzle-rack-position"></span>`fn with_nozzle_rack_position(self, nozzle_pos: i32, nozzle_sn: &str) -> Self`
+
+  Names a specific physical hotend by rack position and serial. BambuStudio sends these
+  two together and only for a non-negative position.
 
 #### Trait Implementations
 

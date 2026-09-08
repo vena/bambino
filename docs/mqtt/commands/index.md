@@ -223,6 +223,18 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
   `material_type` and `sub_brands` are deliberately left alone; case is meaningful there.
 
+- <span id="amsfilamentsettingrequest-with-setting-id"></span>`fn with_setting_id(self, setting_id: &str) -> Self`
+
+  Attaches the full preset identifier, which is a separate wire field from
+  `tray_info_idx` and is omitted entirely when not set.
+
+  Follows the `with_*` convention [`PrintJobConfig`](print_job/index.md#printjobconfig) already uses,
+  rather than a tenth positional argument on [`new`](ams/index.md#amsfilamentsettingrequest).
+
+  Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
+  code in `tray_info_idx`. See [`AmsFilamentSettingPayload::tray_info_idx`](ams/index.md#amsfilamentsettingpayload) for what the
+  printer does when a long id is put in the short field instead.
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsFilamentSettingRequest`
