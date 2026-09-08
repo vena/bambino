@@ -364,6 +364,7 @@ struct AmsFilamentSettingPayload {
     pub command: &'static str,
     pub sequence_id: String,
     pub ams_id: i32,
+    pub slot_id: i32,
     pub tray_id: i32,
     pub tray_info_idx: String,
     pub tray_type: String,
@@ -391,9 +392,21 @@ Overwrites physical attributes or custom slicer presets assigned to a specific t
 
   Target AMS unit or external-spool address — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`](#amsfilamentsettingrequest).
 
+- **`slot_id`**: `i32`
+
+  Slot position within the unit, as supplied by the caller.
+  
+  Distinct from [`tray_id`](#amsfilamentsettingpayload), and both are sent: they coincide on a standard
+  AMS but not on an external spool, where this stays `0` while `tray_id` is `254`.
+
 - **`tray_id`**: `i32`
 
-  Target tray/slot index — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`](#amsfilamentsettingrequest).
+  Derived addressing field — `254` for either external-spool `ams_id` (254/255), otherwise
+  the slot index.
+  
+  Computed by [`AmsFilamentSettingRequest::new`](#amsfilamentsettingrequest) rather than caller-supplied, matching
+  BambuStudio's `command_ams_filament_settings` (`DeviceManager.cpp:1707-1715`), so a
+  caller cannot pair a `slot_id` with a `tray_id` that contradicts it.
 
 - **`tray_info_idx`**: `String`
 
@@ -478,14 +491,27 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
 #### Implementations
 
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
+- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
 
   Creates a request payload to update slot parameters.
 
   **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
-  For standard physical slots, `ams_id` matches the expansion unit index (0-3).
-  For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
-  and `tray_id` must strictly be set to `254` to prevent command rejection.
+  For standard physical slots, `ams_id` matches the expansion unit index (0-3). For an
+  external spool, pass the virtual `ams_id` (`255` single-nozzle / Ext-R, `254` Ext-L)
+  with `slot_id: 0`.
+
+  **`slot_id` is what you pass; `tray_id` is derived.** Both reach the wire, and they
+  differ on a virtual tray: `tray_id` becomes `254` for either external `ams_id` and the
+  slot index otherwise. Deriving it here rather than accepting it means a caller cannot
+  send a `slot_id`/`tray_id` pair that contradicts itself — the same reasoning as
+  `PrinterClient::change_filament()` deriving `target`.
+
+  Confirmed against BambuStudio's `command_ams_filament_settings`
+  (`DeviceManager.cpp:1707-1722`), whose `tag_tray_id` maps either
+  `VIRTUAL_TRAY_MAIN_ID`/`VIRTUAL_TRAY_DEPUTY_ID` to `254` and whose own call sites pass
+  `slot_id: 0` for a virtual tray (`:4853`, `:4877`); and against bambuddy's
+  `ams_set_filament_setting`, which sends `ams_id: 255`, `tray_id: 254`, `slot_id: 0` for
+  a single external slot.
 
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by

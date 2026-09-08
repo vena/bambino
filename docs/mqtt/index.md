@@ -329,14 +329,27 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
 #### Implementations
 
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
+- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](commands/index.md#clampedtaskid)
 
   Creates a request payload to update slot parameters.
 
   **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
-  For standard physical slots, `ams_id` matches the expansion unit index (0-3).
-  For the single-nozzle external spool slot, `ams_id` must strictly be set to `255`
-  and `tray_id` must strictly be set to `254` to prevent command rejection.
+  For standard physical slots, `ams_id` matches the expansion unit index (0-3). For an
+  external spool, pass the virtual `ams_id` (`255` single-nozzle / Ext-R, `254` Ext-L)
+  with `slot_id: 0`.
+
+  **`slot_id` is what you pass; `tray_id` is derived.** Both reach the wire, and they
+  differ on a virtual tray: `tray_id` becomes `254` for either external `ams_id` and the
+  slot index otherwise. Deriving it here rather than accepting it means a caller cannot
+  send a `slot_id`/`tray_id` pair that contradicts itself — the same reasoning as
+  `PrinterClient::change_filament()` deriving `target`.
+
+  Confirmed against BambuStudio's `command_ams_filament_settings`
+  (`DeviceManager.cpp:1707-1722`), whose `tag_tray_id` maps either
+  `VIRTUAL_TRAY_MAIN_ID`/`VIRTUAL_TRAY_DEPUTY_ID` to `254` and whose own call sites pass
+  `slot_id: 0` for a virtual tray (`:4853`, `:4877`); and against bambuddy's
+  `ams_set_filament_setting`, which sends `ams_id: 255`, `tray_id: 254`, `slot_id: 0` for
+  a single external slot.
 
   **IDEX External-Spool Addressing Cheat-Sheet [REF-MQTT-LIFECYCLE]:** external-spool
   addressing differs by command family — this rule is *not* the same one used by

@@ -252,11 +252,16 @@ and source error tracing are derived automatically via `thiserror`.
 
   Emitted when the broker refuses the connection with MQTT CONNACK code 4 or 5.
   
-  Most often the 8-character LAN access code was rejected or has been rotated (a factory
-  reset regenerates it). It is **not** proof of that, though: code 5 is also returned when
-  the printer is powered off or still booting, i.e. unreachable at the application layer.
-  Nothing in the CONNACK distinguishes the two cases, so a caller should not tell a user to
-  re-check their access code without also suggesting the printer may simply be off.
+  Both codes mean the printer refused the credentials. Usually the 8-character LAN access
+  code is wrong or has been rotated (a factory reset regenerates it); on some firmware the
+  serial used as the username is the part it rejected, so a caller reporting this should
+  name both rather than only the access code. Confirmed against bambuddy, which maps
+  CONNACK 4 and 5 to one auth-rejected state on the same reasoning.
+  
+  A field report (ha-bambulab issue #1863) also attributes code 5 to a printer that is
+  powered off or still booting. That is **not** corroborated by either reference client and
+  is recorded here as reported, not established — do not present it to a user as a known
+  cause without checking it independently.
 
 - **`Timeout`**
 

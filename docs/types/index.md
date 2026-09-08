@@ -1538,11 +1538,20 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 
 - **`p_t`**: `Option<u64>`
 
-  Cumulative print time for this individual hotend, in seconds.
+  Cumulative print time for this individual hotend.
   
   A wear/usage counter tied to the physical hotend rather than the position it sits in,
   which is what makes it meaningful on a rack machine where hotends are swapped between
-  slots. Reported by H2C Vortek rack hotends; absent elsewhere. Divide by 3600 for hours.
+  slots. Reported by H2C Vortek rack hotends; absent elsewhere — BambuStudio guards it with
+  `if (njon.contains("p_t"))` and a `/*maybe not contains*/` note
+  (`DevNozzleSystem.cpp:789-791`, parsing the same `device.nozzle` push this field comes
+  from).
+  
+  **Units are seconds per ha-bambulab only** — their sensor divides by 3600 to present
+  hours (`definitions.py:951`) and their field comment says seconds outright. BambuStudio
+  stores it as a bare `int` with no conversion, and bambuddy does not model it at all, so
+  no second reference client corroborates the unit. Treat a value as seconds, but do not
+  treat that as settled.
 
 #### Implementations
 
@@ -1970,7 +1979,14 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Which plate of a multi-plate 3MF the current job was sliced for.
   
   Needed to pull the right plate's metadata — thumbnail, filament list, bed temperature —
-  out of the project file, since a 3MF's per-plate data is indexed on exactly this.
+  out of the project file, since a 3MF's per-plate data is indexed on exactly this. It is
+  also authoritative over the 3MF's own `slice_info`, which can name a different plate on
+  a retained or reused archive.
+  
+  Firmware sends this as **either a number or a decimal string** — BambuStudio branches on
+  `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp:2617-2626`), so
+  the permissive deserializer is load-bearing rather than defensive: a bare `Option<i32>`
+  would fail the entire telemetry frame on the string form.
 
 - **`profile_id`**: `Option<String>`
 
