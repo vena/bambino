@@ -32,3 +32,9 @@ ack_probe_report*.json
 
 # libreoffice lock files
 .~lock.*.csv#
+
+# Ad-hoc telemetry captures. A raw pushall payload carries the printer serial (and the
+# `ams`/`net` blocks carry more), so these are treated the same as the probe reports above:
+# useful locally for checking a wire shape against what the crate binds, never committed.
+test.json
+/captures/

@@ -153,11 +153,16 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
             telemetry_res = printer.poll_telemetry() => {
                 match telemetry_res {
                     Ok(event) => {
+                        // Read the progress cache after `poll_telemetry()` has folded this
+                        // frame in, so the dashboard shows the same values a library consumer
+                        // would see rather than re-deriving them from the raw map.
+                        let progress = printer.print_progress();
                         let payload = &event.raw().payload;
                         match dashboard::render_dashboard(
                             payload,
                             &mut state,
                             quirks,
+                            progress,
                             warning.as_deref(),
                         ) {
                             Ok(()) => warning = None,

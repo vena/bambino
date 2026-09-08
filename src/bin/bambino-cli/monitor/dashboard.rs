@@ -87,6 +87,7 @@ pub(super) fn render_dashboard(
     payload: &[u8],
     state: &mut serde_json::Map<String, serde_json::Value>,
     quirks: &dyn ModelQuirks,
+    progress: bambino::client::PrintProgress,
     warning: Option<&str>,
 ) -> Result<(), serde_json::Error> {
     let v: serde_json::Value = serde_json::from_slice(payload)?;
@@ -120,7 +121,7 @@ pub(super) fn render_dashboard(
     let mut w = RawWriter(io::stdout());
     dwrite!(w, "\x1B[1;1H\x1B[2J");
 
-    render_print_status(state, &mut w);
+    render_print_status(state, progress, &mut w);
     render_nozzles(state, &mut w);
     render_thermal(state, quirks, &mut w);
     render_fans_and_system(state, &mut w);
@@ -144,7 +145,11 @@ pub(super) fn render_dashboard(
     Ok(())
 }
 
-fn render_print_status(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
+fn render_print_status(
+    state: &serde_json::Map<String, serde_json::Value>,
+    progress: bambino::client::PrintProgress,
+    w: &mut impl Write,
+) {
     let gcode_state = state
         .get("gcode_state")
         .and_then(|s| s.as_str())
@@ -153,19 +158,21 @@ fn render_print_status(state: &serde_json::Map<String, serde_json::Value>, w: &m
         .get("subtask_name")
         .and_then(|s| s.as_str())
         .unwrap_or("None");
-    let progress = state
-        .get("progress")
-        .and_then(|p| p.as_f64())
-        .unwrap_or(0.0);
-    let layer_num = state.get("layer_num").and_then(|l| l.as_i64()).unwrap_or(0);
-    let total_layers = state
-        .get("total_layers")
-        .and_then(|l| l.as_i64())
-        .unwrap_or(0);
-    let remaining_sec = state
-        .get("mc_remaining_time")
-        .and_then(|t| t.as_i64())
-        .unwrap_or(0);
+    // Progress comes from the client's cache, not from `state`, because the wire key names
+    // differ from this crate's field names and reading the map by field name silently yields
+    // nothing: the percentage is `mc_percent` (not `progress` — the only `progress` keys on the
+    // wire are `upgrade_state.progress` and `upload.progress`, neither of which is print
+    // completion), and the total is `total_layer_num` (not `total_layers`, which is this
+    // crate's name for it and carries a serde alias that only applies to typed
+    // deserialization). Reading both by the wrong name is what rendered `0.0%  (516/0)` mid-print.
+    //
+    // Deferring to `PrinterClient::print_progress()` rather than correcting the two key names
+    // here also inherits its end-of-print guard: P1S firmware resets `total_layer_num` to 0 in
+    // the final frame, which a plain merge-and-read would show as `(879/0)` at 100%.
+    let percent = progress.percent.unwrap_or(0);
+    let layer_num = progress.layer_num.unwrap_or(0);
+    let total_layers = progress.total_layers.unwrap_or(0);
+    let remaining_sec = progress.remaining_secs.unwrap_or(0) as i64;
 
     let remaining_formatted = if remaining_sec > 0 {
         format!("{}m {}s", remaining_sec / 60, remaining_sec % 60)
@@ -181,9 +188,9 @@ fn render_print_status(state: &serde_json::Map<String, serde_json::Value>, w: &m
     dwriteln!(w, "{:<20} : {}", "Active Job Name", subtask_name);
     dwriteln!(
         w,
-        "{:<20} : {:.1}%  ({}/{})",
+        "{:<20} : {}%  ({}/{})",
         "Print Progress",
-        progress,
+        percent,
         layer_num,
         total_layers
     );
@@ -649,5 +656,86 @@ mod format_color_swatch_tests {
         // bytes total; the old `&hex_color[0..2]` slice's end boundary (byte offset 2)
         // fell in the middle of 'é'.
         assert_eq!(format_color_swatch("a\u{e9}2345"), "");
+    }
+}
+
+#[cfg(test)]
+mod print_status_tests {
+    use super::render_print_status;
+
+    #[test]
+    fn test_print_progress_reads_client_cache_not_raw_wire_names() {
+        // Regression: this line rendered "0.0%  (516/0)" mid-print on a P1S. The percentage
+        // was read as `progress` and the total as `total_layers`, but the wire sends
+        // `mc_percent` and `total_layer_num` — and the only `progress` keys that exist on the
+        // wire are `upgrade_state.progress` and `upload.progress`, so the lookup found either
+        // nothing or an unrelated firmware-upgrade field. `layer_num` was right by accident,
+        // being the one name that matches the wire.
+        //
+        // The state map below is deliberately the *raw* shape, including a decoy
+        // `upload.progress` and no `progress`/`total_layers` keys at all, so a regression to
+        // map lookups fails here rather than silently reading zeros.
+        let state: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({
+                "gcode_state": "RUNNING",
+                "subtask_name": "JEFF+DOG",
+                "layer_num": 516,
+                "total_layer_num": 879,
+                "mc_percent": 68,
+                "mc_remaining_time": 99,
+                "upload": { "progress": 0 },
+                "upgrade_state": { "progress": "" },
+            }))
+            .expect("state fixture");
+
+        let progress = bambino::client::PrintProgress {
+            percent: Some(68),
+            remaining_secs: Some(99),
+            layer_num: Some(516),
+            total_layers: Some(879),
+        };
+
+        let mut out: Vec<u8> = Vec::new();
+        render_print_status(&state, progress, &mut out);
+        let rendered = String::from_utf8(out).expect("utf8");
+
+        assert!(
+            rendered.contains("68%  (516/879)"),
+            "expected percent and total from the client cache, got: {rendered}"
+        );
+        assert!(!rendered.contains("(516/0)"), "total_layers regressed to 0");
+        assert!(!rendered.contains("0%  ("), "percent regressed to 0");
+    }
+
+    #[test]
+    fn test_print_progress_end_of_print_total_reset_does_not_show_zero() {
+        // P1S firmware resets total_layer_num to 0 in the end-of-print frame. The client's
+        // cache guards this (only positive values overwrite the last known total), so the
+        // dashboard must show the retained total rather than the 0 sitting in the merged map.
+        let state: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_value(serde_json::json!({
+                "gcode_state": "FINISH",
+                "subtask_name": "JEFF+DOG",
+                "layer_num": 879,
+                "total_layer_num": 0,
+                "mc_percent": 100,
+            }))
+            .expect("state fixture");
+
+        let progress = bambino::client::PrintProgress {
+            percent: Some(100),
+            remaining_secs: Some(0),
+            layer_num: Some(879),
+            total_layers: Some(879),
+        };
+
+        let mut out: Vec<u8> = Vec::new();
+        render_print_status(&state, progress, &mut out);
+        let rendered = String::from_utf8(out).expect("utf8");
+
+        assert!(
+            rendered.contains("100%  (879/879)"),
+            "end-of-print total must survive the firmware's 0, got: {rendered}"
+        );
     }
 }
