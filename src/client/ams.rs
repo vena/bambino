@@ -383,7 +383,20 @@ where
 
         let expected_seq = seq.to_string();
         self.poll_until(|msg| {
-            let mut resp: ExtrusionCaliGetResponse = serde_json::from_slice(&msg.payload).ok()?;
+            let mut resp: ExtrusionCaliGetResponse = match serde_json::from_slice(&msg.payload) {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Most frames on this topic are unrelated telemetry, so a parse failure is
+                    // normally just "not our message" and must stay silent. A payload that
+                    // *names* this command and still fails to parse is different: it makes
+                    // poll_until run to its timeout with no diagnostic at all, which is how a
+                    // single unexpected field shape reads to a caller as an unexplained hang.
+                    if msg.payload.windows(18).any(|w| w == b"extrusion_cali_get") {
+                        log::debug!("extrusion_cali_get reply failed to deserialize: {e}");
+                    }
+                    return None;
+                }
+            };
             if resp.print.command == "extrusion_cali_get" && resp.print.sequence_id == expected_seq
             {
                 // Single-nozzle firmware omits nozzle_diameter per-entry, setting it only at

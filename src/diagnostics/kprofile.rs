@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 use crate::mqtt::commands::ClampedTaskId;
+use crate::types::telemetry::{deserialize_permissive_opt_string, deserialize_permissive_string};
 
 /// Validates whether a provided calibration profile setting ID complies with EEPROM limits.
 ///
@@ -73,7 +74,15 @@ pub struct KProfileEntry {
     /// of `extrusion_cali_set`'s `filaments` array, so round-tripping an entry read back from
     /// single-nozzle firmware would otherwise emit `"nozzle_diameter":null` — a shape neither
     /// the read side nor `reference/07_diagnostics_hms.md` §7.2 ever shows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Bound permissively: firmware may send a diameter as a bare JSON number (`0.4`) rather
+    /// than the quoted form the captures show, and a strict `Option<String>` fails the whole
+    /// response on that shape rather than just this field.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_permissive_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub nozzle_diameter: Option<String>,
     /// System designation of the target hotend profile structure (e.g. `"HS00-0.4"`).
     ///
@@ -100,9 +109,18 @@ pub struct KProfileEntry {
     /// Custom user-defined name assigned to label the profile slot.
     pub name: String,
     /// Calibrated Linear Advance constant serialized as a float string.
+    ///
+    /// Bound permissively for the same reason as [`nozzle_diameter`](Self::nozzle_diameter):
+    /// firmware may send the numeric form (`0.02`) on the read side. A number is rendered back
+    /// to its decimal text, so callers see one representation either way.
+    #[serde(deserialize_with = "deserialize_permissive_string")]
     pub k_value: String,
     /// Extrusion coefficient parameters.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_permissive_opt_string",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub n_coef: Option<String>,
     /// Secure 19-character unique setting identifier.
     pub setting_id: String,
@@ -252,7 +270,10 @@ pub struct ExtrusionCaliGetResponsePayload {
     /// Echo of the original request sequence identifier.
     pub sequence_id: String,
     /// Nozzle diameter filter applied to the returned profile set.
-    #[serde(default)]
+    ///
+    /// Permissive for the same reason as [`KProfileEntry::nozzle_diameter`] — a numeric form
+    /// here would otherwise fail the entire response envelope.
+    #[serde(default, deserialize_with = "deserialize_permissive_opt_string")]
     pub nozzle_diameter: Option<String>,
     /// Complete array of stored calibration profiles matching the active nozzle.
     #[serde(default)]
@@ -732,6 +753,55 @@ mod tests {
         }"#;
         let resp: ExtrusionCaliGetResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.print.filaments[0].nozzle_diameter, None);
+    }
+
+    #[test]
+    fn test_extrusion_cali_get_response_accepts_numeric_wire_forms() {
+        // k_value, n_coef and nozzle_diameter (per-entry and on the envelope) may arrive as
+        // bare JSON numbers rather than the quoted forms the captures show. Strict String
+        // bindings failed the whole response on that shape, and get_k_profiles()'s poll
+        // predicate discards the parse error — so the caller saw a timeout, not a parse error.
+        let json = r#"{
+            "print": {
+                "command": "extrusion_cali_get",
+                "sequence_id": "50001",
+                "nozzle_diameter": 0.4,
+                "filaments": [{
+                    "cali_idx": 4,
+                    "filament_id": "GFA01",
+                    "nozzle_diameter": 0.4,
+                    "nozzle_id": "HS00-0.4",
+                    "extruder_id": 0,
+                    "name": "My Custom PLA Matte",
+                    "k_value": 0.022,
+                    "n_coef": 0,
+                    "setting_id": "PF12345678901234567"
+                }]
+            }
+        }"#;
+        let resp: ExtrusionCaliGetResponse = serde_json::from_str(json).unwrap();
+        // Numbers are rendered back to decimal text, so callers see one representation.
+        assert_eq!(resp.print.nozzle_diameter, Some("0.4".into()));
+        assert_eq!(resp.print.filaments[0].nozzle_diameter, Some("0.4".into()));
+        assert_eq!(resp.print.filaments[0].k_value, "0.022");
+        assert_eq!(resp.print.filaments[0].n_coef, Some("0".into()));
+    }
+
+    #[test]
+    fn test_kprofile_entry_rejects_null_k_value() {
+        // The permissive binding accepts a number, not a null: k_value has no "not reported"
+        // state, and defaulting it to an empty string would report a value the printer never
+        // sent as if it were calibration data.
+        let json = r#"{
+            "cali_idx": 4,
+            "filament_id": "GFA01",
+            "nozzle_id": "HS00-0.4",
+            "extruder_id": 0,
+            "name": "My Custom PLA Matte",
+            "k_value": null,
+            "setting_id": "PF12345678901234567"
+        }"#;
+        assert!(serde_json::from_str::<KProfileEntry>(json).is_err());
     }
 
     #[test]

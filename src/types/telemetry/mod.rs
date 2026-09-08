@@ -257,7 +257,12 @@ where
 /// Binding it as a plain `Option<String>` would fail the whole frame on the numeric form.
 ///
 /// A number is rendered back to its decimal text so callers see one consistent representation.
-fn deserialize_permissive_opt_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+///
+/// `pub(crate)` rather than private: `diagnostics::kprofile` binds the same number-or-string wire
+/// forms and must not re-derive a second copy of this rule.
+pub(crate) fn deserialize_permissive_opt_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -277,6 +282,21 @@ where
         Ok(RawStringValue::Float(f)) => Ok(Some(f.to_string())),
         Err(e) => Err(e),
     }
+}
+
+/// Required-field counterpart of [`deserialize_permissive_opt_string`], for a string field the
+/// wire always carries but may carry as a bare number.
+///
+/// An explicit `null` is an error here rather than a silent default: unlike the optional form,
+/// these fields have no "not reported" state to degrade to, and inventing an empty string would
+/// hand the caller a value the printer never sent.
+pub(crate) fn deserialize_permissive_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    deserialize_permissive_opt_string(deserializer)?
+        .ok_or_else(|| D::Error::custom("expected a string or number, found null"))
 }
 
 #[cfg(test)]
