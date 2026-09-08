@@ -93,13 +93,17 @@ enum AmsPoolComposition {
 Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
 "AMS Unit Limits" row (user-supplied official Bambu documentation).
 
-**Known limitation**: AMS Lite units are not independently addressable in this model —
-they use the same `ams_id` space as standard AMS units — so A1/A1 Mini's "shared pool OR
-1 AMS Lite, not combinable" exclusivity and A2L's "shared pool + 1 AMS Lite simultaneously"
-additive capacity can't be validated from `ams_id`/`slot_id` alone. Both are conservatively
-modeled as `Shared { max_units: 4 }`, the same as the plain shared-pool models — this may
-under-count A2L's true capacity by one unit, but never accepts a config that's actually
-invalid.
+**Known limitation**: this enum still cannot express A1/A1 Mini's "shared pool OR 1 AMS
+Lite, not combinable" exclusivity, or A2L's "shared pool + 1 AMS Lite simultaneously"
+additive capacity. Both are conservatively modeled as `Shared { max_units: 4 }`, the same
+as the plain shared-pool models — this may under-count A2L's true capacity by one unit, but
+never accepts a config that's actually invalid.
+
+This is a *capacity-counting* gap only. The addressing gap it used to describe — "AMS Lite
+units are not independently addressable ... they use the same `ams_id` space as standard AMS
+units" — is fixed: the A2L AMS Lite reports physical unit id 16, which
+[`normalize_ams_unit_id`](parser/index.md#normalize-ams-unit-id) maps to 6 on ingest, and
+[`MaterialSource::AmsLite`](mapping/index.md#materialsource) addresses its slots with their own wire encodings.
 
 #### Variants
 
@@ -142,6 +146,9 @@ enum MaterialSource {
     AmsHt {
         ams_id: u8,
     },
+    AmsLite {
+        slot_id: u8,
+    },
     ExternalSpool,
     ExternalSpoolLeft,
     ExternalSpoolRight,
@@ -160,6 +167,16 @@ Enumeration of possible physical feed locations for loaded spools.
 - **`AmsHt`**
 
   Spool loaded inside a single-slot High-Temperature (AMS-HT) dry-chamber.
+
+- **`AmsLite`**
+
+  Spool loaded inside the A2L's 4-slot AMS Lite.
+  
+  Kept separate from [`MaterialSource::StandardAms`](mapping/index.md#materialsource) because this unit's two wire
+  encodings do not follow the standard unit's: the flat `ams_mapping` array carries the
+  bare **local** slot rather than a global `ams_id * 4 + slot` channel, and `ams_mapping2`
+  carries the **physical** unit id 16 rather than the normalized 6 the rest of the crate
+  addresses it by. A `StandardAms { ams_id: 6, .. }` would get both wrong.
 
 - **`ExternalSpool`**
 
@@ -363,6 +380,24 @@ branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed ind
 in OrcaSlicer with an equivalent formula. This reopens and reverses the earlier "AMS-HT
 doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
 source.
+
+### `normalize_ams_unit_id`
+
+```rust
+fn normalize_ams_unit_id(ams_id: u8) -> u8
+```
+
+Normalizes an AMS unit id reported on the wire into the id this crate addresses it by.
+
+Only the A2L AMS Lite's physical id 16 is remapped (to 6); every other id passes through
+untouched, and no other Bambu unit reports id 16, so the remap is self-scoping. Applied on
+the inbound telemetry boundary so that `tray_exist_bits`, `resolve_global_tray_id` and the
+mapping builders all agree on one id; the physical 16 is restored only on the outbound wire
+by `crate::ams::MaterialSource::to_mapping2_entry`.
+
+The firmware is internally inconsistent about this unit, which is why one constant cannot
+cover it: `tray_exist_bits` uses bit base 24 (id 6's position, not id 16's), `tray_now`
+reports a local slot 0-3, and only `ams_mapping2` and the per-unit commands carry 16.
 
 ### `resolve_global_tray_id`
 

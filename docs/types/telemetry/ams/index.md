@@ -418,7 +418,13 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - **`id`**: `String`
 
-  Unique index representing the unit position on the physical expansion bus (0 to 3).
+  Unique index representing the unit position on the physical expansion bus.
+  
+  Standard AMS units report 0-3 and AMS-HT units 128-135, both verbatim. The A2L's AMS
+  Lite reports physical id **16** on the wire and is normalized to **6** here, so that
+  `tray_exist_bits` (whose bit base for this unit is 24 = `6 * 4`), `resolve_global_tray_id`
+  and the mapping builders all agree; `MaterialSource::AmsLite` puts the physical 16 back
+  on the outbound `ams_mapping2`.
 
 - **`temp`**: `String`
 

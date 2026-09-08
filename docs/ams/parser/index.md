@@ -17,6 +17,7 @@ tray data, and calculating global indexes.
 |------|------|-------------|
 | [`clean_stale_tray_data`](#clean-stale-tray-data) | fn | Explicitly sanitizes and nullifies telemetry fields when a physical slot becomes empty. |
 | [`evaluate_spool_presence`](#evaluate-spool-presence) | fn | Evaluates if a physical spool is present in a specific standard AMS slot. |
+| [`normalize_ams_unit_id`](#normalize-ams-unit-id) | fn | Normalizes an AMS unit id reported on the wire into the id this crate addresses it by. |
 | [`resolve_global_tray_id`](#resolve-global-tray-id) | fn | Computes the unique global channel identifier for a given expansion unit and local tray. |
 | [`resolve_printing_global_id`](#resolve-printing-global-id) | fn | Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map` inversion, accounting for IDEX map translations. |
 
@@ -90,6 +91,24 @@ branch) computes the bit index as `16 + (ams_id - 128) + slot_id`, confirmed ind
 in OrcaSlicer with an equivalent formula. This reopens and reverses the earlier "AMS-HT
 doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
 source.
+
+### `normalize_ams_unit_id`
+
+```rust
+fn normalize_ams_unit_id(ams_id: u8) -> u8
+```
+
+Normalizes an AMS unit id reported on the wire into the id this crate addresses it by.
+
+Only the A2L AMS Lite's physical id 16 is remapped (to 6); every other id passes through
+untouched, and no other Bambu unit reports id 16, so the remap is self-scoping. Applied on
+the inbound telemetry boundary so that `tray_exist_bits`, `resolve_global_tray_id` and the
+mapping builders all agree on one id; the physical 16 is restored only on the outbound wire
+by `crate::ams::MaterialSource::to_mapping2_entry`.
+
+The firmware is internally inconsistent about this unit, which is why one constant cannot
+cover it: `tray_exist_bits` uses bit base 24 (id 6's position, not id 16's), `tray_now`
+reports a local slot 0-3, and only `ams_mapping2` and the per-unit commands carry 16.
 
 ### `resolve_global_tray_id`
 

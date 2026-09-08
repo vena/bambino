@@ -170,7 +170,9 @@ means "never observed," not "printer reports zero/none."
 
 - **`remaining_secs`**: `Option<i32>`
 
-  Estimated remaining duration of the active layer sequence, in seconds.
+  Estimated remaining print duration, in seconds.
+  
+  Converted on ingest from `mc_remaining_time`, which the wire reports in **minutes**.
 
 - **`layer_num`**: `Option<i32>`
 

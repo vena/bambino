@@ -556,7 +556,13 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - **`id`**: `String`
 
-  Unique index representing the unit position on the physical expansion bus (0 to 3).
+  Unique index representing the unit position on the physical expansion bus.
+  
+  Standard AMS units report 0-3 and AMS-HT units 128-135, both verbatim. The A2L's AMS
+  Lite reports physical id **16** on the wire and is normalized to **6** here, so that
+  `tray_exist_bits` (whose bit base for this unit is 24 = `6 * 4`), `resolve_global_tray_id`
+  and the mapping builders all agree; `MaterialSource::AmsLite` puts the physical 16 back
+  on the outbound `ams_mapping2`.
 
 - **`temp`**: `String`
 
@@ -1648,8 +1654,6 @@ struct PrinterTelemetry {
     pub bed_temper: Option<f64>,
     pub bed_target_temper: Option<f64>,
     pub chamber_temper: Option<f64>,
-    pub tray_exist_bits: Option<String>,
-    pub power_on_flag: Option<bool>,
     pub ipcam: Option<super::diagnostics::IpcamTelemetry>,
     pub xcam: Option<serde_json::Value>,
     pub ams: Option<super::ams::AmsStatusReport>,
@@ -1720,15 +1724,29 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`layer_num`**: `Option<i32>`
 
   Active layer progress tracker.
+  
+  Permissive: bambuddy's `_probe_number` coerces this because "firmware is inconsistent
+  about whether these arrive as ints or as numeric strings". BambuStudio reads it as a
+  bare `get<int>()` and does not corroborate the string form, so the permissive binding is
+  defensive rather than confirmed — it costs nothing and cannot fail a frame.
 
 - **`total_layers`**: `Option<i32>`
 
   Total layers within the sliced print pipeline.
   Wire sends as `total_layer_num`; `total_layers` accepted for compatibility.
+  
+  Permissive on the same single-source basis as `layer_num`.
 
 - **`mc_remaining_time`**: `Option<i32>`
 
-  Estimated remaining duration of the active layer sequence, in seconds.
+  Estimated remaining print duration, in **minutes**.
+  
+  The wire unit is minutes, not seconds — BambuStudio multiplies by 60 on both parse arms
+  to reach its own seconds-based `mc_left_time` (`DeviceManager.cpp:3081-3086`), and
+  bambuddy does the same (`notification_service.py:1163-1169`, "in minutes, convert to
+  seconds"). Callers wanting seconds must multiply.
+  
+  Permissive: BambuStudio branches on `is_string()` here, so the quoted form is real.
 
 - **`spd_lvl`**: `Option<u8>`
 
@@ -1741,6 +1759,9 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`mc_percent`**: `Option<i32>`
 
   Motion controller progress percentage (0–100).
+  
+  Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp:3060-3065`) and
+  bambuddy coerces via `float()`/`_probe_number`, so the quoted form is confirmed.
 
 - **`mc_print_sub_stage`**: `Option<i32>`
 
@@ -1748,7 +1769,11 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`mc_print_stage`**: `Option<String>`
 
-  Motion controller print stage string.
+  Motion controller print stage.
+  
+  Captures show the quoted form (`"2"`), but BambuStudio parses both an `is_string()` and
+  an `is_number()` arm, so a bare number must not fail the frame. A numeric wire value is
+  normalized to its decimal text.
 
 - **`home_flag`**: `Option<u32>`
 
@@ -1828,14 +1853,6 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`chamber_temper`**: `Option<f64>`
 
   Active chamber heater or sensor telemetry (actual, target, or composite packed).
-
-- **`tray_exist_bits`**: `Option<String>`
-
-  Hexadecimal bitmask string representing the physical presence of loaded spools.
-
-- **`power_on_flag`**: `Option<bool>`
-
-  Power status of the printer core logic board.
 
 - **`ipcam`**: `Option<super::diagnostics::IpcamTelemetry>`
 

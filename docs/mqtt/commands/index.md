@@ -190,7 +190,7 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
 
 #### Implementations
 
-- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, preset_code: &str, material_type: &str, sub_brands: Option<&str>, color_hex: &str, temp_min: u32, temp_max: u32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+- <span id="amsfilamentsettingrequest-new"></span>`fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
 
   Creates a request payload to update slot parameters.
 
@@ -229,24 +229,63 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
     carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     uncalibrated.
 
-  **`color_hex` is normalized to uppercase**, with a leading `#` stripped. The printer
-  parses lowercase hex letters in `tray_color` as `0` and the corruption is silent: the
-  `ams_filament_setting` ack echoes the value that was sent and reports `result:
-  "success"`, and only the next AMS push status reveals it (measured on a P1S running
-  firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
-  `material_type` and `sub_brands` are deliberately left alone; case is meaningful there.
+  Only the addressing is positional. Everything the command *describes* — the filament,
+  its color, its temperature window, its preset ids — is set through the `with_*` methods
+  below, following the convention [`PrintJobConfig`](print_job/index.md#printjobconfig) already
+  establishes in this crate.
+
+  This replaced a 9-argument constructor. `nozzle_temp_min`/`nozzle_temp_max` were adjacent
+  `u32`s and `ams_id`/`slot_id` adjacent `i32`s, so transposing either pair compiled
+  cleanly and produced a silently wrong command — on a command whose failures are already
+  silent, since the printer acks a corrupted value as `"success"`.
+
+  Fields left unset serialize as empty strings / zero temperatures; `setting_id` is omitted
+  from the wire entirely.
+
+- <span id="amsfilamentsettingrequest-with-filament"></span>`fn with_filament(self, material_type: &str, sub_brands: Option<&str>) -> Self`
+
+  Sets the material type and its sub-brand label.
+
+  `sub_brands` defaults to `"{material_type} Basic"` when `None`. Case is meaningful in
+  both and is left alone — unlike [`with_color`](ams/index.md#amsfilamentsettingrequest).
+
+- <span id="amsfilamentsettingrequest-with-color"></span>`fn with_color(self, color_hex: &str) -> Self`
+
+  Sets the tray color, **normalized to uppercase** with a leading `#` stripped.
+
+  The printer parses lowercase hex letters in `tray_color` as `0` and the corruption is
+  silent: the `ams_filament_setting` ack echoes the value that was sent and reports
+  `result: "success"`, and only the next AMS push status reveals it (measured on a P1S
+  running firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
+
+  The normalization lives here, at the one place the color is set, rather than in each
+  caller — a caller that forgets is exactly how the original bug arrived.
+
+- <span id="amsfilamentsettingrequest-with-temps"></span>`fn with_temps(self, min: u32, max: u32) -> Self`
+
+  Sets the safe nozzle temperature window, in °C.
+
+  Taking both bounds in one call is the point: as two adjacent positional `u32`s they were
+  transposable without a compile error.
+
+- <span id="amsfilamentsettingrequest-with-preset"></span>`fn with_preset(self, preset_code: &str) -> Self`
+
+  Sets the **short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"`.
+
+  A long `"PF"`-prefixed cloud id does not belong here — pass that to
+  [`with_setting_id`](ams/index.md#amsfilamentsettingrequest). See
+  [`AmsFilamentSettingPayload::tray_info_idx`](ams/index.md#amsfilamentsettingpayload) for what the printer does when the two are
+  conflated.
 
 - <span id="amsfilamentsettingrequest-with-setting-id"></span>`fn with_setting_id(self, setting_id: &str) -> Self`
 
   Attaches the full preset identifier, which is a separate wire field from
   `tray_info_idx` and is omitted entirely when not set.
 
-  Follows the `with_*` convention [`PrintJobConfig`](print_job/index.md#printjobconfig) already uses,
-  rather than a tenth positional argument on [`new`](ams/index.md#amsfilamentsettingrequest).
-
   Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
-  code in `tray_info_idx`. See [`AmsFilamentSettingPayload::tray_info_idx`](ams/index.md#amsfilamentsettingpayload) for what the
-  printer does when a long id is put in the short field instead.
+  code in [`with_preset`](ams/index.md#amsfilamentsettingrequest). See
+  [`AmsFilamentSettingPayload::tray_info_idx`](ams/index.md#amsfilamentsettingpayload) for what the printer does when a long id is
+  put in the short field instead.
 
 #### Trait Implementations
 
