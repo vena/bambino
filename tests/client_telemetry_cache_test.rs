@@ -326,6 +326,54 @@ async fn test_print_progress_cache_from_telemetry() {
 }
 
 #[tokio::test]
+async fn test_print_progress_total_layers_zero_does_not_clobber_cache() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5310,
+            br#"{"print":{"layer_num":5,"total_layer_num":100}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // End-of-print: firmware resets total_layer_num to 0. That is not a real layer
+        // count, and must not overwrite the cached 100.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5311,
+            br#"{"print":{"total_layer_num":0}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse first progress report");
+    assert_eq!(client.print_progress().total_layers, Some(100));
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse total_layer_num reset report");
+    // Guards poll_telemetry's `&& total_layers > 0` cache-merge condition (issue #30).
+    // dashboard.rs's own end-of-print test only covers the CLI's rendering, not this path.
+    assert_eq!(client.print_progress().total_layers, Some(100));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_bed_temperatures_cache_from_telemetry() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");
@@ -907,6 +955,42 @@ async fn test_auxiliary_left2_fan_negative_state_is_none() {
         .expect("poll_telemetry should parse fan speed report");
 
     assert_eq!(client.auxiliary_left2_fan_speed(), None);
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // 306 == 0x132: percentage 50 in the low byte, a flag bit set above it.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5708,
+            br#"{"print":{"cooling_fan_speed":"15","device":{"airduct":{"parts":[{"id":160,"state":306}]}}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    // The low-8-bit mask must still apply to a non-negative state (BambuStudio's
+    // DevFan::ParseV3_0 get_flag_bits(state, 0, 8); bambuddy's identical `& 0xFF`).
+    // Without it a packed value clamps to 100 instead of decoding to its real percentage.
+    // The negative-sentinel guard above and this mask are both required and must stay in
+    // that order — fixing either alone reintroduced the other's bug once already.
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse fan speed report");
+
+    assert_eq!(client.auxiliary_left2_fan_speed(), Some(50));
 
     broker_task.await.expect("Broker task panicked");
 }

@@ -556,12 +556,22 @@ where
             .iter()
             .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_LEFT2)?
             .state?;
-        // Negative states are firmware sentinels for "off/unknown"; None here matches
-        // decode_fan_percentage's None on an unparseable/negative step value.
+        // Two distinct wire shapes, both real, and the fix for each broke the other once
+        // (issues #31 then #184) before they were combined here — order matters:
+        //
+        // 1. A negative state is a firmware sentinel for "off/unknown". It must be rejected
+        //    *before* the mask, since `-1 & 0xFF == 255`, which would clamp to a bogus 100%.
+        // 2. A non-negative state may be bit-packed, with the percentage in the low byte and
+        //    flags above it. BambuStudio's `DevFan::ParseV3_0` applies `get_flag_bits(state,
+        //    0, 8)` unconditionally to every airduct part, and bambuddy independently does the
+        //    same `int(part["state"]) & 0xFF`. Without the mask a packed `306` clamps to 100
+        //    instead of decoding to its real 50.
+        //
+        // None on the sentinel matches decode_fan_percentage's None on an unparseable value.
         if state < 0 {
             return None;
         }
-        Some(state.clamp(0, 100) as u8)
+        Some((state & 0xFF).clamp(0, 100) as u8)
     }
 
     fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {

@@ -535,12 +535,15 @@ async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
     }
 
     match client.print_status() {
-        Some(status @ (PrintStatus::Preparing | PrintStatus::Running | PrintStatus::Paused)) => {
-            Err(CliError::Other(format!(
-                "printer is busy (gcode_state={status:?}) — ack-probe refuses to run during a \
+        Some(
+            status @ (PrintStatus::Preparing
+            | PrintStatus::Slicing
+            | PrintStatus::Running
+            | PrintStatus::Paused),
+        ) => Err(CliError::Other(format!(
+            "printer is busy (gcode_state={status:?}) — ack-probe refuses to run during a \
                  print; skip_objects and project_file are destructive in that state"
-            )))
-        }
+        ))),
         Some(_) => Ok(()),
         None => Err(CliError::Other(format!(
             "no gcode_state received within {BUSY_WARMUP_SECS}s of a pushall — cannot confirm the \

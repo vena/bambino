@@ -263,7 +263,12 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error
 fn printer_is_busy(client: &Printer) -> bool {
     matches!(
         client.print_status(),
-        Some(PrintStatus::Preparing) | Some(PrintStatus::Running) | Some(PrintStatus::Paused)
+        Some(
+            PrintStatus::Preparing
+                | PrintStatus::Slicing
+                | PrintStatus::Running
+                | PrintStatus::Paused,
+        )
     )
 }
 
@@ -438,13 +443,16 @@ async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> 
 /// of what's under the nozzle — mirrors `ack_probe.rs::refuse_if_busy`.
 fn refuse_if_busy(client: &Printer) -> Result<(), CliError> {
     match client.print_status() {
-        Some(status @ (PrintStatus::Preparing | PrintStatus::Running | PrintStatus::Paused)) => {
-            Err(CliError::Other(format!(
-                "printer is busy (gcode_state={status:?}) — probe refuses to run its default \
+        Some(
+            status @ (PrintStatus::Preparing
+            | PrintStatus::Slicing
+            | PrintStatus::Running
+            | PrintStatus::Paused),
+        ) => Err(CliError::Other(format!(
+            "printer is busy (gcode_state={status:?}) — probe refuses to run its default \
                  test sweep during a print; HomeAxes/MoveZUnhomed/MoveXUnhomed and friends can \
                  drive motion into an in-progress part"
-            )))
-        }
+        ))),
         Some(_) => Ok(()),
         None => Err(CliError::Other(
             "no gcode_state received from the pushall capture — cannot confirm the printer is \

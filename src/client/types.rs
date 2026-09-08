@@ -176,6 +176,12 @@ pub enum PrintStatus {
     /// Print preparing to start — homing, bed leveling, or priming, physical
     /// motion in progress (wire: `"PREPARE"`).
     Preparing,
+    /// Printer is slicing a job on-device, before any physical motion (wire: `"SLICING"`).
+    ///
+    /// Distinct from [`Preparing`](Self::Preparing): nothing is moving yet. It is still a
+    /// busy state — a job is in flight — so treat it like the other active states when
+    /// deciding whether the printer can accept new work.
+    Slicing,
     /// Print job actively executing (wire: `"RUNNING"`).
     Running,
     /// Print job paused, resumable (wire: `"PAUSE"`).
@@ -189,11 +195,12 @@ pub enum PrintStatus {
 }
 
 impl PrintStatus {
-    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
+    /// Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"SLICING"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
     pub fn from_gcode_state(state: &str) -> Self {
         match state {
             "IDLE" => PrintStatus::Idle,
             "PREPARE" => PrintStatus::Preparing,
+            "SLICING" => PrintStatus::Slicing,
             "RUNNING" => PrintStatus::Running,
             "PAUSE" => PrintStatus::Paused,
             "FINISH" => PrintStatus::Finished,
@@ -223,6 +230,10 @@ mod tests {
         assert_eq!(
             PrintStatus::from_gcode_state("PREPARE"),
             PrintStatus::Preparing
+        );
+        assert_eq!(
+            PrintStatus::from_gcode_state("SLICING"),
+            PrintStatus::Slicing
         );
         assert_eq!(PrintStatus::from_gcode_state(""), PrintStatus::Unknown);
     }
