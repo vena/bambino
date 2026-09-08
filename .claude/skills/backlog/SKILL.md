@@ -34,18 +34,16 @@ Not every finding gets one. A confirmed real bug or an outstanding needs-verific
 
 ## What counts as confirmation
 
-**BambuStudio + bambuddy + a capture from our own printer, all agreeing, is confirmation.** Not "strong evidence pending hardware" — confirmed. Say so plainly and drop the hedging; a finding that clears this bar should not keep `needs-verification`, and a claim that clears it should not be written up as provisional.
+**BambuStudio and bambuddy agreeing is confirmation — align with them.** Not "strong evidence pending hardware". State it plainly, drop the hedging, and change the code to match; there is nothing further to wait for. They are independent in the way that matters: BambuStudio is the vendor's own client, bambuddy an independent reverse-engineering of the same wire. A capture from our own printer corroborates and is worth citing, but is not required for a shape both already agree on.
 
-The three are independent in the way that matters: BambuStudio is the vendor's own client (what the firmware was built against), bambuddy is an independent reverse-engineering of the same wire, and the capture is this hardware actually doing it. Agreement across all three is not three restatements of one guess.
+**Those two specifically.** ha-bambulab is good supporting evidence and often the most readable account of a field, but it does not carry confirmation on its own or as the second source — a finding resting on ha-bambulab plus one other still needs BambuStudio and bambuddy checked. Cite it freely; don't count it.
 
-Corollaries worth stating, because each has bitten:
+- **One upstream is not two.** Where BambuStudio has an opinion, read it — checking only the more readable source looks thorough and isn't. **BambuStudio is authoritative when the two disagree**, and bambuddy marks its own guesses in its docstrings; take those at face value rather than inheriting them.
+- **Read the whole call, not just the field in question.** Upstream frequently sends more than a finding describes, and matching the first source found reproduces the original defect one field over.
+- **A capture proves presence, never absence.** A key missing from one model's payload says nothing about another model; that is what the upstreams are for. A key present in a capture is real regardless of what upstream does with it.
+- **Don't soften a cleared claim to sound careful.** Hedging something already settled costs the next reader a full re-derivation.
 
-- **One upstream is not two.** Checking bambuddy and stopping is the common failure — it looks thorough and isn't. Where BambuStudio has an opinion, read it; it is the authority when the two upstreams disagree (see #193's `target`, where bambuddy's own docstring flags its value as an unverified extrapolation and BambuStudio's `command_ams_change_filament` settles it the other way).
-- **A capture alone proves presence, never absence.** A key missing from one model's payload says nothing about other models — that is what the upstreams are for. Conversely a key *present* in a capture is real regardless of what upstream does with it.
-- **Upstream can be richer than the issue.** #195 shipped incomplete because bambuddy sends two fields and BambuStudio sends six; matching the first source found and stopping reproduced the original bug one axis over.
-- **Do not soften a cleared claim to sound careful.** Hedging a confirmed finding costs the next reader a full re-derivation to find out it was already settled.
-
-`needs-verification` is for what this bar genuinely cannot close: physical behavior on a model nobody here has, or a wire shape no upstream implements.
+`needs-verification` is for what this bar cannot close: physical behavior on a model nobody here has, or a wire shape no upstream implements. A *shape* confirmed by both upstreams is triageable even when the *harm* is unmeasured — that is a `P-low` footgun, not an open question.
 
 **Reassigning `needs-verification`:** when hardware evidence lands, swap the label to a real priority tier (or close as not-a-bug — see "What counts as an issue" above; if it turns out not to be a bug, close it with a one-line comment stating why, `gh issue close <N> --comment "..."`, rather than leaving it open indefinitely). State what resolved it (wire capture, cross-reference to a known-good source) in the closing comment.
 
