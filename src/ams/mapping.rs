@@ -28,6 +28,17 @@ pub enum MaterialSource {
         /// AMS-HT unit index (128-135, per `AmsMapping2Entry::ams_id`'s range note).
         ams_id: u8,
     },
+    /// Spool loaded inside the A2L's 4-slot AMS Lite.
+    ///
+    /// Kept separate from [`MaterialSource::StandardAms`] because this unit's two wire
+    /// encodings do not follow the standard unit's: the flat `ams_mapping` array carries the
+    /// bare **local** slot rather than a global `ams_id * 4 + slot` channel, and `ams_mapping2`
+    /// carries the **physical** unit id 16 rather than the normalized 6 the rest of the crate
+    /// addresses it by. A `StandardAms { ams_id: 6, .. }` would get both wrong.
+    AmsLite {
+        /// Tray slot index within the unit (0-3).
+        slot_id: u8,
+    },
     /// Default virtual external spool holder (used for standard single-nozzle models).
     ExternalSpool,
     /// Left external spool holder (specifically used on dual-nozzle IDEX systems).
@@ -66,6 +77,13 @@ impl MaterialSource {
             {
                 *ams_id as i32
             }
+            // The flat array's encoding is per-unit-type, not uniformly "global channel id":
+            // AMS Lite puts a bare local slot 0-3 here. CONFIRMED by bambuddy against the
+            // firmware's own mapping — a captured flat `[1]` paired with an `ams_mapping2`
+            // entry of `{"ams_id": 16, "slot_id": 1}`.
+            MaterialSource::AmsLite { slot_id } if *slot_id < super::parser::AMS_SLOTS_PER_UNIT => {
+                *slot_id as i32
+            }
             _ => -1, // External and unmapped slots are strictly mapped to -1
         }
     }
@@ -97,6 +115,23 @@ impl MaterialSource {
                     AmsMapping2Entry {
                         ams_id: *ams_id,
                         slot_id: 0,
+                    }
+                } else {
+                    AmsMapping2Entry {
+                        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+                        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+                    }
+                }
+            }
+            // `ams_mapping2` is the one place the A2L AMS Lite's *physical* id 16 goes back on
+            // the wire, paired with a local slot. CONFIRMED against the firmware's own mapping
+            // (bambuddy's `a2l_lite_wire_ids`) and BambuStudio, which writes the unreduced
+            // `ams_id` into its mapping entry (`DevMapping.cpp:88-89`).
+            MaterialSource::AmsLite { slot_id } => {
+                if *slot_id < super::parser::AMS_SLOTS_PER_UNIT {
+                    AmsMapping2Entry {
+                        ams_id: super::parser::A2L_LITE_PHYSICAL_AMS_ID,
+                        slot_id: *slot_id,
                     }
                 } else {
                     AmsMapping2Entry {
@@ -306,13 +341,17 @@ pub fn is_external_spool_safety_valid(
 /// Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
 /// "AMS Unit Limits" row (user-supplied official Bambu documentation).
 ///
-/// **Known limitation**: AMS Lite units are not independently addressable in this model —
-/// they use the same `ams_id` space as standard AMS units — so A1/A1 Mini's "shared pool OR
-/// 1 AMS Lite, not combinable" exclusivity and A2L's "shared pool + 1 AMS Lite simultaneously"
-/// additive capacity can't be validated from `ams_id`/`slot_id` alone. Both are conservatively
-/// modeled as `Shared { max_units: 4 }`, the same as the plain shared-pool models — this may
-/// under-count A2L's true capacity by one unit, but never accepts a config that's actually
-/// invalid.
+/// **Known limitation**: this enum still cannot express A1/A1 Mini's "shared pool OR 1 AMS
+/// Lite, not combinable" exclusivity, or A2L's "shared pool + 1 AMS Lite simultaneously"
+/// additive capacity. Both are conservatively modeled as `Shared { max_units: 4 }`, the same
+/// as the plain shared-pool models — this may under-count A2L's true capacity by one unit, but
+/// never accepts a config that's actually invalid.
+///
+/// This is a *capacity-counting* gap only. The addressing gap it used to describe — "AMS Lite
+/// units are not independently addressable ... they use the same `ams_id` space as standard AMS
+/// units" — is fixed: the A2L AMS Lite reports physical unit id 16, which
+/// [`crate::ams::normalize_ams_unit_id`] maps to 6 on ingest, and
+/// [`MaterialSource::AmsLite`] addresses its slots with their own wire encodings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmsPoolComposition {
     /// Standard AMS and AMS-HT units draw from one combined pool of `max_units` total
@@ -721,6 +760,35 @@ mod tests {
             slot_id: 200,
         };
         assert_eq!(bad_slot.flat_channel_id(), -1);
+
+        // The A2L AMS Lite's two wire encodings differ from a standard unit's: the flat array
+        // carries the bare local slot, `ams_mapping2` the physical unit id 16.
+        for slot_id in 0..4u8 {
+            let lite = MaterialSource::AmsLite { slot_id };
+            assert_eq!(
+                lite.flat_channel_id(),
+                slot_id as i32,
+                "AMS Lite's flat channel is the bare local slot, not a global ams_id*4+slot"
+            );
+            assert_eq!(
+                lite.to_mapping2_entry(),
+                AmsMapping2Entry {
+                    ams_id: 16,
+                    slot_id
+                },
+                "ams_mapping2 carries the physical unit id 16"
+            );
+        }
+        // Out-of-range slots fall back to the same sentinels as every other source.
+        let bad_lite = MaterialSource::AmsLite { slot_id: 4 };
+        assert_eq!(bad_lite.flat_channel_id(), -1);
+        assert_eq!(
+            bad_lite.to_mapping2_entry(),
+            AmsMapping2Entry {
+                ams_id: 255,
+                slot_id: 255
+            }
+        );
 
         let bad_ht = MaterialSource::AmsHt { ams_id: 50 };
         assert_eq!(bad_ht.flat_channel_id(), -1);

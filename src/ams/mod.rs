@@ -15,6 +15,6 @@ pub use mapping::{
     is_external_spool_safety_valid_flat,
 };
 pub use parser::{
-    clean_stale_tray_data, evaluate_spool_presence, resolve_global_tray_id,
+    clean_stale_tray_data, evaluate_spool_presence, normalize_ams_unit_id, resolve_global_tray_id,
     resolve_printing_global_id,
 };

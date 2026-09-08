@@ -5,7 +5,33 @@ use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Normalizes `AmsUnit::id` on the way in, so the whole crate addresses one id per unit.
+///
+/// The only id this rewrites is the A2L AMS Lite's physical 16, which becomes 6 — see
+/// [`crate::ams::normalize_ams_unit_id`] for why, and for where the physical id is restored.
+/// A non-numeric id is passed through untouched rather than rejected: this field is a
+/// `String` on the wire and failing here would discard the entire telemetry frame.
+fn deserialize_normalized_ams_unit_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    match raw.trim().parse::<u8>() {
+        Ok(id) => {
+            let normalized = crate::ams::normalize_ams_unit_id(id);
+            if normalized == id {
+                Ok(raw)
+            } else {
+                #[cfg(not(feature = "std"))]
+                use alloc::string::ToString;
+                Ok(normalized.to_string())
+            }
+        }
+        Err(_) => Ok(raw),
+    }
+}
 
 /// Per-slot filament-change step code. Mirrors BambuStudio's `DevFilamentStep` enum
 /// (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
@@ -262,7 +288,14 @@ impl AmsStatusReport {
 /// Modular standard expansion unit managing up to 4 physical spool slots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AmsUnit {
-    /// Unique index representing the unit position on the physical expansion bus (0 to 3).
+    /// Unique index representing the unit position on the physical expansion bus.
+    ///
+    /// Standard AMS units report 0-3 and AMS-HT units 128-135, both verbatim. The A2L's AMS
+    /// Lite reports physical id **16** on the wire and is normalized to **6** here, so that
+    /// `tray_exist_bits` (whose bit base for this unit is 24 = `6 * 4`), `resolve_global_tray_id`
+    /// and the mapping builders all agree; `MaterialSource::AmsLite` puts the physical 16 back
+    /// on the outbound `ams_mapping2`.
+    #[serde(deserialize_with = "deserialize_normalized_ams_unit_id")]
     pub id: String,
 
     /// Ambient temperature inside the expansion enclosure, in degrees Celsius.

@@ -51,6 +51,29 @@ fn test_ams_nested_wire_format() {
     assert_eq!(unit_tray[2].state(), 9);
 }
 
+/// The A2L reports its AMS Lite as physical unit id 16, which falls through every id range in
+/// the crate (standard 0-3, AMS-HT 128-135, external 254/255) and resolves to the unmapped
+/// sentinel. It is normalized to 6 at the deserialization boundary so `tray_exist_bits`,
+/// `resolve_global_tray_id` and the mapping builders all address one id.
+#[test]
+fn test_a2l_ams_lite_unit_id_16_is_normalized_to_6_on_ingest() {
+    let json =
+        r#"{ "print": { "ams": { "ams": [ { "id": "16", "temp": "0", "humidity": "5" } ] } } }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let units = &report.print.unwrap().ams.unwrap().ams;
+    assert_eq!(units[0].id, "6");
+
+    // Every other unit id is passed through byte-for-byte.
+    let json = r#"{ "print": { "ams": { "ams": [
+        { "id": "0", "temp": "0", "humidity": "5" },
+        { "id": "128", "temp": "0", "humidity": "5" }
+    ] } } }"#;
+    let report: TelemetryReport = serde_json::from_str(json).unwrap();
+    let units = &report.print.unwrap().ams.unwrap().ams;
+    assert_eq!(units[0].id, "0");
+    assert_eq!(units[1].id, "128");
+}
+
 #[test]
 fn test_ams_drying_fields() {
     let json_data = r#"{

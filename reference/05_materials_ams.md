@@ -13,7 +13,7 @@ The wire-decode boundary constants (`AMS_MAX_STANDARD_ID`, `AMS_HT_ID_MIN`/`AMS_
 *   **Independent pools** (H2C, H2D, H2D Pro, H2S, X2D): up to 4 standard AMS units *and* up to 8 AMS-HT units simultaneously, capped separately.
 *   **Independent pools, narrower HT cap** (P2S): up to 4 standard AMS units *and* up to 4 AMS-HT units simultaneously (8 units / 20 slots total).
 
-`ModelQuirks::ams_pool_composition()` exposes this per model; `ams::validate_ams_pool_composition()` checks a constructed `ams_mapping2` against it, rejecting configs no real hardware combination could serve (e.g. 4 standard + 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4). AMS Lite units aren't independently addressable — they share the standard `ams_id` space — so A1/A1 Mini's "shared pool OR 1 AMS Lite, not combinable" exclusivity and A2L's "+1 AMS Lite simultaneously" additive capacity aren't modeled precisely; both are conservatively treated as the plain 4-unit shared pool.
+`ModelQuirks::ams_pool_composition()` exposes this per model; `ams::validate_ams_pool_composition()` checks a constructed `ams_mapping2` against it, rejecting configs no real hardware combination could serve (e.g. 4 standard + 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4). A1/A1 Mini's "shared pool OR 1 AMS Lite, not combinable" exclusivity and A2L's "+1 AMS Lite simultaneously" additive capacity aren't modeled precisely; both are conservatively treated as the plain 4-unit shared pool. (This is a capacity-counting gap only — the AMS Lite *is* independently addressable, see "The A2L AMS Lite's Unit ID" below.)
 
 #### Spool Presence Masking
 The physical presence of loaded spools across standard expansion units is tracked via a hexadecimal bitmask string:
@@ -35,6 +35,25 @@ slot_exists = (tray_exist_bits >> shift_standard) & 1
 ```
 
 *   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': `shift_ht = 16 + (ams_id - 128) + slot_id` (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp:833`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
+
+##### The A2L AMS Lite's Unit ID
+
+The A2L reports its 4-slot AMS Lite as physical unit **id 16**, outside every other range (standard `0`-`3`, AMS-HT `128`-`135`, external `254`/`255`). The firmware is internally inconsistent about this unit, so no single id works everywhere:
+
+| Field | What the A2L uses |
+|---|---|
+| `tray_exist_bits` | bit base **24** — the position for id 6 (`6*4`), *not* id 16 (which would be bit 64) |
+| `tray_now` | a **local** slot `0`-`3`, not a global id |
+| `ams_mapping2`, per-unit commands | the **physical** id `16` |
+| flat `ams_mapping` | the **local** slot `0`-`3` — not a global channel value at all |
+
+Note the last row: the flat `ams_mapping` array is *not* uniformly "global channel ids". AMS-HT puts its unit id there (`128`-`135`), a regular AMS puts `ams_id*4 + slot`, and the AMS Lite puts a bare local slot. The encoding is per-unit-type.
+
+The resolution is to normalize `16 -> 6` at the telemetry ingest boundary, so global tray ids land at `24`-`27` (colliding with nothing: regular `0`-`15`, AMS-HT `16`-`23` in the bitmask, external `254`/`255`), and to translate back to the physical form only on the outbound wire.
+
+**Verification source:** bambuddy's `a2l_lite_wire_ids()` / `normalize_am_unit_id()` (`bambu_mqtt.py`) marks both of its wire encodings CONFIRMED against the firmware's own mapping — a captured flat `[1]` paired with `ams_mapping2 {"ams_id": 16, "slot_id": 1}`. BambuStudio corroborates the bit-base-24 half independently: `AMS_LITE_MIXED_TRAY_INDEX_OFFSET` is `24` (`DeviceCore/DevDefs.h:93`), applied as `24 + slot_id` in `DevAms::GetTrayId` (`DevFilaSystem.cpp:262-263`), `DevMappingUtil::ams_filament_mapping`, and `DevMapping.cpp:102-104`.
+
+**Not confirmed:** the *global* tray value some commands want (load `target`, `extrusion_cali` `tray_id`). bambuddy extrapolates it as `16*4 + slot` = `64`-`67` and flags it as its single unverified encoding. bambino does not implement that path; a BambuStudio-to-A2L capture of a load or calibration command would settle it.
 
 ##### The Printer-Shutdown Telemetry Exception
 During printer shutdown routines, the firmware emits a final status update where `tray_exist_bits` evaluates to `0` and the `power_on_flag` boolean is set to `false`. To prevent telemetry parsers from falsely interpreting this final update as a physical spool-removal event, updates where `tray_exist_bits = 0` must be ignored strictly when `power_on_flag` is `false`. Conversely, if `power_on_flag` is `false` but `tray_exist_bits` is non-zero, this represents a valid idle-printer state and changes must be processed normally.
@@ -201,6 +220,7 @@ The `"ams_mapping"` parameter is a flat, 1-to-1, forward-mapped JSON array of in
 The integer values within the flat `ams_mapping` array represent absolute physical hardware channels:
 *   **`0` to `15`**: Standard AMS channels. Calculated via `(ams_id * 4) + slot_id` (`ams_id` 0-3, `slot_id` 0-3).
 *   **`128` to `135`**: Physical single-slot high-temperature AMS-HT units. Global channel ID equals the unit's bus ID (`ams_id`).
+*   **`0` to `3` (A2L AMS Lite only)**: a bare **local** slot index, not a global channel. This unit is the exception to "absolute physical hardware channels" above — see "The A2L AMS Lite's Unit ID" in §5.1 for the full per-field encoding table and its verification sources.
 
     **Verification source:** BambuStudio's `DevMappingUtil::ams_filament_mapping` (`DevMapping.cpp:175`) computes the N3S tray index as `ams_id + tray_id`, yielding 128-135, and that value flows through `FilamentInfo::tray_id` into `mapping_v0_json` — the chain that actually builds this flat array. Corroborated independently by Bambuddy, whose `print_scheduler.py::_global_tray_id` returns `ams_id if ams_id >= 128 else ams_id * 4 + tray_id` and whose `bambu_mqtt.py` puts that `tray_id` straight into `command["print"]["ams_mapping"]`.
 
