@@ -7,7 +7,7 @@ description: Rules for filing, triaging, and closing this repo's bug/finding tra
 
 The tracker is GitHub Issues, not a file in this repo. `gh issue` is the interface. There is no local BACKLOG.md — don't recreate one; a bulk-imported history of hundreds of closed nits reads as noise to anyone landing on the repo, which is exactly why it was retired (see git history for `BACKLOG.md` if the old rationale is ever needed).
 
-Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native. Instruct any sub-agents to do the same.
+Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native. Use ctx_shell instead of bash, ctx_search instead of grep, etc. Instruct any sub-agents to do the same.
 
 **Step 0, every invocation:** run `gh auth status` first. If it fails, stop and tell the user — don't silently fall back to guessing or to a local file.
 
@@ -40,6 +40,7 @@ Not every finding gets one. A confirmed real bug or an outstanding needs-verific
 
 - **One upstream is not two.** Where BambuStudio has an opinion, read it — checking only the more readable source looks thorough and isn't. **BambuStudio is authoritative when the two disagree**, and bambuddy marks its own guesses in its docstrings; take those at face value rather than inheriting them.
 - **Read the whole call, not just the field in question.** Upstream frequently sends more than a finding describes, and matching the first source found reproduces the original defect one field over.
+- **A parse site proves the field, not its unit — the unit may live at the call sites.** Grep the accessor as well as the assignment; upstream often stores a raw value and converts only where it renders it.
 - **A capture proves presence, never absence.** A key missing from one model's payload says nothing about another model; that is what the upstreams are for. A key present in a capture is real regardless of what upstream does with it.
 - **Don't soften a cleared claim to sound careful.** Hedging something already settled costs the next reader a full re-derivation.
 
