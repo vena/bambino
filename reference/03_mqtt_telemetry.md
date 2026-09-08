@@ -27,7 +27,9 @@ Local broker interaction occurs via MQTT over TLS (MQTTS) on Port `8883`. The lo
 
 Status telemetry structures, string emission anomalies, and task-ID overflow limits are processed via the primary status channel.
 
-**`plate_idx`** identifies which plate of a multi-plate 3MF the current job was sliced for. A consumer needs it to pull the right plate's metadata — thumbnail, filament list, bed temperature — out of the project file, since a 3MF indexes per-plate data on exactly this. *(Verification source: ha-bambulab PR #2067.)*
+**`plate_idx`** identifies which plate of a multi-plate 3MF the current job was sliced for. A consumer needs it to pull the right plate's metadata — thumbnail, filament list, bed temperature — out of the project file, since a 3MF indexes per-plate data on exactly this (`Metadata/plate_<N>.png` and friends).
+
+**It is authoritative over the 3MF's own `slice_info`.** A printer can retain or reuse a 3MF whose embedded `slice_info` names a different plate, so a consumer that trusts the archive over this field renders a stale thumbnail. Prefer `plate_idx` whenever it is present and non-zero. *(Verification source: ha-bambulab PR #2067, whose cover-image path takes `plate_idx` over the archive's index metadata for exactly this reason.)*
 
 **`subtask_name` also carries the printer's own internal jobs.** A consumer asking "is this a real user print?" must filter these four names out:
 
@@ -392,8 +394,10 @@ The schemes above are the **outbound** rule. There is also an **inbound** `proje
 
 Gate on `result == "SUCCESS"` **and** a non-empty `url`. Two internal-storage URL shapes appear here and mean different things:
 
-*   `file:///userdata/model/history/<name>.gcode.3mf` — a re-print of a file already on the printer. FTPS on port 990 does **not** serve `/userdata/`, so this file is unreachable over FTPS.
-*   `brtc://emmc/<name>` — a dispatch that chose internal storage.
+*   `file:///userdata/model/history/<name>.gcode.3mf` — a print of a file that was **already on the printer**: a touchscreen re-print, a Handy start, or a Studio send-to-storage printed later. Port 990 does **not** serve `/userdata/`, so this file is unreachable over FTPS. Note the exclusion is the *root*, not the scheme — a `file://` URL under another root is reachable, e.g. `file:///media/usb0/<name>.gcode.3mf` was measured listable and downloadable over FTPS on an H2D.
+*   `brtc://emmc/<name>` — a *dispatch* that chose internal storage. Distinct from the above in cause rather than verdict: a slicer sent the file and the printer filed it where port 990 cannot serve it, which an operator can change by sending it elsewhere. There is no such choice behind a `/userdata/` re-print.
+
+On a **screen start this frame is the only place `ams_mapping` appears** — no slicer ever sent one — so a consumer tracking filament mapping must read it here or not at all. Treat it as a gap-fill: when the request topic already carried this print's mapping, that copy is the slicer's own, and the report-topic echo can arrive without the field.
 
 Related caveat from the same source: an H2S reports `sdcard: true` for its internal eMMC, so **the `sdcard` flag is not a proxy for FTPS reachability**. A consumer deciding whether to sweep FTPS for a 3MF needs both facts.
 

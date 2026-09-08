@@ -142,6 +142,32 @@ pub struct ExtrusionCaliGetPayload {
     /// Query once per fitted diameter and merge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nozzle_diameter: Option<String>,
+    /// Which hotend's table to return — `0` = right/main, `1` = left/deputy.
+    ///
+    /// Matters on a dual-nozzle machine, where a `cali_idx` is **not** unique across hotends:
+    /// two profiles can share an index and differ only by extruder. Sent by BambuStudio only
+    /// when it has an extruder to name (`use_extruder_id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extruder_id: Option<u8>,
+    /// Flow-type-qualified hotend designation, e.g. `"HS00-0.4"` or `"HH00-0.4"`.
+    ///
+    /// The leading two characters are the flow code — `HH` high flow, `HS` standard — and a
+    /// printer can hold profiles for both against one diameter, with the same filament reading
+    /// a different K through each. Sent by BambuStudio only when the nozzle volume type is
+    /// known (`use_nozzle_volume_type`). See [`KProfileEntry::nozzle_id`] for the comparison
+    /// rule and the models that report this empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nozzle_id: Option<String>,
+    /// Rack position of the target hotend, on a machine with a nozzle rack.
+    ///
+    /// BambuStudio sends this and [`nozzle_sn`](Self::nozzle_sn) together, and only when it has
+    /// a non-negative position — they identify a specific physical hotend rather than a
+    /// carriage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nozzle_pos: Option<i32>,
+    /// Serial number of the target hotend, paired with [`nozzle_pos`](Self::nozzle_pos).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nozzle_sn: Option<String>,
 }
 
 /// JSON request wrapper to trigger a complete dump of the stored calibration database.
@@ -180,8 +206,37 @@ impl ExtrusionCaliGetRequest {
                 sequence_id: sequence_id.into().to_string(),
                 filament_id: filament_id.map(String::from),
                 nozzle_diameter: nozzle_diameter.map(String::from),
+                extruder_id: None,
+                nozzle_id: None,
+                nozzle_pos: None,
+                nozzle_sn: None,
             },
         }
+    }
+
+    /// Scopes the query to one hotend, for a dual-nozzle machine where a `cali_idx` is not
+    /// unique across extruders. `0` = right/main, `1` = left/deputy.
+    #[must_use]
+    pub fn with_extruder_id(mut self, extruder_id: u8) -> Self {
+        self.print.extruder_id = Some(extruder_id);
+        self
+    }
+
+    /// Scopes the query to one flow type, e.g. `"HS00-0.4"` (standard) or `"HH00-0.4"` (high
+    /// flow) — see [`ExtrusionCaliGetPayload::nozzle_id`].
+    #[must_use]
+    pub fn with_nozzle_id(mut self, nozzle_id: &str) -> Self {
+        self.print.nozzle_id = Some(String::from(nozzle_id));
+        self
+    }
+
+    /// Names a specific physical hotend by rack position and serial. BambuStudio sends these
+    /// two together and only for a non-negative position.
+    #[must_use]
+    pub fn with_nozzle_rack_position(mut self, nozzle_pos: i32, nozzle_sn: &str) -> Self {
+        self.print.nozzle_pos = Some(nozzle_pos);
+        self.print.nozzle_sn = Some(String::from(nozzle_sn));
+        self
     }
 }
 

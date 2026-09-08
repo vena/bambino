@@ -137,7 +137,14 @@ The two facts below are exactly the traps a consumer falls into, and neither is 
 *   Two profiles share a `cali_idx` and differ only by `extruder_id`. Measured on an H2C: index 16 = left, black PLA, K=0.018; index 15 = right, K=0.020.
 *   One profile is what slots on *both* extruders point at. An X2D with one AMS 2 Pro per hotend filed every entry under a single extruder, so the second AMS's slots referenced the first's entries.
 
-Upstream's resolution rule: prefer a profile filed under the slot's own `extruder_id`; if that extruder appears nowhere in the table, match on `cali_idx` alone and accept only when every candidate agrees on one `k_value`. BambuStudio is looser — `CalibUtils::get_pa_k_n_value_by_cali_idx` matches `cali_idx` and nothing else.
+Upstream's resolution rule runs in two ordered steps:
+
+1.  A profile filed under the slot's own `extruder_id` wins outright.
+2.  If the slot's extruder appears **nowhere** in the table, its tagging carries no information about this slot, so match on `cali_idx` alone — accepting the answer only when the candidates agree on one `k_value`, using the **currently installed nozzle diameters as the tie-break**. That diameter check is what separates a live table from one left behind by a nozzle since swapped out.
+
+The condition on step 2 is load-bearing. Where the table *does* distinguish extruders, a slot pointing at an index only the other hotend has is a real miss — index 16 means entry 16 *of that nozzle's table*, and the other's entry 16 is a different profile. Falling back there is how the wrong K gets shown. If neither step singles out one value, return nothing: a blank is a smaller error than confidently printing the other nozzle's number.
+
+BambuStudio is looser — `CalibUtils::get_pa_k_n_value_by_cali_idx` scans the whole history for a matching `cali_idx` and takes the first hit regardless of nozzle.
 
 **2. `nozzle_id` encodes flow type, and is empty on some models.**
 
