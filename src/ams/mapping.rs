@@ -169,6 +169,55 @@ pub struct AmsMapping2Entry {
     pub slot_id: u8,
 }
 
+/// What kind of feed location a raw [`AmsMapping2Entry`]'s `ams_id`/`slot_id` pair names.
+///
+/// Single place the "which `ams_id`s are real physical units" rule lives. `MaterialSource`'s
+/// own methods can rely on the enum variant to tell them, but every function that instead
+/// re-derives physical-ness from a hand-built `AmsMapping2Entry` has to reproduce the same
+/// range checks — and each one independently missed the A2L AMS Lite's physical id 16 when
+/// it was added (issue #221). Route those through [`classify_mapping2_entry`] so a new one
+/// cannot omit a unit type by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmsEntryKind {
+    /// Standard 4-slot AMS unit, `ams_id` 0-3 with an in-range `slot_id`.
+    Standard,
+    /// Single-slot AMS-HT unit, `ams_id` 128-135.
+    Ht,
+    /// The A2L's 4-slot AMS Lite, carried on the wire as physical unit id 16.
+    AmsLite,
+    /// One of the two external-spool sentinel ids (254/255), including the
+    /// `{255, 255}` unmapped sentinel.
+    External,
+    /// Neither a validly-ranged physical unit nor a recognized sentinel.
+    Invalid,
+}
+
+/// Classifies a raw `ams_mapping2` entry by the kind of feed location it names.
+///
+/// `slot_id` is range-checked for the multi-slot unit types (standard and AMS Lite) but
+/// ignored for AMS-HT, which is single-slot and encodes nothing in the field, and for the
+/// external sentinels, whose `slot_id` is `0` or `255` depending on whether the entry means
+/// "external spool" or "unmapped".
+#[must_use]
+pub fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind {
+    if entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID || entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID {
+        AmsEntryKind::External
+    } else if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
+        && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
+    {
+        AmsEntryKind::Standard
+    } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id)
+    {
+        AmsEntryKind::Ht
+    } else if entry.ams_id == super::parser::A2L_LITE_PHYSICAL_AMS_ID
+        && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
+    {
+        AmsEntryKind::AmsLite
+    } else {
+        AmsEntryKind::Invalid
+    }
+}
+
 /// Computes the flat `ams_mapping` channel value an `AmsMapping2Entry` corresponds to.
 ///
 /// Inverse of `MaterialSource::flat_channel_id`, operating on the already-structured
@@ -176,15 +225,20 @@ pub struct AmsMapping2Entry {
 /// `ams_mapping2` from going out of sync when only the latter was supplied.
 #[must_use]
 pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
-    if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
-        && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
-    {
-        (entry.ams_id as i32) * (super::parser::AMS_SLOTS_PER_UNIT as i32) + entry.slot_id as i32
-    } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id)
-    {
-        entry.ams_id as i32
-    } else {
-        -1 // External and unmapped slots are strictly mapped to -1, same as MaterialSource's rule.
+    match classify_mapping2_entry(entry) {
+        AmsEntryKind::Standard => {
+            (entry.ams_id as i32) * (super::parser::AMS_SLOTS_PER_UNIT as i32)
+                + entry.slot_id as i32
+        }
+        AmsEntryKind::Ht => entry.ams_id as i32,
+        // The flat array's encoding is per-unit-type, not uniformly "global channel id": the
+        // AMS Lite puts a bare local slot 0-3 here, mirroring `MaterialSource::flat_channel_id`'s
+        // `AmsLite` arm. Without this, an `ams_mapping2` entry of `{"ams_id": 16, ...}` paired
+        // with a `-1` flat element described the same filament two contradictory ways in one
+        // MQTT command.
+        AmsEntryKind::AmsLite => entry.slot_id as i32,
+        // External and unmapped slots are strictly mapped to -1, same as MaterialSource's rule.
+        AmsEntryKind::External | AmsEntryKind::Invalid => -1,
     }
 }
 
@@ -308,34 +362,21 @@ pub fn is_external_spool_safety_valid(
         return true;
     }
 
-    let mut has_physical_ams = false;
-    for entry in mapping2 {
-        let is_unmapped = entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID
-            && entry.slot_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
-        // Checks both external-spool IDs (254 and 255), matching is_external_spool_safety_valid_flat's
-        // uniform treatment — AmsMapping2Entry's fields are public, so a caller can hand-build
-        // an entry with ams_id 254 (normally IDEX-only, via MaterialSource::ExternalSpoolLeft)
-        // on a single-nozzle printer. Treating it as physical here would dispatch use_ams:true
-        // for a non-physical channel, reproducing the 07FF_8012 lockup this function exists to
-        // prevent.
-        let is_external = (entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID
-            || entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID)
-            && entry.slot_id == 0;
-        // An entry that's neither the unmapped sentinel nor a recognized external id must be a
-        // validly-ranged standard or AMS-HT entry before counting it as physical — an
-        // unconstrained fallthrough would reproduce the 07FF_8012 lockup class for garbage ids
-        // generally.
-        let is_valid_physical = (entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
-            && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT)
-            || (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
-                .contains(&entry.ams_id);
-        if !is_unmapped && !is_external && is_valid_physical {
-            has_physical_ams = true;
-            break;
-        }
-    }
-
-    has_physical_ams
+    // Only a validly-ranged physical unit counts. Both external-spool IDs (254 and 255) are
+    // excluded, matching is_external_spool_safety_valid_flat's uniform treatment —
+    // AmsMapping2Entry's fields are public, so a caller can hand-build an entry with ams_id 254
+    // (normally IDEX-only, via MaterialSource::ExternalSpoolLeft) on a single-nozzle printer.
+    // Treating that as physical would dispatch use_ams:true for a non-physical channel,
+    // reproducing the 07FF_8012 lockup this function exists to prevent; so would an
+    // unconstrained fallthrough for garbage ids. The A2L's AMS Lite *is* physical — omitting it
+    // forced use_ams off for a job fed exclusively from it, which the printer then rejects with
+    // the same 07FF_8012 per [REF-AMS-USEAMS].
+    mapping2.iter().any(|entry| {
+        matches!(
+            classify_mapping2_entry(entry),
+            AmsEntryKind::Standard | AmsEntryKind::Ht | AmsEntryKind::AmsLite
+        )
+    })
 }
 
 /// Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
@@ -385,23 +426,29 @@ pub fn is_ams_pool_composition_valid(
     let mut standard_ids = Vec::new();
     let mut ht_ids = Vec::new();
     for entry in mapping2 {
-        let is_external_sentinel = entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID
-            || entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
-        if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID {
-            if !standard_ids.contains(&entry.ams_id) {
-                standard_ids.push(entry.ams_id);
+        match classify_mapping2_entry(entry) {
+            // The A2L AMS Lite is counted in the standard bucket rather than an additive one of
+            // its own. `AmsPoolComposition` has no axis for A2L's "shared pool + 1 AMS Lite
+            // simultaneously" capacity (see this enum's known-limitation note), so folding the
+            // Lite into the shared count keeps the conservative stance documented there: it may
+            // under-count A2L by one unit, but never accepts a config real hardware can't serve.
+            // What it must not do is what it did before — hard-reject an otherwise valid
+            // mapping just because it contains a legitimate id-16 entry.
+            AmsEntryKind::Standard | AmsEntryKind::AmsLite => {
+                if !standard_ids.contains(&entry.ams_id) {
+                    standard_ids.push(entry.ams_id);
+                }
             }
-        } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
-            .contains(&entry.ams_id)
-        {
-            if !ht_ids.contains(&entry.ams_id) {
-                ht_ids.push(entry.ams_id);
+            AmsEntryKind::Ht => {
+                if !ht_ids.contains(&entry.ams_id) {
+                    ht_ids.push(entry.ams_id);
+                }
             }
-        } else if !is_external_sentinel {
-            // Anything outside the standard/AMS-HT ranges and not one of the two documented
-            // external-spool sentinels (254/255) is a malformed ams_id — reject exhaustively
-            // rather than silently ignoring it like a legitimate external/unmapped entry.
-            return false;
+            // External/unmapped sentinels don't occupy a physical unit slot; anything else is a
+            // malformed ams_id/slot_id pair — reject exhaustively rather than silently ignoring
+            // it like a legitimate external entry.
+            AmsEntryKind::External => {}
+            AmsEntryKind::Invalid => return false,
         }
     }
 
@@ -668,6 +715,51 @@ mod tests {
         assert!(is_ams_pool_composition_valid(
             &mapping,
             AmsPoolComposition::Shared { max_units: 1 }
+        ));
+    }
+
+    #[test]
+    fn test_a2l_ams_lite_entry_recognized_by_raw_entry_consumers() {
+        // Issue #221: three functions re-derived "is this a physical AMS unit" from a raw
+        // AmsMapping2Entry and each missed the A2L AMS Lite's physical id 16, which only
+        // MaterialSource's own methods handled. They now share classify_mapping2_entry.
+        let lite = AmsMapping2Entry {
+            ams_id: super::super::parser::A2L_LITE_PHYSICAL_AMS_ID,
+            slot_id: 1,
+        };
+        assert_eq!(classify_mapping2_entry(&lite), AmsEntryKind::AmsLite);
+
+        // Flat array carries the bare local slot, matching MaterialSource::flat_channel_id's
+        // AmsLite arm — not the -1 unmapped sentinel it used to emit, which contradicted the
+        // ams_mapping2 entry describing the same filament in the same command.
+        assert_eq!(flat_channel_id_for_entry(&lite), 1);
+        assert_eq!(
+            flat_channel_id_for_entry(&lite),
+            MaterialSource::AmsLite { slot_id: 1 }.flat_channel_id()
+        );
+
+        // A job fed exclusively from the AMS Lite is a physical-AMS job: use_ams must stay on,
+        // or the printer rejects the task with 07FF_8012 per [REF-AMS-USEAMS].
+        assert!(is_external_spool_safety_valid(true, &[lite.clone()]));
+
+        // And the pool validator must not hard-reject a mapping containing it.
+        assert!(is_ams_pool_composition_valid(
+            &[lite],
+            AmsPoolComposition::Shared { max_units: 4 }
+        ));
+    }
+
+    #[test]
+    fn test_validate_ams_pool_composition_rejects_malformed_slot_id() {
+        // A standard ams_id paired with an out-of-range slot_id is malformed, and is rejected
+        // the same way an out-of-range ams_id is — the classifier applies one rule to both.
+        let mapping = vec![AmsMapping2Entry {
+            ams_id: 0,
+            slot_id: 9,
+        }];
+        assert!(!is_ams_pool_composition_valid(
+            &mapping,
+            AmsPoolComposition::Shared { max_units: 4 }
         ));
     }
 

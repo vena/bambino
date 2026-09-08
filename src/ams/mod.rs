@@ -10,9 +10,9 @@ pub mod mapping;
 pub mod parser;
 
 pub use mapping::{
-    AmsMapping2Entry, AmsPoolComposition, MaterialSource, build_ams_mapping, build_ams_mapping2,
-    is_ams_pool_composition_valid, is_external_spool_safety_valid,
-    is_external_spool_safety_valid_flat,
+    AmsEntryKind, AmsMapping2Entry, AmsPoolComposition, MaterialSource, build_ams_mapping,
+    build_ams_mapping2, classify_mapping2_entry, is_ams_pool_composition_valid,
+    is_external_spool_safety_valid, is_external_spool_safety_valid_flat,
 };
 pub use parser::{
     clean_stale_tray_data, evaluate_spool_presence, normalize_ams_unit_id, resolve_global_tray_id,

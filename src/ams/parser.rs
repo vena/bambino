@@ -232,13 +232,22 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
 /// * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
+///
+/// AMS-HT is single-slot, so its only valid `tray_id` is `0`; a non-zero one is rejected
+/// rather than silently ignored. Without that check this function and its sibling
+/// [`evaluate_spool_presence`] disagreed on the same `(ams_id, tray_id)` pair — an
+/// AMS-HT id paired with a bad `tray_id` (from a mis-decoded `tray_now`, say) got a
+/// silently-accepted `Some(ams_id)` here but `None` there, masking the caller bug the
+/// sibling catches. [`normalize_ams_unit_id`]'s doc comment requires the two to agree.
 #[must_use]
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
     let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
     let is_external =
         ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
 
-    if is_ht || is_external {
+    if is_ht {
+        if tray_id == 0 { Some(ams_id) } else { None }
+    } else if is_external {
         Some(ams_id)
     } else if (ams_id <= AMS_MAX_STANDARD_ID || ams_id == A2L_LITE_NORMALIZED_AMS_ID)
         && tray_id < AMS_SLOTS_PER_UNIT
@@ -452,6 +461,14 @@ mod tests {
     fn test_resolve_global_tray_id_ams_ht() {
         assert_eq!(resolve_global_tray_id(128, 0), Some(128));
         assert_eq!(resolve_global_tray_id(135, 0), Some(135));
+
+        // AMS-HT is single-slot: a non-zero tray_id is rejected, matching
+        // evaluate_spool_presence's own `tray_id != 0` guard on the same id range, so the two
+        // functions cannot disagree about the same (ams_id, tray_id) pair.
+        assert_eq!(resolve_global_tray_id(128, 1), None);
+        assert_eq!(resolve_global_tray_id(135, 3), None);
+        assert_eq!(resolve_global_tray_id(130, 255), None);
+        assert_eq!(evaluate_spool_presence("0xffffffff", 128, 1, true), None);
     }
 
     #[test]
