@@ -688,11 +688,16 @@ During the run the printer reports as if executing a print job, with these disti
 | `option` | Routines requested | `stg` | `stg_cur` sequence |
 | :--- | :--- | :--- | :--- |
 | `2` | Auto Bed Leveling | `[14, 1]` | `255` → `14` → `1` → `0` |
-| `6` | Auto Bed Leveling + Vibration Compensation | `[14, 1, 3]` | `255` → `14` → `1` → `3` → `0` |
+| `6` | + Vibration Compensation | `[14, 1, 3]` | `255` → `14` → `1` → `3` → `0` |
+| `62` | + Motor Noise, Nozzle Height, Heatbed Thermal | `[14, 1, 3, 25]` | `255` → `14` → `1` → `3` → `25` → `255` → `0` |
 
-Setting bit 2 (Vibration Compensation) added exactly one stage, `3`, to the queue. Stage IDs match pybambu's `CURRENT_STAGE_IDS` (`const.py`): `14` = `cleaning_nozzle_tip` (an unrequested preamble the firmware always queues first), `1` = `auto_bed_leveling`, `3` = `sweeping_xy_mech_mode` (annotated upstream as vibration compensation), `255` = idle in the P1 encoding, `0` = `printing`. Note `stg_cur` reaches `0` near 99% while `gcode_state` is still `RUNNING`, so the [REF-MQTT-IDLEBUG] gate correctly leaves it readable there.
+Each supported bit adds exactly one stage. Stage IDs match pybambu's `CURRENT_STAGE_IDS` (`const.py`): `14` = `cleaning_nozzle_tip` (an unrequested preamble the firmware always queues first), `1` = `auto_bed_leveling`, `3` = `sweeping_xy_mech_mode` (annotated upstream as vibration compensation), `25` = `calibrating_motor_noise`, `255` = idle in the P1 encoding, `0` = `printing`.
 
-Unverified beyond this: only bits 1 and 2 have been exercised, and only on a P1S. Bit 4 is gated to IDEX/dual-nozzle hardware, so it will not produce a stage on a single-nozzle machine.
+**Unsupported option bits are silently accepted and silently dropped.** The `option: 62` run requested all five externally-documented routines (bits 1-5) on a P1S and queued only four stages: bits 4 (Nozzle Height) and 5 (Heatbed Thermal) produced **no stage at all**. The command was still acknowledged `"result": "success", "reason": "success"`, and no HMS entry or `print_error` was raised at any point in the run. There is therefore no wire-level way to distinguish "routine ran" from "routine silently ignored" other than diffing the requested bitmask against the resulting `stg` queue. Bit 4 being inert on a single-nozzle machine is expected (it is IDEX/dual-nozzle gated); bit 5 being inert on a P1S is a capability limit not previously recorded here.
+
+**`stg_cur` returns to idle (`255`) mid-run, while `gcode_state` is still `RUNNING`.** On the `option: 62` run the last queued stage (`25`) completed around 65%, after which `stg_cur` read `255` for roughly a third of the run before flipping to `0` at 99%. Consumers must treat "no stage currently active" as a normal mid-run condition and not as run completion — `mc_percent`/`gcode_state` are the completion signal, not `stg_cur`. Note also that `stg_cur` reaches `0` near 99% while still `RUNNING`, so the [REF-MQTT-IDLEBUG] gate correctly leaves it readable there.
+
+Unverified beyond this: all observations are P1S, firmware `01.10.00.00`. Bits 0 and 6 are internal and untested. Whether bits 4/5 are inert on other models is unknown.
 
 #### Printer Motion & Operation Parameters
 

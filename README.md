@@ -206,11 +206,19 @@ observable while it happens. Verified by wire capture on a P1S (firmware `01.10.
   adding `VIBRATION_COMPENSATION` gives `[14, 1, 3]`. Both fields do arrive in incremental pushes,
   so this is usable in real time. bambino carries them as raw `i32`s — there is no typed stage
   enum yet.
+- **`stg_cur` returning to idle mid-run is normal.** Once the last queued stage finishes,
+  `stg_cur` reads idle for the remainder of the run while `percent` keeps climbing. Use
+  `gcode_state`/`percent` for completion, never `stg_cur`.
 - **Telling a calibration run from a print:** `print_type` reads `"system"` and `subtask_name` is
   `"auto_cali_for_user_param.gcode"`. `layer_num`/`total_layer_num` stay `0` and mean nothing here.
 - `gcode_state` walks `IDLE` → `RUNNING` → `FINISH`.
 
-Only bed-leveling and vibration compensation have been exercised, and only on a P1S. See
+**Unsupported routines are silently dropped.** On a P1S, requesting all five options queues only
+three of them (plus a nozzle-clean preamble): `NOZZLE_HEIGHT` and `HEATBED_THERMAL` produce no
+stage at all, yet the command is still acknowledged as successful and no error is reported.
+`NOZZLE_HEIGHT` is IDEX/dual-nozzle-only by design; `HEATBED_THERMAL` simply isn't supported
+there. The only way to tell what actually ran is to compare the flags you sent against the `stg`
+queue that comes back. All observations are P1S firmware `01.10.00.00`; see
 `reference/03_mqtt_telemetry.md` for the full wire detail and stage-ID mapping.
 
 To capture a run yourself, `bambino-cli control <IP> <SERIAL> calibrate <ROUTINES>... --watch`

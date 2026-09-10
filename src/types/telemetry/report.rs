@@ -344,6 +344,10 @@ pub struct PrinterTelemetry {
     /// the queue tracks the option bitmask: bed-leveling alone gives `[14, 1]`, bed-leveling
     /// plus vibration compensation gives `[14, 1, 3]` (P1S, firmware `01.10.00.00`). Stage IDs
     /// follow pybambu's `CURRENT_STAGE_IDS`; bambino does not decode them into a typed enum.
+    ///
+    /// Diffing this against the requested option bitmask is the only way to learn which routines
+    /// the firmware actually accepted — unsupported bits are dropped without an error or a
+    /// failed ack.
     #[serde(default)]
     pub stg: Option<Vec<i32>>,
 
