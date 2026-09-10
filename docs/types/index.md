@@ -1795,7 +1795,11 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`stg_cur`**: `Option<i32>`
 
-  Active print stage. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+  Stage currently executing, drawn from the same ID space as [`Self::stg`](telemetry/report/index.md#printertelemetry). Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+  
+  Emitted in incremental pushes, so it is usable for real-time stage tracking subject to
+  the [REF-MQTT-IDLEBUG] `gcode_state` gate — A1/P1 firmware reports `0` ("printing") while
+  genuinely idle, so the value means nothing unless `gcode_state` is `RUNNING` or `PAUSE`.
 
 - **`print_error`**: `Option<u32>`
 
@@ -1977,7 +1981,18 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`stg`**: `Option<Vec<i32>>`
 
-  Calibration stage list.
+  Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
+  `FINISH`.
+  
+  Emitted in incremental (`msg: 1`) pushes, not only in `pushall` — see [REF-MQTT-IDLEBUG],
+  which corrects an earlier claim to the contrary. For a standalone `calibration` command
+  the queue tracks the option bitmask: bed-leveling alone gives `[14, 1]`, bed-leveling
+  plus vibration compensation gives `[14, 1, 3]` (P1S, firmware `01.10.00.00`). Stage IDs
+  follow pybambu's `CURRENT_STAGE_IDS`; bambino does not decode them into a typed enum.
+  
+  Diffing this against the requested option bitmask is the only way to learn which routines
+  the firmware actually accepted — unsupported bits are dropped without an error or a
+  failed ack.
 
 - **`mapping`**: `Option<Vec<i32>>`
 
@@ -2038,6 +2053,34 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Cloud batch ID.
 
 #### Implementations
+
+- <span id="printertelemetry-current-stage"></span>`fn current_stage(&self) -> Option<PrintStage>` — [`PrintStage`](telemetry/stage/index.md#printstage)
+
+  Returns the stage currently executing, decoded, or `None` when it cannot be trusted.
+
+  Applies the [REF-MQTT-IDLEBUG] gate: A1/P1 firmware reports `stg_cur = 0` ("printing")
+  while genuinely idle, so this returns `None` unless `gcode_state` is `RUNNING` or `PAUSE`.
+  That gate matters more once the value is typed than it did when it was a bare `i32` — a
+  [`PrintStage::Printing`](telemetry/stage/index.md#printstage) rendered in a UI reads as authoritative. Use
+  [`Self::current_stage_ungated`](telemetry/report/index.md#printertelemetry) only when you are applying your own gate.
+
+  A `Some(PrintStage::Idle)` during a run is not a bug and not completion: after the last
+  queued stage finishes, `stg_cur` reads idle for the tail of the run.
+
+- <span id="printertelemetry-current-stage-ungated"></span>`fn current_stage_ungated(&self) -> Option<PrintStage>` — [`PrintStage`](telemetry/stage/index.md#printstage)
+
+  Decodes `stg_cur` with no [REF-MQTT-IDLEBUG] gate applied.
+
+  Prefer [`Self::current_stage`](telemetry/report/index.md#printertelemetry). This exists for callers applying their own state gate;
+  on an A1 or P1 the raw value is `0` ("printing") when the machine is idle.
+
+- <span id="printertelemetry-stage-queue"></span>`fn stage_queue(&self) -> Vec<PrintStage>` — [`PrintStage`](telemetry/stage/index.md#printstage)
+
+  Decodes the queued stage list, in wire order.
+
+  Needs no state gate — the idle-bug anomaly is specific to `stg_cur`, and an empty or
+  absent queue is unambiguous. Returns an empty `Vec` when `stg` is absent; the queue also
+  legitimately empties to `[]` at `FINISH`.
 
 - <span id="printertelemetry-unpack-temperature"></span>`fn unpack_temperature(raw_val: f64) -> (u16, u16)`
 

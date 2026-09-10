@@ -25,6 +25,7 @@ for composite packed temperatures, home/status flags, and door sensors.
   - [`device`](device/index.md)
   - [`diagnostics`](diagnostics/index.md)
   - [`report`](report/index.md)
+  - [`stage`](stage/index.md)
 - [Types](#types)
   - [`TelemetryReport`](#telemetryreport)
 - [Functions](#functions)
@@ -39,6 +40,7 @@ for composite packed temperatures, home/status flags, and door sensors.
 | [`device`](device/index.md) | mod | Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras). |
 | [`diagnostics`](diagnostics/index.md) | mod | Diagnostic telemetry types (HMS alerts, light reports). |
 | [`report`](report/index.md) | mod | Top-level telemetry report envelope (`print` and `device` wire locations). |
+| [`stage`](stage/index.md) | mod | Typed decoding for the `stg_cur` / `stg` stage-ID space. |
 | [`TelemetryReport`](#telemetryreport) | struct | Unified top-level telemetry report received from the printer's local MQTT broker. |
 | [`decode_nozzle_temperatures`](#decode-nozzle-temperatures) | fn | Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived. |
 | [`is_developer_mode`](#is-developer-mode) | fn | Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1]. |
@@ -49,6 +51,7 @@ for composite packed temperatures, home/status flags, and door sensors.
 - [`device`](device/index.md) — Device-level hardware telemetry (extruders, nozzles, bed, fans, airduct, CTC, cameras).
 - [`diagnostics`](diagnostics/index.md) — Diagnostic telemetry types (HMS alerts, light reports).
 - [`report`](report/index.md) — Top-level telemetry report envelope (`print` and `device` wire locations).
+- [`stage`](stage/index.md) — Typed decoding for the `stg_cur` / `stg` stage-ID space.
 
 
 ---
@@ -2090,7 +2093,11 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`stg_cur`**: `Option<i32>`
 
-  Active print stage. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+  Stage currently executing, drawn from the same ID space as [`Self::stg`](report/index.md#printertelemetry). Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+  
+  Emitted in incremental pushes, so it is usable for real-time stage tracking subject to
+  the [REF-MQTT-IDLEBUG] `gcode_state` gate — A1/P1 firmware reports `0` ("printing") while
+  genuinely idle, so the value means nothing unless `gcode_state` is `RUNNING` or `PAUSE`.
 
 - **`print_error`**: `Option<u32>`
 
@@ -2272,7 +2279,18 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`stg`**: `Option<Vec<i32>>`
 
-  Calibration stage list.
+  Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
+  `FINISH`.
+  
+  Emitted in incremental (`msg: 1`) pushes, not only in `pushall` — see [REF-MQTT-IDLEBUG],
+  which corrects an earlier claim to the contrary. For a standalone `calibration` command
+  the queue tracks the option bitmask: bed-leveling alone gives `[14, 1]`, bed-leveling
+  plus vibration compensation gives `[14, 1, 3]` (P1S, firmware `01.10.00.00`). Stage IDs
+  follow pybambu's `CURRENT_STAGE_IDS`; bambino does not decode them into a typed enum.
+  
+  Diffing this against the requested option bitmask is the only way to learn which routines
+  the firmware actually accepted — unsupported bits are dropped without an error or a
+  failed ack.
 
 - **`mapping`**: `Option<Vec<i32>>`
 
@@ -2333,6 +2351,34 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Cloud batch ID.
 
 #### Implementations
+
+- <span id="printertelemetry-current-stage"></span>`fn current_stage(&self) -> Option<PrintStage>` — [`PrintStage`](stage/index.md#printstage)
+
+  Returns the stage currently executing, decoded, or `None` when it cannot be trusted.
+
+  Applies the [REF-MQTT-IDLEBUG] gate: A1/P1 firmware reports `stg_cur = 0` ("printing")
+  while genuinely idle, so this returns `None` unless `gcode_state` is `RUNNING` or `PAUSE`.
+  That gate matters more once the value is typed than it did when it was a bare `i32` — a
+  [`PrintStage::Printing`](stage/index.md#printstage) rendered in a UI reads as authoritative. Use
+  [`Self::current_stage_ungated`](report/index.md#printertelemetry) only when you are applying your own gate.
+
+  A `Some(PrintStage::Idle)` during a run is not a bug and not completion: after the last
+  queued stage finishes, `stg_cur` reads idle for the tail of the run.
+
+- <span id="printertelemetry-current-stage-ungated"></span>`fn current_stage_ungated(&self) -> Option<PrintStage>` — [`PrintStage`](stage/index.md#printstage)
+
+  Decodes `stg_cur` with no [REF-MQTT-IDLEBUG] gate applied.
+
+  Prefer [`Self::current_stage`](report/index.md#printertelemetry). This exists for callers applying their own state gate;
+  on an A1 or P1 the raw value is `0` ("printing") when the machine is idle.
+
+- <span id="printertelemetry-stage-queue"></span>`fn stage_queue(&self) -> Vec<PrintStage>` — [`PrintStage`](stage/index.md#printstage)
+
+  Decodes the queued stage list, in wire order.
+
+  Needs no state gate — the idle-bug anomaly is specific to `stg_cur`, and an empty or
+  absent queue is unambiguous. Returns an empty `Vec` when `stg` is absent; the queue also
+  legitimately empties to `[]` at `FINISH`.
 
 - <span id="printertelemetry-unpack-temperature"></span>`fn unpack_temperature(raw_val: f64) -> (u16, u16)`
 
@@ -2726,6 +2772,494 @@ and "read-only."
 ##### `impl PartialEq for SdcardState`
 
 - <span id="sdcardstate-partialeq-eq"></span>`fn eq(&self, other: &SdcardState) -> bool` — [`SdcardState`](report/index.md#sdcardstate)
+
+### `PrintStage`
+
+```rust
+enum PrintStage {
+    Idle,
+    Printing,
+    AutoBedLeveling,
+    HeatbedPreheating,
+    VibrationCompensation,
+    ChangingFilament,
+    M400Pause,
+    PausedFilamentRunout,
+    HeatingNozzle,
+    CalibratingDynamicFlow,
+    ScanningBedSurface,
+    InspectingFirstLayer,
+    IdentifyingBuildPlateType,
+    CalibratingMicroLidar,
+    HomingToolhead,
+    CleaningNozzleTip,
+    CheckingExtruderTemperature,
+    PausedByUser,
+    PausedFrontCoverFallOff,
+    CalibratingMicroLidarAlt,
+    CalibratingFlowRatio,
+    PausedNozzleTemperatureMalfunction,
+    PausedHeatbedTemperatureMalfunction,
+    FilamentUnloading,
+    PausedStepLoss,
+    FilamentLoading,
+    MotorNoiseCancellation,
+    PausedAmsOffline,
+    PausedLowHeatbreakFanSpeed,
+    PausedChamberTemperatureControlProblem,
+    CoolingChamber,
+    PausedUserGcode,
+    MotorNoiseShowoff,
+    PausedNozzleClumping,
+    PausedCutterError,
+    PausedFirstLayerError,
+    PausedNozzleClog,
+    MeasuringMotionPrecision,
+    EnhancingMotionPrecision,
+    MeasureMotionAccuracy,
+    NozzleOffsetCalibration,
+    HighTemperatureAutoBedLeveling,
+    AutoCheckQuickReleaseLever,
+    AutoCheckDoorAndUpperCover,
+    LaserCalibration,
+    AutoCheckPlatform,
+    ConfirmingBirdsEyeCameraLocation,
+    CalibratingBirdsEyeCamera,
+    AutoBedLevelingPhase1,
+    AutoBedLevelingPhase2,
+    HeatingChamber,
+    AdjustingHeatbedTemperature,
+    PrintingCalibrationLines,
+    AutoCheckMaterial,
+    LiveViewCameraCalibration,
+    WaitingForHeatbedTemperature,
+    AutoCheckMaterialPosition,
+    CuttingModuleOffsetCalibration,
+    MeasuringSurface,
+    ThermalPreconditioning,
+    HomingBladeHolder,
+    CalibratingCameraOffset,
+    CalibratingBladeHolderPosition,
+    HotendPickAndPlaceTest,
+    WaitingForChamberTemperatureEqualize,
+    PreparingHotend,
+    CalibratingNozzleClumpingDetection,
+    PurifyingChamberAir,
+    MeasuringRotaryAttachment,
+    ToolheadMovingAbovePurgeChute,
+    CoolingNozzle,
+    ToolheadMovingToHeatbedCenter,
+    ActiveArcFitting,
+    HotendTypeDetection,
+    BuildPlateAlignmentDetection,
+    HeatbedSurfaceForeignObjectDetection,
+    HeatbedUndersideForeignObjectDetection,
+    PreExtrusionBeforePrinting,
+    PreparingAms,
+    Unknown(i32),
+}
+```
+
+A stage the printer reports in `stg_cur` (currently executing) or `stg` (queued).
+
+The wire carries bare integers. [`PrintStage::from_wire`](stage/index.md#printstage) maps them to variants and leaves
+anything unrecognized in [`PrintStage::Unknown`](stage/index.md#printstage) rather than failing, so a firmware that adds
+a stage id does not break decoding.
+
+# Read this before trusting a decoded value
+
+Decoding does not make `stg_cur` trustworthy on its own. A1 and P1 firmware reports
+`stg_cur = 0` ([`PrintStage::Printing`](stage/index.md#printstage)) while genuinely idle [REF-MQTT-IDLEBUG], so the value
+means nothing unless `gcode_state` is `RUNNING` or `PAUSE`. Gate on that before displaying a
+stage, or use a helper that does it for you — a typed [`PrintStage::Printing`](stage/index.md#printstage) handed to a UI
+looks authoritative in a way the raw `0` did not, which makes ignoring the gate *more*
+dangerous here, not less.
+
+[`PrintStage::Idle`](stage/index.md#printstage) returning from a run in progress is also normal: once the last queued
+stage finishes, `stg_cur` reads idle for the remainder of the run while `mc_percent` keeps
+climbing. Completion is `gcode_state`/`mc_percent`, never this.
+
+# Verification
+
+Ids `0`–`77` come from BambuStudio's own `get_stage_string` (`DeviceManager.cpp`), the vendor
+client's table. bambuddy's independent `STAGE_NAMES` corroborates 69 of the 78 and contradicts
+none of them except id `74`, where bambuddy carries a self-described guess ("Preparing", noted
+upstream as seen on H2D) and BambuStudio is taken as authoritative. Ids `67`–`73`, `75` and
+`76` appear in BambuStudio alone.
+
+Directly observed on hardware here (P1S, firmware `01.10.00.00`): `0`, `1`, `3`, `14`, `25`
+and the `255` idle encoding. Everything else is upstream-sourced, not locally captured.
+
+Idle is reported as `-1` on X1 and `255` on P1; both normalize to [`PrintStage::Idle`](stage/index.md#printstage), which
+is the split a raw `i32` would otherwise leak to every consumer.
+
+#### Variants
+
+- **`Idle`**
+
+  Idle. Wire sends `-1` on X1 and `255` on P1; both map here.
+
+- **`Printing`**
+
+  Printing.
+
+- **`AutoBedLeveling`**
+
+  Auto bed leveling.
+
+- **`HeatbedPreheating`**
+
+  Heatbed preheating.
+
+- **`VibrationCompensation`**
+
+  Resonance sweep. Upstream's machine name for this is `sweeping_xy_mech_mode`.
+
+- **`ChangingFilament`**
+
+  Changing filament.
+
+- **`M400Pause`**
+
+  M400 pause.
+
+- **`PausedFilamentRunout`**
+
+  Paused (filament ran out).
+
+- **`HeatingNozzle`**
+
+  Heating nozzle.
+
+- **`CalibratingDynamicFlow`**
+
+  Calibrating dynamic flow.
+
+- **`ScanningBedSurface`**
+
+  Scanning bed surface.
+
+- **`InspectingFirstLayer`**
+
+  Inspecting first layer.
+
+- **`IdentifyingBuildPlateType`**
+
+  Identifying build plate type.
+
+- **`CalibratingMicroLidar`**
+
+  Calibrating Micro Lidar.
+
+- **`HomingToolhead`**
+
+  Homing toolhead.
+
+- **`CleaningNozzleTip`**
+
+  Cleaning nozzle tip.
+
+- **`CheckingExtruderTemperature`**
+
+  Checking extruder temperature.
+
+- **`PausedByUser`**
+
+  Paused by the user.
+
+- **`PausedFrontCoverFallOff`**
+
+  Pause (front cover fall off).
+
+- **`CalibratingMicroLidarAlt`**
+
+  Second micro-lidar calibration id. Upstream marks `12` and `18` as duplicated.
+
+- **`CalibratingFlowRatio`**
+
+  Calibrating flow ratio.
+
+- **`PausedNozzleTemperatureMalfunction`**
+
+  Pause (nozzle temperature malfunction).
+
+- **`PausedHeatbedTemperatureMalfunction`**
+
+  Pause (heatbed temperature malfunction).
+
+- **`FilamentUnloading`**
+
+  Filament unloading.
+
+- **`PausedStepLoss`**
+
+  Pause (step loss).
+
+- **`FilamentLoading`**
+
+  Filament loading.
+
+- **`MotorNoiseCancellation`**
+
+  Motor noise cancellation.
+
+- **`PausedAmsOffline`**
+
+  Pause (AMS offline).
+
+- **`PausedLowHeatbreakFanSpeed`**
+
+  Pause (low speed of the heatbreak fan).
+
+- **`PausedChamberTemperatureControlProblem`**
+
+  Pause (chamber temperature control problem).
+
+- **`CoolingChamber`**
+
+  Cooling chamber.
+
+- **`PausedUserGcode`**
+
+  Pause (Gcode inserted by user).
+
+- **`MotorNoiseShowoff`**
+
+  Motor noise showoff.
+
+- **`PausedNozzleClumping`**
+
+  Pause (nozzle clumping).
+
+- **`PausedCutterError`**
+
+  Pause (cutter error).
+
+- **`PausedFirstLayerError`**
+
+  Pause (first layer error).
+
+- **`PausedNozzleClog`**
+
+  Pause (nozzle clog).
+
+- **`MeasuringMotionPrecision`**
+
+  Measuring motion precision.
+
+- **`EnhancingMotionPrecision`**
+
+  Enhancing motion precision.
+
+- **`MeasureMotionAccuracy`**
+
+  Measure motion accuracy.
+
+- **`NozzleOffsetCalibration`**
+
+  Nozzle offset calibration.
+
+- **`HighTemperatureAutoBedLeveling`**
+
+  High temperature auto bed leveling.
+
+- **`AutoCheckQuickReleaseLever`**
+
+  Auto Check: Quick Release Lever.
+
+- **`AutoCheckDoorAndUpperCover`**
+
+  Auto Check: Door and Upper Cover.
+
+- **`LaserCalibration`**
+
+  Laser Calibration.
+
+- **`AutoCheckPlatform`**
+
+  Auto Check: Platform.
+
+- **`ConfirmingBirdsEyeCameraLocation`**
+
+  Confirming BirdsEye Camera location.
+
+- **`CalibratingBirdsEyeCamera`**
+
+  Calibrating BirdsEye Camera.
+
+- **`AutoBedLevelingPhase1`**
+
+  Auto bed leveling - phase 1.
+
+- **`AutoBedLevelingPhase2`**
+
+  Auto bed leveling - phase 2.
+
+- **`HeatingChamber`**
+
+  Heating chamber.
+
+- **`AdjustingHeatbedTemperature`**
+
+  Adjusting heatbed temperature.
+
+- **`PrintingCalibrationLines`**
+
+  Printing calibration lines.
+
+- **`AutoCheckMaterial`**
+
+  Auto Check: Material.
+
+- **`LiveViewCameraCalibration`**
+
+  Live View Camera Calibration.
+
+- **`WaitingForHeatbedTemperature`**
+
+  Waiting for heatbed to reach target temperature.
+
+- **`AutoCheckMaterialPosition`**
+
+  Auto Check: Material Position.
+
+- **`CuttingModuleOffsetCalibration`**
+
+  Cutting Module Offset Calibration.
+
+- **`MeasuringSurface`**
+
+  Measuring Surface.
+
+- **`ThermalPreconditioning`**
+
+  Thermal Preconditioning for first layer optimization.
+
+- **`HomingBladeHolder`**
+
+  Homing Blade Holder.
+
+- **`CalibratingCameraOffset`**
+
+  Calibrating Camera Offset.
+
+- **`CalibratingBladeHolderPosition`**
+
+  Calibrating Blade Holder Position.
+
+- **`HotendPickAndPlaceTest`**
+
+  Hotend Pick and Place Test.
+
+- **`WaitingForChamberTemperatureEqualize`**
+
+  Waiting for the Chamber temperature to equalize.
+
+- **`PreparingHotend`**
+
+  Preparing Hotend.
+
+- **`CalibratingNozzleClumpingDetection`**
+
+  Calibrating the detection position of nozzle clumping.
+
+- **`PurifyingChamberAir`**
+
+  Purifying the chamber air.
+
+- **`MeasuringRotaryAttachment`**
+
+  Measuring Rotary Attachment.
+
+- **`ToolheadMovingAbovePurgeChute`**
+
+  The toolhead moves above the purge chute.
+
+- **`CoolingNozzle`**
+
+  Cooling down the nozzle.
+
+- **`ToolheadMovingToHeatbedCenter`**
+
+  The toolhead moves to the center of the heatbed.
+
+- **`ActiveArcFitting`**
+
+  Active Arc Fitting.
+
+- **`HotendTypeDetection`**
+
+  Hotend Type Detection.
+
+- **`BuildPlateAlignmentDetection`**
+
+  Build plate alignment detection.
+
+- **`HeatbedSurfaceForeignObjectDetection`**
+
+  Heatbed surface foreign object detection.
+
+- **`HeatbedUndersideForeignObjectDetection`**
+
+  Heatbed underside foreign object detection.
+
+- **`PreExtrusionBeforePrinting`**
+
+  Pre-extrusion before printing.
+
+- **`PreparingAms`**
+
+  Preparing AMS.
+
+- **`Unknown`**
+
+  A stage id no upstream table covers. Carries the raw wire value.
+
+#### Implementations
+
+- <span id="printstage-from-wire"></span>`fn from_wire(value: i32) -> Self`
+
+  Decodes a raw `stg_cur` / `stg` wire value.
+
+- <span id="printstage-is-idle"></span>`fn is_idle(self) -> bool`
+
+  Returns true for the idle encodings (`-1` on X1, `255` on P1).
+
+  Not a completion test: `stg_cur` reads idle for the tail of a calibration run that is
+  still in progress. Check `gcode_state` for that.
+
+- <span id="printstage-is-paused"></span>`fn is_paused(self) -> bool`
+
+  Returns true if this stage is one of the paused states.
+
+- <span id="printstage-label"></span>`fn label(self) -> Option<&'static str>`
+
+  Human-readable label, matching BambuStudio's own wording.
+
+  Returns `None` for [`PrintStage::Unknown`](stage/index.md#printstage) — the caller decides how to render an id no
+  upstream table covers, rather than getting a fabricated label.
+
+#### Trait Implementations
+
+##### `impl Clone for PrintStage`
+
+- <span id="printstage-clone"></span>`fn clone(&self) -> PrintStage` — [`PrintStage`](stage/index.md#printstage)
+
+##### `impl Copy for PrintStage`
+
+##### `impl Debug for PrintStage`
+
+- <span id="printstage-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for PrintStage`
+
+##### `impl Hash for PrintStage`
+
+- <span id="printstage-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for PrintStage`
+
+- <span id="printstage-partialeq-eq"></span>`fn eq(&self, other: &PrintStage) -> bool` — [`PrintStage`](stage/index.md#printstage)
 
 
 ---

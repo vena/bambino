@@ -760,6 +760,33 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   ).await?;
   ```
 
+  The returned `u16` is the published command's `sequence_id`, not a completion signal, but
+  the run is observable while it happens (verified on a P1S, firmware `01.10.00.00`):
+
+  - [`print_progress()`](#printerclient) tracks it.
+    `percent` ramps 0 to 100 and `remaining_secs` counts down. This is one aggregate bar
+    across the whole sweep — a single-routine run spans the same full range as a
+    multi-routine one, so per-routine progress cannot be derived from it.
+  - Per-routine boundaries come from `stg` (queued stage list) and `stg_cur` (stage now
+    running) on `PrinterTelemetry`, both emitted in incremental pushes. `BED_LEVELING`
+    alone yields `stg = [14, 1]`; adding `VIBRATION_COMPENSATION` yields `[14, 1, 3]`.
+    Carried as raw `i32`s — there is no typed stage enum yet.
+  - `stg_cur` returning to idle mid-run is normal: after the last queued stage finishes it
+    reads idle for the rest of the run while `percent` keeps climbing. Completion is
+    `gcode_state`/`percent`, never `stg_cur`.
+  - A calibration run is distinguishable from a user print by `print_type == "system"`
+    with `subtask_name == "auto_cali_for_user_param.gcode"`; `layer_num`/`total_layer_num`
+    stay 0 and are meaningless here.
+
+  **Unsupported flags are silently dropped.** On a P1S, passing all five options queues
+  only three routines: `NOZZLE_HEIGHT` (IDEX/dual-nozzle only) and `HEATBED_THERMAL`
+  produce no stage, yet the command is still acknowledged as successful and no error is
+  raised. Compare the flags sent against the returned `stg` queue to learn what actually
+  ran. Note this method does not consult the quirks engine to reject such flags up front.
+
+  All observations are P1S firmware `01.10.00.00`. See `reference/03_mqtt_telemetry.md`
+  for the wire detail and stage-ID mapping.
+
 - <span id="superprinterclient-start-print"></span>`async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error>` — [`PrintJobConfig`](../mqtt/commands/print_job/index.md#printjobconfig), [`Error`](../error/index.md#error)
 
   Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].

@@ -208,6 +208,26 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   door state with `is_door_open()`'s absent-field default of `false`.
   Defaults to `false`, correct for every model without a door sensor.
 
+- `fn supports_heatbed_thermal_calibration(&self) -> bool`
+
+  Returns true if the model runs heatbed leveling and thermal profile calibration (`calibration` option bit 5).
+
+  Default `false`. Observed inert on a P1S: the firmware accepts the bit, acknowledges the
+  command `"result": "success"`, and queues no stage for it [REF-MQTT-LIFECYCLE]. Since the
+  wire reports success either way, a model is assumed not to support this until a capture
+  shows a stage queued for it — the same fail-safe direction as
+  [`Self::has_stg_cur_idle_bug`](#modelquirks), where guessing wrong toward "unsupported" costs a
+  rejected command rather than a silently skipped calibration.
+
+- `fn supported_calibration_mask(&self) -> u32`
+
+  Returns the mask of `calibration` option bits this model actually executes [REF-MQTT-LIFECYCLE].
+
+  Bits 1–3 (bed leveling, vibration compensation, motor noise) are supported everywhere
+  observed. Bit 4 follows [`Self::supports_nozzle_offset_calibration`](#modelquirks) and bit 5 follows
+  [`Self::supports_heatbed_thermal_calibration`](#modelquirks). Bits 0 and 6 are internal/undocumented
+  and never included.
+
 - `fn is_unsafe_homing_command(&self, gcode: &str) -> bool`
 
   Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].
