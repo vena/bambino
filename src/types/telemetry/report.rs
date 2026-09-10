@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::ams::{AmsStatusReport, VirtualTray};
 use super::device::DeviceTelemetry;
 use super::diagnostics::{HmsEntry, IpcamTelemetry};
+use super::stage::PrintStage;
 
 /// Chamber/work/heatbed light state entry from the `lights_report` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -468,6 +469,46 @@ impl SdcardState {
 }
 
 impl PrinterTelemetry {
+    /// Returns the stage currently executing, decoded, or `None` when it cannot be trusted.
+    ///
+    /// Applies the [REF-MQTT-IDLEBUG] gate: A1/P1 firmware reports `stg_cur = 0` ("printing")
+    /// while genuinely idle, so this returns `None` unless `gcode_state` is `RUNNING` or `PAUSE`.
+    /// That gate matters more once the value is typed than it did when it was a bare `i32` — a
+    /// [`PrintStage::Printing`] rendered in a UI reads as authoritative. Use
+    /// [`Self::current_stage_ungated`] only when you are applying your own gate.
+    ///
+    /// A `Some(PrintStage::Idle)` during a run is not a bug and not completion: after the last
+    /// queued stage finishes, `stg_cur` reads idle for the tail of the run.
+    pub fn current_stage(&self) -> Option<PrintStage> {
+        let state = self.gcode_state.as_deref()?;
+        if !matches!(state, "RUNNING" | "PAUSE") {
+            return None;
+        }
+        self.current_stage_ungated()
+    }
+
+    /// Decodes `stg_cur` with no [REF-MQTT-IDLEBUG] gate applied.
+    ///
+    /// Prefer [`Self::current_stage`]. This exists for callers applying their own state gate;
+    /// on an A1 or P1 the raw value is `0` ("printing") when the machine is idle.
+    pub fn current_stage_ungated(&self) -> Option<PrintStage> {
+        self.stg_cur.map(PrintStage::from_wire)
+    }
+
+    /// Decodes the queued stage list, in wire order.
+    ///
+    /// Needs no state gate — the idle-bug anomaly is specific to `stg_cur`, and an empty or
+    /// absent queue is unambiguous. Returns an empty `Vec` when `stg` is absent; the queue also
+    /// legitimately empties to `[]` at `FINISH`.
+    pub fn stage_queue(&self) -> Vec<PrintStage> {
+        self.stg
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|&id| PrintStage::from_wire(id))
+            .collect()
+    }
+
     /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
     ///
     /// Accepts `f64` because the wire sends both integers and floats depending on model.

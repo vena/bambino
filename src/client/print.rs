@@ -1,6 +1,12 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+#[cfg(feature = "std")]
+use std::borrow::Cow;
+
+#[cfg(not(feature = "std"))]
+use alloc::borrow::Cow;
+
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::{PrintJobConfig, StandardControlRequest};
@@ -125,7 +131,29 @@ where
     /// All observations are P1S firmware `01.10.00.00`. See `reference/03_mqtt_telemetry.md`
     /// for the wire detail and stage-ID mapping.
     pub async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error> {
-        self.dispatch(|seq| crate::mqtt::CalibrationRequest::new(options.0, seq))
+        // The firmware acks unsupported option bits as "success" and silently queues nothing for
+        // them, so the wire cannot tell a caller their routine was skipped. Mask against what the
+        // model actually runs and refuse only when nothing at all would execute — a partial
+        // request still does useful work, so failing it outright would break a caller that ORs in
+        // every flag defensively.
+        let supported = self.identity.model.quirks().supported_calibration_mask();
+        let effective = options.0 & supported;
+
+        if effective == 0 {
+            return Err(Error::ModelMismatch(Cow::Borrowed(
+                "no requested calibration routine is supported on this model",
+            )));
+        }
+        if effective != options.0 {
+            log::warn!(
+                "dropping calibration option bits unsupported on this model: {:#08b} (requested {:#08b}, running {:#08b})",
+                options.0 & !supported,
+                options.0,
+                effective
+            );
+        }
+
+        self.dispatch(|seq| crate::mqtt::CalibrationRequest::new(effective, seq))
             .await
     }
 

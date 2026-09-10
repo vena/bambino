@@ -16,6 +16,7 @@ pub mod ams;
 pub mod device;
 pub mod diagnostics;
 pub mod report;
+pub mod stage;
 
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
@@ -36,6 +37,7 @@ pub use diagnostics::{CtcInfo, CtcTelemetry, HmsEntry, IpcamTelemetry};
 pub use report::{
     LightReport, NetInfo, PrintPauseList, PrintPausePoint, PrinterTelemetry, SdcardState,
 };
+pub use stage::PrintStage;
 
 pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
 

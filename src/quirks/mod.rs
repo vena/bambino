@@ -82,6 +82,35 @@ pub trait ModelQuirks {
     /// Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.
     fn supports_nozzle_offset_calibration(&self) -> bool;
 
+    /// Returns true if the model runs heatbed leveling and thermal profile calibration (`calibration` option bit 5).
+    ///
+    /// Default `false`. Observed inert on a P1S: the firmware accepts the bit, acknowledges the
+    /// command `"result": "success"`, and queues no stage for it [REF-MQTT-LIFECYCLE]. Since the
+    /// wire reports success either way, a model is assumed not to support this until a capture
+    /// shows a stage queued for it — the same fail-safe direction as
+    /// [`Self::has_stg_cur_idle_bug`], where guessing wrong toward "unsupported" costs a
+    /// rejected command rather than a silently skipped calibration.
+    fn supports_heatbed_thermal_calibration(&self) -> bool {
+        false
+    }
+
+    /// Returns the mask of `calibration` option bits this model actually executes [REF-MQTT-LIFECYCLE].
+    ///
+    /// Bits 1–3 (bed leveling, vibration compensation, motor noise) are supported everywhere
+    /// observed. Bit 4 follows [`Self::supports_nozzle_offset_calibration`] and bit 5 follows
+    /// [`Self::supports_heatbed_thermal_calibration`]. Bits 0 and 6 are internal/undocumented
+    /// and never included.
+    fn supported_calibration_mask(&self) -> u32 {
+        let mut mask = 0b0000_1110;
+        if self.supports_nozzle_offset_calibration() {
+            mask |= 0b0001_0000;
+        }
+        if self.supports_heatbed_thermal_calibration() {
+            mask |= 0b0010_0000;
+        }
+        mask
+    }
+
     /// Returns true if the build plate moves along the Z-axis (CoreXY bed-on-Z platforms) [REF-MOTO-GCODE].
     fn is_bed_on_z(&self) -> bool;
 
@@ -998,5 +1027,61 @@ mod tests {
         let q = PrinterModel::A1.quirks();
         assert!(!q.is_unsafe_homing_command("G28 Z"));
         assert!(!q.is_unsafe_homing_command("G28"));
+    }
+
+    #[test]
+    fn test_calibration_mask_matches_p1s_capture() {
+        // P1S capture: option 62 (bits 1-5) queued stages for bits 1-3 only. Bits 4 and 5
+        // produced nothing while the firmware still acked "success" [REF-MQTT-LIFECYCLE].
+        let q = PrinterModel::P1S.quirks();
+        assert_eq!(q.supported_calibration_mask(), 0b0000_1110);
+        assert_eq!(62 & q.supported_calibration_mask(), 14);
+    }
+
+    #[test]
+    fn test_calibration_mask_never_includes_internal_bits() {
+        // Bits 0 (xcam) and 6 (nozzle clumping) are internal; no model may advertise them.
+        for model in [
+            PrinterModel::P1S,
+            PrinterModel::A1,
+            PrinterModel::X1C,
+            PrinterModel::Unknown,
+        ] {
+            let mask = model.quirks().supported_calibration_mask();
+            assert_eq!(
+                mask & 0b0100_0001,
+                0,
+                "{model:?} advertises an internal bit"
+            );
+        }
+    }
+
+    #[test]
+    fn test_calibration_mask_tracks_nozzle_offset_quirk() {
+        // Bit 4 must follow the existing predicate rather than being hardcoded.
+        for model in [PrinterModel::P1S, PrinterModel::A1, PrinterModel::X1C] {
+            let q = model.quirks();
+            assert_eq!(
+                q.supported_calibration_mask() & 0b0001_0000 != 0,
+                q.supports_nozzle_offset_calibration(),
+                "{model:?} bit 4 disagrees with supports_nozzle_offset_calibration()"
+            );
+        }
+    }
+
+    #[test]
+    fn test_heatbed_thermal_calibration_defaults_unsupported() {
+        // Fail-safe direction: the wire acks success either way, so absent a capture showing a
+        // queued stage a model is assumed not to run it.
+        assert!(
+            !PrinterModel::Unknown
+                .quirks()
+                .supports_heatbed_thermal_calibration()
+        );
+        assert!(
+            !PrinterModel::P1S
+                .quirks()
+                .supports_heatbed_thermal_calibration()
+        );
     }
 }
