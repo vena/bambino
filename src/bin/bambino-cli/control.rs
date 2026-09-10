@@ -184,11 +184,20 @@ pub enum ControlAction {
     Airduct { mode: AirductModeArg },
     /// Trigger one or more calibration routines
     #[command(
-        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>..."
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch]"
     )]
     Calibrate {
         #[arg(required = true)]
         routines: Vec<CalibrationArg>,
+        /// Stay connected after publishing and stream every subsequent `print`-bearing push as
+        /// one compact NDJSON line until interrupted (Ctrl+C), instead of exiting immediately.
+        ///
+        /// Same output shape as `dump --follow`, but subscribed before the command is published
+        /// — running `dump --follow` in a second terminal races the trigger and can miss the
+        /// first pushes of the run. See issue #227: whether a standalone calibration reports
+        /// any progress at all is unverified, and this flag exists to capture the evidence.
+        #[arg(short = 'w', long)]
+        watch: bool,
     },
     /// AMS filament management
     #[command(flatten_help = true)]
@@ -469,7 +478,7 @@ pub async fn run(
             )
             .await?;
         }
-        ControlAction::Calibrate { routines } => {
+        ControlAction::Calibrate { routines, watch } => {
             let mut options = CalibrationOption(0);
             for routine in routines {
                 let flag = match routine {
@@ -481,8 +490,25 @@ pub async fn run(
                 };
                 options = options | flag;
             }
-            println!("Triggering calibration routines...");
+            // Under --watch stdout is the NDJSON capture stream, so status chatter goes to
+            // stderr — a stray human-readable line would make the captured file invalid NDJSON.
+            if watch {
+                eprintln!("Triggering calibration routines...");
+            } else {
+                println!("Triggering calibration routines...");
+            }
+            // The client subscribes to the report topic during connect, before it publishes
+            // anything (mqtt/client/mod.rs), so the subscription is already live by the time
+            // this command lands — no push can be missed between trigger and follow loop.
             client.start_calibration(options).await?;
+            if watch {
+                eprintln!(
+                    "Calibration command published. Following telemetry pushes as NDJSON — Ctrl+C to stop."
+                );
+                // `false` — capture every root, not just `print`. See issue #227: the
+                // indicator being hunted may live under a root bambino does not model.
+                return crate::monitor::follow_pushes(&mut client, false).await;
+            }
             println!("Calibration command published successfully.");
         }
         ControlAction::Ams { action } => match action {

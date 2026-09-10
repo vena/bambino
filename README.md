@@ -194,6 +194,30 @@ printer.start_calibration(
 ).await?;
 ```
 
+The call returns once the command is published, not when the routine finishes — but the run is
+observable while it happens. Verified by wire capture on a P1S (firmware `01.10.00.00`):
+
+- **`print_progress()` works.** `percent` ramps `0` → `100` and `remaining_secs` counts down
+  (the wire sends minutes; bambino converts). This is a **single aggregate bar across the whole
+  sweep** — a one-routine run and a two-routine run both span the full `0`–`100`, so you cannot
+  derive per-routine progress from it.
+- **Per-routine boundaries come from `stg`/`stg_cur`** on `PrinterTelemetry`. `stg` is the queued
+  stage list, `stg_cur` the stage running now. Requesting `BED_LEVELING` alone gives `stg = [14, 1]`;
+  adding `VIBRATION_COMPENSATION` gives `[14, 1, 3]`. Both fields do arrive in incremental pushes,
+  so this is usable in real time. bambino carries them as raw `i32`s — there is no typed stage
+  enum yet.
+- **Telling a calibration run from a print:** `print_type` reads `"system"` and `subtask_name` is
+  `"auto_cali_for_user_param.gcode"`. `layer_num`/`total_layer_num` stay `0` and mean nothing here.
+- `gcode_state` walks `IDLE` → `RUNNING` → `FINISH`.
+
+Only bed-leveling and vibration compensation have been exercised, and only on a P1S. See
+`reference/03_mqtt_telemetry.md` for the full wire detail and stage-ID mapping.
+
+To capture a run yourself, `bambino-cli control <IP> <SERIAL> calibrate <ROUTINES>... --watch`
+publishes the command and then streams every subsequent message on the report topic as NDJSON
+until Ctrl+C — complete payloads, unfiltered, including roots (`info`, `system`, `mc_print`) that
+`TelemetryReport` doesn't model. Redirect stdout to a file; status chatter goes to stderr.
+
 ### AMS filament control
 
 Both AMS calls take flat positional arguments; the addressing sentinels matter more than the
@@ -594,6 +618,8 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   airduct  calibrate  gcode  gcode-raw  pause  resume  stop
                   gcode-raw prompts for interactive confirmation unless --unsafe is
                   passed, and bypasses all model safety checks; see its --help.
+                  calibrate takes -w/--watch to stream telemetry as NDJSON after
+                  publishing, instead of exiting; see its --help.
                   ams (dry | dry-stop)
 Files actions:    list  upload  delete  space  clock-check
 Camera actions:   snapshot

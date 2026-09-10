@@ -38,3 +38,4 @@ ack_probe_report*.json
 # useful locally for checking a wire shape against what the crate binds, never committed.
 test.json
 /captures/
+/*.ndjson

@@ -97,6 +97,24 @@ where
     ///     CalibrationOption::BED_LEVELING | CalibrationOption::VIBRATION_COMPENSATION
     /// ).await?;
     /// ```
+    ///
+    /// The returned `u16` is the published command's `sequence_id`, not a completion signal, but
+    /// the run is observable while it happens (verified on a P1S, firmware `01.10.00.00`):
+    ///
+    /// - [`print_progress()`](crate::client::PrinterClient::print_progress) tracks it.
+    ///   `percent` ramps 0 to 100 and `remaining_secs` counts down. This is one aggregate bar
+    ///   across the whole sweep — a single-routine run spans the same full range as a
+    ///   multi-routine one, so per-routine progress cannot be derived from it.
+    /// - Per-routine boundaries come from `stg` (queued stage list) and `stg_cur` (stage now
+    ///   running) on `PrinterTelemetry`, both emitted in incremental pushes. `BED_LEVELING`
+    ///   alone yields `stg = [14, 1]`; adding `VIBRATION_COMPENSATION` yields `[14, 1, 3]`.
+    ///   Carried as raw `i32`s — there is no typed stage enum yet.
+    /// - A calibration run is distinguishable from a user print by `print_type == "system"`
+    ///   with `subtask_name == "auto_cali_for_user_param.gcode"`; `layer_num`/`total_layer_num`
+    ///   stay 0 and are meaningless here.
+    ///
+    /// Only bed-leveling and vibration compensation have been exercised, and only on a P1S.
+    /// See `reference/03_mqtt_telemetry.md` for the wire detail and stage-ID mapping.
     pub async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error> {
         self.dispatch(|seq| crate::mqtt::CalibrationRequest::new(options.0, seq))
             .await

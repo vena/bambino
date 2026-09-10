@@ -82,7 +82,7 @@ Both locations use the identical schema. Clients must merge data from both paths
 8.  **gcode_file Emission Anomaly**: The `gcode_file` property does not strictly guarantee a `.gcode` path. On certain firmwares (such as P1S `01.10.00.00`), the printer transmits the parent `.3mf` filename instead of the specific sliced plate `.gcode` path.
 9.  **total_layer_num**: Total layers within the sliced print pipeline. Some firmware versions send this as `total_layers` instead — clients should accept both keys.
 10.  **gcode_start_time**: Unix epoch string for when the current job started. Never observed in a complete local (`print_type: "local"`) print lifecycle capture on a P1S (FAILED→IDLE→PREPARE→RUNNING→FINISH, zero occurrences) — may be cloud-print-only or otherwise absent on LAN-dispatched jobs. Unconfirmed either way; treat its absence as expected on local prints.
-11.  **A1/P1 Series `stg_cur = 0` Idle Bug [REF-MQTT-IDLEBUG]**: The firmware on the A1, A1 Mini, and P1 series exhibits an idle reporting anomaly where `stg_cur = 0` (which normally maps to `"Printing"`) is transmitted in telemetry even when the machine is in an idle, non-printing state. Wire-state evaluation models must ignore the `stg_cur` value when the high-level `gcode_state` is not `RUNNING` or `PAUSE`. **`stg_cur`/`stg` absent from incremental telemetry**: P1S wire captures (`probe_report-from_unhomed.json`, `probe_report-home_axes_repeat-from_homed.json`, captured during `home_axes`/`home_axes_repeat` probe runs) show `stg_cur` and `stg` are never present in incremental `print` updates — only in the one-time `pushall` dump, where this same idle-bug pollution was directly observed (`stg_cur=0` while `gcode_state="IDLE"`). pybambu's `CURRENT_STAGE_IDS` table (`const.py`) documents per-code semantics for `stg_cur` (e.g. `4`="changing_filament", `13`="homing_toolhead") that would otherwise resolve the `mc_print_sub_stage` ambiguity in [REF-MOTO-HOME] — but its absence from the incremental stream makes it unusable for real-time activity detection without resorting to repeated `pushall` polling. Do not build real-time busy/activity detection on `stg_cur` without first re-verifying this on a non-P1S model.
+11.  **A1/P1 Series `stg_cur = 0` Idle Bug [REF-MQTT-IDLEBUG]**: The firmware on the A1, A1 Mini, and P1 series exhibits an idle reporting anomaly where `stg_cur = 0` (which normally maps to `"Printing"`) is transmitted in telemetry even when the machine is in an idle, non-printing state. Wire-state evaluation models must ignore the `stg_cur` value when the high-level `gcode_state` is not `RUNNING` or `PAUSE`. **`stg_cur`/`stg` are emitted in incremental telemetry when a stage is actually queued — a previous claim to the contrary here was wrong and is corrected; do not trust older notes on this.** The earlier claim (that P1S sends both only in the one-time `pushall` dump) was generalized from `probe_report-from_unhomed.json` and `probe_report-home_axes_repeat-from_homed.json`, captured during `home_axes`/`home_axes_repeat` probe runs — runs that queue no stage at all, so both fields were absent for want of content, not by protocol rule. Direct refutation: a standalone `calibration` run on a P1S (firmware `01.10.00.00`) emits `stg` and `stg_cur` in `msg: 1` incremental `print` updates throughout, in a capture containing **zero** `msg: 0` frames. See "Hardware Calibration Routines" below for the full stage sequence. The idle-bug pollution itself remains real and was directly observed in a `pushall` dump (`stg_cur=0` while `gcode_state="IDLE"`) — that is what the `gcode_state` gate above is for, and it is unaffected by this correction. pybambu's `CURRENT_STAGE_IDS` table (`const.py`) documents per-code semantics for `stg_cur` (e.g. `4`="changing_filament", `13`="homing_toolhead") and does resolve the `mc_print_sub_stage` ambiguity in [REF-MOTO-HOME]. Real-time activity detection on `stg_cur` is therefore viable, subject to the `gcode_state` gate; treat the stage-ID semantics as still unverified on non-P1S models.
 
 #### Task Tracking & Sequence Boundaries
 When generating identity fields for command payloads and print job submissions (such as `task_id` and `subtask_id`), values must strictly conform to hardware parser limits.
@@ -664,6 +664,35 @@ The `"option"` value is a 32-bit integer built by evaluating active calibration 
 | **Bit 4** | `16` | Nozzle Height/Tilt Calibration (IDEX/Dual-Nozzle only) |
 | **Bit 5** | `32` | Heatbed Leveling & Thermal Profile Calibration |
 | **Bit 6** | `64` | Nozzle Clumping Position Calibration *(Internal)* |
+
+###### Observed Run Telemetry
+
+**Verification source: direct wire capture, P1S firmware `01.10.00.00`, two runs (`option: 2` and `option: 6`).** This supersedes the earlier assumption that a standalone calibration reports nothing observable.
+
+The command is acknowledged on the report topic before the run starts:
+
+```json
+{"command": "calibration", "option": 2, "result": "success", "reason": "success"}
+```
+
+During the run the printer reports as if executing a print job, with these distinguishing marks:
+
+*   `print_type` becomes `"system"` (not `"local"`/`"idle"`), and `subtask_name` is `"auto_cali_for_user_param.gcode"`. Together these are the reliable way to tell a calibration sweep from a user print.
+*   `gcode_state` walks `IDLE` → `RUNNING` → `FINISH`; `mc_print_stage` is `"2"` during the run and `"1"` at finish.
+*   `layer_num`/`total_layer_num` are `0` — meaningless here, do not surface them.
+
+**`mc_percent` is a single aggregate ramp over the whole sweep, not per-routine.** It climbs monotonically `0 → 100` with no reset at a routine boundary, and a single-routine run (`option: 2`) covers the same full `0 → 100` range as a two-routine run (`option: 6`). A consumer can therefore drive one progress bar from it, but cannot derive per-routine progress. `mc_remaining_time` populates alongside it and counts down in **minutes** (`26 → 0` on both runs).
+
+**Per-routine boundaries come from `stg`/`stg_cur`, which are emitted in `msg: 1` incremental updates** (see the correction in the numbered notes above — an earlier claim that these were `pushall`-only was wrong). `stg` is the queued stage list for the run and `stg_cur` is the stage currently executing; `stg` empties to `[]` at `FINISH`. The queue corresponds directly to the option bitmask:
+
+| `option` | Routines requested | `stg` | `stg_cur` sequence |
+| :--- | :--- | :--- | :--- |
+| `2` | Auto Bed Leveling | `[14, 1]` | `255` → `14` → `1` → `0` |
+| `6` | Auto Bed Leveling + Vibration Compensation | `[14, 1, 3]` | `255` → `14` → `1` → `3` → `0` |
+
+Setting bit 2 (Vibration Compensation) added exactly one stage, `3`, to the queue. Stage IDs match pybambu's `CURRENT_STAGE_IDS` (`const.py`): `14` = `cleaning_nozzle_tip` (an unrequested preamble the firmware always queues first), `1` = `auto_bed_leveling`, `3` = `sweeping_xy_mech_mode` (annotated upstream as vibration compensation), `255` = idle in the P1 encoding, `0` = `printing`. Note `stg_cur` reaches `0` near 99% while `gcode_state` is still `RUNNING`, so the [REF-MQTT-IDLEBUG] gate correctly leaves it readable there.
+
+Unverified beyond this: only bits 1 and 2 have been exercised, and only on a P1S. Bit 4 is gated to IDEX/dual-nozzle hardware, so it will not produce a stage on a single-nozzle machine.
 
 #### Printer Motion & Operation Parameters
 

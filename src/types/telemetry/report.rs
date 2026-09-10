@@ -169,7 +169,11 @@ pub struct PrinterTelemetry {
     /// State field used in newer enclosed printer lines to track sensors (e.g., door status hex strings).
     pub stat: Option<String>,
 
-    /// Active print stage. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+    /// Stage currently executing, drawn from the same ID space as [`Self::stg`]. Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+    ///
+    /// Emitted in incremental pushes, so it is usable for real-time stage tracking subject to
+    /// the [REF-MQTT-IDLEBUG] `gcode_state` gate — A1/P1 firmware reports `0` ("printing") while
+    /// genuinely idle, so the value means nothing unless `gcode_state` is `RUNNING` or `PAUSE`.
     pub stg_cur: Option<i32>,
 
     /// Active error code register, packed as a 32-bit integer [REF-DIAG-HMS].
@@ -332,7 +336,14 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub cfg: Option<String>,
 
-    /// Calibration stage list.
+    /// Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
+    /// `FINISH`.
+    ///
+    /// Emitted in incremental (`msg: 1`) pushes, not only in `pushall` — see [REF-MQTT-IDLEBUG],
+    /// which corrects an earlier claim to the contrary. For a standalone `calibration` command
+    /// the queue tracks the option bitmask: bed-leveling alone gives `[14, 1]`, bed-leveling
+    /// plus vibration compensation gives `[14, 1, 3]` (P1S, firmware `01.10.00.00`). Stage IDs
+    /// follow pybambu's `CURRENT_STAGE_IDS`; bambino does not decode them into a typed enum.
     #[serde(default)]
     pub stg: Option<Vec<i32>>,
 

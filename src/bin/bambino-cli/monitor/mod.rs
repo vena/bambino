@@ -12,8 +12,51 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use crate::connection::create_printer;
+use crate::connection::{Printer, create_printer};
 use crate::error::CliError;
+
+/// Prints incoming pushes as compact NDJSON, one line each, until interrupted or the
+/// connection fails.
+///
+/// `print_only` gates *which messages* are emitted, never which keys survive: every emitted
+/// line is the complete payload, re-serialized from a generic `Value` rather than from a typed
+/// struct, so fields bambino does not model at all still reach the capture.
+///
+/// - `true` — only `print`-bearing pushes. `dump --follow`'s long-standing contract.
+/// - `false` — every message on the report topic. The topic also carries `info` (get_version
+///   responses), `system`, and `mc_print` roots, which `TelemetryReport` does not model at all
+///   (`types/telemetry/mod.rs` declares `print` only). A diagnostic capture chasing an unknown
+///   progress indicator must not pre-filter those away — the field being looked for may well be
+///   under a root nobody has declared yet (see issue #227).
+///
+/// Never returns `Ok` — the caller ends the capture with Ctrl+C, so the only exit is the `?`
+/// on a poll/ping error.
+pub(crate) async fn follow_pushes(printer: &mut Printer, print_only: bool) -> Result<(), CliError> {
+    // MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
+    // the broker resets the connection once that elapses with no packet from the client.
+    // Mirrors run()'s PING_TICK_SECS/ping_timer below.
+    const PING_TICK_SECS: u64 = 15;
+    let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
+    ping_timer.tick().await;
+
+    loop {
+        tokio::select! {
+            res = printer.poll_raw() => {
+                let msg = res?;
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+                    && (!print_only || v.get("print").is_some())
+                {
+                    println!("{}", serde_json::to_string(&v).unwrap_or_default());
+                }
+            }
+            _ = ping_timer.tick() => {
+                printer.send_ping().await?;
+                // Matches run()'s dashboard loop below.
+                printer.mqtt().await?.tick_zombie_check(PING_TICK_SECS as u32)?;
+            }
+        }
+    }
+}
 
 /// Connects, sends `pushall`, and either dumps the first response containing a `print` object
 /// as pretty JSON (default) or, with `follow`, keeps printing every subsequent `print`-bearing
@@ -27,31 +70,7 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str, follow: bool) -> Re
 
     if follow {
         eprintln!("Following telemetry pushes as NDJSON — Ctrl+C to stop.");
-
-        // MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
-        // the broker resets the connection once that elapses with no packet from the client.
-        // Mirrors run()'s PING_TICK_SECS/ping_timer below.
-        const PING_TICK_SECS: u64 = 15;
-        let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
-        ping_timer.tick().await;
-
-        loop {
-            tokio::select! {
-                res = printer.poll_raw() => {
-                    let msg = res?;
-                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
-                        && v.get("print").is_some()
-                    {
-                        println!("{}", serde_json::to_string(&v).unwrap_or_default());
-                    }
-                }
-                _ = ping_timer.tick() => {
-                    printer.send_ping().await?;
-                    // Matches run()'s dashboard loop below.
-                    printer.mqtt().await?.tick_zombie_check(PING_TICK_SECS as u32)?;
-                }
-            }
-        }
+        return follow_pushes(&mut printer, true).await;
     }
 
     let timeout = tokio::time::sleep(Duration::from_secs(10));
