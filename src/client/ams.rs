@@ -10,20 +10,13 @@ use crate::types::VersionInfo;
 
 use super::PrinterClient;
 
-// The drying-chamber temperature bounds moved to `types::telemetry::ams` alongside
-// `AmsUnitModel`, which is where the rest of the AMS *accessory* facts now live — the ceilings
-// are a property of the attached unit, not of anything on this client. Re-imported rather than
-// re-declared so the two cannot drift.
 use crate::types::telemetry::AmsUnitModel;
-use crate::types::telemetry::ams::{
-    AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX, AMS_STANDARD_DRY_TEMP_MAX,
-};
 
 /// Returns true if `ams_id` addresses a standard AMS unit (`0..=3`), an AMS-HT unit
 /// (`128..=135`), or an external-spool sentinel (`254`/`255`) — the full documented
 /// `ams_id` address space shared by `change_filament()` and `select_k_profile()`.
 #[must_use]
-fn is_valid_ams_id(ams_id: i32) -> bool {
+pub(crate) fn is_valid_ams_id(ams_id: i32) -> bool {
     (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id) || ams_id == 254 || ams_id == 255
 }
 
@@ -149,8 +142,9 @@ where
     /// Supplies this client's [`quirk_context()`](Self::quirk_context) to
     /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying),
     /// which resolves the printer's own reported answer against the model's rules. This is the
-    /// call to gate a UI on: it is the identical value [`start_drying`](Self::start_drying)
-    /// checks, so a control offered on the strength of it cannot then be refused.
+    /// call to gate a UI on: it is the identical value a drying cycle's
+    /// [`send()`](crate::client::DryingCycle::send) checks, so a control offered on the strength
+    /// of it cannot then be refused.
     ///
     /// Shorthand for
     /// [`capabilities().supports_ams_remote_drying()`](crate::client::Capabilities::supports_ams_remote_drying);
@@ -169,7 +163,7 @@ where
     /// Matches on the unit's own `id`, which is already normalized on deserialize (the A2L's AMS
     /// Lite reports physical `16` and is stored as `6`), so this compares against the same
     /// address space `is_valid_ams_id` accepts.
-    fn cached_ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
+    pub(crate) fn cached_ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
         self.ams()?
             .ams
             .iter()
@@ -177,133 +171,44 @@ where
             .and_then(crate::types::telemetry::AmsUnit::unit_model)
     }
 
-    /// Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
+    /// Configures a drying cycle for the unit at `ams_id`, to be sent with
+    /// [`send()`](crate::client::DryingCycle::send).
     ///
-    /// * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
-    ///   `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`). The address alone does **not**
-    ///   identify the unit: `0..=3` is shared by the original AMS, the AMS Lite and the AMS 2 Pro,
-    ///   and only the last of those has a heater — the unit model comes from cached telemetry,
-    ///   see Errors below.
-    /// * `temp`: Drying temperature in degrees Celsius. Must fall inside the attached unit's
-    ///   [`AmsUnitModel::dry_temp_range`] — `45..=65` for the AMS 2 Pro, `45..=85` for the
-    ///   AMS-HT. This is a property of the *attached AMS unit*, not the host printer model
-    ///   (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
-    ///   `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
-    ///   variation is documented, so this does not go through `ModelQuirks`). **Both bounds are
-    ///   rejected, not clamped**: BambuStudio refuses a temperature below the floor exactly as it
-    ///   refuses one above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a
-    ///   caller's `0` into `45` would start a real heating cycle nobody asked for.
-    /// * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) —
-    ///   the wire field is `duration` in hours, not the old `dry_time` in minutes. No
-    ///   documented maximum duration was found to validate against.
-    /// * `humidity`: Target humidity (`0` = firmware default / no target).
-    /// * `rotate_tray`: Whether to rotate trays during the cycle.
-    /// * `cooling_temp`: Cooling temperature applied after the drying cycle completes.
-    /// * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
-    /// * `filament`: Filament type string (e.g., "PA-CF").
+    /// The way to start drying. Names each parameter at the call site instead of ordering nine
+    /// of them, defaults the four most callers don't set, and lets
+    /// [`material()`](crate::client::DryingCycle::material) fill temperature, duration and
+    /// cooling temperature from one choice:
     ///
-    /// # Errors
+    /// ```rust,ignore
+    /// client
+    ///     .dry(0)
+    ///     .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+    ///     .rotate_tray(true)
+    ///     .send()
+    ///     .await?;
+    /// ```
     ///
-    /// [`Error::ModelMismatch`] on hosts where
-    /// [`supports_ams_remote_drying()`](Self::supports_ams_remote_drying) is `false` — the
-    /// printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
-    /// A1/A1 Mini or P1P/P1S, and below the minimum firmware on X1C/P2S/H2D/H2S/H2C. Such
-    /// firmware acks this command `result: success` and silently discards it rather than
-    /// actually driving the AMS heater; see `[REF-AMS-DRYER]`.
-    ///
-    /// [`Error::ModelMismatch`] also when the addressed unit is one this crate can see has no
-    /// drying chamber — an external-spool sentinel (`254`/`255`), or a cached
-    /// [`AmsUnitModel`] whose [`supports_drying`](AmsUnitModel::supports_drying) is `false`.
-    /// These are two independent gates on purpose, matching the pair BambuStudio writes out
-    /// longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
-    /// attached box must have a heater.
-    ///
-    /// [`Error::InvalidArgument`] when `temp` falls outside the unit's
-    /// [`dry_temp_range`](AmsUnitModel::dry_temp_range).
-    ///
-    /// The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
-    /// observed passes through — same rule as [`skip_objects`](Self::skip_objects), and for the
-    /// same reason: an idle printer's incremental pushes frequently carry no `ams` block at all,
-    /// and refusing there would break a caller that connects and commands without polling. Call
-    /// [`poll_telemetry()`](Self::poll_telemetry) first to arm the gate. When the unit is
-    /// unobserved the temperature range falls back to the `ams_id`-derived ceiling this method
-    /// used before, which is the best guess available from the address alone.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn start_drying(
+    /// Nothing is published until [`send()`](crate::client::DryingCycle::send), which is where
+    /// every gate runs — host capability, AMS addressing, the external-spool sentinels, the
+    /// attached unit's model, and the temperature range [REF-AMS-DRYER].
+    pub fn dry(
         &mut self,
         ams_id: i32,
-        temp: u32,
-        duration_hours: u32,
-        humidity: u32,
-        rotate_tray: bool,
-        cooling_temp: i32,
-        close_power_conflict: bool,
-        filament: &str,
-    ) -> Result<u16, Error> {
-        if !self.supports_ams_remote_drying() {
-            return Err(Error::ModelMismatch(
-                "AMS drying is screen-only on this host printer — firmware acks this command but does not act on it".into(),
-            ));
-        }
-        if !is_valid_ams_id(ams_id) {
-            return Err(Error::ProtocolViolation(
-                "invalid AMS addressing parameters for start_drying".into(),
-            ));
-        }
-        // An external spool is a holder on a bracket, not a box with a heater — the one place
-        // the address *does* settle the capability, since 254/255 never appear in the `ams`
-        // array for the cached lookup below to find.
-        if ams_id == 254 || ams_id == 255 {
-            return Err(Error::ModelMismatch(
-                "external spool has no drying chamber — start_drying needs an AMS 2 Pro or AMS-HT"
-                    .into(),
-            ));
-        }
-
-        let unit_model = self.cached_ams_unit_model(ams_id);
-        if let Some(model) = unit_model
-            && !model.supports_drying()
-        {
-            return Err(Error::ModelMismatch(
-                "attached AMS unit has no drying chamber — only the AMS 2 Pro and AMS-HT can dry"
-                    .into(),
-            ));
-        }
-
-        // `dry_temp_range()` is the authority when the unit is known. Unobserved, fall back to
-        // the address-derived ceiling — wrong for an original AMS or an AMS Lite at `0..=3`, but
-        // that is exactly the case the gate above cannot rule on either.
-        let (min_temp, max_temp) = unit_model.and_then(AmsUnitModel::dry_temp_range).unwrap_or(
-            if (128..=135).contains(&ams_id) {
-                (AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX)
-            } else {
-                (AMS_DRY_TEMP_MIN, AMS_STANDARD_DRY_TEMP_MAX)
-            },
-        );
-        if temp < min_temp || temp > max_temp {
-            return Err(Error::InvalidArgument(
-                format!(
-                    "AMS dry temperature {temp}°C outside this unit's {min_temp}-{max_temp}°C range"
-                )
-                .into(),
-            ));
-        }
-
-        self.dispatch(|seq| {
-            crate::mqtt::AmsFilamentDryingRequest::new(
-                ams_id,
-                1,
-                filament,
-                temp,
-                duration_hours,
-                humidity,
-                rotate_tray,
-                cooling_temp,
-                close_power_conflict,
-                seq,
-            )
-        })
-        .await
+    ) -> crate::client::DryingCycle<
+        '_,
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    > {
+        crate::client::DryingCycle::new(self, ams_id)
     }
 
     /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].

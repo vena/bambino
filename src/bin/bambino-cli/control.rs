@@ -528,16 +528,19 @@ pub async fn run(
                         id, temp, duration_hours
                     ),
                     "AMS drying command published successfully.",
-                    client.start_drying(
-                        id,
-                        temp,
-                        duration_hours,
-                        humidity,
-                        rotate,
-                        cooling_temp,
-                        close_power_conflict,
-                        &filament,
-                    ),
+                    // Every value passed explicitly: the CLI has its own flag defaults
+                    // (`--cooling-temp` defaults to 0, not the builder's 50), and letting the
+                    // builder's defaults apply here would silently change what the CLI sends.
+                    client
+                        .dry(id)
+                        .temp(temp)
+                        .duration_hours(duration_hours)
+                        .humidity(humidity)
+                        .rotate_tray(rotate)
+                        .cooling_temp(cooling_temp)
+                        .close_power_conflict(close_power_conflict)
+                        .filament(&filament)
+                        .send(),
                 )
                 .await?;
             }

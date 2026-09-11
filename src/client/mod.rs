@@ -19,6 +19,7 @@ mod ams;
 mod camera;
 pub mod capabilities;
 mod connect;
+pub mod drying;
 pub mod dummy;
 mod hardware;
 mod motion;
@@ -30,6 +31,7 @@ pub mod types;
 
 pub use capabilities::Capabilities;
 pub use connect::ConnectAllOutcome;
+pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
 pub use types::{

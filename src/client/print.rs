@@ -183,7 +183,7 @@ where
     /// The firmware accepts every option bit, acknowledges the command `"result": "success"`,
     /// and silently queues nothing for a routine the hardware doesn't run — so the wire never
     /// reports the skip. This method masks the request against
-    /// [`supported_calibration_mask()`](crate::quirks::QuirkStrategy::supported_calibration_mask)
+    /// [`supported_calibration_mask()`](crate::quirks::ModelQuirks::supported_calibration_mask)
     /// instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
     /// remaining routines still run.
     ///

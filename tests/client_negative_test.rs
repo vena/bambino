@@ -9,6 +9,8 @@ use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::PrintJobConfig;
+use bambino::types::DryingMaterial;
+use bambino::types::telemetry::AmsUnitModel;
 
 use common::client::connect_test_client;
 use common::mock_mqtt::{
@@ -513,7 +515,15 @@ async fn test_drying_lifecycle_wire_payload() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
 
     client
-        .start_drying(128, 55, 8, 0, true, 20, false, "PA-CF")
+        .dry(128)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PA-CF")
+        .send()
         .await
         .expect("start_drying failed");
     client.stop_drying(128).await.expect("stop_drying failed");
@@ -538,7 +548,15 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
     // caller's 0°C into the 45°C floor would start a heating cycle nobody asked for.
     for (ams_id, temp) in [(128, 200), (128, 20), (0, 200), (0, 20), (0, 0)] {
         let err = client
-            .start_drying(ams_id, temp, 8, 0, true, 20, false, "PA-CF")
+            .dry(ams_id)
+            .temp(temp)
+            .duration_hours(8)
+            .humidity(0)
+            .rotate_tray(true)
+            .cooling_temp(20)
+            .close_power_conflict(false)
+            .filament("PA-CF")
+            .send()
             .await
             .expect_err("start_drying must reject an out-of-range temperature");
         assert!(
@@ -549,7 +567,15 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
 
     // 85°C is in range for an AMS-HT but out of range for a standard-AMS address.
     let err = client
-        .start_drying(0, 85, 8, 0, true, 20, false, "PLA")
+        .dry(0)
+        .temp(85)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PLA")
+        .send()
         .await
         .expect_err("85°C must be rejected at a standard-AMS address");
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -597,7 +623,15 @@ async fn test_reported_fun2_overrides_the_model_rule() {
 
     assert!(client.supports_ams_remote_drying());
     client
-        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .dry(0)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PLA")
+        .send()
         .await
         .expect("a P1S reporting fun2 bit 5 must be allowed to dry");
 
@@ -640,9 +674,172 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
     assert!(!client.supports_ams_remote_drying());
     assert!(!client.capabilities().supports_ams_remote_drying());
     let err = client
-        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .dry(0)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PLA")
+        .send()
         .await
         .expect_err("a printer reporting fun2 bit 5 clear must be refused");
+    assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The builder's unset defaults are what reaches the wire, so they are pinned here rather than
+/// only described in doc comments. `cooling_temp` in particular defaults to BambuStudio's own
+/// fallback of 50 (`AMSDryControl.cpp:813`), not to zero.
+#[tokio::test]
+async fn test_dry_builder_defaults_reach_the_wire() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_filament_drying");
+        assert_eq!(json["print"]["temp"], 55);
+        assert_eq!(json["print"]["duration"], 8);
+        // Unset by the caller — these are the builder's defaults.
+        assert_eq!(json["print"]["humidity"], 0);
+        assert_eq!(json["print"]["rotate_tray"], false);
+        assert_eq!(json["print"]["cooling_temp"], 50);
+        assert_eq!(json["print"]["close_power_conflict"], false);
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    client
+        .dry(128)
+        .temp(55)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect("dry() with only temp and duration set must publish");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// `.material()` fills temperature, duration, cooling temperature and the filament name from one
+/// choice — the reason the builder exists. PETG on an AMS 2 Pro is 65 °C for 12 h idle, with a
+/// 60 °C softening temperature as the wire `cooling_temp`.
+#[tokio::test]
+async fn test_dry_builder_material_fills_four_fields() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["temp"], 65);
+        assert_eq!(json["print"]["duration"], 12);
+        assert_eq!(json["print"]["cooling_temp"], 60);
+        assert_eq!(json["print"]["filament"], "PETG");
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    client
+        .dry(128)
+        .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+        .send()
+        .await
+        .expect("material() must supply temp, duration, cooling_temp and filament");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// `.printing()` re-reads the lower while-printing column: PETG drops 65 -> 55 °C.
+#[tokio::test]
+async fn test_dry_builder_printing_column() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["temp"], 55);
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    client
+        .dry(128)
+        .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+        .printing(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+        .send()
+        .await
+        .expect("printing() must re-read the while-printing column");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// An unset temperature or duration is refused rather than defaulted. Picking one silently would
+/// start a real heating cycle nobody asked for, which is the same reasoning that made #234 reject
+/// out-of-range temperatures instead of clamping them.
+#[tokio::test]
+async fn test_dry_builder_refuses_unset_temp_or_duration() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    let err = client
+        .dry(128)
+        .duration_hours(8)
+        .send()
+        .await
+        .expect_err("an unset temperature must be refused");
+    assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+    let err = client
+        .dry(128)
+        .temp(55)
+        .send()
+        .await
+        .expect_err("an unset duration must be refused");
+    assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+    // A material with no parameters for this unit leaves them unset rather than guessing, so
+    // the same refusal applies — an AMS Lite has no drying chamber at all.
+    let err = client
+        .dry(0)
+        .material(DryingMaterial::Petg, AmsUnitModel::AmsLite)
+        .send()
+        .await
+        .expect_err("a material with no parameters for this unit must not publish a guess");
+    assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The builder inherits every gate, in the same order. A P1S refuses on host capability before
+/// anything else, so a fully-configured cycle still never reaches the wire.
+#[tokio::test]
+async fn test_dry_builder_inherits_the_gates() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+
+    let err = client
+        .dry(0)
+        .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+        .send()
+        .await
+        .expect_err("P1S is screen-only — the builder must refuse like start_drying did");
     assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
 
     drop(client);
@@ -678,7 +875,15 @@ async fn test_start_drying_refuses_heaterless_unit_once_observed() {
 
     // 55°C is inside the standard-AMS 45-65 range, so only the unit-model gate can reject this.
     let err = client
-        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .dry(0)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PLA")
+        .send()
         .await
         .expect_err("start_drying must refuse an original AMS — it has no heater");
     assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
@@ -717,7 +922,15 @@ async fn test_start_drying_allows_observed_ams_2_pro() {
         .expect("poll_telemetry failed");
 
     client
-        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .dry(0)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PLA")
+        .send()
         .await
         .expect("start_drying must be allowed on an observed AMS 2 Pro");
 
@@ -753,7 +966,15 @@ async fn test_start_drying_range_follows_observed_unit_not_address() {
 
     // 80°C would pass the address-derived 45-85 fallback and fails the observed unit's 45-65.
     let err = client
-        .start_drying(128, 80, 8, 0, true, 20, false, "PLA")
+        .dry(128)
+        .temp(80)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PLA")
+        .send()
         .await
         .expect_err("the observed AMS 2 Pro's 65°C ceiling must win over the AMS-HT address");
     assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
@@ -777,7 +998,15 @@ async fn test_start_drying_rejects_external_spool() {
     // 0..=3 case this needs no telemetry: the sentinels never appear in the `ams` array.
     for ams_id in [254, 255] {
         let err = client
-            .start_drying(ams_id, 55, 8, 0, true, 20, false, "PLA")
+            .dry(ams_id)
+            .temp(55)
+            .duration_hours(8)
+            .humidity(0)
+            .rotate_tray(true)
+            .cooling_temp(20)
+            .close_power_conflict(false)
+            .filament("PLA")
+            .send()
             .await
             .expect_err("start_drying must reject an external spool");
         assert!(matches!(err, Error::ModelMismatch(_)), "ams_id {ams_id}");
@@ -803,7 +1032,15 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
     // hardware. start_drying() must reject before dispatch rather than send a command the
     // printer will accept-then-drop.
     let err = client
-        .start_drying(0, 55, 8, 0, true, 20, false, "PA-CF")
+        .dry(0)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PA-CF")
+        .send()
         .await
         .expect_err("start_drying must reject on P1 (screen-only AMS drying)");
     assert!(matches!(err, Error::ModelMismatch(_)));
@@ -823,7 +1060,15 @@ async fn test_start_drying_rejects_invalid_ams_id() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
 
     let result = client
-        .start_drying(999, 55, 8, 0, true, 20, false, "PA-CF")
+        .dry(999)
+        .temp(55)
+        .duration_hours(8)
+        .humidity(0)
+        .rotate_tray(true)
+        .cooling_temp(20)
+        .close_power_conflict(false)
+        .filament("PA-CF")
+        .send()
         .await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 

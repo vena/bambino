@@ -21,8 +21,8 @@
 //! that a caller may never have made. A quirk reading `None` should fall back to its model
 //! default, not treat it as a denial.
 //!
-//! Build one from a client with [`PrinterClient::quirk_context`](crate::PrinterClient::quirk_context),
-//! or reach for [`PrinterClient::capabilities`](crate::PrinterClient::capabilities), which
+//! Build one from a client with [`PrinterClient::quirk_context`](crate::client::PrinterClient::quirk_context),
+//! or reach for [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which
 //! supplies it for you.
 
 use crate::types::PrinterTelemetry;

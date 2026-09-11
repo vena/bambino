@@ -49,7 +49,7 @@ pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
 /// **An unknown firmware version does not deny the capability** — it falls through to the
 /// model's own answer, and only a version actually read and found older refuses. `None` here
 /// means "nobody has asked this printer yet", never "the printer refused to say": a
-/// non-answering printer makes [`get_version`](crate::PrinterClient::get_version) return
+/// non-answering printer makes [`get_version`](crate::client::PrinterClient::get_version) return
 /// `Err(Error::Timeout)`, so the failure surfaces as an error rather than as a silent `None`.
 /// Denying on `None` would make an X1C's drying support depend on whether the caller happened to
 /// call `get_version()` first — invisible, order-dependent, and wrong in the direction that
@@ -290,7 +290,7 @@ pub trait ModelQuirks {
     ///   P1 manual is explicit ("P1S connected AMS drying functions may only be controlled from
     ///   the P1S screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533
     ///   (reporter saw `dry_status` stay `0` after three acked commands), and this crate's own
-    ///   `start_drying()` was tested against a P1S directly.
+    ///   drying command was tested against a P1S directly.
     /// * **X1C, P2S, H2D, H2S, H2C — firmware-gated.** The capability shipped in a specific
     ///   release; see each model's override for the version.
     /// * **Everything else — allowed.** Matching bambuddy's "all other models (H2D Pro, X1E,
@@ -299,7 +299,7 @@ pub trait ModelQuirks {
     ///
     /// Takes a [`QuirkContext`] rather than letting callers compose the answer, so there is one
     /// answer to this question and not two that can disagree — the failure #240 fixed. Prefer
-    /// [`PrinterClient::capabilities`](crate::PrinterClient::capabilities), which builds the
+    /// [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which builds the
     /// context from cached telemetry for you.
     fn supports_ams_remote_drying(&self, ctx: &QuirkContext) -> bool {
         reported_remote_dry(ctx).unwrap_or(true)

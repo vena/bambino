@@ -2,8 +2,8 @@
 //!
 //! Static per-material drying parameters, as the printer's own drying screen uses them.
 //!
-//! [`start_drying`](crate::PrinterClient::start_drying) takes a bare `filament: &str` and a
-//! `temp`, leaving a consumer to source both. This module is the vendor's own answer: one entry
+//! A drying cycle takes a free-form `filament` string and a `temp`, leaving a consumer to
+//! source both. This module is the vendor's own answer: one entry
 //! per naked material type, each carrying the temperature, duration and cooling temperature
 //! BambuStudio fills in when that material is picked.
 //!
@@ -29,9 +29,9 @@ use crate::types::telemetry::AmsUnitModel;
 ///
 /// **A convenience layer, not a replacement for the `&str` parameter.** The wire `dry_filament`
 /// field is free-form — BambuStudio sends the tray's own `filament_type` string — so
-/// [`start_drying`](crate::PrinterClient::start_drying) keeps taking an arbitrary `&str` and
-/// this enum stays open at the edges via [`from_filament_type`](Self::from_filament_type)
-/// returning `None`.
+/// [`DryingCycle::filament`](crate::client::DryingCycle::filament) keeps taking an arbitrary
+/// `&str` and this enum stays open at the edges via
+/// [`from_filament_type`](Self::from_filament_type) returning `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DryingMaterial {
     /// Polylactic acid.
@@ -110,7 +110,7 @@ impl DryingMaterial {
     /// profile — `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"` all resolve to [`Pa`](Self::Pa), because
     /// BambuStudio's own composite presets inherit their drying parameters from the base
     /// `fdm_filament_pa.json`. `None` for anything unrecognized, which is the case the free-form
-    /// `&str` parameter on `start_drying` exists to serve.
+    /// `&str` parameter on `DryingCycle::filament` exists to serve.
     #[must_use]
     pub fn from_filament_type(filament_type: &str) -> Option<Self> {
         let trimmed = filament_type.trim();
@@ -227,7 +227,7 @@ impl DryingMaterial {
     /// Temperature (°C) at which this material begins to soften
     /// (`filament_dev_drying_softening_temperature`).
     ///
-    /// Also the value to pass as `start_drying`'s `cooling_temp` — see
+    /// Also the value a drying cycle sends as its `cooling_temp` — see
     /// [`command_cooling_temp`](Self::command_cooling_temp).
     #[must_use]
     pub fn softening_temp(self) -> u32 {
@@ -243,7 +243,7 @@ impl DryingMaterial {
         }
     }
 
-    /// What to send as `start_drying`'s `cooling_temp` for this material.
+    /// What a drying cycle sends as its `cooling_temp` for this material.
     ///
     /// **The wire `cooling_temp` carries the *softening* temperature, not the profile's
     /// `filament_dev_drying_cooling_temperature`.** That second field exists and BambuStudio
@@ -354,7 +354,7 @@ mod tests {
     }
 
     /// Every published default must sit inside the hardware range the client enforces,
-    /// otherwise picking a vendor default would produce a command `start_drying` rejects.
+    /// otherwise picking a vendor default would produce a command `DryingCycle::send` rejects.
     #[test]
     fn test_every_default_temp_is_inside_the_unit_range() {
         for material in DryingMaterial::all() {
@@ -433,7 +433,7 @@ mod tests {
             );
         }
 
-        // Unrecognized input stays None — that is what the free-form `&str` on start_drying is
+        // Unrecognized input stays None — that is what the free-form `.filament(..)` escape hatch is
         // for, rather than guessing a material and its temperature.
         assert_eq!(DryingMaterial::from_filament_type("Unobtainium"), None);
         assert_eq!(DryingMaterial::from_filament_type(""), None);

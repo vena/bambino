@@ -3,7 +3,7 @@
 //! [`Capabilities`] answers "can this printer do X" with the client's own cached telemetry
 //! already supplied.
 //!
-//! A [`ModelQuirks`](crate::quirks::ModelQuirks) method that depends on what the machine
+//! A [`ModelQuirks`] method that depends on what the machine
 //! reported takes a [`QuirkContext`]. That is what keeps a single answer to each question — a
 //! caller cannot get a stale reading by forgetting to compose the report, because the context is
 //! required. The cost is that every such call needs a context built and threaded in, and the
@@ -15,19 +15,19 @@
 //!
 //! **Only context-taking quirks are forwarded here.** Everything a model answers on its own —
 //! build volume, fan layout, camera protocol — stays on
-//! [`PrinterClient::quirks()`](crate::PrinterClient::quirks), where no telemetry could change
+//! [`PrinterClient::quirks()`](crate::client::PrinterClient::quirks), where no telemetry could change
 //! the answer and a bare `&'static dyn ModelQuirks` is the honest shape.
 //!
 //! The context is a snapshot taken when the view is created. It reflects what the client had
 //! cached at that moment, so a `Capabilities` held across a
-//! [`poll_telemetry()`](crate::PrinterClient::poll_telemetry) goes stale — build a fresh one per
+//! [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry) goes stale — build a fresh one per
 //! question rather than storing it.
 
 use crate::quirks::{ModelQuirks, QuirkContext};
 
 /// Capability answers for one printer, with its cached telemetry already supplied.
 ///
-/// Created by [`PrinterClient::capabilities()`](crate::PrinterClient::capabilities). See the
+/// Created by [`PrinterClient::capabilities()`](crate::client::PrinterClient::capabilities). See the
 /// [module docs](self) for what is and isn't forwarded here.
 #[derive(Clone, Copy)]
 pub struct Capabilities<'a> {
@@ -62,17 +62,17 @@ impl<'a> Capabilities<'a> {
     /// Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
     /// supported on A1/A1 Mini and P1P/P1S, firmware-gated on X1C/P2S/H2D/H2S/H2C, allowed
     /// elsewhere. See
-    /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying)
+    /// [`ModelQuirks::supports_ams_remote_drying`]
     /// for the sourcing.
     ///
     /// **Gate UI on this rather than on a model check.** It is the same value
-    /// [`start_drying`](crate::PrinterClient::start_drying) tests, so a control offered on the
+    /// [`DryingCycle::send`](crate::client::DryingCycle::send) tests, so a control offered on the
     /// strength of it will not then be refused.
     ///
     /// On a firmware-gated model an unread version does **not** deny the capability — it falls
     /// back to the model's answer, and only a version actually read and found older refuses.
-    /// [`connect_mqtt()`](crate::PrinterClient::connect_mqtt) and
-    /// [`connect_all()`](crate::PrinterClient::connect_all) fetch the version for you, so a
+    /// [`connect_mqtt()`](crate::client::PrinterClient::connect_mqtt) and
+    /// [`connect_all()`](crate::client::PrinterClient::connect_all) fetch the version for you, so a
     /// normally-connected client has it; a caller relying on lazy connection gets the
     /// model-rule answer instead.
     #[must_use]
