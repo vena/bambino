@@ -5,8 +5,11 @@
 //! Also includes [`VersionInfo`] for firmware version queries and AMS/device
 //! sub-structures like [`AmsTray`], [`DeviceTelemetry`], and [`ExtruderInfo`].
 
+pub mod drying;
 pub mod telemetry;
 pub mod version;
+
+pub use drying::{DEFAULT_COMMAND_COOLING_TEMP, DryingMaterial};
 
 pub use telemetry::{
     AirductCollection, AirductModeListEntry, AirductPart, AmsDrySetting, AmsFilamentStep,
