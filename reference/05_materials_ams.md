@@ -103,7 +103,7 @@ Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` fiel
 
 | Bit Range | Mask | Field | Values |
 | :--- | :--- | :--- | :--- |
-| **0–3** | `0xF` | AMS unit type | e.g. `3` = AMS Lite |
+| **0–3** | `0xF` | AMS unit type | Which accessory is attached — see the table below. `3` = AMS 2 Pro, **not** AMS Lite (`2`) |
 | **4–7** | `0xF0` | Dry status | Drying cycle state |
 | **8–11** | `0xF00` | Extruder assignment | `0` = right/main, `1` = left/deputy, `0xE` = uninitialized |
 | **22–23** | `0xC00000` | Dry sub-status | Drying sub-state detail |
@@ -111,6 +111,30 @@ Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` fiel
 | **20–21** | `0x300000` | Dry fan 2 status | Drying fan 2 state (BUG-120; `DevFilaSystem.cpp:697`, `bambutools.py:686`) |
 | **24–27** | `0xF000000` | `bind_switch_in` | Filament Track Switch inlet this unit feeds. `0` = inlet In-B, `1` = inlet In-A, any other value = not bound |
 | **30–31** | `0xC0000000` | Remain-estimate version | Which filament-remaining estimation algorithm the unit reports (`DevAms::RemainEstimateVersion`; `0` = Legacy) |
+
+##### Unit-Type Nibble (bits 0–3)
+
+Bits 0–3 identify which physical accessory is plugged in. BambuStudio casts the nibble straight to its `DevAmsType` enum (`DevFilaSystem.cpp:598`, `type_id = (DevAmsType)DevUtil::get_flag_bits(info, 0, 4)`), enumerated at `DevDefs.h:54-62`:
+
+| Value | Unit | Slots | Dries |
+| :--- | :--- | :--- | :--- |
+| `0` | External spool / dummy | n/a | no |
+| `1` | Original 4-slot AMS | 4 | **no** |
+| `2` | AMS Lite (A1 series) | 4 | no |
+| `3` | AMS 2 Pro (BambuStudio `N3F`) | 4 | **yes**, 45–65 °C |
+| `4` | AMS-HT (BambuStudio `N3S`) | 1 | **yes**, 45–85 °C |
+| `5` | AMS Lite for N9 (`AMS_LITE_MIXED`) | varies | no |
+
+**This is the only field that answers "can this unit dry?" — `ams_id` cannot.** Addresses `0..=3` are shared by the original AMS, the AMS Lite and the AMS 2 Pro, and only the last has a heater. A drying command addressed by range rather than unit type reaches heaterless hardware, which acks nothing and leaves `dry_status` at `0`; BambuStudio gates on the type (`Widgets/AMSItem.hpp:255`, `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and so does bambuddy, by module-name prefix (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`). Exposed here as `AmsUnitModel` (`src/types/telemetry/ams.rs`) with `supports_drying()` and `dry_temp_range()`.
+
+Note that "standard" elsewhere in this chapter — the "Shared pool" bullet in §5.1 above especially — is **pool accounting only** and carries no capability implication. The original AMS and the AMS 2 Pro are both 4-slot units counting against the same pool while differing on whether they have a heater at all.
+
+##### Per-Unit Humidity (`humidity` and `humidity_raw`)
+
+Each unit object in `print.ams.ams[]` carries up to two humidity readings, parsed by BambuStudio at `DevFilaSystem.cpp:677-692`:
+
+*   **`humidity`** — a coarse level `1..=5`, present on every AMS including the original. **`1` is the wettest and `5` the driest** — the direction is inverted relative to what "higher is worse" intuition suggests, and a consumer that reads it as percentage-like gets the meaning backwards. BambuStudio's own level-to-icon mapping proves the direction (`AMSDryControl.cpp:22-38`: `humidity_percent <= 20` maps to level `5`, `> 80` to level `1`), and `DevFilaSystem.h:268` defaults `m_humidity_level = 5` for a unit with no reading. ha-bambulab inverts it for display (`models.py:747-748`, `6 - humidity_index`) with a comment saying the same.
+*   **`humidity_raw`** — integer percent, stored separately as BambuStudio's `m_humidity_percent`. Present on the units that also report chamber `temp`, and additionally firmware-gated per printer: ha-bambulab's `Features.AMS_HUMIDITY` requires A1 ≥ 01.06.10.33, P1 ≥ 01.07.50.18, X1 ≥ 01.08.50.18, and reports X1E as unsupported (`pybambu/models.py:275-284`).
 
 ##### `bind_switch_in` is four bits, not two (BUG-136)
 This field was previously documented here and in two places in `src/` as occupying bits **24–25**. That was wrong: BambuStudio reads `DevUtil::get_flag_bits(info, 24, 4)`, whose implementation is `(value >> start) & ((1 << count) - 1)` — four bits at offset 24, i.e. bits 24–27, mask `0xF000000`.
@@ -381,9 +405,22 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
 
 #### Dryer State Machine & Safety Interlocks
 *   **Heater Enablement**: The heater cannot be activated if any slot in the target unit reports a physical status code of `11` (Loaded). Filament must be fully retracted.
-*   **`dry_sf_reason` Flags**: The hardware control board returns a bitmask error list if safety conditions are not met:
-    *   `1`: Insufficient input voltage (unable to drive the heater element safely).
-    *   `8`: Secondary power plug is disconnected (for dual-plug auxiliary units).
+*   **`dry_sf_reason` Codes**: an array of independent integer reason codes explaining why a drying cycle will not or did not start. **Not a bitmask** — this doc previously described it as one and listed only codes `1` and `8`, whose reading as bit positions was a coincidence. It is an enumerated code list with nine members, which is why this crate parses it as `Option<Vec<i32>>` (`src/types/telemetry/ams.rs`). Enumerated by bambuddy (`backend/app/services/drying_preflight.py`, `DRY_SF_REASON_MESSAGES`):
+
+    | Code | Meaning | Clears |
+    | :--- | :--- | :--- |
+    | `0` | Printer is busy | on its own |
+    | `1` | Insufficient power: too many AMS drying, or external PSU required | **user** (power) |
+    | `2` | AMS is busy | on its own |
+    | `3` | Filament is at the AMS outlet, retract it first | **user** (retract) |
+    | `4` | AMS is already starting a drying cycle | on its own |
+    | `5` | Not supported in 2D mode | on its own |
+    | `6` | AMS is already drying | on its own |
+    | `7` | AMS firmware is upgrading | on its own |
+    | `8` | Plug in the external AMS power adapter to start drying | **user** (power) |
+
+    The "Clears" column is bambuddy's own split (`POWER_REASON_CODES = {1, 8}`, `RETRACT_REASON_CODE = 3`, everything else transient) and is the part that matters to a consumer: it decides between "retry in a moment" and "surface a message and stop". bambuddy also picks a single `primary_reason_code` to display when the firmware sets several at once.
+*   **Drying telemetry is capability-gated upstream.** BambuStudio reads `dry_status`, both dry-fan statuses, `dry_sub_status` and the whole `dry_setting` block only when the printer's own `is_support_remote_dry` bit is set (`DevFilaSystem.cpp:697`), and ha-bambulab restricts `dry_setting` to the P2 series and H2C (`Features.AMS_DRYING_SETTINGS`, `pybambu/models.py:297-301`). This crate parses them unconditionally as `Option`, which is the right shape — but a consumer must not expect them to be present on an X1 or P1.
 *   **Dry Duration Unit (`duration`)**: The command's `duration` parameter specifies the drying duration and is expressed in **hours** (e.g., an 8-hour cycle is serialized as `8`) — distinct from the *telemetry* `dry_time` field described below, which counts down in minutes.
 
 ##### Telemetry Edge-Triggering and Omitted Fields Quirk
