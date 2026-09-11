@@ -14,11 +14,13 @@ use std::time::Duration;
 use bambino::Error;
 use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
 use bambino::mqtt::AirductMode;
+use bambino::types::DryingMaterial;
+use bambino::types::telemetry::AmsUnitModel;
 use clap::{Subcommand, ValueEnum};
 
 use crate::error::CliError;
 
-use crate::connection::create_printer;
+use crate::connection::{Printer, create_printer};
 
 #[derive(Clone, ValueEnum, Debug)]
 pub enum FanTargetArg {
@@ -91,17 +93,39 @@ pub enum CalibrationArg {
 #[derive(Subcommand, Debug)]
 pub enum AmsAction {
     /// Start AMS drying cycle (duration is in hours, not minutes)
+    ///
+    /// Give `--material` to use Bambu's own published parameters for that filament, or set
+    /// `--temp` and `--duration-hours` yourself. Explicit flags override the material.
+    #[command(
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> --material <NAME> | --temp <C> --duration-hours <H>"
+    )]
     Dry {
         id: i32,
-        temp: u32,
-        duration_hours: u32,
-        #[arg(action = clap::ArgAction::Set, value_parser = clap::builder::BoolishValueParser::new())]
+        /// Filament material (PLA, PETG, ABS, PA-CF, ...). Fills temperature, duration and
+        /// cooling temperature from Bambu's published drying parameters for the attached unit.
+        #[arg(long)]
+        material: Option<String>,
+        /// Drying temperature in °C. Overrides --material.
+        #[arg(long)]
+        temp: Option<u32>,
+        /// Cycle duration in whole hours. Overrides --material.
+        #[arg(long)]
+        duration_hours: Option<u32>,
+        /// Filament type string sent on the wire. Defaults to --material's name; set this for a
+        /// material the table does not name.
+        #[arg(long)]
+        filament: Option<String>,
+        /// Rotate trays during the cycle
+        #[arg(long, default_value_t = false)]
         rotate: bool,
-        filament: String,
-        #[arg(long, default_value_t = 0)]
-        humidity: u32,
-        #[arg(long, default_value_t = 0)]
-        cooling_temp: i32,
+        /// Target humidity (0 = firmware default)
+        #[arg(long)]
+        humidity: Option<u32>,
+        /// Cooling temperature. Defaults to the material's softening temperature, else 50 —
+        /// BambuStudio's own fallback. Pass explicitly to override.
+        #[arg(long)]
+        cooling_temp: Option<i32>,
+        /// Override the AMS unit's power-conflict interlock
         #[arg(long, default_value_t = false)]
         close_power_conflict: bool,
     },
@@ -286,6 +310,130 @@ async fn dispatch<T>(
     let result = fut.await?;
     println!("{after_msg}");
     Ok(result)
+}
+
+/// Parsed `ams dry` flags, passed as one struct so `run()` stays readable.
+struct DryArgs {
+    id: i32,
+    material: Option<String>,
+    temp: Option<u32>,
+    duration_hours: Option<u32>,
+    rotate: bool,
+    filament: Option<String>,
+    humidity: Option<u32>,
+    cooling_temp: Option<i32>,
+    close_power_conflict: bool,
+}
+
+/// Resolves the attached AMS unit so a material's parameters can be read from the right column.
+///
+/// Bambu publishes different values per unit type — PA is 65 °C on an AMS 2 Pro and 85 °C on an
+/// AMS-HT — so the material cannot be applied without knowing which is plugged in. Reads the
+/// cached telemetry snapshot, polling once to populate it.
+///
+/// Falls back to the AMS 2 Pro column when the unit cannot be identified, matching bambuddy
+/// (`print_scheduler.py:3807`, `temp_key = module_type if module_type in ("n3f","n3s") else
+/// "n3f"`). That is also the lower of the two columns on every material where they differ, so an
+/// unidentified unit errs cool rather than hot — and the real ceiling is enforced by the drying
+/// gate regardless.
+async fn resolve_dry_unit(client: &mut Printer, ams_id: i32) -> AmsUnitModel {
+    // A failed poll is not fatal: the fallback below is a sound answer, and the drying gate
+    // still refuses anything the hardware would reject.
+    let _ = client.poll_telemetry().await;
+    client
+        .ams()
+        .and_then(|ams| {
+            ams.ams
+                .iter()
+                .find(|u| u.id.parse::<i32>() == Ok(ams_id))
+                .and_then(|u| u.unit_model())
+        })
+        .unwrap_or(AmsUnitModel::Ams2Pro)
+}
+
+/// Builds and sends an `ams dry` cycle.
+async fn run_dry(client: &mut Printer, args: DryArgs) -> Result<(), CliError> {
+    let DryArgs {
+        id,
+        material,
+        temp,
+        duration_hours,
+        rotate,
+        filament,
+        humidity,
+        cooling_temp,
+        close_power_conflict,
+    } = args;
+
+    let resolved = match material.as_deref() {
+        None => None,
+        Some(name) => match DryingMaterial::from_filament_type(name) {
+            Some(m) => Some(m),
+            None => {
+                let known: Vec<&str> = DryingMaterial::all()
+                    .iter()
+                    .map(|m| m.wire_name())
+                    .collect();
+                return Err(CliError::from(Error::InvalidArgument(
+                    format!(
+                        "unknown material '{name}'. Known: {}. For anything else, pass --temp and --duration-hours with --filament '{name}'.",
+                        known.join(", ")
+                    )
+                    .into(),
+                )));
+            }
+        },
+    };
+
+    // Only pay the poll when a material actually needs a column chosen.
+    let unit = match resolved {
+        Some(_) => resolve_dry_unit(client, id).await,
+        None => AmsUnitModel::Ams2Pro,
+    };
+
+    let mut cycle = client.dry(id).rotate_tray(rotate);
+    if let Some(m) = resolved {
+        cycle = cycle.material(m, unit);
+    }
+    // Explicit flags override the material; an unset flag keeps the material's value, or the
+    // builder's default when no material was given.
+    if let Some(t) = temp {
+        cycle = cycle.temp(t);
+    }
+    if let Some(h) = duration_hours {
+        cycle = cycle.duration_hours(h);
+    }
+    if let Some(f) = filament.as_deref() {
+        cycle = cycle.filament(f);
+    }
+    if let Some(h) = humidity {
+        cycle = cycle.humidity(h);
+    }
+    if let Some(c) = cooling_temp {
+        cycle = cycle.cooling_temp(c);
+    }
+    if close_power_conflict {
+        cycle = cycle.close_power_conflict(true);
+    }
+
+    let summary = match (resolved, temp, duration_hours) {
+        (Some(m), _, _) => format!(
+            "Starting AMS {id} drying cycle for {} ({unit:?} parameters)...",
+            m.wire_name()
+        ),
+        (None, Some(t), Some(h)) => {
+            format!("Starting AMS {id} drying cycle at {t}°C for {h} hours...")
+        }
+        _ => format!("Starting AMS {id} drying cycle..."),
+    };
+
+    dispatch(
+        &summary,
+        "AMS drying command published successfully.",
+        cycle.send(),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Dispatches a typed control action to the printer.
@@ -514,6 +662,7 @@ pub async fn run(
         ControlAction::Ams { action } => match action {
             AmsAction::Dry {
                 id,
+                material,
                 temp,
                 duration_hours,
                 rotate,
@@ -522,25 +671,19 @@ pub async fn run(
                 cooling_temp,
                 close_power_conflict,
             } => {
-                dispatch(
-                    &format!(
-                        "Starting AMS {} drying cycle at {}°C for {} hours...",
-                        id, temp, duration_hours
-                    ),
-                    "AMS drying command published successfully.",
-                    // Every value passed explicitly: the CLI has its own flag defaults
-                    // (`--cooling-temp` defaults to 0, not the builder's 50), and letting the
-                    // builder's defaults apply here would silently change what the CLI sends.
-                    client
-                        .dry(id)
-                        .temp(temp)
-                        .duration_hours(duration_hours)
-                        .humidity(humidity)
-                        .rotate_tray(rotate)
-                        .cooling_temp(cooling_temp)
-                        .close_power_conflict(close_power_conflict)
-                        .filament(&filament)
-                        .send(),
+                run_dry(
+                    &mut client,
+                    DryArgs {
+                        id,
+                        material,
+                        temp,
+                        duration_hours,
+                        rotate,
+                        filament,
+                        humidity,
+                        cooling_temp,
+                        close_power_conflict,
+                    },
                 )
                 .await?;
             }

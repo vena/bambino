@@ -1,6 +1,4 @@
 #[cfg(not(feature = "std"))]
-use alloc::format;
-#[cfg(not(feature = "std"))]
 use alloc::string::ToString;
 
 use crate::diagnostics::ExtrusionCaliGetResponse;
