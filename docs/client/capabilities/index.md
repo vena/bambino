@@ -75,12 +75,15 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   for the sourcing.
 
   **Gate UI on this rather than on a model check.** It is the same value
-  [`start_drying`](../index.md#printerclient) tests, so a control offered on the
+  `DryingCycle::send` tests, so a control offered on the
   strength of it will not then be refused.
 
-  For a firmware-gated model this reads `false` until
-  [`get_version()`](../index.md#printerclient) has been called — an unread version
-  cannot be shown to meet a minimum. Call it once after connecting if you intend to ask.
+  On a firmware-gated model an unread version does **not** deny the capability — it falls
+  back to the model's answer, and only a version actually read and found older refuses.
+  [`connect_mqtt()`](../index.md#printerclient) and
+  [`connect_all()`](../index.md#printerclient) fetch the version for you, so a
+  normally-connected client has it; a caller relying on lazy connection gets the
+  model-rule answer instead.
 
 #### Trait Implementations
 

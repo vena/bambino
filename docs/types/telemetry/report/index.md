@@ -516,7 +516,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Second capability bitfield (hex string), distinct from [`fun`](#printertelemetry).
   
   Carries the printer's own firmware capability flags — most importantly bit 5,
-  remote-dry support. Read via [`fun2_bit`](../index.md#fun2-bit) rather than directly:
+  remote-dry support. Read via [`fun2_bit`](../index.md#telemetryreport) rather than directly:
   BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
   reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
   integer the way `fun` is.

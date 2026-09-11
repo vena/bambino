@@ -26,6 +26,7 @@ The client applies model-aware safety checks automatically:
 | Item | Kind | Description |
 |------|------|-------------|
 | [`capabilities`](#capabilities) | mod | # Client-Scoped Capabilities |
+| [`drying`](drying/index.md) | mod | # Drying Cycle Builder |
 | [`dummy`](dummy/index.md) | mod | Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters. |
 | [`types`](#types) | mod | Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration). |
 | [`PrinterClient`](#printerclient) | struct | High-level client for controlling a Bambu Lab printer. |
@@ -33,6 +34,7 @@ The client applies model-aware safety checks automatically:
 ## Modules
 
 - [`capabilities`](capabilities/index.md#capabilities) — # Client-Scoped Capabilities
+- [`drying`](drying/index.md) — # Drying Cycle Builder
 - [`dummy`](dummy/index.md) — Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters.
 - [`types`](types/index.md#types) — Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration).
 
@@ -79,12 +81,15 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   for the sourcing.
 
   **Gate UI on this rather than on a model check.** It is the same value
-  [`start_drying`](#printerclient) tests, so a control offered on the
+  `DryingCycle::send` tests, so a control offered on the
   strength of it will not then be refused.
 
-  For a firmware-gated model this reads `false` until
-  [`get_version()`](#printerclient) has been called — an unread version
-  cannot be shown to meet a minimum. Call it once after connecting if you intend to ask.
+  On a firmware-gated model an unread version does **not** deny the capability — it falls
+  back to the model's answer, and only a version actually read and found older refuses.
+  [`connect_mqtt()`](#printerclient) and
+  [`connect_all()`](#printerclient) fetch the version for you, so a
+  normally-connected client has it; a caller relying on lazy connection gets the
+  model-rule answer instead.
 
 #### Trait Implementations
 
@@ -149,6 +154,149 @@ camera error is still visible instead of being swallowed or masking the success.
 ##### `impl Debug for ConnectAllOutcome`
 
 - <span id="connectalloutcome-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+### `DryingCycle<'a, MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>`
+
+```rust
+struct DryingCycle<'a, MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>
+where
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
+    Timer: TimerProvider,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    FtpsTimer: TimerProvider,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO> {
+    // [REDACTED: Private Fields]
+}
+```
+
+A drying cycle being configured, returned by [`PrinterClient::dry`](#printerclient).
+
+Nothing is sent until [`send()`](drying/index.md#dryingcycle), which runs the same validation the command
+always did — host capability, unit model, temperature range — and publishes.
+
+```rust,ignore
+client
+    .dry(0)
+    .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+    .rotate_tray(true)
+    .send()
+    .await?;
+```
+
+#### Implementations
+
+- <span id="dryingcycle-material"></span>`fn material(self, material: DryingMaterial, unit: AmsUnitModel) -> Self` — [`DryingMaterial`](../types/drying/index.md#dryingmaterial), [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel)
+
+  Fills temperature, duration, cooling temperature and the filament name from the vendor's
+  published parameters for `material` on `unit`.
+
+  Sets four fields at once, which is the whole reason this builder exists — the same choice
+  on a positional call means threading three numbers and a string into four of nine slots.
+
+  Assumes an idle printer. For a cycle that runs alongside a print, follow with
+  [`printing()`](drying/index.md#dryingcycle), which re-reads the lower while-printing column.
+
+  A material with no published parameters for this unit (any unit without a drying chamber)
+  leaves the values untouched, so [`send()`](drying/index.md#dryingcycle) still rejects rather than
+  publishing a guess.
+
+- <span id="dryingcycle-printing"></span>`fn printing(self, material: DryingMaterial, unit: AmsUnitModel) -> Self` — [`DryingMaterial`](../types/drying/index.md#dryingmaterial), [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel)
+
+  Re-reads the material's parameters from the while-printing column.
+
+  Only meaningful after [`material()`](drying/index.md#dryingcycle); on its own it does nothing, since
+  there is no material to re-read. The printing column is lower because the AMS sits in the
+  print's thermal envelope.
+
+- <span id="dryingcycle-temp"></span>`fn temp(self, temp: u32) -> Self`
+
+  Sets the drying temperature in °C, overriding any material default.
+
+- <span id="dryingcycle-duration-hours"></span>`fn duration_hours(self, hours: u32) -> Self`
+
+  Sets the cycle duration in whole hours, overriding any material default.
+
+- <span id="dryingcycle-filament"></span>`fn filament(self, filament: &str) -> Self`
+
+  Sets the filament type string sent as the wire `dry_filament` field.
+
+  Free-form by design — the wire field is arbitrary text and BambuStudio sends the tray's
+  own `filament_type`. Use this for a material [`DryingMaterial`](../types/drying/index.md#dryingmaterial) does not name.
+
+- <span id="dryingcycle-humidity"></span>`fn humidity(self, humidity: u32) -> Self`
+
+  Sets the target humidity. `0`, the default, means "firmware default / no target".
+
+- <span id="dryingcycle-rotate-tray"></span>`fn rotate_tray(self, rotate: bool) -> Self`
+
+  Whether to rotate trays during the cycle. Defaults to `false`.
+
+- <span id="dryingcycle-cooling-temp"></span>`fn cooling_temp(self, cooling_temp: i32) -> Self`
+
+  Sets the cooling temperature sent with the command.
+
+  Defaults to [`DEFAULT_COMMAND_COOLING_TEMP`](../types/drying/index.md#default-command-cooling-temp), and [`material()`](drying/index.md#dryingcycle) sets it
+  to that material's *softening* temperature — which is what the wire field actually
+  carries, despite the profiles also having a similarly-named
+  `filament_dev_drying_cooling_temperature` that BambuStudio never sends.
+
+- <span id="dryingcycle-close-power-conflict"></span>`fn close_power_conflict(self, close: bool) -> Self`
+
+  Whether to override the AMS unit's power-conflict interlock. Defaults to `false`.
+
+  The interlock exists because several drying units on one supply can exceed it; overriding
+  it is the caller asserting they know the power situation.
+
+- <span id="dryingcycle-send"></span>`async fn send(self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+
+  Validates and publishes the cycle, returning the command's sequence ID [REF-AMS-DRYER].
+
+  Every gate lives here — this is the only path that publishes `ams_filament_drying`, so it
+  is the only place a future check has to be added.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) when no temperature or duration was set. These deliberately
+  have no default: silently picking one would start a real heating cycle the caller never
+  asked for. Set them with [`material()`](drying/index.md#dryingcycle) or explicitly.
+
+  [`Error::ModelMismatch`](../error/index.md#error) on a host where
+  [`supports_ams_remote_drying()`](#printerclient) is `false` —
+  the printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
+  A1/A1 Mini or P1P/P1S, and below the minimum firmware on X1C/P2S/H2D/H2S/H2C. Such
+  firmware acks this command `result: success` and silently discards it rather than driving
+  the AMS heater.
+
+  [`Error::ModelMismatch`](../error/index.md#error) also when the addressed unit has no drying chamber — an
+  external-spool sentinel (`254`/`255`), or a cached
+  [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) whose [`supports_drying`](../types/telemetry/ams/index.md#amsunitmodel) is `false`.
+  These are two independent gates on purpose, matching the pair BambuStudio writes out
+  longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
+  attached box must have a heater.
+
+  [`Error::ProtocolViolation`](../error/index.md#error) for an `ams_id` outside the documented address space.
+
+  [`Error::InvalidArgument`](../error/index.md#error) when the temperature falls outside the unit's
+  [`dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel). **Both bounds are rejected, not
+  clamped**: BambuStudio refuses a temperature below the floor exactly as it refuses one
+  above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a caller's value
+  would start a heating cycle they did not ask for.
+
+  The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
+  observed passes through — the rule [`skip_objects`](#printerclient)
+  established, and for the same reason: an idle printer's incremental pushes frequently
+  carry no `ams` block at all, and refusing there would break a caller that connects and
+  commands without polling. Call [`poll_telemetry()`](#printerclient) first
+  to arm it. When the unit is unobserved the temperature range falls back to the
+  `ams_id`-derived ceiling, the best guess the address alone supports.
+
+#### Trait Implementations
 
 ### `CalibrationOption`
 
@@ -328,68 +476,39 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Whether this printer supports remote AMS drying — the printer-side half of the gate.
 
-  Supplies the cached `fun2` to
+  Supplies this client's [`quirk_context()`](#printerclient) to
   [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks),
-  which resolves the printer's own answer against the model default. This is the call to
-  gate a UI on: it is the identical value [`start_drying`](#printerclient) checks, so a
-  control offered on the strength of it cannot then be refused.
+  which resolves the printer's own reported answer against the model's rules. This is the
+  call to gate a UI on: it is the identical value a drying cycle's
+  `send()` checks, so a control offered on the strength
+  of it cannot then be refused.
 
   Shorthand for
   `capabilities().supports_ams_remote_drying()`;
   see there for how the answer is resolved and what has to be polled first.
 
-- <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-dry"></span>`fn dry(&mut self, ams_id: i32) -> crate::client::DryingCycle<'_, MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`DryingCycle`](drying/index.md#dryingcycle)
 
-  Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
+  Configures a drying cycle for the unit at `ams_id`, to be sent with
+  `send()`.
 
-  * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
-    `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`). The address alone does **not**
-    identify the unit: `0..=3` is shared by the original AMS, the AMS Lite and the AMS 2 Pro,
-    and only the last of those has a heater — the unit model comes from cached telemetry,
-    see Errors below.
-  * `temp`: Drying temperature in degrees Celsius. Must fall inside the attached unit's
-    [`AmsUnitModel::dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel) — `45..=65` for the AMS 2 Pro, `45..=85` for the
-    AMS-HT. This is a property of the *attached AMS unit*, not the host printer model
-    (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
-    `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
-    variation is documented, so this does not go through `ModelQuirks`). **Both bounds are
-    rejected, not clamped**: BambuStudio refuses a temperature below the floor exactly as it
-    refuses one above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a
-    caller's `0` into `45` would start a real heating cycle nobody asked for.
-  * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) —
-    the wire field is `duration` in hours, not the old `dry_time` in minutes. No
-    documented maximum duration was found to validate against.
-  * `humidity`: Target humidity (`0` = firmware default / no target).
-  * `rotate_tray`: Whether to rotate trays during the cycle.
-  * `cooling_temp`: Cooling temperature applied after the drying cycle completes.
-  * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
-  * `filament`: Filament type string (e.g., "PA-CF").
+  The way to start drying. Names each parameter at the call site instead of ordering nine
+  of them, defaults the four most callers don't set, and lets
+  `material()` fill temperature, duration and
+  cooling temperature from one choice:
 
-  # Errors
+  ```rust,ignore
+  client
+      .dry(0)
+      .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+      .rotate_tray(true)
+      .send()
+      .await?;
+  ```
 
-  [`Error::ModelMismatch`](../error/index.md#error) on hosts where
-  [`supports_ams_remote_drying()`](#printerclient) is `false` — the
-  printer's own `fun2` bit 5 when it has reported one, else the P1P/P1S quirk. Such
-  firmware acks this command `result: success` and silently discards it rather than
-  actually driving the AMS heater; see `[REF-AMS-DRYER]`.
-
-  [`Error::ModelMismatch`](../error/index.md#error) also when the addressed unit is one this crate can see has no
-  drying chamber — an external-spool sentinel (`254`/`255`), or a cached
-  [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) whose [`supports_drying`](../types/telemetry/ams/index.md#amsunitmodel) is `false`.
-  These are two independent gates on purpose, matching the pair BambuStudio writes out
-  longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
-  attached box must have a heater.
-
-  [`Error::InvalidArgument`](../error/index.md#error) when `temp` falls outside the unit's
-  [`dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel).
-
-  The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
-  observed passes through — same rule as [`skip_objects`](#printerclient), and for the
-  same reason: an idle printer's incremental pushes frequently carry no `ams` block at all,
-  and refusing there would break a caller that connects and commands without polling. Call
-  [`poll_telemetry()`](#printerclient) first to arm the gate. When the unit is
-  unobserved the temperature range falls back to the `ams_id`-derived ceiling this method
-  used before, which is the best guess available from the address alone.
+  Nothing is published until `send()`, which is where
+  every gate runs — host capability, AMS addressing, the external-spool sentinels, the
+  attached unit's model, and the temperature range [REF-AMS-DRYER].
 
 - <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -917,7 +1036,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The firmware accepts every option bit, acknowledges the command `"result": "success"`,
   and silently queues nothing for a routine the hardware doesn't run — so the wire never
   reports the skip. This method masks the request against
-  [`supported_calibration_mask()`](../quirks/index.md)
+  [`supported_calibration_mask()`](../quirks/index.md#modelquirks)
   instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
   remaining routines still run.
 

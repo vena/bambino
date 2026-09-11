@@ -2258,7 +2258,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Second capability bitfield (hex string), distinct from [`fun`](report/index.md#printertelemetry).
   
   Carries the printer's own firmware capability flags — most importantly bit 5,
-  remote-dry support. Read via [`fun2_bit`](#fun2-bit) rather than directly:
+  remote-dry support. Read via [`fun2_bit`](#telemetryreport) rather than directly:
   BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
   reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
   integer the way `fun` is.
@@ -2680,7 +2680,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   Merges a freshly-parsed `XcamTelemetry` into `self` field-by-field.
 
-  Mirrors `super::diagnostics::IpcamTelemetry::merge_from` and exists for the same reason:
+  Mirrors `IpcamTelemetry::merge_from` and exists for the same reason:
   a frame that carries only part of the object must not blank the rest of a cached copy.
   Present fields overwrite; absent ones leave the cached value alone. `extra` merges per key
   rather than being replaced, so an unmodeled key seen once survives later partial frames.

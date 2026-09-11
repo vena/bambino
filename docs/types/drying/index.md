@@ -8,8 +8,8 @@
 
 Static per-material drying parameters, as the printer's own drying screen uses them.
 
-[`start_drying`](../../client/index.md#printerclient) takes a bare `filament: &str` and a
-`temp`, leaving a consumer to source both. This module is the vendor's own answer: one entry
+A drying cycle takes a free-form `filament` string and a `temp`, leaving a consumer to
+source both. This module is the vendor's own answer: one entry
 per naked material type, each carrying the temperature, duration and cooling temperature
 BambuStudio fills in when that material is picked.
 
@@ -66,9 +66,9 @@ here is indexed the same way, via [`AmsUnitModel`](../telemetry/ams/index.md#ams
 
 **A convenience layer, not a replacement for the `&str` parameter.** The wire `dry_filament`
 field is free-form — BambuStudio sends the tray's own `filament_type` string — so
-[`start_drying`](../../client/index.md#printerclient) keeps taking an arbitrary `&str` and
-this enum stays open at the edges via [`from_filament_type`](#dryingmaterial)
-returning `None`.
+`DryingCycle::filament` keeps taking an arbitrary
+`&str` and this enum stays open at the edges via
+[`from_filament_type`](#dryingmaterial) returning `None`.
 
 #### Variants
 
@@ -154,7 +154,7 @@ returning `None`.
   profile — `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"` all resolve to [`Pa`](#dryingmaterial), because
   BambuStudio's own composite presets inherit their drying parameters from the base
   `fdm_filament_pa.json`. `None` for anything unrecognized, which is the case the free-form
-  `&str` parameter on `start_drying` exists to serve.
+  `&str` parameter on `DryingCycle::filament` exists to serve.
 
 - <span id="dryingmaterial-wire-name"></span>`fn wire_name(self) -> &'static str`
 
@@ -185,12 +185,12 @@ returning `None`.
   Temperature (°C) at which this material begins to soften
   (`filament_dev_drying_softening_temperature`).
 
-  Also the value to pass as `start_drying`'s `cooling_temp` — see
+  Also the value a drying cycle sends as its `cooling_temp` — see
   [`command_cooling_temp`](#dryingmaterial).
 
 - <span id="dryingmaterial-command-cooling-temp"></span>`fn command_cooling_temp(self) -> i32`
 
-  What to send as `start_drying`'s `cooling_temp` for this material.
+  What a drying cycle sends as its `cooling_temp` for this material.
 
   **The wire `cooling_temp` carries the *softening* temperature, not the profile's
   `filament_dev_drying_cooling_temperature`.** That second field exists and BambuStudio

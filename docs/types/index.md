@@ -1954,7 +1954,7 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Second capability bitfield (hex string), distinct from [`fun`](telemetry/report/index.md#printertelemetry).
   
   Carries the printer's own firmware capability flags — most importantly bit 5,
-  remote-dry support. Read via [`fun2_bit`](telemetry/index.md#fun2-bit) rather than directly:
+  remote-dry support. Read via [`fun2_bit`](telemetry/index.md#telemetryreport) rather than directly:
   BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
   reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
   integer the way `fun` is.
@@ -2646,7 +2646,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   Merges a freshly-parsed `XcamTelemetry` into `self` field-by-field.
 
-  Mirrors `super::diagnostics::IpcamTelemetry::merge_from` and exists for the same reason:
+  Mirrors `IpcamTelemetry::merge_from` and exists for the same reason:
   a frame that carries only part of the object must not blank the rest of a cached copy.
   Present fields overwrite; absent ones leave the cached value alone. `extra` merges per key
   rather than being replaced, so an unmodeled key seen once survives later partial frames.
@@ -2842,9 +2842,9 @@ here is indexed the same way, via [`AmsUnitModel`](telemetry/ams/index.md#amsuni
 
 **A convenience layer, not a replacement for the `&str` parameter.** The wire `dry_filament`
 field is free-form — BambuStudio sends the tray's own `filament_type` string — so
-[`start_drying`](../client/index.md#printerclient) keeps taking an arbitrary `&str` and
-this enum stays open at the edges via [`from_filament_type`](drying/index.md#dryingmaterial)
-returning `None`.
+`DryingCycle::filament` keeps taking an arbitrary
+`&str` and this enum stays open at the edges via
+[`from_filament_type`](drying/index.md#dryingmaterial) returning `None`.
 
 #### Variants
 
@@ -2930,7 +2930,7 @@ returning `None`.
   profile — `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"` all resolve to [`Pa`](drying/index.md#dryingmaterial), because
   BambuStudio's own composite presets inherit their drying parameters from the base
   `fdm_filament_pa.json`. `None` for anything unrecognized, which is the case the free-form
-  `&str` parameter on `start_drying` exists to serve.
+  `&str` parameter on `DryingCycle::filament` exists to serve.
 
 - <span id="dryingmaterial-wire-name"></span>`fn wire_name(self) -> &'static str`
 
@@ -2961,12 +2961,12 @@ returning `None`.
   Temperature (°C) at which this material begins to soften
   (`filament_dev_drying_softening_temperature`).
 
-  Also the value to pass as `start_drying`'s `cooling_temp` — see
+  Also the value a drying cycle sends as its `cooling_temp` — see
   [`command_cooling_temp`](drying/index.md#dryingmaterial).
 
 - <span id="dryingmaterial-command-cooling-temp"></span>`fn command_cooling_temp(self) -> i32`
 
-  What to send as `start_drying`'s `cooling_temp` for this material.
+  What a drying cycle sends as its `cooling_temp` for this material.
 
   **The wire `cooling_temp` carries the *softening* temperature, not the profile's
   `filament_dev_drying_cooling_temperature`.** That second field exists and BambuStudio

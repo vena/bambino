@@ -410,9 +410,15 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   printer's firmware, rather than acked `result: success` and silently discarded.
 
   Resolved in two stages. First, `ctx.fun2` bit 5 — the printer's own answer
-  (`DeviceManager.cpp:4469`) — wins whenever it is present, since a per-model rule is a
-  claim about every unit of that model while `fun2` is the machine in front of you
-  speaking. Second, when `fun2` is absent, the model's own rule decides.
+  (`DeviceManager.cpp:4469`) — wins where it is present, since a per-model rule is a claim
+  about every unit of that model while `fun2` is the machine in front of you speaking.
+  Second, when `fun2` is absent, the model's own rule decides.
+
+  **A1 and A1 Mini are the exception: they ignore the bit entirely.** Their `false` is a
+  fact about what hardware can be attached — no AMS 2 Pro or AMS-HT compatibility, so
+  there is no drying chamber to command — rather than a firmware capability the printer
+  could gain, and a firmware bit cannot conjure a heater. Every other model defers to a
+  reported bit in both directions.
 
   **The second stage is the one that usually runs.** Only BambuStudio reads `fun2` at all,
   and the P1 and A1 families send neither `fun` nor `fun2`
@@ -430,7 +436,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
     P1 manual is explicit ("P1S connected AMS drying functions may only be controlled from
     the P1S screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533
     (reporter saw `dry_status` stay `0` after three acked commands), and this crate's own
-    `start_drying()` was tested against a P1S directly.
+    drying command was tested against a P1S directly.
   * **X1C, P2S, H2D, H2S, H2C — firmware-gated.** The capability shipped in a specific
     release; see each model's override for the version.
   * **Everything else — allowed.** Matching bambuddy's "all other models (H2D Pro, X1E,

@@ -194,7 +194,7 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
   Merges a freshly-parsed `XcamTelemetry` into `self` field-by-field.
 
-  Mirrors `super::diagnostics::IpcamTelemetry::merge_from` and exists for the same reason:
+  Mirrors `IpcamTelemetry::merge_from` and exists for the same reason:
   a frame that carries only part of the object must not blank the rest of a cached copy.
   Present fields overwrite; absent ones leave the cached value alone. `extra` merges per key
   rather than being replaced, so an unmodeled key seen once survives later partial frames.
