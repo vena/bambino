@@ -17,6 +17,7 @@
 
 mod ams;
 mod camera;
+pub mod capabilities;
 mod connect;
 pub mod dummy;
 mod hardware;
@@ -27,6 +28,7 @@ mod telemetry;
 mod thermal;
 pub mod types;
 
+pub use capabilities::Capabilities;
 pub use connect::ConnectAllOutcome;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
 #[doc(inline)]
@@ -437,8 +439,53 @@ where
     /// bounds, fan/AMS predicates, etc.). `bed_temp_max()` additionally needs the printer's
     /// mains region, which lives on the client, not the model — see
     /// [`is_220v_power()`](Self::is_220v_power).
+    ///
+    /// This is the static strategy object: it knows the model and nothing about what this
+    /// printer has reported. Quirks whose answer depends on the machine's own report take a
+    /// [`QuirkContext`](crate::quirks::QuirkContext) and cannot be called from here without one
+    /// — use [`capabilities()`](Self::capabilities) for those, which supplies it from the cache.
     pub fn quirks(&self) -> &'static dyn crate::quirks::ModelQuirks {
         self.identity.model.quirks()
+    }
+
+    /// Builds a [`QuirkContext`](crate::quirks::QuirkContext) from this client's cached state.
+    ///
+    /// A snapshot of whatever has been observed so far: `fun`/`fun2` from the last telemetry
+    /// carrying them, and firmware from the last [`get_version()`](Self::get_version). Fields
+    /// never observed stay `None`, which quirks read as "the printer didn't say" rather than as
+    /// a denial.
+    ///
+    /// [`QuirkContext::telemetry`](crate::quirks::QuirkContext::telemetry) is left `None` here.
+    /// The client's cache stores extracted scalars rather than a whole `PrinterTelemetry`, so
+    /// there is no live report to hand over; the state-reading quirks are fed the `print` object
+    /// directly as it arrives, and their results are cached (see
+    /// [`is_door_open()`](Self::is_door_open)). Set it yourself when calling such a quirk against
+    /// a report you hold.
+    ///
+    /// Prefer [`capabilities()`](Self::capabilities) unless you need to hand the context to a
+    /// quirk directly — for instance to ask what a *different* model would answer given this
+    /// printer's report.
+    #[must_use]
+    pub fn quirk_context(&self) -> crate::quirks::QuirkContext<'_> {
+        crate::quirks::QuirkContext::empty()
+            .with_fun(self.cache.last_fun.as_deref())
+            .with_fun2(self.cache.last_fun2.as_deref())
+            .with_firmware(self.cache.last_firmware.as_deref())
+    }
+
+    /// Capability answers for this printer, with its cached telemetry already supplied.
+    ///
+    /// The entry point for "can this printer do X" — `client.capabilities().foo()` needs no
+    /// arguments and resolves against what the machine has actually reported, where
+    /// `client.quirks().foo(..)` would make you assemble the context yourself. See
+    /// [`Capabilities`] for which questions are answered here and which stay on
+    /// [`quirks()`](Self::quirks).
+    ///
+    /// Cheap to build and a snapshot of the cache, so call it per question rather than holding
+    /// one across a [`poll_telemetry()`](Self::poll_telemetry).
+    #[must_use]
+    pub fn capabilities(&self) -> Capabilities<'_> {
+        Capabilities::new(self.quirks(), self.quirk_context())
     }
 
     /// Returns direct access to the underlying [`MqttClient`], auto-connecting if needed.

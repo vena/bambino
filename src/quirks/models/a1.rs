@@ -77,6 +77,17 @@ macro_rules! impl_a1_shared {
                 false
             }
 
+            /// Never: the A1 series has no AMS 2 Pro or AMS-HT compatibility, so there is no
+            /// drying chamber to command. bambuddy lists A1 and A1 Mini in
+            /// `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py:223`) for the same reason.
+            ///
+            /// Unconditional rather than `fun2`-first: this is a hardware fact about what can
+            /// be attached, not a firmware capability the printer could gain, so a reported bit
+            /// would not change the answer. The A1 family sends no `fun2` in any case.
+            fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext) -> bool {
+                false
+            }
+
             fn is_bed_on_z(&self) -> bool {
                 false
             }

@@ -53,8 +53,37 @@ fn h2_has_door_sensor_field(telemetry: &PrinterTelemetry) -> bool {
     telemetry.stat.is_some()
 }
 
+/// Firmware release that introduced remote AMS drying on the H2D.
+///
+/// From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:212`). Higher than its H2S/H2C
+/// siblings, which is upstream's value, not a transcription slip.
+pub const H2D_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.30.00";
+
+/// Firmware release that introduced remote AMS drying on the H2S and H2C.
+///
+/// From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:213-216`), listed under `H2S`,
+/// `H2C` and the H2C SSDP codes `O1C`/`O1C2`.
+pub const H2S_H2C_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.00.00";
+
+/// Builds a firmware-gated remote-drying rule for one H2 variant.
+macro_rules! h2_remote_dry_gated {
+    ($min_firmware:expr) => {
+        |ctx: &crate::quirks::QuirkContext| {
+            crate::quirks::remote_dry_from_firmware(ctx, $min_firmware)
+        }
+    };
+}
+
+/// H2D Pro is deliberately **not** firmware-gated — bambuddy's table omits it and its docstring
+/// names it explicitly among the models that fall through to "allowed"
+/// (`printer_manager.py:334`). Inventing a threshold no upstream states would be worse than
+/// letting the printer answer for itself.
+fn h2d_pro_supports_remote_drying(ctx: &crate::quirks::QuirkContext) -> bool {
+    crate::quirks::reported_remote_dry(ctx).unwrap_or(true)
+}
+
 macro_rules! impl_h2_shared {
-    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr, $uses_rack:expr) => {
+    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr, $uses_rack:expr, $remote_dry_fn:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -110,6 +139,10 @@ macro_rules! impl_h2_shared {
                 $offset_cal
             }
 
+            fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext) -> bool {
+                $remote_dry_fn(ctx)
+            }
+
             fn is_bed_on_z(&self) -> bool {
                 true
             }
@@ -153,7 +186,16 @@ macro_rules! impl_h2_shared {
     };
 }
 
-impl_h2_shared!(H2SQuirks, 1, false, H2S_Z_MAX, H2S_X_MAX, H2S_Y_MAX, false);
+impl_h2_shared!(
+    H2SQuirks,
+    1,
+    false,
+    H2S_Z_MAX,
+    H2S_X_MAX,
+    H2S_Y_MAX,
+    false,
+    h2_remote_dry_gated!(H2S_H2C_MIN_REMOTE_DRY_FIRMWARE)
+);
 impl_h2_shared!(
     H2DQuirks,
     2,
@@ -161,7 +203,8 @@ impl_h2_shared!(
     H2_DUAL_Z_MAX,
     H2_DUAL_X_MAX,
     H2_DUAL_Y_MAX,
-    false
+    false,
+    h2_remote_dry_gated!(H2D_MIN_REMOTE_DRY_FIRMWARE)
 );
 impl_h2_shared!(
     H2DProQuirks,
@@ -170,7 +213,8 @@ impl_h2_shared!(
     H2_DUAL_Z_MAX,
     H2_DUAL_X_MAX,
     H2_DUAL_Y_MAX,
-    false
+    false,
+    h2d_pro_supports_remote_drying
 );
 impl_h2_shared!(
     H2CQuirks,
@@ -179,5 +223,6 @@ impl_h2_shared!(
     H2_DUAL_Z_MAX,
     H2_DUAL_X_MAX,
     H2_DUAL_Y_MAX,
-    true
+    true,
+    h2_remote_dry_gated!(H2S_H2C_MIN_REMOTE_DRY_FIRMWARE)
 );

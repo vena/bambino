@@ -60,6 +60,25 @@ pub struct VersionInfo {
     pub module: Vec<VersionModule>,
 }
 
+impl VersionInfo {
+    /// The printer's own firmware version — `module[name == "ota"].sw_ver`.
+    ///
+    /// The `ota` module is the main controller firmware, which is what version-gated
+    /// capabilities are expressed against; the other modules report their own independent
+    /// versions (`mc`, `esp32`, per-AMS entries) and are not interchangeable with it. bambuddy
+    /// reads the same module for the same purpose (`bambu_mqtt.py:998`, "Firmware version info
+    /// (from info.module[name=\"ota\"].sw_ver)").
+    ///
+    /// `None` when no `ota` module is present in the response.
+    #[must_use]
+    pub fn firmware_version(&self) -> Option<&str> {
+        self.module
+            .iter()
+            .find(|m| m.name == "ota")
+            .map(|m| m.sw_ver.as_str())
+    }
+}
+
 /// Wire-level JSON wrapper for the `get_version` response.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg(test)]

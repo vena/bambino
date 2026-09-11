@@ -78,6 +78,12 @@ pub(crate) struct TelemetryCache {
     // The `fun2` capability bitfield arrives on pushall and is absent from most incremental
     // frames, so it needs the same caching `xcam` does to be readable on a command path.
     pub(crate) last_fun2: Option<String>,
+    // `fun` likewise. Cached for the quirk context rather than for developer-mode detection,
+    // which reads it straight off a fresh report.
+    pub(crate) last_fun: Option<String>,
+    // The OTA firmware version, from a `get_version` round trip rather than from telemetry —
+    // several capabilities are gated on it, and a caller should not have to re-query per check.
+    pub(crate) last_firmware: Option<String>,
 }
 
 impl<
@@ -177,9 +183,12 @@ where
                 None => self.cache.last_device = Some(device.clone()),
             }
         }
-        // Read before the `print` early-return: `fun2()` checks the top level too.
+        // Read before the `print` early-return: both accessors check the top level too.
         if let Some(fun2) = report.fun2() {
             self.cache.last_fun2 = Some(fun2.to_string());
+        }
+        if let Some(fun) = report.fun() {
+            self.cache.last_fun = Some(fun.to_string());
         }
         let Some(print) = report.print.as_ref() else {
             return;

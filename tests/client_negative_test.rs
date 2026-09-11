@@ -558,10 +558,15 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
     broker_task.await.expect("Broker task panicked");
 }
 
-/// A P1S reporting `fun2` bit 5 set is taken at its word over the quirk table's hardcoded
-/// `false`. The quirk is a per-model default; `fun2` is the machine answering for itself.
+/// A reported `fun2` bit 5 outranks the model's own rule, end to end through the client.
+///
+/// **The payload here is synthetic and no P1S produces it.** The P1 family sends neither `fun`
+/// nor `fun2` (#241, `reference/03_mqtt_telemetry.md`), so this does not document P1S behavior —
+/// it exercises the precedence rule using the model whose rule is most strongly `false`, which
+/// makes an override the clearest possible signal. Read it as "a reported bit wins", not as
+/// "a P1S can report this".
 #[tokio::test]
-async fn test_reported_fun2_overrides_the_quirk_default() {
+async fn test_reported_fun2_overrides_the_model_rule() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{}/report", SERIAL);
 
@@ -582,8 +587,7 @@ async fn test_reported_fun2_overrides_the_quirk_default() {
     });
 
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
-    // With nothing reported, the P1S model default still stands.
-    assert!(!client.quirks().supports_ams_remote_drying(None));
+    // Before any telemetry, the P1S screen-only rule stands.
     assert!(!client.supports_ams_remote_drying());
 
     client
@@ -620,17 +624,21 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
     });
 
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
-    assert!(client.quirks().supports_ams_remote_drying(None));
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry failed");
 
-    // The quirk and the client agree once both see the same reported value — there is one
-    // answer to this question now, not two that can disagree (#240).
-    assert!(!client.quirks().supports_ams_remote_drying(Some("00")));
+    // There is one answer to this question, not two that can disagree (#240): asking the quirk
+    // directly with the client's own context gives the same result as the client shorthand.
+    assert!(
+        !client
+            .quirks()
+            .supports_ams_remote_drying(&client.quirk_context())
+    );
     assert!(!client.supports_ams_remote_drying());
+    assert!(!client.capabilities().supports_ams_remote_drying());
     let err = client
         .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
         .await

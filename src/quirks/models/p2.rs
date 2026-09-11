@@ -13,6 +13,12 @@ pub const P2S_NOZZLE_TEMP_MAX: u16 = 300;
 /// Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const P2S_BED_TEMP_MAX: u16 = 110;
 
+/// Firmware release that introduced remote AMS drying on the P2S.
+///
+/// From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:219-220`), which lists the same
+/// version under `P2S` and under `N7`, the P2S's internal model code.
+pub const P2S_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.00.00";
+
 /// Quirks for the P2S CoreXY platform.
 pub struct P2Quirks;
 
@@ -92,6 +98,13 @@ impl ModelQuirks for P2Quirks {
 
     fn supports_nozzle_offset_calibration(&self) -> bool {
         false
+    }
+
+    /// Firmware-gated from `01.02.00.00`, per bambuddy's `_DRYING_MIN_FIRMWARE`
+    /// (`printer_manager.py:219-220`, listed under both `P2S` and its internal model code `N7`).
+    /// A reported `fun2` bit 5 still wins when present.
+    fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext) -> bool {
+        crate::quirks::remote_dry_from_firmware(ctx, P2S_MIN_REMOTE_DRY_FIRMWARE)
     }
 
     fn is_bed_on_z(&self) -> bool {

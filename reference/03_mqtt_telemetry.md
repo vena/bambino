@@ -214,6 +214,20 @@ Developer LAN Mode is evaluated via the `fun` telemetry field bit `0x20000000` (
 
 Depending on the active firmware track and message type, the `"fun"` key drifts within the JSON telemetry payload. On certain firmware versions, it is provided directly at the root level (`payload["fun"]`), whereas on others it is nested within the `"print"` object (`payload["print"]["fun"]`). Evaluating systems must sequentially inspect both JSON paths to retrieve the field.
 
+#### The Second Capability Bitfield (`fun2`)
+
+`print.fun2` is a separate hex capability string, distinct from `fun`. BambuStudio reads both in the same update block (`DeviceManager.cpp:4429-4479`) and notes that `fun2` "may have infinite length", reading it with a no-border bit extractor — so it must not be parsed into a fixed-width integer the way `fun` is. Bit `5` is `is_support_remote_dry`, the printer's own answer to whether it honors `ams_filament_drying` (see `05_materials_ams.md` §5.4). Other bits BambuStudio reads: `0` print with eMMC, `3` PA mode, `6` update-remain hide display, `7` print TPU from left extruder, `8` active arc fitting, `17` model internal storage, `19` check track-switch matches sliced printer, `21`–`22` AMS preload version, `23` filament manual multi-color.
+
+**Single-source.** Only BambuStudio reads `fun2`. bambuddy parses `fun` for the developer-mode bit alone and does not parse `fun2` in any form; ha-bambulab likewise. This does not meet this project's two-upstream confirmation bar, so treat the bit meanings above as BambuStudio's account rather than as settled.
+
+##### Capability Bitfields Are Absent on P1 and A1
+
+**Neither `fun` nor `fun2` appears in P1/A1 telemetry at all** — the same omission the probing protocol below was built for, and it applies to every capability bit, not just Developer LAN Mode. Confirmed against `tests/mocks/P1S.json`, a `push_status` fixture with 63 `print` keys (a full state dump, not an incremental frame) carrying neither field, and against `tests/mocks/P1S_print_sequence.ndjson` (342 frames, same result). bambuddy documents the same family trait independently (`bambu_mqtt.py:1420`, "when the `fun` field is absent (A1/P1 printers)").
+
+Consequence for any capability gate: on these families a consumer gets no reported answer and must fall back to a per-model default. A design that prefers the reported bit is correct but **inert** on P1/A1 — it cannot change the outcome there until firmware begins emitting the field. Do not describe such a gate as self-correcting on P1/A1 hardware without a capture showing the field present.
+
+`home_flag` is the capability-shaped field these families *do* send, and it carries some overlapping bits (see §3.2.1) — but see the caution there about bits the vendor's own client distrusts.
+
 #### A1 and P1 Series Hardware Probing Protocol
 On ESP32-based RTOS hardware lines (P1 and A1 series) where the `fun` field is omitted from telemetry, LAN Developer Mode is verified by attempting a non-destructive publish transaction.
 

@@ -152,16 +152,12 @@ where
     /// gate a UI on: it is the identical value [`start_drying`](Self::start_drying) checks, so a
     /// control offered on the strength of it cannot then be refused.
     ///
-    /// `fun2` arrives on pushall, so a client that has never called
-    /// [`poll_telemetry()`](Self::poll_telemetry) holds `None` here and gets the model default —
-    /// on a P1 that means a `false` its firmware may no longer deserve. Poll first if the
-    /// distinction matters.
+    /// Shorthand for
+    /// [`capabilities().supports_ams_remote_drying()`](crate::client::Capabilities::supports_ams_remote_drying);
+    /// see there for how the answer is resolved and what has to be polled first.
     #[must_use]
     pub fn supports_ams_remote_drying(&self) -> bool {
-        self.identity
-            .model
-            .quirks()
-            .supports_ams_remote_drying(self.cache.last_fun2.as_deref())
+        self.capabilities().supports_ams_remote_drying()
     }
 
     /// Looks up the cached [`AmsUnitModel`] for the unit at `ams_id`, if one has been observed.
@@ -439,6 +435,14 @@ where
 
         match result {
             Err(_) if parse_failed => Err(Error::Serialization),
+            Ok(info) => {
+                // Cache the OTA version for the quirk context — several capabilities are gated
+                // on it, and a caller should not have to re-query per check.
+                if let Some(firmware) = info.firmware_version() {
+                    self.cache.last_firmware = Some(firmware.to_string());
+                }
+                Ok(info)
+            }
             other => other,
         }
     }

@@ -57,8 +57,30 @@ fn x1e_bed_temp_max(_mains_220v: Option<bool>) -> u16 {
     X1E_BED_TEMP_MAX
 }
 
+/// Firmware release that introduced remote AMS drying on the X1C.
+///
+/// From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:217-218`), which lists this
+/// version under both `X1` and `X1C`. Notably later than the H2/P2 thresholds — the X1 platform
+/// gained the capability well after the newer machines shipped with it.
+pub const X1C_MIN_REMOTE_DRY_FIRMWARE: &str = "01.09.00.00";
+
+/// X1C gained remote AMS drying in a specific firmware release; a reported `fun2` bit still wins.
+fn x1c_supports_remote_drying(ctx: &crate::quirks::QuirkContext) -> bool {
+    crate::quirks::remote_dry_from_firmware(ctx, X1C_MIN_REMOTE_DRY_FIRMWARE)
+}
+
+/// X1E is deliberately **not** firmware-gated.
+///
+/// bambuddy's table omits it and its docstring names X1E explicitly among the models that fall
+/// through to "allowed" (`printer_manager.py:334`). Extrapolating the X1C threshold onto the X1E
+/// would invent a restriction no upstream states, so this follows the trait default: allow, and
+/// let the printer answer `result: "fail"` if it cannot.
+fn x1e_supports_remote_drying(ctx: &crate::quirks::QuirkContext) -> bool {
+    crate::quirks::reported_remote_dry(ctx).unwrap_or(true)
+}
+
 macro_rules! impl_x1_shared {
-    ($quirks_type:ty, $chamber_heater_max:expr, $nozzle_max:expr, $bed_max_fn:expr) => {
+    ($quirks_type:ty, $chamber_heater_max:expr, $nozzle_max:expr, $bed_max_fn:expr, $remote_dry_fn:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -104,6 +126,10 @@ macro_rules! impl_x1_shared {
                 false
             }
 
+            fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext) -> bool {
+                $remote_dry_fn(ctx)
+            }
+
             fn is_bed_on_z(&self) -> bool {
                 true
             }
@@ -135,10 +161,17 @@ macro_rules! impl_x1_shared {
     };
 }
 
-impl_x1_shared!(X1CQuirks, None, X1C_NOZZLE_TEMP_MAX, x1c_bed_temp_max);
+impl_x1_shared!(
+    X1CQuirks,
+    None,
+    X1C_NOZZLE_TEMP_MAX,
+    x1c_bed_temp_max,
+    x1c_supports_remote_drying
+);
 impl_x1_shared!(
     X1EQuirks,
     Some(X1E_CHAMBER_TEMP_MAX),
     X1E_NOZZLE_TEMP_MAX,
-    x1e_bed_temp_max
+    x1e_bed_temp_max,
+    x1e_supports_remote_drying
 );

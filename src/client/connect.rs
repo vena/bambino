@@ -150,7 +150,38 @@ where
     ///
     /// Idempotent — returns `Ok(())` if already connected.
     pub async fn connect_mqtt(&mut self) -> Result<(), Error> {
-        self.ensure_mqtt().await
+        self.ensure_mqtt().await?;
+        self.prime_firmware_version().await;
+        Ok(())
+    }
+
+    /// Fetches and caches the printer's firmware version, ignoring failure.
+    ///
+    /// Several capabilities are gated on a minimum firmware release
+    /// ([`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying)
+    /// and anything added beside it), and the version is connection-establishment data the same
+    /// way the initial pushall is — bambuddy requests it from its own connect handler, next to
+    /// `_request_push_all()` (`bambu_mqtt.py:1727-1729`). Doing it here means a connected client
+    /// can answer capability questions without the caller knowing to ask for a version first.
+    ///
+    /// **Deliberately non-fatal.** A printer that never answers `get_version` still has a
+    /// perfectly usable MQTT session, and failing the connect over an optional capability lookup
+    /// would turn a missing nicety into an outage. The cached version simply stays `None`, which
+    /// quirks read as "not asked" and resolve from their model rules — see
+    /// [`remote_dry_from_firmware`](crate::quirks) for why that is the safe direction.
+    ///
+    /// Only the explicit connect paths call this. A caller relying on lazy connect — where
+    /// `ensure_mqtt()` runs inside some other command — never pays this round trip, and gets the
+    /// model-rule answer instead.
+    pub(crate) async fn prime_firmware_version(&mut self) {
+        if self.cache.last_firmware.is_some() {
+            return;
+        }
+        if let Err(e) = self.get_version().await {
+            log::debug!(
+                "get_version during connect failed ({e:?}); firmware-gated capabilities will use model rules"
+            );
+        }
     }
 
     /// Returns whether the MQTT session is currently established.
@@ -657,6 +688,12 @@ where
                 Some(Ok(()))
             }
         };
+
+        // Only once the MQTT session is installed — `prime_firmware_version` publishes, and
+        // it is non-fatal, so a failure here leaves the outcome above untouched.
+        if matches!(mqtt, Some(Ok(()))) {
+            self.prime_firmware_version().await;
+        }
 
         ConnectAllOutcome { mqtt, ftps, camera }
     }
