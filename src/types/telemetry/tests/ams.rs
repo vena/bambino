@@ -350,8 +350,119 @@ fn test_ams_unit_info_bitmask() {
     // Call the real accessors instead of hand-rolling the same bit math here — a
     // regression in ams_type()/extruder_assignment()'s shift/mask constants wouldn't have been
     // caught by this test recomputing the expected value independently.
-    assert_eq!(unit.ams_type(), Some(3)); // AMS Lite type
+    assert_eq!(unit.ams_type(), Some(3));
+    // Type 3 is an AMS 2 Pro (BambuStudio `DevAmsType::N3F`), not an AMS Lite — that is `2`. The
+    // earlier comment here said AMS Lite, which is also what the doc comment on ams_type() used
+    // to claim; asserting through the typed accessor makes the claim checkable instead of prose.
+    assert_eq!(unit.unit_model(), Some(AmsUnitModel::Ams2Pro));
     assert_eq!(unit.extruder_assignment(), Some(1)); // Left/deputy extruder
+}
+
+#[test]
+fn test_ams_unit_model_decodes_every_known_wire_type() {
+    // Numbering is BambuStudio's `DevAmsType` (DevDefs.h:54-62), cast straight from info bits 0-3.
+    for (wire, expected) in [
+        (0, AmsUnitModel::ExternalSpool),
+        (1, AmsUnitModel::Ams),
+        (2, AmsUnitModel::AmsLite),
+        (3, AmsUnitModel::Ams2Pro),
+        (4, AmsUnitModel::AmsHt),
+        (5, AmsUnitModel::AmsLiteMixed),
+    ] {
+        assert_eq!(
+            AmsUnitModel::from_wire(wire),
+            Some(expected),
+            "wire type {wire} decoded wrong"
+        );
+    }
+
+    // An unknown type must not be folded onto a neighbouring variant — a wrong guess here is how
+    // a drying command reaches a unit with no heater.
+    for wire in 6..=0xF {
+        assert_eq!(AmsUnitModel::from_wire(wire), None, "wire type {wire}");
+    }
+}
+
+#[test]
+fn test_ams_unit_model_drying_capability_matches_upstream() {
+    // Only the AMS 2 Pro and AMS-HT have heaters: BambuStudio AMSItem.hpp:255 and bambuddy
+    // print_scheduler.py:3976 both gate on exactly these two.
+    assert!(AmsUnitModel::Ams2Pro.supports_drying());
+    assert!(AmsUnitModel::AmsHt.supports_drying());
+    for model in [
+        AmsUnitModel::ExternalSpool,
+        AmsUnitModel::Ams,
+        AmsUnitModel::AmsLite,
+        AmsUnitModel::AmsLiteMixed,
+    ] {
+        assert!(!model.supports_drying(), "{model:?} must not claim drying");
+        assert_eq!(model.dry_temp_range(), None, "{model:?}");
+    }
+
+    // Both bounds, not just the ceiling — BambuStudio rejects sub-45 °C as well.
+    assert_eq!(AmsUnitModel::Ams2Pro.dry_temp_range(), Some((45, 65)));
+    assert_eq!(AmsUnitModel::AmsHt.dry_temp_range(), Some((45, 85)));
+}
+
+#[test]
+fn test_ams_unit_model_slot_count() {
+    // The AMS-HT is the single-slot outlier; the original AMS, AMS Lite and AMS 2 Pro are all 4.
+    assert_eq!(AmsUnitModel::AmsHt.slot_count(), Some(1));
+    for model in [
+        AmsUnitModel::Ams,
+        AmsUnitModel::AmsLite,
+        AmsUnitModel::Ams2Pro,
+    ] {
+        assert_eq!(model.slot_count(), Some(4), "{model:?}");
+    }
+
+    // Upstream has no static answer for these two either (DevAms::GetSlotCount falls back to the
+    // observed tray count), so this returns None rather than inventing one.
+    assert_eq!(AmsUnitModel::ExternalSpool.slot_count(), None);
+    assert_eq!(AmsUnitModel::AmsLiteMixed.slot_count(), None);
+}
+
+#[test]
+fn test_ams_unit_model_none_when_info_absent_or_unknown() {
+    let mut unit = AmsUnit {
+        id: "0".into(),
+        temp: "26.0".into(),
+        humidity: "3".into(),
+        humidity_raw: None,
+        dry_time: None,
+        dry_setting: None,
+        tray: None,
+        info: None,
+        dry_sf_reason: None,
+    };
+    // Older firmware omits `info` entirely; "unknown" must not read as a capability.
+    assert_eq!(unit.unit_model(), None);
+
+    // A type this crate doesn't know still surfaces raw through ams_type().
+    unit.info = Some("1100210F".into());
+    assert_eq!(unit.ams_type(), Some(0xF));
+    assert_eq!(unit.unit_model(), None);
+}
+
+#[test]
+fn test_p1s_capture_reports_an_ams_2_pro() {
+    // Regression pin for the mislabelling this replaced: tests/mocks/P1S.json carries
+    // info "2003" with a populated humidity_raw, which is an AMS 2 Pro attached to a P1S — a
+    // combination that is real (the unit dries; the P1S just can't command it remotely) and was
+    // previously read as an AMS Lite.
+    let unit = AmsUnit {
+        id: "0".into(),
+        temp: "28.4".into(),
+        humidity: "5".into(),
+        humidity_raw: Some("12".into()),
+        dry_time: None,
+        dry_setting: None,
+        tray: None,
+        info: Some("2003".into()),
+        dry_sf_reason: None,
+    };
+    assert_eq!(unit.unit_model(), Some(AmsUnitModel::Ams2Pro));
+    assert!(unit.unit_model().unwrap().supports_drying());
 }
 
 #[test]

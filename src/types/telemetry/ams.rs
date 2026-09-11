@@ -716,6 +716,127 @@ pub enum FilamentSwitchInlet {
     InB,
 }
 
+/// Minimum drying-chamber temperature (°C) accepted by an AMS unit's built-in heater.
+///
+/// Applies to both drying units. Confirmed via BambuStudio's own input validation
+/// (`AMSDryControl.cpp:1186-1189`, and the field hints at 1442-1445 spelling out `"45-65°C"`
+/// for the AMS 2 Pro and `"45-85°C"` for the AMS-HT).
+pub(crate) const AMS_DRY_TEMP_MIN: u32 = 45;
+
+/// Maximum drying-chamber temperature (°C) for an AMS-HT (`N3S`) unit's built-in heater.
+///
+/// Confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-ht/Intr-to-ams-ht-workflow-and-features`)
+/// and BambuStudio's input validation (`AMSDryControl.cpp:1189`). This is a property of the
+/// physical AMS-HT hardware, not the host printer model.
+pub(crate) const AMS_HT_DRY_TEMP_MAX: u32 = 85;
+
+/// Maximum drying-chamber temperature (°C) for an AMS 2 Pro (`N3F`) unit's built-in heater.
+///
+/// Confirmed via Bambu Lab's own wiki (`wiki.bambulab.com/en/ams-2-pro/manual/drying-function`)
+/// and BambuStudio's input validation (`AMSDryControl.cpp:1188`). Property of the physical
+/// AMS 2 Pro hardware, not the host printer model.
+pub(crate) const AMS_STANDARD_DRY_TEMP_MAX: u32 = 65;
+
+/// Which physical AMS accessory is attached, decoded from `info` bits 0–3.
+///
+/// **A property of the accessory, not of the host printer.** The quirks engine answers questions
+/// about the printer; this answers questions about the box plugged into it, and the two are
+/// orthogonal. Remote drying in particular needs *both* gates to pass: an AMS that physically has
+/// a heater (here) and a printer whose firmware acts on the command rather than acking and
+/// discarding it (`ModelQuirks::supports_ams_remote_drying`). BambuStudio writes the same pair out
+/// longhand at `Widgets/AMSControl.cpp:348`.
+///
+/// Do not infer any of this from `ams_id`: `0..=3` is shared by the original AMS, the AMS Lite and
+/// the AMS 2 Pro, and only the last of those can dry.
+///
+/// Wire numbering matches BambuStudio's `DevAmsType` (`DevDefs.h:54-62`), which casts these four
+/// bits straight to it (`DevFilaSystem.cpp:598`). bambuddy reaches the same taxonomy by an
+/// independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
+/// (`bambu_mqtt.py:2492`) — and ha-bambulab spells out the full prefix map (`ams/N`,
+/// `ams_f1/N`, `n3f/N`, `n3s/N`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmsUnitModel {
+    /// External spool / no unit. Wire value `0` (BambuStudio `EXT_SPOOL`).
+    ExternalSpool,
+    /// The original 4-slot AMS. Wire value `1`. **No drying chamber.**
+    Ams,
+    /// AMS Lite, as shipped with the A1 series. Wire value `2`. No drying chamber.
+    AmsLite,
+    /// AMS 2 Pro. Wire value `3` (BambuStudio `N3F`). 4 slots, dries.
+    Ams2Pro,
+    /// AMS-HT. Wire value `4` (BambuStudio `N3S`). Single slot, dries, higher ceiling.
+    AmsHt,
+    /// AMS Lite variant for N9. Wire value `5` (BambuStudio `AMS_LITE_MIXED`). No drying chamber.
+    AmsLiteMixed,
+}
+
+impl AmsUnitModel {
+    /// Decodes a raw `info` bits 0–3 value, or `None` for a unit type this crate doesn't know.
+    ///
+    /// An unknown value is deliberately not folded onto a neighbouring variant — firmware has
+    /// added unit types before ([`AmsLiteMixed`](Self::AmsLiteMixed) being the most recent), and
+    /// guessing a capability for one is how a drying command reaches a unit that can't dry. Read
+    /// [`AmsUnit::ams_type`] for the raw value when this returns `None`.
+    #[must_use]
+    pub fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::ExternalSpool),
+            1 => Some(Self::Ams),
+            2 => Some(Self::AmsLite),
+            3 => Some(Self::Ams2Pro),
+            4 => Some(Self::AmsHt),
+            5 => Some(Self::AmsLiteMixed),
+            _ => None,
+        }
+    }
+
+    /// Returns true if this unit has a drying chamber at all.
+    ///
+    /// True for [`Ams2Pro`](Self::Ams2Pro) and [`AmsHt`](Self::AmsHt) only. The original AMS and
+    /// both AMS Lite variants have no heater, so a drying command addressed to one cannot do
+    /// anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp:255`,
+    /// `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and independently by
+    /// bambuddy (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`).
+    #[must_use]
+    pub fn supports_drying(self) -> bool {
+        matches!(self, Self::Ams2Pro | Self::AmsHt)
+    }
+
+    /// Inclusive `(min, max)` drying-chamber temperature range in °C, or `None` if this unit
+    /// cannot dry.
+    ///
+    /// `(45, 65)` for the AMS 2 Pro and `(45, 85)` for the AMS-HT. **Both bounds are real** —
+    /// BambuStudio refuses a temperature below the minimum just as it refuses one above the
+    /// maximum (`AMSDryControl.cpp:1186-1199`), so a caller clamping only the ceiling still
+    /// publishes values the vendor's own client rejects.
+    #[must_use]
+    pub fn dry_temp_range(self) -> Option<(u32, u32)> {
+        match self {
+            Self::Ams2Pro => Some((AMS_DRY_TEMP_MIN, AMS_STANDARD_DRY_TEMP_MAX)),
+            Self::AmsHt => Some((AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX)),
+            _ => None,
+        }
+    }
+
+    /// Spool slots this unit type has, or `None` where the type alone doesn't determine it.
+    ///
+    /// `1` for the AMS-HT, `4` for the original AMS, AMS Lite and AMS 2 Pro. `None` for
+    /// [`ExternalSpool`](Self::ExternalSpool) and [`AmsLiteMixed`](Self::AmsLiteMixed): upstream
+    /// has no static answer for those either and falls back to the observed tray count
+    /// (BambuStudio `DevAms::GetSlotCount`), so count [`AmsUnit::tray`] rather than trusting a
+    /// number invented here.
+    #[must_use]
+    pub fn slot_count(self) -> Option<u8> {
+        match self {
+            Self::AmsHt => Some(1),
+            Self::Ams | Self::AmsLite | Self::Ams2Pro => {
+                Some(crate::ams::parser::AMS_SLOTS_PER_UNIT)
+            }
+            Self::ExternalSpool | Self::AmsLiteMixed => None,
+        }
+    }
+}
+
 const AMS_UNIT_INFO_TYPE_MASK: u64 = 0xF;
 const AMS_UNIT_INFO_DRY_STATUS_SHIFT: u32 = 4;
 const AMS_UNIT_INFO_DRY_STATUS_MASK: u64 = 0xF;
@@ -743,10 +864,30 @@ impl AmsUnit {
             .and_then(|s| u64::from_str_radix(s, 16).ok())
     }
 
-    /// AMS unit type from bits 0–3 (e.g. 3 = AMS Lite).
+    /// Raw AMS unit type from bits 0–3 — e.g. `3` is an AMS 2 Pro, **not** an AMS Lite (`2`).
+    ///
+    /// Prefer [`unit_model`](Self::unit_model), which decodes this into [`AmsUnitModel`] and
+    /// carries the capability accessors. This stays for the one case that cannot serve: reading
+    /// a unit type newer than this crate knows about.
     pub fn ams_type(&self) -> Option<u8> {
         self.parse_info()
             .map(|v| (v & AMS_UNIT_INFO_TYPE_MASK) as u8)
+    }
+
+    /// Which physical AMS accessory this unit is, decoded from `info` bits 0–3.
+    ///
+    /// Use this rather than [`ams_type`](Self::ams_type) to ask whether the unit can dry, how
+    /// many slots it has, or what temperature range its heater accepts — see [`AmsUnitModel`].
+    ///
+    /// `None` when `info` is absent from the payload (older firmware omits it entirely) or when
+    /// it carries a unit type this crate doesn't know. Both cases mean "don't assume a
+    /// capability", which is the safe reading. This accessor is deliberately payload-local: the
+    /// `info` module list carries the unit type a second time as a module-name prefix
+    /// (`ams_f1/0`, `n3f/0`, `n3s/0`) and BambuStudio falls back to it when the bitmask is
+    /// missing, but that lives in a different payload than this one.
+    #[must_use]
+    pub fn unit_model(&self) -> Option<AmsUnitModel> {
+        self.ams_type().and_then(AmsUnitModel::from_wire)
     }
 
     /// Drying status from bits 4–7.

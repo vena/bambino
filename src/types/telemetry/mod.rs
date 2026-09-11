@@ -27,8 +27,8 @@ use alloc::{vec, vec::Vec};
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub use ams::{
-    AmsDrySetting, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit, FilamentSwitchInlet,
-    VirtualTray,
+    AmsDrySetting, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit, AmsUnitModel,
+    FilamentSwitchInlet, VirtualTray,
 };
 pub use device::{
     AirductCollection, AirductModeListEntry, AirductPart, BedInfo, BedTelemetry, DeviceTelemetry,
