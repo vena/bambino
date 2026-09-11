@@ -1004,6 +1004,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
   `None` means no telemetry carrying `print.ipcam` has been observed yet.
 
+- <span id="superprinterclient-xcam"></span>`fn xcam(&self) -> Option<&XcamTelemetry>` — [`XcamTelemetry`](../types/telemetry/xcam/index.md#xcamtelemetry)
+
+  Returns the cached AI-detection and print-option settings as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
+
+  `None` means no telemetry carrying `print.xcam` has been observed yet. Because `xcam`
+  appears to be pushall-only, that can persist for a long stretch of incremental frames — it
+  is not evidence the model lacks these settings. Use
+  [`XcamTelemetry::supports_ai_monitoring`](../types/telemetry/xcam/index.md#xcamtelemetry) for that question instead.
+
 - <span id="superprinterclient-active-hms-alerts"></span>`fn active_hms_alerts(&self) -> Vec<DecodedHmsAlert>` — [`DecodedHmsAlert`](../diagnostics/hms/index.md#decodedhmsalert)
 
   Returns every cached HMS entry decoded and filtered to genuine faults (mirrors `active_fault()`'s raw-cache-decode-on-access shape).

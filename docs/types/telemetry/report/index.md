@@ -259,7 +259,7 @@ struct PrinterTelemetry {
     pub bed_target_temper: Option<f64>,
     pub chamber_temper: Option<f64>,
     pub ipcam: Option<super::diagnostics::IpcamTelemetry>,
-    pub xcam: Option<serde_json::Value>,
+    pub xcam: Option<super::xcam::XcamTelemetry>,
     pub ams: Option<super::ams::AmsStatusReport>,
     pub p_list: Option<PrintPauseList>,
     pub ams_status: Option<i32>,
@@ -466,9 +466,12 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
   Camera and recording telemetry. Nested as `print.ipcam` on the wire.
 
-- **`xcam`**: `Option<serde_json::Value>`
+- **`xcam`**: `Option<super::xcam::XcamTelemetry>`
 
   AI detection settings (spaghetti detection, first-layer inspection, etc.).
+  
+  Appears to be pushall-only — no incremental `msg: 1` frame in this repo's captures
+  carries it. Prefer [`xcam`](../xcam/index.md), which caches and merges it.
 
 - **`ams`**: `Option<super::ams::AmsStatusReport>`
 
