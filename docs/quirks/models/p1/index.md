@@ -54,12 +54,17 @@ Quirks for the P1P CoreXY platform.
 
 - <span id="p1pquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="p1pquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool`
+- <span id="p1pquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
 
-  `false` unless this P1 reports otherwise: firmware acks `ams_filament_drying`
-  `result: success` and silently discards it (P1 manual, bambuddy #2533, and
-  direct hardware testing on a P1S). A P1 whose `fun2` bit 5 is set is taken at
-  its word, so a firmware update shipping remote drying needs no change here.
+  Screen-only: the firmware acks `ams_filament_drying` `result: success` and
+  silently discards it (P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS` citing
+  its #2533, and direct hardware testing on a P1S).
+
+  **In practice this always returns `false`.** The `fun2` branch exists for
+  consistency with every other implementation, but the P1 family sends no `fun2`
+  at all (`reference/03_mqtt_telemetry.md`), so no P1 can currently reach it. It
+  is not a live self-healing path, and a firmware release adding remote drying
+  would have to start emitting `fun2` for it to engage.
 
 - <span id="p1pquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -114,12 +119,17 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 - <span id="p1squirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="p1squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool`
+- <span id="p1squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
 
-  `false` unless this P1 reports otherwise: firmware acks `ams_filament_drying`
-  `result: success` and silently discards it (P1 manual, bambuddy #2533, and
-  direct hardware testing on a P1S). A P1 whose `fun2` bit 5 is set is taken at
-  its word, so a firmware update shipping remote drying needs no change here.
+  Screen-only: the firmware acks `ams_filament_drying` `result: success` and
+  silently discards it (P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS` citing
+  its #2533, and direct hardware testing on a P1S).
+
+  **In practice this always returns `false`.** The `fun2` branch exists for
+  consistency with every other implementation, but the P1 family sends no `fun2`
+  at all (`reference/03_mqtt_telemetry.md`), so no P1 can currently reach it. It
+  is not a live self-healing path, and a firmware release adding remote drying
+  would have to start emitting `fun2` for it to engage.
 
 - <span id="p1squirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 

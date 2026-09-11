@@ -16,10 +16,24 @@ Per-model strategy structs live in the [`models`](../models/index.md) submodule.
 shared helpers like [`fan_step_to_percentage()`](#fan-step-to-percentage) and [`FanSpeedDebouncer`](#fanspeeddebouncer) for dealing
 with the low-resolution PWM fan telemetry common across most models.
 
+## Contents
+
+- [Modules](#modules)
+  - [`context`](context/index.md)
+  - [`models`](models/index.md)
+- [Types](#types)
+  - [`FanSpeedDebouncer`](#fanspeeddebouncer)
+- [Traits](#traits)
+  - [`ModelQuirks`](#modelquirks)
+- [Functions](#functions)
+  - [`decode_fan_percentage`](#decode-fan-percentage)
+  - [`fan_step_to_percentage`](#fan-step-to-percentage)
+
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`context`](context/index.md) | mod | # Quirk Context |
 | [`models`](models/index.md) | mod | # Model-Specific Kinematic and Operational Configuration Submodules |
 | [`FanSpeedDebouncer`](#fanspeeddebouncer) | struct | Filters out transient quantization oscillation artifacts emitted by physical fan controllers. |
 | [`ModelQuirks`](#modelquirks) | trait | Polymorphic interface tracking model-specific hardware variations and transport exceptions. |
@@ -28,12 +42,104 @@ with the low-resolution PWM fan telemetry common across most models.
 
 ## Modules
 
+- [`context`](context/index.md) — # Quirk Context
 - [`models`](models/index.md) — # Model-Specific Kinematic and Operational Configuration Submodules
 
 
 ---
 
 ## Types
+
+### `QuirkContext<'a>`
+
+```rust
+struct QuirkContext<'a> {
+    pub fun: Option<&'a str>,
+    pub fun2: Option<&'a str>,
+    pub firmware: Option<&'a str>,
+    pub telemetry: Option<&'a crate::types::PrinterTelemetry>,
+}
+```
+
+Wire-derived inputs a quirk may consult, all optional.
+
+See the [module docs](self) for why these are passed in rather than composed at the call
+site.
+
+#### Fields
+
+- **`fun`**: `Option<&'a str>`
+
+  The `fun` capability bitfield, if the printer reported one.
+  
+  Absent on the P1 and A1 families entirely. Bit 29 is Developer LAN Mode; BambuStudio
+  reads a dozen more (`DeviceManager.cpp:4433-4455`) that this crate does not yet.
+
+- **`fun2`**: `Option<&'a str>`
+
+  The `fun2` capability bitfield, if the printer reported one.
+  
+  Absent on the P1 and A1 families entirely, so a quirk that prefers a `fun2` bit is inert
+  on those models and must still carry a sound model default. Single-source: only
+  BambuStudio reads this field.
+
+- **`firmware`**: `Option<&'a str>`
+
+  The printer's OTA firmware version (`module[name="ota"].sw_ver`, e.g. `"01.09.00.00"`),
+  if a `get_version` response has been seen.
+  
+  Several capabilities ship in a specific firmware release rather than being inherent to
+  the model — bambuddy version-gates AMS drying on X1/X1C, H2D, H2S/H2C and P2S for exactly
+  this reason.
+
+- **`telemetry`**: `Option<&'a crate::types::PrinterTelemetry>`
+
+  The most recent `print` telemetry object, for quirks that read a live state field.
+  
+  Distinct from the capability fields above: this is machine *state*
+  ([`is_door_open`](#modelquirks) reads a door bit that flips as
+  someone opens the door), not a capability claim.
+
+#### Implementations
+
+- <span id="quirkcontext-empty"></span>`fn empty() -> Self`
+
+  An empty context — every input absent, so every quirk falls back to its model default.
+
+  Use when no telemetry has been seen, or to ask what a model claims about itself before
+  any report has arrived.
+
+- <span id="quirkcontext-with-fun"></span>`fn with_fun(self, fun: Option<&'a str>) -> Self`
+
+  Sets the `fun` capability bitfield.
+
+- <span id="quirkcontext-with-fun2"></span>`fn with_fun2(self, fun2: Option<&'a str>) -> Self`
+
+  Sets the `fun2` capability bitfield.
+
+- <span id="quirkcontext-with-firmware"></span>`fn with_firmware(self, firmware: Option<&'a str>) -> Self`
+
+  Sets the OTA firmware version.
+
+- <span id="quirkcontext-with-telemetry"></span>`fn with_telemetry(self, telemetry: Option<&'a PrinterTelemetry>) -> Self` — [`PrinterTelemetry`](../types/telemetry/report/index.md#printertelemetry)
+
+  Sets the live `print` telemetry object.
+
+#### Trait Implementations
+
+##### `impl Clone for QuirkContext<'a>`
+
+- <span id="quirkcontext-clone"></span>`fn clone(&self) -> QuirkContext<'a>` — [`QuirkContext`](context/index.md#quirkcontext)
+
+##### `impl Copy for QuirkContext<'a>`
+
+##### `impl Debug for QuirkContext<'a>`
+
+- <span id="quirkcontext-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for QuirkContext<'a>`
+
+- <span id="quirkcontext-default"></span>`fn default() -> QuirkContext<'a>` — [`QuirkContext`](context/index.md#quirkcontext)
 
 ### `FanSpeedDebouncer`
 
@@ -298,35 +404,43 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Supported on: H2S, H2D, H2D Pro, H2C (confirmed by pybambu).
 
-- `fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool`
+- `fn supports_ams_remote_drying(&self, ctx: &QuirkContext<'_>) -> bool`
 
   Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
   printer's firmware, rather than acked `result: success` and silently discarded.
 
-  `fun2` is the printer's own capability bitfield, from the last telemetry report that
-  carried one (`None` if it never did). **When the printer answered, its answer wins** —
-  bit 5 is exactly this capability (`DeviceManager.cpp:4469`), and a per-model default is a
-  claim about every unit of that model while `fun2` is the machine in front of you speaking
-  for itself. The model default below is consulted only for `None`.
+  Resolved in two stages. First, `ctx.fun2` bit 5 — the printer's own answer
+  (`DeviceManager.cpp:4469`) — wins whenever it is present, since a per-model rule is a
+  claim about every unit of that model while `fun2` is the machine in front of you
+  speaking. Second, when `fun2` is absent, the model's own rule decides.
 
-  Takes the reported capability as a parameter rather than leaving callers to compose it,
-  so there is one answer to this question and not two that can disagree — the same reason
-  [`is_door_open`](#modelquirks) and
-  [`has_door_sensor_field`](#modelquirks) take telemetry. `Option<&str>`
-  rather than `&PrinterTelemetry` because the command path holds a cached `fun2` string,
-  not a live report, and because `None` — "the printer never said" — is the distinction the
-  composition turns on. Prefer
-  [`PrinterClient::supports_ams_remote_drying`](../client/index.md#printerclient),
-  which supplies the cached value for you.
+  **The second stage is the one that usually runs.** Only BambuStudio reads `fun2` at all,
+  and the P1 and A1 families send neither `fun` nor `fun2`
+  (`reference/03_mqtt_telemetry.md`), so on a large share of real hardware the reported bit
+  never appears. Treat the model rules as the primary mechanism, not a fallback.
 
-  Model default `true` (AMS 2 Pro / AMS-HT drying is remote-controllable on every other
-  host). `false` on P1P/P1S: confirmed by Bambu's own P1 manual ("P1S connected AMS drying
-  functions may only be controlled from the P1S screen"), by bambuddy (`fix(drying)`,
-  #2533 — reporter saw `dry_status` stay `0` after three acked commands), and by direct
-  hardware testing against this crate's `start_drying()` on a P1S. That verified `false` is
-  therefore reachable only on firmware reporting no `fun2` or reporting bit 5 clear; a P1
-  advertising the bit is taken at its word. If that turns out to re-open the
-  acked-then-discarded path, this composition is what to revisit, not the P1 override.
+  Model rules, ported from bambuddy's `supports_drying()`
+  (`printer_manager.py:328-345`), which is the better-corroborated of the two upstream
+  capability models — BambuStudio's is a bare `is_support_remote_dry = false` initializer
+  that only `fun2` ever sets:
+
+  * **A1 / A1 Mini — never.** No AMS 2 Pro or AMS-HT compatibility at all
+    (`_DRYING_UNSUPPORTED_MODELS`).
+  * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen. Bambu's
+    P1 manual is explicit ("P1S connected AMS drying functions may only be controlled from
+    the P1S screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533
+    (reporter saw `dry_status` stay `0` after three acked commands), and this crate's own
+    `start_drying()` was tested against a P1S directly.
+  * **X1C, P2S, H2D, H2S, H2C — firmware-gated.** The capability shipped in a specific
+    release; see each model's override for the version.
+  * **Everything else — allowed.** Matching bambuddy's "all other models (H2D Pro, X1E,
+    future models) are allowed — the command fails gracefully with `result: "fail"` if
+    unsupported."
+
+  Takes a [`QuirkContext`](context/index.md#quirkcontext) rather than letting callers compose the answer, so there is one
+  answer to this question and not two that can disagree — the failure #240 fixed. Prefer
+  [`PrinterClient::capabilities`](../client/index.md#printerclient), which builds the
+  context from cached telemetry for you.
 
 - `fn supports_vibration_compensation(&self) -> bool`
 
@@ -378,6 +492,24 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 ---
 
 ## Functions
+
+### `firmware_at_least`
+
+```rust
+fn firmware_at_least(have: &str, want: &str) -> bool
+```
+
+Compares two Bambu firmware version strings, returning true if `have` is at least `want`.
+
+Versions are dotted numeric quads (`"01.09.00.00"`). Compared component-wise as integers
+rather than lexicographically: upstream's zero-padded strings happen to sort correctly as
+text, but a single unpadded component (`"1.9.0.0"`) would silently compare wrong, and nothing
+guarantees the padding.
+
+Missing trailing components read as `0`, so `"01.09"` and `"01.09.00.00"` are equal. A
+component that isn't a number makes the whole comparison `false` — an unparseable version
+cannot be shown to meet a minimum, and claiming a capability on a string we failed to read is
+the wrong direction to fail.
 
 ### `decode_fan_percentage`
 

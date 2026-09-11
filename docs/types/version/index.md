@@ -41,6 +41,20 @@ Typed response from a `get_version` command containing all expansion bus modules
 
   All hardware and firmware modules on the expansion bus.
 
+#### Implementations
+
+- <span id="versioninfo-firmware-version"></span>`fn firmware_version(&self) -> Option<&str>`
+
+  The printer's own firmware version — `module[name == "ota"].sw_ver`.
+
+  The `ota` module is the main controller firmware, which is what version-gated
+  capabilities are expressed against; the other modules report their own independent
+  versions (`mc`, `esp32`, per-AMS entries) and are not interchangeable with it. bambuddy
+  reads the same module for the same purpose (`bambu_mqtt.py:998`, "Firmware version info
+  (from info.module[name=\"ota\"].sw_ver)").
+
+  `None` when no `ota` module is present in the response.
+
 #### Trait Implementations
 
 ##### `impl Clone for VersionInfo`

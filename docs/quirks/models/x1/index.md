@@ -17,6 +17,7 @@ X1C and X1E share all behavior except active chamber heater support (X1E only).
 - [Constants](#constants)
   - [`X1C_BED_TEMP_MAX_110V`](#x1c-bed-temp-max-110v)
   - [`X1C_BED_TEMP_MAX_220V`](#x1c-bed-temp-max-220v)
+  - [`X1C_MIN_REMOTE_DRY_FIRMWARE`](#x1c-min-remote-dry-firmware)
   - [`X1C_NOZZLE_TEMP_MAX`](#x1c-nozzle-temp-max)
   - [`X1E_BED_TEMP_MAX`](#x1e-bed-temp-max)
   - [`X1E_CHAMBER_TEMP_MAX`](#x1e-chamber-temp-max)
@@ -31,6 +32,7 @@ X1C and X1E share all behavior except active chamber heater support (X1E only).
 | [`X1EQuirks`](#x1equirks) | struct | Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C. |
 | [`X1C_BED_TEMP_MAX_110V`](#x1c-bed-temp-max-110v) | const | Bed temperature ceiling on a 110V-region unit. |
 | [`X1C_BED_TEMP_MAX_220V`](#x1c-bed-temp-max-220v) | const | Bed temperature ceiling on a 220V-region unit — confirmed, per the official spec sheet, non-obviously *lower* than the 110V ceiling. |
+| [`X1C_MIN_REMOTE_DRY_FIRMWARE`](#x1c-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying on the X1C. |
 | [`X1C_NOZZLE_TEMP_MAX`](#x1c-nozzle-temp-max) | const | X1C nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row. |
 | [`X1E_BED_TEMP_MAX`](#x1e-bed-temp-max) | const | X1E bed temperature ceiling (°C) — flat, not voltage-dependent (see `x1e_bed_temp_max`), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row. |
 | [`X1E_CHAMBER_TEMP_MAX`](#x1e-chamber-temp-max) | const | X1E chamber temperature ceiling (°C) — X1E has an active chamber heater, X1C does not, per `MODEL_MATRIX.csv`'s Max Chamber Temperature row. |
@@ -72,6 +74,8 @@ Quirks for the X1C — no active chamber heater, voltage-dependent bed ceiling (
 - <span id="x1cquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="x1cquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
+
+- <span id="x1cquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
 
 - <span id="x1cquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -121,6 +125,8 @@ Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 
 - <span id="x1equirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
+- <span id="x1equirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+
 - <span id="x1equirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="x1equirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
@@ -155,6 +161,17 @@ const X1C_BED_TEMP_MAX_220V: u16 = 110u16;
 Bed temperature ceiling on a 220V-region unit — confirmed, per the official spec sheet, non-obviously *lower* than the 110V ceiling.
 Also the conservative default when the mains region is unknown (no `home_flag` telemetry
 received yet).
+
+### `X1C_MIN_REMOTE_DRY_FIRMWARE`
+```rust
+const X1C_MIN_REMOTE_DRY_FIRMWARE: &str;
+```
+
+Firmware release that introduced remote AMS drying on the X1C.
+
+From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:217-218`), which lists this
+version under both `X1` and `X1C`. Notably later than the H2/P2 thresholds — the X1 platform
+gained the capability well after the newer machines shipped with it.
 
 ### `X1C_NOZZLE_TEMP_MAX`
 ```rust

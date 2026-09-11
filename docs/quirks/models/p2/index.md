@@ -14,6 +14,7 @@ Configures transport parameters, thermal layouts, and camera corrections for the
 |------|------|-------------|
 | [`P2Quirks`](#p2quirks) | struct | Quirks for the P2S CoreXY platform. |
 | [`P2S_BED_TEMP_MAX`](#p2s-bed-temp-max) | const | Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row. |
+| [`P2S_MIN_REMOTE_DRY_FIRMWARE`](#p2s-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying on the P2S. |
 | [`P2S_NOZZLE_TEMP_MAX`](#p2s-nozzle-temp-max) | const | Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row. |
 | [`P2S_Z_MAX`](#p2s-z-max) | const | Build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row. |
 
@@ -82,6 +83,12 @@ Quirks for the P2S CoreXY platform.
 
 - <span id="p2quirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
+- <span id="p2quirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+
+  Firmware-gated from `01.02.00.00`, per bambuddy's `_DRYING_MIN_FIRMWARE`
+  (`printer_manager.py:219-220`, listed under both `P2S` and its internal model code `N7`).
+  A reported `fun2` bit 5 still wins when present.
+
 - <span id="p2quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="p2quirks-modelquirks-requires-wallclock-rtsp-timestamps"></span>`fn requires_wallclock_rtsp_timestamps(&self) -> bool`
@@ -117,6 +124,16 @@ const P2S_BED_TEMP_MAX: u16 = 110u16;
 ```
 
 Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
+
+### `P2S_MIN_REMOTE_DRY_FIRMWARE`
+```rust
+const P2S_MIN_REMOTE_DRY_FIRMWARE: &str;
+```
+
+Firmware release that introduced remote AMS drying on the P2S.
+
+From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:219-220`), which lists the same
+version under `P2S` and under `N7`, the P2S's internal model code.
 
 ### `P2S_NOZZLE_TEMP_MAX`
 ```rust

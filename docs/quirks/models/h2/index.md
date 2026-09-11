@@ -26,6 +26,8 @@ O1C and O1C2 are hardware revisions with identical quirks.
   - [`H2DQuirks`](#h2dquirks)
   - [`H2SQuirks`](#h2squirks)
 - [Constants](#constants)
+  - [`H2D_MIN_REMOTE_DRY_FIRMWARE`](#h2d-min-remote-dry-firmware)
+  - [`H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`](#h2s-h2c-min-remote-dry-firmware)
   - [`H2S_X_MAX`](#h2s-x-max)
   - [`H2S_Y_MAX`](#h2s-y-max)
   - [`H2S_Z_MAX`](#h2s-z-max)
@@ -44,6 +46,8 @@ O1C and O1C2 are hardware revisions with identical quirks.
 | [`H2DProQuirks`](#h2dproquirks) | struct | Quirks for the H2D Pro — same kinematics as H2D. |
 | [`H2DQuirks`](#h2dquirks) | struct | Quirks for the H2D — dual-nozzle (IDEX) CoreXY. |
 | [`H2SQuirks`](#h2squirks) | struct | Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family. |
+| [`H2D_MIN_REMOTE_DRY_FIRMWARE`](#h2d-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying on the H2D. |
+| [`H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`](#h2s-h2c-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying on the H2S and H2C. |
 | [`H2S_X_MAX`](#h2s-x-max) | const | H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row (340×320×340mm). |
 | [`H2S_Y_MAX`](#h2s-y-max) | const | See `H2S_X_MAX`'s doc comment. |
 | [`H2S_Z_MAX`](#h2s-z-max) | const | H2S build volume Z depth (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row. |
@@ -95,6 +99,8 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 - <span id="h2cquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="h2cquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
+
+- <span id="h2cquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
 
 - <span id="h2cquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -156,6 +162,8 @@ Quirks for the H2D Pro — same kinematics as H2D.
 
 - <span id="h2dproquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
+- <span id="h2dproquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+
 - <span id="h2dproquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="h2dproquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
@@ -215,6 +223,8 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 - <span id="h2dquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="h2dquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
+
+- <span id="h2dquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
 
 - <span id="h2dquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -276,6 +286,8 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 - <span id="h2squirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
+- <span id="h2squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+
 - <span id="h2squirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="h2squirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
@@ -300,6 +312,26 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 ---
 
 ## Constants
+
+### `H2D_MIN_REMOTE_DRY_FIRMWARE`
+```rust
+const H2D_MIN_REMOTE_DRY_FIRMWARE: &str;
+```
+
+Firmware release that introduced remote AMS drying on the H2D.
+
+From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:212`). Higher than its H2S/H2C
+siblings, which is upstream's value, not a transcription slip.
+
+### `H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`
+```rust
+const H2S_H2C_MIN_REMOTE_DRY_FIRMWARE: &str;
+```
+
+Firmware release that introduced remote AMS drying on the H2S and H2C.
+
+From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:213-216`), listed under `H2S`,
+`H2C` and the H2C SSDP codes `O1C`/`O1C2`.
 
 ### `H2S_X_MAX`
 ```rust

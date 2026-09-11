@@ -25,12 +25,14 @@ The client applies model-aware safety checks automatically:
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`capabilities`](#capabilities) | mod | # Client-Scoped Capabilities |
 | [`dummy`](dummy/index.md) | mod | Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters. |
 | [`types`](#types) | mod | Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration). |
 | [`PrinterClient`](#printerclient) | struct | High-level client for controlling a Bambu Lab printer. |
 
 ## Modules
 
+- [`capabilities`](capabilities/index.md#capabilities) — # Client-Scoped Capabilities
 - [`dummy`](dummy/index.md) — Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters.
 - [`types`](types/index.md#types) — Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration).
 
@@ -38,6 +40,63 @@ The client applies model-aware safety checks automatically:
 ---
 
 ## Types
+
+### `Capabilities<'a>`
+
+```rust
+struct Capabilities<'a> {
+    // [REDACTED: Private Fields]
+}
+```
+
+Capability answers for one printer, with its cached telemetry already supplied.
+
+Created by [`PrinterClient::capabilities()`](#printerclient). See the
+[module docs](self) for what is and isn't forwarded here.
+
+#### Implementations
+
+- <span id="capabilities-context"></span>`fn context(&self) -> &QuirkContext<'a>` — [`QuirkContext`](../quirks/context/index.md#quirkcontext)
+
+  The context these answers are resolved against.
+
+  Useful for asking the same question of a different model, or for seeing which inputs were
+  actually available — an answer resolved with `firmware: None` rests on a model rule
+  rather than on anything the printer said.
+
+- <span id="capabilities-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+
+  The underlying model quirks, for the capabilities that take no context.
+
+- <span id="capabilities-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self) -> bool`
+
+  Whether this printer honors `ams_filament_drying` sent over MQTT.
+
+  Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
+  supported on A1/A1 Mini and P1P/P1S, firmware-gated on X1C/P2S/H2D/H2S/H2C, allowed
+  elsewhere. See
+  [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks)
+  for the sourcing.
+
+  **Gate UI on this rather than on a model check.** It is the same value
+  [`start_drying`](#printerclient) tests, so a control offered on the
+  strength of it will not then be refused.
+
+  For a firmware-gated model this reads `false` until
+  [`get_version()`](#printerclient) has been called — an unread version
+  cannot be shown to meet a minimum. Call it once after connecting if you intend to ask.
+
+#### Trait Implementations
+
+##### `impl Clone for Capabilities<'a>`
+
+- <span id="capabilities-clone"></span>`fn clone(&self) -> Capabilities<'a>` — [`Capabilities`](capabilities/index.md#capabilities)
+
+##### `impl Copy for Capabilities<'a>`
+
+##### `impl Debug for Capabilities<'_>`
+
+- <span id="capabilities-debug-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
 ### `ConnectAllOutcome`
 
@@ -275,10 +334,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   gate a UI on: it is the identical value [`start_drying`](#printerclient) checks, so a
   control offered on the strength of it cannot then be refused.
 
-  `fun2` arrives on pushall, so a client that has never called
-  [`poll_telemetry()`](#printerclient) holds `None` here and gets the model default —
-  on a P1 that means a `false` its firmware may no longer deserve. Poll first if the
-  distinction matters.
+  Shorthand for
+  `capabilities().supports_ams_remote_drying()`;
+  see there for how the answer is resolved and what has to be polled first.
 
 - <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -1293,6 +1351,44 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   bounds, fan/AMS predicates, etc.). `bed_temp_max()` additionally needs the printer's
   mains region, which lives on the client, not the model — see
   [`is_220v_power()`](#printerclient).
+
+  This is the static strategy object: it knows the model and nothing about what this
+  printer has reported. Quirks whose answer depends on the machine's own report take a
+  [`QuirkContext`](../quirks/index.md) and cannot be called from here without one
+  — use [`capabilities()`](#printerclient) for those, which supplies it from the cache.
+
+- <span id="printerclient-quirk-context"></span>`fn quirk_context(&self) -> crate::quirks::QuirkContext<'_>` — [`QuirkContext`](../quirks/context/index.md#quirkcontext)
+
+  Builds a [`QuirkContext`](../quirks/index.md) from this client's cached state.
+
+  A snapshot of whatever has been observed so far: `fun`/`fun2` from the last telemetry
+  carrying them, and firmware from the last [`get_version()`](#printerclient). Fields
+  never observed stay `None`, which quirks read as "the printer didn't say" rather than as
+  a denial.
+
+  [`QuirkContext::telemetry`](../quirks/index.md) is left `None` here.
+  The client's cache stores extracted scalars rather than a whole `PrinterTelemetry`, so
+  there is no live report to hand over; the state-reading quirks are fed the `print` object
+  directly as it arrives, and their results are cached (see
+  [`is_door_open()`](#printerclient)). Set it yourself when calling such a quirk against
+  a report you hold.
+
+  Prefer [`capabilities()`](#printerclient) unless you need to hand the context to a
+  quirk directly — for instance to ask what a *different* model would answer given this
+  printer's report.
+
+- <span id="printerclient-capabilities"></span>`fn capabilities(&self) -> Capabilities<'_>` — [`Capabilities`](capabilities/index.md#capabilities)
+
+  Capability answers for this printer, with its cached telemetry already supplied.
+
+  The entry point for "can this printer do X" — `client.capabilities().foo()` needs no
+  arguments and resolves against what the machine has actually reported, where
+  `client.quirks().foo(..)` would make you assemble the context yourself. See
+  [`Capabilities`](capabilities/index.md#capabilities) for which questions are answered here and which stay on
+  [`quirks()`](#printerclient).
+
+  Cheap to build and a snapshot of the cache, so call it per question rather than holding
+  one across a [`poll_telemetry()`](#printerclient).
 
 - <span id="printerclient-mqtt"></span>`async fn mqtt(&mut self) -> Result<&mut MqttClient<<MqttTls as >::Stream>, Error>` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 

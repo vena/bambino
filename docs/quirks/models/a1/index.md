@@ -60,6 +60,16 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
 - <span id="a1miniquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
+- <span id="a1miniquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+
+  Never: the A1 series has no AMS 2 Pro or AMS-HT compatibility, so there is no
+  drying chamber to command. bambuddy lists A1 and A1 Mini in
+  `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py:223`) for the same reason.
+
+  Unconditional rather than `fun2`-first: this is a hardware fact about what can
+  be attached, not a firmware capability the printer could gain, so a reported bit
+  would not change the answer. The A1 family sends no `fun2` in any case.
+
 - <span id="a1miniquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
 - <span id="a1miniquirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
@@ -109,6 +119,16 @@ Quirks for the full-size A1 bed-slinger.
 - <span id="a1quirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
 - <span id="a1quirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
+
+- <span id="a1quirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+
+  Never: the A1 series has no AMS 2 Pro or AMS-HT compatibility, so there is no
+  drying chamber to command. bambuddy lists A1 and A1 Mini in
+  `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py:223`) for the same reason.
+
+  Unconditional rather than `fun2`-first: this is a hardware fact about what can
+  be attached, not a firmware capability the printer could gain, so a reported bit
+  would not change the answer. The A1 family sends no `fun2` in any case.
 
 - <span id="a1quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
