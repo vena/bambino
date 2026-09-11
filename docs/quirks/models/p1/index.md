@@ -54,7 +54,12 @@ Quirks for the P1P CoreXY platform.
 
 - <span id="p1pquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="p1pquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self) -> bool`
+- <span id="p1pquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool`
+
+  `false` unless this P1 reports otherwise: firmware acks `ams_filament_drying`
+  `result: success` and silently discards it (P1 manual, bambuddy #2533, and
+  direct hardware testing on a P1S). A P1 whose `fun2` bit 5 is set is taken at
+  its word, so a firmware update shipping remote drying needs no change here.
 
 - <span id="p1pquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -109,7 +114,12 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 - <span id="p1squirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="p1squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self) -> bool`
+- <span id="p1squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool`
+
+  `false` unless this P1 reports otherwise: firmware acks `ams_filament_drying`
+  `result: success` and silently discards it (P1 manual, bambuddy #2533, and
+  direct hardware testing on a P1S). A P1 whose `fun2` bit 5 is set is taken at
+  its word, so a firmware update shipping remote drying needs no change here.
 
 - <span id="p1squirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 

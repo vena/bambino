@@ -269,18 +269,16 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Whether this printer supports remote AMS drying — the printer-side half of the gate.
 
-  Prefers the printer's own answer, `fun2` bit 5, and falls back to
-  [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks)
-  when the printer has not reported `fun2` (older firmware omits it entirely, and it only
-  arrives on pushall, so an un-polled client always falls back here).
+  Supplies the cached `fun2` to
+  [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks),
+  which resolves the printer's own answer against the model default. This is the call to
+  gate a UI on: it is the identical value [`start_drying`](#printerclient) checks, so a
+  control offered on the strength of it cannot then be refused.
 
-  Firmware outranks the quirk table because the quirk's `true` is a default asserted for
-  every model nobody has tested, while `fun2` is the machine in front of you answering for
-  itself. The one hardware-verified quirk value — P1P/P1S `false`, observed acking the
-  command and discarding it — is therefore reachable only when that firmware reports no
-  `fun2` or reports bit 5 clear. A P1 whose firmware sets the bit is taken at its word here;
-  if that turns out to re-open the acked-then-discarded path, this is the composition to
-  revisit, not the quirk.
+  `fun2` arrives on pushall, so a client that has never called
+  [`poll_telemetry()`](#printerclient) holds `None` here and gets the model default —
+  on a P1 that means a `false` its firmware may no longer deserve. Poll first if the
+  distinction matters.
 
 - <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 

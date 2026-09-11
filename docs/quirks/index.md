@@ -298,16 +298,35 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Supported on: H2S, H2D, H2D Pro, H2C (confirmed by pybambu).
 
-- `fn supports_ams_remote_drying(&self) -> bool`
+- `fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool`
 
   Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
   printer's firmware, rather than acked `result: success` and silently discarded.
 
-  Default `true` (AMS 2 Pro / AMS-HT drying is remote-controllable on every other host).
-  `false` on P1P/P1S: confirmed by Bambu's own P1 manual ("P1S connected AMS drying
+  `fun2` is the printer's own capability bitfield, from the last telemetry report that
+  carried one (`None` if it never did). **When the printer answered, its answer wins** —
+  bit 5 is exactly this capability (`DeviceManager.cpp:4469`), and a per-model default is a
+  claim about every unit of that model while `fun2` is the machine in front of you speaking
+  for itself. The model default below is consulted only for `None`.
+
+  Takes the reported capability as a parameter rather than leaving callers to compose it,
+  so there is one answer to this question and not two that can disagree — the same reason
+  [`is_door_open`](#modelquirks) and
+  [`has_door_sensor_field`](#modelquirks) take telemetry. `Option<&str>`
+  rather than `&PrinterTelemetry` because the command path holds a cached `fun2` string,
+  not a live report, and because `None` — "the printer never said" — is the distinction the
+  composition turns on. Prefer
+  [`PrinterClient::supports_ams_remote_drying`](../client/index.md#printerclient),
+  which supplies the cached value for you.
+
+  Model default `true` (AMS 2 Pro / AMS-HT drying is remote-controllable on every other
+  host). `false` on P1P/P1S: confirmed by Bambu's own P1 manual ("P1S connected AMS drying
   functions may only be controlled from the P1S screen"), by bambuddy (`fix(drying)`,
   #2533 — reporter saw `dry_status` stay `0` after three acked commands), and by direct
-  hardware testing against this crate's `start_drying()` on a P1S.
+  hardware testing against this crate's `start_drying()` on a P1S. That verified `false` is
+  therefore reachable only on firmware reporting no `fun2` or reporting bit 5 clear; a P1
+  advertising the bit is taken at its word. If that turns out to re-open the
+  acked-then-discarded path, this composition is what to revisit, not the P1 override.
 
 - `fn supports_vibration_compensation(&self) -> bool`
 
