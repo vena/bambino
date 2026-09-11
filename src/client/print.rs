@@ -111,24 +111,34 @@ where
     ///   `percent` ramps 0 to 100 and `remaining_secs` counts down. This is one aggregate bar
     ///   across the whole sweep — a single-routine run spans the same full range as a
     ///   multi-routine one, so per-routine progress cannot be derived from it.
-    /// - Per-routine boundaries come from `stg` (queued stage list) and `stg_cur` (stage now
-    ///   running) on `PrinterTelemetry`, both emitted in incremental pushes. `BED_LEVELING`
-    ///   alone yields `stg = [14, 1]`; adding `VIBRATION_COMPENSATION` yields `[14, 1, 3]`.
-    ///   Carried as raw `i32`s — there is no typed stage enum yet.
-    /// - `stg_cur` returning to idle mid-run is normal: after the last queued stage finishes it
-    ///   reads idle for the rest of the run while `percent` keeps climbing. Completion is
-    ///   `gcode_state`/`percent`, never `stg_cur`.
+    /// - Per-routine boundaries come from
+    ///   [`current_stage()`](crate::types::telemetry::PrinterTelemetry::current_stage) and
+    ///   [`stage_queue()`](crate::types::telemetry::PrinterTelemetry::stage_queue), which decode
+    ///   `stg_cur`/`stg` into [`PrintStage`](crate::types::telemetry::PrintStage). Both wire
+    ///   fields arrive in incremental pushes, so this tracks in real time.
+    /// - A [`PrintStage::Idle`](crate::types::telemetry::PrintStage::Idle) mid-run is normal:
+    ///   after the last queued stage finishes it reads idle for the rest of the run while
+    ///   `percent` keeps climbing. Completion is `gcode_state`/`percent`, never the stage.
     /// - A calibration run is distinguishable from a user print by `print_type == "system"`
     ///   with `subtask_name == "auto_cali_for_user_param.gcode"`; `layer_num`/`total_layer_num`
     ///   stay 0 and are meaningless here.
     ///
-    /// **Unsupported flags are silently dropped.** On a P1S, passing all five options queues
-    /// only three routines: `NOZZLE_HEIGHT` (IDEX/dual-nozzle only) and `HEATBED_THERMAL`
-    /// produce no stage, yet the command is still acknowledged as successful and no error is
-    /// raised. Compare the flags sent against the returned `stg` queue to learn what actually
-    /// ran. Note this method does not consult the quirks engine to reject such flags up front.
+    /// # Unsupported routines
     ///
-    /// All observations are P1S firmware `01.10.00.00`. See `reference/03_mqtt_telemetry.md`
+    /// The firmware accepts every option bit, acknowledges the command `"result": "success"`,
+    /// and silently queues nothing for a routine the hardware doesn't run — so the wire never
+    /// reports the skip. This method masks the request against
+    /// [`supported_calibration_mask()`](crate::quirks::QuirkStrategy::supported_calibration_mask)
+    /// instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
+    /// remaining routines still run.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when *none* of the requested routines are supported on this
+    /// model, since that request would otherwise be a silent no-op reported as success. A
+    /// partially-supported request is not an error — it proceeds with whatever the model runs.
+    ///
+    /// Wire observations are P1S firmware `01.10.00.00`. See `reference/03_mqtt_telemetry.md`
     /// for the wire detail and stage-ID mapping.
     pub async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error> {
         // The firmware acks unsupported option bits as "success" and silently queues nothing for

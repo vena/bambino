@@ -194,37 +194,28 @@ printer.start_calibration(
 ).await?;
 ```
 
-The call returns once the command is published, not when the routine finishes — but the run is
-observable while it happens. Verified by wire capture on a P1S (firmware `01.10.00.00`):
+Flags the model doesn't run are dropped with a warning, and the call fails with
+`Error::ModelMismatch` only if nothing would run at all — the printer acknowledges unsupported
+routines as successful and skips them silently, so bambino gates on the quirks engine rather than
+trusting the ack.
 
-- **`print_progress()` works.** `percent` ramps `0` → `100` and `remaining_secs` counts down
-  (the wire sends minutes; bambino converts). This is a **single aggregate bar across the whole
-  sweep** — a one-routine run and a two-routine run both span the full `0`–`100`, so you cannot
-  derive per-routine progress from it.
-- **Per-routine boundaries come from `stg`/`stg_cur`** on `PrinterTelemetry`. `stg` is the queued
-  stage list, `stg_cur` the stage running now. Requesting `BED_LEVELING` alone gives `stg = [14, 1]`;
-  adding `VIBRATION_COMPENSATION` gives `[14, 1, 3]`. Both fields do arrive in incremental pushes,
-  so this is usable in real time. bambino carries them as raw `i32`s — there is no typed stage
-  enum yet.
-- **`stg_cur` returning to idle mid-run is normal.** Once the last queued stage finishes,
-  `stg_cur` reads idle for the remainder of the run while `percent` keeps climbing. Use
-  `gcode_state`/`percent` for completion, never `stg_cur`.
-- **Telling a calibration run from a print:** `print_type` reads `"system"` and `subtask_name` is
-  `"auto_cali_for_user_param.gcode"`. `layer_num`/`total_layer_num` stay `0` and mean nothing here.
-- `gcode_state` walks `IDLE` → `RUNNING` → `FINISH`.
+The call returns when the command is published, not when the routine finishes. Track the run with:
 
-**Unsupported routines are silently dropped.** On a P1S, requesting all five options queues only
-three of them (plus a nozzle-clean preamble): `NOZZLE_HEIGHT` and `HEATBED_THERMAL` produce no
-stage at all, yet the command is still acknowledged as successful and no error is reported.
-`NOZZLE_HEIGHT` is IDEX/dual-nozzle-only by design; `HEATBED_THERMAL` simply isn't supported
-there. The only way to tell what actually ran is to compare the flags you sent against the `stg`
-queue that comes back. All observations are P1S firmware `01.10.00.00`; see
-`reference/03_mqtt_telemetry.md` for the full wire detail and stage-ID mapping.
+- **`print_progress()`** — `percent` and `remaining_secs`. One aggregate bar across the whole
+  sweep, not per routine, so don't try to derive per-routine progress from it.
+- **`current_stage()` / `stage_queue()`** on `PrinterTelemetry` — typed `PrintStage` values for
+  the routine running now and the queue behind it. `current_stage()` returns `None` outside
+  `RUNNING`/`PAUSE`: A1 and P1 firmware reports "printing" while idle, so the raw field is only
+  meaningful under that gate.
+- A `PrintStage::Idle` mid-run is normal and is **not** completion — the tail of a run has no
+  active stage. Use `gcode_state`/`percent` for that.
 
-To capture a run yourself, `bambino-cli control <IP> <SERIAL> calibrate <ROUTINES>... --watch`
-publishes the command and then streams every subsequent message on the report topic as NDJSON
-until Ctrl+C — complete payloads, unfiltered, including roots (`info`, `system`, `mc_print`) that
-`TelemetryReport` doesn't model. Redirect stdout to a file; status chatter goes to stderr.
+`print_type` reads `"system"` during a calibration run, which is how you tell one from a print.
+
+Stage IDs, per-model capture notes, and the rest of the wire detail are in
+`reference/03_mqtt_telemetry.md`. To capture a run yourself,
+`bambino-cli control <IP> <SERIAL> calibrate <ROUTINES>... --watch` publishes the command and then
+streams the report topic as unfiltered NDJSON on stdout until Ctrl+C.
 
 ### AMS filament control
 
