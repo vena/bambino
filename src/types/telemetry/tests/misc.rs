@@ -209,8 +209,167 @@ fn test_xcam_deserialization() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let print = report.print.unwrap();
     let xcam = print.xcam.unwrap();
-    assert_eq!(xcam["first_layer_inspector"], true);
-    assert_eq!(xcam["spaghetti_detector"], false);
+    assert_eq!(xcam.first_layer_inspector, Some(true));
+    assert_eq!(xcam.spaghetti_detector, Some(false));
+    // Old-gen payload: no `cfg`, so no detector decodes and AI monitoring falls back to the
+    // `spaghetti_detector` boolean.
+    assert!(!xcam.supports_ai_monitoring());
+    assert!(xcam.spaghetti_detection().is_none());
+    assert_eq!(xcam.ai_monitoring_enabled(), Some(false));
+}
+
+/// Every distinct `xcam.cfg` value observed across upstream fixtures decodes to all four
+/// detectors enabled, at the sensitivity the capture's model reports.
+#[test]
+fn test_xcam_cfg_decodes_observed_fixture_values() {
+    for (cfg, expected) in [
+        (224695_u32, XcamSensitivity::Medium), // H2DPRO, H2S, H2DEXTSPOOL
+        (374487, XcamSensitivity::High),       // H2D
+        (748983, XcamSensitivity::Medium),     // P2S
+        (1797559, XcamSensitivity::Medium),    // H2C
+        (8089015, XcamSensitivity::Medium),    // X2D
+    ] {
+        let xcam = XcamTelemetry {
+            cfg: Some(cfg),
+            ..Default::default()
+        };
+        assert!(xcam.supports_ai_monitoring(), "cfg {cfg}");
+        for detector in [
+            xcam.spaghetti_detection(),
+            xcam.purge_chute_pileup_detection(),
+            xcam.nozzle_clumping_detection(),
+            xcam.air_printing_detection(),
+        ] {
+            let detector = detector.expect("cfg present");
+            assert!(detector.enabled, "cfg {cfg}");
+            assert_eq!(detector.sensitivity, Some(expected), "cfg {cfg}");
+        }
+        assert_eq!(xcam.ai_monitoring_enabled(), Some(true), "cfg {cfg}");
+    }
+}
+
+/// The three standalone `cfg` bits vary by model rather than sitting constant, which is what
+/// distinguishes them from a misread of the detector triples.
+#[test]
+fn test_xcam_cfg_standalone_bits() {
+    // X2D sets buildplate-align, FOD check and displacement.
+    let x2d = XcamTelemetry {
+        cfg: Some(8089015),
+        ..Default::default()
+    };
+    assert_eq!(x2d.buildplate_align_detection(), Some(true));
+    assert_eq!(x2d.fod_check(), Some(true));
+    assert_eq!(x2d.displacement_detection(), Some(true));
+
+    // H2C sets buildplate-align only.
+    let h2c = XcamTelemetry {
+        cfg: Some(1797559),
+        ..Default::default()
+    };
+    assert_eq!(h2c.buildplate_align_detection(), Some(true));
+    assert_eq!(h2c.fod_check(), Some(false));
+    assert_eq!(h2c.displacement_detection(), Some(false));
+
+    // H2DPRO sets none of the three.
+    let h2dpro = XcamTelemetry {
+        cfg: Some(224695),
+        ..Default::default()
+    };
+    assert_eq!(h2dpro.buildplate_align_detection(), Some(false));
+    assert_eq!(h2dpro.fod_check(), Some(false));
+    assert_eq!(h2dpro.displacement_detection(), Some(false));
+}
+
+/// A synthetic `cfg` with a different sensitivity per detector — the case no real capture
+/// provides, and the only one that distinguishes BambuStudio's bit phase from bambuddy's.
+#[test]
+fn test_xcam_cfg_mixed_sensitivities_follow_bambustudio_phase() {
+    // Enable bits 7/10/13/16 set; sensitivity pairs above each: low(0), medium(1), high(2), low(0).
+    let cfg = (1 << 7) | (0 << 8) | (1 << 10) | (1 << 11) | (1 << 13) | (2 << 14) | (1 << 16);
+    let xcam = XcamTelemetry {
+        cfg: Some(cfg),
+        ..Default::default()
+    };
+    assert_eq!(
+        xcam.spaghetti_detection().unwrap().sensitivity,
+        Some(XcamSensitivity::Low)
+    );
+    assert_eq!(
+        xcam.purge_chute_pileup_detection().unwrap().sensitivity,
+        Some(XcamSensitivity::Medium)
+    );
+    assert_eq!(
+        xcam.nozzle_clumping_detection().unwrap().sensitivity,
+        Some(XcamSensitivity::High)
+    );
+    assert_eq!(
+        xcam.air_printing_detection().unwrap().sensitivity,
+        Some(XcamSensitivity::Low)
+    );
+}
+
+/// The unassigned two-bit sensitivity value `3` has no documented level — BambuStudio leaves
+/// its previous value in place rather than mapping it.
+#[test]
+fn test_xcam_unassigned_sensitivity_is_none() {
+    let xcam = XcamTelemetry {
+        cfg: Some((1 << 7) | (3 << 8)),
+        ..Default::default()
+    };
+    let detector = xcam.spaghetti_detection().unwrap();
+    assert!(detector.enabled);
+    assert_eq!(detector.sensitivity, None);
+}
+
+/// Keys this struct does not model must survive deserialization rather than being dropped.
+#[test]
+fn test_xcam_unmodeled_keys_round_trip() {
+    let json_data = r#"{
+            "print": {
+                "xcam": {
+                    "cfg": 224695,
+                    "halt_print_sensitivity": "medium",
+                    "auto_recovery_step_loss": true,
+                    "filament_tangle_detect": false
+                }
+            }
+        }"#;
+
+    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let xcam = report.print.unwrap().xcam.unwrap();
+    assert_eq!(xcam.cfg, Some(224695));
+    assert_eq!(xcam.halt_print_sensitivity.as_deref(), Some("medium"));
+    assert_eq!(xcam.extra["auto_recovery_step_loss"], true);
+    assert_eq!(xcam.extra["filament_tangle_detect"], false);
+
+    let reserialized = serde_json::to_string(&xcam).unwrap();
+    assert!(reserialized.contains("auto_recovery_step_loss"));
+    assert!(reserialized.contains("filament_tangle_detect"));
+}
+
+/// A partial frame must not blank fields a previous frame established.
+#[test]
+fn test_xcam_merge_from_preserves_absent_fields() {
+    let mut cached = XcamTelemetry {
+        cfg: Some(224695),
+        first_layer_inspector: Some(true),
+        allow_skip_parts: Some(false),
+        ..Default::default()
+    };
+    cached
+        .extra
+        .insert("unknown_key".into(), serde_json::Value::Bool(true));
+
+    let incoming = XcamTelemetry {
+        first_layer_inspector: Some(false),
+        ..Default::default()
+    };
+    cached.merge_from(&incoming);
+
+    assert_eq!(cached.cfg, Some(224695));
+    assert_eq!(cached.first_layer_inspector, Some(false));
+    assert_eq!(cached.allow_skip_parts, Some(false));
+    assert_eq!(cached.extra["unknown_key"], true);
 }
 
 #[test]
@@ -252,6 +411,7 @@ fn test_full_telemetry_with_diagnostics() {
     let ipcam = print.ipcam.unwrap();
     assert_eq!(ipcam.ipcam_record.as_deref(), Some("enable"));
     assert_eq!(ipcam.timelapse.as_deref(), Some("disable"));
+    assert_eq!(print.xcam.unwrap().allow_skip_parts, Some(false));
 }
 
 #[test]

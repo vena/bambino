@@ -17,6 +17,7 @@ pub mod device;
 pub mod diagnostics;
 pub mod report;
 pub mod stage;
+pub mod xcam;
 
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
@@ -38,6 +39,7 @@ pub use report::{
     LightReport, NetInfo, PrintPauseList, PrintPausePoint, PrinterTelemetry, SdcardState,
 };
 pub use stage::PrintStage;
+pub use xcam::{XcamDetector, XcamSensitivity, XcamTelemetry};
 
 pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
 

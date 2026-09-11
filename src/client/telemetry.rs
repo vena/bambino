@@ -17,7 +17,7 @@ use crate::types::telemetry::report::POWER_220V_BITMASK;
 use crate::types::telemetry::{decode_bed_temperatures, decode_nozzle_temperatures};
 use crate::types::{
     AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, TelemetryReport,
-    VirtualTray,
+    VirtualTray, XcamTelemetry,
 };
 
 use super::PrinterClient;
@@ -72,6 +72,9 @@ pub(crate) struct TelemetryCache {
     // only via a raw TelemetryReport parse.
     pub(crate) last_net_conf: Option<u32>,
     pub(crate) last_ipcam: Option<IpcamTelemetry>,
+    // Cached because `print.xcam` is pushall-only: without this, every accessor would read
+    // `None` on the incremental frames that make up the bulk of the stream.
+    pub(crate) last_xcam: Option<XcamTelemetry>,
 }
 
 impl<
@@ -181,6 +184,7 @@ where
         self.update_fan_cache(print);
         self.update_speed_and_signal_cache(print);
         self.update_ipcam_cache(print);
+        self.update_xcam_cache(print);
     }
 
     fn update_state_cache(&mut self, print: &PrinterTelemetry) {
@@ -314,6 +318,17 @@ where
             match &mut self.cache.last_ipcam {
                 Some(cached) => cached.merge_from(ipcam),
                 None => self.cache.last_ipcam = Some(ipcam.clone()),
+            }
+        }
+    }
+
+    fn update_xcam_cache(&mut self, print: &PrinterTelemetry) {
+        if let Some(xcam) = &print.xcam {
+            // Merge field-by-field rather than replacing wholesale — see
+            // `XcamTelemetry::merge_from`.
+            match &mut self.cache.last_xcam {
+                Some(cached) => cached.merge_from(xcam),
+                None => self.cache.last_xcam = Some(xcam.clone()),
             }
         }
     }
@@ -501,6 +516,16 @@ where
     /// `None` means no telemetry carrying `print.ipcam` has been observed yet.
     pub fn ipcam(&self) -> Option<&IpcamTelemetry> {
         self.cache.last_ipcam.as_ref()
+    }
+
+    /// Returns the cached AI-detection and print-option settings as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    ///
+    /// `None` means no telemetry carrying `print.xcam` has been observed yet. Because `xcam`
+    /// appears to be pushall-only, that can persist for a long stretch of incremental frames — it
+    /// is not evidence the model lacks these settings. Use
+    /// [`XcamTelemetry::supports_ai_monitoring`] for that question instead.
+    pub fn xcam(&self) -> Option<&XcamTelemetry> {
+        self.cache.last_xcam.as_ref()
     }
 
     /// Returns every cached HMS entry decoded and filtered to genuine faults (mirrors `active_fault()`'s raw-cache-decode-on-access shape).

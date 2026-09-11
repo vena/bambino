@@ -11,6 +11,7 @@ use super::ams::{AmsStatusReport, VirtualTray};
 use super::device::DeviceTelemetry;
 use super::diagnostics::{HmsEntry, IpcamTelemetry};
 use super::stage::PrintStage;
+use super::xcam::XcamTelemetry;
 
 /// Chamber/work/heatbed light state entry from the `lights_report` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,7 +234,10 @@ pub struct PrinterTelemetry {
     pub ipcam: Option<IpcamTelemetry>,
 
     /// AI detection settings (spaghetti detection, first-layer inspection, etc.).
-    pub xcam: Option<serde_json::Value>,
+    ///
+    /// Appears to be pushall-only — no incremental `msg: 1` frame in this repo's captures
+    /// carries it. Prefer [`crate::client::PrinterClient::xcam`], which caches and merges it.
+    pub xcam: Option<XcamTelemetry>,
 
     /// AMS expansion bus status container [REF-AMS-DECODE].
     pub ams: Option<AmsStatusReport>,

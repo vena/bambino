@@ -13,6 +13,7 @@ pub use telemetry::{
     AmsStatusReport, AmsTray, AmsUnit, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry,
     DeviceTelemetry, ExtToolTelemetry, ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry,
     LightReport, NetInfo, NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState,
-    TelemetryReport, VirtualTray, decode_nozzle_temperatures, is_developer_mode,
+    TelemetryReport, VirtualTray, XcamDetector, XcamSensitivity, XcamTelemetry,
+    decode_nozzle_temperatures, is_developer_mode,
 };
 pub use version::{VersionInfo, VersionModule};
