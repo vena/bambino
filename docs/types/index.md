@@ -621,7 +621,25 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-ams-type"></span>`fn ams_type(&self) -> Option<u8>`
 
-  AMS unit type from bits 0–3 (e.g. 3 = AMS Lite).
+  Raw AMS unit type from bits 0–3 — e.g. `3` is an AMS 2 Pro, **not** an AMS Lite (`2`).
+
+  Prefer [`unit_model`](telemetry/ams/index.md#amsunit), which decodes this into [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel) and
+  carries the capability accessors. This stays for the one case that cannot serve: reading
+  a unit type newer than this crate knows about.
+
+- <span id="amsunit-unit-model"></span>`fn unit_model(&self) -> Option<AmsUnitModel>` — [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel)
+
+  Which physical AMS accessory this unit is, decoded from `info` bits 0–3.
+
+  Use this rather than [`ams_type`](telemetry/ams/index.md#amsunit) to ask whether the unit can dry, how
+  many slots it has, or what temperature range its heater accepts — see [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel).
+
+  `None` when `info` is absent from the payload (older firmware omits it entirely) or when
+  it carries a unit type this crate doesn't know. Both cases mean "don't assume a
+  capability", which is the safe reading. This accessor is deliberately payload-local: the
+  `info` module list carries the unit type a second time as a module-name prefix
+  (`ams_f1/0`, `n3f/0`, `n3s/0`) and BambuStudio falls back to it when the bitmask is
+  missing, but that lives in a different payload than this one.
 
 - <span id="amsunit-dry-status"></span>`fn dry_status(&self) -> Option<u8>`
 

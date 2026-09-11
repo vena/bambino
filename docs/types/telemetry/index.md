@@ -524,7 +524,25 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-ams-type"></span>`fn ams_type(&self) -> Option<u8>`
 
-  AMS unit type from bits 0–3 (e.g. 3 = AMS Lite).
+  Raw AMS unit type from bits 0–3 — e.g. `3` is an AMS 2 Pro, **not** an AMS Lite (`2`).
+
+  Prefer [`unit_model`](ams/index.md#amsunit), which decodes this into [`AmsUnitModel`](ams/index.md#amsunitmodel) and
+  carries the capability accessors. This stays for the one case that cannot serve: reading
+  a unit type newer than this crate knows about.
+
+- <span id="amsunit-unit-model"></span>`fn unit_model(&self) -> Option<AmsUnitModel>` — [`AmsUnitModel`](ams/index.md#amsunitmodel)
+
+  Which physical AMS accessory this unit is, decoded from `info` bits 0–3.
+
+  Use this rather than [`ams_type`](ams/index.md#amsunit) to ask whether the unit can dry, how
+  many slots it has, or what temperature range its heater accepts — see [`AmsUnitModel`](ams/index.md#amsunitmodel).
+
+  `None` when `info` is absent from the payload (older firmware omits it entirely) or when
+  it carries a unit type this crate doesn't know. Both cases mean "don't assume a
+  capability", which is the safe reading. This accessor is deliberately payload-local: the
+  `info` module list carries the unit type a second time as a module-name prefix
+  (`ams_f1/0`, `n3f/0`, `n3s/0`) and BambuStudio falls back to it when the bitmask is
+  missing, but that lives in a different payload than this one.
 
 - <span id="amsunit-dry-status"></span>`fn dry_status(&self) -> Option<u8>`
 
@@ -2869,6 +2887,122 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 ##### `impl Serialize for AmsFilamentStep`
 
 - <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+
+### `AmsUnitModel`
+
+```rust
+enum AmsUnitModel {
+    ExternalSpool,
+    Ams,
+    AmsLite,
+    Ams2Pro,
+    AmsHt,
+    AmsLiteMixed,
+}
+```
+
+Which physical AMS accessory is attached, decoded from `info` bits 0–3.
+
+**A property of the accessory, not of the host printer.** The quirks engine answers questions
+about the printer; this answers questions about the box plugged into it, and the two are
+orthogonal. Remote drying in particular needs *both* gates to pass: an AMS that physically has
+a heater (here) and a printer whose firmware acts on the command rather than acking and
+discarding it (`ModelQuirks::supports_ams_remote_drying`). BambuStudio writes the same pair out
+longhand at `Widgets/AMSControl.cpp:348`.
+
+Do not infer any of this from `ams_id`: `0..=3` is shared by the original AMS, the AMS Lite and
+the AMS 2 Pro, and only the last of those can dry.
+
+Wire numbering matches BambuStudio's `DevAmsType` (`DevDefs.h:54-62`), which casts these four
+bits straight to it (`DevFilaSystem.cpp:598`). bambuddy reaches the same taxonomy by an
+independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
+(`bambu_mqtt.py:2492`) — and ha-bambulab spells out the full prefix map (`ams/N`,
+`ams_f1/N`, `n3f/N`, `n3s/N`).
+
+#### Variants
+
+- **`ExternalSpool`**
+
+  External spool / no unit. Wire value `0` (BambuStudio `EXT_SPOOL`).
+
+- **`Ams`**
+
+  The original 4-slot AMS. Wire value `1`. **No drying chamber.**
+
+- **`AmsLite`**
+
+  AMS Lite, as shipped with the A1 series. Wire value `2`. No drying chamber.
+
+- **`Ams2Pro`**
+
+  AMS 2 Pro. Wire value `3` (BambuStudio `N3F`). 4 slots, dries.
+
+- **`AmsHt`**
+
+  AMS-HT. Wire value `4` (BambuStudio `N3S`). Single slot, dries, higher ceiling.
+
+- **`AmsLiteMixed`**
+
+  AMS Lite variant for N9. Wire value `5` (BambuStudio `AMS_LITE_MIXED`). No drying chamber.
+
+#### Implementations
+
+- <span id="amsunitmodel-from-wire"></span>`fn from_wire(value: u8) -> Option<Self>`
+
+  Decodes a raw `info` bits 0–3 value, or `None` for a unit type this crate doesn't know.
+
+  An unknown value is deliberately not folded onto a neighbouring variant — firmware has
+  added unit types before ([`AmsLiteMixed`](ams/index.md#amsunitmodel) being the most recent), and
+  guessing a capability for one is how a drying command reaches a unit that can't dry. Read
+  [`AmsUnit::ams_type`](ams/index.md#amsunit) for the raw value when this returns `None`.
+
+- <span id="amsunitmodel-supports-drying"></span>`fn supports_drying(self) -> bool`
+
+  Returns true if this unit has a drying chamber at all.
+
+  True for [`Ams2Pro`](ams/index.md#amsunitmodel) and [`AmsHt`](ams/index.md#amsunitmodel) only. The original AMS and
+  both AMS Lite variants have no heater, so a drying command addressed to one cannot do
+  anything. Confirmed by BambuStudio (`Widgets/AMSItem.hpp:255`,
+  `support_drying() { return ams_type == N3S || ams_type == N3F; }`) and independently by
+  bambuddy (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`).
+
+- <span id="amsunitmodel-dry-temp-range"></span>`fn dry_temp_range(self) -> Option<(u32, u32)>`
+
+  Inclusive `(min, max)` drying-chamber temperature range in °C, or `None` if this unit
+  cannot dry.
+
+  `(45, 65)` for the AMS 2 Pro and `(45, 85)` for the AMS-HT. **Both bounds are real** —
+  BambuStudio refuses a temperature below the minimum just as it refuses one above the
+  maximum (`AMSDryControl.cpp:1186-1199`), so a caller clamping only the ceiling still
+  publishes values the vendor's own client rejects.
+
+- <span id="amsunitmodel-slot-count"></span>`fn slot_count(self) -> Option<u8>`
+
+  Spool slots this unit type has, or `None` where the type alone doesn't determine it.
+
+  `1` for the AMS-HT, `4` for the original AMS, AMS Lite and AMS 2 Pro. `None` for
+  [`ExternalSpool`](ams/index.md#amsunitmodel) and [`AmsLiteMixed`](ams/index.md#amsunitmodel): upstream
+  has no static answer for those either and falls back to the observed tray count
+  (BambuStudio `DevAms::GetSlotCount`), so count [`AmsUnit::tray`](ams/index.md#amsunit) rather than trusting a
+  number invented here.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsUnitModel`
+
+- <span id="amsunitmodel-clone"></span>`fn clone(&self) -> AmsUnitModel` — [`AmsUnitModel`](ams/index.md#amsunitmodel)
+
+##### `impl Copy for AmsUnitModel`
+
+##### `impl Debug for AmsUnitModel`
+
+- <span id="amsunitmodel-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsUnitModel`
+
+##### `impl PartialEq for AmsUnitModel`
+
+- <span id="amsunitmodel-partialeq-eq"></span>`fn eq(&self, other: &AmsUnitModel) -> bool` — [`AmsUnitModel`](ams/index.md#amsunitmodel)
 
 ### `FilamentSwitchInlet`
 
