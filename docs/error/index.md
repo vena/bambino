@@ -39,6 +39,7 @@ enum Error {
     ModelMismatch(std::borrow::Cow<'static, str>),
     Backpressure,
     InvalidArgument(std::borrow::Cow<'static, str>),
+    InvalidState(std::borrow::Cow<'static, str>),
 }
 ```
 
@@ -111,6 +112,20 @@ and source error tracing are derived automatically via `thiserror`.
 
   Emitted when a caller-supplied argument fails client-side validation (e.g. an unknown
   axis name) before any command is sent to the printer.
+
+- **`InvalidState`**
+
+  Emitted when a command is refused because the printer's observed print state cannot
+  act on it (e.g. skipping objects with no job loaded).
+  
+  Distinct from [`Error::InvalidArgument`]: the caller's arguments are well-formed, the
+  machine is simply in the wrong state. Distinct from [`Error::ModelMismatch`](#error), which is a
+  permanent capability gap rather than a transient one — retrying after the printer reaches
+  the right state is the correct response to this error, and is not for `ModelMismatch`.
+  
+  These gates read `PrinterClient`'s *cached* `gcode_state`, so they are only as fresh as
+  the last `poll_telemetry()`. A caller that has not polled recently can be refused on a
+  stale reading; poll and retry rather than treating it as final.
 
 #### Trait Implementations
 

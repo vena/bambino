@@ -729,13 +729,28 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Pauses the currently active print job [REF-MQTT-LIFECYCLE].
 
+  Deliberately **not** state-gated, unlike [`skip_objects`](#printerclient). Pausing an
+  idle printer is a firmware no-op rather than a misdirected command, neither BambuStudio
+  nor bambuddy gates this on `gcode_state`, and the CLI's `probe` sends it while idle on
+  purpose to document what the firmware does. See `stop_print` for the staleness argument
+  that applies to any cache-backed gate on this path.
+
 - <span id="superprinterclient-resume-print"></span>`async fn resume_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Resumes a paused print job [REF-MQTT-LIFECYCLE].
 
+  Not state-gated, on the same terms as [`pause_print`](#printerclient).
+
 - <span id="superprinterclient-stop-print"></span>`async fn stop_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].
+
+  Deliberately **ungated**, unlike [`skip_objects`](#printerclient). A state gate reads
+  the *cached* `gcode_state`, which is only as fresh as the last
+  [`poll_telemetry()`](#printerclient); a caller that has not polled since before the
+  job started holds a stale `IDLE`. Refusing an abort on a stale reading would leave the
+  printer running while reporting the stop as rejected — the wrong direction to fail for
+  the abort path. Stop is idempotent, so a no-op stop costs nothing on the other side.
 
 - <span id="superprinterclient-clear-print-error"></span>`async fn clear_print_error(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
@@ -748,6 +763,24 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-skip-objects"></span>`async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Bypasses rendering of specific objects within an active multi-model print job [REF-MQTT-LIFECYCLE].
+
+  `object_ids` are `identify_id` values from the `slice_info.config` inside the **currently
+  loaded** job's 3MF. They reference nothing when no job is loaded, which is why this is
+  gated more tightly than [`pause_print`](#printerclient).
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) when `object_ids` is empty — that would publish an empty
+  `obj_list`, a command that cannot skip anything.
+
+  [`Error::InvalidState`](../error/index.md#error) unless the cached print state is `Running` or `Paused` (or not yet
+  observed). This follows bambuddy, which gates on exactly those two
+  (`bambu_mqtt.py:7047`). Pausing to inspect a failed part, skipping it, then resuming is a
+  legitimate workflow, so `Paused` belongs alongside `Running`.
+
+  Deliberately **not** gated on `xcam.allow_skip_parts`: that field reads `false` in every
+  capture, including hardware the vendor documents as supporting the feature, so gating on
+  it would break skip-objects outright. bambuddy parses it and likewise does not gate on it.
 
 - <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error>` — [`CalibrationOption`](types/index.md#calibrationoption), [`Error`](../error/index.md#error)
 
