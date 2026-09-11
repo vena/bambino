@@ -1,6 +1,6 @@
 name: CI
 
-# See make check-fast.
+# See make check-fast and make check-docs.
 
 on:
   push:
@@ -17,3 +17,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: make check-fast
+      # Separate step, not folded into check-fast: rustdoc does not reuse
+      # cargo build's artifacts, and the pre-commit hook runs check-fast on
+      # every commit. Keeping it here is what makes a broken intra-doc link
+      # block a push without taxing every local commit. See the check-docs
+      # comment in the Makefile.
+      - run: make check-docs

@@ -1,4 +1,4 @@
-.PHONY: check-fast check-esp-idf check-all docs install-hooks
+.PHONY: check-fast check-docs check-esp-idf check-all docs install-hooks
 
 CHIP ?= esp32c6
 
@@ -34,7 +34,42 @@ check-fast:
 check-esp-idf:
 	scripts/check-esp-idf.sh $(CHIP)
 
-check-all: check-fast check-esp-idf
+# Intra-doc link gate. Broken `[...]` links compile, test, and clippy clean, so
+# before this target nothing rejected them: a single session accumulated 15
+# (13 `crate::PrinterClient::foo` links for a type that is not re-exported at
+# the crate root, plus a `QuirkStrategy` link left dead by the rename to
+# `ModelQuirks` that had survived every gate indefinitely). For a published
+# crate the failure mode is a docs.rs page whose links go nowhere.
+#
+# Deliberately NOT part of check-fast, and invoked from .github/workflows/ci.yml
+# as its own step: rustdoc does not reuse `cargo build` artifacts, and the
+# pre-commit hook already runs check-fast on every commit. It is cheap (~9s warm
+# after a src/ touch, vs ~10min for check-fast), so folding it in would be
+# affordable -- the separation is about keeping a class of problem that never
+# blocks anything at commit time off the commit path, not about the 9s.
+#
+# Default features on purpose, NOT `--features embassy` as the `docs` target
+# below uses. Two reasons: that combo (tokio+std+embassy) is one nothing else
+# builds, so it costs ~205s cold instead of ~9s; and two rustdoc invocations for
+# the same crate+features share one fingerprint slot, so matching `docs`' flags
+# would make each run invalidate the other's cached rustdoc output. Different
+# feature sets keep them in separate slots. `cargo doc` writes HTML plus an
+# index and never touches target/doc/bambino.json (verified by md5 before/after),
+# which is the only target/doc artifact the `docs` target consumes -- so the two
+# cannot clobber each other.
+#
+# The gap this leaves: cfg-gated backends (io/embassy.rs, io/esp_idf.rs) are
+# invisible to a default-features doc run, so their intra-doc links stay
+# ungated. Every warning actually observed so far was in default-feature code.
+#
+# -D warnings makes rustdoc's warnings fail the build rather than scroll past.
+# The tree is clean at 0 warnings as of this target landing. If a future
+# `#[doc(hidden)]` or cfg-gated item makes it noisy, the escape hatch is
+# `--document-private-items` or a targeted `#[allow]`, not dropping the check.
+check-docs:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+
+check-all: check-fast check-docs check-esp-idf
 
 install-hooks:
 	scripts/install-hooks.sh
