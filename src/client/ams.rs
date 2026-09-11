@@ -269,12 +269,13 @@ where
         }
 
         let unit_model = self.cached_ams_unit_model(ams_id);
-        if let Some(model) = unit_model {
-            if !model.supports_drying() {
-                return Err(Error::ModelMismatch(
-                    "attached AMS unit has no drying chamber — only the AMS 2 Pro and AMS-HT can dry".into(),
-                ));
-            }
+        if let Some(model) = unit_model
+            && !model.supports_drying()
+        {
+            return Err(Error::ModelMismatch(
+                "attached AMS unit has no drying chamber — only the AMS 2 Pro and AMS-HT can dry"
+                    .into(),
+            ));
         }
 
         // `dry_temp_range()` is the authority when the unit is known. Unobserved, fall back to
