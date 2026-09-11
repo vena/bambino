@@ -69,9 +69,12 @@ impl<'a> Capabilities<'a> {
     /// [`start_drying`](crate::PrinterClient::start_drying) tests, so a control offered on the
     /// strength of it will not then be refused.
     ///
-    /// For a firmware-gated model this reads `false` until
-    /// [`get_version()`](crate::PrinterClient::get_version) has been called — an unread version
-    /// cannot be shown to meet a minimum. Call it once after connecting if you intend to ask.
+    /// On a firmware-gated model an unread version does **not** deny the capability — it falls
+    /// back to the model's answer, and only a version actually read and found older refuses.
+    /// [`connect_mqtt()`](crate::PrinterClient::connect_mqtt) and
+    /// [`connect_all()`](crate::PrinterClient::connect_all) fetch the version for you, so a
+    /// normally-connected client has it; a caller relying on lazy connection gets the
+    /// model-rule answer instead.
     #[must_use]
     pub fn supports_ams_remote_drying(&self) -> bool {
         self.quirks.supports_ams_remote_drying(&self.context)

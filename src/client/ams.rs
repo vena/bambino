@@ -146,11 +146,11 @@ where
 
     /// Whether this printer supports remote AMS drying — the printer-side half of the gate.
     ///
-    /// Supplies the cached `fun2` to
+    /// Supplies this client's [`quirk_context()`](Self::quirk_context) to
     /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying),
-    /// which resolves the printer's own answer against the model default. This is the call to
-    /// gate a UI on: it is the identical value [`start_drying`](Self::start_drying) checks, so a
-    /// control offered on the strength of it cannot then be refused.
+    /// which resolves the printer's own reported answer against the model's rules. This is the
+    /// call to gate a UI on: it is the identical value [`start_drying`](Self::start_drying)
+    /// checks, so a control offered on the strength of it cannot then be refused.
     ///
     /// Shorthand for
     /// [`capabilities().supports_ams_remote_drying()`](crate::client::Capabilities::supports_ams_remote_drying);
@@ -206,7 +206,8 @@ where
     ///
     /// [`Error::ModelMismatch`] on hosts where
     /// [`supports_ams_remote_drying()`](Self::supports_ams_remote_drying) is `false` — the
-    /// printer's own `fun2` bit 5 when it has reported one, else the P1P/P1S quirk. Such
+    /// printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
+    /// A1/A1 Mini or P1P/P1S, and below the minimum firmware on X1C/P2S/H2D/H2S/H2C. Such
     /// firmware acks this command `result: success` and silently discards it rather than
     /// actually driving the AMS heater; see `[REF-AMS-DRYER]`.
     ///
