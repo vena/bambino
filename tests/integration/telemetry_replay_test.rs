@@ -16,15 +16,13 @@
 //! `needs-verification`, well under the three-plus-instances threshold this crate's
 //! quirks-engine precedent uses to justify a shared-strategy refactor.
 
-mod common;
-
 use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
-use common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
+use crate::common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
 
 const SERIAL: &str = "01P000000000000";
 
@@ -35,7 +33,7 @@ const PLAUSIBLE_MAX_TEMP_C: u16 = 500;
 
 #[tokio::test]
 async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
-    let capture = include_str!("mocks/P1S_print_sequence.ndjson");
+    let capture = include_str!("../mocks/P1S_print_sequence.ndjson");
     let lines: Vec<String> = capture
         .lines()
         .filter(|l| !l.trim().is_empty())

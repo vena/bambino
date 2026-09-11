@@ -2,14 +2,12 @@
 //!
 //! Split from `client_test.rs` (see issue #35).
 
-mod common;
-
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use common::client::connect_test_client;
-use common::mock_mqtt::{handle_mqtt_handshake, read_publish_payload};
+use crate::common::client::connect_test_client;
+use crate::common::mock_mqtt::{handle_mqtt_handshake, read_publish_payload};
 
 // ============================================================================
 // G-code Safety Validation Tests

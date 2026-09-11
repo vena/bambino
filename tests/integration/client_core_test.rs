@@ -3,15 +3,13 @@
 //! Split from `client_test.rs` (see issue #35); safety boundaries, temperature
 //! clamps, fan step calculations, and G-code wrapping heuristics.
 
-mod common;
-
 use bambino::client::{BuzzerMode, FanTarget};
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use common::client::connect_test_client;
-use common::mock_mqtt::{
+use crate::common::client::connect_test_client;
+use crate::common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
 };
 

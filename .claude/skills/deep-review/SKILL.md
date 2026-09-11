@@ -28,7 +28,7 @@ find src tests -name '*.rs' | xargs wc -l | sort -rn
 Also note, while discovering:
 - `src/bin/*/` (CLI binaries, if any — currently `bambino-cli`).
 - Loose top-level files (`error.rs`, `models.rs`, `lib.rs`).
-- `tests/` (integration tests + shared mock infrastructure — see Step 2 for why this walk matters and how these fold into the partition).
+- `tests/` (one integration-test binary under `tests/integration/` plus shared mock infrastructure — see Step 2 for why this walk matters and how these fold into the partition).
 - Whether `docs/` exists — if stale, that's a `make docs` pass, not this skill's job.
 
 ## Step 2 — Partition into review units
@@ -40,7 +40,7 @@ Heuristic, not a fixed list:
 - Merge 2–3 thin subdirectories (rough guide: ≤3 files each, related domain) into a single unit rather than spawning a trivially small agent for each.
 - Bundle loose top-level files (`error.rs`, `models.rs`, `lib.rs`, etc.) into one "core" unit.
 - Any `src/bin/*/` binary is its own unit.
-- Fold each `tests/*_test.rs` integration test file into the same unit as the `src/` code it exercises (e.g. `tests/ftps_test.rs` joins the `ftps` unit) — judging mock fidelity needs the mock and the real implementation in the same agent's view. `tests/common/*` (shared mock infrastructure used across multiple units) doesn't belong to just one — give it its own small unit, or fold it into whichever unit relies on it most this run; decide fresh, don't hardcode which.
+- Fold each `tests/integration/*_test.rs` integration test file into the same unit as the `src/` code it exercises (e.g. `tests/integration/ftps_test.rs` joins the `ftps` unit) — judging mock fidelity needs the mock and the real implementation in the same agent's view. These are modules of one test binary rooted at `tests/integration/main.rs` (see #245), not separate test crates, so the partition still splits them per file even though cargo no longer does. `tests/integration/common/*` (shared mock infrastructure used across multiple units) doesn't belong to just one — give it its own small unit, or fold it into whichever unit relies on it most this run; decide fresh, don't hardcode which.
 - Target 3–12 files per unit, but weight by size, not just count. A single file over ~800 lines (or clearly larger than its siblings, e.g. 3x the unit's average) counts as 2–3 file-slots against that target, or gets split into its own unit outright if it's large enough to dominate the agent's attention on its own — the file-count target alone doesn't catch a unit that's technically 3 files but one of them is huge. Too few (by count or effective weighted count) wastes an agent spawn on triviality; too many (by either measure) means the agent can't actually deeply read everything.
 
 Record the resulting partition (unit name → file list) — this is the actual worklist, and it will differ from any previous run once the crate's structure changes.

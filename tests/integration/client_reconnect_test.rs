@@ -2,8 +2,6 @@
 //!
 //! Split from `client_test.rs` Phase 18 section (see issue #35).
 
-mod common;
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -15,10 +13,10 @@ use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
-use common::client::{SERIAL, connect_test_client};
-use common::io::{DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory};
-use common::mock_ftps;
-use common::mock_mqtt::{
+use crate::common::client::{SERIAL, connect_test_client};
+use crate::common::io::{DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory};
+use crate::common::mock_ftps;
+use crate::common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
 };
 

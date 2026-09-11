@@ -10,7 +10,7 @@ cargo build --bin bambino-cli --features cli         # Build the CLI binary
 cargo test                                           # Run all tests
 cargo test --lib                                     # Library tests only
 cargo test test_name                                 # Single test by name
-cargo build --no-default-features --features alloc --lib  # no_std compatibility check (must pass)
+cargo check --no-default-features --features alloc --lib  # no_std compatibility check (must pass)
 cargo check --no-default-features --features embassy --lib  # embassy target check (must pass)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps       # intra-doc link check (must pass)
 ```

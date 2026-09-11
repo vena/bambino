@@ -2,15 +2,13 @@
 //!
 //! Split from `client_test.rs` Phase 18 section (see issue #35).
 
-mod common;
-
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus};
 use bambino::diagnostics::DecodedPrintError;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use common::client::{SERIAL, connect_test_client};
-use common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
+use crate::common::client::{SERIAL, connect_test_client};
+use crate::common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
 
 #[tokio::test]
 async fn test_print_status_cache_from_telemetry() {

@@ -6,8 +6,6 @@
 //! Uses the shared `mock_mqtt` broker over in-memory duplex streams to ensure
 //! deterministic verification of protocol packet framing and multiplexing.
 
-mod common;
-
 use tokio::sync::{mpsc, oneshot};
 
 use bambino::error::Error;
@@ -16,7 +14,7 @@ use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
-use common::mock_mqtt::run_mock_mqtt_broker;
+use crate::common::mock_mqtt::run_mock_mqtt_broker;
 
 #[tokio::test]
 async fn test_mqtt_client_lifecycle_and_telemetry() {

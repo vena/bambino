@@ -14,18 +14,27 @@ CHIP ?= esp32c6
 # rewrote 41 untouched files into an unrelated commit. Use `cargo fmt` (not a
 # bare `rustfmt <file>`) to fix a failure -- it covers the CLI binary and
 # tests/, which a pass rooted at src/lib.rs cannot reach.
+#
+# Order matters: the three ~0s checks run first so a trivial failure fails fast
+# rather than after ~10min of cargo. The two scripts used to run last, behind the
+# whole cargo sequence.
+#
+# The alloc gate is `cargo check`, not `cargo build`: it is a compile gate for
+# the no_std feature combo, nothing consumes the artifact, and skipping codegen
+# costs 9s instead of 15s. The embassy gate beside it has always been a `check`
+# for the same reason.
 check-fast:
 	cargo fmt --check
+	scripts/check-rules-globs.sh
+	scripts/check-doc-latex.sh
 	cargo build
 	cargo build --bin bambino-cli --features cli
 	cargo test
 	cargo test --bin bambino-cli --features cli
-	cargo build --no-default-features --features alloc --lib
+	cargo check --no-default-features --features alloc --lib
 	cargo check --no-default-features --features embassy --lib
 	cargo clippy
 	cargo clippy --bin bambino-cli --features cli
-	scripts/check-rules-globs.sh
-	scripts/check-doc-latex.sh
 
 # Wraps scripts/check-esp-idf.sh. Not run by check-fast/check-all's CI job on
 # every push — see .github/workflows/esp-idf.yml for why (path-filtered, and

@@ -7,8 +7,6 @@
 //! asynchronous network simulation utilizing the shared test infrastructure, preventing
 //! port collisions and flaky cryptography checks.
 
-mod common;
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -21,11 +19,11 @@ use bambino::models::PrinterModel;
 
 use bambino::io::TlsVersion;
 
-use common::io::{
+use crate::common::io::{
     DummyTlsConnector, FailingDataTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
     PerCallVersionReportingTlsConnector, VersionReportingTlsConnector,
 };
-use common::mock_ftps;
+use crate::common::mock_ftps;
 
 /// Return type of [`setup()`]: control-stream pair, shared data-stream container, and factory.
 type SetupResult = (

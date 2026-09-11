@@ -7,8 +7,6 @@
 //! in-memory duplex stream, ensuring that JPEG magic marker bounds and payload
 //! length descriptors are accurately translated.
 
-mod common;
-
 use std::sync::Arc;
 use tokio::io::DuplexStream;
 use tokio::sync::Mutex;
@@ -20,8 +18,8 @@ use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use common::io::{DummyTlsConnector, MockDataStreamFactory};
-use common::mock_camera::{
+use crate::common::io::{DummyTlsConnector, MockDataStreamFactory};
+use crate::common::mock_camera::{
     run_mock_camera_server, run_mock_camera_server_closes_after_handshake,
     run_mock_camera_server_drops_mid_frame,
 };
