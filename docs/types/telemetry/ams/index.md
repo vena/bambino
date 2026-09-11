@@ -6,6 +6,19 @@
 
 AMS telemetry types (tray slots, units, dry settings, virtual trays).
 
+## Contents
+
+- [Types](#types)
+  - [`AmsDrySetting`](#amsdrysetting)
+  - [`AmsStatusReport`](#amsstatusreport)
+  - [`AmsTray`](#amstray)
+  - [`AmsUnit`](#amsunit)
+  - [`VirtualTray`](#virtualtray)
+  - [`AmsFilamentStep`](#amsfilamentstep)
+  - [`AmsUnitModel`](#amsunitmodel)
+  - [`DryBlockReason`](#dryblockreason)
+  - [`FilamentSwitchInlet`](#filamentswitchinlet)
+
 ## Quick Reference
 
 | Item | Kind | Description |
@@ -17,6 +30,7 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
 | [`VirtualTray`](#virtualtray) | struct | Virtual/external spool holder telemetry. |
 | [`AmsFilamentStep`](#amsfilamentstep) | enum | Per-slot filament-change step code. |
 | [`AmsUnitModel`](#amsunitmodel) | enum | Which physical AMS accessory is attached, decoded from `info` bits 0–3. |
+| [`DryBlockReason`](#dryblockreason) | enum | Why the firmware will not, or did not, start a drying cycle — one entry of `dry_sf_reason`. |
 | [`FilamentSwitchInlet`](#filamentswitchinlet) | enum | Which Filament Track Switch inlet an AMS unit feeds through. |
 
 ## Types
@@ -562,6 +576,22 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
   `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
 
+- <span id="amsunit-dry-block-reasons"></span>`fn dry_block_reasons(&self) -> Option<Vec<DryBlockReason>>` — [`DryBlockReason`](#dryblockreason)
+
+  Decodes [`dry_sf_reason`](#amsunit) into typed reasons, in reported order.
+
+  A layer over the raw `Vec<i32>` rather than a replacement for it — the same relationship
+  [`parse_info`](#amsunit) has with the typed `info` accessors. Unrecognized codes
+  survive as [`DryBlockReason::Other`](#dryblockreason).
+
+- <span id="amsunit-primary-dry-block-reason"></span>`fn primary_dry_block_reason(&self) -> Option<DryBlockReason>` — [`DryBlockReason`](#dryblockreason)
+
+  The single reason worth showing a user when the firmware reports several at once.
+
+  Mirrors bambuddy's `primary_reason_code`: a reason the user has to act on outranks one
+  that clears on its own, because that is the only case where showing a message beats
+  retrying silently. Ties break on reported order.
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsUnit`
@@ -963,6 +993,120 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 ##### `impl PartialEq for AmsUnitModel`
 
 - <span id="amsunitmodel-partialeq-eq"></span>`fn eq(&self, other: &AmsUnitModel) -> bool` — [`AmsUnitModel`](#amsunitmodel)
+
+### `DryBlockReason`
+
+```rust
+enum DryBlockReason {
+    PrinterBusy,
+    InsufficientPower,
+    AmsBusy,
+    FilamentAtOutlet,
+    AlreadyStarting,
+    Unsupported2dMode,
+    AlreadyDrying,
+    FirmwareUpgrading,
+    ExternalPowerRequired,
+    Other(i32),
+}
+```
+
+Why the firmware will not, or did not, start a drying cycle — one entry of `dry_sf_reason`.
+
+**`dry_sf_reason` is a list of independent codes, not a bitmask.** `reference/05_materials_ams.md`
+described it as one for a while and listed only `1` and `8`, whose reading as bit positions was
+a coincidence; the field is an enumerated code list with nine members, which is why it
+deserializes as `Vec<i32>`.
+
+Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
+`DRY_SF_REASON_MESSAGES`), as is the user-action split — see
+[`needs_user_action`](#dryblockreason).
+
+#### Variants
+
+- **`PrinterBusy`**
+
+  `0` — the printer is busy.
+
+- **`InsufficientPower`**
+
+  `1` — insufficient power: too many AMS units drying at once, or an external PSU is
+  required. Needs the user to change something.
+
+- **`AmsBusy`**
+
+  `2` — the AMS is busy.
+
+- **`FilamentAtOutlet`**
+
+  `3` — filament is sitting at the AMS outlet and must be retracted first. Needs the user.
+
+- **`AlreadyStarting`**
+
+  `4` — a drying cycle on this AMS is already starting.
+
+- **`Unsupported2dMode`**
+
+  `5` — not supported in 2D mode.
+
+- **`AlreadyDrying`**
+
+  `6` — the AMS is already drying.
+
+- **`FirmwareUpgrading`**
+
+  `7` — the AMS firmware is upgrading.
+
+- **`ExternalPowerRequired`**
+
+  `8` — the external AMS power adapter must be plugged in. Needs the user.
+
+- **`Other`**
+
+  A code this crate doesn't know — newer firmware may add reasons, and folding one onto a
+  neighbouring variant would report a wrong cause with full confidence.
+
+#### Implementations
+
+- <span id="dryblockreason-from-code"></span>`fn from_code(code: i32) -> Self`
+
+  Decodes one raw `dry_sf_reason` entry.
+
+- <span id="dryblockreason-code"></span>`fn code(self) -> i32`
+
+  The raw wire code this reason decodes from.
+
+- <span id="dryblockreason-needs-user-action"></span>`fn needs_user_action(self) -> bool`
+
+  Returns true if clearing this needs the user to physically do something.
+
+  This is the distinction that decides a caller's behavior: retry in a moment, or stop and
+  surface a message. True for [`InsufficientPower`](#dryblockreason) and
+  [`ExternalPowerRequired`](#dryblockreason) (bambuddy's
+  `POWER_REASON_CODES = {1, 8}`) and for [`FilamentAtOutlet`](#dryblockreason)
+  (`RETRACT_REASON_CODE = 3`); every other known reason clears on its own.
+
+  [`Other`](#dryblockreason) returns `false` — an unknown reason is reported as transient
+  because that is the reading that keeps a caller retrying rather than permanently refusing
+  on a code that may be benign.
+
+#### Trait Implementations
+
+##### `impl Clone for DryBlockReason`
+
+- <span id="dryblockreason-clone"></span>`fn clone(&self) -> DryBlockReason` — [`DryBlockReason`](#dryblockreason)
+
+##### `impl Copy for DryBlockReason`
+
+##### `impl Debug for DryBlockReason`
+
+- <span id="dryblockreason-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for DryBlockReason`
+
+##### `impl PartialEq for DryBlockReason`
+
+- <span id="dryblockreason-partialeq-eq"></span>`fn eq(&self, other: &DryBlockReason) -> bool` — [`DryBlockReason`](#dryblockreason)
 
 ### `FilamentSwitchInlet`
 

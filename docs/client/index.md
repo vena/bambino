@@ -265,19 +265,41 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   through the switch, so a `None` here means the firmware has nothing to derive from and
   **discards the command in silence** — load and unload simply do nothing.
 
+- <span id="superprinterclient-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self) -> bool`
+
+  Whether this printer supports remote AMS drying — the printer-side half of the gate.
+
+  Prefers the printer's own answer, `fun2` bit 5, and falls back to
+  [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks)
+  when the printer has not reported `fun2` (older firmware omits it entirely, and it only
+  arrives on pushall, so an un-polled client always falls back here).
+
+  Firmware outranks the quirk table because the quirk's `true` is a default asserted for
+  every model nobody has tested, while `fun2` is the machine in front of you answering for
+  itself. The one hardware-verified quirk value — P1P/P1S `false`, observed acking the
+  command and discarding it — is therefore reachable only when that firmware reports no
+  `fun2` or reports bit 5 clear. A P1 whose firmware sets the bit is taken at its word here;
+  if that turns out to re-open the acked-then-discarded path, this is the composition to
+  revisit, not the quirk.
+
 - <span id="superprinterclient-start-drying"></span>`async fn start_drying(&mut self, ams_id: i32, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, filament: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
 
   * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
-    `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`); anything else is treated as
-    an AMS 2 Pro / standard-AMS drying unit.
-  * `temp`: Drying temperature in degrees Celsius. Clamped to this AMS unit's
-    documented ceiling — this is a property of the *attached AMS unit*, not the host
-    printer model: AMS-HT's built-in heater is rated to 85°C, AMS 2 Pro's to 65°C
+    `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`). The address alone does **not**
+    identify the unit: `0..=3` is shared by the original AMS, the AMS Lite and the AMS 2 Pro,
+    and only the last of those has a heater — the unit model comes from cached telemetry,
+    see Errors below.
+  * `temp`: Drying temperature in degrees Celsius. Must fall inside the attached unit's
+    [`AmsUnitModel::dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel) — `45..=65` for the AMS 2 Pro, `45..=85` for the
+    AMS-HT. This is a property of the *attached AMS unit*, not the host printer model
     (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
     `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
-    variation is documented, so this does not go through `ModelQuirks`).
+    variation is documented, so this does not go through `ModelQuirks`). **Both bounds are
+    rejected, not clamped**: BambuStudio refuses a temperature below the floor exactly as it
+    refuses one above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a
+    caller's `0` into `45` would start a real heating cycle nobody asked for.
   * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) —
     the wire field is `duration` in hours, not the old `dry_time` in minutes. No
     documented maximum duration was found to validate against.
@@ -287,9 +309,31 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
   * `filament`: Filament type string (e.g., "PA-CF").
 
-  Returns `Error::ModelMismatch` on hosts where `ModelQuirks::supports_ams_remote_drying()`
-  is `false` (P1P/P1S) — the firmware acks this command `result: success` and silently
-  discards it rather than actually driving the AMS heater; see `[REF-AMS-DRYER]`.
+  # Errors
+
+  [`Error::ModelMismatch`](../error/index.md#error) on hosts where
+  [`supports_ams_remote_drying()`](#printerclient) is `false` — the
+  printer's own `fun2` bit 5 when it has reported one, else the P1P/P1S quirk. Such
+  firmware acks this command `result: success` and silently discards it rather than
+  actually driving the AMS heater; see `[REF-AMS-DRYER]`.
+
+  [`Error::ModelMismatch`](../error/index.md#error) also when the addressed unit is one this crate can see has no
+  drying chamber — an external-spool sentinel (`254`/`255`), or a cached
+  [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) whose [`supports_drying`](../types/telemetry/ams/index.md#amsunitmodel) is `false`.
+  These are two independent gates on purpose, matching the pair BambuStudio writes out
+  longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
+  attached box must have a heater.
+
+  [`Error::InvalidArgument`](../error/index.md#error) when `temp` falls outside the unit's
+  [`dry_temp_range`](../types/telemetry/ams/index.md#amsunitmodel).
+
+  The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
+  observed passes through — same rule as [`skip_objects`](#printerclient), and for the
+  same reason: an idle printer's incremental pushes frequently carry no `ams` block at all,
+  and refusing there would break a caller that connects and commands without polling. Call
+  [`poll_telemetry()`](#printerclient) first to arm the gate. When the unit is
+  unobserved the temperature range falls back to the `ams_id`-derived ceiling this method
+  used before, which is the best guess available from the address alone.
 
 - <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 

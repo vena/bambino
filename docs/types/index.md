@@ -15,11 +15,13 @@ sub-structures like [`AmsTray`](telemetry/ams/index.md#amstray), [`DeviceTelemet
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`drying`](drying/index.md) | mod | # Filament Drying Presets |
 | [`telemetry`](telemetry/index.md) | mod | # State Telemetry Payload Schemas |
 | [`version`](version/index.md) | mod | Firmware version information returned by the `get_version` command. |
 
 ## Modules
 
+- [`drying`](drying/index.md) — # Filament Drying Presets
 - [`telemetry`](telemetry/index.md) — # State Telemetry Payload Schemas
 - [`version`](version/index.md) — Firmware version information returned by the `get_version` command.
 
@@ -698,6 +700,22 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
   `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
+
+- <span id="amsunit-dry-block-reasons"></span>`fn dry_block_reasons(&self) -> Option<Vec<DryBlockReason>>` — [`DryBlockReason`](telemetry/ams/index.md#dryblockreason)
+
+  Decodes [`dry_sf_reason`](telemetry/ams/index.md#amsunit) into typed reasons, in reported order.
+
+  A layer over the raw `Vec<i32>` rather than a replacement for it — the same relationship
+  [`parse_info`](telemetry/ams/index.md#amsunit) has with the typed `info` accessors. Unrecognized codes
+  survive as [`DryBlockReason::Other`](telemetry/ams/index.md#dryblockreason).
+
+- <span id="amsunit-primary-dry-block-reason"></span>`fn primary_dry_block_reason(&self) -> Option<DryBlockReason>` — [`DryBlockReason`](telemetry/ams/index.md#dryblockreason)
+
+  The single reason worth showing a user when the firmware reports several at once.
+
+  Mirrors bambuddy's `primary_reason_code`: a reason the user has to act on outranks one
+  that clears on its own, because that is the only case where showing a message beats
+  retrying silently. Ties break on reported order.
 
 #### Trait Implementations
 
@@ -1688,6 +1706,7 @@ struct PrinterTelemetry {
     pub vir_slot: Option<Vec<super::ams::VirtualTray>>,
     pub device: Option<super::device::DeviceTelemetry>,
     pub fun: Option<String>,
+    pub fun2: Option<String>,
     pub print_type: Option<String>,
     pub lights_report: Option<Vec<LightReport>>,
     pub gcode_file_prepare_percent: Option<String>,
@@ -1929,6 +1948,16 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`fun`**: `Option<String>`
 
   Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
+
+- **`fun2`**: `Option<String>`
+
+  Second capability bitfield (hex string), distinct from [`fun`](telemetry/report/index.md#printertelemetry).
+  
+  Carries the printer's own firmware capability flags — most importantly bit 5,
+  remote-dry support. Read via [`fun2_bit`](telemetry/index.md#fun2-bit) rather than directly:
+  BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
+  reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
+  integer the way `fun` is.
 
 - **`print_type`**: `Option<String>`
 
@@ -2185,6 +2214,7 @@ struct TelemetryReport {
     pub print: Option<PrinterTelemetry>,
     pub device: Option<DeviceTelemetry>,
     pub fun: Option<String>,
+    pub fun2: Option<String>,
 }
 ```
 
@@ -2207,6 +2237,15 @@ top-level domains depending on which micro-system published the frame.
 
   Developer LAN Mode bitmask field (hex string).
   Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
+
+- **`fun2`**: `Option<String>`
+
+  Second capability bitfield (hex string) — see [`PrinterTelemetry::fun2`](telemetry/report/index.md#printertelemetry).
+  
+  Accepted at the top level as well as inside `print` on the same first-found-wins terms as
+  [`fun`](telemetry/index.md#telemetryreport). BambuStudio itself reads only `print.fun2`
+  (`DeviceManager.cpp:4459`); the top-level slot mirrors `fun`'s documented drift rather
+  than a location observed carrying `fun2`.
 
 #### Implementations
 
@@ -2242,6 +2281,41 @@ top-level domains depending on which micro-system published the frame.
   Mirrors `device()`'s fallback order — top-level `fun` is checked first,
   falling back to `print.fun` [REF-MQTT-ENV §3.2.1]. Prefer this over reading `self.fun`
   directly, the same way `device()` is preferred over `self.device`.
+
+- <span id="telemetryreport-fun2"></span>`fn fun2(&self) -> Option<&str>`
+
+  Returns the `fun2` capability bitfield, checking both wire locations.
+
+  Same first-found-wins order as [`fun`](telemetry/index.md#telemetryreport). Prefer [`fun2_bit`](telemetry/index.md#telemetryreport)
+  over parsing this yourself — see that method for why the string can't go through
+  `u64::from_str_radix`.
+
+- <span id="telemetryreport-fun2-bit"></span>`fn fun2_bit(&self, bit: u32) -> Option<bool>`
+
+  Reads a single bit of the `fun2` capability bitfield.
+
+  `None` only when `fun2` is absent or carries no hex digits at all — "the printer didn't
+  say", which is distinct from a bit that is present and clear. A bit index past the end of
+  the string reads `false`, matching BambuStudio's extractor, which returns `0` rather than
+  failing (`DevUtil.cpp:53`).
+
+  Known bits (`DeviceManager.cpp:4466-4477`): `0` print with eMMC, `3` PA mode,
+  **`5` remote dry supported** (see [`supports_remote_dry`](telemetry/index.md#telemetryreport)),
+  `6` update-remain hide display, `7` print TPU from left extruder (model-gated),
+  `8` active arc fitting, `17` model internal storage, `19` check track-switch matches
+  sliced printer, `21`-`22` AMS preload version, `23` filament manual multi-color.
+
+- <span id="telemetryreport-supports-remote-dry"></span>`fn supports_remote_dry(&self) -> Option<bool>`
+
+  Whether the printer reports its own support for remote AMS drying — `fun2` bit 5.
+
+  This is the printer-side half of the drying gate; the attached unit's heater is the other
+  half (see [`AmsUnitModel::supports_drying`](telemetry/ams/index.md#amsunitmodel)). BambuStudio requires both
+  (`Widgets/AMSControl.cpp:348`).
+
+  `None` means the printer never reported `fun2`, which is not the same as reporting `0` —
+  older firmware omits the field entirely, and treating that as "unsupported" would refuse
+  drying on hardware that has always accepted it.
 
 #### Trait Implementations
 
@@ -2720,6 +2794,224 @@ Hardware or firmware module entry from the printer's expansion bus version datab
 
 ##### `impl DeserializeOwned for VersionModule`
 
+### `DryingMaterial`
+
+```rust
+enum DryingMaterial {
+    Pla,
+    Petg,
+    Pctg,
+    Abs,
+    Asa,
+    Hips,
+    Pc,
+    Pa,
+    Pva,
+    Bvoh,
+    Tpu,
+    Pp,
+    Pe,
+    Pha,
+    Eva,
+    Ppa,
+    Pps,
+}
+```
+
+A base filament material with vendor-published drying parameters.
+
+Each material's profile stores temperature and time as a 4-element array indexed
+`[N3F idle, N3S idle, N3F printing, N3S printing]` — the mapping is explicit in
+BambuStudio's `DevUtilBackend.cpp:87-91`, which reads exactly those four positions into
+`..._on_idle[N3F]`, `..._on_idle[N3S]`, `..._on_print[N3F]`, `..._on_print[N3S]`. Everything
+here is indexed the same way, via [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel) plus a `printing` flag.
+
+**A convenience layer, not a replacement for the `&str` parameter.** The wire `dry_filament`
+field is free-form — BambuStudio sends the tray's own `filament_type` string — so
+[`start_drying`](../client/index.md#printerclient) keeps taking an arbitrary `&str` and
+this enum stays open at the edges via [`from_filament_type`](drying/index.md#dryingmaterial)
+returning `None`.
+
+#### Variants
+
+- **`Pla`**
+
+  Polylactic acid.
+
+- **`Petg`**
+
+  Polyethylene terephthalate glycol. Profile `fdm_filament_pet.json`.
+
+- **`Pctg`**
+
+  Copolyester (PCTG).
+
+- **`Abs`**
+
+  Acrylonitrile butadiene styrene.
+
+- **`Asa`**
+
+  Acrylonitrile styrene acrylate.
+
+- **`Hips`**
+
+  High-impact polystyrene.
+
+- **`Pc`**
+
+  Polycarbonate.
+
+- **`Pa`**
+
+  Polyamide (nylon).
+
+- **`Pva`**
+
+  Polyvinyl alcohol (support material).
+
+- **`Bvoh`**
+
+  Butenediol vinyl alcohol copolymer (support material).
+
+- **`Tpu`**
+
+  Thermoplastic polyurethane.
+
+- **`Pp`**
+
+  Polypropylene.
+
+- **`Pe`**
+
+  Polyethylene.
+
+- **`Pha`**
+
+  Polyhydroxyalkanoate.
+
+- **`Eva`**
+
+  Ethylene-vinyl acetate.
+
+- **`Ppa`**
+
+  Polyphthalamide. Profile `fdm_filament_ppa.json`; sold as PPA-CF.
+
+- **`Pps`**
+
+  Polyphenylene sulfide.
+
+#### Implementations
+
+- <span id="dryingmaterial-all"></span>`fn all() -> &'static [DryingMaterial]` — [`DryingMaterial`](drying/index.md#dryingmaterial)
+
+  Every material in this table.
+
+- <span id="dryingmaterial-from-filament-type"></span>`fn from_filament_type(filament_type: &str) -> Option<Self>`
+
+  Matches a wire `filament_type` string to a material, case-insensitively.
+
+  Accepts the bare material name and the common composite suffixes that share a base
+  profile — `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"` all resolve to [`Pa`](drying/index.md#dryingmaterial), because
+  BambuStudio's own composite presets inherit their drying parameters from the base
+  `fdm_filament_pa.json`. `None` for anything unrecognized, which is the case the free-form
+  `&str` parameter on `start_drying` exists to serve.
+
+- <span id="dryingmaterial-wire-name"></span>`fn wire_name(self) -> &'static str`
+
+  The canonical material name, as it appears in a wire `filament_type` field.
+
+- <span id="dryingmaterial-default-temp"></span>`fn default_temp(self, unit: AmsUnitModel, printing: bool) -> Option<u32>` — [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel)
+
+  Vendor default drying temperature in °C for this material on this unit.
+
+  `printing` selects the lower while-printing column, which exists because the AMS sits in
+  the print's thermal envelope. `None` for a unit with no drying chamber.
+
+  **This is a starting value, not a bound.** It always falls inside
+  [`AmsUnitModel::dry_temp_range`](telemetry/ams/index.md#amsunitmodel), but the range is the hardware limit and this is the
+  vendor's recommendation within it. BambuStudio additionally floors the printing-column
+  value at use: `min(printing_temp, softening_temp, heat_distortion_temp)`
+  (`AMSDryControl.cpp:1723-1725`) — see [`softening_temp`](drying/index.md#dryingmaterial) and
+  [`heat_distortion_temp`](drying/index.md#dryingmaterial) to reproduce that clamp.
+
+- <span id="dryingmaterial-default-duration-hours"></span>`fn default_duration_hours(self, unit: AmsUnitModel, printing: bool) -> Option<u32>` — [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel)
+
+  Vendor default drying duration in whole hours for this material on this unit.
+
+  `None` for a unit with no drying chamber.
+
+- <span id="dryingmaterial-softening-temp"></span>`fn softening_temp(self) -> u32`
+
+  Temperature (°C) at which this material begins to soften
+  (`filament_dev_drying_softening_temperature`).
+
+  Also the value to pass as `start_drying`'s `cooling_temp` — see
+  [`command_cooling_temp`](drying/index.md#dryingmaterial).
+
+- <span id="dryingmaterial-command-cooling-temp"></span>`fn command_cooling_temp(self) -> i32`
+
+  What to send as `start_drying`'s `cooling_temp` for this material.
+
+  **The wire `cooling_temp` carries the *softening* temperature, not the profile's
+  `filament_dev_drying_cooling_temperature`.** That second field exists and BambuStudio
+  parses it (`DevUtilBackend.cpp:109-110`), but never sends it — the drying command is
+  built from `filament_dev_drying_softening_temperature` (`AMSDryControl.cpp:816`). Reading
+  the similarly-named field instead is the obvious mistake here, so this accessor exists to
+  make the right one the easy one.
+
+  Equal to [`softening_temp`](drying/index.md#dryingmaterial); see
+  [`DEFAULT_COMMAND_COOLING_TEMP`](drying/index.md#default-command-cooling-temp) for what BambuStudio sends when a tray's filament
+  resolves to no preset at all.
+
+- <span id="dryingmaterial-heat-distortion-temp"></span>`fn heat_distortion_temp(self) -> Option<u32>`
+
+  Heat-distortion temperature (°C)
+  (`filament_dev_ams_drying_heat_distortion_temperature`), where the profile publishes one.
+
+  `None` for [`Pe`](drying/index.md#dryingmaterial) and [`Pha`](drying/index.md#dryingmaterial), whose profiles omit the key. One of
+  the three inputs to BambuStudio's while-printing clamp
+  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`).
+
+- <span id="dryingmaterial-fully-dryable-by"></span>`fn fully_dryable_by(self, unit: AmsUnitModel) -> bool` — [`AmsUnitModel`](telemetry/ams/index.md#amsunitmodel)
+
+  Returns true if this unit can dry this material *completely*.
+
+  A `false` here does not mean "don't dry it" — BambuStudio still permits the cycle and
+  shows "This filament may not be completely dried" (`AMSDryControl.cpp:1203`). It means
+  the cycle will not fully remove the moisture.
+
+  Read from `filament_dev_ams_drying_ams_limitations`, whose values do **not** use the
+  `DevAmsType` numbering the rest of this module does: in that field `"0"` is the AMS 2 Pro
+  and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp:58-61`), where `DevAmsType`
+  makes them `3` and `4`. `["-1"]` means neither unit qualifies.
+
+  **A profile that omits the key entirely behaves exactly like `["-1"]`.** BambuStudio
+  builds an empty set when the key is absent and then warns on set non-membership
+  (`AMSDryControl.cpp:1184` and `1203`), so the seven materials with no key published —
+  ABS, ASA, HIPS, PC, PA, PVA, TPU — get the same warning as PPA and PPS, which name
+  `["-1"]` explicitly. This method reports `false` for all nine rather than treating an
+  absent key as permission.
+
+#### Trait Implementations
+
+##### `impl Clone for DryingMaterial`
+
+- <span id="dryingmaterial-clone"></span>`fn clone(&self) -> DryingMaterial` — [`DryingMaterial`](drying/index.md#dryingmaterial)
+
+##### `impl Copy for DryingMaterial`
+
+##### `impl Debug for DryingMaterial`
+
+- <span id="dryingmaterial-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for DryingMaterial`
+
+##### `impl PartialEq for DryingMaterial`
+
+- <span id="dryingmaterial-partialeq-eq"></span>`fn eq(&self, other: &DryingMaterial) -> bool` — [`DryingMaterial`](drying/index.md#dryingmaterial)
+
 ### `AmsFilamentStep`
 
 ```rust
@@ -3003,4 +3295,17 @@ Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required
 `Some(false)` when disabled, or `None` if the hex string is unparseable.
 The `fun` field is a variable-length hex string (up to 64 bits). Bit 29
 (`0x20000000`) is the `MQTT_SIGNATURE_REQUIRED` flag — when clear, developer mode is on.
+
+
+---
+
+## Constants
+
+### `DEFAULT_COMMAND_COOLING_TEMP`
+```rust
+const DEFAULT_COMMAND_COOLING_TEMP: i32 = 50i32;
+```
+
+Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset
+(`AMSDryControl.cpp:813`, `int cooling_temp = 50;`).
 

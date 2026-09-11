@@ -31,7 +31,10 @@ for composite packed temperatures, home/status flags, and door sensors.
   - [`TelemetryReport`](#telemetryreport)
 - [Functions](#functions)
   - [`decode_nozzle_temperatures`](#decode-nozzle-temperatures)
+  - [`fun2_bit`](#fun2-bit)
   - [`is_developer_mode`](#is-developer-mode)
+- [Constants](#constants)
+  - [`FUN2_REMOTE_DRY_BIT`](#fun2-remote-dry-bit)
 
 ## Quick Reference
 
@@ -45,7 +48,9 @@ for composite packed temperatures, home/status flags, and door sensors.
 | [`xcam`](xcam/index.md) | mod | AI failure-detection and print-option settings (`print.xcam`). |
 | [`TelemetryReport`](#telemetryreport) | struct | Unified top-level telemetry report received from the printer's local MQTT broker. |
 | [`decode_nozzle_temperatures`](#decode-nozzle-temperatures) | fn | Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`](../../client/index.md#printerclient) — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived. |
+| [`fun2_bit`](#fun2-bit) | fn | Reads one bit of a `fun2` capability hex string, LSB-first from the right. |
 | [`is_developer_mode`](#is-developer-mode) | fn | Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1]. |
+| [`FUN2_REMOTE_DRY_BIT`](#fun2-remote-dry-bit) | const | `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp:4469`). |
 
 ## Modules
 
@@ -601,6 +606,22 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
   `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
+
+- <span id="amsunit-dry-block-reasons"></span>`fn dry_block_reasons(&self) -> Option<Vec<DryBlockReason>>` — [`DryBlockReason`](ams/index.md#dryblockreason)
+
+  Decodes [`dry_sf_reason`](ams/index.md#amsunit) into typed reasons, in reported order.
+
+  A layer over the raw `Vec<i32>` rather than a replacement for it — the same relationship
+  [`parse_info`](ams/index.md#amsunit) has with the typed `info` accessors. Unrecognized codes
+  survive as [`DryBlockReason::Other`](ams/index.md#dryblockreason).
+
+- <span id="amsunit-primary-dry-block-reason"></span>`fn primary_dry_block_reason(&self) -> Option<DryBlockReason>` — [`DryBlockReason`](ams/index.md#dryblockreason)
+
+  The single reason worth showing a user when the firmware reports several at once.
+
+  Mirrors bambuddy's `primary_reason_code`: a reason the user has to act on outranks one
+  that clears on its own, because that is the only case where showing a message beats
+  retrying silently. Ties break on reported order.
 
 #### Trait Implementations
 
@@ -1989,6 +2010,7 @@ struct PrinterTelemetry {
     pub vir_slot: Option<Vec<super::ams::VirtualTray>>,
     pub device: Option<super::device::DeviceTelemetry>,
     pub fun: Option<String>,
+    pub fun2: Option<String>,
     pub print_type: Option<String>,
     pub lights_report: Option<Vec<LightReport>>,
     pub gcode_file_prepare_percent: Option<String>,
@@ -2230,6 +2252,16 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 - **`fun`**: `Option<String>`
 
   Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
+
+- **`fun2`**: `Option<String>`
+
+  Second capability bitfield (hex string), distinct from [`fun`](report/index.md#printertelemetry).
+  
+  Carries the printer's own firmware capability flags — most importantly bit 5,
+  remote-dry support. Read via [`fun2_bit`](#fun2-bit) rather than directly:
+  BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
+  reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
+  integer the way `fun` is.
 
 - **`print_type`**: `Option<String>`
 
@@ -2684,6 +2716,7 @@ struct TelemetryReport {
     pub print: Option<PrinterTelemetry>,
     pub device: Option<DeviceTelemetry>,
     pub fun: Option<String>,
+    pub fun2: Option<String>,
 }
 ```
 
@@ -2706,6 +2739,15 @@ top-level domains depending on which micro-system published the frame.
 
   Developer LAN Mode bitmask field (hex string).
   Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
+
+- **`fun2`**: `Option<String>`
+
+  Second capability bitfield (hex string) — see [`PrinterTelemetry::fun2`](report/index.md#printertelemetry).
+  
+  Accepted at the top level as well as inside `print` on the same first-found-wins terms as
+  [`fun`](#telemetryreport). BambuStudio itself reads only `print.fun2`
+  (`DeviceManager.cpp:4459`); the top-level slot mirrors `fun`'s documented drift rather
+  than a location observed carrying `fun2`.
 
 #### Implementations
 
@@ -2741,6 +2783,41 @@ top-level domains depending on which micro-system published the frame.
   Mirrors `device()`'s fallback order — top-level `fun` is checked first,
   falling back to `print.fun` [REF-MQTT-ENV §3.2.1]. Prefer this over reading `self.fun`
   directly, the same way `device()` is preferred over `self.device`.
+
+- <span id="telemetryreport-fun2"></span>`fn fun2(&self) -> Option<&str>`
+
+  Returns the `fun2` capability bitfield, checking both wire locations.
+
+  Same first-found-wins order as [`fun`](#telemetryreport). Prefer [`fun2_bit`](#telemetryreport)
+  over parsing this yourself — see that method for why the string can't go through
+  `u64::from_str_radix`.
+
+- <span id="telemetryreport-fun2-bit"></span>`fn fun2_bit(&self, bit: u32) -> Option<bool>`
+
+  Reads a single bit of the `fun2` capability bitfield.
+
+  `None` only when `fun2` is absent or carries no hex digits at all — "the printer didn't
+  say", which is distinct from a bit that is present and clear. A bit index past the end of
+  the string reads `false`, matching BambuStudio's extractor, which returns `0` rather than
+  failing (`DevUtil.cpp:53`).
+
+  Known bits (`DeviceManager.cpp:4466-4477`): `0` print with eMMC, `3` PA mode,
+  **`5` remote dry supported** (see [`supports_remote_dry`](#telemetryreport)),
+  `6` update-remain hide display, `7` print TPU from left extruder (model-gated),
+  `8` active arc fitting, `17` model internal storage, `19` check track-switch matches
+  sliced printer, `21`-`22` AMS preload version, `23` filament manual multi-color.
+
+- <span id="telemetryreport-supports-remote-dry"></span>`fn supports_remote_dry(&self) -> Option<bool>`
+
+  Whether the printer reports its own support for remote AMS drying — `fun2` bit 5.
+
+  This is the printer-side half of the drying gate; the attached unit's heater is the other
+  half (see [`AmsUnitModel::supports_drying`](ams/index.md#amsunitmodel)). BambuStudio requires both
+  (`Widgets/AMSControl.cpp:348`).
+
+  `None` means the printer never reported `fun2`, which is not the same as reporting `0` —
+  older firmware omits the field entirely, and treating that as "unsupported" would refuse
+  drying on hardware that has always accepted it.
 
 #### Trait Implementations
 
@@ -3003,6 +3080,120 @@ independent route — the `info` module-name prefix, `"ams"`/`"n3f"`/`"n3s"`
 ##### `impl PartialEq for AmsUnitModel`
 
 - <span id="amsunitmodel-partialeq-eq"></span>`fn eq(&self, other: &AmsUnitModel) -> bool` — [`AmsUnitModel`](ams/index.md#amsunitmodel)
+
+### `DryBlockReason`
+
+```rust
+enum DryBlockReason {
+    PrinterBusy,
+    InsufficientPower,
+    AmsBusy,
+    FilamentAtOutlet,
+    AlreadyStarting,
+    Unsupported2dMode,
+    AlreadyDrying,
+    FirmwareUpgrading,
+    ExternalPowerRequired,
+    Other(i32),
+}
+```
+
+Why the firmware will not, or did not, start a drying cycle — one entry of `dry_sf_reason`.
+
+**`dry_sf_reason` is a list of independent codes, not a bitmask.** `reference/05_materials_ams.md`
+described it as one for a while and listed only `1` and `8`, whose reading as bit positions was
+a coincidence; the field is an enumerated code list with nine members, which is why it
+deserializes as `Vec<i32>`.
+
+Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
+`DRY_SF_REASON_MESSAGES`), as is the user-action split — see
+[`needs_user_action`](ams/index.md#dryblockreason).
+
+#### Variants
+
+- **`PrinterBusy`**
+
+  `0` — the printer is busy.
+
+- **`InsufficientPower`**
+
+  `1` — insufficient power: too many AMS units drying at once, or an external PSU is
+  required. Needs the user to change something.
+
+- **`AmsBusy`**
+
+  `2` — the AMS is busy.
+
+- **`FilamentAtOutlet`**
+
+  `3` — filament is sitting at the AMS outlet and must be retracted first. Needs the user.
+
+- **`AlreadyStarting`**
+
+  `4` — a drying cycle on this AMS is already starting.
+
+- **`Unsupported2dMode`**
+
+  `5` — not supported in 2D mode.
+
+- **`AlreadyDrying`**
+
+  `6` — the AMS is already drying.
+
+- **`FirmwareUpgrading`**
+
+  `7` — the AMS firmware is upgrading.
+
+- **`ExternalPowerRequired`**
+
+  `8` — the external AMS power adapter must be plugged in. Needs the user.
+
+- **`Other`**
+
+  A code this crate doesn't know — newer firmware may add reasons, and folding one onto a
+  neighbouring variant would report a wrong cause with full confidence.
+
+#### Implementations
+
+- <span id="dryblockreason-from-code"></span>`fn from_code(code: i32) -> Self`
+
+  Decodes one raw `dry_sf_reason` entry.
+
+- <span id="dryblockreason-code"></span>`fn code(self) -> i32`
+
+  The raw wire code this reason decodes from.
+
+- <span id="dryblockreason-needs-user-action"></span>`fn needs_user_action(self) -> bool`
+
+  Returns true if clearing this needs the user to physically do something.
+
+  This is the distinction that decides a caller's behavior: retry in a moment, or stop and
+  surface a message. True for [`InsufficientPower`](ams/index.md#dryblockreason) and
+  [`ExternalPowerRequired`](ams/index.md#dryblockreason) (bambuddy's
+  `POWER_REASON_CODES = {1, 8}`) and for [`FilamentAtOutlet`](ams/index.md#dryblockreason)
+  (`RETRACT_REASON_CODE = 3`); every other known reason clears on its own.
+
+  [`Other`](ams/index.md#dryblockreason) returns `false` — an unknown reason is reported as transient
+  because that is the reading that keeps a caller retrying rather than permanently refusing
+  on a code that may be benign.
+
+#### Trait Implementations
+
+##### `impl Clone for DryBlockReason`
+
+- <span id="dryblockreason-clone"></span>`fn clone(&self) -> DryBlockReason` — [`DryBlockReason`](ams/index.md#dryblockreason)
+
+##### `impl Copy for DryBlockReason`
+
+##### `impl Debug for DryBlockReason`
+
+- <span id="dryblockreason-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for DryBlockReason`
+
+##### `impl PartialEq for DryBlockReason`
+
+- <span id="dryblockreason-partialeq-eq"></span>`fn eq(&self, other: &DryBlockReason) -> bool` — [`DryBlockReason`](ams/index.md#dryblockreason)
 
 ### `FilamentSwitchInlet`
 
@@ -3685,6 +3876,27 @@ with no live extruder temps yet — the wire's undocumented routing quirk: `nozz
 nozzle 1 (left)'s actual reading and `nozzle_target_temper` is nozzle 0 (right)'s target,
 each nozzle only getting half of its own reading from the flat fields.
 
+### `fun2_bit`
+
+```rust
+fn fun2_bit(hex: &str, bit: u32) -> Option<bool>
+```
+
+Reads one bit of a `fun2` capability hex string, LSB-first from the right.
+
+The counterpart to [`is_developer_mode`](#is-developer-mode) for the second capability field, and the free
+function behind [`fun2_bit`](#fun2-bit) — use this when holding a `fun2` string on its
+own rather than a whole report.
+
+`fun2` "may have infinite length" per BambuStudio's own comment
+(`DeviceManager.cpp:4464`), which is why this walks hex digits from the right instead of
+going through `u64::from_str_radix` the way [`is_developer_mode`](#is-developer-mode) does for `fun` — a string
+longer than 16 digits would fail that parse outright and report every capability as absent.
+
+Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): a `0x` prefix and any
+non-hex characters are ignored, and an index past the end of the string reads `false` rather
+than failing. Returns `None` only when no hex digits remain after filtering.
+
 ### `is_developer_mode`
 
 ```rust
@@ -3697,4 +3909,16 @@ Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required
 `Some(false)` when disabled, or `None` if the hex string is unparseable.
 The `fun` field is a variable-length hex string (up to 64 bits). Bit 29
 (`0x20000000`) is the `MQTT_SIGNATURE_REQUIRED` flag — when clear, developer mode is on.
+
+
+---
+
+## Constants
+
+### `FUN2_REMOTE_DRY_BIT`
+```rust
+const FUN2_REMOTE_DRY_BIT: u32 = 5u32;
+```
+
+`fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp:4469`).
 
