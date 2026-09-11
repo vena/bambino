@@ -228,6 +228,14 @@ Consequence for any capability gate: on these families a consumer gets no report
 
 `home_flag` is the capability-shaped field these families *do* send, and it carries some overlapping bits (see §3.2.1) — but see the caution there about bits the vendor's own client distrusts.
 
+##### Mains Voltage Is Reported Twice, and the Two Agree
+
+The 220V mains indicator appears in both fields: `home_flag` bit 3 and `fun` bit 2. BambuStudio reads both, `home_flag` bit 3 in `parse_home_flag` (`DeviceManager.cpp:1077`) and `fun` bit 2 later in the same update (`:4437`), so on a disagreement the `fun` value would win.
+
+**No disagreement has been observed.** Checked against ha-bambulab's full-dump `push_status` fixtures — `tests/pybambu/H2D.json` (H2D, firmware 01.01.02.07) reads `1` in both, and `tests/pybambu/2AMS1-1AMS2-1AMSHT.json` (X1-Carbon, 01.09.00.01) reads `0` in both, covering both directions rather than only the all-zero case. ha-bambulab itself reads **only** `home_flag` bit 3 (`pybambu/models.py:4058`, `Home_Flag_Values.VOLTAGE220 = 0x00000008`) and never consults `fun` bit 2; bambuddy derives mains voltage from neither.
+
+This crate reads `home_flag` bit 3, matching ha-bambulab. That single source is sufficient on current evidence. If a capture ever shows the two bits disagreeing, prefer `fun` bit 2 to match BambuStudio's write order — and note that `fun` is absent on P1/A1 entirely, so those families can only ever answer from `home_flag`.
+
 #### A1 and P1 Series Hardware Probing Protocol
 On ESP32-based RTOS hardware lines (P1 and A1 series) where the `fun` field is omitted from telemetry, LAN Developer Mode is verified by attempting a non-destructive publish transaction.
 
