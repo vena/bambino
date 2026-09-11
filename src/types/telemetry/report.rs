@@ -271,6 +271,16 @@ pub struct PrinterTelemetry {
     /// Developer LAN Mode bitmask field (hex string) nested inside `print` [REF-MQTT-ENV §3.2.1].
     pub fun: Option<String>,
 
+    /// Second capability bitfield (hex string), distinct from [`fun`](Self::fun).
+    ///
+    /// Carries the printer's own firmware capability flags — most importantly bit 5,
+    /// remote-dry support. Read via [`TelemetryReport::fun2_bit`] rather than directly:
+    /// BambuStudio notes this string "may have infinite length" (`DeviceManager.cpp:4464`) and
+    /// reads it with a no-border bit extractor, so it must not be parsed into a fixed-width
+    /// integer the way `fun` is.
+    #[serde(default)]
+    pub fun2: Option<String>,
+
     /// Print source identifier (e.g. `"cloud"`, `"local"`, `"idle"`).
     #[serde(default)]
     pub print_type: Option<String>,

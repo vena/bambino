@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
@@ -75,6 +75,9 @@ pub(crate) struct TelemetryCache {
     // Cached because `print.xcam` is pushall-only: without this, every accessor would read
     // `None` on the incremental frames that make up the bulk of the stream.
     pub(crate) last_xcam: Option<XcamTelemetry>,
+    // The `fun2` capability bitfield arrives on pushall and is absent from most incremental
+    // frames, so it needs the same caching `xcam` does to be readable on a command path.
+    pub(crate) last_fun2: Option<String>,
 }
 
 impl<
@@ -173,6 +176,10 @@ where
                 Some(cached) => cached.merge_from(device),
                 None => self.cache.last_device = Some(device.clone()),
             }
+        }
+        // Read before the `print` early-return: `fun2()` checks the top level too.
+        if let Some(fun2) = report.fun2() {
+            self.cache.last_fun2 = Some(fun2.to_string());
         }
         let Some(print) = report.print.as_ref() else {
             return;

@@ -1,4 +1,6 @@
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::ToString;
 
 use crate::diagnostics::ExtrusionCaliGetResponse;
@@ -12,7 +14,10 @@ use super::PrinterClient;
 // `AmsUnitModel`, which is where the rest of the AMS *accessory* facts now live — the ceilings
 // are a property of the attached unit, not of anything on this client. Re-imported rather than
 // re-declared so the two cannot drift.
-use crate::types::telemetry::ams::{AMS_HT_DRY_TEMP_MAX, AMS_STANDARD_DRY_TEMP_MAX};
+use crate::types::telemetry::AmsUnitModel;
+use crate::types::telemetry::ams::{
+    AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX, AMS_STANDARD_DRY_TEMP_MAX,
+};
 
 /// Returns true if `ams_id` addresses a standard AMS unit (`0..=3`), an AMS-HT unit
 /// (`128..=135`), or an external-spool sentinel (`254`/`255`) — the full documented
@@ -139,17 +144,64 @@ where
         .await
     }
 
+    /// Whether this printer supports remote AMS drying — the printer-side half of the gate.
+    ///
+    /// Prefers the printer's own answer, `fun2` bit 5, and falls back to
+    /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying)
+    /// when the printer has not reported `fun2` (older firmware omits it entirely, and it only
+    /// arrives on pushall, so an un-polled client always falls back here).
+    ///
+    /// Firmware outranks the quirk table because the quirk's `true` is a default asserted for
+    /// every model nobody has tested, while `fun2` is the machine in front of you answering for
+    /// itself. The one hardware-verified quirk value — P1P/P1S `false`, observed acking the
+    /// command and discarding it — is therefore reachable only when that firmware reports no
+    /// `fun2` or reports bit 5 clear. A P1 whose firmware sets the bit is taken at its word here;
+    /// if that turns out to re-open the acked-then-discarded path, this is the composition to
+    /// revisit, not the quirk.
+    #[must_use]
+    pub fn supports_ams_remote_drying(&self) -> bool {
+        self.cache
+            .last_fun2
+            .as_deref()
+            .and_then(|hex| {
+                crate::types::telemetry::fun2_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
+            })
+            .unwrap_or_else(|| self.identity.model.quirks().supports_ams_remote_drying())
+    }
+
+    /// Looks up the cached [`AmsUnitModel`] for the unit at `ams_id`, if one has been observed.
+    ///
+    /// `None` covers three distinct cases that all mean the same thing to a caller — no AMS
+    /// snapshot has arrived yet, no unit answers to this address, or the unit reports a type
+    /// newer than this crate knows — and all three read as "don't assume a capability".
+    ///
+    /// Matches on the unit's own `id`, which is already normalized on deserialize (the A2L's AMS
+    /// Lite reports physical `16` and is stored as `6`), so this compares against the same
+    /// address space `is_valid_ams_id` accepts.
+    fn cached_ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
+        self.ams()?
+            .ams
+            .iter()
+            .find(|unit| unit.id.parse::<i32>() == Ok(ams_id))
+            .and_then(crate::types::telemetry::AmsUnit::unit_model)
+    }
+
     /// Initiates a dry-chamber heating cycle on an AMS-HT or AMS 2 Pro unit [REF-AMS-DRYER].
     ///
     /// * `ams_id`: Target AMS unit index. AMS-HT units use the `128..=135` bus ID range (see
-    ///   `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`); anything else is treated as
-    ///   an AMS 2 Pro / standard-AMS drying unit.
-    /// * `temp`: Drying temperature in degrees Celsius. Clamped to this AMS unit's
-    ///   documented ceiling — this is a property of the *attached AMS unit*, not the host
-    ///   printer model: AMS-HT's built-in heater is rated to 85°C, AMS 2 Pro's to 65°C
+    ///   `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX` in `src/ams/parser.rs`). The address alone does **not**
+    ///   identify the unit: `0..=3` is shared by the original AMS, the AMS Lite and the AMS 2 Pro,
+    ///   and only the last of those has a heater — the unit model comes from cached telemetry,
+    ///   see Errors below.
+    /// * `temp`: Drying temperature in degrees Celsius. Must fall inside the attached unit's
+    ///   [`AmsUnitModel::dry_temp_range`] — `45..=65` for the AMS 2 Pro, `45..=85` for the
+    ///   AMS-HT. This is a property of the *attached AMS unit*, not the host printer model
     ///   (confirmed via Bambu Lab's own wiki, `wiki.bambulab.com/en/ams-ht/...` and
     ///   `wiki.bambulab.com/en/ams-2-pro/manual/drying-function` respectively — no per-printer
-    ///   variation is documented, so this does not go through `ModelQuirks`).
+    ///   variation is documented, so this does not go through `ModelQuirks`). **Both bounds are
+    ///   rejected, not clamped**: BambuStudio refuses a temperature below the floor exactly as it
+    ///   refuses one above the ceiling (`AMSDryControl.cpp:1186-1199`), and silently rewriting a
+    ///   caller's `0` into `45` would start a real heating cycle nobody asked for.
     /// * `duration_hours`: Duration in **hours** (e.g., `8` for an 8-hour cycle) —
     ///   the wire field is `duration` in hours, not the old `dry_time` in minutes. No
     ///   documented maximum duration was found to validate against.
@@ -159,9 +211,31 @@ where
     /// * `close_power_conflict`: Whether to override the AMS unit's power-conflict interlock.
     /// * `filament`: Filament type string (e.g., "PA-CF").
     ///
-    /// Returns `Error::ModelMismatch` on hosts where `ModelQuirks::supports_ams_remote_drying()`
-    /// is `false` (P1P/P1S) — the firmware acks this command `result: success` and silently
-    /// discards it rather than actually driving the AMS heater; see `[REF-AMS-DRYER]`.
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] on hosts where
+    /// [`supports_ams_remote_drying()`](Self::supports_ams_remote_drying) is `false` — the
+    /// printer's own `fun2` bit 5 when it has reported one, else the P1P/P1S quirk. Such
+    /// firmware acks this command `result: success` and silently discards it rather than
+    /// actually driving the AMS heater; see `[REF-AMS-DRYER]`.
+    ///
+    /// [`Error::ModelMismatch`] also when the addressed unit is one this crate can see has no
+    /// drying chamber — an external-spool sentinel (`254`/`255`), or a cached
+    /// [`AmsUnitModel`] whose [`supports_drying`](AmsUnitModel::supports_drying) is `false`.
+    /// These are two independent gates on purpose, matching the pair BambuStudio writes out
+    /// longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
+    /// attached box must have a heater.
+    ///
+    /// [`Error::InvalidArgument`] when `temp` falls outside the unit's
+    /// [`dry_temp_range`](AmsUnitModel::dry_temp_range).
+    ///
+    /// The unit-model gate reads the **cached** AMS snapshot, so a unit this client has never
+    /// observed passes through — same rule as [`skip_objects`](Self::skip_objects), and for the
+    /// same reason: an idle printer's incremental pushes frequently carry no `ams` block at all,
+    /// and refusing there would break a caller that connects and commands without polling. Call
+    /// [`poll_telemetry()`](Self::poll_telemetry) first to arm the gate. When the unit is
+    /// unobserved the temperature range falls back to the `ams_id`-derived ceiling this method
+    /// used before, which is the best guess available from the address alone.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_drying(
         &mut self,
@@ -174,9 +248,9 @@ where
         close_power_conflict: bool,
         filament: &str,
     ) -> Result<u16, Error> {
-        if !self.identity.model.quirks().supports_ams_remote_drying() {
+        if !self.supports_ams_remote_drying() {
             return Err(Error::ModelMismatch(
-                "AMS drying is screen-only on this host printer model — firmware acks this command but does not act on it".into(),
+                "AMS drying is screen-only on this host printer — firmware acks this command but does not act on it".into(),
             ));
         }
         if !is_valid_ams_id(ams_id) {
@@ -184,21 +258,43 @@ where
                 "invalid AMS addressing parameters for start_drying".into(),
             ));
         }
-        let max_temp: u32 = if (128..=135).contains(&ams_id) {
-            AMS_HT_DRY_TEMP_MAX
-        } else {
-            AMS_STANDARD_DRY_TEMP_MAX
-        };
-        let temp = if temp > max_temp {
-            log::warn!(
-                "AMS dry temperature {}°C exceeds maximum {}°C, clamping",
-                temp,
-                max_temp
-            );
-            max_temp
-        } else {
-            temp
-        };
+        // An external spool is a holder on a bracket, not a box with a heater — the one place
+        // the address *does* settle the capability, since 254/255 never appear in the `ams`
+        // array for the cached lookup below to find.
+        if ams_id == 254 || ams_id == 255 {
+            return Err(Error::ModelMismatch(
+                "external spool has no drying chamber — start_drying needs an AMS 2 Pro or AMS-HT"
+                    .into(),
+            ));
+        }
+
+        let unit_model = self.cached_ams_unit_model(ams_id);
+        if let Some(model) = unit_model {
+            if !model.supports_drying() {
+                return Err(Error::ModelMismatch(
+                    "attached AMS unit has no drying chamber — only the AMS 2 Pro and AMS-HT can dry".into(),
+                ));
+            }
+        }
+
+        // `dry_temp_range()` is the authority when the unit is known. Unobserved, fall back to
+        // the address-derived ceiling — wrong for an original AMS or an AMS Lite at `0..=3`, but
+        // that is exactly the case the gate above cannot rule on either.
+        let (min_temp, max_temp) = unit_model.and_then(AmsUnitModel::dry_temp_range).unwrap_or(
+            if (128..=135).contains(&ams_id) {
+                (AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX)
+            } else {
+                (AMS_DRY_TEMP_MIN, AMS_STANDARD_DRY_TEMP_MAX)
+            },
+        );
+        if temp < min_temp || temp > max_temp {
+            return Err(Error::InvalidArgument(
+                format!(
+                    "AMS dry temperature {temp}°C outside this unit's {min_temp}-{max_temp}°C range"
+                )
+                .into(),
+            ));
+        }
 
         self.dispatch(|seq| {
             crate::mqtt::AmsFilamentDryingRequest::new(

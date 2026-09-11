@@ -522,35 +522,258 @@ async fn test_drying_lifecycle_wire_payload() {
 }
 
 #[tokio::test]
-async fn test_start_drying_clamps_temperature_to_ams_unit_ceiling() {
+async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
-
-        // AMS-HT (ams_id 128) is rated to 85°C — a requested 200°C must clamp to 85, not
-        // the AMS 2 Pro / standard-AMS ceiling of 65°C.
-        let json_ht = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_ht["print"]["temp"], 85);
-
-        // A standard AMS unit (ams_id 0) is rated to 65°C — a requested 200°C must clamp
-        // to 65.
-        let json_standard = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json_standard["print"]["temp"], 65);
     });
 
     let mut client =
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
 
-    client
-        .start_drying(128, 200, 8, 0, true, 20, false, "PA-CF")
-        .await
-        .expect("start_drying (AMS-HT) failed");
-    client
-        .start_drying(0, 200, 8, 0, true, 20, false, "PLA")
-        .await
-        .expect("start_drying (standard AMS) failed");
+    // No AMS snapshot has been polled, so the unit-model gate passes through and the range
+    // falls back to the `ams_id`-derived one: 45-85 for an AMS-HT address, 45-65 otherwise.
+    // Out-of-range is rejected at both ends rather than clamped — silently rewriting a
+    // caller's 0°C into the 45°C floor would start a heating cycle nobody asked for.
+    for (ams_id, temp) in [(128, 200), (128, 20), (0, 200), (0, 20), (0, 0)] {
+        let err = client
+            .start_drying(ams_id, temp, 8, 0, true, 20, false, "PA-CF")
+            .await
+            .expect_err("start_drying must reject an out-of-range temperature");
+        assert!(
+            matches!(err, Error::InvalidArgument(_)),
+            "ams_id {ams_id} temp {temp} gave {err:?}"
+        );
+    }
 
+    // 85°C is in range for an AMS-HT but out of range for a standard-AMS address.
+    let err = client
+        .start_drying(0, 85, 8, 0, true, 20, false, "PLA")
+        .await
+        .expect_err("85°C must be rejected at a standard-AMS address");
+    assert!(matches!(err, Error::InvalidArgument(_)));
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// A P1S reporting `fun2` bit 5 set is taken at its word over the quirk table's hardcoded
+/// `false`. The quirk is a per-model default; `fun2` is the machine answering for itself.
+#[tokio::test]
+async fn test_reported_fun2_overrides_the_quirk_default() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        // fun2 "20" = bit 5 set, plus an AMS 2 Pro so the unit gate passes too.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4503,
+            br#"{"print":{"fun2":"20","ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"3"}]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_filament_drying");
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    assert!(
+        !client.quirks().supports_ams_remote_drying(),
+        "the P1S quirk default must still be false"
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    assert!(client.supports_ams_remote_drying());
+    client
+        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .await
+        .expect("a P1S reporting fun2 bit 5 must be allowed to dry");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The inverse: a printer reporting bit 5 *clear* is refused even where the quirk says `true`.
+#[tokio::test]
+async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        // fun2 "00" = bit 5 clear. An X1C's quirk default is true.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4504,
+            br#"{"print":{"fun2":"00","ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"3"}]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    assert!(client.quirks().supports_ams_remote_drying());
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    assert!(!client.supports_ams_remote_drying());
+    let err = client
+        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .await
+        .expect_err("a printer reporting fun2 bit 5 clear must be refused");
+    assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// The core of #234: `ams_id` `0..=3` is shared by the original AMS, the AMS Lite and the
+/// AMS 2 Pro, and only the last has a heater. Once telemetry identifies the attached unit, a
+/// drying command to a heaterless one must be refused rather than acked into the void.
+#[tokio::test]
+async fn test_start_drying_refuses_heaterless_unit_once_observed() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        // `info` bits 0-3 = 1 → the original 4-slot AMS. No drying chamber.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4500,
+            br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"1"}]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    // 55°C is inside the standard-AMS 45-65 range, so only the unit-model gate can reject this.
+    let err = client
+        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .await
+        .expect_err("start_drying must refuse an original AMS — it has no heater");
+    assert!(matches!(err, Error::ModelMismatch(_)), "{err:?}");
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Same address, same temperature, but the unit reports as an AMS 2 Pro — it must publish.
+#[tokio::test]
+async fn test_start_drying_allows_observed_ams_2_pro() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        // `info` bits 0-3 = 3 → AMS 2 Pro (BambuStudio `N3F`). Dries, 45-65°C.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4501,
+            br#"{"print":{"ams":{"ams":[{"id":"0","temp":"25","humidity":"4","info":"3"}]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_filament_drying");
+        assert_eq!(json["print"]["temp"], 55);
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    client
+        .start_drying(0, 55, 8, 0, true, 20, false, "PLA")
+        .await
+        .expect("start_drying must be allowed on an observed AMS 2 Pro");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// An AMS 2 Pro tops out at 65°C even though the same request would be legal at an AMS-HT
+/// address — the observed unit, not the address, sets the ceiling.
+#[tokio::test]
+async fn test_start_drying_range_follows_observed_unit_not_address() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        // An AMS-HT bus address carrying an AMS 2 Pro's unit type. Contrived, but it pins
+        // which of the two sources the range comes from.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4502,
+            br#"{"print":{"ams":{"ams":[{"id":"128","temp":"25","humidity":"4","info":"3"}]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    // 80°C would pass the address-derived 45-85 fallback and fails the observed unit's 45-65.
+    let err = client
+        .start_drying(128, 80, 8, 0, true, 20, false, "PLA")
+        .await
+        .expect_err("the observed AMS 2 Pro's 65°C ceiling must win over the AMS-HT address");
+    assert!(matches!(err, Error::InvalidArgument(_)), "{err:?}");
+
+    drop(client);
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
+async fn test_start_drying_rejects_external_spool() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+
+    // 254/255 pass `is_valid_ams_id` (they are real addresses for change_filament), but an
+    // external spool is a bracket with no heater, so drying can never act on one. Unlike the
+    // 0..=3 case this needs no telemetry: the sentinels never appear in the `ams` array.
+    for ams_id in [254, 255] {
+        let err = client
+            .start_drying(ams_id, 55, 8, 0, true, 20, false, "PLA")
+            .await
+            .expect_err("start_drying must reject an external spool");
+        assert!(matches!(err, Error::ModelMismatch(_)), "ams_id {ams_id}");
+    }
+
+    drop(client);
     broker_task.await.expect("Broker task panicked");
 }
 

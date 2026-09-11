@@ -979,6 +979,128 @@ impl AmsUnit {
             ((v >> AMS_UNIT_INFO_DRY_FAN2_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_FAN_STATUS_MASK) as u8
         })
     }
+
+    /// Decodes [`dry_sf_reason`](Self::dry_sf_reason) into typed reasons, in reported order.
+    ///
+    /// A layer over the raw `Vec<i32>` rather than a replacement for it — the same relationship
+    /// [`parse_info`](Self::parse_info) has with the typed `info` accessors. Unrecognized codes
+    /// survive as [`DryBlockReason::Other`].
+    #[must_use]
+    pub fn dry_block_reasons(&self) -> Option<Vec<DryBlockReason>> {
+        self.dry_sf_reason.as_ref().map(|codes| {
+            codes
+                .iter()
+                .copied()
+                .map(DryBlockReason::from_code)
+                .collect()
+        })
+    }
+
+    /// The single reason worth showing a user when the firmware reports several at once.
+    ///
+    /// Mirrors bambuddy's `primary_reason_code`: a reason the user has to act on outranks one
+    /// that clears on its own, because that is the only case where showing a message beats
+    /// retrying silently. Ties break on reported order.
+    #[must_use]
+    pub fn primary_dry_block_reason(&self) -> Option<DryBlockReason> {
+        let reasons = self.dry_block_reasons()?;
+        reasons
+            .iter()
+            .find(|r| r.needs_user_action())
+            .or_else(|| reasons.first())
+            .copied()
+    }
+}
+
+/// Why the firmware will not, or did not, start a drying cycle — one entry of `dry_sf_reason`.
+///
+/// **`dry_sf_reason` is a list of independent codes, not a bitmask.** `reference/05_materials_ams.md`
+/// described it as one for a while and listed only `1` and `8`, whose reading as bit positions was
+/// a coincidence; the field is an enumerated code list with nine members, which is why it
+/// deserializes as `Vec<i32>`.
+///
+/// Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
+/// `DRY_SF_REASON_MESSAGES`), as is the user-action split — see
+/// [`needs_user_action`](Self::needs_user_action).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DryBlockReason {
+    /// `0` — the printer is busy.
+    PrinterBusy,
+    /// `1` — insufficient power: too many AMS units drying at once, or an external PSU is
+    /// required. Needs the user to change something.
+    InsufficientPower,
+    /// `2` — the AMS is busy.
+    AmsBusy,
+    /// `3` — filament is sitting at the AMS outlet and must be retracted first. Needs the user.
+    FilamentAtOutlet,
+    /// `4` — a drying cycle on this AMS is already starting.
+    AlreadyStarting,
+    /// `5` — not supported in 2D mode.
+    Unsupported2dMode,
+    /// `6` — the AMS is already drying.
+    AlreadyDrying,
+    /// `7` — the AMS firmware is upgrading.
+    FirmwareUpgrading,
+    /// `8` — the external AMS power adapter must be plugged in. Needs the user.
+    ExternalPowerRequired,
+    /// A code this crate doesn't know — newer firmware may add reasons, and folding one onto a
+    /// neighbouring variant would report a wrong cause with full confidence.
+    Other(i32),
+}
+
+impl DryBlockReason {
+    /// Decodes one raw `dry_sf_reason` entry.
+    #[must_use]
+    pub fn from_code(code: i32) -> Self {
+        match code {
+            0 => Self::PrinterBusy,
+            1 => Self::InsufficientPower,
+            2 => Self::AmsBusy,
+            3 => Self::FilamentAtOutlet,
+            4 => Self::AlreadyStarting,
+            5 => Self::Unsupported2dMode,
+            6 => Self::AlreadyDrying,
+            7 => Self::FirmwareUpgrading,
+            8 => Self::ExternalPowerRequired,
+            other => Self::Other(other),
+        }
+    }
+
+    /// The raw wire code this reason decodes from.
+    #[must_use]
+    pub fn code(self) -> i32 {
+        match self {
+            Self::PrinterBusy => 0,
+            Self::InsufficientPower => 1,
+            Self::AmsBusy => 2,
+            Self::FilamentAtOutlet => 3,
+            Self::AlreadyStarting => 4,
+            Self::Unsupported2dMode => 5,
+            Self::AlreadyDrying => 6,
+            Self::FirmwareUpgrading => 7,
+            Self::ExternalPowerRequired => 8,
+            Self::Other(code) => code,
+        }
+    }
+
+    /// Returns true if clearing this needs the user to physically do something.
+    ///
+    /// This is the distinction that decides a caller's behavior: retry in a moment, or stop and
+    /// surface a message. True for [`InsufficientPower`](Self::InsufficientPower) and
+    /// [`ExternalPowerRequired`](Self::ExternalPowerRequired) (bambuddy's
+    /// `POWER_REASON_CODES = {1, 8}`) and for [`FilamentAtOutlet`](Self::FilamentAtOutlet)
+    /// (`RETRACT_REASON_CODE = 3`); every other known reason clears on its own.
+    ///
+    /// [`Other`](Self::Other) returns `false` — an unknown reason is reported as transient
+    /// because that is the reading that keeps a caller retrying rather than permanently refusing
+    /// on a code that may be benign.
+    #[must_use]
+    pub fn needs_user_action(self) -> bool {
+        matches!(
+            self,
+            Self::InsufficientPower | Self::ExternalPowerRequired | Self::FilamentAtOutlet
+        )
+    }
 }
 
 impl AmsTray {

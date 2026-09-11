@@ -28,7 +28,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 pub use ams::{
     AmsDrySetting, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit, AmsUnitModel,
-    FilamentSwitchInlet, VirtualTray,
+    DryBlockReason, FilamentSwitchInlet, VirtualTray,
 };
 pub use device::{
     AirductCollection, AirductModeListEntry, AirductPart, BedInfo, BedTelemetry, DeviceTelemetry,
@@ -60,6 +60,15 @@ pub struct TelemetryReport {
     /// Developer LAN Mode bitmask field (hex string).
     /// Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
     pub fun: Option<String>,
+
+    /// Second capability bitfield (hex string) — see [`PrinterTelemetry::fun2`].
+    ///
+    /// Accepted at the top level as well as inside `print` on the same first-found-wins terms as
+    /// [`fun`](Self::fun). BambuStudio itself reads only `print.fun2`
+    /// (`DeviceManager.cpp:4459`); the top-level slot mirrors `fun`'s documented drift rather
+    /// than a location observed carrying `fun2`.
+    #[serde(default)]
+    pub fun2: Option<String>,
 }
 
 impl TelemetryReport {
@@ -107,6 +116,91 @@ impl TelemetryReport {
             .as_deref()
             .or_else(|| self.print.as_ref().and_then(|print| print.fun.as_deref()))
     }
+
+    /// Returns the `fun2` capability bitfield, checking both wire locations.
+    ///
+    /// Same first-found-wins order as [`fun`](Self::fun). Prefer [`fun2_bit`](Self::fun2_bit)
+    /// over parsing this yourself — see that method for why the string can't go through
+    /// `u64::from_str_radix`.
+    #[must_use]
+    pub fn fun2(&self) -> Option<&str> {
+        self.fun2
+            .as_deref()
+            .or_else(|| self.print.as_ref().and_then(|print| print.fun2.as_deref()))
+    }
+
+    /// Reads a single bit of the `fun2` capability bitfield.
+    ///
+    /// `None` only when `fun2` is absent or carries no hex digits at all — "the printer didn't
+    /// say", which is distinct from a bit that is present and clear. A bit index past the end of
+    /// the string reads `false`, matching BambuStudio's extractor, which returns `0` rather than
+    /// failing (`DevUtil.cpp:53`).
+    ///
+    /// Known bits (`DeviceManager.cpp:4466-4477`): `0` print with eMMC, `3` PA mode,
+    /// **`5` remote dry supported** (see [`supports_remote_dry`](Self::supports_remote_dry)),
+    /// `6` update-remain hide display, `7` print TPU from left extruder (model-gated),
+    /// `8` active arc fitting, `17` model internal storage, `19` check track-switch matches
+    /// sliced printer, `21`-`22` AMS preload version, `23` filament manual multi-color.
+    #[must_use]
+    pub fn fun2_bit(&self, bit: u32) -> Option<bool> {
+        fun2_bit(self.fun2()?, bit)
+    }
+
+    /// Whether the printer reports its own support for remote AMS drying — `fun2` bit 5.
+    ///
+    /// This is the printer-side half of the drying gate; the attached unit's heater is the other
+    /// half (see [`AmsUnitModel::supports_drying`]). BambuStudio requires both
+    /// (`Widgets/AMSControl.cpp:348`).
+    ///
+    /// `None` means the printer never reported `fun2`, which is not the same as reporting `0` —
+    /// older firmware omits the field entirely, and treating that as "unsupported" would refuse
+    /// drying on hardware that has always accepted it.
+    #[must_use]
+    pub fn supports_remote_dry(&self) -> Option<bool> {
+        self.fun2_bit(FUN2_REMOTE_DRY_BIT)
+    }
+}
+
+/// `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp:4469`).
+pub const FUN2_REMOTE_DRY_BIT: u32 = 5;
+
+/// Reads one bit of a `fun2` capability hex string, LSB-first from the right.
+///
+/// The counterpart to [`is_developer_mode`] for the second capability field, and the free
+/// function behind [`TelemetryReport::fun2_bit`] — use this when holding a `fun2` string on its
+/// own rather than a whole report.
+///
+/// `fun2` "may have infinite length" per BambuStudio's own comment
+/// (`DeviceManager.cpp:4464`), which is why this walks hex digits from the right instead of
+/// going through `u64::from_str_radix` the way [`is_developer_mode`] does for `fun` — a string
+/// longer than 16 digits would fail that parse outright and report every capability as absent.
+///
+/// Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): a `0x` prefix and any
+/// non-hex characters are ignored, and an index past the end of the string reads `false` rather
+/// than failing. Returns `None` only when no hex digits remain after filtering.
+#[must_use]
+pub fn fun2_bit(hex: &str, bit: u32) -> Option<bool> {
+    let digits: &[u8] = hex
+        .trim()
+        .strip_prefix("0x")
+        .unwrap_or(hex.trim())
+        .as_bytes();
+    let nibble_from_right = (bit / 4) as usize;
+    let mut seen = 0usize;
+    let mut any = false;
+    for &byte in digits.iter().rev() {
+        let Some(value) = (byte as char).to_digit(16) else {
+            continue;
+        };
+        any = true;
+        if seen == nibble_from_right {
+            return Some((value >> (bit % 4)) & 1 == 1);
+        }
+        seen += 1;
+    }
+    // Ran off the left end of the string: those bits are zero, not unknown — but a string with
+    // no hex digits at all never told us anything.
+    any.then_some(false)
 }
 
 /// Shared bed-temperature decode logic behind [`TelemetryReport::bed_temperatures()`] and [`crate::client::PrinterClient::bed_temperatures()`] — both need the same cross-model unpack (composite-packed new-gen `device.bed` vs. flat old-gen `bed_temper`/ `bed_target_temper`), one sourced from a fresh report, the other from cached scalars.

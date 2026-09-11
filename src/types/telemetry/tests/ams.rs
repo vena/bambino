@@ -405,6 +405,96 @@ fn test_ams_unit_model_drying_capability_matches_upstream() {
 }
 
 #[test]
+fn test_dry_block_reason_code_roundtrip_and_user_action_split() {
+    // All nine codes bambuddy enumerates (drying_preflight.py, DRY_SF_REASON_MESSAGES).
+    for code in 0..=8 {
+        assert_eq!(DryBlockReason::from_code(code).code(), code);
+        assert!(
+            !matches!(DryBlockReason::from_code(code), DryBlockReason::Other(_)),
+            "code {code} must be a known reason"
+        );
+    }
+
+    // A code newer firmware may add survives as Other rather than being folded onto a
+    // neighbouring variant, and round-trips.
+    assert_eq!(DryBlockReason::from_code(42), DryBlockReason::Other(42));
+    assert_eq!(DryBlockReason::Other(42).code(), 42);
+
+    // bambuddy's POWER_REASON_CODES = {1, 8} plus RETRACT_REASON_CODE = 3. Everything else,
+    // including an unknown code, reads as transient so a caller keeps retrying.
+    for code in 0..=8 {
+        let expected = matches!(code, 1 | 3 | 8);
+        assert_eq!(
+            DryBlockReason::from_code(code).needs_user_action(),
+            expected,
+            "code {code}"
+        );
+    }
+    assert!(!DryBlockReason::Other(42).needs_user_action());
+}
+
+#[test]
+fn test_dry_block_reasons_decode_from_unit() {
+    let json_data = r#"{
+        "print": {
+            "ams": {
+                "ams": [
+                    { "id": "0", "temp": "26.0", "humidity": "3", "dry_sf_reason": [2, 8, 6] }
+                ]
+            }
+        }
+    }"#;
+    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let unit = &report.print.as_ref().unwrap().ams.as_ref().unwrap().ams[0];
+
+    // Decoded in reported order, raw field untouched — the enum is a layer over the Vec<i32>,
+    // not a replacement for it.
+    assert_eq!(unit.dry_sf_reason.as_deref(), Some([2, 8, 6].as_slice()));
+    assert_eq!(
+        unit.dry_block_reasons(),
+        Some(vec![
+            DryBlockReason::AmsBusy,
+            DryBlockReason::ExternalPowerRequired,
+            DryBlockReason::AlreadyDrying,
+        ])
+    );
+
+    // Two transient reasons bracket one that needs the user — the user-action reason is the one
+    // worth showing, even though it is not first.
+    assert_eq!(
+        unit.primary_dry_block_reason(),
+        Some(DryBlockReason::ExternalPowerRequired)
+    );
+}
+
+#[test]
+fn test_primary_dry_block_reason_falls_back_to_first_reported() {
+    let json_data = r#"{
+        "print": {
+            "ams": {
+                "ams": [
+                    { "id": "0", "temp": "26.0", "humidity": "3", "dry_sf_reason": [6, 2] },
+                    { "id": "1", "temp": "26.0", "humidity": "3" }
+                ]
+            }
+        }
+    }"#;
+    let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
+    let units = &report.print.as_ref().unwrap().ams.as_ref().unwrap().ams;
+
+    // No reason needs the user, so reported order decides.
+    assert_eq!(
+        units[0].primary_dry_block_reason(),
+        Some(DryBlockReason::AlreadyDrying)
+    );
+
+    // An absent field stays None rather than becoming an empty list — "the firmware said
+    // nothing" and "the firmware reported no blockers" are not the same claim.
+    assert_eq!(units[1].dry_block_reasons(), None);
+    assert_eq!(units[1].primary_dry_block_reason(), None);
+}
+
+#[test]
 fn test_ams_unit_model_slot_count() {
     // The AMS-HT is the single-slot outlier; the original AMS, AMS Lite and AMS 2 Pro are all 4.
     assert_eq!(AmsUnitModel::AmsHt.slot_count(), Some(1));
