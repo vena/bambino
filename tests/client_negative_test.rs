@@ -4,7 +4,7 @@
 
 mod common;
 
-use bambino::client::{CalibrationOption, PrintSpeed};
+use bambino::client::{CalibrationOption, PrintSpeed, PrintStatus};
 use bambino::error::Error;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
@@ -912,6 +912,152 @@ async fn test_sequence_id_fits_in_i32() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client.send_gcode("G28").await.expect("send_gcode failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+// ============================================================================
+// Print-state gates (issue #231)
+// ============================================================================
+
+/// `skip_objects` must refuse once telemetry confirms no job is loaded — its object IDs are
+/// `identify_id` values from the loaded 3MF, so they reference nothing when idle.
+#[tokio::test]
+async fn test_skip_objects_refuses_when_idle() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4400,
+            br#"{"print":{"gcode_state":"IDLE"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+    assert_eq!(client.print_status(), Some(PrintStatus::Idle));
+
+    assert!(matches!(
+        client.skip_objects(vec![1, 2]).await,
+        Err(Error::InvalidState(_))
+    ));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// `PAUSE` is a legitimate skip window (inspect a failed part, skip it, resume), so the gate
+/// must let it through and actually publish.
+#[tokio::test]
+async fn test_skip_objects_allowed_when_paused() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4401,
+            br#"{"print":{"gcode_state":"PAUSE"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "skip_objects");
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+    assert_eq!(client.print_status(), Some(PrintStatus::Paused));
+
+    client
+        .skip_objects(vec![3])
+        .await
+        .expect("skip_objects should be allowed while paused");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// An empty `obj_list` cannot skip anything, so it is rejected as a bad argument before the
+/// state gate is even consulted.
+#[tokio::test]
+async fn test_skip_objects_rejects_empty_object_ids() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    assert!(matches!(
+        client.skip_objects(vec![]).await,
+        Err(Error::InvalidArgument(_))
+    ));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// `pause`/`resume`/`stop` are deliberately **not** state-gated, and this guards that against a
+/// well-meaning future "fix" that generalizes `skip_objects`' gate across the lifecycle calls.
+///
+/// Three independent reasons, all load-bearing: no upstream gates these on `gcode_state`; the
+/// gate would read a *cached* value, so a stale `IDLE` would refuse a real abort; and the CLI's
+/// `probe` sends pause/resume while idle on purpose to document firmware behavior, which a
+/// client-side refusal would silently defeat.
+#[tokio::test]
+async fn test_lifecycle_commands_are_not_state_gated() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4402,
+            br#"{"print":{"gcode_state":"IDLE"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        for expected in ["pause", "resume", "stop"] {
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], expected);
+        }
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+    // Cache now definitively reads Idle — the state a gate would refuse on.
+    assert_eq!(client.print_status(), Some(PrintStatus::Idle));
+
+    client
+        .pause_print()
+        .await
+        .expect("pause_print must remain ungated");
+    client
+        .resume_print()
+        .await
+        .expect("resume_print must remain ungated");
+    client
+        .stop_print()
+        .await
+        .expect("stop_print must remain ungated");
 
     broker_task.await.expect("Broker task panicked");
 }

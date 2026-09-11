@@ -1,4 +1,6 @@
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 #[cfg(feature = "std")]
@@ -12,7 +14,7 @@ use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::{PrintJobConfig, StandardControlRequest};
 
 use super::PrinterClient;
-use super::types::{CalibrationOption, PrintSpeed};
+use super::types::{CalibrationOption, PrintSpeed, PrintStatus};
 
 impl<
     MqttRawIO,
@@ -54,18 +56,33 @@ where
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
     /// Pauses the currently active print job [REF-MQTT-LIFECYCLE].
+    ///
+    /// Deliberately **not** state-gated, unlike [`skip_objects`](Self::skip_objects). Pausing an
+    /// idle printer is a firmware no-op rather than a misdirected command, neither BambuStudio
+    /// nor bambuddy gates this on `gcode_state`, and the CLI's `probe` sends it while idle on
+    /// purpose to document what the firmware does. See `stop_print` for the staleness argument
+    /// that applies to any cache-backed gate on this path.
     pub async fn pause_print(&mut self) -> Result<u16, Error> {
         self.dispatch(|seq| StandardControlRequest::new("pause", seq))
             .await
     }
 
     /// Resumes a paused print job [REF-MQTT-LIFECYCLE].
+    ///
+    /// Not state-gated, on the same terms as [`pause_print`](Self::pause_print).
     pub async fn resume_print(&mut self) -> Result<u16, Error> {
         self.dispatch(|seq| StandardControlRequest::new("resume", seq))
             .await
     }
 
     /// Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].
+    ///
+    /// Deliberately **ungated**, unlike [`skip_objects`](Self::skip_objects). A state gate reads
+    /// the *cached* `gcode_state`, which is only as fresh as the last
+    /// [`poll_telemetry()`](Self::poll_telemetry); a caller that has not polled since before the
+    /// job started holds a stale `IDLE`. Refusing an abort on a stale reading would leave the
+    /// printer running while reporting the stop as rejected — the wrong direction to fail for
+    /// the abort path. Stop is idempotent, so a no-op stop costs nothing on the other side.
     pub async fn stop_print(&mut self) -> Result<u16, Error> {
         self.dispatch(|seq| StandardControlRequest::new("stop", seq))
             .await
@@ -90,7 +107,45 @@ where
     }
 
     /// Bypasses rendering of specific objects within an active multi-model print job [REF-MQTT-LIFECYCLE].
+    ///
+    /// `object_ids` are `identify_id` values from the `slice_info.config` inside the **currently
+    /// loaded** job's 3MF. They reference nothing when no job is loaded, which is why this is
+    /// gated more tightly than [`pause_print`](Self::pause_print).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when `object_ids` is empty — that would publish an empty
+    /// `obj_list`, a command that cannot skip anything.
+    ///
+    /// [`Error::InvalidState`] unless the cached print state is `Running` or `Paused` (or not yet
+    /// observed). This follows bambuddy, which gates on exactly those two
+    /// (`bambu_mqtt.py:7047`). Pausing to inspect a failed part, skipping it, then resuming is a
+    /// legitimate workflow, so `Paused` belongs alongside `Running`.
+    ///
+    /// Deliberately **not** gated on `xcam.allow_skip_parts`: that field reads `false` in every
+    /// capture, including hardware the vendor documents as supporting the feature, so gating on
+    /// it would break skip-objects outright. bambuddy parses it and likewise does not gate on it.
     pub async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, Error> {
+        if object_ids.is_empty() {
+            return Err(Error::InvalidArgument(Cow::Borrowed(
+                "skip_objects requires at least one object id",
+            )));
+        }
+        match self.print_status() {
+            // `None`/`Unknown` pass through for the reasons in `reject_unless_job_active`.
+            Some(PrintStatus::Running)
+            | Some(PrintStatus::Paused)
+            | Some(PrintStatus::Unknown)
+            | None => {}
+            Some(status) => {
+                return Err(Error::InvalidState(
+                    format!(
+                        "skip_objects requires a running or paused print (observed state: {status:?})"
+                    )
+                    .into(),
+                ));
+            }
+        }
         self.dispatch(|seq| crate::mqtt::SkipObjectsRequest::new(object_ids, seq))
             .await
     }

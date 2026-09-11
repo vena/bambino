@@ -100,6 +100,20 @@ pub enum Error {
     /// axis name) before any command is sent to the printer.
     #[cfg_attr(feature = "std", error("Invalid argument: {0}"))]
     InvalidArgument(Cow<'static, str>),
+
+    /// Emitted when a command is refused because the printer's observed print state cannot
+    /// act on it (e.g. skipping objects with no job loaded).
+    ///
+    /// Distinct from [`Error::InvalidArgument`]: the caller's arguments are well-formed, the
+    /// machine is simply in the wrong state. Distinct from [`Error::ModelMismatch`], which is a
+    /// permanent capability gap rather than a transient one — retrying after the printer reaches
+    /// the right state is the correct response to this error, and is not for `ModelMismatch`.
+    ///
+    /// These gates read `PrinterClient`'s *cached* `gcode_state`, so they are only as fresh as
+    /// the last `poll_telemetry()`. A caller that has not polled recently can be refused on a
+    /// stale reading; poll and retry rather than treating it as final.
+    #[cfg_attr(feature = "std", error("Invalid printer state: {0}"))]
+    InvalidState(Cow<'static, str>),
 }
 
 impl From<crate::io::SocketError> for Error {
@@ -146,6 +160,7 @@ pub(crate) fn format_error_no_std(
             write!(f, "Command queue saturated with unacknowledged commands")
         }
         Error::InvalidArgument(s) => write!(f, "Invalid argument: {}", s),
+        Error::InvalidState(s) => write!(f, "Invalid printer state: {}", s),
     }
 }
 
@@ -185,6 +200,7 @@ mod tests {
             Error::ModelMismatch(_) => {}
             Error::Backpressure => {}
             Error::InvalidArgument(_) => {}
+            Error::InvalidState(_) => {}
         }
     }
 
@@ -231,6 +247,10 @@ mod tests {
             (
                 Error::InvalidArgument("unknown axis".into()),
                 "Invalid argument: unknown axis",
+            ),
+            (
+                Error::InvalidState("printer is not printing".into()),
+                "Invalid printer state: printer is not printing",
             ),
         ];
 
