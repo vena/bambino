@@ -146,27 +146,22 @@ where
 
     /// Whether this printer supports remote AMS drying — the printer-side half of the gate.
     ///
-    /// Prefers the printer's own answer, `fun2` bit 5, and falls back to
-    /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying)
-    /// when the printer has not reported `fun2` (older firmware omits it entirely, and it only
-    /// arrives on pushall, so an un-polled client always falls back here).
+    /// Supplies the cached `fun2` to
+    /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying),
+    /// which resolves the printer's own answer against the model default. This is the call to
+    /// gate a UI on: it is the identical value [`start_drying`](Self::start_drying) checks, so a
+    /// control offered on the strength of it cannot then be refused.
     ///
-    /// Firmware outranks the quirk table because the quirk's `true` is a default asserted for
-    /// every model nobody has tested, while `fun2` is the machine in front of you answering for
-    /// itself. The one hardware-verified quirk value — P1P/P1S `false`, observed acking the
-    /// command and discarding it — is therefore reachable only when that firmware reports no
-    /// `fun2` or reports bit 5 clear. A P1 whose firmware sets the bit is taken at its word here;
-    /// if that turns out to re-open the acked-then-discarded path, this is the composition to
-    /// revisit, not the quirk.
+    /// `fun2` arrives on pushall, so a client that has never called
+    /// [`poll_telemetry()`](Self::poll_telemetry) holds `None` here and gets the model default —
+    /// on a P1 that means a `false` its firmware may no longer deserve. Poll first if the
+    /// distinction matters.
     #[must_use]
     pub fn supports_ams_remote_drying(&self) -> bool {
-        self.cache
-            .last_fun2
-            .as_deref()
-            .and_then(|hex| {
-                crate::types::telemetry::fun2_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
-            })
-            .unwrap_or_else(|| self.identity.model.quirks().supports_ams_remote_drying())
+        self.identity
+            .model
+            .quirks()
+            .supports_ams_remote_drying(self.cache.last_fun2.as_deref())
     }
 
     /// Looks up the cached [`AmsUnitModel`] for the unit at `ams_id`, if one has been observed.

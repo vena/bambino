@@ -65,8 +65,12 @@ macro_rules! impl_p1_shared {
                 false
             }
 
-            fn supports_ams_remote_drying(&self) -> bool {
-                false
+            /// `false` unless this P1 reports otherwise: firmware acks `ams_filament_drying`
+            /// `result: success` and silently discards it (P1 manual, bambuddy #2533, and
+            /// direct hardware testing on a P1S). A P1 whose `fun2` bit 5 is set is taken at
+            /// its word, so a firmware update shipping remote drying needs no change here.
+            fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool {
+                crate::quirks::reported_remote_dry(fun2).unwrap_or(false)
             }
 
             fn is_bed_on_z(&self) -> bool {

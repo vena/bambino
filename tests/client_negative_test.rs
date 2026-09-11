@@ -582,10 +582,9 @@ async fn test_reported_fun2_overrides_the_quirk_default() {
     });
 
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
-    assert!(
-        !client.quirks().supports_ams_remote_drying(),
-        "the P1S quirk default must still be false"
-    );
+    // With nothing reported, the P1S model default still stands.
+    assert!(!client.quirks().supports_ams_remote_drying(None));
+    assert!(!client.supports_ams_remote_drying());
 
     client
         .poll_telemetry()
@@ -621,13 +620,16 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
     });
 
     let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
-    assert!(client.quirks().supports_ams_remote_drying());
+    assert!(client.quirks().supports_ams_remote_drying(None));
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry failed");
 
+    // The quirk and the client agree once both see the same reported value — there is one
+    // answer to this question now, not two that can disagree (#240).
+    assert!(!client.quirks().supports_ams_remote_drying(Some("00")));
     assert!(!client.supports_ams_remote_drying());
     let err = client
         .start_drying(0, 55, 8, 0, true, 20, false, "PLA")

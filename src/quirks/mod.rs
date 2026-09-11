@@ -21,6 +21,20 @@ use crate::camera::CameraProtocol;
 use crate::models::PrinterModel;
 use crate::types::PrinterTelemetry;
 
+/// Reads the printer's own remote-dry answer out of a `fun2` capability string.
+///
+/// `None` means the printer never reported `fun2`, or reported one carrying no hex digits —
+/// "it didn't say", which is what leaves a
+/// [`supports_ams_remote_drying`](ModelQuirks::supports_ams_remote_drying) implementation free to
+/// fall back to its model default. A `Some` is the printer's answer and every implementation must
+/// honor it, including the P1 override; this helper exists so none of them can read the bit
+/// differently.
+pub(crate) fn reported_remote_dry(fun2: Option<&str>) -> Option<bool> {
+    fun2.and_then(|hex| {
+        crate::types::telemetry::fun2_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
+    })
+}
+
 /// Polymorphic interface tracking model-specific hardware variations and transport exceptions.
 pub trait ModelQuirks {
     /// Returns true if this model series requires plaintext transmissions on the FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
@@ -214,13 +228,32 @@ pub trait ModelQuirks {
     /// Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
     /// printer's firmware, rather than acked `result: success` and silently discarded.
     ///
-    /// Default `true` (AMS 2 Pro / AMS-HT drying is remote-controllable on every other host).
-    /// `false` on P1P/P1S: confirmed by Bambu's own P1 manual ("P1S connected AMS drying
+    /// `fun2` is the printer's own capability bitfield, from the last telemetry report that
+    /// carried one (`None` if it never did). **When the printer answered, its answer wins** —
+    /// bit 5 is exactly this capability (`DeviceManager.cpp:4469`), and a per-model default is a
+    /// claim about every unit of that model while `fun2` is the machine in front of you speaking
+    /// for itself. The model default below is consulted only for `None`.
+    ///
+    /// Takes the reported capability as a parameter rather than leaving callers to compose it,
+    /// so there is one answer to this question and not two that can disagree — the same reason
+    /// [`is_door_open`](Self::is_door_open) and
+    /// [`has_door_sensor_field`](Self::has_door_sensor_field) take telemetry. `Option<&str>`
+    /// rather than `&PrinterTelemetry` because the command path holds a cached `fun2` string,
+    /// not a live report, and because `None` — "the printer never said" — is the distinction the
+    /// composition turns on. Prefer
+    /// [`PrinterClient::supports_ams_remote_drying`](crate::PrinterClient::supports_ams_remote_drying),
+    /// which supplies the cached value for you.
+    ///
+    /// Model default `true` (AMS 2 Pro / AMS-HT drying is remote-controllable on every other
+    /// host). `false` on P1P/P1S: confirmed by Bambu's own P1 manual ("P1S connected AMS drying
     /// functions may only be controlled from the P1S screen"), by bambuddy (`fix(drying)`,
     /// #2533 — reporter saw `dry_status` stay `0` after three acked commands), and by direct
-    /// hardware testing against this crate's `start_drying()` on a P1S.
-    fn supports_ams_remote_drying(&self) -> bool {
-        true
+    /// hardware testing against this crate's `start_drying()` on a P1S. That verified `false` is
+    /// therefore reachable only on firmware reporting no `fun2` or reporting bit 5 clear; a P1
+    /// advertising the bit is taken at its word. If that turns out to re-open the
+    /// acked-then-discarded path, this composition is what to revisit, not the P1 override.
+    fn supports_ams_remote_drying(&self, fun2: Option<&str>) -> bool {
+        reported_remote_dry(fun2).unwrap_or(true)
     }
 
     /// Returns true if the model runs vibration-compensation (resonance) calibration as part of a print job.
@@ -516,6 +549,32 @@ mod tests {
     use super::*;
     use crate::camera::CameraProtocol;
     use crate::models::PrinterModel;
+
+    /// A reported `fun2` bit 5 is the answer for every model, and the model default applies
+    /// only when nothing was reported. Both directions, on both a default-`true` model and the
+    /// default-`false` P1 override, so neither can quietly stop honoring the report (#240).
+    #[test]
+    fn test_supports_ams_remote_drying_honors_the_reported_bit() {
+        let x1c = PrinterModel::X1C.quirks();
+        let p1s = PrinterModel::P1S.quirks();
+
+        // Nothing reported: each model's own default stands.
+        assert!(x1c.supports_ams_remote_drying(None));
+        assert!(!p1s.supports_ams_remote_drying(None));
+
+        // A fun2 carrying no hex digits is still "didn't say", not a reported zero.
+        assert!(x1c.supports_ams_remote_drying(Some("")));
+        assert!(!p1s.supports_ams_remote_drying(Some("")));
+
+        // Bit 5 set: both allow, including the P1 whose default is false. A firmware update
+        // shipping remote drying on a P1 needs no change to the quirk table.
+        assert!(x1c.supports_ams_remote_drying(Some("20")));
+        assert!(p1s.supports_ams_remote_drying(Some("20")));
+
+        // Bit 5 clear: both refuse, including the X1C whose default is true.
+        assert!(!x1c.supports_ams_remote_drying(Some("00")));
+        assert!(!p1s.supports_ams_remote_drying(Some("00")));
+    }
 
     #[test]
     fn test_fan_step_rounding() {
