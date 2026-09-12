@@ -327,14 +327,16 @@ impl ServerCertVerifier for CnFallbackServerVerifier {
 /// Rejects a peer-supplied cert that is being used as an issuer but isn't allowed to be one.
 ///
 /// Requires `basicConstraints` with `ca == true`, `keyUsage.keyCertSign` when a `keyUsage`
-/// extension is present at all (absent `keyUsage` means unrestricted, per RFC 5280 §4.2.1.3),
-/// and a `pathLenConstraint` at least as large as the number of intermediates already traversed
+/// extension is present at all (only an *absent* `keyUsage` means unrestricted, per RFC 5280
+/// §4.2.1.3 — a present-but-malformed one is rejected, matching how a malformed
+/// `basicConstraints` is treated), and a `pathLenConstraint` at least as large as the number of
+/// intermediates already traversed
 /// beneath this one. `intermediates_below` counts intermediates only, not the leaf, matching RFC
 /// 5280 §4.2.1.9's definition.
 ///
 /// Applies to peer-supplied intermediates only. Trusted roots are anchors the caller chose, and
 /// the leaf is never used as an issuer.
-fn check_ca_capable(
+pub(super) fn check_ca_capable(
     cert: &x509_parser::certificate::X509Certificate<'_>,
     intermediates_below: u32,
 ) -> Result<(), RustlsError> {
@@ -356,10 +358,18 @@ fn check_ca_capable(
     {
         return Err(reject("pathLenConstraint exceeded"));
     }
-    if let Ok(Some(ku)) = cert.key_usage()
-        && !ku.value.key_cert_sign()
-    {
-        return Err(reject("keyUsage lacks keyCertSign"));
+    // Three-way, deliberately: `x509-parser` returns `Err` for "present but unparseable" and
+    // `Ok(None)` for "absent". Only the latter is the RFC 5280 §4.2.1.3 unrestricted case.
+    // Collapsing them — which an `if let Ok(Some(ku))` does silently — lets a peer-supplied
+    // intermediate carrying deliberately malformed keyUsage bytes through the one check that
+    // stands between a crafted chain and the CVE-2002-0862-class hop described above, while
+    // the malformed-basicConstraints case one branch up already fails closed.
+    match cert.key_usage() {
+        Err(_) => return Err(reject("keyUsage extension present but malformed")),
+        Ok(Some(ku)) if !ku.value.key_cert_sign() => {
+            return Err(reject("keyUsage lacks keyCertSign"));
+        }
+        Ok(_) => {}
     }
     Ok(())
 }

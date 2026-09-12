@@ -1,4 +1,5 @@
 use super::*;
+use rcgen::{BasicConstraints, IsCa};
 use rustls::client::danger::ServerCertVerifier;
 use rustls_pki_types::UnixTime;
 use x509_parser::prelude::FromDer;
@@ -71,6 +72,28 @@ mod test_support {
         let cert = params.clone().signed_by(&key, parent_issuer).unwrap();
         let der = cert.der().clone();
         (der, Issuer::new(params, key))
+    }
+
+    /// Builds an intermediate cert under `parent_issuer` with a caller-chosen
+    /// `basicConstraints`/`keyUsage` shape, so `check_ca_capable` can be exercised against
+    /// each rejection path (including a deliberately malformed extension, via
+    /// `custom_extensions`).
+    pub(super) fn generate_ca_variant(
+        parent_issuer: &Issuer<'_, KeyPair>,
+        common_name: &str,
+        is_ca: IsCa,
+        key_usages: Vec<rcgen::KeyUsagePurpose>,
+        custom_extensions: Vec<rcgen::CustomExtension>,
+    ) -> CertificateDer<'static> {
+        let mut params = CertificateParams::new(Vec::new()).unwrap();
+        params.is_ca = is_ca;
+        params.key_usages = key_usages;
+        params.custom_extensions = custom_extensions;
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        let key = KeyPair::generate().unwrap();
+        params.signed_by(&key, parent_issuer).unwrap().der().clone()
     }
 
     /// Builds a v3 leaf cert signed by `issuer`. `common_name` is always set; `san_dns_names`
@@ -539,5 +562,107 @@ fn test_peer_sent_no_certificates_is_reported_as_missing() {
     assert_eq!(
         map_tls_handshake_error(none_presented),
         SocketError::CertificateInvalid(CertificateFailure::Missing)
+    );
+}
+
+// Issue #246: `check_ca_capable` is the single check standing between a peer-supplied
+// intermediate and a CVE-2002-0862-class chain hop, and had no test coverage at all.
+
+/// Parses `der` and runs `check_ca_capable` against it with `intermediates_below` below it.
+fn check_ca_capable_der(
+    der: &CertificateDer<'static>,
+    intermediates_below: u32,
+) -> Result<(), rustls::Error> {
+    let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der.as_ref())
+        .expect("fixture cert must parse");
+    super::cert_verify::check_ca_capable(&cert, intermediates_below)
+}
+
+#[test]
+fn test_check_ca_capable_accepts_an_unconstrained_ca_with_key_cert_sign() {
+    let (_, ca_issuer, ..) = test_support::generate_test_ca();
+    let good = test_support::generate_ca_variant(
+        &ca_issuer,
+        "usable intermediate",
+        IsCa::Ca(BasicConstraints::Unconstrained),
+        vec![rcgen::KeyUsagePurpose::KeyCertSign],
+        Vec::new(),
+    );
+    assert!(
+        check_ca_capable_der(&good, 0).is_ok(),
+        "a well-formed CA with keyCertSign must be usable as an issuer"
+    );
+}
+
+#[test]
+fn test_check_ca_capable_rejects_non_ca_basic_constraints() {
+    let (_, ca_issuer, ..) = test_support::generate_test_ca();
+    let not_a_ca = test_support::generate_ca_variant(
+        &ca_issuer,
+        "not a CA",
+        IsCa::ExplicitNoCa,
+        vec![rcgen::KeyUsagePurpose::KeyCertSign],
+        Vec::new(),
+    );
+    assert!(
+        check_ca_capable_der(&not_a_ca, 0).is_err(),
+        "basicConstraints CA=false must not be usable as an issuer"
+    );
+}
+
+#[test]
+fn test_check_ca_capable_rejects_exceeded_path_len_constraint() {
+    let (_, ca_issuer, ..) = test_support::generate_test_ca();
+    let constrained = test_support::generate_ca_variant(
+        &ca_issuer,
+        "pathlen 0",
+        IsCa::Ca(BasicConstraints::Constrained(0)),
+        vec![rcgen::KeyUsagePurpose::KeyCertSign],
+        Vec::new(),
+    );
+    // pathLenConstraint counts intermediates beneath this one (RFC 5280 §4.2.1.9), so zero
+    // below is legal and one below is not.
+    assert!(check_ca_capable_der(&constrained, 0).is_ok());
+    assert!(
+        check_ca_capable_der(&constrained, 1).is_err(),
+        "an intermediate beneath a pathLenConstraint of 0 must be rejected"
+    );
+}
+
+#[test]
+fn test_check_ca_capable_rejects_key_usage_without_key_cert_sign() {
+    let (_, ca_issuer, ..) = test_support::generate_test_ca();
+    let no_cert_sign = test_support::generate_ca_variant(
+        &ca_issuer,
+        "signing only",
+        IsCa::Ca(BasicConstraints::Unconstrained),
+        vec![rcgen::KeyUsagePurpose::DigitalSignature],
+        Vec::new(),
+    );
+    assert!(
+        check_ca_capable_der(&no_cert_sign, 0).is_err(),
+        "a present keyUsage without keyCertSign must be rejected"
+    );
+}
+
+#[test]
+fn test_check_ca_capable_rejects_malformed_key_usage_rather_than_treating_it_as_absent() {
+    let (_, ca_issuer, ..) = test_support::generate_test_ca();
+    // keyUsage (2.5.29.15) must be a BIT STRING; this is an INTEGER, so `x509-parser` returns
+    // `Err` ("present but unparseable") rather than `Ok(None)` ("absent"). Only the latter is
+    // RFC 5280 §4.2.1.3's unrestricted case — collapsing the two would let this through.
+    let malformed = test_support::generate_ca_variant(
+        &ca_issuer,
+        "malformed keyUsage",
+        IsCa::Ca(BasicConstraints::Unconstrained),
+        Vec::new(),
+        vec![rcgen::CustomExtension::from_oid_content(
+            &[2, 5, 29, 15],
+            vec![0x02, 0x01, 0x05],
+        )],
+    );
+    assert!(
+        check_ca_capable_der(&malformed, 0).is_err(),
+        "a malformed keyUsage must fail closed, not read as unrestricted"
     );
 }
