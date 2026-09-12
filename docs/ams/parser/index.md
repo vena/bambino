@@ -100,7 +100,7 @@ fn normalize_ams_unit_id(ams_id: u8) -> u8
 
 Normalizes an AMS unit id reported on the wire into the id this crate addresses it by.
 
-Only the A2L AMS Lite's physical id 16 is remapped (to 6); every other id passes through
+Only an A2L-attached AMS Lite's physical id 16 is remapped (to 6); every other id passes through
 untouched, and no other Bambu unit reports id 16, so the remap is self-scoping. Applied on
 the inbound telemetry boundary so that `tray_exist_bits`, `resolve_global_tray_id` and the
 mapping builders all agree on one id; the physical 16 is restored only on the outbound wire

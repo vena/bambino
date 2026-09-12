@@ -60,7 +60,7 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`ams_id`**: `u8`
 
-  AMS unit index (0-3 for standard, 16 for the A2L AMS Lite, 128-135 for AMS-HT,
+  AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 128-135 for AMS-HT,
   254/255 for external/unmapped).
   
   Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
@@ -115,7 +115,7 @@ What kind of feed location a raw [`AmsMapping2Entry`](#amsmapping2entry)'s `ams_
 Single place the "which `ams_id`s are real physical units" rule lives. `MaterialSource`'s
 own methods can rely on the enum variant to tell them, but every function that instead
 re-derives physical-ness from a hand-built `AmsMapping2Entry` has to reproduce the same
-range checks — and each one independently missed the A2L AMS Lite's physical id 16 when
+range checks — and each one independently missed an A2L-attached AMS Lite's physical id 16 when
 it was added (issue #221). Route those through [`classify_mapping2_entry`](#classify-mapping2-entry) so a new one
 cannot omit a unit type by hand.
 
@@ -185,7 +185,7 @@ never accepts a config that's actually invalid.
 
 This is a *capacity-counting* gap only. The addressing gap it used to describe — "AMS Lite
 units are not independently addressable ... they use the same `ams_id` space as standard AMS
-units" — is fixed: the A2L AMS Lite reports physical unit id 16, which
+units" — is fixed: an A2L-attached AMS Lite reports physical unit id 16, which
 [`normalize_ams_unit_id`](../parser/index.md#normalize-ams-unit-id) maps to 6 on ingest, and
 [`MaterialSource::AmsLite`](#materialsource) addresses its slots with their own wire encodings.
 
