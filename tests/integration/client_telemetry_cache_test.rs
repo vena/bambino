@@ -674,6 +674,52 @@ async fn test_printing_tray_global_id_prefers_snow_field() {
     broker_task.await.expect("Broker task panicked");
 }
 
+/// Issue #258: an AMS Lite attached to an A2L reports physical unit id 16 — not the 0 the same
+/// unit uses as an A1's only AMS, because on an A2L it sits alongside up to four shared-pool
+/// units already holding ids 0-3. The `snow` decode path did not normalize it, so
+/// `resolve_global_tray_id(16, slot)` fell through to `None` and this accessor reported "no
+/// active tray" while the machine was printing from that unit.
+#[tokio::test]
+async fn test_printing_tray_global_id_normalizes_the_a2l_ams_lite_unit_id() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{SERIAL}/report");
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Same extruder shape as the sibling test above (state 18 selects index 1), with snow
+        // routing to the AMS Lite's physical id 16, slot 2: raw = (16 << 8) | 2 = 4098.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            5701,
+            br#"{"device":{"extruder":{"info":[
+                {"id":0,"snow":65535},
+                {"id":1,"snow":4098}
+            ],"state":18}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::A2L).await;
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse extruder report");
+
+    // Normalized 16 -> 6, so 6*4 + 2 = 26. BambuStudio reaches the same 26 by a different
+    // route, keying on its AMS_LITE_MIXED unit type and computing a hardcoded 24 + slot.
+    assert_eq!(
+        client.printing_tray_global_id(),
+        Some(26),
+        "an AMS Lite on an A2L must resolve, not read as no-active-tray"
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 #[tokio::test]
 async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);

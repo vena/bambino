@@ -538,13 +538,41 @@ impl ExtruderInfo {
     /// reading it as the external spool." Re-litigated without new evidence in the
     /// 2026-09-08 telemetry review sweep, same conclusion — don't reopen without a wire
     /// capture showing a genuine `ams_id=255, slot_id=255` combo in the wild.
+    ///
+    /// The decoded `ams_id` goes through
+    /// [`normalize_ams_unit_id`](crate::ams::normalize_ams_unit_id) before it is returned, so
+    /// an AMS Lite **attached to an A2L** — which reports physical id 16 rather than the 0 the
+    /// same unit uses as an A1's only AMS, since on an A2L it coexists with up to four
+    /// shared-pool units already holding ids 0-3 — arrives as the 6 the rest of the crate
+    /// addresses it by. Without it `resolve_global_tray_id(16, slot)` — which accepts only
+    /// 0-3, 6, 128-135 and 254/255 — fell through to `None`, and `printing_tray_global_id()`
+    /// reported "no active tray" on an A2L printing from that unit.
+    ///
+    /// That the `snow`/`spre`/`star` byte shares an id space with the AMS unit's own `id`
+    /// field is confirmed by both upstreams: BambuStudio compares the two directly and
+    /// unnormalized (`DevAms::GetCurrentExtruderId`, `DevFilaSystem.cpp:182`, testing
+    /// `extruder.GetSlotNow().ams_id == m_ams_id`, where `m_ams_id` is the raw reported `id`
+    /// from `DevFilaSystem.cpp:584`), and bambuddy records that id as 16 for this combination
+    /// (`_normalize_a2l_am_units`, `services/bambu_mqtt.py`).
+    ///
+    /// Neither upstream normalizes this decode path. BambuStudio does not need to: it gives
+    /// this combination its own unit type — `AMS_LITE_MIXED = 5`, commented "AMS-Lite for N9",
+    /// N9 being the A2L's dev token, read straight from the unit's own `info` type nibble —
+    /// and computes `24 + slot_id` for it, ignoring `ams_id` entirely
+    /// (`DevFilaSystem.cpp:262`). That is the same global tray id this crate reaches through
+    /// `6 * 4 + slot`, so the two agree on the answer while disagreeing on the route.
+    ///
+    /// Normalizing here rather than widening `resolve_global_tray_id` keeps the promise
+    /// [`normalize_ams_unit_id`](crate::ams::normalize_ams_unit_id) already makes — that the
+    /// inbound telemetry boundary owns this remap — instead of adding a fourth site that
+    /// re-derives the id ranges by hand.
     fn decode_ams_slot_field(raw: Option<u32>) -> Option<(u8, u8)> {
         let raw = raw?;
         if raw == 0xFFFF {
             return None;
         }
         let slot_id = (raw & 0xFF) as u8;
-        let ams_id = ((raw >> 8) & 0xFF) as u8;
+        let ams_id = crate::ams::parser::normalize_ams_unit_id(((raw >> 8) & 0xFF) as u8);
         Some((ams_id, slot_id))
     }
 
