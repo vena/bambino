@@ -108,6 +108,9 @@ pub(crate) fn firmware_gate(ctx: &QuirkContext, min_firmware: &str, unknown: Sup
 /// call site is a background auto-drying scheduler where skipping a printer is free and retried
 /// on the next tick. Neither reason transfers to a library whose caller asked once and is
 /// waiting on the answer, so the thresholds are ported and the `None` handling is not.
+///
+/// Drying *while printing* deliberately resolves `None` the other way — see
+/// [`dry_while_printing_from_firmware`]. Don't align the two.
 pub(crate) fn remote_dry_from_firmware(ctx: &QuirkContext, min_firmware: &str) -> Support {
     remote_dry_reported_or(
         ctx,
