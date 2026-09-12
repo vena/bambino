@@ -374,7 +374,7 @@ pub fn is_external_spool_safety_valid(
     // (normally IDEX-only, via MaterialSource::ExternalSpoolLeft) on a single-nozzle printer.
     // Treating that as physical would dispatch use_ams:true for a non-physical channel,
     // reproducing the 07FF_8012 lockup this function exists to prevent; so would an
-    // unconstrained fallthrough for garbage ids. The A2L's AMS Lite *is* physical — omitting it
+    // unconstrained fallthrough for garbage ids. An A2L-attached AMS Lite *is* physical — omitting it
     // forced use_ams off for a job fed exclusively from it, which the printer then rejects with
     // the same 07FF_8012 per [REF-AMS-USEAMS].
     mapping2.iter().any(|entry| {

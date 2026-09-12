@@ -1325,7 +1325,7 @@ async fn test_stop_drying_rejects_invalid_ams_id() {
     let mut client =
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
-    // 16 is the A2L AMS Lite's physical id and valid; 17 addresses nothing.
+    // 16 is an A2L-attached AMS Lite's physical id and valid; 17 addresses nothing.
     let result = client.stop_drying(17).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 
@@ -1356,7 +1356,7 @@ async fn test_scan_rfid_wire_payload() {
 /// Issue #271: every `ams_id`-taking command accepts the A2L-attached AMS Lite under both its
 /// normalized id 6 and physical id 16, and sends the physical 16 with a local slot.
 #[tokio::test]
-async fn test_ams_commands_address_a2l_ams_lite() {
+async fn test_ams_commands_address_ams_lite_on_a2l() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 
     let broker_task = tokio::spawn(async move {
@@ -1413,11 +1413,11 @@ async fn test_ams_commands_address_a2l_ams_lite() {
     broker_task.await.expect("Broker task panicked");
 }
 
-/// Issue #269: a printer whose `push_status` frames lack the new-protocol probe gets
+/// Issue #269: a printer whose `push_status` frames lack BambuStudio's "np" probe gets
 /// `M620 R<global tray>`; one that shows the probe gets `ams_get_rfid`.
 #[tokio::test]
-async fn test_scan_rfid_selects_command_by_protocol_generation() {
-    for (frame, new_protocol) in [
+async fn test_scan_rfid_selects_command_by_np_format() {
+    for (frame, np_format) in [
         (
             br#"{"print":{"command":"push_status","gcode_state":"IDLE"}}"#.as_slice(),
             false,
@@ -1442,7 +1442,7 @@ async fn test_scan_rfid_selects_command_by_protocol_generation() {
             read_puback(&mut server_stream).await;
 
             let json = read_publish_payload(&mut server_stream).await;
-            if new_protocol {
+            if np_format {
                 assert_eq!(json["print"]["command"], "ams_get_rfid");
                 assert_eq!(json["print"]["ams_id"], 1);
                 assert_eq!(json["print"]["slot_id"], 2);

@@ -56,7 +56,7 @@ fn test_ams_nested_wire_format() {
 /// sentinel. It is normalized to 6 at the deserialization boundary so `tray_exist_bits`,
 /// `resolve_global_tray_id` and the mapping builders all address one id.
 #[test]
-fn test_a2l_ams_lite_unit_id_16_is_normalized_to_6_on_ingest() {
+fn test_ams_lite_on_a2l_unit_id_16_is_normalized_to_6_on_ingest() {
     let json =
         r#"{ "print": { "ams": { "ams": [ { "id": "16", "temp": "0", "humidity": "5" } ] } } }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();

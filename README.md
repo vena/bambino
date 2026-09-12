@@ -226,7 +226,7 @@ ordering, so they're spelled out here.
 
 ```rust
 // change_filament(ams_id, slot_id, curr_temp, tar_temp, extruder_id)
-//   ams_id:      0..=3 standard AMS unit · 16 A2L AMS Lite · 128..=135 AMS-HT bus ID
+//   ams_id:      0..=3 standard AMS unit · 16 AMS Lite on an A2L · 128..=135 AMS-HT bus ID
 //                · 254/255 external spool
 //   slot_id:     0..=3 slot within the unit · 254 external-spool load · 255 unload/retract
 //   temps:       nozzle current/target in °C; -1 lets the firmware decide

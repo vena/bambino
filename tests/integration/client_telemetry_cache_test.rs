@@ -680,7 +680,7 @@ async fn test_printing_tray_global_id_prefers_snow_field() {
 /// `resolve_global_tray_id(16, slot)` fell through to `None` and this accessor reported "no
 /// active tray" while the machine was printing from that unit.
 #[tokio::test]
-async fn test_printing_tray_global_id_normalizes_the_a2l_ams_lite_unit_id() {
+async fn test_printing_tray_global_id_normalizes_the_ams_lite_on_a2l_unit_id() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let topic = format!("device/{SERIAL}/report");
 
