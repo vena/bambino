@@ -23,6 +23,7 @@ with the low-resolution PWM fan telemetry common across most models.
   - [`models`](models/index.md)
 - [Types](#types)
   - [`FanSpeedDebouncer`](#fanspeeddebouncer)
+  - [`Support`](#support)
 - [Traits](#traits)
   - [`ModelQuirks`](#modelquirks)
 - [Functions](#functions)
@@ -36,6 +37,7 @@ with the low-resolution PWM fan telemetry common across most models.
 | [`context`](context/index.md) | mod | # Quirk Context |
 | [`models`](models/index.md) | mod | # Model-Specific Kinematic and Operational Configuration Submodules |
 | [`FanSpeedDebouncer`](#fanspeeddebouncer) | struct | Filters out transient quantization oscillation artifacts emitted by physical fan controllers. |
+| [`Support`](#support) | enum | How a capability answer was reached — the printer's own report, an inference, or a default. |
 | [`ModelQuirks`](#modelquirks) | trait | Polymorphic interface tracking model-specific hardware variations and transport exceptions. |
 | [`decode_fan_percentage`](#decode-fan-percentage) | fn | Decodes a raw fan-speed telemetry string (`cooling_fan_speed`/`big_fan1_speed`/ `big_fan2_speed`/`heatbreak_fan_speed`) into a 0-100 percentage via [`fan_step_to_percentage()`](#fan-step-to-percentage). |
 | [`fan_step_to_percentage`](#fan-step-to-percentage) | fn | Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS]. |
@@ -89,8 +91,8 @@ site.
   if a `get_version` response has been seen.
   
   Several capabilities ship in a specific firmware release rather than being inherent to
-  the model — bambuddy version-gates AMS drying on X1/X1C, H2D, H2S/H2C and P2S for exactly
-  this reason.
+  the model — remote AMS drying is version-gated on H2D, H2D Pro, H2S, H2C, P2S and X2D for
+  exactly this reason.
 
 - **`telemetry`**: `Option<&'a crate::types::PrinterTelemetry>`
 
@@ -184,6 +186,65 @@ consecutive readings before committing a one-step change.
 ##### `impl Default for FanSpeedDebouncer`
 
 - <span id="fanspeeddebouncer-default"></span>`fn default() -> Self`
+
+### `Support`
+
+```rust
+enum Support {
+    Reported(bool),
+    Inferred(bool),
+    Assumed(bool),
+}
+```
+
+How a capability answer was reached — the printer's own report, an inference, or a default.
+
+A plain `bool` collapses "this X1C reported the bit clear" and "no telemetry has arrived, so
+yes was assumed" into the same value, though they warrant opposite handling: the first is
+settled, the second means "ask again once connected". [`is_supported`](#support)
+collapses back to that `bool` for callers that don't need the distinction.
+
+Only capabilities that resolve a reported value against model rules against a default carry
+this type. Static model facts (`z_max`, camera protocol, …) have no provenance question.
+
+#### Variants
+
+- **`Reported`**
+
+  The printer said so itself, e.g. through a `fun2` capability bit.
+
+- **`Inferred`**
+
+  Derived from what is known about this printer without it saying so: its firmware version
+  against a documented threshold, or a documented rule for its model.
+
+- **`Assumed`**
+
+  Nothing about this printer settles it, so this is the capability's default.
+
+#### Implementations
+
+- <span id="support-is-supported"></span>`fn is_supported(self) -> bool`
+
+  The answer with its provenance discarded.
+
+#### Trait Implementations
+
+##### `impl Clone for Support`
+
+- <span id="support-clone"></span>`fn clone(&self) -> Support` — [`Support`](#support)
+
+##### `impl Copy for Support`
+
+##### `impl Debug for Support`
+
+- <span id="support-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for Support`
+
+##### `impl PartialEq for Support`
+
+- <span id="support-partialeq-eq"></span>`fn eq(&self, other: &Support) -> bool` — [`Support`](#support)
 
 
 ---
@@ -431,29 +492,71 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   (`reference/03_mqtt_telemetry.md`), so on a large share of real hardware the reported bit
   never appears. Treat the model rules as the primary mechanism, not a fallback.
 
-  Model rules, ported from bambuddy's `supports_drying()`
-  (`printer_manager.py:328-345`), which is the better-corroborated of the two upstream
-  capability models — BambuStudio's is a bare `is_support_remote_dry = false` initializer
-  that only `fun2` ever sets:
+  Model rules, sourced from Bambu Lab's per-model firmware release histories and its *Filament
+  drying guide for AMS 2 Pro and AMS HT* wiki page (thresholds and rejected values tabulated
+  in `reference/05_materials_ams.md` §5.4). BambuStudio has no model rule of its own — its
+  `is_support_remote_dry` is a bare `false` initializer that only `fun2` ever sets:
 
   * **A1 / A1 Mini — never.** Not a hardware limit: these models do take AMS 2 Pro and
-    AMS-HT units from the shared pool. No known firmware path exposes a remote-dry command
-    on them, and bambuddy lists them in `_DRYING_UNSUPPORTED_MODELS`.
-  * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen. Bambu's
-    P1 manual is explicit ("P1S connected AMS drying functions may only be controlled from
-    the P1S screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533
-    (reporter saw `dry_status` stay `0` after three acked commands), and this crate's own
-    drying command was tested against a P1S directly.
-  * **X1C, P2S, H2D, H2S, H2C — firmware-gated.** The capability shipped in a specific
-    release; see each model's override for the version.
-  * **Everything else — allowed.** Matching bambuddy's "all other models (H2D Pro, X1E,
-    future models) are allowed — the command fails gracefully with `result: "fail"` if
-    unsupported."
+    AMS-HT units from the shared pool. The drying guide lists them as "not supported yet",
+    and bambuddy lists them in `_DRYING_UNSUPPORTED_MODELS`.
+  * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen: P1
+    `01.08.00.00` (2025-04-29) says drying starts "from the printer's screen", no later P1
+    release adds remote drying, and the drying guide names both as unsupported. Bambu's P1
+    manual agrees ("P1S connected AMS drying functions may only be controlled from the P1S
+    screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and this
+    crate's own drying command was tested against a P1S directly.
+  * **X1C — never.** The drying guide names it alongside P1 and A1 as "not supported yet";
+    X1 `01.09.00.00` (2025-04-29) carries the same screen-only sentence as P1 `01.08.00.00`,
+    and no X1/X1C release through `01.12.00.00` mentions remote drying. Bambu Lab has stated
+    the related dry-while-printing feature needs hardware the X1 Carbon lacks.
+  * **H2D, H2D Pro, H2S, H2C, P2S, X2D — firmware-gated.** The capability shipped in a
+    specific release; see each model's constant for the version and its release history.
+  * **A2L — always.** Its earliest published release, `01.01.00.00`, already has it.
+  * **Everything else (X1E, future models) — assumed allowed.** No vendor source states
+    either way; the printer answers `result: "fail"` if it can't. Matches bambuddy's "all
+    other models ... are allowed".
 
   Takes a [`QuirkContext`](context/index.md#quirkcontext) rather than letting callers compose the answer, so there is one
   answer to this question and not two that can disagree — the failure #240 fixed. Prefer
   [`PrinterClient::capabilities`](../client/index.md#printerclient), which builds the
   context from cached telemetry for you.
+
+  Implementors override [`ams_remote_drying_support`](#modelquirks), not
+  this method, so the two cannot disagree.
+
+- `fn ams_remote_drying_support(&self, ctx: &QuirkContext<'_>) -> Support`
+
+  Remote-drying support with its provenance attached.
+
+  The same answer as [`supports_ams_remote_drying`](#modelquirks), plus
+  whether the printer reported it, it was inferred from firmware or a model rule, or it is the
+  default because nothing was known.
+
+- `fn supports_ams_drying_while_printing(&self, ctx: &QuirkContext<'_>) -> bool`
+
+  Returns true if an AMS drying cycle can run while a print is in progress.
+
+  A separate, strictly narrower capability than
+  [`supports_ams_remote_drying`](#modelquirks). During a print the
+  firmware lowers the drying temperature below the printed filament's softening point; this
+  crate does not reimplement that clamp. On an unsupported printer the firmware refuses
+  mid-print with `dry_sf_reason` `0`.
+
+  Sourced from the drying guide's "Introduction to Simultaneous Drying and Printing
+  Function" list plus each model's release history ("Added support for printing while
+  filament is drying" / "Print While Drying"). **Defaults to deny**, unlike idle remote
+  drying — see `dry_while_printing_from_firmware` for why the asymmetry is deliberate.
+
+  Implementors override
+  [`ams_drying_while_printing_support`](#modelquirks).
+
+- `fn ams_drying_while_printing_support(&self, ctx: &QuirkContext<'_>) -> Support`
+
+  Drying-while-printing support with its provenance attached.
+
+  The same answer as
+  [`supports_ams_drying_while_printing`](#modelquirks).
 
 - `fn supports_vibration_compensation(&self) -> bool`
 

@@ -60,10 +60,12 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
 - <span id="a1miniquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="a1miniquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="a1miniquirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
   Never: no known firmware path on the A1 series exposes a remote-dry command.
-  bambuddy lists A1 and A1 Mini in `_DRYING_UNSUPPORTED_MODELS`
+
+  Bambu Lab's *Filament drying guide for AMS 2 Pro and AMS HT* lists A1/A1 mini as
+  "not supported yet", and bambuddy lists both in `_DRYING_UNSUPPORTED_MODELS`
   (`printer_manager.py:223`).
 
   **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
@@ -75,6 +77,13 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
   Unconditional rather than `fun2`-first only because the A1 family sends no
   `fun2` at all, so there is no reported bit to defer to.
+
+- <span id="a1miniquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+  Never supports drying while printing.
+
+  The drying guide names A1/A1 mini as "not supported yet" for simultaneous drying
+  and printing.
 
 - <span id="a1miniquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -126,10 +135,12 @@ Quirks for the full-size A1 bed-slinger.
 
 - <span id="a1quirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="a1quirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="a1quirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
   Never: no known firmware path on the A1 series exposes a remote-dry command.
-  bambuddy lists A1 and A1 Mini in `_DRYING_UNSUPPORTED_MODELS`
+
+  Bambu Lab's *Filament drying guide for AMS 2 Pro and AMS HT* lists A1/A1 mini as
+  "not supported yet", and bambuddy lists both in `_DRYING_UNSUPPORTED_MODELS`
   (`printer_manager.py:223`).
 
   **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
@@ -141,6 +152,13 @@ Quirks for the full-size A1 bed-slinger.
 
   Unconditional rather than `fun2`-first only because the A1 family sends no
   `fun2` at all, so there is no reported bit to defer to.
+
+- <span id="a1quirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+  Never supports drying while printing.
+
+  The drying guide names A1/A1 mini as "not supported yet" for simultaneous drying
+  and printing.
 
 - <span id="a1quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 

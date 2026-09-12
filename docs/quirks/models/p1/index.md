@@ -54,17 +54,28 @@ Quirks for the P1P CoreXY platform.
 
 - <span id="p1pquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="p1pquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="p1pquirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
-  Screen-only: the firmware acks `ams_filament_drying` `result: success` and
-  silently discards it (P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS` citing
-  its #2533, and direct hardware testing on a P1S).
+  Screen-only: the firmware acks `ams_filament_drying` `result: success` and silently discards it.
+
+  P1 firmware `01.08.00.00` (2025-04-29, P1P/P1S firmware release history) says drying
+  starts "from the printer's screen" and no later P1 release adds remote drying; the
+  *Filament drying guide for AMS 2 Pro and AMS HT* lists P1S/P1P as unsupported. Also
+  the P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and direct
+  hardware testing on a P1S.
 
   **In practice this always returns `false`.** The `fun2` branch exists for
   consistency with every other implementation, but the P1 family sends no `fun2`
   at all (`reference/03_mqtt_telemetry.md`), so no P1 can currently reach it. It
   is not a live self-healing path, and a firmware release adding remote drying
   would have to start emitting `fun2` for it to engage.
+
+- <span id="p1pquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+  Never supports drying while printing.
+
+  The drying guide names P1S/P1P as "not supported yet" for simultaneous drying and
+  printing.
 
 - <span id="p1pquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -119,17 +130,28 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 - <span id="p1squirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="p1squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="p1squirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
-  Screen-only: the firmware acks `ams_filament_drying` `result: success` and
-  silently discards it (P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS` citing
-  its #2533, and direct hardware testing on a P1S).
+  Screen-only: the firmware acks `ams_filament_drying` `result: success` and silently discards it.
+
+  P1 firmware `01.08.00.00` (2025-04-29, P1P/P1S firmware release history) says drying
+  starts "from the printer's screen" and no later P1 release adds remote drying; the
+  *Filament drying guide for AMS 2 Pro and AMS HT* lists P1S/P1P as unsupported. Also
+  the P1 manual, bambuddy's `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and direct
+  hardware testing on a P1S.
 
   **In practice this always returns `false`.** The `fun2` branch exists for
   consistency with every other implementation, but the P1 family sends no `fun2`
   at all (`reference/03_mqtt_telemetry.md`), so no P1 can currently reach it. It
   is not a live self-healing path, and a firmware release adding remote drying
   would have to start emitting `fun2` for it to engage.
+
+- <span id="p1squirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+  Never supports drying while printing.
+
+  The drying guide names P1S/P1P as "not supported yet" for simultaneous drying and
+  printing.
 
 - <span id="p1squirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 

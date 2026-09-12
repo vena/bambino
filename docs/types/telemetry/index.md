@@ -2025,6 +2025,8 @@ struct PrinterTelemetry {
     pub job_id: Option<String>,
     pub remain_time: Option<i32>,
     pub cfg: Option<String>,
+    pub aux: Option<String>,
+    pub flag3: Option<u32>,
     pub stg: Option<Vec<i32>>,
     pub mapping: Option<Vec<i32>>,
     pub gcode_start_time: Option<String>,
@@ -2342,6 +2344,22 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   
   A1 / A1 Mini omit `cfg` entirely, so absent is not "off" — hence `Option`.
 
+- **`aux`**: `Option<String>`
+
+  Auxiliary state hex string sent only by printers on the new MQTT protocol.
+  
+  Its *presence* is one quarter of BambuStudio's new-protocol probe, `check_enable_np`
+  (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_new_protocol`](report/index.md#printertelemetry). BambuStudio reads it
+  as a string (`DeviceManager.cpp:4492`).
+
+- **`flag3`**: `Option<u32>`
+
+  Third capability bitfield.
+  
+  Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS new-protocol flag
+  (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
+  [`Self::reports_new_protocol`](report/index.md#printertelemetry). Masked into `u32` like [`home_flag`](report/index.md#printertelemetry).
+
 - **`stg`**: `Option<Vec<i32>>`
 
   Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
@@ -2416,6 +2434,16 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Cloud batch ID.
 
 #### Implementations
+
+- <span id="printertelemetry-reports-new-protocol"></span>`fn reports_new_protocol(&self) -> bool`
+
+  Returns true if this frame shows the printer speaks the new MQTT protocol.
+
+  Mirrors BambuStudio's selector for protocol-dependent commands (`StatusPanel.cpp:5376`,
+  `obj->is_enable_np || obj->is_enable_ams_np`): either `cfg`, `fun`, `aux` and `stat` are
+  all present (`check_enable_np`, `DeviceManager.cpp:4338-4346`), or `flag3` bit 9 is set
+  (`DeviceManager.cpp:3111`). `false` means this frame didn't show it, which on a partial
+  frame is not proof of the old protocol.
 
 - <span id="printertelemetry-current-stage"></span>`fn current_stage(&self) -> Option<PrintStage>` — [`PrintStage`](stage/index.md#printstage)
 
@@ -3103,6 +3131,7 @@ enum DryBlockReason {
     AlreadyDrying,
     FirmwareUpgrading,
     ExternalPowerRequired,
+    FilamentAtOutletManualUnload,
     Other(i32),
 }
 ```
@@ -3111,11 +3140,12 @@ Why the firmware will not, or did not, start a drying cycle — one entry of `dr
 
 **`dry_sf_reason` is a list of independent codes, not a bitmask.** `reference/05_materials_ams.md`
 described it as one for a while and listed only `1` and `8`, whose reading as bit positions was
-a coincidence; the field is an enumerated code list with nine members, which is why it
-deserializes as `Vec<i32>`.
+a coincidence; the field is an enumerated code list, which is why it deserializes as
+`Vec<i32>`.
 
-Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
-`DRY_SF_REASON_MESSAGES`), as is the user-action split — see
+Codes from BambuStudio's `DevAms::CannotDryReason` (`DevFilaSystem.h:167-179`), which has ten
+members; bambuddy's `DRY_SF_REASON_MESSAGES` (`backend/app/services/drying_preflight.py`)
+agrees on `0`-`8` and omits `10`. The user-action split is bambuddy's — see
 [`needs_user_action`](ams/index.md#dryblockreason).
 
 #### Variants
@@ -3157,6 +3187,13 @@ Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
 
   `8` — the external AMS power adapter must be plugged in. Needs the user.
 
+- **`FilamentAtOutletManualUnload`**
+
+  `10` — filament is at the AMS outlet and must be unloaded by hand before drying.
+  
+  Needs the user. BambuStudio's `FilamentAtAmsOutletManualUnload`, whose message asks for a manual
+  unload (`AMSDryControl.cpp:1355-1357`), unlike `3`, where Studio offers an unload button.
+
 - **`Other`**
 
   A code this crate doesn't know — newer firmware may add reasons, and folding one onto a
@@ -3179,8 +3216,10 @@ Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
   This is the distinction that decides a caller's behavior: retry in a moment, or stop and
   surface a message. True for [`InsufficientPower`](ams/index.md#dryblockreason) and
   [`ExternalPowerRequired`](ams/index.md#dryblockreason) (bambuddy's
-  `POWER_REASON_CODES = {1, 8}`) and for [`FilamentAtOutlet`](ams/index.md#dryblockreason)
-  (`RETRACT_REASON_CODE = 3`); every other known reason clears on its own.
+  `POWER_REASON_CODES = {1, 8}`), for [`FilamentAtOutlet`](ams/index.md#dryblockreason)
+  (`RETRACT_REASON_CODE = 3`), and for
+  [`FilamentAtOutletManualUnload`](ams/index.md#dryblockreason), which bambuddy doesn't
+  know; every other known reason clears on its own.
 
   [`Other`](ams/index.md#dryblockreason) returns `false` — an unknown reason is reported as transient
   because that is the reading that keeps a caller retrying rather than permanently refusing

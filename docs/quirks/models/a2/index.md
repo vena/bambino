@@ -53,6 +53,21 @@ Quirks for the A2L large-format open-frame bed-slinger.
 
 - <span id="a2lquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
 
+- <span id="a2lquirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+  Always supported: the A2L's earliest published release already has remote drying.
+
+  A2L `01.01.00.00` (2026-06-01, <https://wiki.bambulab.com/en/a2l/manual/a2l-firmware-release-history>):
+  "Added support for remote activation of filament drying". The *Filament drying guide for AMS
+  2 Pro and AMS HT* gives the same minimum. A reported `fun2` bit 5 still wins.
+
+- <span id="a2lquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+  Always supported: A2L `01.01.00.00`, its earliest release, added "Print While Drying".
+
+  Also listed with that minimum in the drying guide's simultaneous-drying list and in bambuddy's
+  `_DRY_WHILE_PRINTING_MIN_FIRMWARE`.
+
 - <span id="a2lquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
 - <span id="a2lquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`

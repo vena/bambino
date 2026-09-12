@@ -283,6 +283,8 @@ struct PrinterTelemetry {
     pub job_id: Option<String>,
     pub remain_time: Option<i32>,
     pub cfg: Option<String>,
+    pub aux: Option<String>,
+    pub flag3: Option<u32>,
     pub stg: Option<Vec<i32>>,
     pub mapping: Option<Vec<i32>>,
     pub gcode_start_time: Option<String>,
@@ -600,6 +602,22 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   
   A1 / A1 Mini omit `cfg` entirely, so absent is not "off" — hence `Option`.
 
+- **`aux`**: `Option<String>`
+
+  Auxiliary state hex string sent only by printers on the new MQTT protocol.
+  
+  Its *presence* is one quarter of BambuStudio's new-protocol probe, `check_enable_np`
+  (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_new_protocol`](#printertelemetry). BambuStudio reads it
+  as a string (`DeviceManager.cpp:4492`).
+
+- **`flag3`**: `Option<u32>`
+
+  Third capability bitfield.
+  
+  Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS new-protocol flag
+  (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
+  [`Self::reports_new_protocol`](#printertelemetry). Masked into `u32` like [`home_flag`](#printertelemetry).
+
 - **`stg`**: `Option<Vec<i32>>`
 
   Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
@@ -674,6 +692,16 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Cloud batch ID.
 
 #### Implementations
+
+- <span id="printertelemetry-reports-new-protocol"></span>`fn reports_new_protocol(&self) -> bool`
+
+  Returns true if this frame shows the printer speaks the new MQTT protocol.
+
+  Mirrors BambuStudio's selector for protocol-dependent commands (`StatusPanel.cpp:5376`,
+  `obj->is_enable_np || obj->is_enable_ams_np`): either `cfg`, `fun`, `aux` and `stat` are
+  all present (`check_enable_np`, `DeviceManager.cpp:4338-4346`), or `flag3` bit 9 is set
+  (`DeviceManager.cpp:3111`). `false` means this frame didn't show it, which on a partial
+  frame is not proof of the old protocol.
 
 - <span id="printertelemetry-current-stage"></span>`fn current_stage(&self) -> Option<PrintStage>` — [`PrintStage`](../stage/index.md#printstage)
 

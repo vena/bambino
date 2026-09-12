@@ -336,7 +336,9 @@ Sets filament properties (type, color, temperature range) on an AMS tray or exte
   **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
   For standard physical slots, `ams_id` matches the expansion unit index (0-3). For an
   external spool, pass the virtual `ams_id` (`255` single-nozzle / Ext-R, `254` Ext-L)
-  with `slot_id: 0`.
+  with `slot_id: 0`. An A2L-attached AMS Lite takes its physical wire id `16` with a local
+  `0..=3` slot, not the normalized `6` telemetry reports it as (bambuddy
+  `ams_set_filament_setting`, matching the firmware's own `ams_mapping2`).
 
   **`slot_id` is what you pass; `tray_id` is derived.** Both reach the wire, and they
   differ on a virtual tray: `tray_id` becomes `254` for either external `ams_id` and the

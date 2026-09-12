@@ -79,8 +79,8 @@ site.
   if a `get_version` response has been seen.
   
   Several capabilities ship in a specific firmware release rather than being inherent to
-  the model — bambuddy version-gates AMS drying on X1/X1C, H2D, H2S/H2C and P2S for exactly
-  this reason.
+  the model — remote AMS drying is version-gated on H2D, H2D Pro, H2S, H2C, P2S and X2D for
+  exactly this reason.
 
 - **`telemetry`**: `Option<&'a crate::types::PrinterTelemetry>`
 

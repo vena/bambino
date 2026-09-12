@@ -69,8 +69,8 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   Whether this printer honors `ams_filament_drying` sent over MQTT.
 
   Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
-  supported on A1/A1 Mini and P1P/P1S, firmware-gated on X1C/P2S/H2D/H2S/H2C, allowed
-  elsewhere. See
+  supported on A1/A1 Mini, P1P/P1S and X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
+  always on A2L, assumed allowed elsewhere. See
   [`ModelQuirks::supports_ams_remote_drying`](../../quirks/index.md#modelquirks)
   for the sourcing.
 
@@ -84,6 +84,31 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   [`connect_all()`](../index.md#printerclient) fetch the version for you, so a
   normally-connected client has it; a caller relying on lazy connection gets the
   model-rule answer instead.
+
+- <span id="capabilities-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Remote-drying support with its provenance attached.
+
+  The same answer as [`supports_ams_remote_drying`](#capabilities), plus
+  whether it came from the printer ([`Support::Reported`](../../quirks/index.md#support)), from its firmware version or a
+  model rule ([`Support::Inferred`](../../quirks/index.md#support)), or is the default because nothing was known yet
+  ([`Support::Assumed`](../../quirks/index.md#support)). Use it to tell "this printer can't" from "ask again once
+  connected".
+
+- <span id="capabilities-supports-ams-drying-while-printing"></span>`fn supports_ams_drying_while_printing(&self) -> bool`
+
+  Whether an AMS drying cycle can run while a print is in progress.
+
+  Strictly narrower than [`supports_ams_remote_drying`](#capabilities),
+  and defaults to `false` when the firmware version is unknown. See
+  [`ModelQuirks::supports_ams_drying_while_printing`](../../quirks/index.md#modelquirks) for the sourcing.
+
+- <span id="capabilities-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
+
+  Drying-while-printing support with its provenance attached.
+
+  The same answer as
+  [`supports_ams_drying_while_printing`](#capabilities).
 
 #### Trait Implementations
 

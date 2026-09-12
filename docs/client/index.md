@@ -75,8 +75,8 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   Whether this printer honors `ams_filament_drying` sent over MQTT.
 
   Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
-  supported on A1/A1 Mini and P1P/P1S, firmware-gated on X1C/P2S/H2D/H2S/H2C, allowed
-  elsewhere. See
+  supported on A1/A1 Mini, P1P/P1S and X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
+  always on A2L, assumed allowed elsewhere. See
   [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks)
   for the sourcing.
 
@@ -90,6 +90,31 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   [`connect_all()`](#printerclient) fetch the version for you, so a
   normally-connected client has it; a caller relying on lazy connection gets the
   model-rule answer instead.
+
+- <span id="capabilities-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Remote-drying support with its provenance attached.
+
+  The same answer as [`supports_ams_remote_drying`](capabilities/index.md#capabilities), plus
+  whether it came from the printer ([`Support::Reported`](../quirks/index.md#support)), from its firmware version or a
+  model rule ([`Support::Inferred`](../quirks/index.md#support)), or is the default because nothing was known yet
+  ([`Support::Assumed`](../quirks/index.md#support)). Use it to tell "this printer can't" from "ask again once
+  connected".
+
+- <span id="capabilities-supports-ams-drying-while-printing"></span>`fn supports_ams_drying_while_printing(&self) -> bool`
+
+  Whether an AMS drying cycle can run while a print is in progress.
+
+  Strictly narrower than [`supports_ams_remote_drying`](capabilities/index.md#capabilities),
+  and defaults to `false` when the firmware version is unknown. See
+  [`ModelQuirks::supports_ams_drying_while_printing`](../quirks/index.md#modelquirks) for the sourcing.
+
+- <span id="capabilities-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
+
+  Drying-while-printing support with its provenance attached.
+
+  The same answer as
+  [`supports_ams_drying_while_printing`](capabilities/index.md#capabilities).
 
 #### Trait Implementations
 
@@ -448,8 +473,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
-  * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or `254`/`255`
-    for external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
+  * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
+    AMS Lite (`6` as telemetry reports it, or its physical `16`), or `254`/`255` for
+    external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
   * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
     load, or `255` to unload/retract (see `ams_change_filament` examples in
     `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
@@ -458,7 +484,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The wire's `target` field is derived internally rather than caller-supplied —
   confirmed against BambuStudio's `command_ams_change_filament`
   (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
-  any AMS-HT/external-spool unit (`ams_id >= 16`), or the flat global tray ID
+  any AMS-HT/external-spool unit or the A2L AMS Lite (wire `ams_id >= 16`), or the flat global tray ID
   (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
   match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
   class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
@@ -521,11 +547,26 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
 
-  * `ams_id`: AMS unit index (`0..=3`) or AMS-HT unit bus ID (`128..=135`). Only
+  * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or an A2L-attached
+    AMS Lite (`6` or its physical `16`; sent as `16`). Only
     documented against a physical bus unit (`reference/03_mqtt_telemetry.md`
     `ams_get_rfid` example) — external spools have no RFID reader node, so no
     external-spool sentinel value applies here.
   * `slot_id`: Slot within the AMS (`0..=3`).
+
+  **Two commands, chosen by protocol generation** — BambuStudio's selector
+  (`StatusPanel.cpp:5376-5399`). A printer whose telemetry shows the new MQTT protocol
+  (`PrinterTelemetry::reports_new_protocol`)
+  gets `ams_get_rfid`; one whose `push_status` frames don't gets the G-code
+  `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp:1738-1743`), since
+  an old-protocol printer acks `ams_get_rfid` and does nothing. Before any telemetry has
+  arrived the protocol is unknown and `ams_get_rfid` is sent — call
+  [`poll_telemetry()`](#printerclient) first on older firmware.
+
+  **Refused while filament is loaded to the toolhead**, because the scan feeds filament to
+  the reader: returns [`Error::InvalidState`](../error/index.md#error) when the cached `ams.tray_now` is anything but
+  `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
+  same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
 
 - <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 

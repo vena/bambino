@@ -27,6 +27,7 @@ O1C and O1C2 are hardware revisions with identical quirks.
   - [`H2SQuirks`](#h2squirks)
 - [Constants](#constants)
   - [`H2D_MIN_REMOTE_DRY_FIRMWARE`](#h2d-min-remote-dry-firmware)
+  - [`H2D_PRO_MIN_REMOTE_DRY_FIRMWARE`](#h2d-pro-min-remote-dry-firmware)
   - [`H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`](#h2s-h2c-min-remote-dry-firmware)
   - [`H2S_X_MAX`](#h2s-x-max)
   - [`H2S_Y_MAX`](#h2s-y-max)
@@ -46,8 +47,9 @@ O1C and O1C2 are hardware revisions with identical quirks.
 | [`H2DProQuirks`](#h2dproquirks) | struct | Quirks for the H2D Pro — same kinematics as H2D. |
 | [`H2DQuirks`](#h2dquirks) | struct | Quirks for the H2D — dual-nozzle (IDEX) CoreXY. |
 | [`H2SQuirks`](#h2squirks) | struct | Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family. |
-| [`H2D_MIN_REMOTE_DRY_FIRMWARE`](#h2d-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying on the H2D. |
-| [`H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`](#h2s-h2c-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying on the H2S and H2C. |
+| [`H2D_MIN_REMOTE_DRY_FIRMWARE`](#h2d-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying, and drying while printing, on the H2D. |
+| [`H2D_PRO_MIN_REMOTE_DRY_FIRMWARE`](#h2d-pro-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying, and drying while printing, on the H2D Pro. |
+| [`H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`](#h2s-h2c-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying, and drying while printing, on the H2S and H2C. |
 | [`H2S_X_MAX`](#h2s-x-max) | const | H2S build volume X/Y (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row (340×320×340mm). |
 | [`H2S_Y_MAX`](#h2s-y-max) | const | See `H2S_X_MAX`'s doc comment. |
 | [`H2S_Z_MAX`](#h2s-z-max) | const | H2S build volume Z depth (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row. |
@@ -100,7 +102,9 @@ Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 
 
 - <span id="h2cquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="h2cquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="h2cquirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+- <span id="h2cquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
 - <span id="h2cquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -162,7 +166,9 @@ Quirks for the H2D Pro — same kinematics as H2D.
 
 - <span id="h2dproquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="h2dproquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="h2dproquirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+- <span id="h2dproquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
 - <span id="h2dproquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -224,7 +230,9 @@ Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
 
 - <span id="h2dquirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="h2dquirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="h2dquirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+- <span id="h2dquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
 - <span id="h2dquirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -286,7 +294,9 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 
 - <span id="h2squirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
 
-- <span id="h2squirks-modelquirks-supports-ams-remote-drying"></span>`fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext<'_>) -> bool` — [`QuirkContext`](../../context/index.md#quirkcontext)
+- <span id="h2squirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+
+- <span id="h2squirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
 - <span id="h2squirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
 
@@ -318,20 +328,43 @@ Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
 const H2D_MIN_REMOTE_DRY_FIRMWARE: &str;
 ```
 
-Firmware release that introduced remote AMS drying on the H2D.
+Firmware release that introduced remote AMS drying, and drying while printing, on the H2D.
 
-From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:212`). Higher than its H2S/H2C
-siblings, which is upstream's value, not a transcription slip.
+H2D `01.03.00.00` (2026-03-03, <https://wiki.bambulab.com/en/h2d/manual/h2d-firmware-release-history>):
+"Added support for remotely enabling the drying function" and "Added support for printing
+while filament is drying". The *Filament drying guide for AMS 2 Pro and AMS HT* gives the same
+minimum in both of its lists, and bambuddy's `_DRY_WHILE_PRINTING_MIN_FIRMWARE` agrees.
+
+Later than the H2S/H2C `01.02.00.00` relative to each model's own numbering; that is real, not
+a slip. Don't restore bambuddy's `_DRYING_MIN_FIRMWARE` value `01.02.30.00`: it is BambuStudio
+2.5.0's release-note minimum for drying *while printing*, and no such H2D release exists
+(`01.02.10.00` is followed by `01.03.00.00`).
+
+### `H2D_PRO_MIN_REMOTE_DRY_FIRMWARE`
+```rust
+const H2D_PRO_MIN_REMOTE_DRY_FIRMWARE: &str;
+```
+
+Firmware release that introduced remote AMS drying, and drying while printing, on the H2D Pro.
+
+H2D Pro `01.02.00.00` (2026-04-27, <https://wiki.bambulab.com/en/h2d-pro/manual/firmware-release-history>):
+"Added support for remotely enabling the drying function" and printing while drying; no
+earlier H2D Pro release has either. bambuddy's `_DRYING_MIN_FIRMWARE` omits the H2D Pro rather
+than contradicting this, and its `_DRY_WHILE_PRINTING_MIN_FIRMWARE` agrees.
 
 ### `H2S_H2C_MIN_REMOTE_DRY_FIRMWARE`
 ```rust
 const H2S_H2C_MIN_REMOTE_DRY_FIRMWARE: &str;
 ```
 
-Firmware release that introduced remote AMS drying on the H2S and H2C.
+Firmware release that introduced remote AMS drying, and drying while printing, on the H2S and H2C.
 
-From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:213-216`), listed under `H2S`,
-`H2C` and the H2C SSDP codes `O1C`/`O1C2`.
+H2S `01.02.00.00` (2026-03-31, <https://wiki.bambulab.com/en/h2s/manual/h2s-firmware-release-history>)
+and H2C `01.02.00.00` (2026-06-01, <https://wiki.bambulab.com/en/h2c/manual/h2c-firmware-release-history>)
+both add remote drying and printing while drying. The drying guide gives the same H2S minimum;
+it omits the H2C, which is staleness — BambuStudio 2.5.3's notes also name H2C. bambuddy's
+`_DRYING_MIN_FIRMWARE` agrees. BambuStudio 2.5.3's "01.01.40.00 (H2S)" is outvoted by both
+vendor pages.
 
 ### `H2S_X_MAX`
 ```rust
