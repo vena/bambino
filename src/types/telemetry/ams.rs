@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// Normalizes `AmsUnit::id` on the way in, so the whole crate addresses one id per unit.
 ///
-/// The only id this rewrites is the A2L AMS Lite's physical 16, which becomes 6 — see
+/// The only id this rewrites is an A2L-attached AMS Lite's physical 16, which becomes 6 — see
 /// [`crate::ams::normalize_ams_unit_id`] for why, and for where the physical id is restored.
 /// A non-numeric id is passed through untouched rather than rejected: this field is a
 /// `String` on the wire and failing here would discard the entire telemetry frame.

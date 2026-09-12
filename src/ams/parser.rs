@@ -31,21 +31,35 @@ pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
 /// re-litigated without new evidence in the 2026-09-08 telemetry review sweep, same conclusion.
 pub(crate) const AMS_HT_ID_MIN: u8 = 128;
 pub(crate) const AMS_HT_ID_MAX: u8 = 135;
-/// The unit id the A2L's 4-slot AMS Lite actually reports on the wire.
+/// The unit id a 4-slot AMS Lite reports when it is attached to an **A2L printer**.
 ///
-/// It sits outside every other range (standard 0-3, AMS-HT 128-135, external 254/255), so
+/// "AMS Lite" is the unit; "A2L" is the printer it is plugged into, and the pairing is what
+/// selects this id. The same physical unit is an A1/A1 mini's *only* possible AMS and takes id
+/// 0 there; an A2L can run it alongside up to four shared-pool units already holding ids 0-3
+/// (`MODEL_MATRIX.csv`, "AMS Unit Limits"), so it needs an id outside that block and reports
+/// 16.
+///
+/// 16 sits outside every other range (standard 0-3, AMS-HT 128-135, external 254/255), so
 /// untranslated it falls through every branch here and resolves to the unmapped sentinel.
-pub(crate) const A2L_LITE_PHYSICAL_AMS_ID: u8 = 16;
-/// The id the A2L AMS Lite is normalized to on ingest, so the standard `ams_id * 4 + slot`
-/// formula lands its global tray ids at 24-27.
+///
+/// BambuStudio encodes the same pairing as a distinct *unit type* rather than a distinct id —
+/// `AMS_LITE_MIXED = 5`, commented "AMS-Lite for N9" (`DeviceCore/DevDefs.h:61`), N9 being the
+/// A2L's dev token — read from the unit's own `info` type nibble. It therefore never reads
+/// this id at all; see [`AMS_LITE_ON_A2L_NORMALIZED_ID`] for where the two routes reconverge.
+pub(crate) const AMS_LITE_ON_A2L_PHYSICAL_ID: u8 = 16;
+/// The id an [A2L-attached AMS Lite](AMS_LITE_ON_A2L_PHYSICAL_ID) is normalized to on ingest,
+/// so the standard `ams_id * 4 + slot` formula lands its global tray ids at 24-27.
 ///
 /// 24 is not an arbitrary choice: it is BambuStudio's own `AMS_LITE_MIXED_TRAY_INDEX_OFFSET`
 /// (`DeviceCore/DevDefs.h:93`), applied as `24 + slot_id` in all three of `DevAms::GetTrayId`
 /// (`DevFilaSystem.cpp:262-263`), `DevMappingUtil::ams_filament_mapping` and
-/// `DevMapping.cpp:102-104`. bambuddy normalizes to the same id 6 (`normalize_am_unit_id` in
-/// `bambu_mqtt.py`). The range collides with nothing — standard units occupy bits/ids 0-15 and
-/// AMS-HT 16-23 in `tray_exist_bits`.
-pub(crate) const A2L_LITE_NORMALIZED_AMS_ID: u8 = 6;
+/// `DevMapping.cpp:102-104` — none of which consult `ams_id`, because the type already told
+/// them which unit this is. bambuddy instead normalizes to the same id 6 this crate uses
+/// (`normalize_am_unit_id` in `bambu_mqtt.py`). Two routes, one answer.
+///
+/// The range collides with nothing — standard units occupy bits/ids 0-15 and AMS-HT 16-23 in
+/// `tray_exist_bits`.
+pub(crate) const AMS_LITE_ON_A2L_NORMALIZED_ID: u8 = 6;
 /// The single-nozzle external spool, and IDEX's right (primary) carriage — BambuStudio's
 /// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md:165-166,200`). This is the id an
 /// `ams_mapping2` payload must carry for a single-nozzle printer; sending the deputy id
@@ -123,7 +137,7 @@ pub fn evaluate_spool_presence(
     // amount below (mirrors resolve_global_tray_id's bounds check in this same file) —
     // otherwise an out-of-range ams_id produces a shift amount >= 32, which panics in
     // debug builds and silently returns a wrong result in release builds.
-    if (ams_id > AMS_MAX_STANDARD_ID && ams_id != A2L_LITE_NORMALIZED_AMS_ID)
+    if (ams_id > AMS_MAX_STANDARD_ID && ams_id != AMS_LITE_ON_A2L_NORMALIZED_ID)
         || tray_id >= AMS_SLOTS_PER_UNIT
     {
         return None;
@@ -249,7 +263,7 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
         if tray_id == 0 { Some(ams_id) } else { None }
     } else if is_external {
         Some(ams_id)
-    } else if (ams_id <= AMS_MAX_STANDARD_ID || ams_id == A2L_LITE_NORMALIZED_AMS_ID)
+    } else if (ams_id <= AMS_MAX_STANDARD_ID || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
         && tray_id < AMS_SLOTS_PER_UNIT
     {
         Some(ams_id * AMS_SLOTS_PER_UNIT + tray_id)
@@ -260,7 +274,7 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
 
 /// Normalizes an AMS unit id reported on the wire into the id this crate addresses it by.
 ///
-/// Only the A2L AMS Lite's physical id 16 is remapped (to 6); every other id passes through
+/// Only an A2L-attached AMS Lite's physical id 16 is remapped (to 6); every other id passes through
 /// untouched, and no other Bambu unit reports id 16, so the remap is self-scoping. Applied on
 /// the inbound telemetry boundary so that `tray_exist_bits`, `resolve_global_tray_id` and the
 /// mapping builders all agree on one id; the physical 16 is restored only on the outbound wire
@@ -271,8 +285,8 @@ pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
 /// reports a local slot 0-3, and only `ams_mapping2` and the per-unit commands carry 16.
 #[must_use]
 pub fn normalize_ams_unit_id(ams_id: u8) -> u8 {
-    if ams_id == A2L_LITE_PHYSICAL_AMS_ID {
-        A2L_LITE_NORMALIZED_AMS_ID
+    if ams_id == AMS_LITE_ON_A2L_PHYSICAL_ID {
+        AMS_LITE_ON_A2L_NORMALIZED_ID
     } else {
         ams_id
     }
@@ -491,18 +505,18 @@ mod tests {
         // tray_id out of range on standard path
         assert_eq!(resolve_global_tray_id(0, 4), None);
         assert_eq!(resolve_global_tray_id(3, 255), None);
-        // The A2L AMS Lite is addressed by its *normalized* id 6; the raw physical 16 must
+        // An A2L-attached AMS Lite is addressed by its *normalized* id 6; the raw physical 16 must
         // still be rejected, so a caller that skipped normalization fails loudly.
-        assert_eq!(resolve_global_tray_id(A2L_LITE_PHYSICAL_AMS_ID, 0), None);
+        assert_eq!(resolve_global_tray_id(AMS_LITE_ON_A2L_PHYSICAL_ID, 0), None);
     }
 
-    /// Only the A2L AMS Lite's physical id 16 is remapped; the mapping is self-scoping because
+    /// Only an A2L-attached AMS Lite's physical id 16 is remapped; the mapping is self-scoping because
     /// no other Bambu unit reports id 16.
     #[test]
-    fn test_normalize_ams_unit_id_only_touches_the_a2l_lite() {
+    fn test_normalize_ams_unit_id_only_touches_the_a2l_attached_ams_lite() {
         assert_eq!(
-            normalize_ams_unit_id(A2L_LITE_PHYSICAL_AMS_ID),
-            A2L_LITE_NORMALIZED_AMS_ID
+            normalize_ams_unit_id(AMS_LITE_ON_A2L_PHYSICAL_ID),
+            AMS_LITE_ON_A2L_NORMALIZED_ID
         );
         for id in [0u8, 1, 2, 3, 6, 15, 17, 128, 135, 254, 255] {
             assert_eq!(normalize_ams_unit_id(id), id, "id {id} must pass through");
@@ -514,15 +528,15 @@ mod tests {
     /// of 24 (`24 + slot_id` in `DevAms::GetTrayId`), and the bit base the firmware already
     /// uses for this unit in `tray_exist_bits`.
     #[test]
-    fn test_a2l_lite_resolves_to_global_tray_ids_24_through_27() {
+    fn test_a2l_attached_ams_lite_resolves_to_global_tray_ids_24_through_27() {
         for slot in 0..4u8 {
             assert_eq!(
-                resolve_global_tray_id(A2L_LITE_NORMALIZED_AMS_ID, slot),
+                resolve_global_tray_id(AMS_LITE_ON_A2L_NORMALIZED_ID, slot),
                 Some(24 + slot)
             );
         }
         assert_eq!(
-            resolve_global_tray_id(A2L_LITE_NORMALIZED_AMS_ID, 4),
+            resolve_global_tray_id(AMS_LITE_ON_A2L_NORMALIZED_ID, 4),
             None,
             "the AMS Lite is still a 4-slot unit"
         );
@@ -532,21 +546,21 @@ mod tests {
     /// through the ordinary standard-unit shift. Bits 16-23 belong to the AMS-HT range, so
     /// there is no collision.
     #[test]
-    fn test_a2l_lite_spool_presence_reads_bits_24_through_27() {
+    fn test_a2l_attached_ams_lite_spool_presence_reads_bits_24_through_27() {
         // Bit 25 set (slot 1 occupied), nothing else.
         let mask = format!("{:x}", 1u32 << 25);
         assert_eq!(
-            evaluate_spool_presence(&mask, A2L_LITE_NORMALIZED_AMS_ID, 1, true),
+            evaluate_spool_presence(&mask, AMS_LITE_ON_A2L_NORMALIZED_ID, 1, true),
             Some(true)
         );
         assert_eq!(
-            evaluate_spool_presence(&mask, A2L_LITE_NORMALIZED_AMS_ID, 0, true),
+            evaluate_spool_presence(&mask, AMS_LITE_ON_A2L_NORMALIZED_ID, 0, true),
             Some(false)
         );
         // A bit in the AMS-HT range must not read as an AMS Lite slot.
         let ht_mask = format!("{:x}", 1u32 << 16);
         assert_eq!(
-            evaluate_spool_presence(&ht_mask, A2L_LITE_NORMALIZED_AMS_ID, 0, true),
+            evaluate_spool_presence(&ht_mask, AMS_LITE_ON_A2L_NORMALIZED_ID, 0, true),
             Some(false)
         );
     }

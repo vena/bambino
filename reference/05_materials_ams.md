@@ -36,9 +36,13 @@ slot_exists = (tray_exist_bits >> shift_standard) & 1
 
 *   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': `shift_ht = 16 + (ams_id - 128) + slot_id` (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp:833`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
 
-##### The A2L AMS Lite's Unit ID
+##### Unit ID of an AMS Lite Attached to an A2L
 
-The A2L reports its 4-slot AMS Lite as physical unit **id 16**, outside every other range (standard `0`-`3`, AMS-HT `128`-`135`, external `254`/`255`). The firmware is internally inconsistent about this unit, so no single id works everywhere:
+**"AMS Lite" is the unit; "A2L" is the printer.** The pairing is what matters here, because the same physical AMS Lite reports a different id depending on which printer it is plugged into. On an A1 / A1 mini it is the machine's *only* possible AMS (see the pool table above) and takes id `0`. An A2L can run it alongside up to four shared-pool units already occupying ids `0`-`3`, so there it reports physical unit **id 16**, outside every other range (standard `0`-`3`, AMS-HT `128`-`135`, external `254`/`255`).
+
+BambuStudio encodes this pairing as a distinct *unit type* rather than a distinct id: `AMS_LITE_MIXED = 5`, commented "AMS-Lite for N9" (`DeviceCore/DevDefs.h:61`), N9 being the A2L's dev token, read from the unit's own `info` type nibble. Its tray-id branches for that type ignore `ams_id` entirely, so it never reads the 16 at all.
+
+The firmware is internally inconsistent about this unit, so no single id works everywhere:
 
 | Field | What the A2L uses |
 |---|---|
@@ -244,7 +248,7 @@ The `"ams_mapping"` parameter is a flat, 1-to-1, forward-mapped JSON array of in
 The integer values within the flat `ams_mapping` array represent absolute physical hardware channels:
 *   **`0` to `15`**: Standard AMS channels. Calculated via `(ams_id * 4) + slot_id` (`ams_id` 0-3, `slot_id` 0-3).
 *   **`128` to `135`**: Physical single-slot high-temperature AMS-HT units. Global channel ID equals the unit's bus ID (`ams_id`).
-*   **`0` to `3` (A2L AMS Lite only)**: a bare **local** slot index, not a global channel. This unit is the exception to "absolute physical hardware channels" above — see "The A2L AMS Lite's Unit ID" in §5.1 for the full per-field encoding table and its verification sources.
+*   **`0` to `3` (an A2L-attached AMS Lite only)**: a bare **local** slot index, not a global channel. This unit is the exception to "absolute physical hardware channels" above — see "Unit ID of an AMS Lite Attached to an A2L" in §5.1 for the full per-field encoding table and its verification sources.
 
     **Verification source:** BambuStudio's `DevMappingUtil::ams_filament_mapping` (`DevMapping.cpp:175`) computes the N3S tray index as `ams_id + tray_id`, yielding 128-135, and that value flows through `FilamentInfo::tray_id` into `mapping_v0_json` — the chain that actually builds this flat array. Corroborated independently by Bambuddy, whose `print_scheduler.py::_global_tray_id` returns `ams_id if ams_id >= 128 else ams_id * 4 + tray_id` and whose `bambu_mqtt.py` puts that `tray_id` straight into `command["print"]["ams_mapping"]`.
 

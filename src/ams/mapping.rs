@@ -123,14 +123,14 @@ impl MaterialSource {
                     }
                 }
             }
-            // `ams_mapping2` is the one place the A2L AMS Lite's *physical* id 16 goes back on
+            // `ams_mapping2` is the one place an A2L-attached AMS Lite's *physical* id 16 goes back on
             // the wire, paired with a local slot. CONFIRMED against the firmware's own mapping
             // (bambuddy's `a2l_lite_wire_ids`) and BambuStudio, which writes the unreduced
             // `ams_id` into its mapping entry (`DevMapping.cpp:88-89`).
             MaterialSource::AmsLite { slot_id } => {
                 if *slot_id < super::parser::AMS_SLOTS_PER_UNIT {
                     AmsMapping2Entry {
-                        ams_id: super::parser::A2L_LITE_PHYSICAL_AMS_ID,
+                        ams_id: super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID,
                         slot_id: *slot_id,
                     }
                 } else {
@@ -163,7 +163,7 @@ impl MaterialSource {
 /// Structured object detailing unit and slot coordinates within `ams_mapping2` arrays.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AmsMapping2Entry {
-    /// AMS unit index (0-3 for standard, 16 for the A2L AMS Lite, 128-135 for AMS-HT,
+    /// AMS unit index (0-3 for standard, 16 for an A2L-attached AMS Lite, 128-135 for AMS-HT,
     /// 254/255 for external/unmapped).
     ///
     /// Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
@@ -180,7 +180,7 @@ pub struct AmsMapping2Entry {
 /// Single place the "which `ams_id`s are real physical units" rule lives. `MaterialSource`'s
 /// own methods can rely on the enum variant to tell them, but every function that instead
 /// re-derives physical-ness from a hand-built `AmsMapping2Entry` has to reproduce the same
-/// range checks — and each one independently missed the A2L AMS Lite's physical id 16 when
+/// range checks — and each one independently missed an A2L-attached AMS Lite's physical id 16 when
 /// it was added (issue #221). Route those through [`classify_mapping2_entry`] so a new one
 /// cannot omit a unit type by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +215,7 @@ pub fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind {
     } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id)
     {
         AmsEntryKind::Ht
-    } else if entry.ams_id == super::parser::A2L_LITE_PHYSICAL_AMS_ID
+    } else if entry.ams_id == super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID
         && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
     {
         AmsEntryKind::AmsLite
@@ -396,7 +396,7 @@ pub fn is_external_spool_safety_valid(
 ///
 /// This is a *capacity-counting* gap only. The addressing gap it used to describe — "AMS Lite
 /// units are not independently addressable ... they use the same `ams_id` space as standard AMS
-/// units" — is fixed: the A2L AMS Lite reports physical unit id 16, which
+/// units" — is fixed: an A2L-attached AMS Lite reports physical unit id 16, which
 /// [`crate::ams::normalize_ams_unit_id`] maps to 6 on ingest, and
 /// [`MaterialSource::AmsLite`] addresses its slots with their own wire encodings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -433,7 +433,7 @@ pub fn is_ams_pool_composition_valid(
     let mut ht_ids = Vec::new();
     for entry in mapping2 {
         match classify_mapping2_entry(entry) {
-            // The A2L AMS Lite is counted in the standard bucket rather than an additive one of
+            // An A2L-attached AMS Lite is counted in the standard bucket rather than an additive one of
             // its own. `AmsPoolComposition` has no axis for A2L's "shared pool + 1 AMS Lite
             // simultaneously" capacity (see this enum's known-limitation note), so folding the
             // Lite into the shared count keeps the conservative stance documented there: it may
@@ -725,12 +725,12 @@ mod tests {
     }
 
     #[test]
-    fn test_a2l_ams_lite_entry_recognized_by_raw_entry_consumers() {
+    fn test_a2l_attached_ams_lite_entry_recognized_by_raw_entry_consumers() {
         // Issue #221: three functions re-derived "is this a physical AMS unit" from a raw
-        // AmsMapping2Entry and each missed the A2L AMS Lite's physical id 16, which only
+        // AmsMapping2Entry and each missed an A2L-attached AMS Lite's physical id 16, which only
         // MaterialSource's own methods handled. They now share classify_mapping2_entry.
         let lite = AmsMapping2Entry {
-            ams_id: super::super::parser::A2L_LITE_PHYSICAL_AMS_ID,
+            ams_id: super::super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID,
             slot_id: 1,
         };
         assert_eq!(classify_mapping2_entry(&lite), AmsEntryKind::AmsLite);
@@ -859,7 +859,7 @@ mod tests {
         };
         assert_eq!(bad_slot.flat_channel_id(), -1);
 
-        // The A2L AMS Lite's two wire encodings differ from a standard unit's: the flat array
+        // An A2L-attached AMS Lite's two wire encodings differ from a standard unit's: the flat array
         // carries the bare local slot, `ams_mapping2` the physical unit id 16.
         for slot_id in 0..4u8 {
             let lite = MaterialSource::AmsLite { slot_id };
