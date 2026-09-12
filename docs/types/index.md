@@ -2042,19 +2042,19 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`aux`**: `Option<String>`
 
-  Auxiliary state hex string sent only by printers on the new MQTT protocol.
+  Auxiliary state hex string, sent only by firmware using BambuStudio's "np" payload format.
   
-  Its *presence* is one quarter of BambuStudio's new-protocol probe, `check_enable_np`
-  (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_new_protocol`](telemetry/report/index.md#printertelemetry). BambuStudio reads it
+  Its *presence* is one quarter of BambuStudio's `check_enable_np` probe
+  (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_np_format`](telemetry/report/index.md#printertelemetry). BambuStudio reads it
   as a string (`DeviceManager.cpp:4492`).
 
 - **`flag3`**: `Option<u32>`
 
   Third capability bitfield.
   
-  Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS new-protocol flag
+  Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS-side "np" flag
   (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
-  [`Self::reports_new_protocol`](telemetry/report/index.md#printertelemetry). Masked into `u32` like [`home_flag`](telemetry/report/index.md#printertelemetry).
+  [`Self::reports_np_format`](telemetry/report/index.md#printertelemetry). Masked into `u32` like [`home_flag`](telemetry/report/index.md#printertelemetry).
 
 - **`stg`**: `Option<Vec<i32>>`
 
@@ -2131,15 +2131,20 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 #### Implementations
 
-- <span id="printertelemetry-reports-new-protocol"></span>`fn reports_new_protocol(&self) -> bool`
+- <span id="printertelemetry-reports-np-format"></span>`fn reports_np_format(&self) -> bool`
 
-  Returns true if this frame shows the printer speaks the new MQTT protocol.
+  Returns true if this frame shows the firmware uses BambuStudio's "np" payload format.
 
-  Mirrors BambuStudio's selector for protocol-dependent commands (`StatusPanel.cpp:5376`,
+  This is not the MQTT version — the transport is MQTT 3.1.1 on every printer. It is a
+  firmware-side difference in which JSON fields and commands the printer understands.
+  BambuStudio tracks it as `is_enable_np` / `is_enable_ams_np` and never expands "np"; the
+  name here follows it rather than guessing.
+
+  Mirrors BambuStudio's selector (`StatusPanel.cpp:5376`,
   `obj->is_enable_np || obj->is_enable_ams_np`): either `cfg`, `fun`, `aux` and `stat` are
   all present (`check_enable_np`, `DeviceManager.cpp:4338-4346`), or `flag3` bit 9 is set
   (`DeviceManager.cpp:3111`). `false` means this frame didn't show it, which on a partial
-  frame is not proof of the old protocol.
+  frame is not proof the firmware lacks it.
 
 - <span id="printertelemetry-current-stage"></span>`fn current_stage(&self) -> Option<PrintStage>` — [`PrintStage`](telemetry/stage/index.md#printstage)
 

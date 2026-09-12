@@ -484,7 +484,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The wire's `target` field is derived internally rather than caller-supplied —
   confirmed against BambuStudio's `command_ams_change_filament`
   (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
-  any AMS-HT/external-spool unit or the A2L AMS Lite (wire `ams_id >= 16`), or the flat global tray ID
+  any AMS-HT/external-spool unit or an A2L-attached AMS Lite (wire `ams_id >= 16`), or the flat global tray ID
   (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
   match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
   class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
@@ -554,13 +554,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
     external-spool sentinel value applies here.
   * `slot_id`: Slot within the AMS (`0..=3`).
 
-  **Two commands, chosen by protocol generation** — BambuStudio's selector
-  (`StatusPanel.cpp:5376-5399`). A printer whose telemetry shows the new MQTT protocol
-  (`PrinterTelemetry::reports_new_protocol`)
+  **Two commands, chosen by firmware payload format** — BambuStudio's selector
+  (`StatusPanel.cpp:5376-5399`). The MQTT transport is the same either way. A printer whose
+  telemetry shows BambuStudio's "np" format
+  (`PrinterTelemetry::reports_np_format`)
   gets `ams_get_rfid`; one whose `push_status` frames don't gets the G-code
   `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp:1738-1743`), since
-  an old-protocol printer acks `ams_get_rfid` and does nothing. Before any telemetry has
-  arrived the protocol is unknown and `ams_get_rfid` is sent — call
+  older firmware acks `ams_get_rfid` and does nothing. Before any telemetry has arrived the
+  format is unknown and `ams_get_rfid` is sent — call
   [`poll_telemetry()`](#printerclient) first on older firmware.
 
   **Refused while filament is loaded to the toolhead**, because the scan feeds filament to
