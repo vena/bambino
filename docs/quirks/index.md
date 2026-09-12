@@ -414,11 +414,17 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   about every unit of that model while `fun2` is the machine in front of you speaking.
   Second, when `fun2` is absent, the model's own rule decides.
 
-  **A1 and A1 Mini are the exception: they ignore the bit entirely.** Their `false` is a
-  fact about what hardware can be attached — no AMS 2 Pro or AMS-HT compatibility, so
-  there is no drying chamber to command — rather than a firmware capability the printer
-  could gain, and a firmware bit cannot conjure a heater. Every other model defers to a
-  reported bit in both directions.
+  **A1 and A1 Mini are the exception: they ignore the bit entirely.** Not because the
+  hardware cannot be attached — both draw from the shared AMS pool alongside AMS 2 Pro and
+  AMS-HT units (`reference/05_materials_ams.md`, `MODEL_MATRIX.csv`, and
+  `A1Quirks::ams_pool_composition()` all agree) — but because no known firmware path on
+  these models exposes a remote-dry command at all, and bambuddy lists them in
+  `_DRYING_UNSUPPORTED_MODELS`. They are hard-coded rather than bit-driven because the
+  families send neither `fun` nor `fun2`, so there is no bit to defer to in the first
+  place. Every other model defers to a reported bit in both directions.
+
+  Do not loosen this branch on the strength of "but the A1 takes an AMS-HT" — it does; the
+  gate is about the command channel, not the attachable hardware.
 
   **The second stage is the one that usually runs.** Only BambuStudio reads `fun2` at all,
   and the P1 and A1 families send neither `fun` nor `fun2`
@@ -430,8 +436,9 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   capability models — BambuStudio's is a bare `is_support_remote_dry = false` initializer
   that only `fun2` ever sets:
 
-  * **A1 / A1 Mini — never.** No AMS 2 Pro or AMS-HT compatibility at all
-    (`_DRYING_UNSUPPORTED_MODELS`).
+  * **A1 / A1 Mini — never.** Not a hardware limit: these models do take AMS 2 Pro and
+    AMS-HT units from the shared pool. No known firmware path exposes a remote-dry command
+    on them, and bambuddy lists them in `_DRYING_UNSUPPORTED_MODELS`.
   * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen. Bambu's
     P1 manual is explicit ("P1S connected AMS drying functions may only be controlled from
     the P1S screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533

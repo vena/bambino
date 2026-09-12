@@ -60,7 +60,13 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
 - **`ams_id`**: `u8`
 
-  AMS unit index (0-3 for standard, 128-135 for AMS-HT, 254/255 for external/unmapped).
+  AMS unit index (0-3 for standard, 16 for the A2L AMS Lite, 128-135 for AMS-HT,
+  254/255 for external/unmapped).
+  
+  Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
+  [`AmsEntryKind`](#amsentrykind) warns about, since a caller reading this field in isolation could add
+  defensive rejection that breaks A2L support (issue #221). Classify with
+  [`classify_mapping2_entry`](#classify-mapping2-entry) rather than re-deriving the ranges.
 
 - **`slot_id`**: `u8`
 

@@ -562,7 +562,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   telemetry messages that arrive in the interim. Wrap in a platform-specific
   timeout if you need a shorter deadline than `command_timeout_secs`.
 
-- <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self, nozzle_diameter: Option<&str>) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-get-k-profiles"></span>`async fn get_k_profiles(&mut self, filament_id: Option<&str>, nozzle_diameter: Option<&str>) -> Result<ExtrusionCaliGetResponse, Error>` — [`ExtrusionCaliGetResponse`](../diagnostics/kprofile/index.md#extrusioncaligetresponse), [`Error`](../error/index.md#error)
 
   Requests a dump of the printer's stored K-profile calibration database [REF-DIAG-KPROF].
 
@@ -576,6 +576,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   whichever single diameter the firmware picks — on a machine that can hold more than one,
   that is a partial table which looks complete to the caller. Call once per fitted diameter
   and merge the results.
+
+  `filament_id` scopes the query the same way, to a single filament preset id. `None` omits
+  the field entirely; `Some("")` is the "every filament" form `reference/07_diagnostics_hms.md`
+  documents, and is distinct from omitting it. Exposed here because the alternative was to
+  bypass this wrapper and hand-manage the priming quirk through
+  [`set_k_profile_primed()`](#printerclient), forfeiting the automatic priming
+  this method exists to guarantee.
 
 - <span id="superprinterclient-set-k-profile-primed"></span>`fn set_k_profile_primed(&mut self, primed: bool)`
 
@@ -849,14 +856,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-is-axis-homed"></span>`fn is_axis_homed(&self, axis: char) -> Option<bool>`
 
   Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
-  `None` means no telemetry carrying `home_flag` has been observed yet (via
-  [`poll_telemetry()`](#printerclient)) — not "unhomed". Advisory only: the firmware does
-  not reject motion on unhomed axes [REF-MOTO-HOME].
+
+  `None` means no telemetry carrying `home_flag` has been observed **on the current MQTT
+  connection** (via [`poll_telemetry()`](#printerclient)) — not "unhomed". A
+  disconnect/reconnect resets this to `None` until the printer reports again; the two
+  cases are deliberately not distinguished, since a caller must handle `None` either way.
+  Advisory only: the firmware does not reject motion on unhomed axes [REF-MOTO-HOME].
 
 - <span id="superprinterclient-is-all-axes-homed"></span>`fn is_all_axes_homed(&self) -> Option<bool>`
 
   Returns whether X, Y, and Z were all homed as of the last-observed `home_flag` telemetry.
-  `None` means no telemetry carrying `home_flag` has been observed yet.
+
+  `None` means no telemetry carrying `home_flag` has been observed on the current MQTT
+  connection — see [`is_axis_homed()`](#printerclient).
 
 - <span id="superprinterclient-send-gcode"></span>`async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
