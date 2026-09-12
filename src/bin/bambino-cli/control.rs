@@ -9,7 +9,7 @@
 //! to isolate connection, handshake, and packet serialization issues.
 
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bambino::Error;
 use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
@@ -325,30 +325,66 @@ struct DryArgs {
     close_power_conflict: bool,
 }
 
+/// How long [`resolve_dry_unit`] waits for telemetry that actually names the AMS unit before
+/// giving up and warning. Sized to cover a pushall round trip on a busy printer without
+/// stalling an interactive command; the fallback is still a sound answer if it expires.
+const DRY_UNIT_RESOLVE_TIMEOUT_SECS: u64 = 5;
+
+/// Reads the attached unit type for `ams_id` out of the cached telemetry snapshot.
+fn cached_dry_unit(client: &Printer, ams_id: i32) -> Option<AmsUnitModel> {
+    client.ams().and_then(|ams| {
+        ams.ams
+            .iter()
+            .find(|u| u.id.parse::<i32>() == Ok(ams_id))
+            .and_then(|u| u.unit_model())
+    })
+}
+
 /// Resolves the attached AMS unit so a material's parameters can be read from the right column.
 ///
 /// Bambu publishes different values per unit type — PA is 65 °C on an AMS 2 Pro and 85 °C on an
-/// AMS-HT — so the material cannot be applied without knowing which is plugged in. Reads the
-/// cached telemetry snapshot, polling once to populate it.
+/// AMS-HT — so the material cannot be applied without knowing which is plugged in.
+///
+/// Requests a full state dump and then polls until the AMS array actually arrives, rather than
+/// reading whatever a single poll happens to return. Automatic broadcasts carry only fields that
+/// changed since the last transmission [REF-MQTT-TELEMETRY], so on a printer whose AMS state has
+/// been static the `ams.ams` array may not appear in any incremental frame at all — one poll
+/// routinely lands on a temperature-only delta and leaves the cache empty. `probe.rs`'s homing
+/// warm-up loop exists for the same reason.
 ///
 /// Falls back to the AMS 2 Pro column when the unit cannot be identified, matching bambuddy
 /// (`print_scheduler.py:3807`, `temp_key = module_type if module_type in ("n3f","n3s") else
 /// "n3f"`). That is also the lower of the two columns on every material where they differ, so an
 /// unidentified unit errs cool rather than hot — and the real ceiling is enforced by the drying
-/// gate regardless.
+/// gate regardless. The fallback now warns on stderr: erring cool still means the filament
+/// under-dries, and silently substituting a guessed column is the failure this exists to make
+/// visible.
 async fn resolve_dry_unit(client: &mut Printer, ams_id: i32) -> AmsUnitModel {
-    // A failed poll is not fatal: the fallback below is a sound answer, and the drying gate
-    // still refuses anything the hardware would reject.
-    let _ = client.poll_telemetry().await;
-    client
-        .ams()
-        .and_then(|ams| {
-            ams.ams
-                .iter()
-                .find(|u| u.id.parse::<i32>() == Ok(ams_id))
-                .and_then(|u| u.unit_model())
-        })
-        .unwrap_or(AmsUnitModel::Ams2Pro)
+    // Neither the pushall nor a failed poll is fatal: the fallback below is a sound answer, and
+    // the drying gate still refuses anything the hardware would reject.
+    let _ = client.request_pushall().await;
+    let deadline = Instant::now() + Duration::from_secs(DRY_UNIT_RESOLVE_TIMEOUT_SECS);
+    loop {
+        if let Some(model) = cached_dry_unit(client, ams_id) {
+            return model;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        if !matches!(
+            tokio::time::timeout(remaining, client.poll_telemetry()).await,
+            Ok(Ok(_))
+        ) {
+            break;
+        }
+    }
+    eprintln!(
+        "warning: AMS {ams_id} never reported its unit type within {DRY_UNIT_RESOLVE_TIMEOUT_SECS}s — \
+         using the AMS 2 Pro material column. An AMS-HT dries this material hotter, so the \
+         filament may be under-dried; pass --temp explicitly to override."
+    );
+    AmsUnitModel::Ams2Pro
 }
 
 /// Builds and sends an `ams dry` cycle.
