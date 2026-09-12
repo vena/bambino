@@ -61,6 +61,32 @@ impl ModelQuirks for A2LQuirks {
         crate::ams::AmsPoolComposition::Shared { max_units: 4 }
     }
 
+    /// Always supported: the A2L's earliest published release already has remote drying.
+    ///
+    /// A2L `01.01.00.00` (2026-06-01, <https://wiki.bambulab.com/en/a2l/manual/a2l-firmware-release-history>):
+    /// "Added support for remote activation of filament drying". The *Filament drying guide for AMS
+    /// 2 Pro and AMS HT* gives the same minimum. A reported `fun2` bit 5 still wins.
+    fn ams_remote_drying_support(
+        &self,
+        ctx: &crate::quirks::QuirkContext,
+    ) -> crate::quirks::Support {
+        crate::quirks::remote_dry_reported_or(ctx, crate::quirks::Support::Inferred(true))
+    }
+
+    /// Always supported: A2L `01.01.00.00`, its earliest release, added "Print While Drying".
+    ///
+    /// Also listed with that minimum in the drying guide's simultaneous-drying list and in bambuddy's
+    /// `_DRY_WHILE_PRINTING_MIN_FIRMWARE`.
+    fn ams_drying_while_printing_support(
+        &self,
+        ctx: &crate::quirks::QuirkContext,
+    ) -> crate::quirks::Support {
+        crate::quirks::dry_while_printing_unless_reported_off(
+            ctx,
+            crate::quirks::Support::Inferred(true),
+        )
+    }
+
     fn supports_nozzle_offset_calibration(&self) -> bool {
         false
     }

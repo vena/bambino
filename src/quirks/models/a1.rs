@@ -78,7 +78,9 @@ macro_rules! impl_a1_shared {
             }
 
             /// Never: no known firmware path on the A1 series exposes a remote-dry command.
-            /// bambuddy lists A1 and A1 Mini in `_DRYING_UNSUPPORTED_MODELS`
+            ///
+            /// Bambu Lab's *Filament drying guide for AMS 2 Pro and AMS HT* lists A1/A1 mini as
+            /// "not supported yet", and bambuddy lists both in `_DRYING_UNSUPPORTED_MODELS`
             /// (`printer_manager.py:223`).
             ///
             /// **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
@@ -90,8 +92,22 @@ macro_rules! impl_a1_shared {
             ///
             /// Unconditional rather than `fun2`-first only because the A1 family sends no
             /// `fun2` at all, so there is no reported bit to defer to.
-            fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext) -> bool {
-                false
+            fn ams_remote_drying_support(
+                &self,
+                _ctx: &crate::quirks::QuirkContext,
+            ) -> crate::quirks::Support {
+                crate::quirks::Support::Inferred(false)
+            }
+
+            /// Never supports drying while printing.
+            ///
+            /// The drying guide names A1/A1 mini as "not supported yet" for simultaneous drying
+            /// and printing.
+            fn ams_drying_while_printing_support(
+                &self,
+                _ctx: &crate::quirks::QuirkContext,
+            ) -> crate::quirks::Support {
+                crate::quirks::Support::Inferred(false)
             }
 
             fn is_bed_on_z(&self) -> bool {

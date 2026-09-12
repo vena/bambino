@@ -751,7 +751,7 @@ async fn test_drying_lifecycle_wire_payload() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     client
         .dry(128)
@@ -779,7 +779,7 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     // No AMS snapshot has been polled, so the unit-model gate passes through and the range
     // falls back to the `ams_id`-derived one: 45-85 for an AMS-HT address, 45-65 otherwise.
@@ -885,7 +885,7 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
-        // fun2 "00" = bit 5 clear. An X1C's quirk default is true.
+        // fun2 "00" = bit 5 clear. An X1E's quirk default is true.
         send_publish_payload(
             &mut server_stream,
             &topic,
@@ -896,7 +896,8 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
+    assert!(client.supports_ams_remote_drying());
 
     client
         .poll_telemetry()
@@ -951,7 +952,7 @@ async fn test_dry_builder_defaults_reach_the_wire() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     client
         .dry(128)
@@ -981,7 +982,7 @@ async fn test_dry_builder_material_fills_four_fields() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     client
         .dry(128)
@@ -1005,7 +1006,7 @@ async fn test_dry_builder_printing_column() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     client
         .dry(128)
@@ -1029,7 +1030,7 @@ async fn test_dry_builder_refuses_unset_temp_or_duration() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     let err = client
         .dry(128)
@@ -1106,7 +1107,7 @@ async fn test_start_drying_refuses_heaterless_unit_once_observed() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1154,7 +1155,7 @@ async fn test_start_drying_allows_observed_ams_2_pro() {
         assert_eq!(json["print"]["temp"], 55);
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1197,7 +1198,7 @@ async fn test_start_drying_range_follows_observed_unit_not_address() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1230,7 +1231,7 @@ async fn test_start_drying_rejects_external_spool() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     // 254/255 pass `is_valid_ams_id` (they are real addresses for change_filament), but an
     // external spool is a bracket with no heater, so drying can never act on one. Unlike the
@@ -1296,7 +1297,7 @@ async fn test_start_drying_rejects_invalid_ams_id() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     let result = client
         .dry(999)
@@ -1322,7 +1323,7 @@ async fn test_stop_drying_rejects_invalid_ams_id() {
     });
 
     let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     // 16 is the A2L AMS Lite's physical id and valid; 17 addresses nothing.
     let result = client.stop_drying(17).await;

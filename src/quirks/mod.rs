@@ -41,6 +41,54 @@ pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
     })
 }
 
+/// How a capability answer was reached — the printer's own report, an inference, or a default.
+///
+/// A plain `bool` collapses "this X1C reported the bit clear" and "no telemetry has arrived, so
+/// yes was assumed" into the same value, though they warrant opposite handling: the first is
+/// settled, the second means "ask again once connected". [`is_supported`](Self::is_supported)
+/// collapses back to that `bool` for callers that don't need the distinction.
+///
+/// Only capabilities that resolve a reported value against model rules against a default carry
+/// this type. Static model facts (`z_max`, camera protocol, …) have no provenance question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    /// The printer said so itself, e.g. through a `fun2` capability bit.
+    Reported(bool),
+    /// Derived from what is known about this printer without it saying so: its firmware version
+    /// against a documented threshold, or a documented rule for its model.
+    Inferred(bool),
+    /// Nothing about this printer settles it, so this is the capability's default.
+    Assumed(bool),
+}
+
+impl Support {
+    /// The answer with its provenance discarded.
+    #[must_use]
+    pub fn is_supported(self) -> bool {
+        match self {
+            Self::Reported(v) | Self::Inferred(v) | Self::Assumed(v) => v,
+        }
+    }
+}
+
+/// Returns the printer's reported remote-dry bit as [`Support::Reported`], or `fallback` when it
+/// said nothing.
+pub(crate) fn remote_dry_reported_or(ctx: &QuirkContext, fallback: Support) -> Support {
+    reported_remote_dry(ctx).map_or(fallback, Support::Reported)
+}
+
+/// Compares the context's firmware against `min_firmware`, or returns `unknown` when no version
+/// has been read.
+///
+/// `unknown` is the caller's to choose because the right default differs per capability: idle
+/// remote drying assumes yes (see [`remote_dry_from_firmware`]), drying while printing assumes no,
+/// and a model whose earliest published release already has the capability can infer yes.
+pub(crate) fn firmware_gate(ctx: &QuirkContext, min_firmware: &str, unknown: Support) -> Support {
+    ctx.firmware.map_or(unknown, |have| {
+        Support::Inferred(firmware_at_least(have, min_firmware))
+    })
+}
+
 /// Resolves remote-dry support for a model that ships the capability in a specific firmware
 /// release, honoring a reported `fun2` bit first.
 ///
@@ -51,7 +99,7 @@ pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
 /// means "nobody has asked this printer yet", never "the printer refused to say": a
 /// non-answering printer makes [`get_version`](crate::client::PrinterClient::get_version) return
 /// `Err(Error::Timeout)`, so the failure surfaces as an error rather than as a silent `None`.
-/// Denying on `None` would make an X1C's drying support depend on whether the caller happened to
+/// Denying on `None` would make an H2S's drying support depend on whether the caller happened to
 /// call `get_version()` first — invisible, order-dependent, and wrong in the direction that
 /// hides a capability the printer has.
 ///
@@ -60,13 +108,42 @@ pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
 /// call site is a background auto-drying scheduler where skipping a printer is free and retried
 /// on the next tick. Neither reason transfers to a library whose caller asked once and is
 /// waiting on the answer, so the thresholds are ported and the `None` handling is not.
-pub(crate) fn remote_dry_from_firmware(ctx: &QuirkContext, min_firmware: &str) -> bool {
-    match reported_remote_dry(ctx) {
-        Some(reported) => reported,
-        None => match ctx.firmware {
-            Some(have) => firmware_at_least(have, min_firmware),
-            None => true,
-        },
+pub(crate) fn remote_dry_from_firmware(ctx: &QuirkContext, min_firmware: &str) -> Support {
+    remote_dry_reported_or(
+        ctx,
+        firmware_gate(ctx, min_firmware, Support::Assumed(true)),
+    )
+}
+
+/// Resolves drying-while-printing support for a model that ships it in a specific firmware
+/// release.
+///
+/// **Default deny**, the opposite of [`remote_dry_from_firmware`], and deliberately: the vendor's
+/// list for this capability is a closed allowlist ("P1S/P1P/X1C/A1/A1mini are not supported yet"),
+/// and on an unsupported printer the firmware refuses mid-print with `dry_sf_reason` `0` anyway,
+/// so assuming no hides nothing a caller could have used. bambuddy's
+/// `supports_drying_while_printing` reaches the same conclusion.
+///
+/// No `fun2` bit reports this capability. A reported *clear* remote-dry bit still refuses it,
+/// because drying while printing is strictly narrower than idle remote drying; a *set* bit says
+/// nothing about the concurrent case and is not treated as evidence for it.
+pub(crate) fn dry_while_printing_from_firmware(ctx: &QuirkContext, min_firmware: &str) -> Support {
+    dry_while_printing_unless_reported_off(
+        ctx,
+        firmware_gate(ctx, min_firmware, Support::Assumed(false)),
+    )
+}
+
+/// Returns [`Support::Reported`]`(false)` if the printer reports idle remote drying unsupported,
+/// else `answer` — see [`dry_while_printing_from_firmware`] for why only the clear bit counts.
+pub(crate) fn dry_while_printing_unless_reported_off(
+    ctx: &QuirkContext,
+    answer: Support,
+) -> Support {
+    if reported_remote_dry(ctx) == Some(false) {
+        Support::Reported(false)
+    } else {
+        answer
     }
 }
 
@@ -285,31 +362,76 @@ pub trait ModelQuirks {
     /// (`reference/03_mqtt_telemetry.md`), so on a large share of real hardware the reported bit
     /// never appears. Treat the model rules as the primary mechanism, not a fallback.
     ///
-    /// Model rules, ported from bambuddy's `supports_drying()`
-    /// (`printer_manager.py:328-345`), which is the better-corroborated of the two upstream
-    /// capability models — BambuStudio's is a bare `is_support_remote_dry = false` initializer
-    /// that only `fun2` ever sets:
+    /// Model rules, sourced from Bambu Lab's per-model firmware release histories and its *Filament
+    /// drying guide for AMS 2 Pro and AMS HT* wiki page (thresholds and rejected values tabulated
+    /// in `reference/05_materials_ams.md` §5.4). BambuStudio has no model rule of its own — its
+    /// `is_support_remote_dry` is a bare `false` initializer that only `fun2` ever sets:
     ///
     /// * **A1 / A1 Mini — never.** Not a hardware limit: these models do take AMS 2 Pro and
-    ///   AMS-HT units from the shared pool. No known firmware path exposes a remote-dry command
-    ///   on them, and bambuddy lists them in `_DRYING_UNSUPPORTED_MODELS`.
-    /// * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen. Bambu's
-    ///   P1 manual is explicit ("P1S connected AMS drying functions may only be controlled from
-    ///   the P1S screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533
-    ///   (reporter saw `dry_status` stay `0` after three acked commands), and this crate's own
-    ///   drying command was tested against a P1S directly.
-    /// * **X1C, P2S, H2D, H2S, H2C — firmware-gated.** The capability shipped in a specific
-    ///   release; see each model's override for the version.
-    /// * **Everything else — allowed.** Matching bambuddy's "all other models (H2D Pro, X1E,
-    ///   future models) are allowed — the command fails gracefully with `result: "fail"` if
-    ///   unsupported."
+    ///   AMS-HT units from the shared pool. The drying guide lists them as "not supported yet",
+    ///   and bambuddy lists them in `_DRYING_UNSUPPORTED_MODELS`.
+    /// * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen: P1
+    ///   `01.08.00.00` (2025-04-29) says drying starts "from the printer's screen", no later P1
+    ///   release adds remote drying, and the drying guide names both as unsupported. Bambu's P1
+    ///   manual agrees ("P1S connected AMS drying functions may only be controlled from the P1S
+    ///   screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and this
+    ///   crate's own drying command was tested against a P1S directly.
+    /// * **X1C — never.** The drying guide names it alongside P1 and A1 as "not supported yet";
+    ///   X1 `01.09.00.00` (2025-04-29) carries the same screen-only sentence as P1 `01.08.00.00`,
+    ///   and no X1/X1C release through `01.12.00.00` mentions remote drying. Bambu Lab has stated
+    ///   the related dry-while-printing feature needs hardware the X1 Carbon lacks.
+    /// * **H2D, H2D Pro, H2S, H2C, P2S, X2D — firmware-gated.** The capability shipped in a
+    ///   specific release; see each model's constant for the version and its release history.
+    /// * **A2L — always.** Its earliest published release, `01.01.00.00`, already has it.
+    /// * **Everything else (X1E, future models) — assumed allowed.** No vendor source states
+    ///   either way; the printer answers `result: "fail"` if it can't. Matches bambuddy's "all
+    ///   other models ... are allowed".
     ///
     /// Takes a [`QuirkContext`] rather than letting callers compose the answer, so there is one
     /// answer to this question and not two that can disagree — the failure #240 fixed. Prefer
     /// [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which builds the
     /// context from cached telemetry for you.
+    ///
+    /// Implementors override [`ams_remote_drying_support`](Self::ams_remote_drying_support), not
+    /// this method, so the two cannot disagree.
     fn supports_ams_remote_drying(&self, ctx: &QuirkContext) -> bool {
-        reported_remote_dry(ctx).unwrap_or(true)
+        self.ams_remote_drying_support(ctx).is_supported()
+    }
+
+    /// Remote-drying support with its provenance attached.
+    ///
+    /// The same answer as [`supports_ams_remote_drying`](Self::supports_ams_remote_drying), plus
+    /// whether the printer reported it, it was inferred from firmware or a model rule, or it is the
+    /// default because nothing was known.
+    fn ams_remote_drying_support(&self, ctx: &QuirkContext) -> Support {
+        remote_dry_reported_or(ctx, Support::Assumed(true))
+    }
+
+    /// Returns true if an AMS drying cycle can run while a print is in progress.
+    ///
+    /// A separate, strictly narrower capability than
+    /// [`supports_ams_remote_drying`](Self::supports_ams_remote_drying). During a print the
+    /// firmware lowers the drying temperature below the printed filament's softening point; this
+    /// crate does not reimplement that clamp. On an unsupported printer the firmware refuses
+    /// mid-print with `dry_sf_reason` `0`.
+    ///
+    /// Sourced from the drying guide's "Introduction to Simultaneous Drying and Printing
+    /// Function" list plus each model's release history ("Added support for printing while
+    /// filament is drying" / "Print While Drying"). **Defaults to deny**, unlike idle remote
+    /// drying — see `dry_while_printing_from_firmware` for why the asymmetry is deliberate.
+    ///
+    /// Implementors override
+    /// [`ams_drying_while_printing_support`](Self::ams_drying_while_printing_support).
+    fn supports_ams_drying_while_printing(&self, ctx: &QuirkContext) -> bool {
+        self.ams_drying_while_printing_support(ctx).is_supported()
+    }
+
+    /// Drying-while-printing support with its provenance attached.
+    ///
+    /// The same answer as
+    /// [`supports_ams_drying_while_printing`](Self::supports_ams_drying_while_printing).
+    fn ams_drying_while_printing_support(&self, ctx: &QuirkContext) -> Support {
+        dry_while_printing_unless_reported_off(ctx, Support::Assumed(false))
     }
 
     /// Returns true if the model runs vibration-compensation (resonance) calibration as part of a print job.
@@ -614,7 +736,7 @@ mod tests {
         let x1c = PrinterModel::X1C.quirks();
         let p1s = PrinterModel::P1S.quirks();
 
-        // Bit 5 set beats an unmet firmware minimum and beats the P1's screen-only rule.
+        // Bit 5 set beats the X1C's and the P1's never rules.
         let reported_yes = QuirkContext::empty().with_fun2(Some("20"));
         assert!(x1c.supports_ams_remote_drying(&reported_yes));
         assert!(p1s.supports_ams_remote_drying(&reported_yes));
@@ -626,26 +748,34 @@ mod tests {
         assert!(!x1c.supports_ams_remote_drying(&reported_no));
 
         // A fun2 carrying no hex digits is "didn't say", not a reported zero, so the model
-        // rules still decide.
+        // rules still decide — which for both of these is never.
         let said_nothing = QuirkContext::empty()
             .with_fun2(Some(""))
             .with_firmware(Some("99.99.99.99"));
-        assert!(x1c.supports_ams_remote_drying(&said_nothing));
+        assert!(!x1c.supports_ams_remote_drying(&said_nothing));
         assert!(!p1s.supports_ams_remote_drying(&said_nothing));
     }
 
     /// The model rules, which are what actually run on hardware — `fun2` is BambuStudio-only and
-    /// absent on P1/A1 entirely, so these paths carry the weight. Ported from bambuddy's
-    /// `supports_drying()` (`printer_manager.py:328-345`).
+    /// absent on P1/A1 entirely, so these paths carry the weight. Sourced from the vendor release
+    /// histories and drying guide (`reference/05_materials_ams.md` §5.4).
     #[test]
     fn test_model_rules_without_a_reported_bit() {
         let none = QuirkContext::empty();
-
-        // Never, regardless of firmware: no AMS 2 Pro/HT compatibility at all.
         let newest = QuirkContext::empty().with_firmware(Some("99.99.99.99"));
-        for model in [PrinterModel::A1, PrinterModel::A1Mini] {
-            assert!(
-                !model.quirks().supports_ams_remote_drying(&none),
+
+        // Never, regardless of firmware: A1 (no remote-dry command path), P1 (screen-only), X1C
+        // (named unsupported by the drying guide).
+        for model in [
+            PrinterModel::A1,
+            PrinterModel::A1Mini,
+            PrinterModel::P1P,
+            PrinterModel::P1S,
+            PrinterModel::X1C,
+        ] {
+            assert_eq!(
+                model.quirks().ams_remote_drying_support(&none),
+                Support::Inferred(false),
                 "{model:?}"
             );
             assert!(
@@ -654,67 +784,128 @@ mod tests {
             );
         }
 
-        // Never: screen-only. The P1 family sends no fun2, so this is the only reachable path.
-        for model in [PrinterModel::P1P, PrinterModel::P1S] {
-            assert!(
-                !model.quirks().supports_ams_remote_drying(&none),
-                "{model:?}"
-            );
-            assert!(
-                !model.quirks().supports_ams_remote_drying(&newest),
-                "{model:?} is screen-only regardless of firmware"
-            );
-        }
-
-        // Firmware-gated: below the threshold refuses, at or above allows.
-        for (model, min) in [
-            (PrinterModel::X1C, "01.09.00.00"),
-            (PrinterModel::P2S, "01.02.00.00"),
-            (PrinterModel::H2D, "01.02.30.00"),
-            (PrinterModel::H2S, "01.02.00.00"),
-            (PrinterModel::H2C, "01.02.00.00"),
+        // Firmware-gated: at the threshold allows, just below refuses, unread is assumed yes.
+        for (model, min, below) in [
+            (PrinterModel::P2S, "01.02.00.00", "01.01.99.99"),
+            (PrinterModel::H2D, "01.03.00.00", "01.02.99.99"),
+            (PrinterModel::H2DPro, "01.02.00.00", "01.01.99.99"),
+            (PrinterModel::H2S, "01.02.00.00", "01.01.99.99"),
+            (PrinterModel::H2C, "01.02.00.00", "01.01.99.99"),
         ] {
             let at = QuirkContext::empty().with_firmware(Some(min));
-            assert!(
-                model.quirks().supports_ams_remote_drying(&at),
+            assert_eq!(
+                model.quirks().ams_remote_drying_support(&at),
+                Support::Inferred(true),
                 "{model:?} at its minimum {min}"
+            );
+            let ctx = QuirkContext::empty().with_firmware(Some(below));
+            assert_eq!(
+                model.quirks().ams_remote_drying_support(&ctx),
+                Support::Inferred(false),
+                "{model:?} at {below} is below its minimum"
             );
 
             // An unread version is "nobody asked", not "too old": only a version actually read
             // and judged refuses, so capability never depends on call ordering. Deliberately
             // unlike bambuddy, whose `bool(firmware and ...)` is a Python None-guard on a
             // background scheduler — see `remote_dry_from_firmware`.
-            assert!(
-                model.quirks().supports_ams_remote_drying(&none),
-                "{model:?} with no firmware read must fall back to the model answer"
+            assert_eq!(
+                model.quirks().ams_remote_drying_support(&none),
+                Support::Assumed(true),
+                "{model:?} with no firmware read"
             );
         }
 
-        // One explicit below-threshold case per gated model, so a wrong constant is caught
-        // rather than passing on the equality check alone.
-        for (model, below) in [
-            (PrinterModel::X1C, "01.08.99.99"),
-            (PrinterModel::P2S, "01.01.99.99"),
-            (PrinterModel::H2D, "01.02.29.99"),
-            (PrinterModel::H2S, "01.01.99.99"),
-            (PrinterModel::H2C, "01.01.99.99"),
+        // Earliest published release already has it: an unread version is inferred, not assumed.
+        for model in [PrinterModel::X2D, PrinterModel::A2L] {
+            assert_eq!(
+                model.quirks().ams_remote_drying_support(&none),
+                Support::Inferred(true),
+                "{model:?}"
+            );
+        }
+
+        // No vendor source either way: assumed allowed.
+        assert_eq!(
+            PrinterModel::X1E.quirks().ams_remote_drying_support(&none),
+            Support::Assumed(true)
+        );
+    }
+
+    /// Drying while printing defaults to deny and has no reporting bit of its own; a clear
+    /// remote-dry bit still refuses it, a set one proves nothing.
+    #[test]
+    fn test_drying_while_printing_rules() {
+        let none = QuirkContext::empty();
+
+        for model in [
+            PrinterModel::A1,
+            PrinterModel::A1Mini,
+            PrinterModel::P1P,
+            PrinterModel::P1S,
+            PrinterModel::X1C,
         ] {
-            let ctx = QuirkContext::empty().with_firmware(Some(below));
-            assert!(
-                !model.quirks().supports_ams_remote_drying(&ctx),
-                "{model:?} at {below} is below its minimum"
+            assert_eq!(
+                model.quirks().ams_drying_while_printing_support(&none),
+                Support::Inferred(false),
+                "{model:?}"
             );
         }
 
-        // Not gated: bambuddy's docstring names X1E and H2D Pro among the models that fall
-        // through to "allowed". Inventing a threshold for them would be a restriction no
-        // upstream states.
-        for model in [PrinterModel::X1E, PrinterModel::H2DPro] {
+        for (model, min, below) in [
+            (PrinterModel::P2S, "01.02.00.00", "01.01.99.99"),
+            (PrinterModel::H2D, "01.03.00.00", "01.02.99.99"),
+            (PrinterModel::H2DPro, "01.02.00.00", "01.01.99.99"),
+            (PrinterModel::H2S, "01.02.00.00", "01.01.99.99"),
+            (PrinterModel::H2C, "01.02.00.00", "01.01.99.99"),
+        ] {
+            let q = model.quirks();
+            assert_eq!(
+                q.ams_drying_while_printing_support(&none),
+                Support::Assumed(false),
+                "{model:?} with no firmware read defaults to deny"
+            );
+            let at = QuirkContext::empty().with_firmware(Some(min));
             assert!(
-                model.quirks().supports_ams_remote_drying(&none),
-                "{model:?} is not firmware-gated upstream"
+                q.supports_ams_drying_while_printing(&at),
+                "{model:?} at {min}"
+            );
+            let old = QuirkContext::empty().with_firmware(Some(below));
+            assert!(
+                !q.supports_ams_drying_while_printing(&old),
+                "{model:?} at {below}"
             );
         }
+
+        for model in [PrinterModel::X2D, PrinterModel::A2L] {
+            assert_eq!(
+                model.quirks().ams_drying_while_printing_support(&none),
+                Support::Inferred(true),
+                "{model:?}"
+            );
+        }
+        for model in [PrinterModel::X1E, PrinterModel::Unknown] {
+            assert_eq!(
+                model.quirks().ams_drying_while_printing_support(&none),
+                Support::Assumed(false),
+                "{model:?}"
+            );
+        }
+
+        let h2s = PrinterModel::H2S.quirks();
+        let clear = QuirkContext::empty()
+            .with_fun2(Some("00"))
+            .with_firmware(Some("99.99.99.99"));
+        assert_eq!(
+            h2s.ams_drying_while_printing_support(&clear),
+            Support::Reported(false)
+        );
+        let set = QuirkContext::empty().with_fun2(Some("20"));
+        assert_eq!(
+            h2s.ams_drying_while_printing_support(&set),
+            Support::Assumed(false),
+            "a set idle bit is not evidence for the concurrent case"
+        );
     }
 
     #[test]

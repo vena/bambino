@@ -23,6 +23,18 @@ pub const X2D_BED_TEMP_MAX: u16 = 120;
 /// Chamber temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Chamber Temperature row.
 pub const X2D_CHAMBER_TEMP_MAX: u16 = 65;
 
+/// Firmware release that introduced remote AMS drying, and drying while printing, on the X2D.
+///
+/// X2D `01.01.00.00` (2026-04-14, <https://wiki.bambulab.com/en/x2d/manual/x2d-firmware-release-history>):
+/// "Added support for remote activation of filament drying" and "Added support for 'Print While
+/// Drying' feature" (the latter needs the separately sold AMS external power supply). The *Filament
+/// drying guide for AMS 2 Pro and AMS HT* gives the same minimum in both lists, and bambuddy's
+/// `_DRY_WHILE_PRINTING_MIN_FIRMWARE` agrees; its `_DRYING_MIN_FIRMWARE` omits the X2D.
+///
+/// This is the earliest published X2D release, so an unread version is inferred supported rather
+/// than assumed.
+pub const X2D_MIN_REMOTE_DRY_FIRMWARE: &str = "01.01.00.00";
+
 /// Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
 pub struct X2Quirks;
 
@@ -95,6 +107,35 @@ impl ModelQuirks for X2Quirks {
 
     fn supports_nozzle_offset_calibration(&self) -> bool {
         true
+    }
+
+    /// Firmware-gated from [`X2D_MIN_REMOTE_DRY_FIRMWARE`]; a reported `fun2` bit 5 still wins.
+    fn ams_remote_drying_support(
+        &self,
+        ctx: &crate::quirks::QuirkContext,
+    ) -> crate::quirks::Support {
+        crate::quirks::remote_dry_reported_or(
+            ctx,
+            crate::quirks::firmware_gate(
+                ctx,
+                X2D_MIN_REMOTE_DRY_FIRMWARE,
+                crate::quirks::Support::Inferred(true),
+            ),
+        )
+    }
+
+    fn ams_drying_while_printing_support(
+        &self,
+        ctx: &crate::quirks::QuirkContext,
+    ) -> crate::quirks::Support {
+        crate::quirks::dry_while_printing_unless_reported_off(
+            ctx,
+            crate::quirks::firmware_gate(
+                ctx,
+                X2D_MIN_REMOTE_DRY_FIRMWARE,
+                crate::quirks::Support::Inferred(true),
+            ),
+        )
     }
 
     fn is_bed_on_z(&self) -> bool {

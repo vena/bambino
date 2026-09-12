@@ -14,24 +14,24 @@ use bambino::quirks::QuirkContext;
 fn test_nothing_reported() {
     let ctx = QuirkContext::empty();
     let cases = [
-        // Never: no AMS 2 Pro / AMS-HT compatibility.
+        // Never: no remote-dry command path (A1), screen-only (P1), named unsupported (X1C).
         (PrinterModel::A1, false),
         (PrinterModel::A1Mini, false),
-        // Never: screen-only.
         (PrinterModel::P1P, false),
         (PrinterModel::P1S, false),
+        (PrinterModel::X1C, false),
         // Firmware-gated, but an unread version falls back to the model answer rather than
         // denying — "nobody asked" is not "too old".
-        (PrinterModel::X1C, true),
         (PrinterModel::P2S, true),
         (PrinterModel::H2D, true),
+        (PrinterModel::H2DPro, true),
         (PrinterModel::H2S, true),
         (PrinterModel::H2C, true),
-        // Not gated upstream.
-        (PrinterModel::X1E, true),
-        (PrinterModel::H2DPro, true),
-        (PrinterModel::A2L, true),
         (PrinterModel::X2D, true),
+        // Every published release has it.
+        (PrinterModel::A2L, true),
+        // No source either way.
+        (PrinterModel::X1E, true),
         (PrinterModel::Unknown, true),
     ];
     for (model, expected) in cases {
@@ -47,17 +47,19 @@ fn test_nothing_reported() {
 #[test]
 fn test_firmware_below_threshold_denies_only_gated_models() {
     let cases = [
-        (PrinterModel::X1C, "01.08.99.99", false),
         (PrinterModel::P2S, "01.01.99.99", false),
-        (PrinterModel::H2D, "01.02.29.99", false),
+        (PrinterModel::H2D, "01.02.99.99", false),
+        (PrinterModel::H2DPro, "01.01.99.99", false),
         (PrinterModel::H2S, "01.01.99.99", false),
         (PrinterModel::H2C, "01.01.99.99", false),
+        (PrinterModel::X2D, "01.00.99.99", false),
         // Ungated models ignore the version entirely.
         (PrinterModel::X1E, "00.00.00.01", true),
-        (PrinterModel::H2DPro, "00.00.00.01", true),
+        (PrinterModel::A2L, "00.00.00.01", true),
         // Never-supported models stay false on any version.
         (PrinterModel::A1, "99.99.99.99", false),
         (PrinterModel::P1S, "99.99.99.99", false),
+        (PrinterModel::X1C, "99.99.99.99", false),
     ];
     for (model, firmware, expected) in cases {
         let ctx = QuirkContext::empty().with_firmware(Some(firmware));
@@ -73,11 +75,12 @@ fn test_firmware_below_threshold_denies_only_gated_models() {
 #[test]
 fn test_firmware_at_threshold_allows() {
     for (model, min) in [
-        (PrinterModel::X1C, "01.09.00.00"),
         (PrinterModel::P2S, "01.02.00.00"),
-        (PrinterModel::H2D, "01.02.30.00"),
+        (PrinterModel::H2D, "01.03.00.00"),
+        (PrinterModel::H2DPro, "01.02.00.00"),
         (PrinterModel::H2S, "01.02.00.00"),
         (PrinterModel::H2C, "01.02.00.00"),
+        (PrinterModel::X2D, "01.01.00.00"),
     ] {
         let ctx = QuirkContext::empty().with_firmware(Some(min));
         assert!(
@@ -107,6 +110,8 @@ fn test_reported_bit_outranks_every_model_rule() {
         PrinterModel::H2S,
         PrinterModel::H2C,
         PrinterModel::P2S,
+        PrinterModel::X2D,
+        PrinterModel::A2L,
     ] {
         // A1/A1 Mini are the deliberate exception: their rule is a hardware fact about what
         // can be attached, not a firmware capability, so no reported bit overrides it.
@@ -126,19 +131,19 @@ fn test_reported_bit_outranks_every_model_rule() {
 /// A reported bit beats firmware in both directions, so the two inputs cannot deadlock.
 #[test]
 fn test_reported_bit_beats_firmware() {
-    let x1c = PrinterModel::X1C.quirks();
+    let h2s = PrinterModel::H2S.quirks();
 
     // Bit set, firmware far too old: allowed.
     let old_but_reported = QuirkContext::empty()
         .with_fun2(Some("20"))
         .with_firmware(Some("01.00.00.00"));
-    assert!(x1c.supports_ams_remote_drying(&old_but_reported));
+    assert!(h2s.supports_ams_remote_drying(&old_but_reported));
 
     // Bit clear, firmware new enough: refused.
     let new_but_denied = QuirkContext::empty()
         .with_fun2(Some("00"))
         .with_firmware(Some("99.99.99.99"));
-    assert!(!x1c.supports_ams_remote_drying(&new_but_denied));
+    assert!(!h2s.supports_ams_remote_drying(&new_but_denied));
 }
 
 /// A `fun2` string carrying no hex digits is "didn't say", not a reported zero, so the model
@@ -148,7 +153,7 @@ fn test_reported_bit_beats_firmware() {
 fn test_empty_fun2_is_not_a_reported_zero() {
     let empty = QuirkContext::empty().with_fun2(Some(""));
     assert!(
-        PrinterModel::X1C
+        PrinterModel::H2S
             .quirks()
             .supports_ams_remote_drying(&empty)
     );
@@ -159,5 +164,5 @@ fn test_empty_fun2_is_not_a_reported_zero() {
     );
 
     let junk = QuirkContext::empty().with_fun2(Some("zz"));
-    assert!(PrinterModel::X1C.quirks().supports_ams_remote_drying(&junk));
+    assert!(PrinterModel::H2S.quirks().supports_ams_remote_drying(&junk));
 }

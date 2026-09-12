@@ -409,7 +409,7 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
 
 #### Dryer State Machine & Safety Interlocks
 *   **Heater Enablement**: The heater cannot be activated if any slot in the target unit reports a physical status code of `11` (Loaded). Filament must be fully retracted.
-*   **`dry_sf_reason` Codes**: an array of independent integer reason codes explaining why a drying cycle will not or did not start. **Not a bitmask** — this doc previously described it as one and listed only codes `1` and `8`, whose reading as bit positions was a coincidence. It is an enumerated code list with nine members, which is why this crate parses it as `Option<Vec<i32>>` (`src/types/telemetry/ams.rs`). Enumerated by bambuddy (`backend/app/services/drying_preflight.py`, `DRY_SF_REASON_MESSAGES`):
+*   **`dry_sf_reason` Codes**: an array of independent integer reason codes explaining why a drying cycle will not or did not start. **Not a bitmask** — this doc previously described it as one and listed only codes `1` and `8`, whose reading as bit positions was a coincidence. It is an enumerated code list, which is why this crate parses it as `Option<Vec<i32>>` (`src/types/telemetry/ams.rs`, decoded by `AmsUnit::dry_block_reasons`). BambuStudio's `DevAms::CannotDryReason` (`DevFilaSystem.h:167-179`) is the authoritative enumeration and has ten members; bambuddy's `DRY_SF_REASON_MESSAGES` (`backend/app/services/drying_preflight.py`) agrees on `0`-`8` and omits `10`. `9` is unassigned in both:
 
     | Code | Meaning | Clears |
     | :--- | :--- | :--- |
@@ -422,9 +422,35 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
     | `6` | AMS is already drying | on its own |
     | `7` | AMS firmware is upgrading | on its own |
     | `8` | Plug in the external AMS power adapter to start drying | **user** (power) |
+    | `10` | Filament is at the AMS outlet and must be unloaded manually (BambuStudio `FilamentAtAmsOutletManualUnload`) | **user** (manual unload) |
 
-    The "Clears" column is bambuddy's own split (`POWER_REASON_CODES = {1, 8}`, `RETRACT_REASON_CODE = 3`, everything else transient) and is the part that matters to a consumer: it decides between "retry in a moment" and "surface a message and stop". bambuddy also picks a single `primary_reason_code` to display when the firmware sets several at once.
+    The "Clears" column is bambuddy's own split (`POWER_REASON_CODES = {1, 8}`, `RETRACT_REASON_CODE = 3`, everything else transient), extended to `10`, which BambuStudio words as requiring a manual unload (`AMSDryControl.cpp:1355-1357`). The split is the part that matters to a consumer: it decides between "retry in a moment" and "surface a message and stop". bambuddy also picks a single `primary_reason_code` to display when the firmware sets several at once.
 *   **Drying telemetry is capability-gated upstream.** BambuStudio reads `dry_status`, both dry-fan statuses, `dry_sub_status` and the whole `dry_setting` block only when the printer's own `is_support_remote_dry` bit is set (`DevFilaSystem.cpp:697`), and ha-bambulab restricts `dry_setting` to the P2 series and H2C (`Features.AMS_DRYING_SETTINGS`, `pybambu/models.py:297-301`). This crate parses them unconditionally as `Option`, which is the right shape — but a consumer must not expect them to be present on an X1 or P1.
+*   **Remote-drying firmware thresholds.** Whether `ams_filament_drying` is honored over MQTT depends on the host printer and its firmware (`ModelQuirks::ams_remote_drying_support`). Drying *while a print runs* is a separate, narrower capability with its own list (`ModelQuirks::ams_drying_while_printing_support`); the firmware lowers the drying temperature below the printed filament's softening point during a print (the vendor guide's examples: PETG dried while printing PLA clamps to 45 °C, ABS while printing PETG to 55 °C). This crate documents that clamp and does not reimplement it.
+
+    | Model | Idle remote drying | Drying while printing | Source |
+    | :--- | :--- | :--- | :--- |
+    | H2D | `01.03.00.00` (2026-03-03) | `01.03.00.00` | H2D firmware release history; drying guide |
+    | H2D Pro | `01.02.00.00` (2026-04-27) | `01.02.00.00` | H2D Pro firmware release history |
+    | H2S | `01.02.00.00` (2026-03-31) | `01.02.00.00` | H2S firmware release history; drying guide |
+    | H2C | `01.02.00.00` (2026-06-01) | `01.02.00.00` | H2C firmware release history |
+    | P2S | `01.02.00.00` (2026-04-09) | `01.02.00.00` | P2S firmware release history; drying guide |
+    | X2D | `01.01.00.00` (2026-04-14, earliest release) | `01.01.00.00` | X2D firmware release history; drying guide |
+    | A2L | `01.01.00.00` (2026-06-01, earliest release) | `01.01.00.00` | A2L firmware release history; drying guide |
+    | X1C | never | never | drying guide: "P1S/P1P/X1C/A1/A1mini are not supported yet"; X1 `01.09.00.00` is screen-only |
+    | P1P / P1S | never | never | P1 `01.08.00.00` is screen-only; drying guide |
+    | A1 / A1 Mini | never | never | drying guide |
+    | X1E | not stated — allowed | not stated — denied | no entry in any X1E release |
+
+    Firmware release histories live at `https://wiki.bambulab.com/en/<model>/manual/<model>-firmware-release-history`, with three exceptions: H2D Pro is `h2d-pro/manual/firmware-release-history`, and X1/X1C and X1E live under `x1/manual/` as `X1-X1C-firmware-release-history` and `X1E-firmware-release-history`. The drying guide is the wiki page *Filament drying guide for AMS 2 Pro and AMS HT*; its two minimum-firmware lists ("Drying Workflow on Bambu Studio" and "Introduction to Simultaneous Drying and Printing Function") omit H2C and H2D Pro, whose own release notes announce both features — the per-model notes are more specific and more recent.
+
+    **Source order for a firmware threshold**, strongest first: (1) the model's firmware release history, (2) a Bambu feature wiki page with a minimum-firmware table, (3) BambuStudio release notes, (4) BambuStudio and bambuddy source agreeing, (5) a single upstream table. Numbers that failed this check, recorded so they are not reintroduced:
+
+    - `01.02.30.00` (H2D) — BambuStudio 2.5.0's release-note minimum for drying *while printing*; absent from the H2D release history (`01.02.10.00` is followed by `01.03.00.00`). bambuddy's `_DRYING_MIN_FIRMWARE` filed it as the idle threshold.
+    - `01.09.00.00` (X1/X1C) — the X1's AMS 2 Pro/HT support release, whose only drying line is "starting the filament drying operation from the printer's screen" — the same sentence P1 `01.08.00.00` carries. bambuddy's `_DRYING_MIN_FIRMWARE` read it as remote drying.
+    - `01.11.02.00` (X1C) — bambuddy's `_DRY_WHILE_PRINTING_MIN_FIRMWARE`; that release has no drying entry and the drying guide names the X1C as unsupported.
+    - `01.08.50.18` (X1) — ha-bambulab's `Features.AMS_DRYING`; a beta build absent from the public history. A `.50.` segment marks one.
+    - `01.01.40.00` (H2S) — BambuStudio 2.5.3's notes; the H2S release history and the drying guide both say `01.02.00.00`.
 *   **Dry Duration Unit (`duration`)**: The command's `duration` parameter specifies the drying duration and is expressed in **hours** (e.g., an 8-hour cycle is serialized as `8`) — distinct from the *telemetry* `dry_time` field described below, which counts down in minutes.
 
 ##### Telemetry Edge-Triggering and Omitted Fields Quirk

@@ -53,37 +53,39 @@ fn h2_has_door_sensor_field(telemetry: &PrinterTelemetry) -> bool {
     telemetry.stat.is_some()
 }
 
-/// Firmware release that introduced remote AMS drying on the H2D.
+/// Firmware release that introduced remote AMS drying, and drying while printing, on the H2D.
 ///
-/// From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:212`). Higher than its H2S/H2C
-/// siblings, which is upstream's value, not a transcription slip.
-pub const H2D_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.30.00";
+/// H2D `01.03.00.00` (2026-03-03, <https://wiki.bambulab.com/en/h2d/manual/h2d-firmware-release-history>):
+/// "Added support for remotely enabling the drying function" and "Added support for printing
+/// while filament is drying". The *Filament drying guide for AMS 2 Pro and AMS HT* gives the same
+/// minimum in both of its lists, and bambuddy's `_DRY_WHILE_PRINTING_MIN_FIRMWARE` agrees.
+///
+/// Later than the H2S/H2C `01.02.00.00` relative to each model's own numbering; that is real, not
+/// a slip. Don't restore bambuddy's `_DRYING_MIN_FIRMWARE` value `01.02.30.00`: it is BambuStudio
+/// 2.5.0's release-note minimum for drying *while printing*, and no such H2D release exists
+/// (`01.02.10.00` is followed by `01.03.00.00`).
+pub const H2D_MIN_REMOTE_DRY_FIRMWARE: &str = "01.03.00.00";
 
-/// Firmware release that introduced remote AMS drying on the H2S and H2C.
+/// Firmware release that introduced remote AMS drying, and drying while printing, on the H2S and H2C.
 ///
-/// From bambuddy's `_DRYING_MIN_FIRMWARE` (`printer_manager.py:213-216`), listed under `H2S`,
-/// `H2C` and the H2C SSDP codes `O1C`/`O1C2`.
+/// H2S `01.02.00.00` (2026-03-31, <https://wiki.bambulab.com/en/h2s/manual/h2s-firmware-release-history>)
+/// and H2C `01.02.00.00` (2026-06-01, <https://wiki.bambulab.com/en/h2c/manual/h2c-firmware-release-history>)
+/// both add remote drying and printing while drying. The drying guide gives the same H2S minimum;
+/// it omits the H2C, which is staleness — BambuStudio 2.5.3's notes also name H2C. bambuddy's
+/// `_DRYING_MIN_FIRMWARE` agrees. BambuStudio 2.5.3's "01.01.40.00 (H2S)" is outvoted by both
+/// vendor pages.
 pub const H2S_H2C_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.00.00";
 
-/// Builds a firmware-gated remote-drying rule for one H2 variant.
-macro_rules! h2_remote_dry_gated {
-    ($min_firmware:expr) => {
-        |ctx: &crate::quirks::QuirkContext| {
-            crate::quirks::remote_dry_from_firmware(ctx, $min_firmware)
-        }
-    };
-}
-
-/// H2D Pro is deliberately **not** firmware-gated — bambuddy's table omits it and its docstring
-/// names it explicitly among the models that fall through to "allowed"
-/// (`printer_manager.py:334`). Inventing a threshold no upstream states would be worse than
-/// letting the printer answer for itself.
-fn h2d_pro_supports_remote_drying(ctx: &crate::quirks::QuirkContext) -> bool {
-    crate::quirks::reported_remote_dry(ctx).unwrap_or(true)
-}
+/// Firmware release that introduced remote AMS drying, and drying while printing, on the H2D Pro.
+///
+/// H2D Pro `01.02.00.00` (2026-04-27, <https://wiki.bambulab.com/en/h2d-pro/manual/firmware-release-history>):
+/// "Added support for remotely enabling the drying function" and printing while drying; no
+/// earlier H2D Pro release has either. bambuddy's `_DRYING_MIN_FIRMWARE` omits the H2D Pro rather
+/// than contradicting this, and its `_DRY_WHILE_PRINTING_MIN_FIRMWARE` agrees.
+pub const H2D_PRO_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.00.00";
 
 macro_rules! impl_h2_shared {
-    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr, $uses_rack:expr, $remote_dry_fn:expr) => {
+    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr, $uses_rack:expr, $min_dry_firmware:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -139,8 +141,18 @@ macro_rules! impl_h2_shared {
                 $offset_cal
             }
 
-            fn supports_ams_remote_drying(&self, ctx: &crate::quirks::QuirkContext) -> bool {
-                $remote_dry_fn(ctx)
+            fn ams_remote_drying_support(
+                &self,
+                ctx: &crate::quirks::QuirkContext,
+            ) -> crate::quirks::Support {
+                crate::quirks::remote_dry_from_firmware(ctx, $min_dry_firmware)
+            }
+
+            fn ams_drying_while_printing_support(
+                &self,
+                ctx: &crate::quirks::QuirkContext,
+            ) -> crate::quirks::Support {
+                crate::quirks::dry_while_printing_from_firmware(ctx, $min_dry_firmware)
             }
 
             fn is_bed_on_z(&self) -> bool {
@@ -194,7 +206,7 @@ impl_h2_shared!(
     H2S_X_MAX,
     H2S_Y_MAX,
     false,
-    h2_remote_dry_gated!(H2S_H2C_MIN_REMOTE_DRY_FIRMWARE)
+    H2S_H2C_MIN_REMOTE_DRY_FIRMWARE
 );
 impl_h2_shared!(
     H2DQuirks,
@@ -204,7 +216,7 @@ impl_h2_shared!(
     H2_DUAL_X_MAX,
     H2_DUAL_Y_MAX,
     false,
-    h2_remote_dry_gated!(H2D_MIN_REMOTE_DRY_FIRMWARE)
+    H2D_MIN_REMOTE_DRY_FIRMWARE
 );
 impl_h2_shared!(
     H2DProQuirks,
@@ -214,7 +226,7 @@ impl_h2_shared!(
     H2_DUAL_X_MAX,
     H2_DUAL_Y_MAX,
     false,
-    h2d_pro_supports_remote_drying
+    H2D_PRO_MIN_REMOTE_DRY_FIRMWARE
 );
 impl_h2_shared!(
     H2CQuirks,
@@ -224,5 +236,5 @@ impl_h2_shared!(
     H2_DUAL_X_MAX,
     H2_DUAL_Y_MAX,
     true,
-    h2_remote_dry_gated!(H2S_H2C_MIN_REMOTE_DRY_FIRMWARE)
+    H2S_H2C_MIN_REMOTE_DRY_FIRMWARE
 );

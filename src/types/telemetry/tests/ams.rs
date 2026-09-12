@@ -406,8 +406,8 @@ fn test_ams_unit_model_drying_capability_matches_upstream() {
 
 #[test]
 fn test_dry_block_reason_code_roundtrip_and_user_action_split() {
-    // All nine codes bambuddy enumerates (drying_preflight.py, DRY_SF_REASON_MESSAGES).
-    for code in 0..=8 {
+    // BambuStudio's CannotDryReason: 0-8 (which bambuddy also enumerates) and 10. 9 is unassigned.
+    for code in (0..=8).chain([10]) {
         assert_eq!(DryBlockReason::from_code(code).code(), code);
         assert!(
             !matches!(DryBlockReason::from_code(code), DryBlockReason::Other(_)),
@@ -419,11 +419,13 @@ fn test_dry_block_reason_code_roundtrip_and_user_action_split() {
     // neighbouring variant, and round-trips.
     assert_eq!(DryBlockReason::from_code(42), DryBlockReason::Other(42));
     assert_eq!(DryBlockReason::Other(42).code(), 42);
+    assert_eq!(DryBlockReason::from_code(9), DryBlockReason::Other(9));
 
-    // bambuddy's POWER_REASON_CODES = {1, 8} plus RETRACT_REASON_CODE = 3. Everything else,
-    // including an unknown code, reads as transient so a caller keeps retrying.
-    for code in 0..=8 {
-        let expected = matches!(code, 1 | 3 | 8);
+    // bambuddy's POWER_REASON_CODES = {1, 8} plus RETRACT_REASON_CODE = 3, and BambuStudio's
+    // manual-unload 10. Everything else, including an unknown code, reads as transient so a
+    // caller keeps retrying.
+    for code in (0..=8).chain([10]) {
+        let expected = matches!(code, 1 | 3 | 8 | 10);
         assert_eq!(
             DryBlockReason::from_code(code).needs_user_action(),
             expected,

@@ -1016,11 +1016,12 @@ impl AmsUnit {
 ///
 /// **`dry_sf_reason` is a list of independent codes, not a bitmask.** `reference/05_materials_ams.md`
 /// described it as one for a while and listed only `1` and `8`, whose reading as bit positions was
-/// a coincidence; the field is an enumerated code list with nine members, which is why it
-/// deserializes as `Vec<i32>`.
+/// a coincidence; the field is an enumerated code list, which is why it deserializes as
+/// `Vec<i32>`.
 ///
-/// Codes enumerated by bambuddy (`backend/app/services/drying_preflight.py`,
-/// `DRY_SF_REASON_MESSAGES`), as is the user-action split — see
+/// Codes from BambuStudio's `DevAms::CannotDryReason` (`DevFilaSystem.h:167-179`), which has ten
+/// members; bambuddy's `DRY_SF_REASON_MESSAGES` (`backend/app/services/drying_preflight.py`)
+/// agrees on `0`-`8` and omits `10`. The user-action split is bambuddy's — see
 /// [`needs_user_action`](Self::needs_user_action).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DryBlockReason {
@@ -1043,6 +1044,11 @@ pub enum DryBlockReason {
     FirmwareUpgrading,
     /// `8` — the external AMS power adapter must be plugged in. Needs the user.
     ExternalPowerRequired,
+    /// `10` — filament is at the AMS outlet and must be unloaded by hand before drying.
+    ///
+    /// Needs the user. BambuStudio's `FilamentAtAmsOutletManualUnload`, whose message asks for a manual
+    /// unload (`AMSDryControl.cpp:1355-1357`), unlike `3`, where Studio offers an unload button.
+    FilamentAtOutletManualUnload,
     /// A code this crate doesn't know — newer firmware may add reasons, and folding one onto a
     /// neighbouring variant would report a wrong cause with full confidence.
     Other(i32),
@@ -1062,6 +1068,7 @@ impl DryBlockReason {
             6 => Self::AlreadyDrying,
             7 => Self::FirmwareUpgrading,
             8 => Self::ExternalPowerRequired,
+            10 => Self::FilamentAtOutletManualUnload,
             other => Self::Other(other),
         }
     }
@@ -1079,6 +1086,7 @@ impl DryBlockReason {
             Self::AlreadyDrying => 6,
             Self::FirmwareUpgrading => 7,
             Self::ExternalPowerRequired => 8,
+            Self::FilamentAtOutletManualUnload => 10,
             Self::Other(code) => code,
         }
     }
@@ -1088,8 +1096,10 @@ impl DryBlockReason {
     /// This is the distinction that decides a caller's behavior: retry in a moment, or stop and
     /// surface a message. True for [`InsufficientPower`](Self::InsufficientPower) and
     /// [`ExternalPowerRequired`](Self::ExternalPowerRequired) (bambuddy's
-    /// `POWER_REASON_CODES = {1, 8}`) and for [`FilamentAtOutlet`](Self::FilamentAtOutlet)
-    /// (`RETRACT_REASON_CODE = 3`); every other known reason clears on its own.
+    /// `POWER_REASON_CODES = {1, 8}`), for [`FilamentAtOutlet`](Self::FilamentAtOutlet)
+    /// (`RETRACT_REASON_CODE = 3`), and for
+    /// [`FilamentAtOutletManualUnload`](Self::FilamentAtOutletManualUnload), which bambuddy doesn't
+    /// know; every other known reason clears on its own.
     ///
     /// [`Other`](Self::Other) returns `false` — an unknown reason is reported as transient
     /// because that is the reading that keeps a caller retrying rather than permanently refusing
@@ -1098,7 +1108,10 @@ impl DryBlockReason {
     pub fn needs_user_action(self) -> bool {
         matches!(
             self,
-            Self::InsufficientPower | Self::ExternalPowerRequired | Self::FilamentAtOutlet
+            Self::InsufficientPower
+                | Self::ExternalPowerRequired
+                | Self::FilamentAtOutlet
+                | Self::FilamentAtOutletManualUnload
         )
     }
 }

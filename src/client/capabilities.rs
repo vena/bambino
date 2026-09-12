@@ -23,7 +23,7 @@
 //! [`poll_telemetry()`](crate::client::PrinterClient::poll_telemetry) goes stale — build a fresh one per
 //! question rather than storing it.
 
-use crate::quirks::{ModelQuirks, QuirkContext};
+use crate::quirks::{ModelQuirks, QuirkContext, Support};
 
 /// Capability answers for one printer, with its cached telemetry already supplied.
 ///
@@ -60,8 +60,8 @@ impl<'a> Capabilities<'a> {
     /// Whether this printer honors `ams_filament_drying` sent over MQTT.
     ///
     /// Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
-    /// supported on A1/A1 Mini and P1P/P1S, firmware-gated on X1C/P2S/H2D/H2S/H2C, allowed
-    /// elsewhere. See
+    /// supported on A1/A1 Mini, P1P/P1S and X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
+    /// always on A2L, assumed allowed elsewhere. See
     /// [`ModelQuirks::supports_ams_remote_drying`]
     /// for the sourcing.
     ///
@@ -79,6 +79,38 @@ impl<'a> Capabilities<'a> {
     pub fn supports_ams_remote_drying(&self) -> bool {
         self.quirks.supports_ams_remote_drying(&self.context)
     }
+
+    /// Remote-drying support with its provenance attached.
+    ///
+    /// The same answer as [`supports_ams_remote_drying`](Self::supports_ams_remote_drying), plus
+    /// whether it came from the printer ([`Support::Reported`]), from its firmware version or a
+    /// model rule ([`Support::Inferred`]), or is the default because nothing was known yet
+    /// ([`Support::Assumed`]). Use it to tell "this printer can't" from "ask again once
+    /// connected".
+    #[must_use]
+    pub fn ams_remote_drying_support(&self) -> Support {
+        self.quirks.ams_remote_drying_support(&self.context)
+    }
+
+    /// Whether an AMS drying cycle can run while a print is in progress.
+    ///
+    /// Strictly narrower than [`supports_ams_remote_drying`](Self::supports_ams_remote_drying),
+    /// and defaults to `false` when the firmware version is unknown. See
+    /// [`ModelQuirks::supports_ams_drying_while_printing`] for the sourcing.
+    #[must_use]
+    pub fn supports_ams_drying_while_printing(&self) -> bool {
+        self.quirks
+            .supports_ams_drying_while_printing(&self.context)
+    }
+
+    /// Drying-while-printing support with its provenance attached.
+    ///
+    /// The same answer as
+    /// [`supports_ams_drying_while_printing`](Self::supports_ams_drying_while_printing).
+    #[must_use]
+    pub fn ams_drying_while_printing_support(&self) -> Support {
+        self.quirks.ams_drying_while_printing_support(&self.context)
+    }
 }
 
 impl core::fmt::Debug for Capabilities<'_> {
@@ -88,8 +120,12 @@ impl core::fmt::Debug for Capabilities<'_> {
         f.debug_struct("Capabilities")
             .field("context", &self.context)
             .field(
-                "supports_ams_remote_drying",
-                &self.supports_ams_remote_drying(),
+                "ams_remote_drying_support",
+                &self.ams_remote_drying_support(),
+            )
+            .field(
+                "ams_drying_while_printing_support",
+                &self.ams_drying_while_printing_support(),
             )
             .finish()
     }
