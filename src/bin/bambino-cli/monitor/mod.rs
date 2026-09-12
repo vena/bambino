@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use bambino::Error;
+use bambino::io::SocketError;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal;
 use tokio::sync::mpsc;
@@ -190,6 +192,19 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
                                     Some(format!("Failed to render telemetry updates: {:?}", e));
                             }
                         }
+                    }
+                    // A `TimedOut` from `poll_wire`'s per-read deadline means the wire went
+                    // quiet, not that the session is gone — that deadline exists precisely so
+                    // a caller can retry, and `FrameReadState` resumes a partial frame rather
+                    // than discarding it. Tearing the monitor down here throws away a
+                    // recoverable connection. A genuinely dead one is still caught, by
+                    // `tick_zombie_check`'s 60s `secs_since_last_message` counter below, so
+                    // retrying does not loop forever against a corpse.
+                    Err(Error::Network(SocketError::TimedOut)) => {
+                        warning = Some(
+                            "Connection stalled (no telemetry within the read deadline) — retrying"
+                                .to_string(),
+                        );
                     }
                     Err(e) => break Err(e),
                 }

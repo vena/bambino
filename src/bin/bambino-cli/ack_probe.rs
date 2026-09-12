@@ -440,7 +440,12 @@ async fn run_one(
         wire_command: test.wire_command().to_string(),
         description: test.description().to_string(),
         sequence_id: sequence_id.clone(),
-        sent_payload: payload_value,
+        // Redacted like every other JSON value reaching the report, even though no current
+        // `build_payload` arm emits a credential. The module invites new `AckTest` variants
+        // ("add a variant for any future command before putting it on the allowlist"), and
+        // these reports are written expressly to be attached to bug reports — so the guarantee
+        // has to hold structurally rather than by each future author remembering it.
+        sent_payload: redact_secrets(payload_value),
         window_secs: window.as_secs(),
         verdict: verdict::PUBLISH_FAILED,
         publish_error: None,
