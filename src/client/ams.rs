@@ -58,10 +58,12 @@ pub(crate) fn wire_ams_id(ams_id: i32) -> i32 {
 /// Global tray ids of an A2L-attached AMS Lite accepted by tray-id addressing commands:
 /// `AMS_LITE_ON_A2L_NORMALIZED_ID * AMS_SLOTS_PER_UNIT + slot`, i.e. `24..=27`.
 ///
-/// This is BambuStudio's own tray id for the unit — `DevAms::GetTrayId` returns `24 + slot_id`
-/// for `AMS_LITE_MIXED` (`DevFilaSystem.cpp:262-263`), and `extrusion_cali_sel`'s `tray_id` is
-/// filled from it (`AMSMaterialsSetting.cpp:677`). bambuddy instead extrapolates `64..=67`
-/// (`16 * 4 + slot`) and marks that as unconfirmed; BambuStudio wins the disagreement.
+/// This is BambuStudio's calibration tray id for the unit: `extrusion_cali_sel`'s `tray_id` is
+/// filled from `GetTrayIdByAmsSlotId` (`AMSMaterialsSetting.cpp:677`), whose
+/// `DevFilaSystem::GetTrayIndexMap` gives `24 + slot_id` for a mixed AMS Lite and `ams_id` for an
+/// AMS-HT (`DevFilaSystem.cpp:367-373`). Not `DevAms::GetTrayId`, whose AMS-HT
+/// `16 + (ams_id - 128)` is only the `tray_exist_bits` index (#210). bambuddy instead extrapolates
+/// `64..=67` (`16 * 4 + slot`) and marks that as unconfirmed; BambuStudio wins the disagreement.
 pub(crate) const AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS: core::ops::RangeInclusive<i32> =
     (crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID as i32
         * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32)
