@@ -77,13 +77,19 @@ macro_rules! impl_a1_shared {
                 false
             }
 
-            /// Never: the A1 series has no AMS 2 Pro or AMS-HT compatibility, so there is no
-            /// drying chamber to command. bambuddy lists A1 and A1 Mini in
-            /// `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py:223`) for the same reason.
+            /// Never: no known firmware path on the A1 series exposes a remote-dry command.
+            /// bambuddy lists A1 and A1 Mini in `_DRYING_UNSUPPORTED_MODELS`
+            /// (`printer_manager.py:223`).
             ///
-            /// Unconditional rather than `fun2`-first: this is a hardware fact about what can
-            /// be attached, not a firmware capability the printer could gain, so a reported bit
-            /// would not change the answer. The A1 family sends no `fun2` in any case.
+            /// **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
+            /// see `ams_pool_composition()` a few lines below, which
+            /// returns the same `Shared { max_units: 4 }` the X1C/P1/A2L do, plus
+            /// `reference/05_materials_ams.md` and `MODEL_MATRIX.csv`. The gate is about the
+            /// command channel, not the attachable hardware; this puts A1 in the same bucket as
+            /// P1P/P1S rather than a "never possible" one.
+            ///
+            /// Unconditional rather than `fun2`-first only because the A1 family sends no
+            /// `fun2` at all, so there is no reported bit to defer to.
             fn supports_ams_remote_drying(&self, _ctx: &crate::quirks::QuirkContext) -> bool {
                 false
             }

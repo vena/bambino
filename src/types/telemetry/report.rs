@@ -347,7 +347,16 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub remain_time: Option<i32>,
 
-    /// Hex config bitmask string (bit 18 = AMS Filament Backup).
+    /// Hex config bitmask string of user-facing printer settings [REF-MQTT-TELEMETRY].
+    ///
+    /// Bit 18 is AMS Filament Backup (auto-refill), confirmed against both upstreams:
+    /// BambuStudio decodes it as `SetAutoRefillEnabled(get_flag_bits(cfg, 18))`
+    /// (`DeviceManager.cpp`, the `/*cfg*/` block), and `DevFilaSystem::CanShowFilamentBackup()`
+    /// gates the "Filament Backup" UI on that same `IsAutoRefillEnabled()` — the auto-refill
+    /// flag and the feature's user-facing name are the same thing. bambuddy reads the identical
+    /// position in `parse_ams_filament_backup_from_cfg` (`services/bambu_mqtt.py`).
+    ///
+    /// A1 / A1 Mini omit `cfg` entirely, so absent is not "off" — hence `Option`.
     #[serde(default)]
     pub cfg: Option<String>,
 

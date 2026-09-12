@@ -163,7 +163,13 @@ impl MaterialSource {
 /// Structured object detailing unit and slot coordinates within `ams_mapping2` arrays.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AmsMapping2Entry {
-    /// AMS unit index (0-3 for standard, 128-135 for AMS-HT, 254/255 for external/unmapped).
+    /// AMS unit index (0-3 for standard, 16 for the A2L AMS Lite, 128-135 for AMS-HT,
+    /// 254/255 for external/unmapped).
+    ///
+    /// Id 16 is a real physical unit, not a sentinel — omitting it here is the exact footgun
+    /// [`AmsEntryKind`] warns about, since a caller reading this field in isolation could add
+    /// defensive rejection that breaks A2L support (issue #221). Classify with
+    /// [`classify_mapping2_entry`] rather than re-deriving the ranges.
     pub ams_id: u8,
     /// Tray slot index within the unit (0-3 for standard AMS, 0 for single-slot units).
     pub slot_id: u8,

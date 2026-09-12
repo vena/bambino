@@ -207,6 +207,40 @@ On-board cooling fan speeds are represented in telemetry via the following JSON 
 *   `heatbreak_fan_speed`: Toolhead heatbreak/hotend fan speed.
 *   `device.airduct.parts`: On models with a second left-side auxiliary fan (`X2D` and `P2S`), its speed is nested inside this array within the object matching `"id": 160`. The `"state"` parameter of this object holds the speed value directly as an integer percentage (`0` to `100`) and does not require the 0–15 step conversion used by the other fan telemetry keys. Despite the wire port number and this id suggesting a "right" fan, BambuStudio's `DevFan.h` names decoded id 10 `FAN_REMOTE_COOLING_1_IDX` — a second left-side auxiliary fan, distinct from the primary `FAN_REMOTE_COOLING_0_IDX` (port 2, mirrored into `big_fan1_speed`); confirmed against bambuddy's test suite, which titles this fan "P2S/X2D left auxiliary part cooling fan" throughout (issue #60).
 
+#### The Settings Bitmask (`cfg`)
+
+`print.cfg` is a **hex string** carrying user-facing printer settings, distinct from the `fun`/`fun2` capability bitfields (which describe what the hardware *can* do rather than what the user has turned on). Decode with `int(cfg, 16)` before testing a bit; BambuStudio's `get_flag_bits(cfg, n)` does the same.
+
+Bit positions confirmed against BambuStudio's `/*cfg*/` block (`src/slic3r/GUI/DeviceManager.cpp`) and `DevPrintOptions.cpp`:
+
+| Bit | Meaning |
+| --- | --- |
+| 0 | AMS detect-on-insert |
+| 1 | AMS detect-on-powerup |
+| 3 | Camera recording while printing |
+| 4 | Camera resolution (`0` = 720p, `1` = 1080p) |
+| 5 | Camera timelapse |
+| 6 | TUTK disabled |
+| 7 | Chamber light on |
+| 8-10 | Print speed level |
+| 12 | First-layer inspection |
+| 13-14 | AI monitoring sensitivity (`0` never-halt, `1` low, `2` medium, `3` high) |
+| 15 | AI monitoring |
+| 16 | Auto-recovery from step loss |
+| 17 | AMS remaining-filament detection |
+| 18 | **AMS Filament Backup** (auto-refill) |
+| 19 | Save remote print file to storage |
+| 20-21 | Door-open check state |
+| 22 | Prompt sound allowed |
+| 23 | Filament tangle detection |
+| 25 | Upgrade kit installed |
+| 32-33 | Idle heating protection |
+| 42 | Liveview preview supported |
+
+Bit 18's "AMS Filament Backup" name is the feature's user-facing label: BambuStudio stores the bit as `SetAutoRefillEnabled(...)` and `DevFilaSystem::CanShowFilamentBackup()` gates the "Filament Backup" UI on that same `IsAutoRefillEnabled()`. bambuddy reads the identical position in `parse_ams_filament_backup_from_cfg` (`backend/app/services/bambu_mqtt.py`), citing `get_flag_bits(cfg, 18)`.
+
+**A1 and A1 Mini omit `cfg` entirely** (bambuddy records this in the same function), so an absent `cfg` is "unknown", never "every setting off".
+
 #### Developer LAN Mode Bitmask Evaluation
 Developer LAN Mode is evaluated via the `fun` telemetry field bit `0x20000000` (which represents the `MQTT_SIGNATURE_REQUIRED` flag). The boolean evaluation is inverted:
 *   **`True` (1)**: MQTT Signature/Encryption is **Required** (LAN Developer Mode is **OFF / disabled**).
@@ -275,8 +309,36 @@ Triggers the printer to emit a complete `"pushall"` state dump on the report top
 }
 ```
 
-##### P1/A1 Series Rate Limit
-On ESP32-based RTOS hardware lines (P1P, P1S, A1, A1 Mini), the `pushall` command imposes significant processing overhead on the constrained network processor. Issuing this command more frequently than once every 5 minutes can cause observable lag, delayed telemetry broadcasts, and degraded command responsiveness. Clients targeting these platforms should send `pushall` only once at connection establishment and rely on the incremental partial-update stream for ongoing state tracking.
+##### P1/A1 Series Rate Limit (single weak source — unverified against hardware)
+
+**Recommendation (unchanged):** on ESP32-based RTOS hardware lines (P1P, P1S, A1, A1 Mini), do not issue `pushall` more often than once every 5 minutes. Send it once at connection establishment and rely on the incremental partial-update stream for ongoing state tracking. That design is right for delta-based telemetry on its own merits, whatever the status of the 5-minute figure below.
+
+**Source, in full:** OpenBambuAPI, `mqtt.md:143-144` — "As a rule of thumb, refrain from executing this command at intervals less than 5 minutes on the P1P, as it may cause lag due to its hardware limitations." That is the *sole* basis, it is self-hedged ("rule of thumb", "may cause lag"), OpenBambuAPI is a community protocol doc rather than one of the three tracked upstreams, and **no hardware measurement in this repo has verified it**. Treat the number as folklore-grade until a capture says otherwise; do not restate it as an established hardware characteristic.
+
+**Do not cite `TIMEOUT_FOR_KEEPALIVE` as corroboration.** BambuStudio has a 5-minute pushall constant (`src/slic3r/GUI/DeviceManager.hpp:38`), but `DeviceManager::keep_alive()` (`DeviceCore/DevManager.cpp:75-100`) uses it as a **minimum-refresh** timer — neither of its branches ever suppresses a pushall, both send one — which is the opposite direction from a maximum-frequency limit. Same number, opposite meaning; it has already caused two wrong turns in this repo (see issue #254's design discussion). The vendor's sustained cadence never running faster than 5 minutes is *compatible* with the caution, not evidence for it.
+
+**Model coverage is an extrapolation.** OpenBambuAPI says P1P only. Extending to P1S/A1/A1 Mini is a same-processor-class inference: per `MODEL_MATRIX.csv`, the P1P and P1S carry the same ESP32-WROOM-32 and the A1/A1 Mini an ESP32-S3. It is conservative rather than contested — BambuStudio applies its own constants with no model branch at all, and `check_pushing()` (`DevManager.cpp:102-118`) calls `keep_alive()` unconditionally. (The `!obj->is_support_mqtt_alive` gate a few lines below governs `command_pushing("start")`, a different command — not the pushall keepalive.) **Do not extend this to the A2L on family-name grounds:** `MODEL_MATRIX.csv` records it as a single-core Cortex-M7, the same processor as the H2S, not an ESP32.
+
+**Deployment evidence points the other way.** Neither bambuddy nor ha-bambulab throttles `pushall` at all — bambuddy's `_request_push_all` (`backend/app/services/bambu_mqtt.py`) is a bare publish with no time or model check, and it deliberately issues two within seconds at print start when the first frame carries no `total_layer_num`. Both are widely deployed in LAN mode with large P1/A1 user bases, and bambuddy's MQTT service is densely annotated with issue-numbered firmware workarounds — none of them about `pushall` lag. Absence of a workaround in code that would have hit the problem is meaningful negative evidence, though not proof.
+
+##### The Vendor's Two Complementary Constants
+
+BambuStudio governs `pushall` with two constants, adjacent at `src/slic3r/GUI/DeviceManager.hpp:38-39`. They are complementary, not alternatives, and conflating them is the specific mistake to avoid:
+
+*   `TIMEOUT_FOR_KEEPALIVE` (**5 minutes**) — the *sustained cadence*. `keep_alive()` issues a routine pushall once this elapses. A minimum-refresh timer; it never declines.
+*   `REQUEST_PUSH_MIN_TIME` (**3 seconds**) — an *anti-burst floor* on event-driven requests between keepalives. `MachineObject::command_request_push_all(bool request_now = false)` (`DeviceManager.cpp:1330-1355`) returns `-1` without publishing when this has not elapsed. This is the only BambuStudio constant that actually suppresses a pushall.
+
+**Connection establishment bypasses the floor.** `request_now == true` overrides `REQUEST_PUSH_MIN_TIME`, and the vendor uses it exactly where freshness is mandatory:
+
+| Site | `request_now` | Context |
+| --- | --- | --- |
+| `GUI_App.cpp:2166`, `:2209` | `true` | connection / login established |
+| `DeviceWeb/ViewModels/FilamentManager/FilamentManagerVM.cpp:567` | `true` | explicit user action |
+| `DeviceCore/DevManager.cpp:90`, `:96` | default | `keep_alive` periodic |
+| `DeviceManager.cpp:2588` | default | diff-merge recovery |
+| `SelectMachine.cpp:3869`, `SendToPrinter.cpp:1226` | default | dialog selection changed |
+
+So connect is not merely *when* a client should pushall — it is an operation the vendor considers important enough to exempt from its own rate limiting. ha-bambulab (`pybambu/bambu_client.py:536-539`) and bambuddy (`services/bambu_mqtt.py`, its `on_connect` handler) both pushall on connect too; neither models a floor.
 
 ##### Telemetry Update Granularity
 The behavior of the report topic stream differs by hardware family:
