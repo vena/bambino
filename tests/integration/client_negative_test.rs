@@ -1324,7 +1324,8 @@ async fn test_stop_drying_rejects_invalid_ams_id() {
     let mut client =
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1C).await;
 
-    let result = client.stop_drying(16).await;
+    // 16 is the A2L AMS Lite's physical id and valid; 17 addresses nothing.
+    let result = client.stop_drying(17).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
 
     broker_task.await.expect("Broker task panicked");
@@ -1347,6 +1348,66 @@ async fn test_scan_rfid_wire_payload() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
     client.scan_rfid(0, 2).await.expect("scan_rfid failed");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Issue #271: every `ams_id`-taking command accepts the A2L-attached AMS Lite under both its
+/// normalized id 6 and physical id 16, and sends the physical 16 with a local slot.
+#[tokio::test]
+async fn test_ams_commands_address_a2l_ams_lite() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_change_filament");
+        assert_eq!(json["print"]["ams_id"], 16);
+        assert_eq!(json["print"]["slot_id"], 1);
+        assert_eq!(json["print"]["target"], 16);
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_get_rfid");
+        assert_eq!(json["print"]["ams_id"], 16);
+        assert_eq!(json["print"]["slot_id"], 2);
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_filament_drying");
+        assert_eq!(json["print"]["ams_id"], 16);
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "extrusion_cali_sel");
+        assert_eq!(json["print"]["ams_id"], 16);
+        assert_eq!(json["print"]["tray_id"], 25);
+
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["command"], "ams_filament_drying");
+        assert_eq!(json["print"]["ams_id"], 16);
+        assert_eq!(json["print"]["mode"], 1);
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::A2L).await;
+
+    client
+        .change_filament(6, 1, -1, -1, None)
+        .await
+        .expect("change_filament failed");
+    client.scan_rfid(16, 2).await.expect("scan_rfid failed");
+    client.stop_drying(6).await.expect("stop_drying failed");
+    client
+        .select_k_profile(6, 25, 4, "GFA01", "0.4")
+        .await
+        .expect("select_k_profile failed");
+    // No AMS telemetry has arrived, so the unit-model gate passes the unobserved unit through.
+    client
+        .dry(16)
+        .temp(50)
+        .duration_hours(4)
+        .send()
+        .await
+        .expect("drying cycle failed");
 
     broker_task.await.expect("Broker task panicked");
 }

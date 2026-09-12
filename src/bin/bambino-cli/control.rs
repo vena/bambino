@@ -331,7 +331,13 @@ struct DryArgs {
 const DRY_UNIT_RESOLVE_TIMEOUT_SECS: u64 = 5;
 
 /// Reads the attached unit type for `ams_id` out of the cached telemetry snapshot.
+///
+/// Telemetry stores an A2L-attached AMS Lite under its normalized id 6, so a physical 16 is
+/// normalized before the lookup.
 fn cached_dry_unit(client: &Printer, ams_id: i32) -> Option<AmsUnitModel> {
+    let ams_id = u8::try_from(ams_id).map_or(ams_id, |id| {
+        i32::from(bambino::ams::normalize_ams_unit_id(id))
+    });
     client.ams().and_then(|ams| {
         ams.ams
             .iter()

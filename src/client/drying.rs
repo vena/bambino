@@ -374,6 +374,7 @@ where
             filament,
             ..
         } = self;
+        let ams_id = super::ams::wire_ams_id(ams_id);
         client
             .dispatch(|seq| {
                 crate::mqtt::AmsFilamentDryingRequest::new(

@@ -10,13 +10,63 @@ use super::PrinterClient;
 
 use crate::types::telemetry::AmsUnitModel;
 
-/// Returns true if `ams_id` addresses a standard AMS unit (`0..=3`), an AMS-HT unit
-/// (`128..=135`), or an external-spool sentinel (`254`/`255`) — the full documented
-/// `ams_id` address space shared by `change_filament()` and `select_k_profile()`.
+/// Returns true if `ams_id` addresses a physical AMS bus unit.
+///
+/// That is a standard AMS unit (`0..=3`), an AMS-HT unit (`128..=135`), or an A2L-attached AMS
+/// Lite under either spelling — the physical wire id
+/// [`AMS_LITE_ON_A2L_PHYSICAL_ID`](crate::ams::parser::AMS_LITE_ON_A2L_PHYSICAL_ID) or the
+/// [normalized id](crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID) telemetry reports it as.
+/// External-spool sentinels are excluded; see [`is_valid_ams_id`] for the set that includes them.
+#[must_use]
+pub(crate) fn is_valid_ams_bus_unit_id(ams_id: i32) -> bool {
+    (0..=i32::from(crate::ams::parser::AMS_MAX_STANDARD_ID)).contains(&ams_id)
+        || (i32::from(crate::ams::parser::AMS_HT_ID_MIN)
+            ..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
+            .contains(&ams_id)
+        || ams_id == i32::from(crate::ams::parser::AMS_LITE_ON_A2L_PHYSICAL_ID)
+        || ams_id == i32::from(crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID)
+}
+
+/// Returns true if `ams_id` is a bus unit ([`is_valid_ams_bus_unit_id`]) or an external-spool
+/// sentinel (`254`/`255`) — the full documented `ams_id` address space shared by
+/// `change_filament()` and `select_k_profile()`.
 #[must_use]
 pub(crate) fn is_valid_ams_id(ams_id: i32) -> bool {
-    (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id) || ams_id == 254 || ams_id == 255
+    is_valid_ams_bus_unit_id(ams_id)
+        || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
+        || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID)
 }
+
+/// Translates a caller-supplied `ams_id` into the id the wire carries.
+///
+/// Only the A2L-attached AMS Lite differs: telemetry normalizes its physical id 16 to 6, but
+/// every per-unit command addresses it as 16 with a local `0..=3` slot — confirmed from the
+/// firmware's own `ams_mapping2` (`{ams_id: 16, slot_id: 0-3}`, bambuddy `a2l_lite_wire_ids`,
+/// `bambu_mqtt.py:142-163`), and BambuStudio sends `ams_get_rfid {ams_id: 16}` for the unit.
+/// Callers may pass either spelling; every other id passes through untouched.
+#[must_use]
+pub(crate) fn wire_ams_id(ams_id: i32) -> i32 {
+    if ams_id == i32::from(crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID) {
+        i32::from(crate::ams::parser::AMS_LITE_ON_A2L_PHYSICAL_ID)
+    } else {
+        ams_id
+    }
+}
+
+/// Global tray ids of an A2L-attached AMS Lite accepted by tray-id addressing commands:
+/// `AMS_LITE_ON_A2L_NORMALIZED_ID * AMS_SLOTS_PER_UNIT + slot`, i.e. `24..=27`.
+///
+/// This is BambuStudio's own tray id for the unit — `DevAms::GetTrayId` returns `24 + slot_id`
+/// for `AMS_LITE_MIXED` (`DevFilaSystem.cpp:262-263`), and `extrusion_cali_sel`'s `tray_id` is
+/// filled from it (`AMSMaterialsSetting.cpp:677`). bambuddy instead extrapolates `64..=67`
+/// (`16 * 4 + slot`) and marks that as unconfirmed; BambuStudio wins the disagreement.
+pub(crate) const AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS: core::ops::RangeInclusive<i32> =
+    (crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID as i32
+        * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32)
+        ..=(crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID as i32
+            * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
+            + crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
+            - 1);
 
 /// Highest standard-AMS global tray ID accepted by tray-id addressing commands:
 /// `AMS_MAX_STANDARD_ID + 1` units × `AMS_SLOTS_PER_UNIT` slots, zero-indexed (i.e. `15`).
@@ -66,8 +116,9 @@ where
 {
     /// Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
     ///
-    /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or `254`/`255`
-    ///   for external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
+    /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), an A2L-attached
+    ///   AMS Lite (`6` as telemetry reports it, or its physical `16`), or `254`/`255` for
+    ///   external spool (IDEX Ext-L/Ext-R or single-nozzle, respectively).
     /// * `slot_id`: Slot within the AMS (`0..=3`), `254` for a single-nozzle external-spool
     ///   load, or `255` to unload/retract (see `ams_change_filament` examples in
     ///   `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
@@ -76,7 +127,7 @@ where
     /// The wire's `target` field is derived internally rather than caller-supplied —
     /// confirmed against BambuStudio's `command_ams_change_filament`
     /// (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
-    /// any AMS-HT/external-spool unit (`ams_id >= 16`), or the flat global tray ID
+    /// any AMS-HT/external-spool unit or the A2L AMS Lite (wire `ams_id >= 16`), or the flat global tray ID
     /// (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
     /// match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
     /// class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
@@ -113,6 +164,7 @@ where
             ));
         }
 
+        let ams_id = wire_ams_id(ams_id);
         let target = if slot_id == 255 {
             255
         } else if ams_id >= 16 {
@@ -159,9 +211,12 @@ where
     /// newer than this crate knows — and all three read as "don't assume a capability".
     ///
     /// Matches on the unit's own `id`, which is already normalized on deserialize (the A2L's AMS
-    /// Lite reports physical `16` and is stored as `6`), so this compares against the same
-    /// address space `is_valid_ams_id` accepts.
+    /// Lite reports physical `16` and is stored as `6`), so a caller-supplied physical `16` is
+    /// normalized the same way before comparing.
     pub(crate) fn cached_ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
+        let ams_id = u8::try_from(ams_id).map_or(ams_id, |id| {
+            i32::from(crate::ams::parser::normalize_ams_unit_id(id))
+        });
         self.ams()?
             .ams
             .iter()
@@ -219,6 +274,7 @@ where
                 "invalid AMS addressing parameters for stop_drying".into(),
             ));
         }
+        let ams_id = wire_ams_id(ams_id);
         self.dispatch(|seq| {
             crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, "", 0, 0, 0, false, 0, false, seq)
         })
@@ -227,19 +283,21 @@ where
 
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
     ///
-    /// * `ams_id`: AMS unit index (`0..=3`) or AMS-HT unit bus ID (`128..=135`). Only
+    /// * `ams_id`: AMS unit index (`0..=3`), AMS-HT unit bus ID (`128..=135`), or an A2L-attached
+    ///   AMS Lite (`6` or its physical `16`; sent as `16`). Only
     ///   documented against a physical bus unit (`reference/03_mqtt_telemetry.md`
     ///   `ams_get_rfid` example) — external spools have no RFID reader node, so no
     ///   external-spool sentinel value applies here.
     /// * `slot_id`: Slot within the AMS (`0..=3`).
     pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error> {
-        let ams_valid = (0..=3).contains(&ams_id) || (128..=135).contains(&ams_id);
+        let ams_valid = is_valid_ams_bus_unit_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id);
         if !ams_valid || !slot_valid {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for scan_rfid".into(),
             ));
         }
+        let ams_id = wire_ams_id(ams_id);
 
         self.dispatch(|seq| crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq))
             .await
@@ -279,6 +337,7 @@ where
     ) -> Result<u16, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
         let tray_valid = (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
+            || AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS.contains(&tray_id)
             || (128..=135).contains(&tray_id)
             || tray_id == 254
             || tray_id == 255;
@@ -288,6 +347,7 @@ where
             ));
         }
 
+        let ams_id = wire_ams_id(ams_id);
         self.dispatch(|seq| {
             crate::diagnostics::ExtrusionCaliSelRequest::new(
                 ams_id,
