@@ -91,6 +91,10 @@ pub(crate) struct TelemetryCache {
     // The OTA firmware version, from a `get_version` round trip rather than from telemetry —
     // several capabilities are gated on it, and a caller should not have to re-query per check.
     pub(crate) last_firmware: Option<String>,
+    // Whether the printer speaks the new MQTT protocol (`PrinterTelemetry::reports_new_protocol`).
+    // `Some(true)` is sticky: a partial frame lacking the probe fields must not downgrade it.
+    // `Some(false)` is set only from a `push_status` frame while nothing better is known.
+    pub(crate) last_new_protocol: Option<bool>,
 }
 
 impl<
@@ -226,6 +230,13 @@ where
         }
         if let Some(hms) = &print.hms {
             self.cache.last_hms = Some(hms.clone());
+        }
+        if print.reports_new_protocol() {
+            self.cache.last_new_protocol = Some(true);
+        } else if self.cache.last_new_protocol.is_none()
+            && print.command.as_deref() == Some("push_status")
+        {
+            self.cache.last_new_protocol = Some(false);
         }
     }
 

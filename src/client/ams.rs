@@ -1,4 +1,6 @@
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::ToString;
 
 use crate::diagnostics::ExtrusionCaliGetResponse;
@@ -67,6 +69,9 @@ pub(crate) const AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS: core::ops::RangeInclusive<i32>
             * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
             + crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
             - 1);
+
+/// `ams.tray_now` value meaning no filament is loaded to the toolhead.
+const AMS_TRAY_NOW_UNLOADED: &str = "255";
 
 /// Highest standard-AMS global tray ID accepted by tray-id addressing commands:
 /// `AMS_MAX_STANDARD_ID + 1` units × `AMS_SLOTS_PER_UNIT` slots, zero-indexed (i.e. `15`).
@@ -289,6 +294,20 @@ where
     ///   `ams_get_rfid` example) — external spools have no RFID reader node, so no
     ///   external-spool sentinel value applies here.
     /// * `slot_id`: Slot within the AMS (`0..=3`).
+    ///
+    /// **Two commands, chosen by protocol generation** — BambuStudio's selector
+    /// (`StatusPanel.cpp:5376-5399`). A printer whose telemetry shows the new MQTT protocol
+    /// ([`PrinterTelemetry::reports_new_protocol`](crate::types::PrinterTelemetry::reports_new_protocol))
+    /// gets `ams_get_rfid`; one whose `push_status` frames don't gets the G-code
+    /// `M620 R<global tray>` (`command_ams_refresh_rfid`, `DeviceManager.cpp:1738-1743`), since
+    /// an old-protocol printer acks `ams_get_rfid` and does nothing. Before any telemetry has
+    /// arrived the protocol is unknown and `ams_get_rfid` is sent — call
+    /// [`poll_telemetry()`](Self::poll_telemetry) first on older firmware.
+    ///
+    /// **Refused while filament is loaded to the toolhead**, because the scan feeds filament to
+    /// the reader: returns [`Error::InvalidState`] when the cached `ams.tray_now` is anything but
+    /// `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
+    /// same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
     pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error> {
         let ams_valid = is_valid_ams_bus_unit_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id);
@@ -297,8 +316,36 @@ where
                 "invalid AMS addressing parameters for scan_rfid".into(),
             ));
         }
-        let ams_id = wire_ams_id(ams_id);
+        if self
+            .ams()
+            .and_then(|ams| ams.tray_now.as_deref())
+            .is_some_and(|tray_now| tray_now != AMS_TRAY_NOW_UNLOADED)
+        {
+            return Err(Error::InvalidState(
+                "filament is loaded to the toolhead — unload it before scanning RFID".into(),
+            ));
+        }
 
+        if self.cache.last_new_protocol == Some(false) {
+            // Both ids are range-checked above, so the u8 conversions cannot fail.
+            let global_tray = u8::try_from(ams_id)
+                .ok()
+                .zip(u8::try_from(slot_id).ok())
+                .and_then(|(ams, slot)| {
+                    crate::ams::resolve_global_tray_id(crate::ams::normalize_ams_unit_id(ams), slot)
+                })
+                .ok_or_else(|| {
+                    Error::ProtocolViolation(
+                        "AMS address has no global tray index for M620 R".into(),
+                    )
+                })?;
+            let gcode = format!("M620 R{global_tray}");
+            return self
+                .dispatch(|seq| crate::mqtt::GCodeRequest::new(&gcode, seq))
+                .await;
+        }
+
+        let ams_id = wire_ams_id(ams_id);
         self.dispatch(|seq| crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq))
             .await
     }

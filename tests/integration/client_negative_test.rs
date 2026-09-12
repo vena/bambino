@@ -1413,6 +1413,87 @@ async fn test_ams_commands_address_a2l_ams_lite() {
     broker_task.await.expect("Broker task panicked");
 }
 
+/// Issue #269: a printer whose `push_status` frames lack the new-protocol probe gets
+/// `M620 R<global tray>`; one that shows the probe gets `ams_get_rfid`.
+#[tokio::test]
+async fn test_scan_rfid_selects_command_by_protocol_generation() {
+    for (frame, new_protocol) in [
+        (
+            br#"{"print":{"command":"push_status","gcode_state":"IDLE"}}"#.as_slice(),
+            false,
+        ),
+        (
+            br#"{"print":{"command":"push_status","cfg":"0","fun":"0","aux":"0","stat":"0"}}"#
+                .as_slice(),
+            true,
+        ),
+        (
+            br#"{"print":{"command":"push_status","flag3":512}}"#.as_slice(),
+            true,
+        ),
+    ] {
+        let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+        let topic = format!("device/{}/report", SERIAL);
+        let frame = frame.to_vec();
+
+        let broker_task = tokio::spawn(async move {
+            handle_mqtt_handshake(&mut server_stream).await;
+            send_publish_payload(&mut server_stream, &topic, 4601, &frame).await;
+            read_puback(&mut server_stream).await;
+
+            let json = read_publish_payload(&mut server_stream).await;
+            if new_protocol {
+                assert_eq!(json["print"]["command"], "ams_get_rfid");
+                assert_eq!(json["print"]["ams_id"], 1);
+                assert_eq!(json["print"]["slot_id"], 2);
+            } else {
+                assert_eq!(json["print"]["command"], "gcode_line");
+                assert_eq!(json["print"]["param"], "M620 R6\n");
+            }
+        });
+
+        let mut client =
+            connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+        client
+            .poll_telemetry()
+            .await
+            .expect("poll_telemetry failed");
+        client.scan_rfid(1, 2).await.expect("scan_rfid failed");
+
+        broker_task.await.expect("Broker task panicked");
+    }
+}
+
+/// Issue #269: the scan feeds filament to the reader, so it is refused while `tray_now` shows
+/// filament loaded to the toolhead.
+#[tokio::test]
+async fn test_scan_rfid_refuses_with_filament_loaded() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4602,
+            br#"{"print":{"command":"push_status","ams":{"tray_now":"3","ams":[]}}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+    let result = client.scan_rfid(0, 2).await;
+    assert!(matches!(result, Err(Error::InvalidState(_))));
+
+    broker_task.await.expect("Broker task panicked");
+}
+
 #[tokio::test]
 async fn test_scan_rfid_rejects_invalid_ams_id() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);

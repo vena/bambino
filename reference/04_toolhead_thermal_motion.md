@@ -179,6 +179,8 @@ Instructs the physical AMS slot corresponding to the global tray index to execut
 M620 R{global_tray_index}
 ```
 
+This is the **old-protocol** form. BambuStudio sends it only when the printer shows neither new-protocol signal — `cfg`, `fun`, `aux` and `stat` all present in `print` (`check_enable_np`, `DeviceManager.cpp:4338-4346`) or `flag3` bit 9 set (`is_enable_ams_np`, `DeviceManager.cpp:3111`) — and sends the MQTT `ams_get_rfid {ams_id, slot_id}` otherwise (`StatusPanel.cpp:5376-5399`). An old-protocol printer acks `ams_get_rfid` and does nothing. No firmware release note marks the switch, so version tables (ha-bambulab's `Features.AMS_READ_RFID_COMMAND`) are not a valid selector. Both upstreams refuse the scan while filament is loaded to the toolhead (bambuddy: `tray_now != 255`).
+
 #### LED, Airduct, and Buzzer Systems
 The high-level JSON command envelopes for controlling enclosure lighting, airduct directional dampers, and buzzer alarms (`ledctrl`, `set_airduct`, `print_option`, and `buzzer_ctrl`) are transmitted directly via the MQTTS API schemas documented in `[REF-MQTT-LIFECYCLE]`.
 

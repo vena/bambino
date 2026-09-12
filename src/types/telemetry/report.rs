@@ -360,6 +360,22 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub cfg: Option<String>,
 
+    /// Auxiliary state hex string sent only by printers on the new MQTT protocol.
+    ///
+    /// Its *presence* is one quarter of BambuStudio's new-protocol probe, `check_enable_np`
+    /// (`DeviceManager.cpp:4338-4346`) — see [`Self::reports_new_protocol`]. BambuStudio reads it
+    /// as a string (`DeviceManager.cpp:4492`).
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
+    pub aux: Option<String>,
+
+    /// Third capability bitfield.
+    ///
+    /// Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS new-protocol flag
+    /// (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
+    /// [`Self::reports_new_protocol`]. Masked into `u32` like [`home_flag`](Self::home_flag).
+    #[serde(default, deserialize_with = "deserialize_signed_as_u32")]
+    pub flag3: Option<u32>,
+
     /// Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
     /// `FINISH`.
     ///
@@ -459,6 +475,8 @@ pub(crate) const NET_CONF_WIRED_BITMASK: u32 = 0x1;
 pub(crate) const POWER_220V_BITMASK: u32 = 0x0000_0008;
 pub(crate) const SDCARD_STATE_SHIFT: u32 = 8;
 pub(crate) const SDCARD_STATE_MASK: u32 = 0x3;
+/// `flag3` bit 9, BambuStudio's `is_enable_ams_np`.
+pub(crate) const FLAG3_AMS_NEW_PROTOCOL_BITMASK: u32 = 1 << 9;
 
 /// SD-card presence/health state, decoded from `home_flag` bits 8–9.
 ///
@@ -492,6 +510,23 @@ impl SdcardState {
 }
 
 impl PrinterTelemetry {
+    /// Returns true if this frame shows the printer speaks the new MQTT protocol.
+    ///
+    /// Mirrors BambuStudio's selector for protocol-dependent commands (`StatusPanel.cpp:5376`,
+    /// `obj->is_enable_np || obj->is_enable_ams_np`): either `cfg`, `fun`, `aux` and `stat` are
+    /// all present (`check_enable_np`, `DeviceManager.cpp:4338-4346`), or `flag3` bit 9 is set
+    /// (`DeviceManager.cpp:3111`). `false` means this frame didn't show it, which on a partial
+    /// frame is not proof of the old protocol.
+    #[must_use]
+    pub fn reports_new_protocol(&self) -> bool {
+        let probe =
+            self.cfg.is_some() && self.fun.is_some() && self.aux.is_some() && self.stat.is_some();
+        probe
+            || self
+                .flag3
+                .is_some_and(|f| f & FLAG3_AMS_NEW_PROTOCOL_BITMASK != 0)
+    }
+
     /// Returns the stage currently executing, decoded, or `None` when it cannot be trusted.
     ///
     /// Applies the [REF-MQTT-IDLEBUG] gate: A1/P1 firmware reports `stg_cur = 0` ("printing")
