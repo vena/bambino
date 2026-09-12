@@ -411,11 +411,22 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
                 } else {
                     current_year
                 };
-                if day <= days_in_month(month, alternate_year) {
+                // Calendar validity alone is not enough. Retrying forward — from
+                // `current_year - 1` back to `current_year` — can only be sound if the entry
+                // still lands at or before the reference clock, which is the exact invariant
+                // the rollover comparison above enforces in the first place. Without this, a
+                // `Feb 29 10:00` line read on 2024-01-15 rolls back to the non-leap 2023,
+                // fails the day check, and is then "repaired" to 2024-02-29 — six weeks in
+                // the future. Retrying backward to `current_year - 1` moves the entry further
+                // into the past and never violates the invariant, so it needs no extra guard.
+                let alternate_is_future = alternate_year == current_year
+                    && (month, day, hour, minute)
+                        > (current_month, current_day, current_hour, current_minute);
+                if day <= days_in_month(month, alternate_year) && !alternate_is_future {
                     year = alternate_year;
                 } else {
                     log::warn!(
-                        "Dropping LIST entry with calendar-invalid date under either rollover-candidate year"
+                        "Dropping LIST entry with no sound rollover-candidate year (calendar-invalid, or future-dated relative to the reference clock)"
                     );
                     continue;
                 }
@@ -568,6 +579,50 @@ mod tests {
         assert_eq!(f.name, "weird_spacing   name.3mf");
         assert_eq!(f.size, 12);
         assert_eq!(f.year, 2030);
+    }
+
+    #[test]
+    fn test_feb_29_rollover_retry_never_reconstructs_a_future_date() {
+        // 2024 is a leap year, 2023 is not. `Feb 29 10:00` read on 2024-01-15 rolls back to
+        // 2023, fails the day check, and the retry's only other candidate is 2024 — which
+        // would place the entry six weeks in the future, the exact condition the rollover
+        // comparison exists to prevent. There is no sound year, so the entry is dropped.
+        let files = parse_unix_listing(
+            "-rwxrwxrwx   1 root     root           12 Feb 29 10:00 leapfile.3mf",
+            CurrentDateTime {
+                year: 2024,
+                month: 1,
+                day: 15,
+                hour: 0,
+                minute: 0,
+            },
+        );
+        assert!(
+            files.is_empty(),
+            "the retry must not repair a Feb 29 entry into a future-dated one, got {files:?}"
+        );
+    }
+
+    #[test]
+    fn test_feb_29_rollover_retry_still_recovers_a_past_dated_entry() {
+        // The backward retry, which is what closed #165 added and which this guard must not
+        // break: read on 2025-03-10, `Feb 29 10:00` is not after the reference clock, so the
+        // initial pick is 2025 — not a leap year, so the day check fails. The alternate
+        // candidate 2024 is both a leap year and further into the past, so it is sound and
+        // the entry is recovered rather than dropped.
+        let files = parse_unix_listing(
+            "-rwxrwxrwx   1 root     root           12 Feb 29 10:00 leapfile.3mf",
+            CurrentDateTime {
+                year: 2025,
+                month: 3,
+                day: 10,
+                hour: 0,
+                minute: 0,
+            },
+        );
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].year, 2024);
+        assert!(files[0].year_is_inferred);
     }
 
     #[test]

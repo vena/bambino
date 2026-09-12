@@ -576,6 +576,47 @@ pub async fn run_mock_server_dele_connection_drop(
     // Drop the stream instead of responding.
 }
 
+/// Mock server for the `PASV`-step coverage gap (issue #261): reads `PASV` and then drops the
+/// control stream without replying. A transport failure *during* the PASV exchange must poison
+/// the client, the way every other control-channel transport failure does — every existing
+/// poisoning test exercises a command issued *after* PASV already succeeded, so
+/// `negotiate_passive_port`'s own calls to the poisoning helpers were never covered.
+pub async fn run_mock_server_pasv_connection_drop(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "PASV\r\n");
+    // Drop the stream instead of responding.
+}
+
+/// Mock server for the other half of issue #261: `PASV` is answered, but with a rejection code
+/// rather than `227`. The control channel is still perfectly in sync, so this must surface as a
+/// `ProtocolViolation` *without* poisoning the client — the asymmetry with the drop case above
+/// is the thing worth pinning.
+pub async fn run_mock_server_pasv_rejected(
+    mut server_control: tokio::io::DuplexStream,
+    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "PASV\r\n");
+    respond(&mut server_control, b"425 Can't open data connection.\r\n").await;
+
+    // The client is not poisoned, so it may legitimately issue a follow-up command; answer it
+    // so the assertion under test is the client's own state, not a second transport failure.
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "AVBL\r\n");
+    respond(&mut server_control, b"213 1024000\r\n").await;
+}
+
 /// Mock server for the regression test: a transport failure between `rename_file`'s two-step
 /// `RNFR`/`RNTO` sequence must poison the client the same way a single-reply command's failure
 /// already does. Acks `RNFR` normally, then drops the connection instead of responding to

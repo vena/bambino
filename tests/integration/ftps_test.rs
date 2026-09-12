@@ -834,6 +834,92 @@ async fn test_ftps_list_initial_negotiation_failure_poisons_client() {
     server_handle.await.expect("Mock server panicked");
 }
 
+/// Issue #261: a transport failure during the `PASV` exchange itself must poison the client.
+///
+/// Every other poisoning test issues its failing command *after* `PASV` has already succeeded,
+/// so `negotiate_passive_port`'s own `write_command_poisoning`/`read_response_poisoning` calls
+/// were only ever exercised on the happy path.
+#[tokio::test]
+async fn test_ftps_pasv_transport_failure_poisons_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_pasv_connection_drop(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(Error::Network(_))),
+        "Expected the connection dropped during PASV to surface as Network, got {:?}",
+        result
+    );
+
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(next_result, Err(Error::ProtocolViolation(_))),
+        "Expected the poisoned client to reject the next command with ProtocolViolation, got {:?}",
+        next_result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
+/// Issue #261, the complement: a non-`227` reply to `PASV` is a clean protocol rejection, not a
+/// transport failure — the control channel is still in sync, so the client must surface the
+/// error *without* poisoning itself and must keep serving subsequent commands.
+#[tokio::test]
+async fn test_ftps_pasv_rejection_reply_does_not_poison_client() {
+    let (client_control, server_control, data_container, factory) = setup();
+
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server_pasv_rejected(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+
+    let result = client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(Error::ProtocolViolation(_))),
+        "Expected a non-227 PASV reply to surface as ProtocolViolation, got {:?}",
+        result
+    );
+
+    let next_result = client.get_available_space().await;
+    assert!(
+        matches!(next_result, Ok(_)),
+        "A rejected PASV must leave the control channel usable, got {:?}",
+        next_result
+    );
+
+    server_handle.await.expect("Mock server panicked");
+}
+
 /// Regression: `download_file`'s confirmation-read handling must accept `426` (the
 /// documented P2S/X2D TLS 1.3 close race) and fall through to the SIZE recheck, symmetric with
 /// `upload_file`'s existing 426 handling — previously RETR treated 426 as an unconditional hard
