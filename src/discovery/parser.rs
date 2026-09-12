@@ -170,8 +170,19 @@ fn extract_headers<'a>(headers: &[httparse::Header<'a>]) -> Option<RawSsdpHeader
 ///
 /// Per [REF-NET-DISC] Protocol Violation #7, some firmware tracks embed the model
 /// directly in the target URN (e.g. `urn:bambulab-com:device:P1S:1`).
+///
+/// The prefix match is case-**insensitive**. `is_bambu_device` keys on the same URN and is
+/// already case-insensitive, so an exact-case match here meant a differently-cased URN was
+/// still accepted as a Bambu device while this fallback silently extracted nothing and the
+/// printer came back as `Unknown` with an empty `raw_model_str`. [REF-NET-DISC] Violation #5
+/// records this codebase's own experience with casing varying across firmware tracks.
+/// The returned slice keeps the URN's original casing — only the comparison is normalized.
 fn extract_model_from_nt_st(value: &str) -> Option<&str> {
-    let stripped = value.strip_prefix("urn:bambulab-com:device:")?;
+    const URN_PREFIX: &str = "urn:bambulab-com:device:";
+    let (prefix, stripped) = value.split_at_checked(URN_PREFIX.len())?;
+    if !prefix.eq_ignore_ascii_case(URN_PREFIX) {
+        return None;
+    }
     let model = stripped.split(':').next()?;
     if eq_case_insensitive(model, "3dprinter") {
         return None;
@@ -533,6 +544,29 @@ mod tests {
             None
         );
         assert_eq!(extract_model_from_nt_st("ssdp:alive"), None);
+    }
+
+    #[test]
+    fn test_extract_model_from_nt_st_is_case_insensitive_like_is_bambu_device() {
+        // `is_bambu_device` lowercases before matching the same URN, so a differently-cased
+        // URN was accepted as a Bambu device while this fallback extracted nothing — the
+        // printer came back `Unknown` with an empty `raw_model_str`.
+        assert_eq!(
+            extract_model_from_nt_st("URN:BambuLab-COM:device:P1S:1"),
+            Some("P1S")
+        );
+        // Only the prefix comparison is normalized; the model keeps the wire's own casing.
+        assert_eq!(
+            extract_model_from_nt_st("URN:BAMBULAB-COM:DEVICE:p1s:1"),
+            Some("p1s")
+        );
+        // The generic-model rejection was already case-insensitive and must stay that way.
+        assert_eq!(
+            extract_model_from_nt_st("URN:BambuLab-COM:device:3DPrinter:1"),
+            None
+        );
+        // A URN shorter than the prefix must not panic on the split.
+        assert_eq!(extract_model_from_nt_st("urn:bambu"), None);
     }
 
     #[test]
