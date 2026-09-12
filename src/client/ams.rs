@@ -363,20 +363,32 @@ where
     /// whichever single diameter the firmware picks — on a machine that can hold more than one,
     /// that is a partial table which looks complete to the caller. Call once per fitted diameter
     /// and merge the results.
+    ///
+    /// `filament_id` scopes the query the same way, to a single filament preset id. `None` omits
+    /// the field entirely; `Some("")` is the "every filament" form `reference/07_diagnostics_hms.md`
+    /// documents, and is distinct from omitting it. Exposed here because the alternative was to
+    /// bypass this wrapper and hand-manage the priming quirk through
+    /// [`set_k_profile_primed()`](Self::set_k_profile_primed), forfeiting the automatic priming
+    /// this method exists to guarantee.
     pub async fn get_k_profiles(
         &mut self,
+        filament_id: Option<&str>,
         nozzle_diameter: Option<&str>,
     ) -> Result<ExtrusionCaliGetResponse, Error> {
         if !self.k_profile_primed {
             let prime_seq = self.next_sequence_id();
-            let prime_req =
-                crate::diagnostics::ExtrusionCaliGetRequest::new(None, nozzle_diameter, prime_seq);
+            let prime_req = crate::diagnostics::ExtrusionCaliGetRequest::new(
+                filament_id,
+                nozzle_diameter,
+                prime_seq,
+            );
             self.publish_request(&prime_req).await?;
             self.k_profile_primed = true;
         }
 
         let seq = self.next_sequence_id();
-        let req = crate::diagnostics::ExtrusionCaliGetRequest::new(None, nozzle_diameter, seq);
+        let req =
+            crate::diagnostics::ExtrusionCaliGetRequest::new(filament_id, nozzle_diameter, seq);
         self.publish_request(&req).await?;
 
         let expected_seq = seq.to_string();

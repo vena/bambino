@@ -639,7 +639,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
                 .saturating_sub(Self::message_size(&buffered));
             return Ok(buffered);
         }
-        self.send_keepalive_if_due(timer).await?;
+        // The keepalive lives in `poll_wire` itself, so every read-loop consumer gets it —
+        // `PrinterClient::poll_until()` used to miss out because "remember to ping before you
+        // read" was enforced only by each call site repeating it.
         self.poll_wire(timer).await
     }
 
@@ -678,6 +680,12 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// Used by `PrinterClient::poll_until()` which manages its own buffer stashing
     /// and must not re-read messages it just pushed.
     ///
+    /// Issues a keepalive first when one is due ([`send_keepalive_if_due`](Self::send_keepalive_if_due)),
+    /// so a long wait on a printer sending no QoS1 traffic — whose PUBACKs would otherwise keep
+    /// the broker deadline alive incidentally — is not dropped mid-read. This lives here rather
+    /// than at each call site because the previous arrangement had exactly one consumer
+    /// (`poll_telemetry_with_timer`) remembering to do it and another (`poll_until`) not.
+    ///
     /// Bounds each individual low-level read step to
     /// [`MQTT_READ_TIMEOUT_SECS`] when `timer` has a real wall-clock (see
     /// [`TimerProvider::has_real_clock`]) — closes the "connection stalls with zero
@@ -691,6 +699,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
         timer: &T,
     ) -> Result<MqttMessage, Error> {
         loop {
+            // Per iteration, not once per call: a burst of non-message packets can keep this
+            // loop spinning past the broker's deadline without ever returning to the caller.
+            self.send_keepalive_if_due(timer).await?;
             let (header, payload_buf) = read_exact_packet(
                 &mut self.stream,
                 &mut self.read_state,
