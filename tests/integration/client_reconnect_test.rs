@@ -117,11 +117,18 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
-        let json = read_publish_payload(&mut server_stream).await;
+        // `ensure_mqtt()` publishes a connect-time pushall before returning, so it — not the
+        // caller's command — mints the first sequence ID of the session.
+        let pushall = read_publish_payload(&mut server_stream).await;
         assert_eq!(
-            json["print"]["sequence_id"], "10001",
+            pushall["pushing"]["sequence_id"], "10001",
             "DummyTimer has no real clock — reseed must be skipped, not collapse every \
              default-configured client onto the same wall-clock seed"
+        );
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(
+            json["print"]["sequence_id"], "10002",
+            "the caller's first command must continue the untouched default sequence"
         );
     });
 
@@ -155,6 +162,13 @@ async fn test_first_lazy_command_carries_a_reseeded_sequence_id_with_a_real_cloc
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
+        // The connect-time pushall is itself minted after the reseed, so it must already be
+        // off the fixed default — as must the caller's command behind it.
+        let pushall = read_publish_payload(&mut server_stream).await;
+        assert_ne!(
+            pushall["pushing"]["sequence_id"], "10001",
+            "with a real clock the reseed must complete before any sequence ID is minted"
+        );
         let json = read_publish_payload(&mut server_stream).await;
         assert_ne!(
             json["print"]["sequence_id"], "10001",

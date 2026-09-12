@@ -126,6 +126,10 @@ pub struct PrinterClient<
     pub(crate) identity: PrinterIdentity,
     pub(crate) sequence_counter: u64,
     pub(crate) k_profile_primed: bool,
+    /// Monotonic counter bumped on every MQTT connection boundary (attach, lazy dial,
+    /// disconnect). Telemetry that is only trustworthy on the connection it was observed
+    /// under is stamped with this value — see `TelemetryCache::last_home_flag_generation`.
+    pub(crate) connection_generation: u32,
     pub(crate) cache: telemetry::TelemetryCache,
     pub(crate) command_timeout_secs: u64,
     pub(crate) connect_timeout_secs: u64,
@@ -187,6 +191,7 @@ where
             identity,
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
+            connection_generation: 0,
             cache: telemetry::TelemetryCache::default(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
@@ -246,6 +251,7 @@ where
             },
             sequence_counter: INITIAL_SEQUENCE_ID,
             k_profile_primed: false,
+            connection_generation: 0,
             cache: telemetry::TelemetryCache::default(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,

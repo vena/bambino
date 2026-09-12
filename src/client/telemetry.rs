@@ -46,6 +46,13 @@ fn is_command_echo(report: &TelemetryReport) -> bool {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TelemetryCache {
     pub(crate) last_home_flag: Option<u32>,
+    /// `PrinterClient::connection_generation` in effect when `last_home_flag` was last
+    /// written. The homing accessors refuse a flag stamped with a stale generation; the
+    /// mains-region read (`is_220v_power`) deliberately does not, because mains wiring is a
+    /// fixed property of the physical printer and cannot change across a reconnect to the
+    /// same unit — letting it go cold would fall back to the conservative 110 °C bed clamp
+    /// for no gain. The two share a field but not a fate; do not collapse them.
+    pub(crate) last_home_flag_generation: Option<u32>,
     pub(crate) last_gcode_state: Option<String>,
     pub(crate) last_door_open: Option<bool>,
     pub(crate) last_print_error: Option<u32>,
@@ -206,6 +213,7 @@ where
     fn update_state_cache(&mut self, print: &PrinterTelemetry) {
         if let Some(flag) = print.home_flag {
             self.cache.last_home_flag = Some(flag);
+            self.cache.last_home_flag_generation = Some(self.connection_generation);
         }
         if let Some(state) = &print.gcode_state {
             self.cache.last_gcode_state = Some(state.clone());

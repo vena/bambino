@@ -2,13 +2,20 @@
 //!
 //! Split from `client_test.rs` Phase 18 section (see issue #35).
 
-use bambino::client::{PrintProgress, PrintSpeed, PrintStatus};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
+use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use crate::common::client::{SERIAL, connect_test_client};
-use crate::common::mock_mqtt::{handle_mqtt_handshake, read_puback, send_publish_payload};
+use crate::common::client::{SERIAL, connect_test_client, connect_test_mqtt};
+use crate::common::io::{DummyTlsConnector, MockDataStreamFactory};
+use crate::common::mock_mqtt::{
+    handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
+};
 
 #[tokio::test]
 async fn test_print_status_cache_from_telemetry() {
@@ -1071,6 +1078,194 @@ async fn test_wifi_signal_cache_from_telemetry() {
         .expect("poll_telemetry should parse second wifi_signal report");
     assert_eq!(client.wifi_signal(), Some("-90dBm"));
     assert!(client.is_ethernet_active_via_wifi_signal());
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// Issue #262: a command-echo response shares the `print` envelope and several field names
+/// with genuine telemetry, so `poll_telemetry()`'s `is_command_echo` gate has to route it to
+/// `Unknown` *and* leave the cache alone. Nothing asserted the second half.
+#[tokio::test]
+async fn test_command_echo_is_unknown_and_leaves_the_cache_untouched() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = format!("device/{}/report", SERIAL);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4500,
+            br#"{"print":{"command":"push_status","home_flag":7,"gcode_state":"RUNNING"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        // An `extrusion_cali_get` reply carrying fields that overlap genuine telemetry. If the
+        // gate let this through, it would clobber both cached values with the echo's contents.
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4501,
+            br#"{"print":{"command":"extrusion_cali_get","sequence_id":"10001","home_flag":0,"gcode_state":"FAILED"}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+
+    let first = client.poll_telemetry().await.expect("first poll failed");
+    assert!(matches!(first, TelemetryEvent::Report(..)));
+    assert_eq!(client.is_all_axes_homed(), Some(true));
+    assert_eq!(client.print_status(), Some(PrintStatus::Running));
+
+    let echo = client.poll_telemetry().await.expect("echo poll failed");
+    assert!(
+        matches!(echo, TelemetryEvent::Unknown(_)),
+        "a print.command outside KNOWN_TELEMETRY_COMMANDS must route to Unknown"
+    );
+    assert_eq!(
+        client.is_all_axes_homed(),
+        Some(true),
+        "a command echo must not clobber the cached home_flag"
+    );
+    assert_eq!(
+        client.print_status(),
+        Some(PrintStatus::Running),
+        "a command echo must not clobber the cached gcode_state"
+    );
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+// Issue #254: connection-scoped telemetry must not survive an MQTT reconnect.
+
+/// `home_flag` bits X|Y|Z set (0x07) plus the 220 V mains bit (0x08).
+const HOME_FLAG_XYZ_HOMED_220V: u32 = 0x0F;
+
+#[tokio::test]
+async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
+    let topic = format!("device/{}/report", SERIAL);
+
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let first_topic = topic.clone();
+    let first_broker = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        send_publish_payload(
+            &mut server_stream,
+            &first_topic,
+            4400,
+            format!(r#"{{"print":{{"home_flag":{HOME_FLAG_XYZ_HOMED_220V}}}}}"#).as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse the home_flag report");
+    assert_eq!(client.is_all_axes_homed(), Some(true));
+    assert_eq!(client.is_axis_homed('x'), Some(true));
+    assert_eq!(client.is_220v_power(), Some(true));
+    first_broker.await.expect("first broker task panicked");
+
+    client
+        .disconnect_mqtt()
+        .await
+        .expect("disconnect_mqtt is infallible");
+
+    // The disconnect's cause may be the very event that lost homing, and firmware re-sends
+    // only *changed* fields — so a flag from the previous connection is not evidence about
+    // this machine any more, and would never self-correct if it happens not to change.
+    assert_eq!(
+        client.is_all_axes_homed(),
+        None,
+        "a home_flag observed on a previous connection must not read as a confident Some"
+    );
+    assert_eq!(client.is_axis_homed('x'), None);
+
+    // ...but the mains region is a fixed property of the physical printer, so it deliberately
+    // does NOT share the homing accessors' fate. A "just clear the whole cache" refactor would
+    // reset this to None and silently drop the bed ceiling to the conservative 110 °C clamp.
+    assert_eq!(
+        client.is_220v_power(),
+        Some(true),
+        "mains wiring cannot change across a reconnect to the same unit"
+    );
+
+    let (client_stream_2, mut server_stream_2) = tokio::io::duplex(8192);
+    let second_broker = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream_2).await;
+        send_publish_payload(
+            &mut server_stream_2,
+            &topic,
+            4401,
+            format!(r#"{{"print":{{"home_flag":{HOME_FLAG_XYZ_HOMED_220V}}}}}"#).as_bytes(),
+        )
+        .await;
+        read_puback(&mut server_stream_2).await;
+    });
+
+    let reconnected = connect_test_mqtt(TokioIo(client_stream_2), SERIAL, PrinterModel::P1S).await;
+    client.attach_mqtt(reconnected);
+    assert_eq!(
+        client.is_all_axes_homed(),
+        None,
+        "re-attaching must not resurrect the pre-disconnect flag"
+    );
+
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry should parse the post-reconnect home_flag report");
+    assert_eq!(
+        client.is_all_axes_homed(),
+        Some(true),
+        "a flag observed on the current connection must read normally again"
+    );
+    second_broker.await.expect("second broker task panicked");
+}
+
+#[tokio::test]
+async fn test_lazy_connect_publishes_pushall_before_the_callers_own_command() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Firmware broadcasts carry only changed fields, so a connection that never asks for a
+        // full state dump may never see an unchanged value at all. Every reference client
+        // (BambuStudio, ha-bambulab, bambuddy) requests one from its own connect handler.
+        let connect_frame = read_publish_payload(&mut server_stream).await;
+        assert_eq!(
+            connect_frame["pushing"]["command"], "pushall",
+            "connection establishment must request a full state dump first"
+        );
+
+        let caller_frame = read_publish_payload(&mut server_stream).await;
+        assert_eq!(caller_frame["print"]["command"], "gcode_line");
+    });
+
+    let factory = MockDataStreamFactory::new(Arc::new(Mutex::new(Some(TokioIo(client_stream)))));
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        factory,
+        PrinterIdentity {
+            ip: "127.0.0.1".to_string(),
+            serial: SERIAL.to_string(),
+            access_code: "12345678".to_string(),
+            model: PrinterModel::P1S,
+        },
+    );
+
+    // Lazy connect: `home_axes` dials through `ensure_mqtt()`, which is where the pushall
+    // belongs — the reconnect path in the bug report goes through it, not through an explicit
+    // `connect_mqtt()`.
+    client.home_axes(false).await.expect("G28 homing failed");
 
     broker_task.await.expect("Broker task panicked");
 }

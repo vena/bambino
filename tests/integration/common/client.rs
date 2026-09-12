@@ -41,7 +41,19 @@ pub async fn connect_test_client<IO: AsyncIo>(
     serial: &str,
     model: PrinterModel,
 ) -> TestClient<IO> {
-    let mqtt_client = MqttClient::connect(
+    PrinterClient::from_mqtt(connect_test_mqtt(stream, serial, model).await, model)
+}
+
+/// Completes the MQTT connect handshake over `stream` and returns the bare [`MqttClient`],
+/// for tests that need to hand a *second* session to
+/// [`PrinterClient::attach_mqtt()`](bambino::client::PrinterClient::attach_mqtt) rather than
+/// build a new client. Same broker-task ordering requirement as [`connect_test_client`].
+pub async fn connect_test_mqtt<IO: AsyncIo>(
+    stream: IO,
+    serial: &str,
+    model: PrinterModel,
+) -> MqttClient<IO> {
+    MqttClient::connect(
         stream,
         &PrinterIdentity {
             ip: String::new(),
@@ -51,6 +63,5 @@ pub async fn connect_test_client<IO: AsyncIo>(
         },
     )
     .await
-    .expect("MQTT connect handshake failed");
-    PrinterClient::from_mqtt(mqtt_client, model)
+    .expect("MQTT connect handshake failed")
 }

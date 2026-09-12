@@ -133,6 +133,7 @@ where
             })
             .await?;
         self.mqtt = Some(mqtt_client);
+        self.begin_connection();
         // Reseed from wall-clock time so two independent sessions connecting to the
         // same printer don't start from the same fixed counter and risk colliding
         // sequence IDs while both have in-flight requests. Skipped under a timer with
@@ -143,7 +144,62 @@ where
             self.sequence_counter =
                 crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
         }
+        self.publish_connect_pushall().await;
         Ok(())
+    }
+
+    /// Marks an MQTT connection boundary, invalidating every cached value whose trustworthiness
+    /// is scoped to a single connection.
+    ///
+    /// Bumping one counter is deliberately preferred over resetting fields one by one: the
+    /// previous shape — `disconnect_mqtt()` clearing whatever its author remembered to clear —
+    /// is exactly how `self.cache` came to survive a reconnect while `k_profile_primed` did not.
+    /// A new connection-scoped cache field opts in by stamping `connection_generation` when it
+    /// is written, and cannot be silently forgotten here.
+    pub(crate) fn begin_connection(&mut self) {
+        self.k_profile_primed = false;
+        self.connection_generation = self.connection_generation.wrapping_add(1);
+    }
+
+    /// Publishes a `pushall` immediately after a connection is established, refilling the
+    /// telemetry cache that [`begin_connection()`](Self::begin_connection) just invalidated.
+    ///
+    /// Firmware broadcasts carry only *changed* fields [REF-MQTT-TELEMETRY], so a value that
+    /// happens not to change across the reconnect may never be re-sent on its own — a full
+    /// state dump is the only thing that reliably repopulates the cache. Every reference client
+    /// does this from its own connect handler: BambuStudio (`GUI_App.cpp:2166`, `:2209`,
+    /// with `request_now = true` to bypass its own `REQUEST_PUSH_MIN_TIME` anti-burst floor),
+    /// ha-bambulab (`pybambu/bambu_client.py:536-539`), and bambuddy
+    /// (`services/bambu_mqtt.py:1711-1731`). None of them gates it on cache age, and none
+    /// branches on model — don't route this through the quirks engine.
+    ///
+    /// Publishes directly rather than through
+    /// [`request_pushall()`](PrinterClient::request_pushall) because that path re-enters
+    /// `ensure_mqtt()`, which would make this an async recursion. `self.mqtt` is already
+    /// `Some` by the time this runs, so the re-entry would be a no-op anyway.
+    ///
+    /// **Deliberately non-fatal**, for the same reason as
+    /// [`prime_firmware_version()`](Self::prime_firmware_version): a printer that never
+    /// answers still has a usable session, and the accessors already report `None` rather
+    /// than a stale value.
+    async fn publish_connect_pushall(&mut self) {
+        let seq = self.next_sequence_id();
+        let request = crate::mqtt::PushAllRequest::new(seq);
+        let payload = match serde_json::to_vec(&request) {
+            Ok(payload) => payload,
+            Err(_) => {
+                log::debug!("serializing the connect-time pushall failed; cache stays cold");
+                return;
+            }
+        };
+        let Some(mqtt) = self.mqtt.as_mut() else {
+            return;
+        };
+        if let Err(e) = mqtt.publish_command_with_timer(&payload, &self.timer).await {
+            log::debug!(
+                "connect-time pushall failed ({e:?}); connection-scoped telemetry stays None until the printer reports"
+            );
+        }
     }
 
     /// Eagerly establishes the MQTT connection.
@@ -196,7 +252,7 @@ where
     /// [`attach_storage()`](super::PrinterClient::attach_storage).
     pub fn attach_mqtt(&mut self, mqtt: MqttClient<MqttTls::Stream>) {
         self.mqtt = Some(mqtt);
-        self.k_profile_primed = false;
+        self.begin_connection();
     }
 
     /// Disconnects the MQTT session, if one exists, and clears it from the client.
@@ -214,7 +270,7 @@ where
     /// only recovers a `connect()`-built client, never one built via `from_mqtt()`.
     pub async fn disconnect_mqtt(&mut self) -> Result<(), Error> {
         self.mqtt = None;
-        self.k_profile_primed = false;
+        self.begin_connection();
         Ok(())
     }
 
@@ -251,6 +307,7 @@ where
             identity: self.identity,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
+            connection_generation: self.connection_generation,
             cache: self.cache,
             command_timeout_secs: self.command_timeout_secs,
             connect_timeout_secs: self.connect_timeout_secs,
@@ -348,6 +405,7 @@ where
             identity: self.identity,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
+            connection_generation: self.connection_generation,
             cache: self.cache,
             command_timeout_secs: self.command_timeout_secs,
             connect_timeout_secs: self.connect_timeout_secs,
@@ -747,6 +805,7 @@ where
             identity: self.identity,
             sequence_counter: self.sequence_counter,
             k_profile_primed: self.k_profile_primed,
+            connection_generation: self.connection_generation,
             cache: self.cache,
             command_timeout_secs: self.command_timeout_secs,
             connect_timeout_secs: self.connect_timeout_secs,

@@ -55,10 +55,28 @@ where
     CameraTls: TlsConnector<CameraRawIO>,
     CameraFactory: RawStreamFactory<CameraRawIO>,
 {
+    /// Returns the cached `home_flag` only if it was observed on the current MQTT connection.
+    ///
+    /// A disconnect may itself be caused by the same event that lost homing — a power cut, a
+    /// physical intervention — so a flag observed before the boundary says nothing about the
+    /// machine on the other side of it. Firmware broadcasts carry only *changed* fields
+    /// [REF-MQTT-TELEMETRY], so an unchanged `home_flag` may never be re-sent after a
+    /// reconnect and the stale value would otherwise persist indefinitely rather than
+    /// self-correcting on the next report.
+    fn home_flag_this_connection(&self) -> Option<u32> {
+        if self.cache.last_home_flag_generation? != self.connection_generation {
+            return None;
+        }
+        self.cache.last_home_flag
+    }
+
     /// Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
-    /// `None` means no telemetry carrying `home_flag` has been observed yet (via
-    /// [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed". Advisory only: the firmware does
-    /// not reject motion on unhomed axes [REF-MOTO-HOME].
+    ///
+    /// `None` means no telemetry carrying `home_flag` has been observed **on the current MQTT
+    /// connection** (via [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed". A
+    /// disconnect/reconnect resets this to `None` until the printer reports again; the two
+    /// cases are deliberately not distinguished, since a caller must handle `None` either way.
+    /// Advisory only: the firmware does not reject motion on unhomed axes [REF-MOTO-HOME].
     pub fn is_axis_homed(&self, axis: char) -> Option<bool> {
         let bit = match axis.to_ascii_uppercase() {
             'X' => HOME_FLAG_X_BIT,
@@ -66,14 +84,15 @@ where
             'Z' => HOME_FLAG_Z_BIT,
             _ => return None,
         };
-        self.cache.last_home_flag.map(|flag| flag & bit != 0)
+        self.home_flag_this_connection().map(|flag| flag & bit != 0)
     }
 
     /// Returns whether X, Y, and Z were all homed as of the last-observed `home_flag` telemetry.
-    /// `None` means no telemetry carrying `home_flag` has been observed yet.
+    ///
+    /// `None` means no telemetry carrying `home_flag` has been observed on the current MQTT
+    /// connection — see [`is_axis_homed()`](Self::is_axis_homed).
     pub fn is_all_axes_homed(&self) -> Option<bool> {
-        self.cache
-            .last_home_flag
+        self.home_flag_this_connection()
             .map(|flag| flag & HOME_FLAG_XYZ_BITS == HOME_FLAG_XYZ_BITS)
     }
 
