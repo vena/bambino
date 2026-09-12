@@ -23,7 +23,7 @@ To maintain spec-to-wire alignment across generations, any parsing library, inte
 
 ## Technical Terminology Registry
 
-*   **Local Broker**: The secure, self-signed TLS MQTT server hosted directly on the physical printer's network board (Port 8883).
+*   **Local Broker**: The secure TLS MQTT server hosted directly on the physical printer's network board (Port 8883). Its leaf certificate is issued by Bambu's private `BBL CA`, not self-signed.
 *   **Physical AMS Unit**: Modular 4-slot filament expansion systems (Gen 1 / Gen 2 / AMS 2 Pro / N3F) connected to the printer's hardware expansion bus.
 *   **AMS-HT**: The single-slot high-temperature dry-chamber unit (N3S) connected via the expansion bus.
 *   **External Spool**: The physical spool holder located outside of the AMS environment, communicating via non-bus virtual channels (`vt_tray` / `vir_slot`).

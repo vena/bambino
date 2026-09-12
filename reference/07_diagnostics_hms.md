@@ -121,6 +121,19 @@ To retrieve all stored profiles from the machine's database, publish the `"extru
 
 **A response is the complete table for exactly one nozzle diameter, and it echoes the *requested* diameter rather than reflecting installed hardware.** The bare request shape (`command` + `sequence_id` only) is accepted, but on a dual-diameter machine its reply covers whichever single diameter the firmware picks — a partial table that looks complete to the caller, with no way to ask for the rest. Query once per fitted diameter and merge. `filament_id` scopes the query to one preset; upstream sends an empty string for "all filaments".
 
+##### Optional Request Scoping Fields
+
+BambuStudio sends four further request fields, each only when it has a value for it. They narrow which table comes back and are omitted entirely otherwise — an absent field is not the same as a zero.
+
+| Field | Type | Sent when | Meaning |
+| --- | --- | --- | --- |
+| `extruder_id` | int | BambuStudio's `use_extruder_id` is set | Which hotend's table to return — `0` right/main, `1` left/deputy. Matters on a dual-nozzle machine, where a `cali_idx` is **not** unique across hotends (see "Resolving a Slot to a Profile" below). |
+| `nozzle_id` | string | `use_nozzle_volume_type` is set | Flow-type-qualified hotend designation, e.g. `"HS00-0.4"` (standard) or `"HH00-0.4"` (high flow). A printer can hold profiles for both against one diameter, with the same filament reading a different K through each. |
+| `nozzle_pos` | int | position is non-negative | Rack position of the target hotend on a machine with a nozzle rack. Always sent together with `nozzle_sn`. |
+| `nozzle_sn` | string | as above | Serial number of the target hotend. Paired with `nozzle_pos`; the two together identify a specific physical hotend rather than a carriage. |
+
+*(Verification source: BambuStudio's `extrusion_cali_get` constructor, transcribed into this crate's `ExtrusionCaliGetPayload` doc comments in `src/diagnostics/kprofile.rs`. The `nozzle_id` flow-code vocabulary is separately corroborated by bambuddy issue #3044 / commit `e5a18bf5`, cited below.)*
+
 Two consequences worth stating separately, both of which bambino already handles:
 
 *   Match responses on `sequence_id`. The report topic is shared, so an unmatched read can pick up BambuStudio's response to its own query.
@@ -186,6 +199,15 @@ Single-nozzle firmware may omit the per-entry `"nozzle_diameter"` field inside e
 `"filaments"` object shown above, setting it only once at the envelope level (as in the
 example). Parsers must fall back to the envelope's `"nozzle_diameter"` when the per-entry
 field is absent, rather than treating a filament entry without it as malformed.
+
+Two further per-entry fields are optional and absent from the example above:
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `ams_id` | int | `0` | Links the profile to an AMS unit. |
+| `tray_id` | int | `-1` | Links the profile to an AMS tray slot. **At least X1C firmware spuriously reports `result: "fail"` for an `extrusion_cali` write using `tray_id: -1` even though the write still applies** — do not treat that ack's `result` as authoritative for a `tray_id: -1` write without cross-checking that the profile actually landed. |
+
+*(Verification source: this crate's `KProfileEntry` doc comments in `src/diagnostics/kprofile.rs`; the `tray_id: -1` ack behaviour is a live-probe observation against an X1C.)*
 
 #### Create or Edit a Calibration Profile
 To save or overwrite a specific K-value profile slot, publish an `"extrusion_cali_set"` command containing a nested `"filaments"` array:

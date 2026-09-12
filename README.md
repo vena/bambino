@@ -225,28 +225,53 @@ Both AMS calls take flat positional arguments; the addressing sentinels matter m
 ordering, so they're spelled out here.
 
 ```rust
-// change_filament(ams_id, slot_id, curr_temp, tar_temp)
-//   ams_id:    0..=3 standard AMS unit · 128..=135 AMS-HT bus ID · 254/255 external spool
-//   slot_id:   0..=3 slot within the unit · 254 external-spool load · 255 unload/retract
-//   temps:     nozzle current/target in °C; -1 lets the firmware decide
-printer.change_filament(0, 1, -1, -1).await?;   // load AMS 0, slot 1, firmware picks temps
-printer.change_filament(0, 255, -1, -1).await?; // unload whatever AMS 0 currently has loaded
+// change_filament(ams_id, slot_id, curr_temp, tar_temp, extruder_id)
+//   ams_id:      0..=3 standard AMS unit · 16 A2L AMS Lite · 128..=135 AMS-HT bus ID
+//                · 254/255 external spool
+//   slot_id:     0..=3 slot within the unit · 254 external-spool load · 255 unload/retract
+//   temps:       nozzle current/target in °C; -1 lets the firmware decide
+//   extruder_id: Some(0) right/main, Some(1) left/deputy. None on any printer without a
+//                Filament Track Switch; on a machine that has one (an H2C), None makes the
+//                firmware discard the command in silence.
+printer.change_filament(0, 1, -1, -1, None).await?;   // load AMS 0 slot 1, firmware picks temps
+printer.change_filament(0, 255, -1, -1, None).await?; // unload whatever AMS 0 has loaded
 
-// start_drying(ams_id, temp, duration_hours, humidity, rotate_tray, cooling_temp,
-//              close_power_conflict, filament)
-//   temp:                 °C, clamped to 85 for AMS-HT bus IDs (128..=135), 65 otherwise
-//   duration_hours:       hours, not minutes
-//   humidity:             target %; 0 = firmware default
-//   rotate_tray:          rotate trays during the cycle
-//   cooling_temp:         °C to cool down to once drying finishes
-//   close_power_conflict: override the unit's power-conflict interlock
-//   filament:             filament type string, for the unit's own display/logic
-printer.start_drying(0, 55, 8, 0, true, 20, false, "PA-CF").await?;
+// Drying is a builder: PrinterClient::dry(ams_id) → DryingCycle → .send().await
+//   .temp(°C)                 45..=65 standard, 45..=85 for AMS-HT bus IDs (128..=135).
+//                             Out-of-range is REJECTED with Error::InvalidArgument, not
+//                             clamped — silently rewriting the value would start a heating
+//                             cycle the caller did not ask for.
+//   .duration_hours(h)        hours, not minutes
+//   .humidity(%)              target %; 0 = firmware default
+//   .rotate_tray(bool)        rotate trays during the cycle
+//   .cooling_temp(°C)         cool down to this once drying finishes
+//   .close_power_conflict(b)  override the unit's power-conflict interlock
+//   .filament("PA-CF")        filament type string, for the unit's own display/logic
+//   .material(m, unit)        shorthand: fills temp/duration/filament from the material's
+//                             row for that unit type (columns differ between AMS 2 Pro and
+//                             AMS-HT), so prefer it over hand-picking a temperature
+printer
+    .dry(0)
+    .temp(55)
+    .duration_hours(8)
+    .rotate_tray(true)
+    .cooling_temp(20)
+    .filament("PA-CF")
+    .send()
+    .await?;
+
+// Or let the material table choose:
+printer
+    .dry(0)
+    .material(DryingMaterial::Pa, AmsUnitModel::AmsHt)
+    .send()
+    .await?;
+
 printer.stop_drying(0).await?;                  // ams_id only—every other field is zeroed
 ```
 
-`start_drying` returns `Error::ModelMismatch` on P1P/P1S: that firmware acks the command and
-then silently discards it instead of driving the AMS heater.
+`DryingCycle::send()` returns `Error::ModelMismatch` on P1P/P1S: that firmware acks the command
+and then silently discards it instead of driving the AMS heater.
 
 ### File transfer
 
@@ -417,7 +442,7 @@ let url = build_rtsps_url(ip, access_code)?;
 (matching the documented 8-character LAN access code format) and returns
 `Result<String, Error>`.
 
-Since the printer uses self-signed TLS, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to rewrite the request-line URI in transit:
+Since the printer's TLS leaf is issued by Bambu's private `BBL CA` rather than a publicly-trusted root, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to rewrite the request-line URI in transit:
 
 ```rust
 use bambino::camera::rtsps::rewrite_rtsp_request_uri;
@@ -598,7 +623,7 @@ Commands:
   control       Dispatch a movement or hardware control command
   files         Traverse and transfer files on the printer's MicroSD card
   camera        Camera streaming operations
-  inspect-cert  Capture a printer's raw leaf TLS cert to disk for SAN/CN inspection
+  inspect-cert  Capture a printer's raw TLS cert chain to disk for SAN/CN inspection
   verify-tls    Attempt a real CA-verified TLS handshake against a printer
   help          Print this message or the help of the given subcommand(s)
 
