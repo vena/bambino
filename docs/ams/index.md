@@ -144,12 +144,67 @@ cannot omit a unit type by hand.
 
 - <span id="amsentrykind-partialeq-eq"></span>`fn eq(&self, other: &AmsEntryKind) -> bool` — [`AmsEntryKind`](mapping/index.md#amsentrykind)
 
+### `AmsLiteSlot`
+
+```rust
+enum AmsLiteSlot {
+    None,
+    Additive,
+    Exclusive,
+}
+```
+
+How a model accepts an AMS Lite alongside its shared AMS pool.
+
+Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
+
+#### Variants
+
+- **`None`**
+
+  No AMS Lite attaches (X1C, X1E, P1P, P1S).
+
+- **`Additive`**
+
+  One AMS Lite attaches *in addition to* the full shared pool (A2L).
+  
+  It reports physical unit id 16 ([`AmsEntryKind::AmsLite`](mapping/index.md#amsentrykind)), so it is counted on its own
+  and never against the shared pool.
+
+- **`Exclusive`**
+
+  One AMS Lite attaches *instead of* the shared pool, never combined with it (A1, A1 Mini).
+  
+  On these models the AMS Lite shares ids `0..=3` with standard AMS units, so an
+  `ams_mapping2` cannot say which unit is the Lite and [`is_ams_pool_composition_valid`](mapping/index.md#is-ams-pool-composition-valid)
+  cannot enforce the exclusivity; the unit's type is in telemetry
+  ([`AmsUnitModel`](../types/telemetry/index.md)).
+
+#### Trait Implementations
+
+##### `impl Clone for AmsLiteSlot`
+
+- <span id="amsliteslot-clone"></span>`fn clone(&self) -> AmsLiteSlot` — [`AmsLiteSlot`](mapping/index.md#amsliteslot)
+
+##### `impl Copy for AmsLiteSlot`
+
+##### `impl Debug for AmsLiteSlot`
+
+- <span id="amsliteslot-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsLiteSlot`
+
+##### `impl PartialEq for AmsLiteSlot`
+
+- <span id="amsliteslot-partialeq-eq"></span>`fn eq(&self, other: &AmsLiteSlot) -> bool` — [`AmsLiteSlot`](mapping/index.md#amsliteslot)
+
 ### `AmsPoolComposition`
 
 ```rust
 enum AmsPoolComposition {
     Shared {
         max_units: u8,
+        ams_lite: AmsLiteSlot,
     },
     Independent {
         max_standard: u8,
@@ -161,15 +216,7 @@ enum AmsPoolComposition {
 Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
 "AMS Unit Limits" row (user-supplied official Bambu documentation).
 
-**Known limitation**: this enum still cannot express A1/A1 Mini's "shared pool OR 1 AMS
-Lite, not combinable" exclusivity, or A2L's "shared pool + 1 AMS Lite simultaneously"
-additive capacity. Both are conservatively modeled as `Shared { max_units: 4 }`, the same
-as the plain shared-pool models — this may under-count A2L's true capacity by one unit, but
-never accepts a config that's actually invalid.
-
-This is a *capacity-counting* gap only. The addressing gap it used to describe — "AMS Lite
-units are not independently addressable ... they use the same `ams_id` space as standard AMS
-units" — is fixed: an A2L-attached AMS Lite reports physical unit id 16, which
+An A2L-attached AMS Lite reports physical unit id 16, which
 [`normalize_ams_unit_id`](parser/index.md#normalize-ams-unit-id) maps to 6 on ingest, and
 [`MaterialSource::AmsLite`](mapping/index.md#materialsource) addresses its slots with their own wire encodings.
 
@@ -184,6 +231,15 @@ units" — is fixed: an A2L-attached AMS Lite reports physical unit id 16, which
 
   Standard AMS and AMS-HT units draw from independent pools, each with its own cap
   (H2C, H2D, H2D Pro, H2S, X2D, P2S).
+
+#### Implementations
+
+- <span id="amspoolcomposition-max-units"></span>`fn max_units(self) -> u8`
+
+  Returns the most units of every kind the model can have attached at once — the number to size a per-unit UI to.
+
+  An A2L's additive AMS Lite counts, so it answers 5. An A1's exclusive AMS Lite does not
+  raise the total, since it replaces the pool rather than joining it.
 
 #### Trait Implementations
 
@@ -370,6 +426,10 @@ Rejects configs no real hardware combination could serve — e.g. 4 standard +
 Counts *distinct* `ams_id`s used (not slot allocations) — a config referencing the same
 unit across multiple slots isn't an extra unit. External-spool and unmapped sentinel
 entries are ignored, since they don't occupy a physical AMS unit slot.
+
+An A2L-attached AMS Lite (id 16) is valid only on a model with [`AmsLiteSlot::Additive`](mapping/index.md#amsliteslot),
+and never counts against the shared pool there. [`AmsLiteSlot::Exclusive`](mapping/index.md#amsliteslot) is not enforced:
+an A1's AMS Lite uses the standard ids, so nothing in the mapping identifies it.
 
 ### `is_external_spool_safety_valid`
 

@@ -70,7 +70,8 @@ Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceilin
 
   **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
   see `ams_pool_composition()` a few lines below, which
-  returns the same `Shared { max_units: 4 }` the X1C/P1/A2L do, plus
+  returns a shared pool of 4 like the X1C/P1/A2L (with one AMS Lite as the
+  alternative), plus
   `reference/05_materials_ams.md` and `MODEL_MATRIX.csv`. The gate is about the
   command channel, not the attachable hardware; this puts A1 in the same bucket as
   P1P/P1S rather than a "never possible" one.
@@ -145,7 +146,8 @@ Quirks for the full-size A1 bed-slinger.
 
   **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
   see `ams_pool_composition()` a few lines below, which
-  returns the same `Shared { max_units: 4 }` the X1C/P1/A2L do, plus
+  returns a shared pool of 4 like the X1C/P1/A2L (with one AMS Lite as the
+  alternative), plus
   `reference/05_materials_ams.md` and `MODEL_MATRIX.csv`. The gate is about the
   command channel, not the attachable hardware; this puts A1 in the same bucket as
   P1P/P1S rather than a "never possible" one.
