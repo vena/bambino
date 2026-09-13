@@ -15,7 +15,7 @@ use crate::common::mock_mqtt::{
 // Command-response round-trip tests (Phase 18)
 // ============================================================================
 
-const VERSION_RESPONSE: &str = r#"{"info":{"command":"get_version","sequence_id":"10001","module":[{"product_name":"Bambu Lab P1S","name":"ota","hw_ver":"OTA","sw_ver":"01.09.00.00","sn":"01P000000000001","visible":true},{"name":"esp32","sw_ver":"01.02.03.04","sn":"01P000000000002"}]}}"#;
+const VERSION_RESPONSE: &str = r#"{"info":{"command":"get_version","sequence_id":"30001","module":[{"product_name":"Bambu Lab P1S","name":"ota","hw_ver":"OTA","sw_ver":"01.09.00.00","sn":"01P000000000001","visible":true},{"name":"esp32","sw_ver":"01.02.03.04","sn":"01P000000000002"}]}}"#;
 
 // Correct command but a sequence ID that doesn't belong to us — simulates a stray
 // response from another MQTT client querying the same printer concurrently.
@@ -200,7 +200,7 @@ async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
 // string) that fails to deserialize as VersionInfo — simulates a firmware response arriving
 // but failing to parse (issue #52).
 const VERSION_RESPONSE_MALFORMED: &str =
-    r#"{"info":{"command":"get_version","sequence_id":"10001","module":[{"name":123}]}}"#;
+    r#"{"info":{"command":"get_version","sequence_id":"30001","module":[{"name":123}]}}"#;
 
 #[tokio::test]
 async fn test_get_version_surfaces_serialization_error_on_malformed_matching_response() {

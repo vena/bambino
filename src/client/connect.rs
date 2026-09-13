@@ -132,20 +132,22 @@ where
                 MqttClient::connect(stream, &self.identity).await
             })
             .await?;
+        self.install_mqtt(mqtt_client).await;
+        Ok(())
+    }
+
+    /// Installs a freshly dialled MQTT session and runs every per-connection step, in order.
+    ///
+    /// The one install path for a session this client dialled itself (`ensure_mqtt()` and
+    /// `connect_all()`), so a step added here cannot be missed by one of them — `connect_all()`
+    /// once installed the session by hand and skipped both `begin_connection()` and the
+    /// connect-time pushall. The reseed must follow `begin_connection()` and precede the pushall,
+    /// which is the first id the new connection mints.
+    async fn install_mqtt(&mut self, mqtt_client: MqttClient<MqttTls::Stream>) {
         self.mqtt = Some(mqtt_client);
         self.begin_connection();
-        // Reseed from wall-clock time so two independent sessions connecting to the
-        // same printer don't start from the same fixed counter and risk colliding
-        // sequence IDs while both have in-flight requests. Skipped under a timer with
-        // no real clock (e.g. DummyTimer, always 0) — reseeding to a constant would
-        // recreate exactly the collision this exists to prevent, and existing tests
-        // rely on the deterministic default sequence when no real timer is chained.
-        if self.timer.has_real_clock() {
-            self.sequence_counter =
-                crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
-        }
+        self.reseed_sequence_counter();
         self.publish_connect_pushall().await;
-        Ok(())
     }
 
     /// Marks an MQTT connection boundary, invalidating every cached value whose trustworthiness
@@ -706,13 +708,7 @@ where
             None => None,
             Some(Err(e)) => Some(Err(e)),
             Some(Ok(client)) => {
-                self.mqtt = Some(client);
-                // Same wall-clock reseed `ensure_mqtt()` performs, and for the same reason —
-                // see its comment on colliding sequence IDs between independent sessions.
-                if self.timer.has_real_clock() {
-                    self.sequence_counter =
-                        crate::mqtt::commands::clamp_task_id(self.timer.now_millis()) as u64;
-                }
+                self.install_mqtt(client).await;
                 Some(Ok(()))
             }
         };

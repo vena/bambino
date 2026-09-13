@@ -55,7 +55,24 @@ use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::models::PrinterModel;
 use crate::mqtt::{MqttClient, MqttMessage};
 
-pub(crate) const INITIAL_SEQUENCE_ID: u64 = 10000;
+/// Lowest `sequence_id` this client mints, above every range another party on the shared report topic is known to use.
+///
+/// Every subscriber receives every client's command echoes on the one report topic, so an id
+/// minted inside someone else's range can be mistaken for theirs, and theirs for ours. The
+/// printer's `push_status` counter and bambuddy's counter both start near 0 (bambuddy also
+/// hardcodes `"0"` for pause/resume/stop), and BambuStudio reserves `20000..30000`
+/// (`DevUtil.h` `STUDIO_START_SEQ_ID`/`STUDIO_END_SEQ_ID`) — it raises an error dialog for any
+/// echo in that range carrying an `err_code`, so an id of ours landing there would pop dialogs
+/// in a user's open BambuStudio.
+pub(crate) const SEQUENCE_ID_FLOOR: u64 = 30_000;
+pub(crate) const INITIAL_SEQUENCE_ID: u64 = SEQUENCE_ID_FLOOR;
+
+/// Maps an arbitrary seed (a clock reading) into the mintable range `[SEQUENCE_ID_FLOOR, TASK_ID_MAX)`.
+pub(crate) fn sequence_id_from_seed(seed: u64) -> u64 {
+    use crate::mqtt::commands::TASK_ID_MAX;
+    SEQUENCE_ID_FLOOR + seed % (TASK_ID_MAX - SEQUENCE_ID_FLOOR)
+}
+
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
 /// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined dial+connect sequence — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT` (`src/io/esp_idf.rs`).
@@ -307,14 +324,36 @@ where
 {
     /// Increments and returns the next transaction/sequence identifier tracking commands.
     ///
-    /// Wraps via `clamp_task_id()` (32-bit signed integer limit) to stay within firmware
-    /// parsing constraints [REF-MQTT-ENV] — on overflow this continues as
-    /// `(sequence_counter + 1) % TASK_ID_MAX` rather than resetting to
-    /// `INITIAL_SEQUENCE_ID`, so a session never revisits the same starting value mid-flight.
+    /// Stays below the 32-bit signed integer limit firmware parses [REF-MQTT-ENV], and on
+    /// reaching it wraps back to `SEQUENCE_ID_FLOOR` rather than to 0, so a long session never
+    /// drifts into the low range the printer's own `push_status` counter and other clients use.
     pub fn next_sequence_id(&mut self) -> u64 {
-        self.sequence_counter =
-            crate::mqtt::commands::clamp_task_id(self.sequence_counter + 1) as u64;
+        let next = self.sequence_counter + 1;
+        self.sequence_counter = if next >= crate::mqtt::commands::TASK_ID_MAX {
+            SEQUENCE_ID_FLOOR
+        } else {
+            next
+        };
         self.sequence_counter
+    }
+
+    /// Reseeds `sequence_counter` from the clock after a successful MQTT connect.
+    ///
+    /// Two independent sessions connecting to the same printer must not mint the same ids
+    /// while both have commands in flight. The seed is the platform's wall clock when it has
+    /// one ([`TimerProvider::unix_millis`]); a monotonic clock alone counts from its own epoch
+    /// (timer construction, boot), which two processes started together share. Skipped under a
+    /// timer with no real clock (`DummyTimer`, always 0): reseeding to a constant would recreate
+    /// the collision this exists to prevent, and tests rely on the deterministic default.
+    pub(crate) fn reseed_sequence_counter(&mut self) {
+        if !self.timer.has_real_clock() {
+            return;
+        }
+        let seed = self
+            .timer
+            .unix_millis()
+            .unwrap_or_else(|| self.timer.now_millis());
+        self.sequence_counter = sequence_id_from_seed(seed);
     }
 
     /// Sets the timeout (in seconds) used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
@@ -511,5 +550,29 @@ where
     pub async fn mqtt(&mut self) -> Result<&mut MqttClient<MqttTls::Stream>, Error> {
         self.ensure_mqtt().await?;
         Ok(self.mqtt.as_mut().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mqtt::commands::TASK_ID_MAX;
+
+    #[test]
+    fn test_sequence_id_from_seed_stays_in_mintable_range() {
+        for seed in [
+            0,
+            1,
+            SEQUENCE_ID_FLOOR,
+            TASK_ID_MAX - 1,
+            TASK_ID_MAX,
+            u64::MAX,
+        ] {
+            let id = sequence_id_from_seed(seed);
+            assert!(
+                (SEQUENCE_ID_FLOOR..TASK_ID_MAX).contains(&id),
+                "seed {seed} mapped to {id}, outside [SEQUENCE_ID_FLOOR, TASK_ID_MAX)"
+            );
+        }
     }
 }

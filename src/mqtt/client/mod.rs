@@ -111,11 +111,15 @@ pub struct MqttClient<IO: AsyncIo> {
     pending_bytes: usize,
     /// Accumulated elapsed seconds since the last command publish while waiting for a response update.
     write_pending_secs: Option<u32>,
-    /// `sequence_id` [REF-MQTT-ACK] of the command that armed `write_pending_secs` — poll_wire's
-    /// PUBLISH arm only clears the zombie timer on a reply echoing this exact value, not on any
-    /// incoming PUBLISH (background telemetry arrives far more often than
-    /// MQTT_ZOMBIE_TIMEOUT_SECS and would otherwise mask a real zombie episode forever).
-    write_pending_sequence_id: Option<String>,
+    /// `(command, sequence_id)` [REF-MQTT-ACK] of the command that armed `write_pending_secs`.
+    ///
+    /// poll_wire's PUBLISH arm only clears the zombie timer on a reply echoing both values, not
+    /// on any incoming PUBLISH (background telemetry arrives far more often than
+    /// MQTT_ZOMBIE_TIMEOUT_SECS and would otherwise mask a real zombie episode forever). The
+    /// command name is part of the key because the number alone is not unique on the shared
+    /// report topic: the printer's `push_status` counter and other clients' commands mint ids
+    /// from overlapping ranges.
+    write_pending_echo: Option<(String, String)>,
     /// Whether a PINGREQ has been sent with no PINGRESP yet received.
     ///
     /// Set by `send_ping_with_timer`, cleared by `poll_wire`'s PINGRESP arm, and checked on the
@@ -154,18 +158,20 @@ fn advance_packet_id(current: u16) -> u16 {
     if next == 0 { 1 } else { next }
 }
 
-/// Extracts the `sequence_id` echoed one level inside a Bambu MQTT JSON payload's top-level
-/// wrapper object (`print`/`system`/`pushing`/`info` — see [REF-MQTT-ACK]). Used to correlate
-/// a command ack with the command that armed the write-zombie timer, rather than treating any
-/// incoming PUBLISH (including background `push_status` telemetry, which carries its own
-/// independent sequence_id counter under the same shape) as proof the write channel is alive.
-fn extract_sequence_id(payload: &[u8]) -> Option<String> {
+/// Extracts the `(command, sequence_id)` pair echoed one level inside a Bambu MQTT JSON payload's top-level wrapper object.
+///
+/// The wrapper is `print`/`system`/`pushing`/`info` — see [REF-MQTT-ACK]. Used to correlate a
+/// command ack with the command that armed the write-zombie timer, rather than treating any
+/// incoming PUBLISH as proof the write channel is alive. Both values are required: background
+/// `push_status` telemetry carries its own independent `sequence_id` counter under the same
+/// shape, so a number match alone can be a different message.
+fn extract_echo_key(payload: &[u8]) -> Option<(String, String)> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    value
-        .as_object()?
-        .values()
-        .find_map(|inner| inner.get("sequence_id")?.as_str())
-        .map(|s| s.to_string())
+    value.as_object()?.values().find_map(|inner| {
+        let command = inner.get("command")?.as_str()?;
+        let sequence_id = inner.get("sequence_id")?.as_str()?;
+        Some((command.to_string(), sequence_id.to_string()))
+    })
 }
 
 /// Wire command names confirmed to produce an echoed ack [REF-MQTT-ACK] that write-zombie
@@ -502,7 +508,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             pending_messages: VecDeque::new(),
             pending_bytes: 0,
             write_pending_secs: None,
-            write_pending_sequence_id: None,
+            write_pending_echo: None,
             ping_outstanding: false,
             last_outbound_ms: None,
             secs_since_last_message: 0,
@@ -595,12 +601,8 @@ impl<IO: AsyncIo> MqttClient<IO> {
             // Only correlate commands with confirmed ack evidence (ACK_CORRELATED_COMMANDS);
             // everything else (including pushall) falls back to clearing on any PUBLISH, same
             // as before this correlation fix existed.
-            self.write_pending_sequence_id = match extract_command_and_sequence_id(payload) {
-                Some((command, seq)) if ACK_CORRELATED_COMMANDS.contains(&command.as_str()) => {
-                    Some(seq)
-                }
-                _ => None,
-            };
+            self.write_pending_echo = extract_command_and_sequence_id(payload)
+                .filter(|(command, _)| ACK_CORRELATED_COMMANDS.contains(&command.as_str()));
         }
 
         Ok(packet_id)
@@ -798,23 +800,21 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     }
 
                     // Reset write channel zombie tracking only when this PUBLISH's echoed
-                    // sequence_id [REF-MQTT-ACK] matches the outstanding command's — not on any
-                    // incoming PUBLISH. Background telemetry (push_status) carries its own
+                    // command and sequence_id [REF-MQTT-ACK] match the outstanding command's — not
+                    // on any incoming PUBLISH. Background telemetry (push_status) carries its own
                     // independent, low-value sequence_id counter and arrives far more often than
                     // MQTT_ZOMBIE_TIMEOUT_SECS, so an unconditional reset here would mask a real
                     // zombie episode (broker discarding commands) forever [REF-MQTT-ZOMBIE].
                     // A pending command with no known sequence_id (pushall's `pushing` wrapper
                     // has no echoed ack, see `wrapper_key`) falls back to clearing on any
                     // PUBLISH, matching pre-correlation behavior for that case only.
-                    let should_clear = match &self.write_pending_sequence_id {
-                        Some(expected) => {
-                            extract_sequence_id(&payload).as_deref() == Some(expected.as_str())
-                        }
+                    let should_clear = match &self.write_pending_echo {
+                        Some(expected) => extract_echo_key(&payload).as_ref() == Some(expected),
                         None => self.write_pending_secs.is_some(),
                     };
                     if should_clear {
                         self.write_pending_secs = None;
-                        self.write_pending_sequence_id = None;
+                        self.write_pending_echo = None;
                     }
 
                     return Ok(MqttMessage { topic, payload });
@@ -1256,7 +1256,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
-                write_pending_sequence_id: None,
+                write_pending_echo: None,
                 ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
@@ -1324,7 +1324,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
-                write_pending_sequence_id: None,
+                write_pending_echo: None,
                 ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
@@ -1388,7 +1388,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
-                write_pending_sequence_id: None,
+                write_pending_echo: None,
                 ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
@@ -1441,7 +1441,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: Some(0),
-                write_pending_sequence_id: Some("100002".to_string()),
+                write_pending_echo: Some(("gcode_line".to_string(), "100002".to_string())),
                 ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
@@ -1469,11 +1469,31 @@ mod tests {
                 "unrelated telemetry must not clear the write-zombie timer"
             );
 
+            // A frame carrying the same number under a different command — the printer's own
+            // push_status counter, or another client's echo on the shared report topic — is not
+            // this command's ack either.
+            let collision = encode_publish_qos1(
+                3,
+                "device/01P000000000000/report",
+                b"{\"print\":{\"command\":\"push_status\",\"sequence_id\":\"100002\"}}",
+            );
+            server_stream.write_all(&collision).await.unwrap();
+            server_stream.flush().await.unwrap();
+            client
+                .poll_wire(&timer)
+                .await
+                .expect("colliding PUBLISH should parse");
+            assert_eq!(
+                client.write_pending_secs,
+                Some(0),
+                "a sequence_id match under a different command must not clear the timer"
+            );
+
             // The matching ack must clear it.
             let ack = encode_publish_qos1(
                 2,
                 "device/01P000000000000/report",
-                b"{\"print\":{\"sequence_id\":\"100002\",\"result\":\"success\"}}",
+                b"{\"print\":{\"command\":\"gcode_line\",\"sequence_id\":\"100002\",\"result\":\"success\"}}",
             );
             server_stream.write_all(&ack).await.unwrap();
             server_stream.flush().await.unwrap();
@@ -1486,7 +1506,7 @@ mod tests {
                 client.write_pending_secs, None,
                 "a PUBLISH echoing the outstanding command's sequence_id must clear the timer"
             );
-            assert_eq!(client.write_pending_sequence_id, None);
+            assert_eq!(client.write_pending_echo, None);
         }
 
         #[tokio::test]
@@ -1507,7 +1527,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
-                write_pending_sequence_id: None,
+                write_pending_echo: None,
                 ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
@@ -1523,7 +1543,7 @@ mod tests {
                 .expect("pushall publish failed");
             assert_eq!(client.write_pending_secs, Some(0));
             assert_eq!(
-                client.write_pending_sequence_id, None,
+                client.write_pending_echo, None,
                 "pushall has no echoed ack to correlate against"
             );
 
@@ -1543,7 +1563,7 @@ mod tests {
                 .await
                 .expect("telemetry PUBLISH should parse");
             assert_eq!(client.write_pending_secs, None);
-            assert_eq!(client.write_pending_sequence_id, None);
+            assert_eq!(client.write_pending_echo, None);
         }
     }
 }

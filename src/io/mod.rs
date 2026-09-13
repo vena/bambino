@@ -441,6 +441,16 @@ pub trait TimerProvider {
     /// *differences* between two calls are meaningful.
     fn now_millis(&self) -> u64;
 
+    /// Returns wall-clock milliseconds since the Unix epoch, or `None` when the platform has no calendar clock.
+    ///
+    /// Only used as a seed that differs between independent processes (command `sequence_id`s),
+    /// never for timing, so an unsynchronised clock is acceptable. `None` (the default) makes
+    /// callers fall back to [`now_millis`](Self::now_millis), whose epoch two processes started
+    /// together can share.
+    fn unix_millis(&self) -> Option<u64> {
+        None
+    }
+
     /// Whether this timer provides genuine wall-clock timing.
     /// `true` (the default) for every real platform implementation (`TokioTimer`, `EmbassyTimer`,
     /// `EspIdfTimer`). Only `PrinterClient`'s `DummyTimer` default overrides this to `false`.

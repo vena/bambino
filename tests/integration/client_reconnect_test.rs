@@ -65,6 +65,13 @@ async fn test_connect_all_connects_mqtt_and_skips_unconfigured_channels() {
 
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
+        // connect_all() must run the same per-connection steps as ensure_mqtt(), including the
+        // connect-time pushall that refills the telemetry cache (issue #287).
+        let pushall = read_publish_payload(&mut server_stream).await;
+        assert_eq!(
+            pushall["pushing"]["command"], "pushall",
+            "connect_all() must publish the connect-time pushall"
+        );
     });
 
     let mut client = PrinterClient::new(
@@ -110,7 +117,7 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
     // .with_timer() isn't chained), now_millis() always returns 0, so reseeding
     // unconditionally would collide every default-configured client onto the same seed —
     // exactly the bug this guard prevents. Verify the first command after a lazy
-    // ensure_mqtt() connect still carries the untouched default sequence ID (10001).
+    // ensure_mqtt() connect still carries the untouched default sequence ID (30001).
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
@@ -121,13 +128,13 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
         // caller's command — mints the first sequence ID of the session.
         let pushall = read_publish_payload(&mut server_stream).await;
         assert_eq!(
-            pushall["pushing"]["sequence_id"], "10001",
+            pushall["pushing"]["sequence_id"], "30001",
             "DummyTimer has no real clock — reseed must be skipped, not collapse every \
              default-configured client onto the same wall-clock seed"
         );
         let json = read_publish_payload(&mut server_stream).await;
         assert_eq!(
-            json["print"]["sequence_id"], "10002",
+            json["print"]["sequence_id"], "30002",
             "the caller's first command must continue the untouched default sequence"
         );
     });
@@ -153,7 +160,7 @@ async fn test_first_lazy_command_carries_a_reseeded_sequence_id_with_a_real_cloc
     // The complement of the DummyTimer test above. dispatch() used to mint the sequence ID
     // before publish_request() ran ensure_mqtt(), so the wall-clock reseed landed one command
     // too late and the *first* command of every lazily-connecting session still published the
-    // fixed 10001 — precisely the cross-session collision the reseed exists to prevent, since
+    // fixed 30001 — precisely the cross-session collision the reseed exists to prevent, since
     // MQTT connects lazily by default and "construct, then immediately send" is the common
     // shape. With a real TimerProvider the first command must already be reseeded.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
@@ -166,14 +173,24 @@ async fn test_first_lazy_command_carries_a_reseeded_sequence_id_with_a_real_cloc
         // off the fixed default — as must the caller's command behind it.
         let pushall = read_publish_payload(&mut server_stream).await;
         assert_ne!(
-            pushall["pushing"]["sequence_id"], "10001",
+            pushall["pushing"]["sequence_id"], "30001",
             "with a real clock the reseed must complete before any sequence ID is minted"
         );
         let json = read_publish_payload(&mut server_stream).await;
         assert_ne!(
-            json["print"]["sequence_id"], "10001",
+            json["print"]["sequence_id"], "30001",
             "with a real clock the reseed must complete before the first command's \
              sequence ID is minted, not after it"
+        );
+        let seq: u64 = json["print"]["sequence_id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (30_000..i32::MAX as u64).contains(&seq),
+            "a reseeded id must stay above the printer's push_status counter and BambuStudio's \
+             reserved 20000..30000 range, got {seq}"
         );
     });
 

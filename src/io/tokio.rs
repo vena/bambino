@@ -44,6 +44,13 @@ impl TimerProvider for TokioTimer {
     fn now_millis(&self) -> u64 {
         self.epoch.elapsed().as_millis() as u64
     }
+
+    fn unix_millis(&self) -> Option<u64> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64)
+    }
 }
 
 /// UDP socket interface wrapping a native Tokio UdpSocket.

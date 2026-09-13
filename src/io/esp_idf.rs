@@ -81,6 +81,17 @@ impl TimerProvider for EspIdfTimer {
         // esp_timer_get_time() returns microseconds since boot as i64
         (unsafe { ::esp_idf_svc::sys::esp_timer_get_time() } as u64) / 1000
     }
+
+    /// Reads ESP-IDF's newlib `SystemTime`, which counts from 1970 at boot until SNTP sets it.
+    ///
+    /// Unsynchronised it is only boot-relative, but it still serves the seed this method
+    /// exists for; an SNTP-synced device gets a real per-boot distinction.
+    fn unix_millis(&self) -> Option<u64> {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as u64)
+    }
 }
 
 /// Microseconds since boot, for the handshake-loop instrumentation in `EspIdfTlsConnector::connect`.

@@ -854,7 +854,16 @@ All commands published to the request topic produce an acknowledgment response o
 
 **Observed behavior (P1S, firmware 2025):** All tested commands return `result: "success"` regardless of whether the command had a meaningful effect. This includes motion commands when axes are unhomed, pause/resume/stop when no print is active, and clearing errors when none exist. The ack confirms command *receipt and dispatch*, not successful *execution*. Clients must not treat `result: "success"` as confirmation that the intended physical action occurred.
 
-The printer's own incremental `push_status` telemetry uses an independent `sequence_id` counter (starting from low values like `0` or `1`), separate from the client's command sequence IDs. This makes correlation unambiguous — command acks carry the client's high-value sequence IDs, while background telemetry carries the printer's own counter.
+The printer's own incremental `push_status` telemetry uses an independent `sequence_id` counter (starting from low values like `0` or `1`; captures show `"11"` and `"58"`), separate from the client's command sequence IDs. **A number alone does not identify an ack.** The report topic is shared: every subscriber receives every client's echoes, and the ranges overlap —
+
+| Party | `sequence_id` range | Source |
+| :--- | :--- | :--- |
+| Printer `push_status` | counts up from 0 | wire captures |
+| bambuddy | counts up from 1; hardcodes `"0"` for pause/resume/stop/clean_print_error/print_speed | `backend/app/services/bambu_mqtt.py` |
+| BambuStudio | `20000..30000` for its own commands, `0` for cloud | `DeviceCore/DevUtil.h` `STUDIO_START_SEQ_ID`/`STUDIO_END_SEQ_ID`/`CLOUD_SEQ_ID` |
+| bambino | `30000..i32::MAX`, seeded from the wall clock per connect | `src/client/mod.rs` `SEQUENCE_ID_FLOOR` |
+
+Correlate on the echoed `command` name and `sequence_id` together. BambuStudio shows an error dialog for any echo with an `err_code` whose `sequence_id` falls in its own range, so a third-party client minting ids there would raise dialogs in a user's open BambuStudio.
 
 ###### Ack Correlation Confirmed by Wire Capture (P1S, firmware 2025)
 

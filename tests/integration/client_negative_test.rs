@@ -1581,15 +1581,15 @@ async fn test_select_k_profile_rejects_standard_tray_id_above_15() {
     broker_task.await.expect("Broker task panicked");
 }
 
-const K_PROFILE_RESPONSE: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10002","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+const K_PROFILE_RESPONSE: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"30002","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
 
 // Second `get_k_profiles()` call on an already-primed client: sequence ID advances
-// past the first call's prime (10001) and real query (10002).
-const K_PROFILE_RESPONSE_SECOND_CALL: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10003","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+// past the first call's prime (30001) and real query (30002).
+const K_PROFILE_RESPONSE_SECOND_CALL: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"30003","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
 
 // Manual-prime-skip call: only the real query is sent, so it lands on the first
-// sequence ID issued (10001), not the second (10002) that auto-priming would consume.
-const K_PROFILE_RESPONSE_NO_PRIME: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"10001","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
+// sequence ID issued (30001), not the second (30002) that auto-priming would consume.
+const K_PROFILE_RESPONSE_NO_PRIME: &str = r#"{"print":{"command":"extrusion_cali_get","sequence_id":"30001","nozzle_diameter":"0.4","filaments":[{"cali_idx":4,"filament_id":"GFA01","nozzle_diameter":"0.4","nozzle_id":"HS00-0.4","extruder_id":0,"name":"Test PLA","k_value":"0.022000","setting_id":"PF12345678901234567"}]}}"#;
 
 // Correct command but a sequence ID that belongs to nobody — simulates a stray
 // response from another MQTT client (Orca/Studio/a second instance of us) querying
@@ -1787,7 +1787,7 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
 }
 
 // This only exercises a single command from a freshly-constructed client (sequence
-// ID 10001), so it can't seed sequence_counter near TASK_ID_MAX to actually trigger wraparound
+// ID 30001), so it can't seed sequence_counter near TASK_ID_MAX to actually trigger wraparound
 // — that field is pub(crate), invisible to this external integration test. It still verifies a
 // real invariant (every wire sequence_id fits in i32), just not wraparound itself; the
 // wraparound math is covered directly by

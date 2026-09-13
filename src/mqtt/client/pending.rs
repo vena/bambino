@@ -135,7 +135,7 @@ mod tests {
                 pending_messages: VecDeque::new(),
                 pending_bytes: 0,
                 write_pending_secs: None,
-                write_pending_sequence_id: None,
+                write_pending_echo: None,
                 ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
