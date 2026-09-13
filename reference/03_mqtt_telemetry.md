@@ -886,6 +886,41 @@ This extends the "success regardless of effect" observation above in an importan
 
 Not confirmed by this run: whether any of these behave the same on other models. The capture is P1S-only.
 
+###### Ack Verdict Vocabulary
+
+BambuStudio and bambuddy agree on how an echo says a command was refused. bambino decodes it into `CommandOutcome` (`src/client/command.rs`):
+
+| Field | Meaning | Source |
+| :--- | :--- | :--- |
+| `result` | `"success"`, or a refusal spelled `"fail"` (BambuStudio `DeviceCore/DevCalib.cpp:216,252,308`; bambuddy `await_cali_ack`) or `"failed"` (signature-verify refusal, §3.2). The inbound `project_file` push spells success `"SUCCESS"`, so compare case-insensitively. | both |
+| `result` absent | Receipt with no verdict. P1S firmware 01.10.00.00 answers `ams_filament_setting` with a bare `{command, sequence_id}` while refusing it through HMS (bambuddy #2732). Not success. | bambuddy `_handle_dev_mode_probe_response` |
+| `reason` | Free text, e.g. `"mqtt message verify failed"`. `"success"` on accepted commands. | both |
+| `err_code` | Integer device error code; `0` means none. BambuStudio raises its error dialog for any non-zero value regardless of `result`, through the same `DeviceErrorDialog::show_error_code` as the `print_error` register, so it decodes as `MMMM_CCCC` the same way. | BambuStudio `DeviceManager.cpp:3044-3049`, `StatusPanel.cpp:3573` |
+| `errno` | Per-command integer. `ams_change_filament`: `-2` chamber too hot, `-4` AMS too hot to load without softening the filament; `soft_temp` (°C) gives the limit when present. `set_ctt`: `-2` low-temperature filament loaded, `-4` target below 40 °C so control will not activate. | BambuStudio `DeviceManager.cpp:2993-3036` |
+
+###### Effect Signals: Did the Command Do Anything?
+
+Because an ack confirms receipt only, whether a command took effect has to be read from later telemetry, and the field differs per command. Telemetry carries the printer's own `sequence_id` counter, so none of these can be tied to the causing command by id — attribute by the command's scope (which tray, which axis) and a short window after its ack. That attribution is a heuristic.
+
+| Command (bambino method) | Effect signal | Refusal signal |
+| :--- | :--- | :--- |
+| `pause`/`resume`/`stop` (`pause_print`, `resume_print`, `stop_print`) | `print.gcode_state` (`PrinterClient::print_status`) | `print_error`, HMS |
+| `project_file` (`start_print`) | `gcode_state` leaving `IDLE`/`FINISH`, `subtask_name` | `print_error` (e.g. `0500_4003` on replay, §3.4), HMS |
+| `gcode_line` homing (`home_axes`) | `home_flag` bits 0-2 (`is_all_axes_homed`, `wait_for_homing`) | HMS |
+| `gcode_line` motion (`move_relative`, `extrude`) | none reported — no absolute position over MQTT | HMS |
+| `gcode_line` heaters (`set_bed_temperature`, `set_nozzle_temperature`, `set_chamber_temperature`) | `bed_target_temper`, `nozzle_target_temper`, chamber target | HMS |
+| `gcode_line` fans (`set_fan_speed`) | `cooling_fan_speed`, `big_fan1_speed`, `big_fan2_speed` | — |
+| `ams_filament_drying` (`dry(..).send()`, `stop_drying`) | AMS unit `dry_status`, `dry_sub_status` | `dry_block_reasons` (`dry_sf_reason`), issue #277 |
+| `ams_change_filament`/`ams_control` (`change_filament`) | `ams_status` main/sub state, tray `tray_now` | ack `errno` (above), HMS |
+| `ams_filament_setting` | tray `tray_info_idx`/`tray_type` read back on the next push (bambuddy #2756) | ack `result` |
+| `extrusion_cali_sel` (`select_k_profile`) | tray `cali_idx` | ack `result` |
+| `extrusion_cali_set`/`_del` | `get_k_profiles` read-back (bambuddy `await_cali_ack` doc: "callers that need certainty read the calibration table back") | ack `result`/`reason` |
+| `ledctrl` (`set_led`) | `lights_report` node `mode` | — |
+| `set_airduct` (`set_airduct_mode`) | `device.airduct` mode | none: acks success on models without a damper (P1S) |
+| `buzzer_ctrl`, `print_option` (`set_buzzer_mode`, `set_prompt_sound`) | none reported | none: acks success on models without the hardware (P1S) |
+| `calibration` (`start_calibration`) | `gcode_state`, `stg_cur` stage | unsupported option bits are silently dropped (§3.3) |
+| `skip_objects` | `s_obj` list | — |
+
 ---
 
 ### 3.4 Mechanical & Firmware Quirks
