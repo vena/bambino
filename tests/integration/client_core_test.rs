@@ -127,19 +127,23 @@ async fn test_move_relative_zero_distance_is_noop() {
         // assertion below would fail on mismatched params.
         let json_x = read_publish_payload(&mut server_stream).await;
         assert_eq!(json_x["print"]["param"], "G91\nG0 X5.00 F1000\nG90\n");
+        json_x
     });
 
     let mut client =
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
-    // Zero-distance Z move: must be a no-op (Ok(0), no travel-limit error, no wire traffic) —
+    // Zero-distance Z move: must be a no-op (Ok(None), no travel-limit error, no wire traffic) —
     // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
     // otherwise collapse it into (it returns the same empty string for zero and out-of-range).
     let z_result = client
         .move_relative('z', 0.0, 3000)
         .await
         .expect("zero-distance Z move should succeed as a no-op");
-    assert_eq!(z_result, 0, "no-op move should return sentinel packet id 0");
+    assert_eq!(
+        z_result, None,
+        "a no-op move publishes nothing, so has no handle"
+    );
 
     // Zero-distance X move: same no-op contract, off the Z-only travel-limit code path.
     let x_zero_result = client
@@ -147,17 +151,26 @@ async fn test_move_relative_zero_distance_is_noop() {
         .await
         .expect("zero-distance X move should succeed as a no-op");
     assert_eq!(
-        x_zero_result, 0,
-        "no-op move should return sentinel packet id 0"
+        x_zero_result, None,
+        "a no-op move publishes nothing, so has no handle"
     );
 
-    // Non-zero move on the same client still publishes normally.
-    client
+    // Non-zero move on the same client still publishes normally, and its handle names exactly
+    // what reached the wire (issue #283).
+    let handle = client
         .move_relative('x', 5.0, 1000)
         .await
-        .expect("non-zero X move failed");
+        .expect("non-zero X move failed")
+        .expect("a published move must return a handle");
 
-    broker_task.await.expect("Broker task panicked");
+    let json_x = broker_task.await.expect("Broker task panicked");
+    assert_eq!(handle.command(), "gcode_line");
+    assert_eq!(
+        json_x["print"]["sequence_id"],
+        handle.sequence_id().to_string(),
+        "the handle must carry the sequence_id the printer will echo, not the MQTT packet id"
+    );
+    assert_eq!(handle.ack(), bambino::client::AckExpectation::Echoes);
 }
 
 #[tokio::test]

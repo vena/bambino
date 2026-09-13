@@ -244,12 +244,21 @@ const ACK_CORRELATED_COMMANDS: &[&str] = &[
     "get_access_code",
 ];
 
+/// Whether `command` is confirmed to echo its `sequence_id` — membership in [`ACK_CORRELATED_COMMANDS`].
+///
+/// The single source for both write-zombie correlation and the
+/// [`AckExpectation`](crate::client::AckExpectation) a `PrinterClient` command handle carries,
+/// so the two cannot disagree about which commands answer.
+pub(crate) fn command_echoes(command: &str) -> bool {
+    ACK_CORRELATED_COMMANDS.contains(&command)
+}
+
 /// Extracts the `command` name and `sequence_id` from an outgoing command payload's single
 /// top-level wrapper object (`print`/`system`/`pushing`/`info` — the Payload+Request pattern
 /// always nests exactly one). `pushall` (`pushing` wrapper) triggers an unlabeled state-dump
 /// stream rather than an echoed ack [REF-MQTT-LIFECYCLE], so it's excluded from
 /// `ACK_CORRELATED_COMMANDS` above like every other command without confirmed ack evidence.
-fn extract_command_and_sequence_id(payload: &[u8]) -> Option<(String, String)> {
+pub(crate) fn extract_command_and_sequence_id(payload: &[u8]) -> Option<(String, String)> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
     let inner = value.as_object()?.values().next()?;
     let command = inner.get("command")?.as_str()?.to_string();
@@ -602,7 +611,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             // everything else (including pushall) falls back to clearing on any PUBLISH, same
             // as before this correlation fix existed.
             self.write_pending_echo = extract_command_and_sequence_id(payload)
-                .filter(|(command, _)| ACK_CORRELATED_COMMANDS.contains(&command.as_str()));
+                .filter(|(command, _)| command_echoes(command));
         }
 
         Ok(packet_id)

@@ -18,6 +18,7 @@
 mod ams;
 mod camera;
 pub mod capabilities;
+pub mod command;
 mod connect;
 pub mod drying;
 pub mod dummy;
@@ -30,6 +31,7 @@ mod thermal;
 pub mod types;
 
 pub use capabilities::Capabilities;
+pub use command::{AckExpectation, CommandHandle};
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
@@ -422,40 +424,58 @@ where
     }
 
     /// Serializes a request struct and publishes it to the printer's MQTT command channel.
-    pub(crate) async fn publish_request<T: Serialize>(
-        &mut self,
-        request: &T,
-    ) -> Result<u16, Error> {
+    pub(crate) async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<(), Error> {
         self.ensure_mqtt().await?;
         let payload = serde_json::to_vec(request).map_err(|_| Error::Serialization)?;
+        self.publish_payload(&payload).await
+    }
+
+    async fn publish_payload(&mut self, payload: &[u8]) -> Result<(), Error> {
         self.mqtt
             .as_mut()
             .unwrap()
-            .publish_command_with_timer(&payload, &self.timer)
+            .publish_command_with_timer(payload, &self.timer)
             .await
+            .map(|_packet_id| ())
     }
 
-    /// Collapses the repeated `next_sequence_id()` → build request → `publish_request()` triplet used by nearly every command-dispatching method in this module.
-    /// `build` receives the freshly-clamped sequence ID and constructs the request struct; closures can
-    /// capture whatever other locals a given command needs beyond `seq`.
+    /// Mints a sequence ID, builds the request with it, publishes it, and returns the [`CommandHandle`] naming it.
+    ///
+    /// Used by every fire-and-forget command method. `build` receives the freshly minted sequence
+    /// ID and constructs the request struct; closures can capture whatever other locals a given
+    /// command needs beyond `seq`. The handle's command name is read back from the serialized
+    /// payload rather than passed in, so it is the name actually on the wire.
     pub(crate) async fn dispatch<T: Serialize>(
         &mut self,
         build: impl FnOnce(u64) -> T,
-    ) -> Result<u16, Error> {
+    ) -> Result<CommandHandle, Error> {
         // Connect before minting: `ensure_mqtt()` reseeds `sequence_counter` from the wall
         // clock on a successful lazy connect (see `connect.rs`), and MQTT connects lazily by
         // default — so minting first meant the first command of every session carried the
         // un-reseeded `INITIAL_SEQUENCE_ID + 1`, which is the exact collision between two
         // independent sessions the reseed exists to prevent. Idempotent: `ensure_mqtt()`
-        // short-circuits when already connected, so `publish_request`'s own call is free.
+        // short-circuits when already connected.
         self.ensure_mqtt().await?;
         let seq = self.next_sequence_id();
         let req = build(seq);
-        self.publish_request(&req).await
+        let payload = serde_json::to_vec(&req).map_err(|_| Error::Serialization)?;
+        let (command, _) = crate::mqtt::client::extract_command_and_sequence_id(&payload).ok_or(
+            Error::ProtocolViolation("command payload carries no command name".into()),
+        )?;
+        let ack = if crate::mqtt::client::command_echoes(&command) {
+            AckExpectation::Echoes
+        } else {
+            AckExpectation::SettlesOnPublish
+        };
+        self.publish_payload(&payload).await?;
+        // `next_sequence_id` keeps the counter below `TASK_ID_MAX` (`i32::MAX`), so this is lossless.
+        Ok(CommandHandle::new(command, seq as u32, ack))
     }
 
     /// Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
-    pub async fn request_pushall(&mut self) -> Result<u16, Error> {
+    ///
+    /// Settles on publish: `pushall` has no echo, the state dump that follows is the answer.
+    pub async fn request_pushall(&mut self) -> Result<CommandHandle, Error> {
         self.dispatch(crate::mqtt::PushAllRequest::new).await
     }
 

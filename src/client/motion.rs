@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::GCodeRequest;
 
-use super::{POLL_UNTIL_MAX_MESSAGES, PrinterClient};
+use super::{CommandHandle, POLL_UNTIL_MAX_MESSAGES, PrinterClient};
 
 // home_flag bits 0-2 [REF-HOMEFLAG]
 const HOME_FLAG_X_BIT: u32 = 0x01;
@@ -111,7 +111,7 @@ where
     /// // This will be rejected on CoreXY printers (unsafe partial homing):
     /// // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
     /// ```
-    pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error> {
+    pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<CommandHandle, Error> {
         if self
             .identity
             .model
@@ -127,8 +127,8 @@ where
 
     /// Dispatches a raw G-code string without model safety checks [REF-MOTO-GCODE].
     ///
-    /// Returns the MQTT packet identifier assigned to track publication delivery status.
-    pub async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, Error> {
+    /// Returns the [`CommandHandle`] of the published `gcode_line` command.
+    pub async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<CommandHandle, Error> {
         self.dispatch(|seq| GCodeRequest::new(gcode_line, seq))
             .await
     }
@@ -141,7 +141,7 @@ where
     ///   (such as `G28 Z`) bypasses this and risks driving the bed directly into a misplaced toolhead.
     /// * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
     ///   highly recommended for standard configurations.
-    pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, Error> {
+    pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<CommandHandle, Error> {
         let is_bed_on_z = self.identity.model.quirks().is_bed_on_z();
 
         let gcode = if is_bed_on_z {
@@ -174,15 +174,14 @@ where
     /// `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
     ///
     /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
-    /// returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a
-    /// real publish, so it unambiguously signals "nothing was sent"). This avoids surfacing
-    /// the Z-axis travel-limit error for a request that isn't actually out of range.
+    /// returns `Ok(None)`. This avoids surfacing the Z-axis travel-limit error for a request
+    /// that isn't actually out of range.
     pub async fn move_relative(
         &mut self,
         axis: char,
         distance: f32,
         feedrate: u32,
-    ) -> Result<u16, Error> {
+    ) -> Result<Option<CommandHandle>, Error> {
         let axis_upper = axis.to_ascii_uppercase();
         if !matches!(axis_upper, 'X' | 'Y' | 'Z') {
             // Reject invalid axes up front — otherwise `relative_xy_move_gcode` collapses
@@ -201,12 +200,9 @@ where
         if distance == 0.0 {
             // Zero-distance move is a legitimate no-op (e.g. a UI slider at rest), not a
             // travel-limit violation — short-circuit before `relative_z_move_gcode` collapses
-            // it to the same empty-string signal it uses for an out-of-range distance. No MQTT
-            // packet is published, so there's no real packet identifier to return; `0` signals
-            // "no-op, nothing sent" — safe because this return value is an MQTT packet
-            // identifier (from `send_gcode_raw`'s publish, not a sequence id), and MQTT reserves
-            // packet identifier 0, so it can't collide with a genuine in-flight packet.
-            return Ok(0);
+            // it to the same empty-string signal it uses for an out-of-range distance. Nothing
+            // is published, so there is no command to hand back.
+            return Ok(None);
         }
         if axis_upper == 'Z' {
             let gcode = self
@@ -219,7 +215,7 @@ where
                     "Z-axis move exceeds model travel limits".into(),
                 ));
             }
-            self.send_gcode_raw(&gcode).await
+            self.send_gcode_raw(&gcode).await.map(Some)
         } else {
             let gcode = self
                 .identity
@@ -231,7 +227,7 @@ where
                     format!("{axis_upper}-axis move exceeds model travel limits").into(),
                 ));
             }
-            self.send_gcode_raw(&gcode).await
+            self.send_gcode_raw(&gcode).await.map(Some)
         }
     }
 
@@ -239,7 +235,7 @@ where
     ///
     /// Configures the active extruder drive gear to relative mode (`M83`) and feeds
     /// the specified length of filament (in mm) at the designated feedrate (in mm/min).
-    pub async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, Error> {
+    pub async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<CommandHandle, Error> {
         if self.is_all_axes_homed() == Some(false) {
             log::warn!("not all axes are homed (last-known state) — extrude proceeding anyway");
         }

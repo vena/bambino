@@ -4,7 +4,7 @@ use alloc::format;
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
-use super::PrinterClient;
+use super::{CommandHandle, PrinterClient};
 
 impl<
     MqttRawIO,
@@ -60,7 +60,7 @@ where
     /// ```rust,ignore
     /// printer.set_bed_temperature(60).await?;
     /// ```
-    pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
+    pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<CommandHandle, Error> {
         let mains_220v = self.is_220v_power();
         let max = self.identity.model.quirks().bed_temp_max(mains_220v);
         let target_temp = super::clamp_temp(target_temp, max, "Bed");
@@ -85,7 +85,7 @@ where
         &mut self,
         nozzle_id: u8,
         target_temp: u16,
-    ) -> Result<u16, Error> {
+    ) -> Result<CommandHandle, Error> {
         // Rack-slot addressing is a quirks *predicate*, not something to infer from the
         // nozzle count — `uses_nozzle_rack()` is passed explicitly by the H2 macro precisely
         // so a future variant has to state whether it racks its hotends (see
@@ -125,7 +125,10 @@ where
     /// fighting an open exhaust, and this method still returns `Ok`. Use
     /// [`preheat_chamber()`](Self::preheat_chamber) to drive both together, or call
     /// [`set_airduct_mode()`](Self::set_airduct_mode) yourself.
-    pub async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error> {
+    pub async fn set_chamber_temperature(
+        &mut self,
+        target_temp: u16,
+    ) -> Result<CommandHandle, Error> {
         let Some(max) = self
             .identity
             .model
@@ -160,13 +163,14 @@ where
     /// `target_temp` still returns the same `ModelMismatch` the primitive would, and the flap is
     /// left alone — the caller wanted heat this model cannot make.
     ///
-    /// Returns the sequence ID of the `M141` when one is sent, or of the `set_airduct` command
-    /// when `target_temp` is `0` on a flap-only model.
+    /// Returns the handle of the `M141` when one is sent, or of the `set_airduct` command when
+    /// `target_temp` is `0` on a flap-only model. When both are sent, only the `M141`'s handle is
+    /// returned.
     ///
     /// [`AirductMode::Heating`]: crate::mqtt::commands::AirductMode::Heating
     /// [`AirductMode::Cooling`]: crate::mqtt::commands::AirductMode::Cooling
     /// [`ModelQuirks::supports_airduct_mode`]: crate::quirks::ModelQuirks::supports_airduct_mode
-    pub async fn preheat_chamber(&mut self, target_temp: u16) -> Result<u16, Error> {
+    pub async fn preheat_chamber(&mut self, target_temp: u16) -> Result<CommandHandle, Error> {
         use crate::mqtt::commands::AirductMode;
 
         let quirks = self.identity.model.quirks();

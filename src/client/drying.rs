@@ -26,7 +26,7 @@ use crate::types::telemetry::ams::{
     AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX, AMS_STANDARD_DRY_TEMP_MAX,
 };
 
-use super::PrinterClient;
+use super::{CommandHandle, PrinterClient};
 
 /// A drying cycle being configured, returned by [`PrinterClient::dry`].
 ///
@@ -303,7 +303,7 @@ where
     /// commands without polling. Call [`poll_telemetry()`](PrinterClient::poll_telemetry) first
     /// to arm it. When the unit is unobserved the temperature range falls back to the
     /// `ams_id`-derived ceiling, the best guess the address alone supports.
-    pub async fn send(self) -> Result<u16, Error> {
+    pub async fn send(self) -> Result<CommandHandle, Error> {
         if self.temp == 0 {
             return Err(Error::InvalidArgument(
                 "drying temperature not set — call .material(..) or .temp(..)".into(),

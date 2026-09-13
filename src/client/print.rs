@@ -13,8 +13,8 @@ use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::{PrintJobConfig, StandardControlRequest};
 
-use super::PrinterClient;
 use super::types::{CalibrationOption, PrintSpeed, PrintStatus};
+use super::{CommandHandle, PrinterClient};
 
 impl<
     MqttRawIO,
@@ -62,7 +62,7 @@ where
     /// nor bambuddy gates this on `gcode_state`, and the CLI's `probe` sends it while idle on
     /// purpose to document what the firmware does. See `stop_print` for the staleness argument
     /// that applies to any cache-backed gate on this path.
-    pub async fn pause_print(&mut self) -> Result<u16, Error> {
+    pub async fn pause_print(&mut self) -> Result<CommandHandle, Error> {
         self.dispatch(|seq| StandardControlRequest::new("pause", seq))
             .await
     }
@@ -70,7 +70,7 @@ where
     /// Resumes a paused print job [REF-MQTT-LIFECYCLE].
     ///
     /// Not state-gated, on the same terms as [`pause_print`](Self::pause_print).
-    pub async fn resume_print(&mut self) -> Result<u16, Error> {
+    pub async fn resume_print(&mut self) -> Result<CommandHandle, Error> {
         self.dispatch(|seq| StandardControlRequest::new("resume", seq))
             .await
     }
@@ -83,19 +83,19 @@ where
     /// job started holds a stale `IDLE`. Refusing an abort on a stale reading would leave the
     /// printer running while reporting the stop as rejected — the wrong direction to fail for
     /// the abort path. Stop is idempotent, so a no-op stop costs nothing on the other side.
-    pub async fn stop_print(&mut self) -> Result<u16, Error> {
+    pub async fn stop_print(&mut self) -> Result<CommandHandle, Error> {
         self.dispatch(|seq| StandardControlRequest::new("stop", seq))
             .await
     }
 
     /// Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
-    pub async fn clear_print_error(&mut self) -> Result<u16, Error> {
+    pub async fn clear_print_error(&mut self) -> Result<CommandHandle, Error> {
         self.dispatch(crate::mqtt::CleanPrintErrorRequest::new)
             .await
     }
 
     /// Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
-    pub async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<u16, Error> {
+    pub async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error> {
         let speed_str = match level {
             PrintSpeed::Silent => "1",
             PrintSpeed::Standard => "2",
@@ -125,7 +125,7 @@ where
     /// Deliberately **not** gated on `xcam.allow_skip_parts`: that field reads `false` in every
     /// capture, including hardware the vendor documents as supporting the feature, so gating on
     /// it would break skip-objects outright. bambuddy parses it and likewise does not gate on it.
-    pub async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, Error> {
+    pub async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<CommandHandle, Error> {
         if object_ids.is_empty() {
             return Err(Error::InvalidArgument(Cow::Borrowed(
                 "skip_objects requires at least one object id",
@@ -195,7 +195,10 @@ where
     ///
     /// Wire observations are P1S firmware `01.10.00.00`. See `reference/03_mqtt_telemetry.md`
     /// for the wire detail and stage-ID mapping.
-    pub async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error> {
+    pub async fn start_calibration(
+        &mut self,
+        options: CalibrationOption,
+    ) -> Result<CommandHandle, Error> {
         // The firmware acks unsupported option bits as "success" and silently queues nothing for
         // them, so the wire cannot tell a caller their routine was skipped. Mask against what the
         // model actually runs and refuse only when nothing at all would execute — a partial
@@ -227,7 +230,7 @@ where
     /// The model's quirks engine gates `nozzle_offset_cali`: it resolves the default when the
     /// config left it `None`, and forces it off on a single-nozzle model even if the caller set
     /// it explicitly.
-    pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error> {
+    pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error> {
         let model = self.identity.model;
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))
             .await

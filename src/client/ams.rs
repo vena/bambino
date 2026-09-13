@@ -8,7 +8,7 @@ use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::VersionInfo;
 
-use super::PrinterClient;
+use super::{CommandHandle, PrinterClient};
 
 use crate::types::telemetry::AmsUnitModel;
 
@@ -154,7 +154,7 @@ where
         curr_temp: i32,
         tar_temp: i32,
         extruder_id: Option<u8>,
-    ) -> Result<u16, Error> {
+    ) -> Result<CommandHandle, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
         // slot_id 254 is only meaningful as the external-spool load sentinel, so it is valid
@@ -275,7 +275,7 @@ where
     ///
     /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
     /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
-    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error> {
+    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<CommandHandle, Error> {
         if !is_valid_ams_id(ams_id) {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for stop_drying".into(),
@@ -311,7 +311,7 @@ where
     /// the reader: returns [`Error::InvalidState`] when the cached `ams.tray_now` is anything but
     /// `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
     /// same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
-    pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error> {
+    pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<CommandHandle, Error> {
         let ams_valid = is_valid_ams_bus_unit_id(ams_id);
         let slot_valid = (0..=3).contains(&slot_id);
         if !ams_valid || !slot_valid {
@@ -384,7 +384,7 @@ where
         cali_idx: i32,
         filament_id: &str,
         nozzle_diameter: &str,
-    ) -> Result<u16, Error> {
+    ) -> Result<CommandHandle, Error> {
         let ams_valid = is_valid_ams_id(ams_id);
         let tray_valid = (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
             || AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS.contains(&tray_id)
