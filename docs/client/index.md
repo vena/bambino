@@ -26,6 +26,7 @@ The client applies model-aware safety checks automatically:
 | Item | Kind | Description |
 |------|------|-------------|
 | [`capabilities`](#capabilities) | mod | # Client-Scoped Capabilities |
+| [`command`](command/index.md) | mod | # Command Handles and Outcomes |
 | [`drying`](drying/index.md) | mod | # Drying Cycle Builder |
 | [`dummy`](dummy/index.md) | mod | Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters. |
 | [`types`](#types) | mod | Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration). |
@@ -34,6 +35,7 @@ The client applies model-aware safety checks automatically:
 ## Modules
 
 - [`capabilities`](capabilities/index.md#capabilities) — # Client-Scoped Capabilities
+- [`command`](command/index.md) — # Command Handles and Outcomes
 - [`drying`](drying/index.md) — # Drying Cycle Builder
 - [`dummy`](dummy/index.md) — Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters.
 - [`types`](types/index.md#types) — Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration).
@@ -127,6 +129,155 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
 ##### `impl Debug for Capabilities<'_>`
 
 - <span id="capabilities-debug-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
+### `CommandHandle`
+
+```rust
+struct CommandHandle {
+    // [REDACTED: Private Fields]
+}
+```
+
+Names a command this client published, for matching the printer's answer to it.
+
+Only a [`PrinterClient`](#printerclient) mints one, so a handle always refers to a
+`sequence_id` this client actually sent.
+
+#### Implementations
+
+- <span id="commandhandle-command"></span>`fn command(&self) -> &str`
+
+  Returns the wire command name, e.g. `"gcode_line"` or `"ams_filament_drying"`.
+
+- <span id="commandhandle-sequence-id"></span>`fn sequence_id(&self) -> u32`
+
+  Returns the `sequence_id` the command was published under, which the printer echoes back.
+
+- <span id="commandhandle-ack"></span>`fn ack(&self) -> AckExpectation` — [`AckExpectation`](command/index.md#ackexpectation)
+
+  Returns whether an echo is coming for this command.
+
+#### Trait Implementations
+
+##### `impl Clone for CommandHandle`
+
+- <span id="commandhandle-clone"></span>`fn clone(&self) -> CommandHandle` — [`CommandHandle`](command/index.md#commandhandle)
+
+##### `impl Debug for CommandHandle`
+
+- <span id="commandhandle-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for CommandHandle`
+
+##### `impl Hash for CommandHandle`
+
+- <span id="commandhandle-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for CommandHandle`
+
+- <span id="commandhandle-partialeq-eq"></span>`fn eq(&self, other: &CommandHandle) -> bool` — [`CommandHandle`](command/index.md#commandhandle)
+
+### `CommandRefusal`
+
+```rust
+struct CommandRefusal {
+    pub result: Option<String>,
+    pub reason: Option<String>,
+    pub err_code: Option<u32>,
+    pub errno: Option<i32>,
+}
+```
+
+The printer's stated reasons for refusing a command.
+
+Every field is as the printer sent it, and any of them may be absent: `result`/`reason` are
+the generic pair, `err_code` a device error code, and `errno` a per-command code.
+
+#### Fields
+
+- **`result`**: `Option<String>`
+
+  The echoed `result` string (`"fail"`, `"failed"`, …), when present.
+
+- **`reason`**: `Option<String>`
+
+  The echoed free-text `reason`, e.g. `"mqtt message verify failed"` when LAN developer
+  mode is off. `None` when absent or empty.
+
+- **`err_code`**: `Option<u32>`
+
+  Non-zero device error code.
+  
+  BambuStudio shows it through the same dialog as the `print_error` register
+  (`DeviceManager.cpp:3044`), so it decodes the same way — see
+  [`decoded_error()`](command/index.md#commandrefusal).
+
+- **`errno`**: `Option<i32>`
+
+  Non-zero per-command code.
+  
+  For `ams_change_filament`, `-2` means the chamber and `-4` the AMS is too hot to load the
+  filament without softening it; the echo's `soft_temp` field, when present, is the limit
+  in °C (BambuStudio `DeviceManager.cpp:2993-3016`).
+
+#### Implementations
+
+- <span id="commandrefusal-decoded-error"></span>`fn decoded_error(&self) -> Option<DecodedPrintError>` — [`DecodedPrintError`](../diagnostics/hms/index.md#decodedprinterror)
+
+  Decodes [`err_code`](command/index.md#commandrefusal) into its `MMMM_CCCC` short code.
+
+#### Trait Implementations
+
+##### `impl Clone for CommandRefusal`
+
+- <span id="commandrefusal-clone"></span>`fn clone(&self) -> CommandRefusal` — [`CommandRefusal`](command/index.md#commandrefusal)
+
+##### `impl Debug for CommandRefusal`
+
+- <span id="commandrefusal-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for CommandRefusal`
+
+##### `impl PartialEq for CommandRefusal`
+
+- <span id="commandrefusal-partialeq-eq"></span>`fn eq(&self, other: &CommandRefusal) -> bool` — [`CommandRefusal`](command/index.md#commandrefusal)
+
+### `CommandResolution`
+
+```rust
+struct CommandResolution {
+    pub handle: CommandHandle,
+    pub outcome: CommandOutcome,
+}
+```
+
+A command paired with its terminal outcome.
+
+#### Fields
+
+- **`handle`**: `CommandHandle`
+
+  The command, as returned when it was published.
+
+- **`outcome`**: `CommandOutcome`
+
+  What became of it.
+
+#### Trait Implementations
+
+##### `impl Clone for CommandResolution`
+
+- <span id="commandresolution-clone"></span>`fn clone(&self) -> CommandResolution` — [`CommandResolution`](command/index.md#commandresolution)
+
+##### `impl Debug for CommandResolution`
+
+- <span id="commandresolution-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for CommandResolution`
+
+##### `impl PartialEq for CommandResolution`
+
+- <span id="commandresolution-partialeq-eq"></span>`fn eq(&self, other: &CommandResolution) -> bool` — [`CommandResolution`](command/index.md#commandresolution)
 
 ### `ConnectAllOutcome`
 
@@ -278,7 +429,7 @@ client
   The interlock exists because several drying units on one supply can exceed it; overriding
   it is the caller asserting they know the power situation.
 
-- <span id="dryingcycle-send"></span>`async fn send(self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="dryingcycle-send"></span>`async fn send(self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Validates and publishes the cycle, returning the command's sequence ID [REF-AMS-DRYER].
 
@@ -469,7 +620,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 #### Implementations
 
-- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
@@ -536,14 +687,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   every gate runs — host capability, AMS addressing, the external-spool sentinels, the
   attached unit's model, and the temperature range [REF-AMS-DRYER].
 
-- <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
 
   Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
   every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
 
-- <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
 
@@ -569,7 +720,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
   same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
 
-- <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
 
@@ -865,7 +1016,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Overrides the default maximum accepted camera frame size (see `BinaryCameraStream::with_max_frame_size`).
 
-- <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<u16, Error>` — [`FanTarget`](types/index.md#fantarget), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](types/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
 
@@ -873,23 +1024,23 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   For models with unique secondary cooling configurations (like the X2D), directs commands
   to the correct target port ID.
 
-- <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-led"></span>`async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: crate::mqtt::commands::AirductMode) -> Result<u16, Error>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-airduct-mode"></span>`async fn set_airduct_mode(&mut self, mode: crate::mqtt::commands::AirductMode) -> Result<CommandHandle, Error>` — [`AirductMode`](../mqtt/commands/hardware/index.md#airductmode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
 
   Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
 
-- <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-prompt-sound"></span>`async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Configures whether the printer's speakers emit prompt notification sounds [REF-MQTT-LIFECYCLE].
 
   Supported on models with onboard speakers (A1, A1 Mini, A2L).
 
-- <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<u16, Error>` — [`BuzzerMode`](types/index.md#buzzermode), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-buzzer-mode"></span>`async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error>` — [`BuzzerMode`](types/index.md#buzzermode), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Modifies active alarm or attention chime parameters on the physical buzzer module [REF-MQTT-LIFECYCLE].
 
@@ -912,7 +1063,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `None` means no telemetry carrying `home_flag` has been observed on the current MQTT
   connection — see [`is_axis_homed()`](#printerclient).
 
-- <span id="superprinterclient-send-gcode"></span>`async fn send_gcode(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-send-gcode"></span>`async fn send_gcode(&mut self, gcode_line: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sends a G-code command with model-aware safety validation.
 
@@ -930,13 +1081,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
   ```
 
-- <span id="superprinterclient-send-gcode-raw"></span>`async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-send-gcode-raw"></span>`async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dispatches a raw G-code string without model safety checks [REF-MOTO-GCODE].
 
-  Returns the MQTT packet identifier assigned to track publication delivery status.
+  Returns the [`CommandHandle`](command/index.md#commandhandle) of the published `gcode_line` command.
 
-- <span id="superprinterclient-home-axes"></span>`async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-home-axes"></span>`async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dispatches safe homing operations to prevent hardware collisions.
 
@@ -947,7 +1098,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
     highly recommended for standard configurations.
 
-- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: char, distance: f32, feedrate: u32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-move-relative"></span>`async fn move_relative(&mut self, axis: char, distance: f32, feedrate: u32) -> Result<Option<CommandHandle>, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dispatches a manual relative axis movement block.
 
@@ -963,11 +1114,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
 
   A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
-  returns `Ok(0)` (packet id `0` is reserved by the MQTT layer and never assigned to a
-  real publish, so it unambiguously signals "nothing was sent"). This avoids surfacing
-  the Z-axis travel-limit error for a request that isn't actually out of range.
+  returns `Ok(None)`. This avoids surfacing the Z-axis travel-limit error for a request
+  that isn't actually out of range.
 
-- <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-extrude"></span>`async fn extrude(&mut self, length: f32, feedrate: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dispatches a manual relative extrusion command sequence [REF-GCODE-EXTRUDE].
 
@@ -998,7 +1148,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   step against `self.timer` internally, bounding a single call regardless of what
   this loop does above it.
 
-- <span id="superprinterclient-pause-print"></span>`async fn pause_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-pause-print"></span>`async fn pause_print(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Pauses the currently active print job [REF-MQTT-LIFECYCLE].
 
@@ -1008,13 +1158,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   purpose to document what the firmware does. See `stop_print` for the staleness argument
   that applies to any cache-backed gate on this path.
 
-- <span id="superprinterclient-resume-print"></span>`async fn resume_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-resume-print"></span>`async fn resume_print(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Resumes a paused print job [REF-MQTT-LIFECYCLE].
 
   Not state-gated, on the same terms as [`pause_print`](#printerclient).
 
-- <span id="superprinterclient-stop-print"></span>`async fn stop_print(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-stop-print"></span>`async fn stop_print(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].
 
@@ -1025,15 +1175,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   printer running while reporting the stop as rejected — the wrong direction to fail for
   the abort path. Stop is idempotent, so a no-op stop costs nothing on the other side.
 
-- <span id="superprinterclient-clear-print-error"></span>`async fn clear_print_error(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-clear-print-error"></span>`async fn clear_print_error(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<u16, Error>` — [`PrintSpeed`](types/index.md#printspeed), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error>` — [`PrintSpeed`](types/index.md#printspeed), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
 
-- <span id="superprinterclient-skip-objects"></span>`async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-skip-objects"></span>`async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Bypasses rendering of specific objects within an active multi-model print job [REF-MQTT-LIFECYCLE].
 
@@ -1055,7 +1205,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   capture, including hardware the vendor documents as supporting the feature, so gating on
   it would break skip-objects outright. bambuddy parses it and likewise does not gate on it.
 
-- <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<u16, Error>` — [`CalibrationOption`](types/index.md#calibrationoption), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-start-calibration"></span>`async fn start_calibration(&mut self, options: CalibrationOption) -> Result<CommandHandle, Error>` — [`CalibrationOption`](types/index.md#calibrationoption), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Triggers automated physical calibration routines on the printer chassis [REF-MQTT-LIFECYCLE].
 
@@ -1103,7 +1253,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Wire observations are P1S firmware `01.10.00.00`. See `reference/03_mqtt_telemetry.md`
   for the wire detail and stage-ID mapping.
 
-- <span id="superprinterclient-start-print"></span>`async fn start_print(&mut self, config: &PrintJobConfig) -> Result<u16, Error>` — [`PrintJobConfig`](../mqtt/commands/print_job/index.md#printjobconfig), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-start-print"></span>`async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error>` — [`PrintJobConfig`](../mqtt/commands/print_job/index.md#printjobconfig), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Submits a `.3mf` print job from MicroSD storage for execution [REF-MQTT-LIFECYCLE].
 
@@ -1152,14 +1302,27 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Pulls the next telemetry event from the MQTT channel.
 
-  Returns a [`Report`](https://docs.rs/std/latest/std/error/struct.Report.html) if the payload deserializes as a known
-  telemetry structure, or [`TelemetryEvent::Unknown`](types/index.md#telemetryevent) otherwise. A payload that
-  deserializes successfully but carries a `print.command` other than `"push_status"`/
-  `"pushall"` is a command-echo response (e.g. `extrusion_cali_get`'s reply shares the
-  `print` envelope and the `nozzle_diameter` field name with genuine telemetry) and is
-  also routed to `Unknown` rather than misreported as a report. Drains any
-  internally buffered messages (from command-response round-trips) before
-  reading from the wire.
+  Returns, in order of precedence:
+
+  - [`Command`](https://docs.rs/std/latest/std/process/struct.Command.html) for a command outcome that needs no message — a command
+    past its deadline, or one lost to a disconnect — before touching the wire.
+  - [`Command`](https://docs.rs/std/latest/std/process/struct.Command.html) for an echo answering a command this client published,
+    with the printer's verdict decoded.
+  - [`TelemetryEvent::Unknown`](types/index.md#telemetryevent) for any other command echo, under any wrapper (`print`,
+    `system`, `info`): another client's command, or a response a request method such as
+    [`get_version()`](#printerclient) did not claim. An echo shares envelopes and field
+    names with telemetry (`extrusion_cali_get`'s reply carries `nozzle_diameter`), so it is
+    never read as a report.
+  - [`Report`](https://docs.rs/std/latest/std/error/struct.Report.html) if the payload deserializes as telemetry, else `Unknown`.
+
+  Drains any internally buffered messages (from command-response round-trips) before
+  reading from the wire. A timeout is noticed on the next call, so it is delivered late by
+  however long this call blocks on the wire — at most `MQTT_READ_TIMEOUT_SECS` (30s) on a
+  completely silent link, and in practice far sooner, since the printer pushes telemetry
+  continuously and this call sends a keepalive every 20s.
+
+  Cancellation-safe in a `select!`: outcome bookkeeping happens only after the wire read
+  has returned, never across an await.
 
   # Example
 
@@ -1173,10 +1336,41 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
                   println!("Printer state: {:?}", print.gcode_state);
               }
           }
+          TelemetryEvent::Command(resolution, _raw) => {
+              println!("{}: {:?}", resolution.handle.command(), resolution.outcome);
+          }
           TelemetryEvent::Unknown(_) => {}
       }
   }
   ```
+
+- <span id="superprinterclient-await-ack"></span>`async fn await_ack(&mut self, handle: &CommandHandle) -> Result<CommandOutcome, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`CommandOutcome`](command/index.md#commandoutcome), [`Error`](../error/index.md#error)
+
+  Waits for the outcome of one command this client published, reading the wire until its echo arrives or its time runs out.
+
+  The inline counterpart to receiving [`Command`](https://docs.rs/std/latest/std/process/struct.Command.html) from
+  [`poll_telemetry()`](#printerclient), for scripts that send one command and act on
+  the answer. Messages read while waiting are buffered and still delivered by later
+  `poll_telemetry()` calls, and the outcome returned here is not delivered again as an
+  event.
+
+  - A command that never echoes returns [`CommandOutcome::SettledOnPublish`](command/index.md#commandoutcome) at once.
+  - A command whose outcome is already known returns it at once — including one the
+    caller's event loop has already received, for the most recent 32 outcomes.
+  - Otherwise waits up to [`set_command_timeout()`](#printerclient) from this
+    call and returns [`CommandOutcome::TimedOut`](command/index.md#commandoutcome) if no echo arrives. Without a real clock
+    the wait is bounded only by the 200-message safety valve, which also ends a wait early
+    on a busy link.
+
+  **Blocks the caller's event loop for up to the timeout.** A UI should consume
+  `TelemetryEvent::Command` from its existing `poll_telemetry()` loop instead.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../error/index.md#error) for a handle whose outcome this client no longer holds — it
+  was delivered more than 32 outcomes ago, or already returned by an earlier `await_ack`.
+  Transport errors from reading the wire are returned as-is; the command then resolves as
+  [`CommandOutcome::ConnectionLost`](command/index.md#commandoutcome) once the session is re-established.
 
 - <span id="superprinterclient-print-status"></span>`fn print_status(&self) -> Option<PrintStatus>` — [`PrintStatus`](types/index.md#printstatus)
 
@@ -1380,7 +1574,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Pulls the next raw MQTT message without deserialization.
 
-- <span id="superprinterclient-set-bed-temperature"></span>`async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+  Bypasses command-outcome tracking: an echo read here is not matched to its command, so
+  that command later resolves as [`CommandOutcome::TimedOut`](command/index.md#commandoutcome) instead. Don't mix this with
+  [`poll_telemetry()`](#printerclient) while commands are outstanding.
+
+- <span id="superprinterclient-set-bed-temperature"></span>`async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the heated bed target temperature.
 
@@ -1398,7 +1596,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   printer.set_bed_temperature(60).await?;
   ```
 
-- <span id="superprinterclient-set-nozzle-temperature"></span>`async fn set_nozzle_temperature(&mut self, nozzle_id: u8, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-nozzle-temperature"></span>`async fn set_nozzle_temperature(&mut self, nozzle_id: u8, target_temp: u16) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
 
@@ -1414,7 +1612,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Values exceeding the model's maximum nozzle temperature are clamped automatically.
 
-- <span id="superprinterclient-set-chamber-temperature"></span>`async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-set-chamber-temperature"></span>`async fn set_chamber_temperature(&mut self, target_temp: u16) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the target temperature of the active heated chamber loop [REF-MOTO-GCODE].
 
@@ -1431,7 +1629,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   [`preheat_chamber()`](#printerclient) to drive both together, or call
   [`set_airduct_mode()`](#printerclient) yourself.
 
-- <span id="superprinterclient-preheat-chamber"></span>`async fn preheat_chamber(&mut self, target_temp: u16) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-preheat-chamber"></span>`async fn preheat_chamber(&mut self, target_temp: u16) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Sets the chamber target *and* the airduct flap that has to agree with it.
 
@@ -1452,8 +1650,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `target_temp` still returns the same `ModelMismatch` the primitive would, and the flap is
   left alone — the caller wanted heat this model cannot make.
 
-  Returns the sequence ID of the `M141` when one is sent, or of the `set_airduct` command
-  when `target_temp` is `0` on a flap-only model.
+  Returns the handle of the `M141` when one is sent, or of the `set_airduct` command when
+  `target_temp` is `0` on a flap-only model. When both are sent, only the `M141`'s handle is
+  returned.
 
 - <span id="printerclient-new"></span>`fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self` — [`PrinterIdentity`](../identity/index.md#printeridentity)
 
@@ -1487,10 +1686,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Increments and returns the next transaction/sequence identifier tracking commands.
 
-  Wraps via `clamp_task_id()` (32-bit signed integer limit) to stay within firmware
-  parsing constraints [REF-MQTT-ENV] — on overflow this continues as
-  `(sequence_counter + 1) % TASK_ID_MAX` rather than resetting to
-  `INITIAL_SEQUENCE_ID`, so a session never revisits the same starting value mid-flight.
+  Stays below the 32-bit signed integer limit firmware parses [REF-MQTT-ENV], and on
+  reaching it wraps back to `SEQUENCE_ID_FLOOR` rather than to 0, so a long session never
+  drifts into the low range the printer's own `push_status` counter and other clients use.
 
 - <span id="printerclient-set-command-timeout"></span>`fn set_command_timeout(&mut self, secs: u64)`
 
@@ -1499,9 +1697,16 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
   the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
 
-- <span id="printerclient-request-pushall"></span>`async fn request_pushall(&mut self) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+  The same value is the deadline after which a fire-and-forget command with no echo
+  resolves as [`CommandOutcome::TimedOut`](command/index.md#commandoutcome), measured from its publish. A command keeps the
+  deadline in force when it was sent; changing this later does not move it. The default is
+  10 seconds, the same window write-zombie detection allows for an echo.
+
+- <span id="printerclient-request-pushall"></span>`async fn request_pushall(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].
+
+  Settles on publish: `pushall` has no echo, the state dump that follows is the answer.
 
 - <span id="printerclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -1579,6 +1784,127 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   The default [`PrinterClient`](#printerclient) request flow awaits each command in turn and isn't affected.
 
 #### Trait Implementations
+
+### `AckExpectation`
+
+```rust
+enum AckExpectation {
+    Echoes,
+    SettlesOnPublish,
+}
+```
+
+Whether the printer answers a command with an echo of its `sequence_id`.
+
+#### Variants
+
+- **`Echoes`**
+
+  The printer echoes the command.
+  
+  Confirmed on a P1S for every command bambino sends except `pushall`
+  (`reference/03_mqtt_telemetry.md` §REF-MQTT-ACK); other models are unmeasured.
+
+- **`SettlesOnPublish`**
+
+  The printer sends no echo, so publishing is the whole outcome.
+  
+  `pushall` is the one such command: it triggers a state dump instead
+  [REF-MQTT-LIFECYCLE].
+
+#### Trait Implementations
+
+##### `impl Clone for AckExpectation`
+
+- <span id="ackexpectation-clone"></span>`fn clone(&self) -> AckExpectation` — [`AckExpectation`](command/index.md#ackexpectation)
+
+##### `impl Copy for AckExpectation`
+
+##### `impl Debug for AckExpectation`
+
+- <span id="ackexpectation-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AckExpectation`
+
+##### `impl Hash for AckExpectation`
+
+- <span id="ackexpectation-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl PartialEq for AckExpectation`
+
+- <span id="ackexpectation-partialeq-eq"></span>`fn eq(&self, other: &AckExpectation) -> bool` — [`AckExpectation`](command/index.md#ackexpectation)
+
+### `CommandOutcome`
+
+```rust
+enum CommandOutcome {
+    Accepted,
+    Refused(CommandRefusal),
+    NoVerdict,
+    TimedOut,
+    ConnectionLost,
+    SettledOnPublish,
+}
+```
+
+The terminal outcome of one published command.
+
+#### Variants
+
+- **`Accepted`**
+
+  The printer echoed the command with `result: "success"` and no error code.
+  
+  Confirms receipt only, not that the command had any effect — see the module docs.
+
+- **`Refused`**
+
+  The printer echoed the command with a failure verdict.
+
+- **`NoVerdict`**
+
+  The printer echoed the command without any verdict.
+  
+  P1S firmware 01.10.00.00 answers some commands with a bare `{command, sequence_id}` and
+  no `result`, while refusing them through HMS instead (bambuddy #2732). Receipt is all
+  this proves; it is not success.
+
+- **`TimedOut`**
+
+  No echo arrived before the command's deadline.
+  
+  Not evidence of rejection: the command may still have been executed. Deadlines are
+  [`set_command_timeout()`](#printerclient) from publish, and are
+  only measured with a real clock ([`with_timer()`](#printerclient)).
+
+- **`ConnectionLost`**
+
+  The MQTT session ended between publish and echo, so no echo can arrive.
+  
+  Sessions use Clean Session and subscribe afresh, and an echo arrives within milliseconds
+  while a reconnect takes seconds, so an answer addressed to the old session is never
+  delivered on the new one. The command may still have been executed.
+
+- **`SettledOnPublish`**
+
+  The command never echoes ([`AckExpectation::SettlesOnPublish`](command/index.md#ackexpectation)), so publishing was the
+  whole outcome.
+
+#### Trait Implementations
+
+##### `impl Clone for CommandOutcome`
+
+- <span id="commandoutcome-clone"></span>`fn clone(&self) -> CommandOutcome` — [`CommandOutcome`](command/index.md#commandoutcome)
+
+##### `impl Debug for CommandOutcome`
+
+- <span id="commandoutcome-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for CommandOutcome`
+
+##### `impl PartialEq for CommandOutcome`
+
+- <span id="commandoutcome-partialeq-eq"></span>`fn eq(&self, other: &CommandOutcome) -> bool` — [`CommandOutcome`](command/index.md#commandoutcome)
 
 ### `BuzzerMode`
 
@@ -1837,6 +2163,7 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 ```rust
 enum TelemetryEvent {
     Report(Box<crate::types::TelemetryReport>, crate::mqtt::MqttMessage),
+    Command(super::command::CommandResolution, Option<crate::mqtt::MqttMessage>),
     Unknown(crate::mqtt::MqttMessage),
 }
 ```
@@ -1853,23 +2180,39 @@ available via [`into_raw`](types/index.md#telemetryevent).
 
   State telemetry update (print status, device hardware, or both).
 
+- **`Command`**
+
+  The terminal outcome of a command this client published.
+  
+  Carries the echo that decided it, or `None` for an outcome no message produced
+  ([`CommandOutcome::TimedOut`](command/index.md#commandoutcome), [`CommandOutcome::ConnectionLost`](command/index.md#commandoutcome)).
+
 - **`Unknown`**
 
-  Payload that didn't match any known telemetry structure.
+  Payload that didn't match any known telemetry structure, including command echoes for
+  `sequence_id`s this client did not send (other clients share the report topic).
 
 #### Implementations
 
-- <span id="telemetryevent-into-raw"></span>`fn into_raw(self) -> MqttMessage` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage)
+- <span id="telemetryevent-into-raw"></span>`fn into_raw(self) -> Option<MqttMessage>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage)
 
-  Consumes the event and returns the underlying raw MQTT message.
+  Consumes the event and returns the underlying raw MQTT message, if one produced it.
 
-- <span id="telemetryevent-raw"></span>`fn raw(&self) -> &MqttMessage` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage)
+  `None` only for a [`Command`](types/index.md#telemetryevent) outcome that no message produced.
 
-  Returns a reference to the underlying raw MQTT message.
+- <span id="telemetryevent-raw"></span>`fn raw(&self) -> Option<&MqttMessage>` — [`MqttMessage`](../mqtt/client/index.md#mqttmessage)
+
+  Returns a reference to the underlying raw MQTT message, if one produced it.
+
+  `None` only for a [`Command`](types/index.md#telemetryevent) outcome that no message produced.
 
 - <span id="telemetryevent-report"></span>`fn report(&self) -> Option<&TelemetryReport>` — [`TelemetryReport`](../types/telemetry/index.md#telemetryreport)
 
   Returns the typed report if this is a `Report` variant.
+
+- <span id="telemetryevent-command"></span>`fn command(&self) -> Option<&CommandResolution>` — [`CommandResolution`](command/index.md#commandresolution)
+
+  Returns the command resolution if this is a `Command` variant.
 
 #### Trait Implementations
 

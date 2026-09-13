@@ -281,6 +281,8 @@ Timer implementation utilizing Tokio's non-blocking system clock registry.
 
 - <span id="tokiotimer-timerprovider-now-millis"></span>`fn now_millis(&self) -> u64`
 
+- <span id="tokiotimer-timerprovider-unix-millis"></span>`fn unix_millis(&self) -> Option<u64>`
+
 ### `TokioTlsConnector`
 
 ```rust

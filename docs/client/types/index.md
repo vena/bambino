@@ -390,6 +390,7 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 ```rust
 enum TelemetryEvent {
     Report(Box<crate::types::TelemetryReport>, crate::mqtt::MqttMessage),
+    Command(super::command::CommandResolution, Option<crate::mqtt::MqttMessage>),
     Unknown(crate::mqtt::MqttMessage),
 }
 ```
@@ -406,23 +407,39 @@ available via [`into_raw`](#telemetryevent).
 
   State telemetry update (print status, device hardware, or both).
 
+- **`Command`**
+
+  The terminal outcome of a command this client published.
+  
+  Carries the echo that decided it, or `None` for an outcome no message produced
+  ([`CommandOutcome::TimedOut`](../command/index.md#commandoutcome), [`CommandOutcome::ConnectionLost`](../command/index.md#commandoutcome)).
+
 - **`Unknown`**
 
-  Payload that didn't match any known telemetry structure.
+  Payload that didn't match any known telemetry structure, including command echoes for
+  `sequence_id`s this client did not send (other clients share the report topic).
 
 #### Implementations
 
-- <span id="telemetryevent-into-raw"></span>`fn into_raw(self) -> MqttMessage` — [`MqttMessage`](../../mqtt/client/index.md#mqttmessage)
+- <span id="telemetryevent-into-raw"></span>`fn into_raw(self) -> Option<MqttMessage>` — [`MqttMessage`](../../mqtt/client/index.md#mqttmessage)
 
-  Consumes the event and returns the underlying raw MQTT message.
+  Consumes the event and returns the underlying raw MQTT message, if one produced it.
 
-- <span id="telemetryevent-raw"></span>`fn raw(&self) -> &MqttMessage` — [`MqttMessage`](../../mqtt/client/index.md#mqttmessage)
+  `None` only for a [`Command`](#telemetryevent) outcome that no message produced.
 
-  Returns a reference to the underlying raw MQTT message.
+- <span id="telemetryevent-raw"></span>`fn raw(&self) -> Option<&MqttMessage>` — [`MqttMessage`](../../mqtt/client/index.md#mqttmessage)
+
+  Returns a reference to the underlying raw MQTT message, if one produced it.
+
+  `None` only for a [`Command`](#telemetryevent) outcome that no message produced.
 
 - <span id="telemetryevent-report"></span>`fn report(&self) -> Option<&TelemetryReport>` — [`TelemetryReport`](../../types/telemetry/index.md#telemetryreport)
 
   Returns the typed report if this is a `Report` variant.
+
+- <span id="telemetryevent-command"></span>`fn command(&self) -> Option<&CommandResolution>` — [`CommandResolution`](../command/index.md#commandresolution)
+
+  Returns the command resolution if this is a `Command` variant.
 
 #### Trait Implementations
 

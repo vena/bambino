@@ -124,7 +124,7 @@ client
   The interlock exists because several drying units on one supply can exceed it; overriding
   it is the caller asserting they know the power situation.
 
-- <span id="dryingcycle-send"></span>`async fn send(self) -> Result<u16, Error>` — [`Error`](../../error/index.md#error)
+- <span id="dryingcycle-send"></span>`async fn send(self) -> Result<CommandHandle, Error>` — [`CommandHandle`](../command/index.md#commandhandle), [`Error`](../../error/index.md#error)
 
   Validates and publishes the cycle, returning the command's sequence ID [REF-AMS-DRYER].
 

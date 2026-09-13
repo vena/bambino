@@ -193,6 +193,13 @@ with the FreeRTOS scheduler instead of blocking the task thread.
 
 - <span id="espidftimer-timerprovider-now-millis"></span>`fn now_millis(&self) -> u64`
 
+- <span id="espidftimer-timerprovider-unix-millis"></span>`fn unix_millis(&self) -> Option<u64>`
+
+  Reads ESP-IDF's newlib `SystemTime`, which counts from 1970 at boot until SNTP sets it.
+
+  Unsynchronised it is only boot-relative, but it still serves the seed this method
+  exists for; an SNTP-synced device gets a real per-boot distinction.
+
 ### `EspIdfTlsConnector`
 
 ```rust

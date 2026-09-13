@@ -49,6 +49,10 @@ async fn example() -> Result<(), bambino::Error> {
                 let (bed_actual, bed_target) = report.bed_temperatures();
                 println!("Bed: {}°C / {}°C target", bed_actual, bed_target);
             }
+            // Every command's outcome: accepted, refused, no verdict, timed out, or lost
+            TelemetryEvent::Command(resolution, _raw) => {
+                println!("{}: {:?}", resolution.handle.command(), resolution.outcome);
+            }
             TelemetryEvent::Unknown(_) => {}
         }
     }

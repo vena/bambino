@@ -562,6 +562,15 @@ without burning processor cycles on embedded platforms.
 
 #### Provided Methods 
 
+- `fn unix_millis(&self) -> Option<u64>`
+
+  Returns wall-clock milliseconds since the Unix epoch, or `None` when the platform has no calendar clock.
+
+  Only used as a seed that differs between independent processes (command `sequence_id`s),
+  never for timing, so an unsynchronised clock is acceptable. `None` (the default) makes
+  callers fall back to [`now_millis`](#timerprovider), whose epoch two processes started
+  together can share.
+
 - `fn has_real_clock(&self) -> bool`
 
   Whether this timer provides genuine wall-clock timing.
