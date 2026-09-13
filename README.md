@@ -648,16 +648,17 @@ Commands:
   control       Dispatch a movement or hardware control command
   files         Traverse and transfer files on the printer's MicroSD card
   camera        Camera streaming operations
-  inspect-cert  Capture a printer's raw TLS cert chain to disk for SAN/CN inspection
-  verify-tls    Attempt a real CA-verified TLS handshake against a printer
+  inspect-cert  Capture a printer's raw TLS certificate chain to disk for SAN/CN inspection
+  verify-tls    Attempt a CA-verified TLS handshake against a printer
   help          Print this message or the help of the given subcommand(s)
 
 Options:
   -v, --verbose       Enable verbose connection and packet debugging output
       --with-certs <PATH>
                       Verify the printer's TLS certificate against these CA certs
-                      instead of skipping verification. Accepts a cert file or a
-                      directory of them; applies to every printer-facing subcommand.
+                      instead of skipping verification entirely. Accepts a single
+                      PEM/DER file or a directory of them. Applies to every
+                      printer-facing subcommand: MQTT, FTPS, camera.
   -h, --help          Print help
 
 Most commands require positional args: <IP> <SERIAL> <ACCESS_CODE>

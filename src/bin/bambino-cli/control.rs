@@ -218,8 +218,9 @@ pub enum ControlAction {
         ///
         /// Same output shape as `dump --follow`, but subscribed before the command is published
         /// — running `dump --follow` in a second terminal races the trigger and can miss the
-        /// first pushes of the run. See issue #227: whether a standalone calibration reports
-        /// any progress at all is unverified, and this flag exists to capture the evidence.
+        /// first pushes of the run.
+        // Exists to capture evidence for issue #227: whether a standalone calibration reports
+        // any progress at all is unverified.
         #[arg(short = 'w', long)]
         watch: bool,
     },

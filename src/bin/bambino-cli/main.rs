@@ -131,7 +131,9 @@ enum Commands {
         tests: Option<String>,
     },
 
-    /// Check which MQTT commands echo a correlatable `sequence_id` ack (issue #26)
+    // Evidence harness for `ACK_CORRELATED_COMMANDS` (issue #26). Doc comments on this enum are
+    // the CLI's `--help` text, so contributor references stay in `//` comments like this one.
+    /// Check which MQTT commands echo a correlatable `sequence_id` ack
     AckProbe {
         ip: String,
         serial: String,
@@ -177,11 +179,10 @@ enum Commands {
         access_code: String,
         #[command(subcommand)]
         action: storage::FilesAction,
-        /// Bypass FtpsClient's TLS-1.2-enforcement check for P2S/X2D (the embassy
-        /// escape hatch, ported to the CLI for testing; see src/ftps/CLAUDE.md and
-        /// src/io/CLAUDE.md). On tokio, force_tls_1_2 is already applied automatically
-        /// per-model — this flag exists to let a caller override enforcement even when
-        /// negotiated_version reports non-1.2.
+        // The embassy escape hatch, ported to the CLI for testing; see src/ftps/CLAUDE.md and
+        // src/io/CLAUDE.md.
+        /// Skip the check that P2S/X2D FTPS negotiated TLS 1.2. The CLI already requests
+        /// TLS 1.2 for those models; this proceeds even if the connection reports another version.
         #[arg(long)]
         allow_unverified_tls_1_2: bool,
     },
@@ -201,10 +202,11 @@ enum Commands {
         action: camera::CameraAction,
     },
 
-    /// Diagnostic: capture a printer's raw TLS cert chain to disk for SAN/CN inspection
-    /// (see .claude/rules/tls-identity-sni.md). Also reports whether the printer sends its
-    /// issuing CA alongside the leaf, which decides what certificate pinning a consumer can
-    /// build on TlsConnector::peer_chain_der. No FTPS/MQTT traffic is exchanged.
+    // Background on the SAN/CN identity check: .claude/rules/tls-identity-sni.md.
+    /// Capture a printer's raw TLS certificate chain to disk for SAN/CN inspection
+    ///
+    /// Also reports whether the printer sends its issuing CA alongside the leaf, which decides
+    /// what certificate pinning an application can build. No FTPS/MQTT traffic is exchanged.
     InspectCert {
         ip: String,
         serial: String,
@@ -217,10 +219,12 @@ enum Commands {
         output: String,
     },
 
-    /// Diagnostic: attempt a real CA-verified TLS handshake (SNI=serial) against a printer
-    /// using build_verified_client_config, to validate CnFallbackServerVerifier end-to-end
-    /// (see .claude/rules/tls-identity-sni.md). Requires --with-certs. No FTPS/MQTT traffic
-    /// is exchanged.
+    // Validates `build_verified_client_config`/`CnFallbackServerVerifier` end-to-end; background
+    // in .claude/rules/tls-identity-sni.md.
+    /// Attempt a CA-verified TLS handshake against a printer
+    ///
+    /// Checks the chain of trust, the handshake signature, and that the certificate names the
+    /// printer's serial. Requires --with-certs. No FTPS/MQTT traffic is exchanged.
     VerifyTls {
         ip: String,
         serial: String,
