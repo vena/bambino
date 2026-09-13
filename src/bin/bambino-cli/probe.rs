@@ -198,7 +198,8 @@ async fn capture_pushall(
             Ok(Err(e)) => return Err(e),
             Err(_) => break,
         };
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload)
+        if let Some(raw) = event.raw()
+            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw.payload)
             && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
         {
             return Ok(Some(v));
@@ -369,7 +370,9 @@ async fn capture_responses(
             Ok(Err(e)) => return Err(e),
             Err(_) => break,
         };
-        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&event.raw().payload) {
+        if let Some(raw) = event.raw()
+            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw.payload)
+        {
             // Redact before the value is ever stored: `-o/--output` takes an arbitrary path,
             // and raw telemetry carries per-component `sn` fields (see redact::REDACTED_KEYS).
             responses.push(CapturedMessage {

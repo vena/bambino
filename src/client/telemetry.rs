@@ -21,23 +21,11 @@ use crate::types::{
 };
 
 use super::PrinterClient;
+use super::command::{
+    AckExpectation, CommandHandle, CommandOutcome, CommandResolution, decode_verdict,
+    parse_command_echo,
+};
 use super::types::{PrintProgress, PrintSpeed, PrintStatus, TelemetryEvent};
-
-/// `print.command` values seen on genuine telemetry pushes. Any other value on a
-/// deserializable `TelemetryReport` means the frame is really a command-echo response
-/// (`extrusion_cali_get`, `ams_control`, etc.) that happens to share the `print` envelope
-/// and enough optional field names to parse as a mostly-empty report.
-const KNOWN_TELEMETRY_COMMANDS: &[&str] = &["push_status", "pushall"];
-
-/// True if `report` is a command-echo response misdetected as telemetry rather than a
-/// genuine `push_status`/`pushall` frame — see [`KNOWN_TELEMETRY_COMMANDS`].
-fn is_command_echo(report: &TelemetryReport) -> bool {
-    report
-        .print
-        .as_ref()
-        .and_then(|print| print.command.as_deref())
-        .is_some_and(|command| !KNOWN_TELEMETRY_COMMANDS.contains(&command))
-}
 
 /// Cached "last-observed" telemetry values, updated by `PrinterClient::poll_telemetry()`.
 /// Each field independently keeps its most recently observed value — a telemetry message
@@ -138,14 +126,27 @@ where
 {
     /// Pulls the next telemetry event from the MQTT channel.
     ///
-    /// Returns a [`TelemetryEvent::Report`] if the payload deserializes as a known
-    /// telemetry structure, or [`TelemetryEvent::Unknown`] otherwise. A payload that
-    /// deserializes successfully but carries a `print.command` other than `"push_status"`/
-    /// `"pushall"` is a command-echo response (e.g. `extrusion_cali_get`'s reply shares the
-    /// `print` envelope and the `nozzle_diameter` field name with genuine telemetry) and is
-    /// also routed to `Unknown` rather than misreported as a report. Drains any
-    /// internally buffered messages (from command-response round-trips) before
-    /// reading from the wire.
+    /// Returns, in order of precedence:
+    ///
+    /// - [`TelemetryEvent::Command`] for a command outcome that needs no message — a command
+    ///   past its deadline, or one lost to a disconnect — before touching the wire.
+    /// - [`TelemetryEvent::Command`] for an echo answering a command this client published,
+    ///   with the printer's verdict decoded.
+    /// - [`TelemetryEvent::Unknown`] for any other command echo, under any wrapper (`print`,
+    ///   `system`, `info`): another client's command, or a response a request method such as
+    ///   [`get_version()`](Self::get_version) did not claim. An echo shares envelopes and field
+    ///   names with telemetry (`extrusion_cali_get`'s reply carries `nozzle_diameter`), so it is
+    ///   never read as a report.
+    /// - [`TelemetryEvent::Report`] if the payload deserializes as telemetry, else `Unknown`.
+    ///
+    /// Drains any internally buffered messages (from command-response round-trips) before
+    /// reading from the wire. A timeout is noticed on the next call, so it is delivered late by
+    /// however long this call blocks on the wire — at most `MQTT_READ_TIMEOUT_SECS` (30s) on a
+    /// completely silent link, and in practice far sooner, since the printer pushes telemetry
+    /// continuously and this call sends a keepalive every 20s.
+    ///
+    /// Cancellation-safe in a `select!`: outcome bookkeeping happens only after the wire read
+    /// has returned, never across an await.
     ///
     /// # Example
     ///
@@ -159,25 +160,127 @@ where
     ///                 println!("Printer state: {:?}", print.gcode_state);
     ///             }
     ///         }
+    ///         TelemetryEvent::Command(resolution, _raw) => {
+    ///             println!("{}: {:?}", resolution.handle.command(), resolution.outcome);
+    ///         }
     ///         TelemetryEvent::Unknown(_) => {}
     ///     }
     /// }
     /// ```
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error> {
+        if let Some(event) = self.next_unanswered_outcome() {
+            return Ok(event);
+        }
         self.ensure_mqtt().await?;
+        // A lazy reconnect inside `ensure_mqtt()` just resolved every pending command.
+        if let Some(event) = self.next_unanswered_outcome() {
+            return Ok(event);
+        }
         let msg = self
             .mqtt
             .as_mut()
             .unwrap()
             .poll_telemetry_with_timer(&self.timer)
             .await?;
-        match serde_json::from_slice::<TelemetryReport>(&msg.payload) {
-            Ok(report) if is_command_echo(&report) => Ok(TelemetryEvent::Unknown(msg)),
-            Ok(report) => {
-                self.update_telemetry_cache(&report);
-                Ok(TelemetryEvent::Report(Box::new(report), msg))
+        Ok(self.classify_message(msg))
+    }
+
+    /// Waits for the outcome of one command this client published, reading the wire until its echo arrives or its time runs out.
+    ///
+    /// The inline counterpart to receiving [`TelemetryEvent::Command`] from
+    /// [`poll_telemetry()`](Self::poll_telemetry), for scripts that send one command and act on
+    /// the answer. Messages read while waiting are buffered and still delivered by later
+    /// `poll_telemetry()` calls, and the outcome returned here is not delivered again as an
+    /// event.
+    ///
+    /// - A command that never echoes returns [`CommandOutcome::SettledOnPublish`] at once.
+    /// - A command whose outcome is already known returns it at once — including one the
+    ///   caller's event loop has already received, for the most recent 32 outcomes.
+    /// - Otherwise waits up to [`set_command_timeout()`](Self::set_command_timeout) from this
+    ///   call and returns [`CommandOutcome::TimedOut`] if no echo arrives. Without a real clock
+    ///   the wait is bounded only by the 200-message safety valve, which also ends a wait early
+    ///   on a busy link.
+    ///
+    /// **Blocks the caller's event loop for up to the timeout.** A UI should consume
+    /// `TelemetryEvent::Command` from its existing `poll_telemetry()` loop instead.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a handle whose outcome this client no longer holds — it
+    /// was delivered more than 32 outcomes ago, or already returned by an earlier `await_ack`.
+    /// Transport errors from reading the wire are returned as-is; the command then resolves as
+    /// [`CommandOutcome::ConnectionLost`] once the session is re-established.
+    pub async fn await_ack(&mut self, handle: &CommandHandle) -> Result<CommandOutcome, Error> {
+        if handle.ack() == AckExpectation::SettlesOnPublish {
+            return Ok(CommandOutcome::SettledOnPublish);
+        }
+        self.ensure_mqtt().await?;
+        if let Some(outcome) = self.commands.take_known(handle) {
+            return Ok(outcome);
+        }
+        if !self.commands.is_pending(handle) {
+            return Err(Error::InvalidArgument(
+                "no outcome held for this command handle".into(),
+            ));
+        }
+        let result = self
+            .poll_until(|msg| {
+                let echo = parse_command_echo(&msg.payload)?;
+                handle.is_answered_by(&echo).then(|| decode_verdict(&echo))
+            })
+            .await;
+        match result {
+            Ok(outcome) => {
+                self.commands.forget(handle);
+                Ok(outcome)
             }
-            Err(_) => Ok(TelemetryEvent::Unknown(msg)),
+            Err(Error::Timeout) => {
+                self.commands.forget(handle);
+                Ok(CommandOutcome::TimedOut)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Pops a command outcome that needs no message, recording it as delivered.
+    fn next_unanswered_outcome(&mut self) -> Option<TelemetryEvent> {
+        let now_ms = self.timer.has_real_clock().then(|| self.timer.now_millis());
+        let resolution = self.commands.next_unanswered(now_ms)?;
+        self.commands.remember(&resolution);
+        Some(TelemetryEvent::Command(resolution, None))
+    }
+
+    /// Turns one wire message into the event it represents — see [`poll_telemetry()`](Self::poll_telemetry).
+    fn classify_message(&mut self, msg: MqttMessage) -> TelemetryEvent {
+        let report = serde_json::from_slice::<TelemetryReport>(&msg.payload).ok();
+        // The bulk of traffic is telemetry pushes, which say so in `print.command`; only other
+        // frames pay for the second, echo-shaped read.
+        let is_push = report.as_ref().is_some_and(|report| {
+            report
+                .print
+                .as_ref()
+                .and_then(|print| print.command.as_deref())
+                .is_some_and(|command| matches!(command, "push_status" | "pushall"))
+        });
+        if !is_push && let Some(echo) = parse_command_echo(&msg.payload) {
+            return match self.commands.take_answered(&echo) {
+                Some(handle) => {
+                    let resolution = CommandResolution {
+                        handle,
+                        outcome: decode_verdict(&echo),
+                    };
+                    self.commands.remember(&resolution);
+                    TelemetryEvent::Command(resolution, Some(msg))
+                }
+                None => TelemetryEvent::Unknown(msg),
+            };
+        }
+        match report {
+            Some(report) => {
+                self.update_telemetry_cache(&report);
+                TelemetryEvent::Report(Box::new(report), msg)
+            }
+            None => TelemetryEvent::Unknown(msg),
         }
     }
 
@@ -670,6 +773,10 @@ where
     }
 
     /// Pulls the next raw MQTT message without deserialization.
+    ///
+    /// Bypasses command-outcome tracking: an echo read here is not matched to its command, so
+    /// that command later resolves as [`CommandOutcome::TimedOut`] instead. Don't mix this with
+    /// [`poll_telemetry()`](Self::poll_telemetry) while commands are outstanding.
     pub async fn poll_raw(&mut self) -> Result<MqttMessage, Error> {
         self.ensure_mqtt().await?;
         self.mqtt

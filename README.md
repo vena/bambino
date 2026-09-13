@@ -146,10 +146,30 @@ loop {
                 );
             }
         }
+        // The outcome of a command this client sent: see "Command outcomes" below
+        TelemetryEvent::Command(resolution, _raw) => {
+            println!("{}: {:?}", resolution.handle.command(), resolution.outcome);
+        }
         TelemetryEvent::Unknown(_) => {}
     }
 }
 ```
+
+### Command outcomes
+
+Every command method returns a `CommandHandle` carrying the `sequence_id` the printer echoes back. Each echoing command ends in exactly one `CommandOutcome` — `Accepted`, `Refused` (with the printer's `reason`/`err_code`/`errno`), `NoVerdict`, `TimedOut`, or `ConnectionLost` — delivered through `poll_telemetry()` as `TelemetryEvent::Command`. A script can wait for one instead:
+
+```rust
+use bambino::client::CommandOutcome;
+
+let handle = printer.set_led("chamber_light", true).await?;
+match printer.await_ack(&handle).await? {
+    CommandOutcome::Refused(refusal) => eprintln!("refused: {:?}", refusal.reason),
+    outcome => println!("{outcome:?}"),
+}
+```
+
+`Accepted` means the printer *received* the command, not that it did anything: a P1S accepts `set_airduct` without having a damper. The telemetry field that shows each command's effect is tabulated in `reference/03_mqtt_telemetry.md` ("Effect Signals").
 
 > **Timestamps:** printer-stamped time fields in telemetry come from an unsynced clock; see [Timestamps on LAN-mode printers](#timestamps-on-lan-mode-printers).
 

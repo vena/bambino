@@ -159,6 +159,9 @@ where
     /// A new connection-scoped cache field opts in by stamping `connection_generation` when it
     /// is written, and cannot be silently forgotten here.
     pub(crate) fn begin_connection(&mut self) {
+        // Echoes addressed to the old session can no longer arrive; see
+        // `CommandOutcome::ConnectionLost`.
+        self.commands.connection_ended();
         self.k_profile_primed = false;
         self.connection_generation = self.connection_generation.wrapping_add(1);
     }
@@ -308,6 +311,7 @@ where
             timer,
             identity: self.identity,
             sequence_counter: self.sequence_counter,
+            commands: self.commands,
             k_profile_primed: self.k_profile_primed,
             connection_generation: self.connection_generation,
             cache: self.cache,
@@ -406,6 +410,7 @@ where
             timer: self.timer,
             identity: self.identity,
             sequence_counter: self.sequence_counter,
+            commands: self.commands,
             k_profile_primed: self.k_profile_primed,
             connection_generation: self.connection_generation,
             cache: self.cache,
@@ -800,6 +805,7 @@ where
             timer: self.timer,
             identity: self.identity,
             sequence_counter: self.sequence_counter,
+            commands: self.commands,
             k_profile_primed: self.k_profile_primed,
             connection_generation: self.connection_generation,
             cache: self.cache,

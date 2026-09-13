@@ -178,7 +178,10 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
                         // frame in, so the dashboard shows the same values a library consumer
                         // would see rather than re-deriving them from the raw map.
                         let progress = printer.print_progress();
-                        let payload = &event.raw().payload;
+                        // An outcome no message produced (a timeout, a disconnect) has nothing
+                        // to render; this monitor sends no commands after its pushall anyway.
+                        let Some(raw) = event.raw() else { continue };
+                        let payload = &raw.payload;
                         match dashboard::render_dashboard(
                             payload,
                             &mut state,

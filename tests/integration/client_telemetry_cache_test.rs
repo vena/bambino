@@ -1129,7 +1129,7 @@ async fn test_wifi_signal_cache_from_telemetry() {
 }
 
 /// Issue #262: a command-echo response shares the `print` envelope and several field names
-/// with genuine telemetry, so `poll_telemetry()`'s `is_command_echo` gate has to route it to
+/// with genuine telemetry, so `poll_telemetry()`'s command-echo check has to route it to
 /// `Unknown` *and* leave the cache alone. Nothing asserted the second half.
 #[tokio::test]
 async fn test_command_echo_is_unknown_and_leaves_the_cache_untouched() {
@@ -1170,7 +1170,7 @@ async fn test_command_echo_is_unknown_and_leaves_the_cache_untouched() {
     let echo = client.poll_telemetry().await.expect("echo poll failed");
     assert!(
         matches!(echo, TelemetryEvent::Unknown(_)),
-        "a print.command outside KNOWN_TELEMETRY_COMMANDS must route to Unknown"
+        "a command echo for a sequence_id this client never sent must route to Unknown"
     );
     assert_eq!(
         client.is_all_axes_homed(),

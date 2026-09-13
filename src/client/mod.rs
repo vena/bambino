@@ -31,7 +31,9 @@ mod thermal;
 pub mod types;
 
 pub use capabilities::Capabilities;
-pub use command::{AckExpectation, CommandHandle};
+pub use command::{
+    AckExpectation, CommandHandle, CommandOutcome, CommandRefusal, CommandResolution,
+};
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
@@ -144,6 +146,8 @@ pub struct PrinterClient<
     pub(crate) timer: Timer,
     pub(crate) identity: PrinterIdentity,
     pub(crate) sequence_counter: u64,
+    /// Commands awaiting an echo and outcomes waiting to be delivered — see `command::CommandTracker`.
+    pub(crate) commands: command::CommandTracker,
     pub(crate) k_profile_primed: bool,
     /// Monotonic counter bumped on every MQTT connection boundary (attach, lazy dial,
     /// disconnect). Telemetry that is only trustworthy on the connection it was observed
@@ -209,6 +213,7 @@ where
             timer: DummyTimer,
             identity,
             sequence_counter: INITIAL_SEQUENCE_ID,
+            commands: command::CommandTracker::default(),
             k_profile_primed: false,
             connection_generation: 0,
             cache: telemetry::TelemetryCache::default(),
@@ -269,6 +274,7 @@ where
                 model,
             },
             sequence_counter: INITIAL_SEQUENCE_ID,
+            commands: command::CommandTracker::default(),
             k_profile_primed: false,
             connection_generation: 0,
             cache: telemetry::TelemetryCache::default(),
@@ -362,6 +368,11 @@ where
     ///
     /// Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
     /// the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
+    ///
+    /// The same value is the deadline after which a fire-and-forget command with no echo
+    /// resolves as [`CommandOutcome::TimedOut`], measured from its publish. A command keeps the
+    /// deadline in force when it was sent; changing this later does not move it. The default is
+    /// 10 seconds, the same window write-zombie detection allows for an echo.
     pub fn set_command_timeout(&mut self, secs: u64) {
         self.command_timeout_secs = secs;
     }
@@ -469,7 +480,25 @@ where
         };
         self.publish_payload(&payload).await?;
         // `next_sequence_id` keeps the counter below `TASK_ID_MAX` (`i32::MAX`), so this is lossless.
-        Ok(CommandHandle::new(command, seq as u32, ack))
+        let handle = CommandHandle::new(command, seq as u32, ack);
+        let deadline_ms = self.command_deadline_ms();
+        self.commands.track(&handle, deadline_ms);
+        Ok(handle)
+    }
+
+    /// Returns the monotonic deadline for a command published now, or `None` when none can be measured.
+    ///
+    /// `None` without a real clock (`DummyTimer` always reads 0) or with the command timeout
+    /// disabled by [`set_command_timeout(0)`](Self::set_command_timeout).
+    fn command_deadline_ms(&self) -> Option<u64> {
+        if !self.timer.has_real_clock() || self.command_timeout_secs == 0 {
+            return None;
+        }
+        Some(
+            self.timer
+                .now_millis()
+                .saturating_add(self.command_timeout_secs.saturating_mul(1000)),
+        )
     }
 
     /// Requests a full state dump from the printer [REF-MQTT-LIFECYCLE].

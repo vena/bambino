@@ -3,6 +3,9 @@
 #[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
+#[allow(unused_imports)] // doc links only
+use super::command::CommandOutcome;
+use super::command::CommandResolution;
 use crate::mqtt::MqttMessage;
 use crate::types::TelemetryReport;
 
@@ -15,23 +18,34 @@ use crate::types::TelemetryReport;
 pub enum TelemetryEvent {
     /// State telemetry update (print status, device hardware, or both).
     Report(Box<TelemetryReport>, MqttMessage),
-    /// Payload that didn't match any known telemetry structure.
+    /// The terminal outcome of a command this client published.
+    ///
+    /// Carries the echo that decided it, or `None` for an outcome no message produced
+    /// ([`CommandOutcome::TimedOut`], [`CommandOutcome::ConnectionLost`]).
+    Command(CommandResolution, Option<MqttMessage>),
+    /// Payload that didn't match any known telemetry structure, including command echoes for
+    /// `sequence_id`s this client did not send (other clients share the report topic).
     Unknown(MqttMessage),
 }
 
 impl TelemetryEvent {
-    /// Consumes the event and returns the underlying raw MQTT message.
-    pub fn into_raw(self) -> MqttMessage {
+    /// Consumes the event and returns the underlying raw MQTT message, if one produced it.
+    ///
+    /// `None` only for a [`Command`](Self::Command) outcome that no message produced.
+    pub fn into_raw(self) -> Option<MqttMessage> {
         match self {
-            Self::Report(_, raw) => raw,
-            Self::Unknown(raw) => raw,
+            Self::Report(_, raw) | Self::Unknown(raw) => Some(raw),
+            Self::Command(_, raw) => raw,
         }
     }
 
-    /// Returns a reference to the underlying raw MQTT message.
-    pub fn raw(&self) -> &MqttMessage {
+    /// Returns a reference to the underlying raw MQTT message, if one produced it.
+    ///
+    /// `None` only for a [`Command`](Self::Command) outcome that no message produced.
+    pub fn raw(&self) -> Option<&MqttMessage> {
         match self {
-            Self::Report(_, raw) | Self::Unknown(raw) => raw,
+            Self::Report(_, raw) | Self::Unknown(raw) => Some(raw),
+            Self::Command(_, raw) => raw.as_ref(),
         }
     }
 
@@ -39,7 +53,15 @@ impl TelemetryEvent {
     pub fn report(&self) -> Option<&TelemetryReport> {
         match self {
             Self::Report(report, _) => Some(report),
-            Self::Unknown(_) => None,
+            Self::Command(..) | Self::Unknown(_) => None,
+        }
+    }
+
+    /// Returns the command resolution if this is a `Command` variant.
+    pub fn command(&self) -> Option<&CommandResolution> {
+        match self {
+            Self::Command(resolution, _) => Some(resolution),
+            Self::Report(..) | Self::Unknown(_) => None,
         }
     }
 }
