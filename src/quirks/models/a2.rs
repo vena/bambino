@@ -58,7 +58,11 @@ impl ModelQuirks for A2LQuirks {
     }
 
     fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
-        crate::ams::AmsPoolComposition::Shared { max_units: 4 }
+        // A shared pool of 4 plus one AMS Lite at the same time (`MODEL_MATRIX.csv`).
+        crate::ams::AmsPoolComposition::Shared {
+            max_units: 4,
+            ams_lite: crate::ams::AmsLiteSlot::Additive,
+        }
     }
 
     /// Always supported: the A2L's earliest published release already has remote drying.

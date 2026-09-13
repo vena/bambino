@@ -203,9 +203,9 @@ pub trait ModelQuirks {
 
     /// Returns this model's physical AMS unit pool structure — whether standard AMS
     /// and AMS-HT units share one combined pool or draw from independent pools, and each
-    /// pool's unit-count ceiling. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
-    /// See [`crate::ams::AmsPoolComposition`]'s doc comment for the AMS-lite modeling
-    /// limitation.
+    /// pool's unit-count ceiling, and whether an AMS Lite attaches alongside or instead of the
+    /// shared pool. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row. Size a
+    /// per-unit UI from [`AmsPoolComposition::max_units`](crate::ams::AmsPoolComposition::max_units).
     fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition;
 
     /// Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.

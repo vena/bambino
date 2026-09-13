@@ -10,8 +10,8 @@ pub mod mapping;
 pub mod parser;
 
 pub use mapping::{
-    AmsEntryKind, AmsMapping2Entry, AmsPoolComposition, MaterialSource, build_ams_mapping,
-    build_ams_mapping2, classify_mapping2_entry, is_ams_pool_composition_valid,
+    AmsEntryKind, AmsLiteSlot, AmsMapping2Entry, AmsPoolComposition, MaterialSource,
+    build_ams_mapping, build_ams_mapping2, classify_mapping2_entry, is_ams_pool_composition_valid,
     is_external_spool_safety_valid, is_external_spool_safety_valid_flat,
 };
 pub use parser::{

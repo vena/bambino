@@ -10,10 +10,12 @@ The physical printer monitors modular material expansion units connected to its 
 The wire-decode boundary constants (`AMS_MAX_STANDARD_ID`, `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX`) are protocol-wide, not model-dependent — every model uses the same bit addressing. What *is* model-dependent is how many units of each type a given machine physically supports, confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row (user-supplied official Bambu documentation):
 
 *   **Shared pool** (X1C, X1E, P1P, P1S, A1, A1 Mini, A2L): standard AMS and AMS-HT units draw from one combined pool of up to 4 units total.
+    *   **A2L**: one AMS Lite attaches *in addition* to the full pool (5 units). It reports its own unit id (16), so it is counted separately.
+    *   **A1, A1 Mini**: one AMS Lite attaches *instead of* the pool, never combined with it. It uses the standard ids `0..=3`, so an `ams_mapping2` cannot say which unit is the Lite; only the unit type in telemetry (`AmsUnitModel`) can.
 *   **Independent pools** (H2C, H2D, H2D Pro, H2S, X2D): up to 4 standard AMS units *and* up to 8 AMS-HT units simultaneously, capped separately.
 *   **Independent pools, narrower HT cap** (P2S): up to 4 standard AMS units *and* up to 4 AMS-HT units simultaneously (8 units / 20 slots total).
 
-`ModelQuirks::ams_pool_composition()` exposes this per model; `ams::validate_ams_pool_composition()` checks a constructed `ams_mapping2` against it, rejecting configs no real hardware combination could serve (e.g. 4 standard + 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4). A1/A1 Mini's "shared pool OR 1 AMS Lite, not combinable" exclusivity and A2L's "+1 AMS Lite simultaneously" additive capacity aren't modeled precisely; both are conservatively treated as the plain 4-unit shared pool. (This is a capacity-counting gap only — the AMS Lite *is* independently addressable, see "The A2L AMS Lite's Unit ID" below.)
+`ModelQuirks::ams_pool_composition()` exposes this per model as `AmsPoolComposition` (the AMS Lite rule is its `AmsLiteSlot`: `None`, `Additive`, `Exclusive`), and `AmsPoolComposition::max_units()` gives the total to size a per-unit UI to. `ams::is_ams_pool_composition_valid()` checks a constructed `ams_mapping2` against it, rejecting configs no real hardware combination could serve (e.g. 4 standard + 8 AMS-HT units on a P2S, which only has independent pools of 4 and 4, or an id-16 AMS Lite entry on any model but the A2L). The A1's exclusivity cannot be checked from a mapping, for the reason above.
 
 #### Spool Presence Masking
 The physical presence of loaded spools across standard expansion units is tracked via a hexadecimal bitmask string:

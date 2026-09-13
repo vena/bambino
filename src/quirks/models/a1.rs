@@ -70,7 +70,11 @@ macro_rules! impl_a1_shared {
             }
 
             fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
-                crate::ams::AmsPoolComposition::Shared { max_units: 4 }
+                // A shared pool of 4, or one AMS Lite instead (`MODEL_MATRIX.csv`).
+                crate::ams::AmsPoolComposition::Shared {
+                    max_units: 4,
+                    ams_lite: crate::ams::AmsLiteSlot::Exclusive,
+                }
             }
 
             fn supports_nozzle_offset_calibration(&self) -> bool {

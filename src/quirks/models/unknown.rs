@@ -71,7 +71,10 @@ impl ModelQuirks for UnknownQuirks {
     }
 
     fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
-        crate::ams::AmsPoolComposition::Shared { max_units: 4 }
+        crate::ams::AmsPoolComposition::Shared {
+            max_units: 4,
+            ams_lite: crate::ams::AmsLiteSlot::None,
+        }
     }
 
     fn supports_nozzle_offset_calibration(&self) -> bool {
