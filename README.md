@@ -290,8 +290,13 @@ printer
 printer.stop_drying(0).await?;                  // ams_id only—every other field is zeroed
 ```
 
-`DryingCycle::send()` returns `Error::ModelMismatch` on P1P/P1S: that firmware acks the command
-and then silently discards it instead of driving the AMS heater.
+`DryingCycle::send()` returns `Error::ModelMismatch` in two cases:
+
+- **The printer can't dry remotely:** A1/A1 Mini and P1P/P1S, and X1C/P2S/H2D/H2S/H2C below their
+  minimum firmware. That firmware acks the command and then silently discards it instead of
+  driving the AMS heater. `printer.supports_ams_remote_drying()` gives the same answer up front.
+- **The unit has no heater:** an external spool, or a unit whose reported type can't dry (the
+  original AMS, AMS Lite).
 
 ### File transfer
 
@@ -472,7 +477,7 @@ use bambino::camera::rtsps::rewrite_rtsp_request_uri;
 let rewritten = rewrite_rtsp_request_uri(player_uri, printer_ip)?;
 ```
 
-`rewrite_rtsp_request_uri` only rewrites the URI text in the request line. Tt does **not**
+`rewrite_rtsp_request_uri` only rewrites the URI text in the request line. It does **not**
 recompute or repair an already-computed Digest `Authorization` header. It's only useful to a
 proxy that acts as its own independent RTSP client toward the printer (computing its own
 Digest response against the rewritten URI). A transparent relay that forwards the player's
@@ -664,8 +669,6 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   airduct  calibrate  gcode  gcode-raw  pause  resume  stop
                   gcode-raw prompts for interactive confirmation unless --unsafe is
                   passed, and bypasses all model safety checks; see its --help.
-                  calibrate takes -w/--watch to stream telemetry as NDJSON after
-                  publishing, instead of exiting; see its --help.
                   ams (dry | dry-stop)
 Files actions:    list  upload  delete  space  clock-check
 Camera actions:   snapshot
