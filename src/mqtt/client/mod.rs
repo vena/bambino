@@ -815,7 +815,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     // MQTT_ZOMBIE_TIMEOUT_SECS, so an unconditional reset here would mask a real
                     // zombie episode (broker discarding commands) forever [REF-MQTT-ZOMBIE].
                     // A pending command with no known sequence_id (pushall's `pushing` wrapper
-                    // has no echoed ack, see `wrapper_key`) falls back to clearing on any
+                    // has no echoed ack, see `ACK_CORRELATED_COMMANDS`) falls back to clearing on any
                     // PUBLISH, matching pre-correlation behavior for that case only.
                     let should_clear = match &self.write_pending_echo {
                         Some(expected) => extract_echo_key(&payload).as_ref() == Some(expected),

@@ -291,7 +291,7 @@ struct AckReport {
 }
 
 /// Returns the payload's single top-level wrapper object (`print`/`system`/`pushing`/`info`) —
-/// mirrors `extract_sequence_id`'s traversal in `src/mqtt/client/mod.rs`, which is the code
+/// mirrors `extract_echo_key`'s traversal in `src/mqtt/client/mod.rs`, which is the code
 /// whose behavior this harness exists to justify.
 fn wrapper_object(
     payload: &serde_json::Value,
