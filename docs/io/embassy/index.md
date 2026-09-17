@@ -116,12 +116,13 @@ this via the `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features), so `c
 can be called repeatedly on the same connector — there is no one-shot buffer-consumption
 constraint to work around.
 
-**`negotiated_version` always returns `None`, honestly.** `mbedtls-rs` exposes no public
-API to read back the TLS version actually negotiated (confirmed by reading its source, not
-assumed). This means `FtpsClient::connect()`'s TLS-1.2 enforcement check still fails
-closed for P2S/X2D even after this backend swap; use
-`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` to opt out of that check when
-needed (see `src/ftps/CLAUDE.md` and this module's `CLAUDE.md`).
+**`negotiated_version` reports the real negotiated version.** `mbedtls-rs` 0.3 added
+`Session::tls_version()`, so `FtpsClient::connect()`'s TLS-1.2 enforcement check can be
+satisfied for real on P2S/X2D rather than always failing closed — no need for
+`PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` when the printer genuinely
+negotiates 1.2 (see `src/ftps/CLAUDE.md` and this module's `CLAUDE.md`). This connector
+still sets only `min_version`, so it cannot *cap* the peer at 1.2; a printer that
+insisted on 1.3 would fail the check rather than be downgraded.
 
 **No built-in connect timeout**, same as before: `connect()` has no retry/poll loop of its
 own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Callers that need
@@ -155,10 +156,15 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
 - <span id="embassytlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: RawStream) -> Result<<Self as >::Stream, SocketError>` — [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
-- <span id="embassytlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, _stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
+- <span id="embassytlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
-  `mbedtls-rs` exposes no API to read back the negotiated TLS version — see this
-  type's doc comment above. Return `None` honestly rather than hard-coding a guess.
+  Reports the TLS version actually negotiated, via `mbedtls-rs` 0.3's
+  `Session::tls_version()`.
+
+  `None` means the handshake has not completed (or the session was closed), never "this
+  backend cannot tell": `mbedtls-rs` gates the accessor on its own `connected` flag
+  because MbedTLS seeds the underlying field with the *configured maximum* version at
+  setup and on every reset, which is not a version the peers have agreed on.
 
 - <span id="embassytlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, _stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
 
