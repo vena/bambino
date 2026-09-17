@@ -58,7 +58,11 @@ esp-rtos = { version = "0.3.0", features = [
     "log-04",
 ] }
 esp-radio = { version = "0.18.0", features = ["esp32c6", "log-04", "wifi"] }
-esp-alloc = "0.10.0"
+# `internal-heap-stats` costs cpu on every alloc/dealloc and buys the one number this probe
+# exists to report: an allocator-tracked `Max usage` high-water mark. The first hardware run
+# sampled only at stage boundaries, where every TLS session had already been freed, so the
+# three-live-sessions peak inside the FTPS stage was invisible.
+esp-alloc = { version = "0.10.0", features = ["internal-heap-stats"] }
 esp-backtrace = { version = "0.19.0", features = [
     "esp32c6",
     "panic-handler",

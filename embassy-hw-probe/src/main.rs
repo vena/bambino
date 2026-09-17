@@ -111,15 +111,25 @@ macro_rules! mk_static {
     }};
 }
 
-/// Logs a stage banner plus the heap headroom at that point.
+/// Logs a stage banner plus the heap state at that point.
 ///
-/// Heap is printed per stage rather than once at the end because the interesting number is
-/// the *low-water mark* across the run, and the run is expected to fail partway through the
-/// first few times it is flashed.
+/// **Sample at both ends of a stage, not just the start.** The first hardware run logged only
+/// at stage entry and so never observed the interesting figure: every TLS session was freed
+/// before the next banner, so all six samples read ~50 KB and the three-sessions-live peak
+/// inside stage 4 went unmeasured. `esp-alloc`'s `internal-heap-stats` feature is enabled for
+/// the same reason — it makes `HeapStats` carry a real allocator-tracked `Max usage`
+/// high-water mark, which no amount of sampling from here can reconstruct after the fact.
 macro_rules! stage {
     ($n:literal, $($arg:tt)*) => {{
         log::info!("=== stage {}: {} ===", $n, format_args!($($arg)*));
-        log::info!("heap: {}", esp_alloc::HEAP.stats());
+        log::info!("heap at stage {} entry: {}", $n, esp_alloc::HEAP.stats());
+    }};
+}
+
+/// Closes a stage, logging the heap again so the peak can be attributed to a stage.
+macro_rules! stage_end {
+    ($n:literal) => {{
+        log::info!("heap at stage {} exit: {}", $n, esp_alloc::HEAP.stats());
     }};
 }
 
@@ -263,6 +273,7 @@ async fn main(spawner: Spawner) -> ! {
             }
             Err(e) => panic!("stage 1 FAILED: dial: {e:?}"),
         }
+        stage_end!(1);
     }
 
     stage!(2, "TLS handshake against {PRINTER_IP}:{MQTT_PORT}");
@@ -294,6 +305,11 @@ async fn main(spawner: Spawner) -> ! {
             }
             Err(e) => panic!("stage 2 FAILED: handshake: {e:?}"),
         }
+        // This drop is the one place a `Session` cannot be closed politely: `TlsConnector`
+        // has no close method, so the `mbedtls-rs` "Session dropped without being closed
+        // properly" warning that follows is expected here and only here. Stages 3 and 4 go
+        // through the crate's own `disconnect_*` paths instead.
+        stage_end!(2);
     }
 
     stage!(3, "MQTT connect and one telemetry event");
@@ -324,6 +340,15 @@ async fn main(spawner: Spawner) -> ! {
             Ok(Err(e)) => panic!("stage 3 FAILED: poll_telemetry: {e:?}"),
             Err(_) => panic!("stage 3 FAILED: no telemetry within 30s"),
         }
+        // Graceful teardown rather than a bare drop. Two reasons: it exercises
+        // `disconnect_mqtt` on hardware, which nothing else here does, and it keeps the
+        // "Session dropped without being closed properly" warning meaningful — the first
+        // hardware run emitted it after every stage, so it said nothing about which teardown
+        // was actually impolite.
+        if let Err(e) = printer.disconnect_mqtt().await {
+            log::warn!("stage 3: disconnect_mqtt failed: {e:?}");
+        }
+        stage_end!(3);
     }
 
     stage!(4, "FTPS connect and list_directory");
@@ -358,6 +383,10 @@ async fn main(spawner: Spawner) -> ! {
             }
             Err(e) => panic!("stage 4 FAILED: list_directory: {e:?}"),
         }
+        // Closes the control channel and both TLS sessions the FTPS client owns; see the
+        // note in stage 3 on why this is not a bare drop.
+        ftps.disconnect().await;
+        stage_end!(4);
     }
 
     stage!(5, "EmbassyTimer monotonicity and pacing");
@@ -379,6 +408,7 @@ async fn main(spawner: Spawner) -> ! {
             "stage 5 FAILED: now_millis did not advance ({before} -> {after})"
         );
         log::info!("stage 5 OK: 500ms sleep measured {elapsed}ms");
+        stage_end!(5);
     }
 
     log::info!("=== all stages complete ===");
