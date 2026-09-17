@@ -120,6 +120,21 @@ embassy-time = { version = "0.5.1", optional = true }
 # Real TLS 1.2+1.3 for Embassy via MbedTLS (hw-accelerated crypto on ESP32 targets).
 # `log` routes MbedTLS's own debug logging into this crate's `log` facade; the `tls` bundle
 # (default) gives X.509 parsing, ECDSA/RSA, and the record-buffer sizes FTPS/MQTT need.
+#
+# **Measured cost per live `Session`, ESP32-C6 against a P1S** (`embassy-hw-probe`, GitHub
+# issue #292, allocator high-water marks from esp-alloc's `internal-heap-stats`): one session
+# peaks ~55 KB above a ~50 KB baseline of embassy-net + esp-radio; two concurrent (FTPS
+# control + data) peak at 149 KB of a 174 KB heap, i.e. ~48 KB each. The 16 KiB in + 16 KiB
+# out record buffers are only two thirds of that — the rest is the SSL context, config, and
+# transient X.509 parsing during the handshake.
+#
+# The consequence is a real ceiling, not a footnote: **three concurrent sessions do not fit**
+# on a C6 at these defaults. ~29 KB of headroom remained at the two-session peak, and a third
+# needs ~48 KB. That is exactly what `PrinterClient::connect_all()` asks for (MQTT + FTPS
+# control + camera), so on this chip either shrink the buffers with mbedtls-rs's
+# `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features, grow the heap, or connect
+# channels sequentially and drop each client when done. Note `disconnect_mqtt`/
+# `FtpsClient::disconnect` do *not* release the session memory — the drop does.
 mbedtls-rs = { version = "0.3", default-features = false, features = [
     "tls",
     "log",
