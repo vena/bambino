@@ -149,6 +149,16 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
         }
     }
 
+    /// Hands out the underlying transport so a teardown path can shut its TLS session down.
+    ///
+    /// Exists for `PrinterClient::disconnect_camera`, which needs `&mut Self::Stream` to call
+    /// [`TlsConnector::close`](crate::io::TlsConnector::close) before the stream is dropped
+    /// (GitHub issue #293). `pub(crate)` on purpose: reading from this directly would strand
+    /// `read_state` mid-frame.
+    pub(crate) fn stream_mut(&mut self) -> &mut IO {
+        &mut self.stream
+    }
+
     /// Overrides the maximum accepted frame size (default: `CAMERA_FRAME_MAX_SIZE`, 10MB).
     ///
     /// Consuming builder, matching the `PrinterClient::with_mqtt_port`/`with_ftps_port`

@@ -20,8 +20,9 @@ use bambino::models::PrinterModel;
 use bambino::io::TlsVersion;
 
 use crate::common::io::{
-    DummyTlsConnector, FailingDataTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
-    PerCallVersionReportingTlsConnector, VersionReportingTlsConnector,
+    CloseCountingTlsConnector, DummyTlsConnector, FailingDataTlsConnector,
+    HostCapturingTlsConnector, MockDataStreamFactory, PerCallVersionReportingTlsConnector,
+    VersionReportingTlsConnector,
 };
 use crate::common::mock_ftps;
 
@@ -958,6 +959,69 @@ async fn test_ftps_disconnect() {
     client.disconnect().await;
 
     server_handle.await.expect("Mock server panicked");
+}
+
+/// Regression test for GitHub issue #293: every FTPS TLS session must be shut down through
+/// [`TlsConnector::close`], not merely dropped.
+///
+/// Two sessions are closed here, and both matter for a different reason: the per-transfer data
+/// channel (whose memory already comes back when the transfer ends, but whose peer would
+/// otherwise see a truncated stream every time) and the control channel (which `disconnect()`
+/// also drops, to return MbedTLS's ~48 KB of record buffers on embassy rather than holding them
+/// until the client itself goes out of scope). The no-op default on `TlsConnector::close` means
+/// a teardown path that skips it is silent, so this counts the calls rather than trusting them.
+#[tokio::test]
+async fn test_ftps_closes_tls_sessions_on_teardown() {
+    let (client_control, server_control, data_container, factory) = setup();
+    let server_handle = tokio::spawn(mock_ftps::run_mock_server(
+        server_control,
+        data_container.clone(),
+    ));
+
+    let (connector, closes) = CloseCountingTlsConnector::new();
+    let mut client = FtpsClient::connect(
+        TokioIo(client_control),
+        connector,
+        factory,
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: "TEST0000000001".into(),
+            access_code: "12345678".into(),
+            model: PrinterModel::P1S,
+        },
+        DummyTimer,
+        false,
+    )
+    .await
+    .expect("FTPS handshake failed");
+
+    client
+        .list_directory(
+            "/model",
+            CurrentDateTime {
+                year: 2026,
+                month: 6,
+                day: 17,
+                hour: 15,
+                minute: 0,
+            },
+        )
+        .await
+        .expect("list_directory should succeed");
+    assert_eq!(
+        closes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "a completed transfer must close its data channel's TLS session"
+    );
+
+    client.disconnect().await;
+    assert_eq!(
+        closes.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "disconnect() must close the control channel's TLS session"
+    );
+
+    server_handle.abort();
 }
 
 #[tokio::test]

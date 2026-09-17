@@ -245,6 +245,23 @@ where
         Ok(session)
     }
 
+    /// Sends `close_notify` via `mbedtls-rs` 0.3's `Session::close()`.
+    ///
+    /// Idempotent for free: `Session::close` returns `Ok(())` immediately when its own
+    /// `connected` flag is already clear, and clears that flag on success — which is also what
+    /// silences the `Session dropped without being closed properly` warning `mbedtls-rs` emits
+    /// from `Drop`.
+    ///
+    /// Closing does **not** release the session's record buffers; `mbedtls-rs` frees those in
+    /// `Drop`, which on an ESP32-C6 is ~48 KB per session (GitHub issue #293). Callers that
+    /// need the memory back must drop the stream, not merely close it.
+    async fn close(&self, stream: &mut Self::Stream) -> Result<(), SocketError> {
+        stream.close().await.map_err(|e| {
+            log::debug!("mbedtls-rs Session::close failed: {e:?}");
+            SocketError::ConnectionAborted
+        })
+    }
+
     /// Reports the TLS version actually negotiated, via `mbedtls-rs` 0.3's
     /// `Session::tls_version()`.
     ///

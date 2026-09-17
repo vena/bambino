@@ -296,19 +296,23 @@ async fn main(spawner: Spawner) -> ! {
         // completes, and seeing it hang is more informative on a first run than a timeout
         // that hides where it stopped.
         match connector.connect(PRINTER_SERIAL, raw).await {
-            Ok(session) => {
+            Ok(mut session) => {
                 log::info!(
                     "stage 2 OK: handshake complete, negotiated_version = {:?}",
                     connector.negotiated_version(&session)
                 );
+                // Exercises `TlsConnector::close` directly, which no other stage does —
+                // stages 3 and 4 reach it through the crate's own `disconnect_*` paths.
+                // A "Session dropped without being closed properly" warning anywhere in
+                // this run now means a teardown path missed its close (GitHub issue #293),
+                // not an expected gap in the API.
+                if let Err(e) = connector.close(&mut session).await {
+                    log::warn!("stage 2: TLS close failed: {e:?}");
+                }
                 drop(session);
             }
             Err(e) => panic!("stage 2 FAILED: handshake: {e:?}"),
         }
-        // This drop is the one place a `Session` cannot be closed politely: `TlsConnector`
-        // has no close method, so the `mbedtls-rs` "Session dropped without being closed
-        // properly" warning that follows is expected here and only here. Stages 3 and 4 go
-        // through the crate's own `disconnect_*` paths instead.
         stage_end!(2);
     }
 

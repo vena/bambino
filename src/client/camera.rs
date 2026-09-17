@@ -86,16 +86,26 @@ where
 
     /// Disconnects the camera session, if one exists, and clears it from the client.
     ///
-    /// Once `camera_config` is consumed by `ensure_camera()`, a dead
-    /// stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
+    /// A dead stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
     /// stuck `Some(...)` forever, since `ensure_camera()`'s `is_some()` short-circuit would
-    /// keep handing back the same broken stream. There is no protocol-level teardown on
-    /// `BinaryCameraStream` to call — this just clears the slot.
+    /// keep handing back the same broken stream.
     ///
-    /// Idempotent. Reconnecting requires a fresh [`.with_camera()`](Self::with_camera) on a
-    /// new `PrinterClient`, the same caveat FTPS already documents for
-    /// [`disconnect_storage()`](Self::disconnect_storage).
+    /// There is no protocol-level teardown on `BinaryCameraStream` to call, but the TLS session
+    /// underneath it is shut down properly before the slot is cleared —
+    /// [`TlsConnector::close`](crate::io::TlsConnector::close) sends `close_notify` so the
+    /// printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
+    /// Failure there is logged and ignored: the connection is going away either way.
+    ///
+    /// Idempotent, and unlike [`disconnect_storage()`](Self::disconnect_storage) this *can* be
+    /// reconnected — `ensure_camera()` never consumes `camera_config` (nothing is moved out of
+    /// it), so the next camera call redials.
     pub async fn disconnect_camera(&mut self) -> Result<(), Error> {
+        if let Some((tls, _)) = self.camera_config.as_ref()
+            && let Some(mut camera) = self.camera.take()
+            && let Err(e) = tls.close(camera.stream_mut()).await
+        {
+            log::debug!("camera TLS close failed: {e:?}");
+        }
         self.camera = None;
         Ok(())
     }

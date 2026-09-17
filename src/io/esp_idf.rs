@@ -1591,6 +1591,13 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         Ok(EspIdfTlsStream { tls, timer })
     }
 
+    // No `close()` override: `esp_idf_svc::tls::EspTls` exposes no shutdown method (only
+    // `Drop`, which runs `esp_tls_conn_destroy`), so this backend keeps the trait's no-op
+    // default rather than faking an orderly `close_notify` it cannot send. The
+    // `context_handle()` raw pointer is not a way around this — destroying the context through
+    // it would leave the safe wrapper holding a dangling handle to free again. Revisit if
+    // esp-idf-svc grows a real close seam (GitHub issue #293).
+
     fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
         query_negotiated_tls_version(&stream.tls)
     }

@@ -262,8 +262,13 @@ where
 
     /// Disconnects the MQTT session, if one exists, and clears it from the client.
     ///
-    /// There is no protocol-level teardown on `MqttClient` to call — this just clears
-    /// the slot, mirroring `disconnect_camera()`. Without this, a dead stream (a
+    /// There is no protocol-level (MQTT DISCONNECT) teardown on `MqttClient` to call, but the
+    /// TLS session underneath it is shut down properly before the slot is cleared —
+    /// [`TlsConnector::close`](crate::io::TlsConnector::close) sends `close_notify` so the
+    /// printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
+    /// Failure there is logged and ignored: the connection is going away either way. Dropping
+    /// the client is what releases the session's memory — on MbedTLS/embassy that is ~48 KB,
+    /// freed in `Drop`, not in `close()`. Without this, a dead stream (a
     /// [`tick_zombie_check()`](crate::mqtt::MqttClient::tick_zombie_check)-detected
     /// zombie, a transport error) left `self.mqtt` stuck `Some(...)` forever, since
     /// `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken
@@ -274,7 +279,11 @@ where
     /// `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
     /// only recovers a `connect()`-built client, never one built via `from_mqtt()`.
     pub async fn disconnect_mqtt(&mut self) -> Result<(), Error> {
-        self.mqtt = None;
+        if let Some(mut mqtt) = self.mqtt.take()
+            && let Err(e) = self.mqtt_tls.close(mqtt.stream_mut()).await
+        {
+            log::debug!("MQTT TLS close failed: {e:?}");
+        }
         self.begin_connection();
         Ok(())
     }
@@ -552,10 +561,11 @@ where
                 Ok::<_, Error>(cam)
             })
             .await?;
-        // Only clear camera_config once the connection has actually succeeded — a failed
-        // attempt (including a connect_timeout_secs timeout on a slow LAN) must leave it
-        // intact so the next call retries instead of permanently reporting "not configured".
-        self.camera_config = None;
+        // `camera_config` is deliberately *not* cleared here. Unlike `ftps_config`, whose
+        // connector is moved into the `FtpsClient`, nothing is consumed by a camera connect —
+        // the borrow above is `as_ref()` only. Keeping it is what lets `disconnect_camera()`
+        // close the TLS session through the connector (GitHub issue #293), and it makes a
+        // disconnect/reconnect cycle work instead of permanently reporting "not configured".
         self.camera = Some(camera_stream);
         Ok(())
     }
@@ -747,7 +757,7 @@ where
             None => None,
             Some(Err(e)) => Some(Err(e)),
             Some(Ok(cam)) => {
-                self.camera_config = None;
+                // Not cleared, for the same reason as in `ensure_camera()` above.
                 self.camera = Some(cam);
                 Some(Ok(()))
             }

@@ -18,7 +18,7 @@ use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 
-use crate::common::io::{DummyTlsConnector, MockDataStreamFactory};
+use crate::common::io::{CloseCountingTlsConnector, DummyTlsConnector, MockDataStreamFactory};
 use crate::common::mock_camera::{
     run_mock_camera_server, run_mock_camera_server_closes_after_handshake,
     run_mock_camera_server_drops_mid_frame,
@@ -348,7 +348,67 @@ async fn test_attach_and_disconnect_camera() {
         "disconnect_camera must clear self.camera"
     );
 
+    // GitHub issue #293: the slot being clear is not the whole teardown — the TLS session
+    // underneath must be closed, not merely dropped. Verified against a counting connector in
+    // `test_disconnect_camera_closes_the_tls_session` below; `DummyTlsConnector` here keeps the
+    // trait's no-op default, so this test says nothing about it either way.
+
     server_handle
         .await
         .expect("Background mock camera server panicked");
+}
+
+/// Regression test for GitHub issue #293: `disconnect_camera()` must shut the TLS session down
+/// through [`TlsConnector::close`] before releasing it.
+///
+/// The close runs through the connector still held in `camera_config` — which is why
+/// `ensure_camera()` no longer clears that field on a successful connect. Nothing was moved out
+/// of it there (unlike `ftps_config`, whose connector moves into the `FtpsClient`), so clearing
+/// it only ever cost the teardown its connector and the client its ability to redial.
+#[tokio::test]
+async fn test_disconnect_camera_closes_the_tls_session() {
+    let access_code = "87654321";
+    let (client_stream, server_stream) = tokio::io::duplex(8192);
+    let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
+
+    let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
+        BinaryCameraStream::new(TokioIo(client_stream));
+    camera_stream
+        .authenticate(&PrinterIdentity {
+            ip: String::new(),
+            serial: String::new(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        })
+        .await
+        .expect("Failed to negotiate binary stream authentication handshake");
+
+    let (connector, closes) = CloseCountingTlsConnector::new();
+    let mut client = PrinterClient::new(
+        DummyTlsConnector,
+        DummyFactory,
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: access_code.to_string(),
+            model: PrinterModel::P1S,
+        },
+    )
+    .with_camera(
+        connector,
+        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
+    );
+    client.attach_camera(camera_stream);
+
+    client
+        .disconnect_camera()
+        .await
+        .expect("disconnect_camera should succeed");
+    assert_eq!(
+        closes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "disconnect_camera must close the TLS session before dropping the stream"
+    );
+
+    server_handle.abort();
 }

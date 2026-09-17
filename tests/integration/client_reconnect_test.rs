@@ -13,8 +13,10 @@ use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
-use crate::common::client::{SERIAL, connect_test_client};
-use crate::common::io::{DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory};
+use crate::common::client::{SERIAL, connect_test_client, connect_test_mqtt};
+use crate::common::io::{
+    CloseCountingTlsConnector, DummyTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
+};
 use crate::common::mock_ftps;
 use crate::common::mock_mqtt::{
     handle_mqtt_handshake, read_puback, read_publish_payload, send_publish_payload,
@@ -209,6 +211,45 @@ async fn test_first_lazy_command_carries_a_reseeded_sequence_id_with_a_real_cloc
     client.send_gcode("G28").await.expect("send_gcode failed");
 
     broker_task.await.expect("mock broker task panicked");
+}
+
+/// Regression test for GitHub issue #293: `disconnect_mqtt()` must shut the TLS session down
+/// through [`TlsConnector::close`] before releasing it, not just drop it.
+///
+/// Dropping alone already returns the memory — the slot goes to `None` in the same call — but
+/// it sends no `close_notify`, so the printer sees a truncated connection on every ordinary
+/// disconnect. `TlsConnector::close` defaults to a no-op, so forgetting the call is silent;
+/// this counts it.
+#[tokio::test]
+async fn test_disconnect_mqtt_closes_the_tls_session() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+    });
+
+    let (connector, closes) = CloseCountingTlsConnector::new();
+    let mut client = PrinterClient::new(
+        connector,
+        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
+        PrinterIdentity {
+            ip: "127.0.0.1".into(),
+            serial: SERIAL.into(),
+            access_code: "12345678".into(),
+            model: PrinterModel::P1S,
+        },
+    );
+    client.attach_mqtt(connect_test_mqtt(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await);
+    broker_task.await.expect("mock broker task panicked");
+
+    client
+        .disconnect_mqtt()
+        .await
+        .expect("disconnect_mqtt should succeed");
+    assert_eq!(
+        closes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "disconnect_mqtt must close the TLS session before dropping it"
+    );
 }
 
 #[tokio::test]

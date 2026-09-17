@@ -367,6 +367,28 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     async fn connect(&self, host: &str, raw_stream: RawStream)
     -> Result<Self::Stream, SocketError>;
 
+    /// Sends the TLS `close_notify` alert, shutting the session down in an orderly way.
+    ///
+    /// Called by every teardown path in this crate (`PrinterClient::disconnect_mqtt`/
+    /// `disconnect_storage`/`disconnect_camera`, `FtpsClient::disconnect`, and the end of each
+    /// FTPS data transfer) immediately before the stream is dropped. Without it the peer sees a
+    /// truncated connection rather than a clean shutdown, which makes a real truncation attack
+    /// indistinguishable from a normal teardown for anyone inspecting the wire.
+    ///
+    /// Defaults to a no-op so a backend whose TLS library exposes no shutdown seam stays
+    /// honest rather than pretending — the ESP-IDF backend is exactly that case
+    /// (`esp_idf_svc::tls::EspTls` only tears down in `Drop`). Takes `&mut Self::Stream` rather
+    /// than consuming it so the caller keeps ownership and decides when the stream is released;
+    /// closing does not necessarily free the session's buffers (on `mbedtls-rs` it does not —
+    /// see `FtpsClient::disconnect`, which drops the stream for that reason).
+    ///
+    /// Best-effort by contract: the connection is going away regardless, so callers log and
+    /// continue rather than propagating. Implementations must be idempotent — a second call
+    /// on an already-closed stream is a no-op, not an error.
+    async fn close(&self, _stream: &mut Self::Stream) -> Result<(), SocketError> {
+        Ok(())
+    }
+
     /// Returns the TLS protocol version negotiated on the given stream.
     ///
     /// Platforms that cannot inspect the negotiated version return `None`. This does **not**

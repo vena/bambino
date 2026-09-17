@@ -326,6 +326,16 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
 }
 
 impl<IO: AsyncIo> MqttClient<IO> {
+    /// Hands out the underlying transport so a teardown path can shut its TLS session down.
+    ///
+    /// Exists for `PrinterClient::disconnect_mqtt`, which needs `&mut Self::Stream` to call
+    /// [`TlsConnector::close`](crate::io::TlsConnector::close) before the client is dropped
+    /// (GitHub issue #293). Deliberately `pub(crate)` and deliberately not a general escape
+    /// hatch: writing to this stream behind the client's back would desync its frame state.
+    pub(crate) fn stream_mut(&mut self) -> &mut IO {
+        &mut self.stream
+    }
+
     /// Writes a frame via [`write_frame_with_timer`], poisoning the connection on failure.
     ///
     /// A write timeout or I/O error may already have put a partial frame on the wire, and

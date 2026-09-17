@@ -101,7 +101,18 @@ where
     Factory: RawStreamFactory<RawIO>,
     FtpsTimer: TimerProvider,
 {
-    control_stream: Tls::Stream,
+    /// The secure control channel, `None` only after [`disconnect()`](FtpsClient::disconnect)
+    /// has torn it down.
+    ///
+    /// An `Option` purely so `disconnect()` can *drop* the TLS session rather than merely
+    /// closing it: MbedTLS frees a session's record buffers in `Drop`, not in `close()`, and on
+    /// an ESP32-C6 that is ~48 KB against roughly 29 KB of headroom at the two-session peak
+    /// (GitHub issue #293). A consumer holding a disconnected client would otherwise keep that
+    /// memory alive for the rest of the client's scope. Every public method calls
+    /// `check_poisoned()` first and `disconnect()` always poisons on the way out, so the `None`
+    /// case is unreachable from outside — `control_parts()` still handles it rather than
+    /// unwrapping, since that invariant is enforced by convention, not by the type.
+    control_stream: Option<Tls::Stream>,
     tls_connector: Tls,
     data_factory: Factory,
     model: PrinterModel,
@@ -130,6 +141,20 @@ where
     /// read — confirmed via `tests/ftps_test.rs::test_ftps_download_file` failing with a spurious
     /// `ConnectionReset` when scoped too narrowly.
     control_fill_buf: Vec<u8>,
+}
+
+/// The error every control-channel access reports once [`FtpsClient::disconnect`] has dropped
+/// the stream.
+///
+/// Unreachable through the public API — `disconnect()` poisons the client in the same call, and
+/// `check_poisoned()` runs first on every public method, so a caller sees the poisoning message
+/// instead. This exists so the `None` arm has an honest answer rather than an `unwrap`.
+fn control_stream_gone() -> Error {
+    Error::ProtocolViolation(
+        "FTPS control channel has been disconnected — this instance must be discarded; \
+         reconnect with a new FtpsClient::connect() call instead of reusing it"
+            .into(),
+    )
 }
 
 /// Bundles the args a login-step command shares across calls, so each call site only spells
@@ -198,7 +223,7 @@ where
         )
         .await?;
         Ok(Self {
-            control_stream,
+            control_stream: Some(control_stream),
             tls_connector,
             data_factory,
             model: identity.model,
@@ -315,7 +340,7 @@ where
         control_fill_buf: Vec<u8>,
     ) -> Self {
         Self {
-            control_stream,
+            control_stream: Some(control_stream),
             tls_connector,
             data_factory,
             model: identity.model,
@@ -359,8 +384,10 @@ where
         // printer must not be able to block the control channel indefinitely before this
         // method gets the chance to poison the client.
         let deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
-        if let Err(e) = write_command(&mut self.control_stream, cmd, &self.timer, deadline_ms).await
-        {
+        let Some(stream) = self.control_stream.as_mut() else {
+            return Err(control_stream_gone());
+        };
+        if let Err(e) = write_command(stream, cmd, &self.timer, deadline_ms).await {
             self.poisoned = true;
             return Err(e);
         }
@@ -377,8 +404,11 @@ where
         deadline_ms: Option<u64>,
     ) -> Result<(u16, String), Error> {
         let mut buf = Vec::new();
+        let Some(stream) = self.control_stream.as_mut() else {
+            return Err(control_stream_gone());
+        };
         match read_response(
-            &mut self.control_stream,
+            stream,
             &mut buf,
             &mut self.control_fill_buf,
             &self.timer,
@@ -460,6 +490,28 @@ where
         Ok(DataChannel::Secure(secure))
     }
 
+    /// Shuts the data channel's TLS session down and releases it, at the end of a completed
+    /// transfer.
+    ///
+    /// The counterpart to `open_data_channel`: a data channel is per-transfer, so its memory
+    /// already comes back when this consumes it, but without
+    /// [`TlsConnector::close`](crate::io::TlsConnector::close) the printer would see every
+    /// transfer end in a truncated TLS stream rather than a `close_notify` (GitHub issue #293).
+    /// The `Plain` variant has nothing to close — those models run the data channel
+    /// unencrypted (`uses_plaintext_ftps_data_channel`).
+    ///
+    /// Only the success paths route through here. A transfer that fails mid-stream has already
+    /// poisoned the client and drops the channel where it errors — there is no orderly shutdown
+    /// to send on a connection that just broke, and adding one would mean awaiting a peer that
+    /// may be the reason the transfer failed.
+    async fn close_data_channel(&self, channel: DataChannel<RawIO, Tls::Stream>) {
+        if let DataChannel::Secure(mut secure) = channel
+            && let Err(e) = self.tls_connector.close(&mut secure).await
+        {
+            log::debug!("FTPS data-channel TLS close failed: {e:?}");
+        }
+    }
+
     /// Queries the storage server for raw directory listings and parses their structures.
     ///
     /// `now` must carry the **printer's** wall-clock time, not the host's. A `LIST` line omits
@@ -512,7 +564,7 @@ where
             self.poisoned = true;
             return Err(e);
         }
-        drop(data_channel);
+        self.close_data_channel(data_channel).await;
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = self.read_response_poisoning(deadline_ms).await?;
@@ -728,11 +780,14 @@ where
             self.poisoned = true;
             return Err(Error::Network(SocketError::ConnectionAborted));
         }
-        drop(data_channel);
+        self.close_data_channel(data_channel).await;
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
+        let Some(stream) = self.control_stream.as_mut() else {
+            return Err(control_stream_gone());
+        };
         let res = read_response(
-            &mut self.control_stream,
+            stream,
             &mut ctrl_buf,
             &mut self.control_fill_buf,
             &self.timer,
@@ -800,7 +855,7 @@ where
             self.poisoned = true;
             return Err(e);
         }
-        drop(data_channel);
+        self.close_data_channel(data_channel).await;
 
         let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
         let (code, _) = self.read_response_poisoning(deadline_ms).await?;
@@ -950,28 +1005,36 @@ where
     /// struct doc comment) so every subsequent method call on this instance fails cleanly with
     /// the same "must reconnect" error, instead of a caller mistaking a disconnected client for
     /// a live one. Idempotent: calling this more than once is a no-op after the first call.
+    ///
+    /// After `QUIT` the TLS session is shut down properly and then dropped, in that order:
+    /// [`TlsConnector::close`](crate::io::TlsConnector::close) sends `close_notify` so the peer
+    /// sees an orderly teardown rather than a truncated stream, and dropping the stream is what
+    /// actually returns its memory — MbedTLS frees a session's record buffers in `Drop`, not in
+    /// `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
+    /// itself goes out of scope (GitHub issue #293).
     pub async fn disconnect(&mut self) {
         if self.check_poisoned().is_err() {
             return;
         }
         let write_deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
-        let _ = write_command(
-            &mut self.control_stream,
-            "QUIT",
-            &self.timer,
-            write_deadline_ms,
-        )
-        .await;
-        let mut buf = Vec::new();
         let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let _ = read_response(
-            &mut self.control_stream,
-            &mut buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await;
+        if let Some(stream) = self.control_stream.as_mut() {
+            let _ = write_command(stream, "QUIT", &self.timer, write_deadline_ms).await;
+            let mut buf = Vec::new();
+            let _ = read_response(
+                stream,
+                &mut buf,
+                &mut self.control_fill_buf,
+                &self.timer,
+                deadline_ms,
+            )
+            .await;
+        }
+        if let Some(mut stream) = self.control_stream.take()
+            && let Err(e) = self.tls_connector.close(&mut stream).await
+        {
+            log::debug!("FTPS control-channel TLS close failed: {e:?}");
+        }
         self.poisoned = true;
     }
 }

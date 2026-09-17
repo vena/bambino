@@ -289,6 +289,19 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
         Ok(TokioIo(tls_stream))
     }
 
+    /// Sends `close_notify` via `AsyncWriteExt::shutdown`, which `tokio-rustls` implements as a
+    /// TLS-level shutdown (queue the alert, flush it) rather than a bare socket close.
+    ///
+    /// Idempotent: rustls only queues the alert once, so a second call just re-flushes an empty
+    /// buffer.
+    async fn close(&self, stream: &mut Self::Stream) -> Result<(), SocketError> {
+        use ::tokio::io::AsyncWriteExt;
+        stream.0.shutdown().await.map_err(|e| {
+            log::debug!("TLS shutdown failed: {e:?}");
+            SocketError::from(e)
+        })
+    }
+
     fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
         match stream.0.get_ref().1.protocol_version()? {
             rustls::ProtocolVersion::TLSv1_2 => Some(TlsVersion::Tls12),

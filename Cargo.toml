@@ -133,8 +133,10 @@ embassy-time = { version = "0.5.1", optional = true }
 # needs ~48 KB. That is exactly what `PrinterClient::connect_all()` asks for (MQTT + FTPS
 # control + camera), so on this chip either shrink the buffers with mbedtls-rs's
 # `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features, grow the heap, or connect
-# channels sequentially and drop each client when done. Note `disconnect_mqtt`/
-# `FtpsClient::disconnect` do *not* release the session memory — the drop does.
+# channels sequentially and drop each client when done. `disconnect_mqtt`/
+# `disconnect_camera`/`FtpsClient::disconnect` do release a session's memory, but only because
+# each of them drops the stream after closing it (GitHub issue #293) — `close()` alone does not:
+# MbedTLS frees in `Drop`. A stream held elsewhere and merely closed still costs its ~48 KB.
 mbedtls-rs = { version = "0.3", default-features = false, features = [
     "tls",
     "log",

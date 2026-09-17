@@ -152,6 +152,46 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for HostCapturingTlsConnector {
     }
 }
 
+/// A pass-through TLS connector that counts how many times `close()` was called on it.
+///
+/// Guards the teardown wiring from GitHub issue #293: `TlsConnector::close` defaults to a
+/// no-op, so a teardown path that forgets to call it fails nothing and logs nothing — the
+/// symptom only ever showed up as an `mbedtls-rs` warning on real hardware. Counting the calls
+/// is the part a mock *can* verify; whether a `close_notify` actually reaches the peer is a
+/// wire-level question (`.claude/rules/wire-framing-hardware-verification.md`) that belongs to
+/// `embassy-hw-probe`.
+pub struct CloseCountingTlsConnector {
+    pub closes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CloseCountingTlsConnector {
+    /// Returns the connector plus a cloned handle to its counter — grab the handle before
+    /// handing the connector's ownership off to `connect()`, which consumes it.
+    pub fn new() -> (Self, Arc<std::sync::atomic::AtomicUsize>) {
+        let closes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (
+            Self {
+                closes: closes.clone(),
+            },
+            closes,
+        )
+    }
+}
+
+impl<RawIO: AsyncIo> TlsConnector<RawIO> for CloseCountingTlsConnector {
+    type Stream = RawIO;
+
+    async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
+        Ok(raw_stream)
+    }
+
+    async fn close(&self, _stream: &mut Self::Stream) -> Result<(), SocketError> {
+        self.closes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
 /// A dynamic, in-memory stream factory for passive FTP data channels.
 ///
 /// **Why this is used:**
