@@ -33,8 +33,24 @@ check-fast:
 	cargo test --bin bambino-cli --features cli
 	cargo check --no-default-features --features alloc --lib
 	cargo check --no-default-features --features embassy --lib
+	$(MAKE) test-embassy-host
 	cargo clippy
 	cargo clippy --bin bambino-cli --features cli
+
+# Runs the embassy backend's code on the host, which the `cargo check` above cannot: a check
+# proves io/embassy.rs compiles, never that it behaves. `embassy` + `std` is not a shipping
+# target — it exists so embassy-only code is executable in CI, since EmbassyTlsConnector needs
+# only mbedtls-rs and an AsyncIo stream, not embassy-net's executor or an ESP32.
+#
+# `--test` (not `--lib`): the crate's unit tests import `crate::io::tokio` under a bare
+# `cfg(test)`, so the whole `#[cfg(test)]` surface fails to build without the tokio feature.
+# Integration tests are separate crates and skip it. Widening this to `--lib` means gating
+# those imports on `feature = "tokio"` first.
+#
+# Kept inside check-fast rather than check-all: it guards a backend nobody can test on
+# hardware here, so the cheap host-side half should not be the part that gets skipped.
+test-embassy-host:
+	cargo test --no-default-features --features "embassy,std" --test embassy_tls_version_test
 
 # Wraps scripts/check-esp-idf.sh. Not run by check-fast/check-all's CI job on
 # every push — see .github/workflows/esp-idf.yml for why (path-filtered, and

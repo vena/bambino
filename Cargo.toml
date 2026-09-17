@@ -169,3 +169,21 @@ rcgen = "0.14"
 # For constructing an explicit (possibly expired) certificate validity window in
 # io::tokio's CnFallbackServerVerifier expiry test.
 time = "0.3"
+
+# A TLS server that can be pinned to exactly one protocol version, for
+# tests/embassy_tls_version_test.rs. mbedtls-rs cannot play this role: its
+# `ServerSessionConfig` has no `max_version` field (only the client config does), so an
+# all-MbedTLS loopback always lands on the highest version both ends support and could never
+# prove the TLS-1.2 arm of `EmbassyTlsConnector::negotiated_version`. Not a new supply-chain
+# entry — rustls is already in the lock file via `tokio-rustls`, and dev-dependencies never
+# reach consumers. Preferred over spawning `openssl s_server`, which would make the suite
+# depend on a binary outside cargo.
+rustls = "0.23.41"
+
+# Supplies a `critical-section` implementation for host test binaries. `mbedtls-rs` calls
+# `critical_section::with` to guard its global RNG/hook state; on a real target the HAL
+# registers the impl, so nothing in the crate's own dependencies provides one and an
+# `embassy`-featured host link fails with undefined `_critical_section_1_0_acquire`/`_release`.
+# The `std` impl (a plain mutex) is the intended stand-in for exactly this case. Dev-only, so
+# no impl is ever registered for a real firmware build — registering two would be a hard error.
+critical-section = { version = "1.2.0", features = ["std"] }

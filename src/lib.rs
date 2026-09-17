@@ -89,7 +89,11 @@
 //! - [`diagnostics`] — HMS alert decoding and K-profile (Linear Advance) management.
 //! - [`error`] — The unified [`Error`] type.
 
-#[cfg(all(not(feature = "std"), feature = "alloc"))]
+// Not gated on `not(feature = "std")`: `alloc::` paths need this declaration in edition 2018+
+// whether or not `std` is present, and `io/embassy.rs` names `alloc::ffi::CString` directly.
+// Keeping the `std` exclusion made the otherwise-valid `embassy` + `std` combination fail to
+// compile, which is exactly the combination that lets embassy-only code be tested on the host.
+#[cfg(feature = "alloc")]
 extern crate alloc;
 
 pub mod error;

@@ -173,6 +173,7 @@ name = "bambino"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "critical-section",
  "crossterm",
  "embassy-net",
  "embassy-time",
@@ -186,6 +187,7 @@ dependencies = [
  "mbedtls-rs",
  "rand_core",
  "rcgen",
+ "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",

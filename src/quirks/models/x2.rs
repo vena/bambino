@@ -65,6 +65,18 @@ impl ModelQuirks for X2Quirks {
     /// TLS record or a cleartext FTP reply would settle it, and if it is a cleartext `421` this
     /// cap is unrelated to the fix and should be reconsidered.
     ///
+    /// **Unverified on X2D, and no upstream can settle it — don't re-check them expecting an
+    /// answer.** All three were searched (2026-09-17): bambuddy still says outright that nobody
+    /// there has an X2D, so their entry stays RE-TEST WANTED; ha-bambulab caps
+    /// `maximum_version` to TLS 1.2 unconditionally for every model, so it never reaches the
+    /// question and its silence is not evidence; and BambuStudio has no implicit-FTPS client in
+    /// its open tree at all (its LAN file transfer is in the closed BambuNetworking library),
+    /// so the vendor source cannot speak to this either. What bambuddy *did* add is the
+    /// instrument rather than the answer: on `WRONG_VERSION_NUMBER` their client now opens one
+    /// plain connection to :990 and logs the printer's own reply, because the TLS layer eats
+    /// those bytes before the error surfaces. This needs *an* X2D, not a re-reading of upstream
+    /// — one owner running `openssl s_client -connect <ip>:990` against it is enough.
+    ///
     /// See [REF-FTPS-CONN] in `reference/02_ftps.md` §2.1.
     fn enforces_ftps_tls_1_2(&self) -> bool {
         true
