@@ -395,6 +395,7 @@ mod tests {
     use super::*;
     use crate::io::{AsyncUdpSocket, BindableUdpSocket, SocketError};
     use crate::models::PrinterModel;
+    use crate::test_support::MockTimer;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -539,35 +540,10 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    struct MockTimer {
-        clock: std::sync::Mutex<u64>,
-    }
-
-    impl MockTimer {
-        fn new() -> Self {
-            Self {
-                clock: std::sync::Mutex::new(0),
-            }
-        }
-
-        fn advance(&self, ms: u64) {
-            *self.clock.lock().unwrap() += ms;
-        }
-    }
-
-    impl TimerProvider for MockTimer {
-        async fn sleep(
-            &self,
-            _duration: core::time::Duration,
-        ) -> Result<(), crate::io::TimerError> {
-            Ok(())
-        }
-
-        fn now_millis(&self) -> u64 {
-            *self.clock.lock().unwrap()
-        }
-    }
-
+    /// Genuinely about the tokio backend — it asserts `TokioTimer::now_millis` tracks real
+    /// wall-clock time, which no platform-agnostic double can stand in for. Gated rather than
+    /// migrated, per #291.
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_tokio_timer_now_millis_advances() {
         use crate::io::tokio::TokioTimer;
@@ -582,16 +558,10 @@ mod tests {
         assert!(t1 > t0, "now_millis must advance with real time");
     }
 
-    #[tokio::test]
-    async fn test_mock_timer_now_millis_controllable() {
-        let timer = MockTimer::new();
-        assert_eq!(timer.now_millis(), 0);
-        timer.advance(250);
-        assert_eq!(timer.now_millis(), 250);
-        timer.advance(750);
-        assert_eq!(timer.now_millis(), 1000);
-    }
-
+    /// Asserts the listen loop really does terminate on *wall-clock* time, so it needs a real
+    /// platform timer — the virtual-clock sibling below covers the same termination property
+    /// under every feature set.
+    #[cfg(feature = "tokio")]
     #[tokio::test]
     async fn test_discover_devices_wall_clock_timeout() {
         use crate::io::tokio::TokioTimer;
@@ -637,10 +607,52 @@ mod tests {
         );
     }
 
+    /// The feature-set-independent half of the wall-clock test above: against a socket that never
+    /// blocks, the listen loop must still terminate on the timer's clock rather than spinning
+    /// forever. Runs under `alloc`/`embassy` too, where no `TokioTimer` exists.
+    #[tokio::test]
+    async fn test_discover_devices_terminates_on_the_virtual_clock() {
+        struct QuickExitSocket;
+
+        impl BindableUdpSocket for QuickExitSocket {
+            async fn bind(_addr: SocketAddr) -> Result<Self, SocketError> {
+                Ok(Self)
+            }
+        }
+
+        impl AsyncUdpSocket for QuickExitSocket {
+            async fn send_to(
+                &self,
+                _buf: &[u8],
+                _target: SocketAddr,
+            ) -> Result<usize, SocketError> {
+                Ok(100)
+            }
+            async fn recv_from(&self, _buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
+                Err(SocketError::TimedOut)
+            }
+        }
+
+        let timer = MockTimer::new();
+        let started = timer.now_millis();
+        let devices = discover_devices::<QuickExitSocket, MockTimer>(
+            core::time::Duration::from_millis(300),
+            &timer,
+        )
+        .await
+        .unwrap();
+
+        assert!(devices.is_empty());
+        // The loop's own `sleep()` calls are what advanced the clock past the budget — a timer
+        // whose clock never moved would never have returned at all.
+        assert!(
+            timer.now_millis().saturating_sub(started) >= 300,
+            "discovery must run out the full timeout on the virtual clock"
+        );
+    }
+
     #[tokio::test]
     async fn test_discover_devices_with_reports_each_unique_device_once() {
-        use crate::io::tokio::TokioTimer;
-
         // Every bound port gets its own socket, so both engines replay this same sequence:
         // the first printer twice, then a second printer. The callback must fire once per
         // unique serial after dedup — not once per datagram, and not once per port.
@@ -689,9 +701,9 @@ mod tests {
             }
         }
 
-        let timer = TokioTimer::new();
+        let timer = MockTimer::new();
         let mut reported: Vec<String> = Vec::new();
-        let devices = discover_devices_with::<RepeatingSocket, TokioTimer, _>(
+        let devices = discover_devices_with::<RepeatingSocket, MockTimer, _>(
             core::time::Duration::from_millis(200),
             &timer,
             |device| reported.push(device.serial.clone()),
@@ -710,8 +722,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_devices_succeeds_in_degraded_mode_when_one_port_fails_to_bind() {
-        use crate::io::tokio::TokioTimer;
-
         // If only one of SSDP_PORT/SSDP_PORT_ALT can be bound (e.g. another process already
         // holds it), discovery must still proceed on the one bound port rather than failing
         // outright — only both ports failing is fatal.
@@ -740,8 +750,8 @@ mod tests {
             }
         }
 
-        let timer = TokioTimer::new();
-        let devices = discover_devices::<SinglePortBindFailSocket, TokioTimer>(
+        let timer = MockTimer::new();
+        let devices = discover_devices::<SinglePortBindFailSocket, MockTimer>(
             core::time::Duration::from_millis(100),
             &timer,
         )
@@ -753,8 +763,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_devices_succeeds_in_degraded_mode_when_first_port_fails_to_bind() {
-        use crate::io::tokio::TokioTimer;
-
         // The bind loop used to return as soon as SSDP_PORT (the *first* port in the
         // list) failed to bind, so SSDP_PORT_ALT was never even attempted — degraded mode only
         // actually worked when the *second* port failed. Mirrors the sibling test above but
@@ -784,8 +792,8 @@ mod tests {
             }
         }
 
-        let timer = TokioTimer::new();
-        let devices = discover_devices::<FirstPortBindFailSocket, TokioTimer>(
+        let timer = MockTimer::new();
+        let devices = discover_devices::<FirstPortBindFailSocket, MockTimer>(
             core::time::Duration::from_millis(100),
             &timer,
         )
@@ -797,8 +805,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_devices_tolerates_initial_broadcast_failure_on_one_engine() {
-        use crate::io::tokio::TokioTimer;
-
         // The initial scan loop used `?` on each engine's broadcast_search(), so one
         // engine failing to send aborted the whole sweep before the listen loop was ever
         // reached — even though the other, healthy port could still have found printers. This
@@ -833,8 +839,8 @@ mod tests {
             }
         }
 
-        let timer = TokioTimer::new();
-        let devices = discover_devices::<PartialSendFailSocket, TokioTimer>(
+        let timer = MockTimer::new();
+        let devices = discover_devices::<PartialSendFailSocket, MockTimer>(
             core::time::Duration::from_millis(100),
             &timer,
         )

@@ -539,3 +539,8 @@ pub(crate) async fn read_to_eof_bounded<IO: AsyncIo, T: TimerProvider>(
 
 #[cfg(test)]
 mod tests;
+
+// The wall-clock stall tests, which can't be expressed against a virtual clock — see the module's
+// own doc comment. Split out so `tests` above stays compilable under `alloc`/`embassy` (#291).
+#[cfg(all(test, feature = "tokio"))]
+mod tests_tokio;

@@ -111,6 +111,13 @@ pub mod mqtt;
 pub mod quirks;
 pub mod types;
 
+// Platform-agnostic test doubles (`MockTimer`, `MockIo`) shared by every `#[cfg(test)]` module.
+// Deliberately not gated on any platform feature: a test double that pulled in `crate::io::tokio`
+// would make the whole unit-test surface fail to compile under `alloc`/`embassy`, which is what
+// kept no_std code untestable (#291).
+#[cfg(test)]
+mod test_support;
+
 #[doc(inline)]
 pub use error::Error;
 #[doc(inline)]

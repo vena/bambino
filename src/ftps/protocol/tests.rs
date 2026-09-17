@@ -1,82 +1,6 @@
 use super::*;
 use crate::client::dummy::DummyTimer;
-use crate::io::TokioIo;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
-
-/// Records each individual `poll_write` call as its own chunk — lets a test assert how many separate writes a function issued, not just the concatenated bytes.
-#[derive(Clone, Default)]
-struct WriteRecorder(Arc<Mutex<Vec<Vec<u8>>>>);
-
-impl tokio::io::AsyncRead for WriteRecorder {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        _buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Poll::Pending
-    }
-}
-
-impl tokio::io::AsyncWrite for WriteRecorder {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        self.0.lock().unwrap().push(buf.to_vec());
-        Poll::Ready(Ok(buf.len()))
-    }
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-}
-
-/// Returns one queued chunk per `poll_read` call — lets a test control exactly how many bytes a single underlying socket read returns, to exercise `read_line_raw`'s buffered leftover-carry behavior deterministically.
-/// Once the queue is drained, further reads report EOF (0 bytes), which is fine since these tests
-/// only ever issue as many reads as chunks provided.
-#[derive(Clone, Default)]
-struct ChunkedReader(Arc<Mutex<std::collections::VecDeque<Vec<u8>>>>);
-
-impl ChunkedReader {
-    fn with_chunks(chunks: &[&[u8]]) -> Self {
-        let queue = chunks.iter().map(|c| c.to_vec()).collect();
-        Self(Arc::new(Mutex::new(queue)))
-    }
-}
-
-impl tokio::io::AsyncRead for ChunkedReader {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        if let Some(chunk) = self.0.lock().unwrap().pop_front() {
-            buf.put_slice(&chunk);
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl tokio::io::AsyncWrite for ChunkedReader {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Poll::Ready(Ok(buf.len()))
-    }
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-}
+use crate::test_support::MockIo;
 
 #[tokio::test]
 async fn test_read_line_raw_carries_leftover_bytes_across_calls() {
@@ -85,9 +9,8 @@ async fn test_read_line_raw_carries_leftover_bytes_across_calls() {
     // `read_line_raw` must return only the first line; the second call must return the
     // second line using the bytes already buffered from the first read, without issuing
     // any further socket read (the mock's queue only has one chunk).
-    let reader =
-        ChunkedReader::with_chunks(&[b"150 Opening data connection\r\n226 Transfer complete\r\n"]);
-    let mut stream = TokioIo(reader);
+    let mut stream =
+        MockIo::with_chunks(&[b"150 Opening data connection\r\n226 Transfer complete\r\n"]);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -106,8 +29,7 @@ async fn test_read_line_raw_carries_leftover_bytes_across_calls() {
 async fn test_read_line_raw_assembles_line_split_across_reads() {
     // A line with no '\n' in the first socket read (partial line) must still be assembled
     // correctly once the rest arrives in a second read.
-    let reader = ChunkedReader::with_chunks(&[b"220 Wel", b"come\r\n"]);
-    let mut stream = TokioIo(reader);
+    let mut stream = MockIo::with_chunks(&[b"220 Wel", b"come\r\n"]);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -124,9 +46,8 @@ async fn test_read_response_multiline_in_single_socket_read() {
     // socket read must still parse into the correct accumulated text across all three
     // lines — exercising the leftover-carry path via the public entry point rather than
     // calling `read_line_raw` directly.
-    let reader =
-        ChunkedReader::with_chunks(&[b"213-First line\r\n213-Second line\r\n213 Final line\r\n"]);
-    let mut stream = TokioIo(reader);
+    let mut stream =
+        MockIo::with_chunks(&[b"213-First line\r\n213-Second line\r\n213 Final line\r\n"]);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -142,10 +63,9 @@ async fn test_read_response_intermediate_line_matching_terminator_shape_not_mist
     // RFC 959 §4.2 explicitly warns that an intermediate line can itself start
     // with a 3-digit-number-plus-space sequence — it must not be mistaken for the
     // terminator unless its code also matches the reply's opening code.
-    let reader = ChunkedReader::with_chunks(&[
+    let mut stream = MockIo::with_chunks(&[
         b"213-Header\r\n150 looks like a terminator but isn't\r\n213 Final line\r\n",
     ]);
-    let mut stream = TokioIo(reader);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -163,9 +83,8 @@ async fn test_read_response_intermediate_line_matching_terminator_shape_not_mist
 async fn test_read_response_free_text_intermediate_line_preserved() {
     // RFC 959 §4.2 — intermediate lines aren't required to carry any code prefix
     // at all; free text must be preserved verbatim, not silently dropped.
-    let reader =
-        ChunkedReader::with_chunks(&[b"213-Header\r\nplain free text, no code\r\n213 End\r\n"]);
-    let mut stream = TokioIo(reader);
+    let mut stream =
+        MockIo::with_chunks(&[b"213-Header\r\nplain free text, no code\r\n213 End\r\n"]);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -181,8 +100,7 @@ async fn test_read_response_header_with_no_separator_treated_as_terminal() {
     // A header line whose 4th byte is neither ' ' nor '-' (e.g. code immediately
     // followed by CRLF, no separator at all) used to fall through and be silently discarded
     // instead of surfacing as a reply.
-    let reader = ChunkedReader::with_chunks(&[b"200\r\n"]);
-    let mut stream = TokioIo(reader);
+    let mut stream = MockIo::with_chunks(&[b"200\r\n"]);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -201,10 +119,8 @@ async fn test_read_response_leftover_bytes_carry_to_next_call() {
     // read. `fill_buf` must be threaded across *both* `read_response` calls (as
     // `FtpsClient` does via its `control_fill_buf` field) so the second call sees the
     // already-buffered `226` line instead of blocking on a socket read that never comes.
-    let reader = ChunkedReader::with_chunks(&[
-        b"150 Opening data connection.\r\n226 Transfer complete.\r\n",
-    ]);
-    let mut stream = TokioIo(reader);
+    let mut stream =
+        MockIo::with_chunks(&[b"150 Opening data connection.\r\n226 Transfer complete.\r\n"]);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
 
@@ -219,93 +135,6 @@ async fn test_read_response_leftover_bytes_carry_to_next_call() {
     assert_eq!(code, 226);
 }
 
-/// Regression test: a read deadline firing mid-line must not discard the bytes already read.
-/// `read_line_raw` used to `append` the leftover buffer into the per-call `line_buf` before every
-/// socket read, so a timeout dropped the partial line on the floor and the next call resumed
-/// mid-line — desyncing the reply parser. Nothing structural prevented that; only
-/// `.claude/rules/ftps-poisoning.md`'s "never un-poison" convention kept it from being observable.
-#[tokio::test]
-async fn test_read_response_keeps_partial_line_across_a_timeout() {
-    let (client_half, mut server_half) = tokio::io::duplex(4096);
-    let mut stream = TokioIo(client_half);
-    let mut line_buf = Vec::new();
-    let mut fill_buf = Vec::new();
-    let timer = crate::io::tokio::TokioTimer::new();
-
-    // Half a reply arrives, then the server goes silent past the deadline.
-    tokio::io::AsyncWriteExt::write_all(&mut server_half, b"226 Transfer com")
-        .await
-        .expect("partial reply write");
-
-    let deadline_ms = Some(timer.now_millis().saturating_add(50));
-    let result = read_response(
-        &mut stream,
-        &mut line_buf,
-        &mut fill_buf,
-        &timer,
-        deadline_ms,
-    )
-    .await;
-    assert!(
-        matches!(result, Err(Error::Network(SocketError::TimedOut))),
-        "expected the stall deadline to fire, got {:?}",
-        result
-    );
-
-    // The rest arrives; a fresh call must reassemble the whole line from the retained prefix.
-    tokio::io::AsyncWriteExt::write_all(&mut server_half, b"plete.\r\n")
-        .await
-        .expect("remainder write");
-
-    let deadline_ms = Some(timer.now_millis().saturating_add(5_000));
-    let (code, text) = read_response(
-        &mut stream,
-        &mut line_buf,
-        &mut fill_buf,
-        &timer,
-        deadline_ms,
-    )
-    .await
-    .expect("second read must complete the line held over from the timed-out call");
-    assert_eq!(code, 226);
-    assert_eq!(text, "Transfer complete.");
-}
-
-/// Returns a fixed-size nonzero chunk on every `poll_read` call, forever — never signals EOF.
-/// Used to exercise `read_to_eof`'s size cap against a stream that never stops sending data.
-#[derive(Clone)]
-struct InfiniteReader {
-    chunk_len: usize,
-}
-
-impl tokio::io::AsyncRead for InfiniteReader {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let chunk = vec![0u8; self.chunk_len];
-        buf.put_slice(&chunk);
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl tokio::io::AsyncWrite for InfiniteReader {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Poll::Ready(Ok(buf.len()))
-    }
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-}
-
 #[tokio::test]
 async fn test_read_to_eof_rejects_oversized_transfer() {
     // A stream that never sends EOF and exceeds the transfer cap must error cleanly instead of
@@ -315,10 +144,7 @@ async fn test_read_to_eof_rejects_oversized_transfer() {
     // test run, pre-commit hook, and CI job. `read_to_eof` is a thin delegation to this
     // function with the constant, so the abort path under test is the same one.
     const TEST_MAX_BYTES: usize = FTPS_DATA_READ_BUF_SIZE * 4;
-    let reader = InfiniteReader {
-        chunk_len: FTPS_DATA_READ_BUF_SIZE,
-    };
-    let mut stream = TokioIo(reader);
+    let mut stream = MockIo::infinite();
     let mut out = Vec::new();
 
     let result =
@@ -327,97 +153,18 @@ async fn test_read_to_eof_rejects_oversized_transfer() {
     assert!(out.len() <= TEST_MAX_BYTES);
 }
 
-/// Regression test mirroring `read_exact_packet`'s `test_read_exact_packet_stalled_connection_times_out`: a data channel that stalls with zero incoming bytes (e.g. firmware hang mid-transfer) must not hang `read_to_eof` forever.
-/// `WriteRecorder`'s `poll_read` always returns `Pending`, simulating a genuinely stalled socket
-/// rather than a merely slow or closed one. The outer `tokio::time::timeout` is a meta-safety net —
-/// if the implementation regresses to hanging forever, this test fails promptly instead of wedging
-/// the whole suite.
-#[tokio::test]
-async fn test_read_to_eof_stalled_connection_times_out() {
-    let mut stream = TokioIo(WriteRecorder::default());
-    let mut out = Vec::new();
-    let timer = crate::io::tokio::TokioTimer::new();
-    let budget_ms = 50;
-
-    let started = std::time::Instant::now();
-    let result = tokio::time::timeout(
-        core::time::Duration::from_secs(5),
-        read_to_eof(&mut stream, &mut out, &timer, budget_ms),
-    )
-    .await
-    .expect(
-        "read_to_eof hung past the 5s meta-safety timeout instead of honoring its own \
-         budget — this is the exact regression this test guards against",
-    );
-    let elapsed = started.elapsed();
-
-    assert!(
-        matches!(result, Err(Error::Network(SocketError::TimedOut))),
-        "Expected TimedOut for a stalled connection, got {:?}",
-        result
-    );
-    assert!(
-        elapsed < core::time::Duration::from_secs(2),
-        "read_to_eof took {:?} to time out against a {}ms budget — too slow",
-        elapsed,
-        budget_ms
-    );
-}
-
-/// Regression test mirroring the above, at the control-channel `read_response` level: a control channel that stalls with zero incoming bytes (e.g. after a `150`/`125` reply, before the eventual `226`) must not hang `read_response` forever.
-#[tokio::test]
-async fn test_read_response_stalled_connection_times_out() {
-    let mut stream = TokioIo(WriteRecorder::default());
-    let mut line_buf = Vec::new();
-    let mut fill_buf = Vec::new();
-    let timer = crate::io::tokio::TokioTimer::new();
-    let budget_ms = 50;
-    let deadline_ms = Some(timer.now_millis().saturating_add(budget_ms));
-
-    let started = std::time::Instant::now();
-    let result = tokio::time::timeout(
-        core::time::Duration::from_secs(5),
-        read_response(
-            &mut stream,
-            &mut line_buf,
-            &mut fill_buf,
-            &timer,
-            deadline_ms,
-        ),
-    )
-    .await
-    .expect(
-        "read_response hung past the 5s meta-safety timeout instead of honoring its own \
-         budget — this is the exact regression this test guards against",
-    );
-    let elapsed = started.elapsed();
-
-    assert!(
-        matches!(result, Err(Error::Network(SocketError::TimedOut))),
-        "Expected TimedOut for a stalled connection, got {:?}",
-        result
-    );
-    assert!(
-        elapsed < core::time::Duration::from_secs(2),
-        "read_response took {:?} to time out against a {}ms budget — too slow",
-        elapsed,
-        budget_ms
-    );
-}
-
 #[tokio::test]
 async fn test_write_command_sends_single_write_call() {
     // Regression test: write_command must send "cmd\r\n" as one write_all call, not two
     // separate ones. Some embedded FTP servers (confirmed live against a Bambu P1S) don't
     // reliably reassemble a command line split across two writes/TLS records.
-    let recorder = WriteRecorder::default();
-    let mut stream = TokioIo(recorder.clone());
+    let mut stream = MockIo::empty();
 
     write_command(&mut stream, "USER bblp", &DummyTimer, None)
         .await
         .unwrap();
 
-    let calls = recorder.0.lock().unwrap();
+    let calls = &stream.writes;
     assert_eq!(
         calls.len(),
         1,
@@ -425,43 +172,6 @@ async fn test_write_command_sends_single_write_call() {
         calls.len()
     );
     assert_eq!(calls[0], b"USER bblp\r\n");
-}
-
-/// Regression test: `write_command` had no deadline at all, so a printer wedged with a full
-/// receive window blocked every control-channel command (SIZE/DELE/MKD/PASV/QUIT) forever, and
-/// the caller never reached its poisoning path. A 1-byte duplex whose peer never reads models
-/// exactly that: the first byte lands, the rest of the write blocks indefinitely.
-#[tokio::test]
-async fn test_write_command_stalled_connection_times_out() {
-    let (client_half, _server_half) = tokio::io::duplex(1);
-    let mut stream = TokioIo(client_half);
-    let timer = crate::io::tokio::TokioTimer::new();
-    let budget_ms = 50;
-    let deadline_ms = Some(timer.now_millis().saturating_add(budget_ms));
-
-    let started = std::time::Instant::now();
-    let result = tokio::time::timeout(
-        core::time::Duration::from_secs(5),
-        write_command(&mut stream, "USER bblp", &timer, deadline_ms),
-    )
-    .await
-    .expect(
-        "write_command hung past the 5s meta-safety timeout instead of honoring its own \
-         budget — this is the exact regression this test guards against",
-    );
-    let elapsed = started.elapsed();
-
-    assert!(
-        matches!(result, Err(Error::Network(SocketError::TimedOut))),
-        "Expected TimedOut for a stalled control channel, got {:?}",
-        result
-    );
-    assert!(
-        elapsed < core::time::Duration::from_secs(2),
-        "write_command took {:?} to time out against a {}ms budget — too slow",
-        elapsed,
-        budget_ms
-    );
 }
 
 #[test]
