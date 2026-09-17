@@ -417,8 +417,9 @@ where
         {
             return Err(Error::ProtocolViolation(
                 "This model requires TLS 1.2 for FTPS but either a different version was \
-                 negotiated or the negotiated version could not be determined \
-                 — configure the TlsConnector with force_tls_1_2 enabled"
+                 negotiated or the handshake had not completed — on tokio, build the \
+                 TlsConnector's config with force_tls_1_2 enabled; on esp-idf/embassy, which \
+                 cannot cap the maximum version, use with_ftps_allow_unverified_tls_1_2(true)"
                     .into(),
             ));
         }

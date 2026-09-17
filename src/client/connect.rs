@@ -435,11 +435,16 @@ where
 
     /// Overrides the default `false` for `FtpsClient`'s TLS-1.2-enforcement bypass.
     ///
-    /// Only meaningful for the `embassy` feature talking to P2S/X2D, where no available TLS
-    /// backend can honestly satisfy `require_tls_1_2_if_enforced`'s exact-version check —
-    /// see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. On `tokio`/`esp-idf`, use
-    /// `force_tls_1_2` on the `TlsConnector` instead, since those platforms can actually
-    /// satisfy the check for real.
+    /// Rarely needed. Every backend can now *report* the negotiated version, so
+    /// `require_tls_1_2_if_enforced` passes on its own whenever a P2S/X2D actually negotiates
+    /// TLS 1.2 — see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. What differs between
+    /// backends is the ability to *cap* the peer at 1.2: only `tokio` has that knob
+    /// (`force_tls_1_2` on `build_verified_client_config_with_options` /
+    /// `build_unsafe_client_config_with_options`). `esp-idf` and `embassy` set no maximum
+    /// version — upstream exposes none on ESP-IDF, and this crate sets only `min_version` on
+    /// embassy — so against a printer that insisted on TLS 1.3 they fail closed, and this
+    /// bypass is the only way through. It skips the version check only; certificate
+    /// verification is configured on the `TlsConnector` and is unaffected.
     /// Non-consuming — chain onto any construction path.
     #[must_use]
     pub fn with_ftps_allow_unverified_tls_1_2(mut self, allow: bool) -> Self {
