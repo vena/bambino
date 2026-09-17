@@ -90,10 +90,6 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokioio-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
 
-##### `impl<T> Same for TokioIo<T>`
-
-- <span id="tokioio-same-type-output"></span>`type Output = T`
-
 ##### `impl TlsConnector<TokioIo<TcpStream>> for TokioTlsConnector`
 
 - <span id="tokiotlsconnector-tlsconnector-type-stream"></span>`type Stream = TokioIo<TlsStream<TcpStream>>`
