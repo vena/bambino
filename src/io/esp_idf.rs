@@ -348,7 +348,7 @@ async fn poll_connect_until_complete(
 /// Poll interval between non-blocking TLS retry attempts (handshake and read/write).
 ///
 /// `esp-idf-svc`/`esp-idf-hal` expose no async socket-readiness primitive for an
-/// arbitrary fd (confirmed by inspecting `esp-idf-svc` 0.52.1's source, not just its
+/// arbitrary fd (confirmed by inspecting `esp-idf-svc` 0.53.0's source, not just its
 /// docs — the only async wait building block available is `EspAsyncTimer`). Real
 /// wake-on-ready is possible via `esp_idf_svc::tls::EspAsyncTls` combined with the
 /// `async-io` crate and `MountedEventfs`, but that needs a new dependency and real
@@ -673,7 +673,7 @@ fn build_tls_config<'a>(
 /// used by `build_unverified_tls_cfg` for `EspIdfTlsConnector::new()`/`with_certs` with an
 /// empty anchor set.
 ///
-/// `esp_idf_svc::tls::Config` (0.52.1) has no field for ESP-IDF's own `skip_server_cert_verify`
+/// `esp_idf_svc::tls::Config` (0.53.0) has no field for ESP-IDF's own `skip_server_cert_verify`
 /// flag, and that flag only exists in the generated `esp_tls_cfg` at all when the consuming
 /// app's sdkconfig sets `CONFIG_ESP_TLS_INSECURE` (off by default) -- a build-time condition
 /// bambino cannot see or require (GitHub issue #168). `crt_bundle_attach` has neither
@@ -1265,7 +1265,7 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
 /// `build_verified_client_config_with_options(..., force_tls_1_2: bool)` /
 /// `build_unsafe_client_config_with_options(force_tls_1_2: bool)`, this connector has no
-/// equivalent knob: `esp_idf_svc::tls::Config` (0.52.1, as vendored) exposes no min/max TLS
+/// equivalent knob: `esp_idf_svc::tls::Config` (0.53.0, as vendored) exposes no min/max TLS
 /// version field, and the mbedTLS accessor functions that would set it
 /// (`mbedtls_ssl_conf_min_tls_version`/`mbedtls_ssl_conf_max_tls_version`) are absent from
 /// this ESP-IDF build's actual bindgen output (confirmed by inspecting the generated
@@ -1300,7 +1300,7 @@ impl EspIdfTlsConnector {
     ///
     /// Reached via `build_unverified_tls_cfg`'s `crt_bundle_attach` hook
     /// (`accept_any_certificate`), which forces `MBEDTLS_SSL_VERIFY_NONE` directly on the
-    /// mbedTLS config -- `esp_idf_svc::tls::Config` (0.52.1) has no field for ESP-IDF's own
+    /// mbedTLS config -- `esp_idf_svc::tls::Config` (0.53.0) has no field for ESP-IDF's own
     /// `skip_server_cert_verify` flag, and that flag only exists in `esp_tls_cfg` at all when
     /// the consuming app's sdkconfig sets `CONFIG_ESP_TLS_INSECURE` (off by default) -- a
     /// build-time condition bambino cannot see or require. See `accept_any_certificate`'s doc

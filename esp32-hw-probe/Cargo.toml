@@ -27,7 +27,12 @@ esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git" }
 
 [dependencies]
 log = "0.4"
-esp-idf-svc = { version = "0.52.1", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
+# Must track the root crate's `esp-idf-svc` requirement: `esp-idf-sys` carries
+# `links = "esp_idf"`, so two disjoint version requirements on it in one graph is a hard
+# resolver error, not a duplicate build. The `[patch.crates-io]` git overrides above make a
+# stale pin worse rather than harmless — esp-rs master is on the 0.53 line, which would
+# satisfy the root crate and violate a `^0.52.1` here.
+esp-idf-svc = { version = "0.53.0", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
 # Remove `generic-queue-8` if you plan to use `embassy-time` WITH `embassy-executor`
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 # Path dep on the crate under test so a probe exercises the *shipped* type rather than a
