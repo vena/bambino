@@ -1,0 +1,20 @@
+# Bare-metal RISC-V, not `-espidf`: the embassy backend is no_std and brings its own stack
+# (esp-hal + esp-radio + embassy-net), so nothing here needs the ESP-IDF SDK. This is the
+# single largest difference from `esp32-hw-probe/.cargo/config.toml` and the reason the two
+# probes cannot be one package.
+[build]
+target = "riscv32imac-unknown-none-elf"
+
+[target.riscv32imac-unknown-none-elf]
+runner = "espflash flash --monitor"
+rustflags = [
+  "-C", "link-arg=-Tlinkall.x",
+  # Keeps `esp-backtrace`'s unwinder able to walk the stack — without it a panic in the
+  # middle of bring-up reports one frame, which is not enough to place the failure.
+  "-C", "force-frame-pointers",
+]
+
+[env]
+# esp-println's logger reads this at init; `info` keeps the probe's own stage lines visible
+# without esp-radio's per-packet chatter. Raise to `debug` when a stage hangs.
+ESP_LOG = "info"

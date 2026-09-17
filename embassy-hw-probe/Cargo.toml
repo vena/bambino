@@ -1,0 +1,111 @@
+[package]
+name = "embassy-hw-probe"
+version = "0.1.0"
+authors = ["Daniel Vena <deaconvena+bambino@gmail.com>"]
+edition = "2024"
+resolver = "2"
+rust-version = "1.86"
+repository = "https://github.com/vena/bambino"
+description = "Bare-metal hardware probe harness for bambino's embassy target. Not published."
+license = "AGPL-3.0"
+publish = false
+
+[[bin]]
+name = "embassy-hw-probe"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+
+# Path dep on the crate under test so the probe exercises the *shipped* types rather than a
+# copy of them — a reimplementation here could pass while the real code still fails. Fine
+# despite the root `exclude = ["embassy-hw-probe/"]`: that only keeps this directory out of
+# the published tarball, it doesn't stop bambino being a local path dependency.
+#
+# `default-features = false` matters more here than on the esp-idf probe: the default set is
+# `std` + `tokio`, and while that combination compiles (root `CLAUDE.md`'s fourth gated
+# configuration), it cannot link for a no_std target.
+bambino = { path = "..", default-features = false, features = ["embassy"] }
+
+# Must match the versions bambino's `embassy` feature resolves to — embassy-net carries the
+# smoltcp stack the probe and the crate under test have to agree on.
+embassy-net = { version = "0.9.1", features = [
+    "dhcpv4",
+    "dns",
+    "medium-ethernet",
+    "proto-ipv4",
+    "tcp",
+    "udp",
+] }
+embassy-time = "0.5.1"
+embassy-executor = "0.10.0"
+
+# The bare-metal stack. These four versions are one coherent set and cannot be bumped
+# individually: esp-rtos 0.3 and esp-radio 0.18 both pin `esp-hal ~1.1`, and the whole
+# graph has to land on one `esp-sync` minor (0.2 here — esp-alloc 0.11/esp-println 0.18 are
+# on 0.3 and pull the rest of the set forward with them). `mbedtls-rs-sys` independently
+# pins `esp-hal ~1.1.0` for its hardware-crypto hooks, which is what makes 1.1 the line to
+# be on rather than a free choice.
+# `~1.1.2`, not `1.1.2`: a caret requirement resolves to 1.2 and every other crate here
+# pins `~1.1`, which is a hard resolver conflict rather than a duplicate build.
+esp-hal = { version = "~1.1.2", features = ["esp32c6", "log-04", "unstable"] }
+esp-rtos = { version = "0.3.0", features = [
+    "embassy",
+    "esp-radio",
+    "esp32c6",
+    "log-04",
+] }
+esp-radio = { version = "0.18.0", features = ["esp32c6", "log-04", "wifi"] }
+esp-alloc = "0.10.0"
+esp-backtrace = { version = "0.19.0", features = [
+    "esp32c6",
+    "panic-handler",
+    "println",
+] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c6"] }
+esp-println = { version = "0.17.0", features = ["esp32c6", "log-04"] }
+
+# Named directly so `main.rs` can construct the one process-wide `Tls`. Cargo unifies this
+# with bambino's own `mbedtls-rs` dependency, so the feature set here only has to cover what
+# this file names.
+#
+# **The `esp32c6` feature is deliberately off**, and that costs hardware-accelerated crypto:
+# it pulls `mbedtls-rs-sys`'s optional `esp-hal ~1.2` dependency, and esp-rtos 0.3 /
+# esp-radio 0.18 — the newest *stable* releases of both — pin `esp-hal ~1.1`. Turning it on
+# therefore means moving the whole stack to esp-hal 1.2 + esp-rtos 0.4 + esp-radio
+# 1.0.0-beta, i.e. a prerelease radio driver underneath a probe whose entire purpose is to
+# establish a baseline. Revisit once esp-radio 1.0 ships. Until then, treat any handshake
+# timing from this probe as a software-crypto floor, not as what the chip can do — the
+# ESP-IDF probe's ~435ms local-compute figure (`src/io/CLAUDE.md`) is accelerated and is not
+# comparable.
+mbedtls-rs = { version = "0.3", default-features = false, features = ["tls"] }
+
+# Supplies the one C-library symbol MbedTLS's X.509 code needs and the bare-metal sysroot
+# does not provide: `memchr`, referenced by `mbedtls_x509_dn_gets`. Without it the link fails
+# with a single undefined symbol after everything else has compiled — a linker error, so no
+# amount of `cargo check` finds it. `default-features = false` plus the one function keeps
+# this from shadowing anything esp-hal's ROM stubs already define.
+tinyrlibc = { version = "0.5", default-features = false, features = ["memchr"] }
+
+# `mbedtls_rs::Tls::new` wants `&'static mut (dyn CryptoRng + Send)`. esp-hal's `Trng`
+# implements rand_core 0.10's `TryRng`, so the probe only has to assert the `TryCryptoRng`
+# marker over it — see `HwRng` in `src/main.rs`.
+rand_core = { version = "0.10", default-features = false }
+
+# `'static` storage for the network stack, the TCP pools, and the single `Tls` instance.
+# Not a bambino dependency — see the README's Embassy section, which uses it the same way.
+static_cell = "2.1"
+
+[profile.release]
+# Symbols cost flash, not RAM, and a panic backtrace without them is unreadable — which is
+# the whole point of a probe whose failure mode is "it hung somewhere in bring-up".
+debug = true
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+
+[profile.dev]
+debug = true
+opt-level = "z"

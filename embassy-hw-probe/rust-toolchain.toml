@@ -1,0 +1,6 @@
+# Stable, unlike `esp32-hw-probe`'s nightly: that probe needs `build-std` for the
+# `-espidf` target's std, and this one targets a tier-2 bare-metal triple whose `core`
+# and `alloc` ship prebuilt. Nothing here needs a nightly feature.
+[toolchain]
+channel = "stable"
+targets = ["riscv32imac-unknown-none-elf"]

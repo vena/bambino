@@ -1,0 +1,13 @@
+/.vscode
+/target
+/Cargo.lock
+
+# Wi-Fi credentials and printer identity for the probe (see .env.example, which IS
+# tracked). Never commit: holds a network password, and the repo root's CLAUDE.md
+# treats printer serials and access codes as credentials too.
+/.env
+
+# Monitor transcripts. Kept out of git because a probe run's log is evidence for one
+# investigation, not a project artifact — quote the relevant lines into the commit
+# message or the issue instead.
+/*.log

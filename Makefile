@@ -1,4 +1,4 @@
-.PHONY: check-fast check-docs check-esp-idf check-all docs install-hooks
+.PHONY: check-fast check-docs check-esp-idf check-embassy-probe check-all docs install-hooks
 
 CHIP ?= esp32c6
 
@@ -74,6 +74,28 @@ test-embassy-host:
 # GitHub's ephemeral hosted runners).
 check-esp-idf:
 	scripts/check-esp-idf.sh $(CHIP)
+
+# Compiles embassy-hw-probe/ for bare-metal RISC-V. Unlike check-esp-idf this needs no
+# Docker and no SDK — just `rustup target add riscv32imac-unknown-none-elf` — because the
+# embassy backend is no_std and brings its own stack.
+#
+# `cargo build`, not `cargo check`: the one failure this catches that a check cannot is a
+# link error. MbedTLS's X.509 code references `memchr`, which the bare-metal sysroot does not
+# provide, and the whole crate compiles cleanly before the linker says so (hence the
+# `tinyrlibc` dependency in the probe's Cargo.toml).
+#
+# Placeholder credentials: the probe's build.rs requires the .env keys, and a gate that only
+# runs for whoever has a printer on their desk is not a gate. Process env beats the file, so
+# this works whether or not a real .env exists and never reads one.
+#
+# Not in check-fast, same reasoning as check-esp-idf: this builds a whole bare-metal stack
+# (esp-hal, esp-radio, MbedTLS) for a harness no library change can break silently — the
+# library half is already covered by check-fast's two embassy gates.
+check-embassy-probe:
+	cd embassy-hw-probe && \
+		PROBE_WIFI_SSID=ci PROBE_WIFI_PASS=ci PROBE_PRINTER_IP=127.0.0.1 \
+		PROBE_SERIAL=ci PROBE_ACCESS_CODE=00000000 \
+		cargo build --release
 
 # Intra-doc link gate. Broken `[...]` links compile, test, and clippy clean, so
 # before this target nothing rejected them: a single session accumulated 15
