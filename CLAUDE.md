@@ -27,6 +27,10 @@ Every change must compile under both the default `tokio` feature set and the `al
 
 The `embassy` feature is not implied by `alloc` alone — `io/embassy.rs` and `#[cfg(feature = "embassy")]` code aren't exercised by the plain no_std/alloc check, so both commands above are required.
 
+**`embassy` + `std` is a fourth gated configuration, and not a shipping target.** Platform features are additive, so a consumer who leaves default features on, or whose dependency graph makes Cargo unify features across two crates using bambino differently, gets `std` + `tokio` *plus* an embedded backend. That combination was broken until `extern crate alloc` stopped being gated on `not(feature = "std")`, with no consumer-side workaround and nothing in the gate to catch it — hence `cargo check --features embassy --lib` in `make check-fast` alongside the `--no-default-features` one. Don't collapse the two; they cover different things.
+
+That same configuration is what makes embassy code *executable* on the host: `EmbassyTlsConnector` needs only `mbedtls-rs` and an `AsyncIo` stream, not embassy-net's executor or an ESP32. `make test-embassy-host` (in `check-fast`) uses it for `tests/embassy_tls_version_test.rs`. It must stay an integration test until GitHub issue #291 lands — the crate's `#[cfg(test)]` modules import `crate::io::tokio` behind a bare `cfg(test)`, so the whole unit-test surface fails to build without the `tokio` feature. Host execution is not hardware verification: no backend code has ever run on real Embassy hardware (issue #292).
+
 **Mock tests cannot verify wire-level write/read framing changes — see `.claude/rules/wire-framing-hardware-verification.md`.**
 
 Run `make check-fast`/`make check-all`/`git commit`/ALL shell commands through `ctx_shell`, not `Bash`, when lean-ctx is connected — their output (multi-target cargo build/test/clippy, ESP-IDF check) is large and repetitive, and global CLAUDE.md's lean-ctx section routes all shell commands through `ctx_shell` — `git commit` firing the pre-commit hook is just the case where forgetting this is costliest, not a special exception to some other rule.

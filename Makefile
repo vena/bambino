@@ -23,6 +23,16 @@ CHIP ?= esp32c6
 # the no_std feature combo, nothing consumes the artifact, and skipping codegen
 # costs 9s instead of 15s. The embassy gate beside it has always been a `check`
 # for the same reason.
+#
+# There are two embassy checks, and the second is not redundant. The
+# `--no-default-features` one is the bare-metal shipping target. The plain
+# `--features embassy` one is default features (std + tokio) *plus* embassy — the
+# combination Cargo's feature unification forces when two crates in one dependency
+# graph use bambino differently, and what a consumer gets from
+# `cargo add bambino --features embassy` without `--no-default-features`. That
+# combination was broken until `extern crate alloc` stopped being gated on
+# `not(feature = "std")` (see the comment at that declaration in src/lib.rs), with
+# no consumer-side workaround, and nothing in the gate would have caught it.
 check-fast:
 	cargo fmt --check
 	scripts/check-rules-globs.sh
@@ -33,14 +43,17 @@ check-fast:
 	cargo test --bin bambino-cli --features cli
 	cargo check --no-default-features --features alloc --lib
 	cargo check --no-default-features --features embassy --lib
+	cargo check --features embassy --lib
 	$(MAKE) test-embassy-host
 	cargo clippy
 	cargo clippy --bin bambino-cli --features cli
 
-# Runs the embassy backend's code on the host, which the `cargo check` above cannot: a check
-# proves io/embassy.rs compiles, never that it behaves. `embassy` + `std` is not a shipping
-# target — it exists so embassy-only code is executable in CI, since EmbassyTlsConnector needs
-# only mbedtls-rs and an AsyncIo stream, not embassy-net's executor or an ESP32.
+# Runs the embassy backend's code on the host, which the `cargo check`es above cannot: a check
+# proves io/embassy.rs compiles, never that it behaves. It runs in the `embassy` + `std`
+# configuration that the `cargo check --features embassy --lib` line above now gates — not a
+# shipping target, but a combination consumers reach through feature unification, so it is
+# checked on its own merits. EmbassyTlsConnector needs only mbedtls-rs and an AsyncIo stream,
+# not embassy-net's executor or an ESP32, which is what makes host execution possible at all.
 #
 # `--test` (not `--lib`): the crate's unit tests import `crate::io::tokio` under a bare
 # `cfg(test)`, so the whole `#[cfg(test)]` surface fails to build without the tokio feature.
