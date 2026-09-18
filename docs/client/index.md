@@ -813,15 +813,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Disconnects the camera session, if one exists, and clears it from the client.
 
-  Once `camera_config` is consumed by `ensure_camera()`, a dead
-  stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
+  A dead stream (`ConnectionReset`, bad markers, etc.) would otherwise leave `self.camera`
   stuck `Some(...)` forever, since `ensure_camera()`'s `is_some()` short-circuit would
-  keep handing back the same broken stream. There is no protocol-level teardown on
-  `BinaryCameraStream` to call — this just clears the slot.
+  keep handing back the same broken stream.
 
-  Idempotent. Reconnecting requires a fresh [`.with_camera()`](#printerclient) on a
-  new `PrinterClient`, the same caveat FTPS already documents for
-  [`disconnect_storage()`](#printerclient).
+  There is no protocol-level teardown on `BinaryCameraStream` to call, but the TLS session
+  underneath it is shut down properly before the slot is cleared —
+  [`TlsConnector::close`](../io/index.md#tlsconnector) sends `close_notify` so the
+  printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
+  Failure there is logged and ignored: the connection is going away either way.
+
+  Idempotent, and unlike [`disconnect_storage()`](#printerclient) this *can* be
+  reconnected — `ensure_camera()` never consumes `camera_config` (nothing is moved out of
+  it), so the next camera call redials.
 
 - <span id="superprinterclient-connect-mqtt"></span>`async fn connect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -845,8 +849,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Disconnects the MQTT session, if one exists, and clears it from the client.
 
-  There is no protocol-level teardown on `MqttClient` to call — this just clears
-  the slot, mirroring `disconnect_camera()`. Without this, a dead stream (a
+  There is no protocol-level (MQTT DISCONNECT) teardown on `MqttClient` to call, but the
+  TLS session underneath it is shut down properly before the slot is cleared —
+  [`TlsConnector::close`](../io/index.md#tlsconnector) sends `close_notify` so the
+  printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
+  Failure there is logged and ignored: the connection is going away either way. Dropping
+  the client is what releases the session's memory — on MbedTLS/embassy that is ~48 KB,
+  freed in `Drop`, not in `close()`. Without this, a dead stream (a
   [`tick_zombie_check()`](../mqtt/index.md)-detected
   zombie, a transport error) left `self.mqtt` stuck `Some(...)` forever, since
   `ensure_mqtt()`'s `is_some()` short-circuit kept handing back the same broken

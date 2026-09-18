@@ -192,6 +192,14 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokiotlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: TokioIo<::tokio::net::TcpStream>) -> Result<<Self as >::Stream, SocketError>` — [`TokioIo`](#tokioio), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
+- <span id="tokiotlsconnector-tlsconnector-close"></span>`async fn close(&self, stream: &mut <Self as >::Stream) -> Result<(), SocketError>` — [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
+
+  Sends `close_notify` via `AsyncWriteExt::shutdown`, which `tokio-rustls` implements as a
+  TLS-level shutdown (queue the alert, flush it) rather than a bare socket close.
+
+  Idempotent: rustls only queues the alert once, so a second call just re-flushes an empty
+  buffer.
+
 - <span id="tokiotlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
 - <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](../index.md#tlsconnector)
@@ -302,6 +310,14 @@ TLS Secure connector wrapping Tokio-Rustls.
 - <span id="tokiotlsconnector-tlsconnector-type-stream"></span>`type Stream = TokioIo<TlsStream<TcpStream>>`
 
 - <span id="tokiotlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: TokioIo<::tokio::net::TcpStream>) -> Result<<Self as >::Stream, SocketError>` — [`TokioIo`](#tokioio), [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
+
+- <span id="tokiotlsconnector-tlsconnector-close"></span>`async fn close(&self, stream: &mut <Self as >::Stream) -> Result<(), SocketError>` — [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
+
+  Sends `close_notify` via `AsyncWriteExt::shutdown`, which `tokio-rustls` implements as a
+  TLS-level shutdown (queue the alert, flush it) rather than a bare socket close.
+
+  Idempotent: rustls only queues the alert once, so a second call just re-flushes an empty
+  buffer.
 
 - <span id="tokiotlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 

@@ -166,5 +166,12 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   the same "must reconnect" error, instead of a caller mistaking a disconnected client for
   a live one. Idempotent: calling this more than once is a no-op after the first call.
 
+  After `QUIT` the TLS session is shut down properly and then dropped, in that order:
+  [`TlsConnector::close`](../../io/index.md#tlsconnector) sends `close_notify` so the peer
+  sees an orderly teardown rather than a truncated stream, and dropping the stream is what
+  actually returns its memory — MbedTLS frees a session's record buffers in `Drop`, not in
+  `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
+  itself goes out of scope (GitHub issue #293).
+
 #### Trait Implementations
 

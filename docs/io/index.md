@@ -96,6 +96,14 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokiotlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: TokioIo<::tokio::net::TcpStream>) -> Result<<Self as >::Stream, SocketError>` — [`TokioIo`](tokio/index.md#tokioio), [`TlsConnector`](#tlsconnector), [`SocketError`](#socketerror)
 
+- <span id="tokiotlsconnector-tlsconnector-close"></span>`async fn close(&self, stream: &mut <Self as >::Stream) -> Result<(), SocketError>` — [`TlsConnector`](#tlsconnector), [`SocketError`](#socketerror)
+
+  Sends `close_notify` via `AsyncWriteExt::shutdown`, which `tokio-rustls` implements as a
+  TLS-level shutdown (queue the alert, flush it) rather than a bare socket close.
+
+  Idempotent: rustls only queues the alert once, so a second call just re-flushes an empty
+  buffer.
+
 - <span id="tokiotlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](#tlsconnector), [`TlsVersion`](#tlsversion)
 
 - <span id="tokiotlsconnector-tlsconnector-peer-chain-der"></span>`fn peer_chain_der(&self, stream: &<Self as >::Stream) -> Option<Vec<Vec<u8>>>` — [`TlsConnector`](#tlsconnector)
@@ -615,6 +623,27 @@ without enforcing a static library provider.
   Negotiates a secure TLS handshake with the targeted printer.
 
 #### Provided Methods 
+
+- `fn close(&self, _stream: &mut <Self as >::Stream) -> Result<(), SocketError>`
+
+  Sends the TLS `close_notify` alert, shutting the session down in an orderly way.
+
+  Called by every teardown path in this crate (`PrinterClient::disconnect_mqtt`/
+  `disconnect_storage`/`disconnect_camera`, `FtpsClient::disconnect`, and the end of each
+  FTPS data transfer) immediately before the stream is dropped. Without it the peer sees a
+  truncated connection rather than a clean shutdown, which makes a real truncation attack
+  indistinguishable from a normal teardown for anyone inspecting the wire.
+
+  Defaults to a no-op so a backend whose TLS library exposes no shutdown seam stays
+  honest rather than pretending — the ESP-IDF backend is exactly that case
+  (`esp_idf_svc::tls::EspTls` only tears down in `Drop`). Takes `&mut Self::Stream` rather
+  than consuming it so the caller keeps ownership and decides when the stream is released;
+  closing does not necessarily free the session's buffers (on `mbedtls-rs` it does not —
+  see `FtpsClient::disconnect`, which drops the stream for that reason).
+
+  Best-effort by contract: the connection is going away regardless, so callers log and
+  continue rather than propagating. Implementations must be idempotent — a second call
+  on an already-closed stream is a no-op, not an error.
 
 - `fn negotiated_version(&self, _stream: &<Self as >::Stream) -> Option<TlsVersion>`
 

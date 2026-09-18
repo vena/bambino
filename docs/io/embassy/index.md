@@ -156,6 +156,19 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
 - <span id="embassytlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: RawStream) -> Result<<Self as >::Stream, SocketError>` — [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
+- <span id="embassytlsconnector-tlsconnector-close"></span>`async fn close(&self, stream: &mut <Self as >::Stream) -> Result<(), SocketError>` — [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
+
+  Sends `close_notify` via `mbedtls-rs` 0.3's `Session::close()`.
+
+  Idempotent for free: `Session::close` returns `Ok(())` immediately when its own
+  `connected` flag is already clear, and clears that flag on success — which is also what
+  silences the `Session dropped without being closed properly` warning `mbedtls-rs` emits
+  from `Drop`.
+
+  Closing does **not** release the session's record buffers; `mbedtls-rs` frees those in
+  `Drop`, which on an ESP32-C6 is ~48 KB per session (GitHub issue #293). Callers that
+  need the memory back must drop the stream, not merely close it.
+
 - <span id="embassytlsconnector-tlsconnector-negotiated-version"></span>`fn negotiated_version(&self, stream: &<Self as >::Stream) -> Option<TlsVersion>` — [`TlsConnector`](../index.md#tlsconnector), [`TlsVersion`](../index.md#tlsversion)
 
   Reports the TLS version actually negotiated, via `mbedtls-rs` 0.3's
