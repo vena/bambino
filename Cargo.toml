@@ -137,6 +137,9 @@ embassy-time = { version = "0.5.1", optional = true }
 # `disconnect_camera`/`FtpsClient::disconnect` do release a session's memory, but only because
 # each of them drops the stream after closing it (GitHub issue #293) — `close()` alone does not:
 # MbedTLS frees in `Drop`. A stream held elsewhere and merely closed still costs its ~48 KB.
+# Verified on the same hardware after that fix: every stage now exits within ~150 bytes of the
+# ~50 KB embassy-net + esp-radio baseline (stage 4 exit 50,040 against 91,220 before), and the
+# run no longer logs "Session dropped without being closed properly".
 mbedtls-rs = { version = "0.3", default-features = false, features = [
     "tls",
     "log",
