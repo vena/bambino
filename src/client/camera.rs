@@ -92,7 +92,7 @@ where
     ///
     /// There is no protocol-level teardown on `BinaryCameraStream` to call, but the TLS session
     /// underneath it is shut down properly before the slot is cleared —
-    /// [`TlsConnector::close`](crate::io::TlsConnector::close) sends `close_notify` so the
+    /// [`TlsConnector::close`] sends `close_notify` so the
     /// printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
     /// Failure there is logged and ignored: the connection is going away either way.
     ///

@@ -264,7 +264,7 @@ where
     ///
     /// There is no protocol-level (MQTT DISCONNECT) teardown on `MqttClient` to call, but the
     /// TLS session underneath it is shut down properly before the slot is cleared —
-    /// [`TlsConnector::close`](crate::io::TlsConnector::close) sends `close_notify` so the
+    /// [`TlsConnector::close`] sends `close_notify` so the
     /// printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
     /// Failure there is logged and ignored: the connection is going away either way. Dropping
     /// the client is what releases the session's memory — on MbedTLS/embassy that is ~48 KB,

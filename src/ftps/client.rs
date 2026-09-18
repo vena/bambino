@@ -495,7 +495,7 @@ where
     ///
     /// The counterpart to `open_data_channel`: a data channel is per-transfer, so its memory
     /// already comes back when this consumes it, but without
-    /// [`TlsConnector::close`](crate::io::TlsConnector::close) the printer would see every
+    /// [`TlsConnector::close`] the printer would see every
     /// transfer end in a truncated TLS stream rather than a `close_notify` (GitHub issue #293).
     /// The `Plain` variant has nothing to close — those models run the data channel
     /// unencrypted (`uses_plaintext_ftps_data_channel`).
@@ -1007,7 +1007,7 @@ where
     /// a live one. Idempotent: calling this more than once is a no-op after the first call.
     ///
     /// After `QUIT` the TLS session is shut down properly and then dropped, in that order:
-    /// [`TlsConnector::close`](crate::io::TlsConnector::close) sends `close_notify` so the peer
+    /// [`TlsConnector::close`] sends `close_notify` so the peer
     /// sees an orderly teardown rather than a truncated stream, and dropping the stream is what
     /// actually returns its memory — MbedTLS frees a session's record buffers in `Drop`, not in
     /// `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
