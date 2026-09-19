@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# Local commit gate: rejects the commit unless `make check-fast` passes.
-# GitHub CI mirrors the same commands on every push to main, but this hook is
-# what catches a regression before it becomes a commit. .git/hooks/ isn't
-# tracked by git, so scripts/install-hooks.sh is what makes the gate survive a
-# fresh clone.
+# Local commit gate: rejects the commit unless `make check-commit` passes.
 #
-# Docs-only commits skip the cargo gate: `make check-fast` is a multi-target
-# build/test/clippy run costing minutes, and it cannot say anything about a
-# change no cargo target reads.
+# This runs the FAST SUBSET, not the full matrix. The full `make check-fast`
+# moved to scripts/hooks/pre-push (#296): it measured ~8min in the realistic
+# commit case, which is a cost paid per commit and was discouraging the small,
+# frequent commits root CLAUDE.md asks for. Nothing was dropped -- pre-push
+# still gates the whole matrix before anything reaches main, so the guarantee
+# that main is never pushed broken is intact; only the *cadence* changed, from
+# once-per-commit to once-per-push. See the check-commit comment in the
+# Makefile for the per-step measurements behind the split.
 #
-# The list below is an ALLOWLIST of known-inert paths, not a denylist of code
-# paths. Anything unrecognized runs the full gate, so a new file type fails
-# safe (slow) rather than unchecked. Two deliberate exclusions:
-#   - tests/mocks/*.json|.ndjson are NOT inert — tests deserialize them, so a
-#     fixture edit can fail the suite.
-#   - Cargo.toml/Cargo.lock/build.rs/*.rs/Makefile/.cargo/ are obviously not
-#     inert and are covered by falling through to the catch-all.
-# MODEL_MATRIX.csv is inert: it is referenced only in doc comments, never via
-# include_str!/include_bytes!.
+# GitHub CI mirrors check-fast on every push to main as the backstop, but these
+# hooks are what catch a regression before it leaves the machine. .git/hooks/
+# isn't tracked by git, so scripts/install-hooks.sh is what makes both gates
+# survive a fresh clone.
+#
+# Docs-only commits skip the cargo gate: it is a build/test/clippy run costing
+# tens of seconds, and it cannot say anything about a change no cargo target
+# reads.
+#
+# The inert-path allowlist lives in scripts/check-inert-paths.sh, shared with
+# scripts/hooks/pre-push so the two gates cannot drift apart. It is an allowlist,
+# so an unrecognized new file type fails safe (runs the gate).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -31,24 +35,11 @@ if [ -n "$staged" ]; then
     # files) that it costs nothing to run on every commit.
     scripts/check-doc-latex.sh
 
-    code_touched=0
-    while IFS= read -r path; do
-        [ -z "$path" ] && continue
-        case "$path" in
-            *.md|LICENSE|.gitignore|MODEL_MATRIX.csv) ;;
-            .claude/*|docs/*|reference/*|.github/*) ;;
-            *)
-                code_touched=1
-                break
-                ;;
-        esac
-    done <<< "$staged"
-
-    if [ "$code_touched" -eq 0 ]; then
-        echo "pre-commit: docs-only change — skipping 'make check-fast'."
-        echo "pre-commit: (staged paths matched the inert allowlist in scripts/hooks/pre-commit)"
+    if printf '%s\n' "$staged" | scripts/check-inert-paths.sh; then
+        echo "pre-commit: docs-only change — skipping 'make check-commit'."
+        echo "pre-commit: (staged paths matched the inert allowlist in scripts/check-inert-paths.sh)"
         exit 0
     fi
 fi
 
-exec make check-fast
+exec make check-commit

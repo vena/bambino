@@ -1,6 +1,55 @@
-.PHONY: check-fast check-docs check-esp-idf check-embassy-probe check-all docs install-hooks
+.PHONY: check-commit check-fast check-docs check-esp-idf check-embassy-probe check-all docs install-hooks
 
 CHIP ?= esp32c6
+
+# Fast pre-commit subset (measured 54s, vs check-fast's 492s). This is what the
+# pre-commit hook runs; scripts/hooks/pre-push runs the full check-fast before
+# anything reaches main, so nothing below is *dropped* -- it moves from
+# once-per-commit to once-per-push (#296).
+#
+# The split is measured, not guessed. Per-step timing of check-fast in the
+# realistic commit case (deps warm, bambino invalidated in every feature slot,
+# which is what any source edit does) totalled 492s, distributed as:
+#
+#   cargo test                     206s   (--lib 44s, --test integration 62s, --doc 60s)
+#   cargo test embassy-host --test  71s
+#   cargo test --bin bambino-cli    49s
+#   cargo test embassy-host --lib    41s
+#   cargo clippy --bin bambino-cli   29s
+#   cargo clippy                     21s
+#   cargo check embassy no-default   20s
+#   cargo build --bin bambino-cli    19s
+#   cargo check alloc                19s
+#   cargo build                      10s
+#   cargo check embassy+std           9s
+#   fmt + the two scripts            <1s
+#
+# Two things that table settled, both contradicting the plausible guesses:
+#   - The six-feature-set breadth is NOT the cost. The four cargo checks are 47s
+#     combined, under 10% of the gate. The four *test* legs are 366s, 74%. So
+#     narrowing feature coverage would have bought almost nothing while giving up
+#     the one guarantee the matrix exists for.
+#   - No step is redundant. Measured: `cargo build` after `cargo test` still costs
+#     its full ~10s, and `cargo build --bin` after `cargo test --bin` costs 29s --
+#     the cfg(test) and non-test builds are separate compilations, so neither pair
+#     collapses. Likewise `cargo clippy --all-targets --features cli` is 77s
+#     against 49s for the two clippy calls it would replace: it lints tests/ and
+#     the bin's test modules that nothing lints today, so it is a coverage gain at
+#     a cost, not a saving. Don't "simplify" any of these three into each other.
+#
+# What is here and why: fmt and the two scripts are free. `cargo clippy` type-checks
+# the whole default-feature lib, so it catches a compile error without a separate
+# `cargo build` (clippy cannot reuse build's fingerprints anyway -- different rustc
+# wrapper). `cargo test --lib` is the cheapest leg that actually executes code.
+# Deliberately absent: doctests and integration tests (60s + 62s), the CLI legs,
+# and the feature matrix -- all real checks, all left to pre-push, none of them the
+# thing a just-edited line usually breaks.
+check-commit:
+	cargo fmt --check
+	scripts/check-rules-globs.sh
+	scripts/check-doc-latex.sh
+	cargo clippy
+	cargo test --lib
 
 # Default host build/test + both feature-gate checks from CLAUDE.md + clippy.
 # This is the full local verification gate short of the esp-idf Docker check.
