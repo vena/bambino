@@ -355,15 +355,36 @@ async fn poll_connect_until_complete(
 /// app-side setup (a sized eventfd mount, a dedicated thread with a bumped stack, and
 /// working around an ESP-IDF main-task/async-io-thread priority inversion) — left as a
 /// future upgrade. This fixed-interval poll works because `EspIdfTlsConnector::connect` puts the
-/// adopted fd in `O_NONBLOCK` *and* pins `Config::timeout_ms = 0`, so every `EspTls` call takes a
-/// single handshake step and returns immediately instead of blocking inside the FFI call, and an
-/// outer `TimerProvider`-based timeout can preempt the operation between poll attempts. Both are
-/// required: `O_NONBLOCK` alone still left `esp_tls_conn_new_sync` spinning internally for up to
-/// the default 4s per call, which made this interval dead time between spins rather than pacing
-/// (GitHub issue #67). (`Config::non_block` is deliberately *off* on the adopted-socket path —
-/// see the comment in `connect` and GitHub issue #61.)
+/// adopted fd in `O_NONBLOCK` *and* pins `Config::timeout_ms = 1`, so every `EspTls` call returns
+/// after ~1ms of handshake progress instead of blocking inside the FFI call for the whole
+/// handshake, and an outer `TimerProvider`-based timeout can preempt the operation between poll
+/// attempts. Both are required: `O_NONBLOCK` alone still left `esp_tls_conn_new_sync` spinning
+/// internally for up to the default 4s per call, which made this interval dead time between spins
+/// rather than pacing (GitHub issue #67). (`Config::non_block` is deliberately *off* on the
+/// adopted-socket path — see the comment in `connect` and GitHub issue #61.)
 #[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
+
+/// How far a single `esp_tls_conn_new_sync` call may carry the handshake before returning, in
+/// milliseconds -- the bound that makes [`TLS_POLL_INTERVAL`] and `connect_timeout` mean anything.
+///
+/// `1`, not `0`, because ESP-IDF changed what `0` means inside the 5.5 series; the full version
+/// table and the measurements behind it are in `EspIdfTlsConnector::connect`, at the assignment
+/// this is read for (GitHub issue #294).
+///
+/// A named constant rather than a literal at each assignment because `connect` has **two**
+/// `esp_tls_cfg`s to pin it on -- `esp_idf_svc`'s `Config` for the anchored path and the raw one
+/// [`build_unverified_tls_cfg`] builds for the anchor-less path -- and they took different values
+/// for as long as both existed. The anchor-less path started from `esp_tls_cfg::default()` and so
+/// silently kept `timeout_ms = 0` while the anchored path was being fixed for issue #67, which is
+/// why hardware runs of `EspIdfTlsConnector::new()` still reported `1 steps, 0us polling` after
+/// that fix landed. Pin both from here; do not reintroduce a literal.
+///
+/// `u32` to match `esp_idf_svc::tls::Config::timeout_ms`, the narrower of the two field types;
+/// the raw `esp_tls_cfg::timeout_ms` is a `c_int` and is cast at its assignment, exactly as
+/// `Config::try_into_raw` casts its own.
+#[cfg(feature = "esp-idf")]
+const TLS_HANDSHAKE_STEP_BUDGET_MS: u32 = 1;
 
 /// Default upper bound on the handshake loop in `EspIdfTlsConnector::connect`, used when the caller doesn't supply one via `.with_connect_timeout(d)`.
 /// Chosen generously — printers on a healthy LAN handshake in well under a second, but a 10s budget
@@ -381,6 +402,47 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
     code == ::esp_idf_svc::sys::EWOULDBLOCK as i32
         || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_READ
         || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_WRITE
+}
+
+/// Reads and clears the last ESP-type error recorded on `tls`'s error handle, if any.
+///
+/// The one caller uses it to tell ESP-IDF v5.5.5's "this call's `timeout_ms` budget expired,
+/// handshake still in progress" apart from a real handshake failure. v5.5.5 signals the former as
+/// a `-1` return from `esp_tls_conn_new_sync` plus `ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT` here,
+/// where v5.5.3/v5.5.4/v6.0.1 return `0` (which reaches Rust as `EWOULDBLOCK`, already retryable
+/// via [`is_would_block`]). Both `-1` cases collapse to `ESP_FAIL` by the time `esp-idf-svc` is
+/// done with them, so the error handle is the only discriminator left.
+///
+/// Clearing is what makes the answer trustworthy: every version records
+/// `ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT` on expiry, so a value left behind by an earlier retryable
+/// step would otherwise read as "retryable" on a later genuine failure that recorded no ESP-type
+/// error of its own.
+#[cfg(feature = "esp-idf")]
+fn take_esp_tls_error<S: ::esp_idf_svc::tls::Socket>(
+    tls: &::esp_idf_svc::tls::EspTls<S>,
+) -> Option<i32> {
+    let mut handle: ::esp_idf_svc::sys::esp_tls_error_handle_t = core::ptr::null_mut();
+
+    // SAFETY: `tls.context_handle()` is a live `esp_tls` handle owned by `tls`, which outlives
+    // this call; `handle` is a valid out-pointer into this stack frame.
+    let got =
+        unsafe { ::esp_idf_svc::sys::esp_tls_get_error_handle(tls.context_handle(), &mut handle) };
+    if got != ::esp_idf_svc::sys::ESP_OK || handle.is_null() {
+        return None;
+    }
+
+    let mut code: ::core::ffi::c_int = 0;
+    // SAFETY: `handle` is non-null and owned by `tls`; `code` is a valid out-pointer into this
+    // stack frame. Returns `ESP_OK` only when it actually populated `code`.
+    let ret = unsafe {
+        ::esp_idf_svc::sys::esp_tls_get_and_clear_error_type(
+            handle,
+            ::esp_idf_svc::sys::esp_tls_error_type_t_ESP_TLS_ERR_TYPE_ESP,
+            &mut code,
+        )
+    };
+
+    (ret == ::esp_idf_svc::sys::ESP_OK).then_some(code)
 }
 
 /// Maps a non-WouldBlock `EspError` from a failed TLS connect/negotiate attempt to a
@@ -562,8 +624,8 @@ static ESP_TLS_LOG_QUIET: std::sync::Mutex<(usize, u32)> = std::sync::Mutex::new
 /// specified timeout` lines before this existed (measured: 62 lines on a 1.42s ESP32-P4
 /// handshake that connected first try). Nothing had failed and no timeout had been exceeded —
 /// `esp_tls_conn_new_sync` logs that line on every step that does not *complete* the
-/// handshake, and `connect` pins `Config::timeout_ms = 0` so every step returns immediately
-/// (GitHub issue #67). The count therefore scales with handshake duration, one line per
+/// handshake, and `connect` pins `Config::timeout_ms = 1` so every step returns promptly
+/// (GitHub issues #67 and #294). The count therefore scales with handshake duration, one line per
 /// `TLS_POLL_INTERVAL`. bambino is the only layer that knows those warnings are expected; a
 /// consumer reading the log cannot tell them from real ones (GitHub issue #156).
 ///
@@ -1370,9 +1432,10 @@ impl EspIdfTlsConnector {
     /// retrying rather than how long any single attempt may take.
     /// The deadline is checked *between* iterations, so it cannot preempt a stall *inside*
     /// one: the `EspTls::negotiate` FFI call is not interruptible from this task once entered.
-    /// `connect` pins `Config::timeout_ms = 0` so each call is a single handshake step, which
-    /// keeps that window near-instant and gives this deadline ~`TLS_POLL_INTERVAL` granularity
-    /// (GitHub issue #67) — but a call that blocks internally is still unbounded regardless of
+    /// `connect` pins `Config::timeout_ms = 1` so each call advances the handshake for at most
+    /// ~1ms, which keeps that window short and gives this deadline ~`TLS_POLL_INTERVAL`
+    /// granularity (GitHub issues #67 and #294) — but a call that blocks internally is still
+    /// unbounded regardless of
     /// what is passed here, and the calling task is then lost with nothing logged (observed
     /// once on ESP32-P4, GitHub issue #66). Consumers running printer I/O on a dedicated task
     /// should subscribe it to the ESP-IDF Task Watchdog, which is the only layer that can
@@ -1439,11 +1502,21 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // Only used when this connector has no trust anchor -- see `build_unverified_tls_cfg`
         // and `Self::new`'s doc comment for why this bypasses `cfg`/`Config` entirely rather
         // than being expressible as another field on it.
-        let unverified_cfg = self
-            .certs
-            .ca_pem
-            .is_none()
-            .then(|| build_unverified_tls_cfg(&self.certs.client_cert, &self.certs.client_key));
+        let unverified_cfg = self.certs.ca_pem.is_none().then(|| {
+            let mut rcfg =
+                build_unverified_tls_cfg(&self.certs.client_cert, &self.certs.client_key);
+            // The same two pins `cfg` gets below, for the same reasons -- see the comments
+            // there. They have to be repeated because this path does not go through
+            // `esp_idf_svc::tls::Config` at all: `build_unverified_tls_cfg` starts from
+            // `esp_tls_cfg::default()`, so every field `connect` does not set here is a zero,
+            // and a zeroed `timeout_ms` is exactly the value GitHub issues #67 and #294 are
+            // about. That drift was not theoretical -- it is why `EspIdfTlsConnector::new()`
+            // still reported `1 steps, 0us polling` on hardware after #67 was fixed, the
+            // anchor-less path having quietly never been covered.
+            rcfg.non_block = false;
+            rcfg.timeout_ms = TLS_HANDSHAKE_STEP_BUDGET_MS as ::core::ffi::c_int;
+            rcfg
+        });
 
         // Force `non_block` off for the adopted-socket path (GitHub issue #61). ESP-IDF's
         // `esp_tls_low_level_conn` populates `tls->rset`/`tls->wset` only in its
@@ -1460,36 +1533,55 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // it compiles clean either way; reproducing it needs a flashed board and a printer.
         cfg.non_block = false;
 
-        // Make each `negotiate()` perform exactly one handshake step (GitHub issue #67).
+        // Bound how far each `negotiate()` call carries the handshake (GitHub issues #67, #294).
         // With `non_block = false` the call lands in `esp_tls_conn_new_sync`, which is a
         // `while (1)` around `esp_tls_low_level_conn` bounded only by `cfg->timeout_ms` — and
         // `esp-idf-svc`'s `Config::new` defaults that to 4000ms. The fd is `O_NONBLOCK`, so
         // mbedTLS returns `WANT_READ` immediately and that loop simply spins, unyielding, for
-        // up to 4s per call. `timeout_ms = 0` makes its `elapsed / 1000 >= timeout_ms` test
-        // true on the first pass, so it runs one step and returns 0, which `esp-idf-svc` maps
-        // to `EWOULDBLOCK` and `is_would_block` already treats as retryable.
+        // up to 4s per call.
         //
-        // Without this the poll loop below is not pacing anything: `TLS_POLL_INTERVAL` and the
-        // `connect_timeout` deadline are only evaluated between 4s spins, so a 10s budget has
+        // Without a bound the poll loop below is not pacing anything: `TLS_POLL_INTERVAL` and
+        // the `connect_timeout` deadline are only evaluated between spins, so a 10s budget has
         // ~4s granularity and overshoots to ~12.06s (measured: five boot-adjacent timeouts
         // within 10ms of each other, 3 x ~4.02s). A successful handshake finishes inside the
         // first spin, so the loop never ran at all on the happy path.
         //
-        // Set here rather than in `build_tls_config` because 0 is only safe while `non_block`
-        // is false: the `ESP_TLS_CONNECTING` branch passes `cfg->timeout_ms > 0 ? &tv : NULL`
-        // to `select()`, so a `non_block = true` caller would get an indefinite block instead
-        // of a single step. That branch is unreachable from here, but a shared default would
+        // `1`, not `0`, because ESP-IDF changed what `0` means mid-patch-series. The relevant
+        // `conn_new_sync` gates its expiry check on `ret == 0 && cfg->timeout_ms <op> 0`, where
+        // `<op>` and the value returned on expiry differ across the provisioned checkouts:
+        //
+        //   v5.5.3 / v5.5.4 / v6.0.1   `>= 0`, and the expiry returns `0`
+        //   v5.5.5                     `> 0`,  and the expiry returns `-1`
+        //
+        // So `timeout_ms = 0` bounded the call on 5.5.3/5.5.4/6.0.1 (`elapsed >= 0` is true on
+        // the first pass → one step per call) but disabled the bound entirely on v5.5.5, where
+        // the test is never reached and a single `negotiate()` runs the whole handshake inside
+        // `while (1)`. Measured on ESP32-P4 against a P1S: 113 of 113 v5.5.5 handshakes reported
+        // `1 steps` with `0us polling`, worst case 33.8s of uninterruptible block, tripping the
+        // Task Watchdog ~30 times per unattended run. `1` satisfies both comparisons, so the
+        // bound holds on every version rather than on whichever operator shipped.
+        //
+        // The cost is that a step is now "as much handshake as fits in ~1ms" instead of exactly
+        // one — a ~1ms busy-wait per call, against a 20ms sleep between calls. That is the
+        // trade #67's comment previously declined, and it is worth taking now that the
+        // alternative is an unbounded block rather than a slightly noisier log.
+        //
+        // v5.5.5's `-1` on expiry is *not* distinguishable from a real failure by return value
+        // (`esp-idf-svc` maps both to `ESP_FAIL`) — see `take_esp_tls_error` and the loop below
+        // for how the retryable case is recovered from the error handle.
+        //
+        // Set here rather than in `build_tls_config` because this is only safe while
+        // `non_block` is false: the `ESP_TLS_CONNECTING` branch feeds `cfg->timeout_ms` to
+        // `select()`, so a `non_block = true` caller would get a 1ms readiness poll instead of
+        // a handshake step. That branch is unreachable from here, but a shared default would
         // reach it.
         //
-        // Side effect: `conn_new_sync`'s early-return path logs
+        // Side effect: `conn_new_sync`'s expiry path logs
         // `W esp-tls: Failed to open new connection in specified timeout` on every step that
-        // does not complete the handshake, so a normal ~1.3s connect emits ~55 `W` lines on a
-        // handshake that is going perfectly. That is not worth trading the pacing away for —
-        // `timeout_ms = 1` would spin ~1ms per call before logging the identical warning,
-        // reintroducing the busy-wait #67 removed without silencing anything — so the noise is
-        // handled where it belongs instead, by `EspTlsLogQuiet` around the loop below
-        // (GitHub issue #156).
-        cfg.timeout_ms = 0;
+        // does not complete the handshake, on every version, so a normal ~1.3s connect emits a
+        // stream of `W` lines on a handshake that is going perfectly. That noise is handled
+        // where it belongs, by `EspTlsLogQuiet` around the loop below (GitHub issue #156).
+        cfg.timeout_ms = TLS_HANDSHAKE_STEP_BUDGET_MS;
 
         let timer = EspIdfTimer::new().map_err(|e| {
             log::debug!("failed to create ESP-IDF async timer for TLS: {e}");
@@ -1535,6 +1627,19 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             negotiate_us += now_micros().saturating_sub(step_start);
             steps += 1;
 
+            // `is_would_block` covers the v5.5.3/v5.5.4/v6.0.1 spelling of "budget expired,
+            // handshake still in progress" (`conn_new_sync` returns 0, which surfaces as
+            // `EWOULDBLOCK`). On v5.5.5 the same condition returns -1 and surfaces as the same
+            // opaque `ESP_FAIL` a real failure does, so the error handle is consulted instead --
+            // see `take_esp_tls_error` and the `cfg.timeout_ms` comment above. Drained
+            // unconditionally on every error, including the already-retryable ones, so the
+            // record can never outlive the step that produced it.
+            let retryable = step.as_ref().err().is_some_and(|e| {
+                let esp_err = take_esp_tls_error(&tls);
+                is_would_block(e)
+                    || esp_err == Some(::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT)
+            });
+
             match step {
                 Ok(_) => {
                     log::debug!(
@@ -1544,7 +1649,7 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     );
                     break;
                 }
-                Err(e) if is_would_block(&e) => {
+                Err(_) if retryable => {
                     // connect_timeout == 0 means "disabled" (matching
                     // with_connect_timeout's doc comment and its precedent elsewhere in
                     // this crate), not "expire on the very first would-block poll" — skip the

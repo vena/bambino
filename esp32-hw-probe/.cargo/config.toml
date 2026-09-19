@@ -11,7 +11,11 @@ build-std = ["std", "panic_abort"]
 
 [env]
 MCU = "esp32c6"
-ESP_IDF_VERSION = "v5.5.3"
+# v5.5.5 specifically, for the GitHub issue #294 round: it is the only release in the 5.5
+# series where `esp_tls_conn_new_sync` gates its early return on `timeout_ms > 0` (rather than
+# `>= 0`) and returns `-1` (rather than `0`) on expiry. Pinning back to v5.5.3/v5.5.4 makes the
+# probe measure a version the bug cannot reproduce on. See `src/main.rs`'s module docs.
+ESP_IDF_VERSION = "v5.5.5"
 ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
 
 # Uncomment this if you have moved the target dir by setting CARGO_TARGET_DIR or similar.
