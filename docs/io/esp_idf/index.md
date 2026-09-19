@@ -305,9 +305,10 @@ only against a peer that insists on 1.3.
   retrying rather than how long any single attempt may take.
   The deadline is checked *between* iterations, so it cannot preempt a stall *inside*
   one: the `EspTls::negotiate` FFI call is not interruptible from this task once entered.
-  `connect` pins `Config::timeout_ms = 0` so each call is a single handshake step, which
-  keeps that window near-instant and gives this deadline ~`TLS_POLL_INTERVAL` granularity
-  (GitHub issue #67) — but a call that blocks internally is still unbounded regardless of
+  `connect` pins `Config::timeout_ms = 1` so each call advances the handshake for at most
+  ~1ms, which keeps that window short and gives this deadline ~`TLS_POLL_INTERVAL`
+  granularity (GitHub issues #67 and #294) — but a call that blocks internally is still
+  unbounded regardless of
   what is passed here, and the calling task is then lost with nothing logged (observed
   once on ESP32-P4, GitHub issue #66). Consumers running printer I/O on a dedicated task
   should subscribe it to the ESP-IDF Task Watchdog, which is the only layer that can
