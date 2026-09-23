@@ -46,11 +46,18 @@ where
     /// Injects a pre-connected [`FtpsClient`] directly.
     ///
     /// Use this for test mocks or Embassy where the caller manages the FTPS
-    /// connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps).
-    pub fn attach_storage(
+    /// connection. For lazy connection, use [`.with_ftps()`](Self::with_ftps). On a
+    /// [`from_mqtt()`](Self::from_mqtt) client, whose FTPS type parameters are placeholders,
+    /// use [`.with_attached_storage()`](Self::with_attached_storage) instead.
+    ///
+    /// A session already in the slot is disconnected first, as
+    /// [`disconnect_storage()`](Self::disconnect_storage) does, so its TLS session is closed
+    /// rather than dropped mid-stream.
+    pub async fn attach_storage(
         &mut self,
         ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>,
     ) {
+        let _ = self.disconnect_storage().await;
         self.ftps = Some(ftps_client);
     }
 

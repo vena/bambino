@@ -238,7 +238,9 @@ async fn test_disconnect_mqtt_closes_the_tls_session() {
             model: PrinterModel::P1S,
         },
     );
-    client.attach_mqtt(connect_test_mqtt(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await);
+    client
+        .attach_mqtt(connect_test_mqtt(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await)
+        .await;
     broker_task.await.expect("mock broker task panicked");
 
     client
@@ -281,6 +283,9 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     let topic = format!("device/{SERIAL}/report");
     let broker_task_b = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_b).await;
+        // attach_mqtt runs the same connect-time pushall a dialled session gets (#346).
+        let pushall = read_publish_payload(&mut server_stream_b).await;
+        assert_eq!(pushall["pushing"]["command"], "pushall");
         send_publish_payload(
             &mut server_stream_b,
             &topic,
@@ -301,7 +306,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     )
     .await
     .expect("second MQTT connect handshake failed");
-    client.attach_mqtt(mqtt_client_b);
+    client.attach_mqtt(mqtt_client_b).await;
     assert!(
         client.is_mqtt_connected(),
         "attach_mqtt must reinstall a session"
@@ -459,7 +464,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     .await
     .expect("fresh FTPS handshake failed");
 
-    client.attach_storage(fresh_ftps);
+    client.attach_storage(fresh_ftps).await;
     assert!(client.is_ftps_connected());
     client
         .disconnect_storage()

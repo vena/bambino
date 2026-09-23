@@ -425,7 +425,8 @@ loop {
 `read_camera_frame` bounds the read against the client's timer. `camera()` hands out the
 underlying stream directly, and errors immediately on RTSPS models. Use
 `.with_camera_max_frame_size(bytes)` to lower the frame cap, and `.attach_camera()` to inject
-an already-connected stream (tests, Embassy).
+an already-connected stream (tests, Embassy). A `from_mqtt()` client uses
+`.with_attached_camera(tls, stream)` instead, since its camera type parameters are placeholders.
 
 The stream type is also usable standalone:
 

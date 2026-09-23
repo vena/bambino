@@ -14,7 +14,7 @@ paths:
 
 Every path that tears a TLS session down must **close it and then drop it** — both, in that order. `TlsConnector::close()` (`src/io/mod.rs`) sends `close_notify`; dropping the stream is what returns its memory. Neither substitutes for the other: MbedTLS frees a session's buffers in `Drop`, not in `close()` (~48 KB per session on an ESP32-C6, against ~29 KB of headroom at the two-session peak — see the `mbedtls-rs` comment in `Cargo.toml`), and a drop without a close leaves the peer seeing a truncated connection, which is indistinguishable from a truncation attack to anyone reading the wire.
 
-The current call sites are `PrinterClient::disconnect_mqtt`, `disconnect_camera`, `disconnect_storage` (via `FtpsClient::disconnect`), and `FtpsClient`'s per-transfer data channel. A new one added anywhere else has to do the same.
+The current call sites are `PrinterClient::disconnect_mqtt`, `disconnect_camera`, `disconnect_storage` (via `FtpsClient::disconnect`), `FtpsClient`'s per-transfer data channel, and the three `attach_*` methods, which are async so they can close an occupied slot before replacing it. A new one added anywhere else has to do the same. The sync type-changing builders (`with_ftps`, `with_camera`, `with_attached_camera`, `with_attached_storage`) cannot close; their docs tell the caller to disconnect first. A camera installed by `attach_camera` with no connector configured is dropped without a close, since there is nothing to close through — `with_attached_camera` exists so a `from_mqtt()` client can supply one.
 
 Two traps this has already sprung (GitHub issue #293, found only because `mbedtls-rs` logs `Session dropped without being closed properly`):
 

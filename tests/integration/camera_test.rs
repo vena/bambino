@@ -329,7 +329,7 @@ async fn test_attach_and_disconnect_camera() {
     );
     assert!(!client.is_camera_connected());
 
-    client.attach_camera(camera_stream);
+    client.attach_camera(camera_stream).await;
     assert!(client.is_camera_connected());
 
     let mut frame_buf = Vec::new();
@@ -398,7 +398,7 @@ async fn test_disconnect_camera_closes_the_tls_session() {
         connector,
         MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
     );
-    client.attach_camera(camera_stream);
+    client.attach_camera(camera_stream).await;
 
     client
         .disconnect_camera()

@@ -79,6 +79,9 @@ pub(crate) struct TelemetryCache {
     // The OTA firmware version, from a `get_version` round trip rather than from telemetry —
     // several capabilities are gated on it, and a caller should not have to re-query per check.
     pub(crate) last_firmware: Option<String>,
+    // `connection_generation` when `last_firmware` was fetched. An OTA update reboots the
+    // printer and forces a reconnect, so a version from an earlier connection is not trusted.
+    pub(crate) last_firmware_generation: Option<u32>,
     // Whether the firmware uses BambuStudio's "np" payload format (`PrinterTelemetry::reports_np_format`).
     // `Some(true)` is sticky: a partial frame lacking the probe fields must not downgrade it.
     // `Some(false)` is set only from a `push_status` frame while nothing better is known.
@@ -168,6 +171,12 @@ where
     /// }
     /// ```
     pub async fn poll_telemetry(&mut self) -> Result<TelemetryEvent, Error> {
+        // Messages a command-response wait already read come first: one may be the echo of a
+        // command whose deadline has since passed, and expiring that command before its buffered
+        // echo is seen would report a command the printer answered in time as TimedOut (#350).
+        if let Some(msg) = self.mqtt.as_mut().and_then(|mqtt| mqtt.take_pending()) {
+            return Ok(self.classify_message(msg));
+        }
         if let Some(event) = self.next_unanswered_outcome() {
             return Ok(event);
         }
@@ -214,7 +223,8 @@ where
         if handle.ack() == AckExpectation::SettlesOnPublish {
             return Ok(CommandOutcome::SettledOnPublish);
         }
-        self.ensure_mqtt().await?;
+        // No `ensure_mqtt()` before these: a known outcome (e.g. `ConnectionLost` after
+        // `disconnect_mqtt()`) needs no connection, and `poll_until` connects on its own (#351).
         if let Some(outcome) = self.commands.take_known(handle) {
             return Ok(outcome);
         }

@@ -1246,6 +1246,9 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
     let (client_stream_2, mut server_stream_2) = tokio::io::duplex(8192);
     let second_broker = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_2).await;
+        // attach_mqtt runs the same connect-time pushall a dialled session gets (#346).
+        let pushall = read_publish_payload(&mut server_stream_2).await;
+        assert_eq!(pushall["pushing"]["command"], "pushall");
         send_publish_payload(
             &mut server_stream_2,
             &topic,
@@ -1257,7 +1260,7 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
     });
 
     let reconnected = connect_test_mqtt(TokioIo(client_stream_2), SERIAL, PrinterModel::P1S).await;
-    client.attach_mqtt(reconnected);
+    client.attach_mqtt(reconnected).await;
     assert_eq!(
         client.is_all_axes_homed(),
         None,

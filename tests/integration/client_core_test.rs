@@ -410,13 +410,13 @@ async fn test_cooling_fans_and_peripheral_switches() {
         .await
         .expect("Auxiliary left fan set failed");
 
-    // Verify right auxiliary cooling fan is restricted on non-X2D models
+    // Verify the second left-side auxiliary fan (port 10) is restricted on non-X2D models
     let err_res = client_p1s
         .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
         .await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
-    // Verify right auxiliary cooling fan is supported on X2D model (using Port 10)
+    // Verify the second left-side auxiliary fan is supported on X2D (port 10)
     let (client_stream_x2, mut server_stream_x2) = tokio::io::duplex(8192);
     let broker_task_x2 = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_x2).await;
@@ -434,7 +434,7 @@ async fn test_cooling_fans_and_peripheral_switches() {
     client_x2
         .set_fan_speed(FanTarget::AuxiliaryLeft2, 80)
         .await
-        .expect("X2D auxiliary right fan set failed");
+        .expect("X2D second left auxiliary fan set failed");
 
     broker_task.await.expect("P1S broker task panicked");
     broker_task_x2.await.expect("X2D broker task panicked");

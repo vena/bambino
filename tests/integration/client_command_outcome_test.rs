@@ -227,6 +227,31 @@ async fn test_disconnect_resolves_pending_commands_as_connection_lost() {
 }
 
 #[tokio::test]
+async fn test_await_ack_after_disconnect_returns_connection_lost_without_redialing() {
+    // Regression (#351): await_ack called ensure_mqtt() before take_known(), so on this
+    // from_mqtt() client, which cannot redial, the known ConnectionLost outcome became an error.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        read_command(&mut server_stream).await;
+    });
+
+    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let handle = client.resume_print().await.expect("resume_print failed");
+    broker_task.await.expect("broker task panicked");
+
+    client.disconnect_mqtt().await.unwrap();
+    assert_eq!(
+        client
+            .await_ack(&handle)
+            .await
+            .expect("known outcome needs no connection"),
+        CommandOutcome::ConnectionLost
+    );
+}
+
+#[tokio::test]
 async fn test_await_ack_returns_the_outcome_once_and_keeps_other_traffic() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 

@@ -42,7 +42,7 @@ where
     let sleep_fut = timer.sleep(core::time::Duration::from_secs(connect_timeout_secs));
     match race(fut, sleep_fut).await {
         Raced::Left(result) => result,
-        Raced::Right(_) => Err(E::from(SocketError::TimedOut)),
+        Raced::Right(r) => Err(E::from(crate::io::deadline_error(r))),
     }
 }
 
@@ -235,7 +235,7 @@ where
     /// `ensure_mqtt()` runs inside some other command — never pays this round trip, and gets the
     /// model-rule answer instead.
     pub(crate) async fn prime_firmware_version(&mut self) {
-        if self.cache.last_firmware.is_some() {
+        if self.firmware_this_connection().is_some() {
             return;
         }
         if let Err(e) = self.get_version().await {
@@ -255,9 +255,24 @@ where
     /// Use this for test mocks or Embassy where the caller manages the MQTT connection,
     /// mirroring [`attach_camera()`](super::PrinterClient::attach_camera)/
     /// [`attach_storage()`](super::PrinterClient::attach_storage).
-    pub fn attach_mqtt(&mut self, mqtt: MqttClient<MqttTls::Stream>) {
-        self.mqtt = Some(mqtt);
-        self.begin_connection();
+    ///
+    /// A session already in the slot is closed first, as
+    /// [`disconnect_mqtt()`](Self::disconnect_mqtt) does. The new one then gets every step a
+    /// session this client dials itself gets: the connection-scoped cache is invalidated, the
+    /// sequence counter is reseeded (under a timer with a real clock), and a `pushall` refills
+    /// the cache.
+    pub async fn attach_mqtt(&mut self, mqtt: MqttClient<MqttTls::Stream>) {
+        self.close_mqtt_session().await;
+        self.install_mqtt(mqtt).await;
+    }
+
+    /// Takes the MQTT session out of its slot, if any, and closes its TLS session before it drops.
+    async fn close_mqtt_session(&mut self) {
+        if let Some(mut mqtt) = self.mqtt.take()
+            && let Err(e) = self.mqtt_tls.close(mqtt.stream_mut()).await
+        {
+            log::debug!("MQTT TLS close failed: {e:?}");
+        }
     }
 
     /// Disconnects the MQTT session, if one exists, and clears it from the client.
@@ -277,13 +292,9 @@ where
     /// Idempotent. Reconnecting requires [`.attach_mqtt()`](Self::attach_mqtt) with a fresh
     /// `MqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
     /// `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
-    /// only recovers a `connect()`-built client, never one built via `from_mqtt()`.
+    /// only recovers a `new()`-built client, never one built via `from_mqtt()`.
     pub async fn disconnect_mqtt(&mut self) -> Result<(), Error> {
-        if let Some(mut mqtt) = self.mqtt.take()
-            && let Err(e) = self.mqtt_tls.close(mqtt.stream_mut()).await
-        {
-            log::debug!("MQTT TLS close failed: {e:?}");
-        }
+        self.close_mqtt_session().await;
         self.begin_connection();
         Ok(())
     }
@@ -291,7 +302,9 @@ where
     /// Sets a [`TimerProvider`] for wall-clock command-response timeouts.
     ///
     /// Consuming builder — works on both [`new()`](PrinterClient::new) and
-    /// [`from_mqtt()`](PrinterClient::from_mqtt) construction paths.
+    /// [`from_mqtt()`](PrinterClient::from_mqtt) construction paths. On a client already holding
+    /// a session (`from_mqtt()`), the sequence counter is reseeded from the new timer's clock,
+    /// which `from_mqtt()` itself cannot do under its `DummyTimer`.
     #[must_use]
     pub fn with_timer<NewTimer: TimerProvider>(
         self,
@@ -309,7 +322,7 @@ where
         CameraTls,
         CameraFactory,
     > {
-        PrinterClient {
+        let mut client = PrinterClient {
             mqtt: self.mqtt,
             ftps: self.ftps,
             ftps_config: self.ftps_config,
@@ -333,7 +346,13 @@ where
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
+        };
+        // `from_mqtt()` installs its session under `DummyTimer`, where the reseed is skipped;
+        // this is the first point a real clock is available to it (#346).
+        if client.mqtt.is_some() {
+            client.reseed_sequence_counter();
         }
+        client
     }
 
     /// Overrides the default MQTT port (8883).
@@ -370,10 +389,9 @@ where
     /// out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
     /// so there's no call site to thread `self.timer` through the way MQTT/camera do.
     ///
-    /// Must not be called on a client with an already-connected FTPS session — the existing
-    /// connection is dropped (not explicitly disconnected) when the new struct is built.
-    /// Functionally safe (LAN-only TCP/TLS, `Drop`-based teardown), but callers should
-    /// disconnect first if they want an explicit, orderly teardown.
+    /// Call [`disconnect_storage()`](Self::disconnect_storage) first on a client with a
+    /// connected FTPS session: this builder is synchronous and cannot close it, so the session is
+    /// dropped without `close_notify` (see `.claude/rules/tls-session-teardown.md`).
     #[must_use]
     pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
         self,
@@ -406,7 +424,7 @@ where
         assert!(
             !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
             "with_ftps() requires a real ip/access_code — this PrinterClient was built via \
-             from_mqtt(), which leaves both empty; use .attach_storage() instead"
+             from_mqtt(), which leaves both empty; use .with_attached_storage() instead"
         );
         PrinterClient {
             mqtt: self.mqtt,
@@ -477,7 +495,7 @@ where
         }
         let (tls, factory, timer) = self.ftps_config.as_ref().ok_or_else(|| {
             Error::ProtocolViolation(
-                "FTPS not configured — call .with_ftps() or .attach_storage()".into(),
+                "FTPS not configured — call .with_ftps(), .attach_storage() or .with_attached_storage()".into(),
             )
         })?;
         let identity = &self.identity;
@@ -541,7 +559,7 @@ where
         }
         let (tls, factory) = self.camera_config.as_ref().ok_or_else(|| {
             Error::ProtocolViolation(
-                "Camera not configured — call .with_camera() or .attach_camera()".into(),
+                "Camera not configured — call .with_camera(), .attach_camera() or .with_attached_camera()".into(),
             )
         })?;
         let identity = &self.identity;
@@ -777,8 +795,8 @@ where
     /// Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
     /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
     ///
-    /// Must not be called on a client with an already-connected camera session — see
-    /// `.with_ftps()`'s doc comment for why.
+    /// Call [`disconnect_camera()`](Self::disconnect_camera) first on a client with a connected
+    /// camera session, for the same reason as `.with_ftps()`.
     #[must_use]
     pub fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(
         self,
@@ -807,7 +825,7 @@ where
         assert!(
             !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
             "with_camera() requires a real ip/access_code — this PrinterClient was built via \
-             from_mqtt(), which leaves both empty; use .attach_camera() instead"
+             from_mqtt(), which leaves both empty; use .with_attached_camera() instead"
         );
         PrinterClient {
             mqtt: self.mqtt,
@@ -815,6 +833,132 @@ where
             ftps_config: self.ftps_config,
             camera: None,
             camera_config: Some((tls, factory)),
+            mqtt_tls: self.mqtt_tls,
+            mqtt_factory: self.mqtt_factory,
+            timer: self.timer,
+            identity: self.identity,
+            sequence_counter: self.sequence_counter,
+            commands: self.commands,
+            k_profile_primed: self.k_profile_primed,
+            connection_generation: self.connection_generation,
+            cache: self.cache,
+            command_timeout_secs: self.command_timeout_secs,
+            connect_timeout_secs: self.connect_timeout_secs,
+            mqtt_port: self.mqtt_port,
+            ftps_port: self.ftps_port,
+            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            camera_port: self.camera_port,
+            camera_max_frame_size: self.camera_max_frame_size,
+            _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
+        }
+    }
+
+    /// Installs a camera stream the caller connected, changing the camera type parameters to match it.
+    ///
+    /// The attach path for a [`from_mqtt()`](PrinterClient::from_mqtt) client: its camera slots
+    /// are fixed to placeholder types, so [`attach_camera()`](Self::attach_camera) cannot take a
+    /// real stream there, and [`with_camera()`](Self::with_camera) needs the ip/access code such
+    /// a client lacks. `tls` is the connector that produced the stream; it is kept so
+    /// [`disconnect_camera()`](Self::disconnect_camera) can send `close_notify`. There is no
+    /// dialer, so after a disconnect the next camera call returns
+    /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected) until a camera is
+    /// attached again.
+    ///
+    /// Call [`disconnect_camera()`](Self::disconnect_camera) first on a client with a connected
+    /// camera session, for the same reason as `.with_ftps()`.
+    #[must_use]
+    // The return type is `Self` with three parameters swapped, spelled out as every
+    // type-changing builder here does; the nested `PreConnected<_>` just tips it over the lint.
+    #[allow(clippy::type_complexity)]
+    pub fn with_attached_camera<NewCameraRawIO, NewCameraTls>(
+        self,
+        tls: NewCameraTls,
+        camera: BinaryCameraStream<NewCameraTls::Stream>,
+    ) -> PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        NewCameraRawIO,
+        NewCameraTls,
+        super::PreConnected<NewCameraRawIO>,
+    >
+    where
+        NewCameraRawIO: AsyncIo,
+        NewCameraTls: TlsConnector<NewCameraRawIO>,
+    {
+        PrinterClient {
+            mqtt: self.mqtt,
+            ftps: self.ftps,
+            ftps_config: self.ftps_config,
+            camera: Some(camera),
+            camera_config: Some((tls, super::PreConnected(PhantomData))),
+            mqtt_tls: self.mqtt_tls,
+            mqtt_factory: self.mqtt_factory,
+            timer: self.timer,
+            identity: self.identity,
+            sequence_counter: self.sequence_counter,
+            commands: self.commands,
+            k_profile_primed: self.k_profile_primed,
+            connection_generation: self.connection_generation,
+            cache: self.cache,
+            command_timeout_secs: self.command_timeout_secs,
+            connect_timeout_secs: self.connect_timeout_secs,
+            mqtt_port: self.mqtt_port,
+            ftps_port: self.ftps_port,
+            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            camera_port: self.camera_port,
+            camera_max_frame_size: self.camera_max_frame_size,
+            _mqtt_raw_io: PhantomData,
+            _camera_raw_io: PhantomData,
+        }
+    }
+
+    /// Installs an FTPS client the caller connected, changing the FTPS type parameters to match it.
+    ///
+    /// The FTPS counterpart of [`with_attached_camera()`](Self::with_attached_camera), for a
+    /// [`from_mqtt()`](PrinterClient::from_mqtt) client whose FTPS slots are placeholders.
+    /// [`FtpsClient`] carries its own connector, so
+    /// [`disconnect_storage()`](Self::disconnect_storage) closes it as usual. No FTPS
+    /// configuration is kept, so after a disconnect [`storage()`](Self::storage) reports FTPS
+    /// as not configured until a client is attached again.
+    ///
+    /// Call [`disconnect_storage()`](Self::disconnect_storage) first on a client with a
+    /// connected FTPS session, for the same reason as `.with_ftps()`.
+    #[must_use]
+    pub fn with_attached_storage<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
+        self,
+        ftps_client: FtpsClient<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>,
+    ) -> PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        NewFtpsRawIO,
+        NewFtpsTls,
+        NewFtpsFactory,
+        NewFtpsTimer,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
+    where
+        NewFtpsRawIO: AsyncIo,
+        NewFtpsTls: TlsConnector<NewFtpsRawIO>,
+        NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
+        NewFtpsTimer: TimerProvider,
+    {
+        PrinterClient {
+            mqtt: self.mqtt,
+            ftps: Some(ftps_client),
+            ftps_config: None,
+            camera: self.camera,
+            camera_config: self.camera_config,
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,

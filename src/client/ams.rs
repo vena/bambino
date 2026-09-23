@@ -454,6 +454,7 @@ where
                 // on it, and a caller should not have to re-query per check.
                 if let Some(firmware) = info.firmware_version() {
                     self.cache.last_firmware = Some(firmware.to_string());
+                    self.cache.last_firmware_generation = Some(self.connection_generation);
                 }
                 Ok(info)
             }

@@ -50,15 +50,24 @@ where
     /// Injects a pre-connected [`BinaryCameraStream`] directly.
     ///
     /// Use this for test mocks or Embassy where the caller manages the camera
-    /// connection. For lazy connection, use [`.with_camera()`](Self::with_camera).
-    pub fn attach_camera(&mut self, camera: BinaryCameraStream<CameraTls::Stream>) {
+    /// connection. For lazy connection, use [`.with_camera()`](Self::with_camera). On a
+    /// [`from_mqtt()`](Self::from_mqtt) client, whose camera type parameters are placeholders,
+    /// use [`.with_attached_camera()`](Self::with_attached_camera) instead.
+    ///
+    /// A session already in the slot is disconnected first, as
+    /// [`disconnect_camera()`](Self::disconnect_camera) does. The attached stream is closed on a
+    /// later disconnect only if a connector is configured (`.with_camera()` or
+    /// `.with_attached_camera()`); without one it is dropped without `close_notify`.
+    pub async fn attach_camera(&mut self, camera: BinaryCameraStream<CameraTls::Stream>) {
+        let _ = self.disconnect_camera().await;
         self.camera = Some(camera);
     }
 
     /// Returns direct access to the underlying [`BinaryCameraStream`], auto-connecting if needed.
     ///
-    /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera) or
-    /// [`.attach_camera()`](Self::attach_camera). Returns `Error::ProtocolViolation`
+    /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera),
+    /// [`.attach_camera()`](Self::attach_camera) or
+    /// [`.with_attached_camera()`](Self::with_attached_camera). Returns `Error::ProtocolViolation`
     /// immediately for RTSPS models — see `ensure_camera()`'s doc
     /// comment.
     pub async fn camera(&mut self) -> Result<&mut BinaryCameraStream<CameraTls::Stream>, Error> {

@@ -13,7 +13,7 @@
 //! - **Chamber heater guards** — `set_chamber_temperature()` rejects requests on models
 //!   without an active PTC heater (open-frame machines like A1/P1).
 //! - **Fan routing** — Fan commands are directed to the correct controller, including
-//!   the secondary right-side auxiliary fan on models that have one (P2S, X2D, etc.).
+//!   the second left-side auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
 
 mod ams;
 mod camera;
@@ -251,11 +251,16 @@ where
     ///
     /// Use this when you have a pre-established MQTT session (tests, Embassy,
     /// or any context where the caller manages the connection). The resulting client uses
-    /// [`PreConnected`] for both the MQTT `Tls` and `Factory` slots — `ensure_mqtt()`
-    /// short-circuits on `self.mqtt.is_some()` before either is ever called, so
-    /// `PreConnected`'s `RawStreamFactory::dial` (which returns
-    /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected)) is unreachable in
-    /// practice.
+    /// [`PreConnected`] for both the MQTT `Tls` and `Factory` slots. `ensure_mqtt()`
+    /// short-circuits on `self.mqtt.is_some()`, so `PreConnected`'s `RawStreamFactory::dial` is
+    /// reachable only after [`disconnect_mqtt()`](Self::disconnect_mqtt): the next command then
+    /// returns [`SocketError::NotConnected`](crate::io::SocketError::NotConnected) until
+    /// [`attach_mqtt()`](Self::attach_mqtt) supplies a new session.
+    ///
+    /// Being synchronous, this skips the connect-time `pushall` a dialled session gets, so
+    /// connection-scoped telemetry stays `None` until the printer next reports it. Call
+    /// [`request_pushall()`](Self::request_pushall) once to refill it. The sequence counter is
+    /// reseeded when [`with_timer()`](Self::with_timer) supplies a real clock.
     pub fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self {
         let serial = String::from(mqtt_client.serial());
         Self {
@@ -566,7 +571,19 @@ where
         crate::quirks::QuirkContext::empty()
             .with_fun(self.cache.last_fun.as_deref())
             .with_fun2(self.cache.last_fun2.as_deref())
-            .with_firmware(self.cache.last_firmware.as_deref())
+            .with_firmware(self.firmware_this_connection())
+    }
+
+    /// Returns the cached firmware version only if it was fetched on the current MQTT connection.
+    ///
+    /// A firmware update reboots the printer and so ends the connection; a version cached before
+    /// that boundary may be the pre-update one, which would answer firmware-gated capabilities
+    /// wrongly until the next `get_version()` (#352). Mirrors `home_flag_this_connection`.
+    pub(crate) fn firmware_this_connection(&self) -> Option<&str> {
+        if self.cache.last_firmware_generation? != self.connection_generation {
+            return None;
+        }
+        self.cache.last_firmware.as_deref()
     }
 
     /// Capability answers for this printer, with its cached telemetry already supplied.
