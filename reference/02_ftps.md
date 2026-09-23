@@ -186,12 +186,14 @@ Upon reaching EOF on the data socket, the client must close the data channel and
 #### P2S / X2D TLS 1.3 Session Close Race [REF-FTPS-CONN]
 Under TLS 1.3, the FTP control server may close the connection prematurely after file transfers or throw a transient `426 "Failure reading network stream"` during close negotiations. This occurs because the TCP data channel close event races the `226` transfer confirmation packet. To handle this, the transfer must be verified via the `SIZE` command:
 1.  Complete the data transmission.
-2.  Terminate the data channel socket directly.
+2.  Close the data channel (see *Command Channel Post-Transfer Response Synchronization* below).
 3.  Query `SIZE <remote_path>` over the control channel.
 4.  If the returned size matches the source file size byte-for-byte, ignore any preceding transient network alerts and proceed with the print dispatch command. If the size mismatches, the transfer must be treated as genuinely truncated.
 
 #### Command Channel Post-Transfer Response Synchronization
-The printer's embedded FTPS server does not transmit a TLS `close_notify` shutdown alert upon completion of data channel transfers. If the connecting peer client expects a standard graceful TLS shutdown negotiation on the data socket, the session will hang indefinitely. To prevent this, the client must abruptly close the passive TCP data connection socket immediately after writing the final byte of the file payload.
+The printer's embedded FTPS server does not transmit a TLS `close_notify` shutdown alert upon completion of data channel transfers. A client that *waits* for the server's `close_notify` on the data socket will therefore hang indefinitely. Sending the client's own `close_notify` is fine: after writing the final byte of the payload (or reading EOF, for `RETR`/`LIST`), the client sends a TLS `close_notify` on the data channel without waiting for a reply, bounds that close by a write timeout (bambino uses `FTPS_WRITE_TIMEOUT_SECS`, 30 s), then drops the socket. A close that fails or times out is logged and the transfer continues to the `226` read. Models whose data channel is plaintext just close the TCP socket.
+
+*Verified 2026-09-23 on a P1S (firmware `01.10.00.00`), rustls 0.23 backend (tokio): `LIST`, `STOR` and `RETR` of 1 KiB and 5 MiB files all sent `close_notify` and received the `226` within the same second, with no close failure and byte-identical round-trips. The 5 MiB transfers took ~22 s each, all spent moving the payload, not closing the channel. The mbedtls (embassy) backend has been hardware-checked for `LIST` only; ESP-IDF has not been checked.*
 
 Following the data channel closure, the client must block-wait on the secure control connection for the positive completion reply (`226 Transfer complete`). Because of substantial write latency on the physical MicroSD card controller, this control channel response can be delayed by up to 300 seconds as internal buffers are flushed to non-volatile flash storage.
 
