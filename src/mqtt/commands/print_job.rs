@@ -178,9 +178,11 @@ pub struct PrintJobConfig {
     pub bed_leveling: CalibrationMode,
     /// Whether to run dynamic flow calibration before the print.
     pub run_flow_calibration: CalibrationMode,
-    /// Whether to run vibration compensation calibration before the print. No tri-state
-    /// companion field exists on the wire for this one (`reference/03_mqtt_telemetry.md:334`),
-    /// so `Auto` serializes identically to `Off` via `as_wire_bool()`.
+    /// Whether to run vibration compensation calibration before the print. Defaults to `Off`
+    /// on every model, matching BambuStudio, which always sends `false` (see
+    /// `reference/03_mqtt_telemetry.md`, "Default (`vibration_cali`)"). No tri-state companion
+    /// field exists on the wire for this one, so `Auto` serializes identically to `Off` via
+    /// `as_wire_bool()`.
     pub run_vibration_compensation: CalibrationMode,
     /// Whether timelapse capture is enabled.
     pub timelapse: bool,
@@ -210,7 +212,7 @@ pub struct PrintJobConfig {
 }
 
 impl PrintJobConfig {
-    /// Builds a job config with calibration flags defaulted on and AMS disabled.
+    /// Builds a job config with bed leveling and flow calibration on, vibration compensation off, and AMS disabled.
     pub fn new(
         job_filename: &str,
         plate_gcode_path: &str,
@@ -226,7 +228,7 @@ impl PrintJobConfig {
             bed_type: String::from(bed_type),
             bed_leveling: CalibrationMode::On,
             run_flow_calibration: CalibrationMode::On,
-            run_vibration_compensation: CalibrationMode::On,
+            run_vibration_compensation: CalibrationMode::Off,
             timelapse: true,
             layer_inspect: true,
             nozzle_offset_cali: None,
@@ -501,17 +503,6 @@ impl ProjectFileRequest {
             CalibrationMode::Off
         };
 
-        // Hard gate for the same reason as `nozzle_offset` above: a model that does not run
-        // vibration compensation must not be told to, even by an explicit caller opt-in.
-        // Upstream applies this by overwriting the field after building the payload; doing it
-        // through the quirks engine keeps model dispatch in one place per this crate's
-        // invariants. Unverified on hardware — see `supports_vibration_compensation`.
-        let vibration_cali = if model.quirks().supports_vibration_compensation() {
-            config.run_vibration_compensation
-        } else {
-            CalibrationMode::Off
-        };
-
         // Resolved through the quirks engine rather than a model match, per the Key Invariants.
         // Both inputs are required and the resolver declines rather than guesses — every path
         // that cannot name the right physical nozzle with confidence lands on `None`, which omits
@@ -552,7 +543,7 @@ impl ProjectFileRequest {
                 auto_bed_leveling: config.bed_leveling.as_wire_i32(),
                 extrude_cali_flag: config.run_flow_calibration.as_wire_i32(),
                 nozzle_offset_cali: nozzle_offset.as_wire_i32(),
-                vibration_cali: vibration_cali.as_wire_bool(),
+                vibration_cali: config.run_vibration_compensation.as_wire_bool(),
                 nozzle_mapping,
                 layer_inspect: config.layer_inspect,
                 use_ams,

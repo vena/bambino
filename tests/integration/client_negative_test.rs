@@ -141,7 +141,8 @@ async fn test_start_print_wire_payload() {
         assert_eq!(json["print"]["use_ams"], false);
         assert_eq!(json["print"]["ams_mapping"], "");
         assert_eq!(json["print"]["bed_leveling"], true);
-        assert_eq!(json["print"]["vibration_cali"], true);
+        // Defaults to false on every model, matching BambuStudio (#375).
+        assert_eq!(json["print"]["vibration_cali"], false);
         assert_eq!(json["print"]["timelapse"], true);
         assert_eq!(json["print"]["layer_inspect"], true);
         // P1S: single nozzle → nozzle_offset_cali forced to 0

@@ -515,22 +515,33 @@ mod tests {
     }
 
     #[test]
-    fn test_vibration_cali_forced_off_on_p2s_despite_explicit_opt_in() {
-        let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
-            .vibration_compensation(CalibrationMode::On);
-        let req = ProjectFileRequest::from_config(&config, 1, PrinterModel::P2S);
-        assert!(
-            !req.print.vibration_cali,
-            "P2S must send vibration_cali:false even when the caller asked for On"
-        );
+    fn test_vibration_cali_defaults_off_on_every_model() {
+        let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured");
+        for model in [
+            PrinterModel::P1S,
+            PrinterModel::X1C,
+            PrinterModel::P2S,
+            PrinterModel::H2D,
+        ] {
+            let req = ProjectFileRequest::from_config(&config, 1, model);
+            assert!(
+                !req.print.vibration_cali,
+                "{model:?} should default to false"
+            );
+        }
     }
 
     #[test]
-    fn test_vibration_cali_honored_on_a_model_that_supports_it() {
+    fn test_vibration_cali_explicit_opt_in_honored_on_every_model() {
         let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
             .vibration_compensation(CalibrationMode::On);
-        let req = ProjectFileRequest::from_config(&config, 1, PrinterModel::P1S);
-        assert!(req.print.vibration_cali);
+        for model in [PrinterModel::P1S, PrinterModel::P2S] {
+            let req = ProjectFileRequest::from_config(&config, 1, model);
+            assert!(
+                req.print.vibration_cali,
+                "{model:?} should honor the opt-in"
+            );
+        }
     }
 
     #[test]

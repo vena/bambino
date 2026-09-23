@@ -523,15 +523,14 @@ Upstream bambuddy sends three fields in `project_file` that bambino does not, al
 
 If a capture ever *does* become available, check these three first and update this note.
 
-###### Model Gate (`vibration_cali`)
-`vibration_cali` is sent on every model **except P2S**, where it must be forced to `false` regardless of the caller's request. The P2S does not run vibration compensation the way the X1/P1 series does.
+###### Default (`vibration_cali`)
+`vibration_cali` defaults to `false` on every model. A caller may still opt in; no model forces it off.
 
-*   Note `N7` and `P2S` are the same machine — `N7` is the internal/SSDP code (BambuStudio ships both `resources/printers/N7.json` and `resources/profiles/BBL/machine/Bambu Lab P2S.json`). Upstream's check reads `("P2S", "N7")` because it matches on a name string that may arrive in either form; a decode that already resolves to a model enum needs only the one variant.
-*   In this crate the gate lives in the quirks engine (`PrinterQuirks::supports_vibration_compensation`), not as an inline model match, per the quirks invariant in root `CLAUDE.md`. Upstream instead overwrites the field after building the payload.
-
-**Verification source — weaker than the rest of this document, read the caveat.** This rests on bambuddy commit `be18ebb3` ("Fix P2S printer support - disable vibration_cali and fix FTP SSL") and nothing else. BambuStudio cannot corroborate it: its printer profiles carry 30+ `support_*` capability keys and **none** concerns vibration (verified across `BL-P001`, `C11`, `C12`, `N1`, `N2S`, `N7`, `N9`, `O1D`), and its own vibration checkbox (`Calibration.cpp:57`) is ungated by model. What raises confidence is that the *other* half of that same commit is the P2S FTPS TLS-1.3 quirk, independently confirmed here and implemented in `src/quirks/models/p2.rs` — the contributor was demonstrably working from a real P2S. That is corroboration of the source, not of this claim.
-
-No P2S has been available to verify this directly. See issue #133; confirm before treating it as settled.
+*   **BambuStudio sends `false` for every print job, for every model.** `SelectMachine.cpp` passes a literal `false` into the `vabration_cali` parameter of `PrintJob::set_print_config` (`Jobs/PrintJob.hpp:106`), which becomes `params.task_vibration_cali` (`PrintJob.cpp:258`); `SendMultiMachinePage.cpp:511` sets `params.task_vibration_cali = false` directly. No checkbox feeds it and no model is exempt. OrcaSlicer does the same. ha-bambulab's `print_project_file` service also defaults it to `false` (`coordinator.py:716`).
+*   bambuddy defaults it to `true` and forces `false` on P2S only (`bambu_mqtt.py:6029-6033`, from commit `be18ebb3`, "Fix P2S printer support - disable vibration_cali and fix FTP SSL"). That commit fixed an FTPS failure in the same change and has no capture isolating `vibration_cali`; the reported error `0300_400C` is the generic "task was canceled".
+*   Per this repo's evidence rule, BambuStudio is authoritative where the two disagree, so the crate follows it. The earlier P2S-only quirk (issue #133) was removed (issue #375).
+*   Caveat: BambuStudio hands `task_vibration_cali` to the closed-source `bambu_networking` plugin (see the note above), so the exact wire value is inferred from the parameter, not observed.
+*   Standalone `calibration` (bit 2 of `option`) is unaffected: both upstreams send it for any model (see "Calibration" below).
 
 ###### Polymorphic Typing Rule (`use_ams`)
 The `"use_ams"` parameter must strictly be serialized as a JSON boolean (`true` or `false`). On dual-nozzle IDEX printers (such as the H2D and H2D Pro), the printer's onboard JSON parser processes this field polymorphically. If the `use_ams` field is serialized on the wire as an integer (`1` or `0`) instead of a boolean, the parser interprets the value as the physical nozzle carriage index (`1` = Left/Deputy nozzle) rather than a boolean material routing flag.

@@ -197,7 +197,7 @@ let config = PrintJobConfig::new(
 printer.start_print(&config).await?;
 ```
 
-Bed leveling, flow calibration, and vibration compensation run automatically as part of the print (all enabled by default in `PrintJobConfig`); vibration compensation is forced off on models that don't support it, regardless of the config. Use the builder methods to change them—they take either a `bool` or a `CalibrationMode` (`Off`/`On`/`Auto`, matching BambuStudio's tri-state encoding):
+Bed leveling and flow calibration run automatically as part of the print (enabled by default in `PrintJobConfig`). Vibration compensation is off by default on every model, matching BambuStudio, which always sends `vibration_cali: false`; opt in with `.vibration_compensation(true)`. Use the builder methods to change them—they take either a `bool` or a `CalibrationMode` (`Off`/`On`/`Auto`, matching BambuStudio's tri-state encoding):
 
 ```rust
 use bambino::mqtt::CalibrationMode;
