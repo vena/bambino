@@ -766,9 +766,11 @@ with named fields and sensible defaults for calibration flags.
 
 - **`run_vibration_compensation`**: `CalibrationMode`
 
-  Whether to run vibration compensation calibration before the print. No tri-state
-  companion field exists on the wire for this one (`reference/03_mqtt_telemetry.md:334`),
-  so `Auto` serializes identically to `Off` via `as_wire_bool()`.
+  Whether to run vibration compensation calibration before the print. Defaults to `Off`
+  on every model, matching BambuStudio, which always sends `false` (see
+  `reference/03_mqtt_telemetry.md`, "Default (`vibration_cali`)"). No tri-state companion
+  field exists on the wire for this one, so `Auto` serializes identically to `Off` via
+  `as_wire_bool()`.
 
 - **`timelapse`**: `bool`
 
@@ -813,7 +815,7 @@ with named fields and sensible defaults for calibration flags.
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
 
-  Builds a job config with calibration flags defaulted on and AMS disabled.
+  Builds a job config with bed leveling and flow calibration on, vibration compensation off, and AMS disabled.
 
 - <span id="printjobconfig-with-ams"></span>`fn with_ams(self, mapping: Vec<i32>) -> Self`
 

@@ -571,26 +571,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   The same answer as
   [`supports_ams_drying_while_printing`](#modelquirks).
 
-- `fn supports_vibration_compensation(&self) -> bool`
-
-  Returns true if the model runs vibration-compensation (resonance) calibration as part of a print job.
-
-  Default `true` (the X1/P1 series and everything modelled after them). `false` on P2S,
-  where `vibration_cali` must be forced off in the `project_file` payload regardless of
-  what the caller asked for.
-
-  **This one rests on upstream authority alone, unlike its neighbours.** BambuStudio has
-  no per-model vibration capability flag to consult — its printer profiles carry 30+
-  `support_*` keys and none concerns vibration, and its own calibration checkbox is
-  ungated by model. The sole source is bambuddy `be18ebb3` ("Fix P2S printer support —
-  disable vibration_cali and fix FTP SSL"), a single community commit whose *other* half
-  is the P2S FTPS TLS-1.3 quirk this crate independently confirmed and implements in
-  `models::p2::P2Quirks`. That makes the contributor demonstrably right about the same
-  machine, which is corroboration of the source, not proof of this claim.
-
-  No P2S has been available to verify it here. See issue #133 — if one ever is, confirm
-  before treating this as settled.
-
 - `fn uses_nozzle_rack(&self) -> bool`
 
   Returns true if the model mounts its hotends from a swappable tool-changer rack.
