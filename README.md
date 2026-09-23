@@ -113,8 +113,12 @@ If you already have a connected `MqttClient` (tests, Embassy), wrap it directly:
 ```rust
 use bambino::client::PrinterClient;
 
-let mut printer = PrinterClient::from_mqtt(mqtt_client, model);
+let mut printer = PrinterClient::from_mqtt(mqtt_client, model)
+    .with_timer(timer);                       // a real clock also reseeds the sequence ids
+printer.request_pushall().await?;             // from_mqtt skips the connect-time pushall
 ```
+
+A `from_mqtt()` client's FTPS and camera slots are placeholders, so attach connections you made yourself with `.with_attached_storage(ftps_client)` and `.with_attached_camera(tls, stream)`. To replace a dead MQTT session later, use `printer.attach_mqtt(new_client).await`: it closes the old session and runs the same pushall and reseed a dialled connection gets.
 
 ### Send commands
 

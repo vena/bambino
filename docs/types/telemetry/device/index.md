@@ -648,7 +648,7 @@ struct NozzleInfo {
     pub tm: Option<u32>,
     pub max_temp: Option<u32>,
     pub nozzle_type: Option<String>,
-    pub wear: Option<u32>,
+    pub wear: Option<f32>,
     pub serial_number: Option<String>,
     pub sn: Option<String>,
     pub filament_colour: Option<String>,
@@ -701,9 +701,12 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   `nozzle_id` on a K-profile entry uses the flow-code vocabulary only — see
   `crate::diagnostics::KProfileEntry::nozzle_id`.
 
-- **`wear`**: `Option<u32>`
+- **`wear`**: `Option<f32>`
 
   Normalized physical wear tracker value.
+  
+  A float: H2C, P2S and X2D send `0.0`, and BambuStudio stores it as `float m_wear`
+  (`DevNozzleSystem.h:104`).
 
 - **`serial_number`**: `Option<String>`
 

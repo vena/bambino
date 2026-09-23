@@ -100,7 +100,9 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   Whether an AMS drying cycle can run while a print is in progress.
 
   Strictly narrower than [`supports_ams_remote_drying`](#capabilities),
-  and defaults to `false` when the firmware version is unknown. See
+  and defaults to `false` when the firmware version is unknown — except on X2D and A2L,
+  whose earliest firmware already has the feature, so they report `true` before
+  `get_version()` completes. See
   [`ModelQuirks::supports_ams_drying_while_printing`](../../quirks/index.md#modelquirks) for the sourcing.
 
 - <span id="capabilities-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)

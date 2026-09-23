@@ -44,8 +44,6 @@ Quirks for the P1P CoreXY platform.
 
 - <span id="p1pquirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
 
-- <span id="p1pquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
-
 - <span id="p1pquirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="p1pquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
@@ -70,7 +68,7 @@ Quirks for the P1P CoreXY platform.
   is not a live self-healing path, and a firmware release adding remote drying
   would have to start emitting `fun2` for it to engage.
 
-- <span id="p1pquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+- <span id="p1pquirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
   Never supports drying while printing.
 
@@ -120,8 +118,6 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
 
 - <span id="p1squirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
 
-- <span id="p1squirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
-
 - <span id="p1squirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
 
 - <span id="p1squirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
@@ -146,7 +142,7 @@ Quirks for the P1S CoreXY platform (same family, enclosed, guaranteed aux fan).
   is not a live self-healing path, and a firmware release adding remote drying
   would have to start emitting `fun2` for it to engage.
 
-- <span id="p1squirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, _ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
+- <span id="p1squirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
 
   Never supports drying while printing.
 

@@ -169,10 +169,17 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   **This is a starting value, not a bound.** It always falls inside
   [`AmsUnitModel::dry_temp_range`](../telemetry/ams/index.md#amsunitmodel), but the range is the hardware limit and this is the
-  vendor's recommendation within it. BambuStudio additionally floors the printing-column
-  value at use: `min(printing_temp, softening_temp, heat_distortion_temp)`
-  (`AMSDryControl.cpp:1723-1725`) — see [`softening_temp`](#dryingmaterial) and
-  [`heat_distortion_temp`](#dryingmaterial) to reproduce that clamp.
+  vendor's recommendation within it.
+
+  **Capped at [`heat_distortion_temp`](#dryingmaterial) in both columns.**
+  BambuStudio disables Start whenever the temperature exceeds the heat-distortion
+  temperature and a tray is loaded, idle or printing (`AMSDryControl.cpp:1213-1230`), yet
+  three raw profile values break that rule (TPU idle on both units, PVA idle on the AMS-HT).
+  The value returned is the one BambuStudio would let a loaded tray start with. It also
+  floors the printing column at the softening temperature
+  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`);
+  no published printing value exceeds [`softening_temp`](#dryingmaterial), so that
+  half is a no-op here.
 
 - <span id="dryingmaterial-default-duration-hours"></span>`fn default_duration_hours(self, unit: AmsUnitModel, printing: bool) -> Option<u32>` — [`AmsUnitModel`](../telemetry/ams/index.md#amsunitmodel)
 
@@ -203,14 +210,16 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
   [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp) for what BambuStudio sends when a tray's filament
   resolves to no preset at all.
 
-- <span id="dryingmaterial-heat-distortion-temp"></span>`fn heat_distortion_temp(self) -> Option<u32>`
+- <span id="dryingmaterial-heat-distortion-temp"></span>`fn heat_distortion_temp(self) -> u32`
 
-  Heat-distortion temperature (°C)
-  (`filament_dev_ams_drying_heat_distortion_temperature`), where the profile publishes one.
+  Heat-distortion temperature (°C) (`filament_dev_ams_drying_heat_distortion_temperature`).
 
-  `None` for [`Pe`](#dryingmaterial) and [`Pha`](#dryingmaterial), whose profiles omit the key. One of
-  the three inputs to BambuStudio's while-printing clamp
-  (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`).
+  [`Pe`](#dryingmaterial) and [`Pha`](#dryingmaterial) publish no value of their own and inherit 45 °C
+  from `fdm_filament_common.json:108-110`; BambuStudio reads the merged parent+child config
+  (`PresetBundle.cpp:5081-5109`). BambuStudio refuses to start a cycle above this on a
+  loaded tray (`AMSDryControl.cpp:1213-1230`), and it is one of the three inputs to the
+  while-printing clamp (`min(printing_temp, softening_temp, heat_distortion_temp)`,
+  `AMSDryControl.cpp:1723-1725`).
 
 - <span id="dryingmaterial-fully-dryable-by"></span>`fn fully_dryable_by(self, unit: AmsUnitModel) -> bool` — [`AmsUnitModel`](../telemetry/ams/index.md#amsunitmodel)
 
@@ -225,12 +234,12 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
   and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp:58-61`), where `DevAmsType`
   makes them `3` and `4`. `["-1"]` means neither unit qualifies.
 
-  **A profile that omits the key entirely behaves exactly like `["-1"]`.** BambuStudio
-  builds an empty set when the key is absent and then warns on set non-membership
-  (`AMSDryControl.cpp:1184` and `1203`), so the seven materials with no key published —
-  ABS, ASA, HIPS, PC, PA, PVA, TPU — get the same warning as PPA and PPS, which name
-  `["-1"]` explicitly. This method reports `false` for all nine rather than treating an
-  absent key as permission.
+  **A profile that omits the key inherits `["1"]` (AMS-HT only)** from
+  `fdm_filament_common.json:105-107`, which every material preset inherits; BambuStudio
+  reads the merged parent+child config (`PresetBundle.cpp:5081-5109`,
+  `DevUtilBackend.cpp:63-113`). So the seven materials with no key of their own — ABS, ASA,
+  HIPS, PC, PA, PVA, TPU — are fully dryable by the AMS-HT and not the AMS 2 Pro. PPA and
+  PPS name `["-1"]` explicitly.
 
 #### Trait Implementations
 

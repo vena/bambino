@@ -396,7 +396,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`stg_cur`**: `Option<i32>`
 
-  Stage currently executing, drawn from the same ID space as [`Self::stg`](#printertelemetry). Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+  Stage currently executing, drawn from the same ID space as [`Self::stg`](#printertelemetry).
+  
+  Reads `0` ("printing") while genuinely idle on A1/P1 firmware [REF-MQTT-IDLEBUG], so the
+  stage accessor gates it on `gcode_state` for every model rather than per-model quirk.
   
   Emitted in incremental pushes, so it is usable for real-time stage tracking subject to
   the [REF-MQTT-IDLEBUG] `gcode_state` gate — A1/P1 firmware reports `0` ("printing") while

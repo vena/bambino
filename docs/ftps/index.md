@@ -184,6 +184,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
   itself goes out of scope (GitHub issue #293).
 
+  A poisoned client skips `QUIT` and the close — its stream may be desynced or dead — but
+  still drops the control session here, so its memory is returned now rather than when the
+  client goes out of scope (#320).
+
 #### Trait Implementations
 
 ### `CurrentDateTime`
@@ -286,7 +290,8 @@ Standardized representation of an entry retrieved from physical printer storage.
   The parsed file or directory name, exactly as reported by the raw `LIST` line
   — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
   and rejoining with a single space, so internal runs of multiple consecutive spaces
-  round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
+  round-trip exactly and remain usable as-is in `delete_file`/`download_file`. Leading and
+  trailing spaces are kept too; only the one separator before the name is dropped.
 
 - **`is_dir`**: `bool`
 

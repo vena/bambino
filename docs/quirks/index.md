@@ -295,10 +295,6 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model is an open-frame or entry-level machine lacking a physical chamber temperature sensor [REF-THER-DECODE].
 
-- `fn has_stg_cur_idle_bug(&self) -> bool`
-
-  Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
-
 - `fn physical_nozzle_count(&self) -> u8`
 
   Returns the number of physical extruder carriages present on the machine carriage bus.
@@ -382,9 +378,8 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   Default `false`. Observed inert on a P1S: the firmware accepts the bit, acknowledges the
   command `"result": "success"`, and queues no stage for it [REF-MQTT-LIFECYCLE]. Since the
   wire reports success either way, a model is assumed not to support this until a capture
-  shows a stage queued for it — the same fail-safe direction as
-  [`Self::has_stg_cur_idle_bug`](#modelquirks), where guessing wrong toward "unsupported" costs a
-  rejected command rather than a silently skipped calibration.
+  shows a stage queued for it: guessing wrong toward "unsupported" costs a rejected command
+  rather than a silently skipped calibration.
 
 - `fn supported_calibration_mask(&self) -> u32`
 
@@ -402,11 +397,29 @@ Polymorphic interface tracking model-specific hardware variations and transport 
   Default: bed-on-Z models reject G28 with axis constraints (Z, X, or Y) to prevent
   nozzle-to-plate collisions. Bed-slingers allow all homing variants.
 
-  Scans every line of `gcode` independently — multi-statement `\n`-joined payloads are a
-  documented, supported wire shape (see `GCodeRequest`) — and recognizes `G28` as a
-  case-insensitive prefix match on a line rather than requiring it to be the entire leading
-  whitespace-split token, so glued forms like `G28X` (no space before the axis letter) are
-  caught too, alongside the already-handled space-separated form (`G28 X`).
+  Scans every statement of `gcode` independently, splitting on `\n` and a bare `\r` —
+  multi-statement payloads are a documented, supported wire shape (see `GCodeRequest`).
+  Comments and a leading `M117` message are skipped; `G28X`, `G 28 Z` and `G028 Z` are all
+  recognized as `G28`, since the firmware's parser is undocumented and the scan resolves
+  every ambiguity toward rejecting.
+
+- `fn validate_gcode(&self, gcode: &str, mains_220v: Option<bool>) -> Result<(), Error>`
+
+  Checks raw G-code against this model's limits: what `PrinterClient::send_gcode` enforces.
+
+  Rejects, with [`Error::ModelMismatch`]:
+
+  - axis-constrained `G28` on a bed-on-Z model (see [`Self::is_unsafe_homing_command`](#modelquirks));
+  - an `M104`/`M109` `S`/`R`/`B` above [`Self::nozzle_temp_max`](#modelquirks);
+  - an `M140`/`M190` `S`/`R` above [`Self::bed_temp_max`](#modelquirks) for `mains_220v`;
+  - any `M141`/`M191` on a model without an active chamber heater, and an `S`/`R` above
+    [`Self::active_chamber_heater_max_temp_c`](#modelquirks) on one with a heater.
+
+  A temperature argument that isn't a plain decimal (`S3e2`, `S0x1F`) is rejected with
+  [`Error::InvalidArgument`](../error/index.md#error) rather than interpreted. Unlike the typed setters, nothing is
+  clamped: the G-code is either sent as written or refused. Relative moves are **not**
+  bounded — the printer reports no absolute position, so there is nothing to bound them
+  against; `move_relative` caps a single move's distance instead.
 
 - `fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String`
 

@@ -126,7 +126,7 @@ client
 
 - <span id="dryingcycle-send"></span>`async fn send(self) -> Result<CommandHandle, Error>` — [`CommandHandle`](../command/index.md#commandhandle), [`Error`](../../error/index.md#error)
 
-  Validates and publishes the cycle, returning the command's sequence ID [REF-AMS-DRYER].
+  Validates and publishes the cycle, returning the published command's [`CommandHandle`](../command/index.md#commandhandle) [REF-AMS-DRYER].
 
   Every gate lives here — this is the only path that publishes `ams_filament_drying`, so it
   is the only place a future check has to be added.
@@ -140,13 +140,15 @@ client
   [`Error::ModelMismatch`](../../error/index.md#error) on a host where
   [`supports_ams_remote_drying()`](../index.md#printerclient) is `false` —
   the printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
-  A1/A1 Mini or P1P/P1S, and below the minimum firmware on X1C/P2S/H2D/H2S/H2C. Such
+  A1/A1 Mini, P1P/P1S or X1C, and below the minimum firmware on
+  H2D/H2D Pro/H2S/H2C/P2S/X2D. Such
   firmware acks this command `result: success` and silently discards it rather than driving
   the AMS heater.
 
   [`Error::ModelMismatch`](../../error/index.md#error) also when the addressed unit has no drying chamber — an
-  external-spool sentinel (`254`/`255`), or a cached
-  [`AmsUnitModel`](../../types/telemetry/ams/index.md#amsunitmodel) whose [`supports_drying`](../../types/telemetry/ams/index.md#amsunitmodel) is `false`.
+  external-spool sentinel (`254`/`255`), an AMS Lite on an A2L (`6`/`16`, an id only that
+  heaterless unit takes), or a cached [`AmsUnitModel`](../../types/telemetry/ams/index.md#amsunitmodel) whose
+  [`supports_drying`](../../types/telemetry/ams/index.md#amsunitmodel) is `false`.
   These are two independent gates on purpose, matching the pair BambuStudio writes out
   longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
   attached box must have a heater.
@@ -166,6 +168,13 @@ client
   commands without polling. Call [`poll_telemetry()`](../index.md#printerclient) first
   to arm it. When the unit is unobserved the temperature range falls back to the
   `ams_id`-derived ceiling, the best guess the address alone supports.
+
+  A temperature above the filament's heat-distortion temperature
+  ([`DryingMaterial::heat_distortion_temp`](../../types/drying/index.md#dryingmaterial), for a filament string
+  [`DryingMaterial::from_filament_type`](../../types/drying/index.md#dryingmaterial) recognizes) is sent as asked but logged with
+  `log::warn!`. BambuStudio refuses such a cycle on a loaded tray; here an explicit
+  [`temp()`](#dryingcycle) is the caller's call, and [`material()`](#dryingcycle) never
+  picks one.
 
 #### Trait Implementations
 

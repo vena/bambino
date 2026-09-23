@@ -13,8 +13,8 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 * **Setting ID Validation**: Enforces the 19-character numeric `setting_id` boundary
   (`"PF"` followed by exactly 17 decimal digits) to prevent memory table corruption in the local
   EEPROM partition database.
-* **Polymorphic Deletions**: Separates deletion schemas cleanly between standard single-nozzle
-  platforms (keyed on `setting_id`) and dual-nozzle IDEX platforms (keyed on coordinate/carriage parameters).
+* **Polymorphic Deletions**: Separate deletion entry types for single-nozzle platforms (which
+  also carry `setting_id`) and dual-nozzle IDEX platforms, both sent flat in `print`.
 
 ## Contents
 
@@ -49,7 +49,7 @@ pressure-advance calibration profiles on the printer's onboard EEPROM [REF-DIAG-
 | [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest) | struct | JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP]. |
 | [`ExtrusionCaliSetPayload`](#extrusioncalisetpayload) | struct | Inner payload for [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest). |
 | [`ExtrusionCaliSetRequest`](#extrusioncalisetrequest) | struct | JSON request wrapper to create or overwrite calibration profile allocations. |
-| [`IdexCaliDelEntry`](#idexcalidelentry) | struct | Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B). |
+| [`IdexCaliDelEntry`](#idexcalidelentry) | struct | Deletion data fields utilized by dual-nozzle IDEX databases (Schema B). |
 | [`IdexCaliDelPayload`](#idexcalidelpayload) | struct | Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest). |
 | [`IdexCaliDelRequest`](#idexcalidelrequest) | struct | JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF]. |
 | [`KProfileEntry`](#kprofileentry) | struct | Structured representation of a Linear Advance calibration profile entry on the printer. |
@@ -303,6 +303,7 @@ struct ExtrusionCaliSelPayload {
     pub command: &'static str,
     pub ams_id: i32,
     pub tray_id: i32,
+    pub slot_id: i32,
     pub cali_idx: i32,
     pub filament_id: String,
     pub nozzle_diameter: String,
@@ -325,6 +326,12 @@ Inner payload for [`ExtrusionCaliSelRequest`](#extrusioncaliselrequest).
 - **`tray_id`**: `i32`
 
   Absolute global tray ID (not local slot index).
+
+- **`slot_id`**: `i32`
+
+  Local slot within the unit: `0..=3` on a standard AMS or an AMS Lite on an A2L, `0` on
+  an AMS-HT or external spool. BambuStudio (`DeviceManager.cpp:2061-2078`) and bambuddy
+  both send it alongside the global `tray_id` (#315).
 
 - **`cali_idx`**: `i32`
 
@@ -377,7 +384,7 @@ database mislinking on the motion board.
 
 #### Implementations
 
-- <span id="extrusioncaliselrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
+- <span id="extrusioncaliselrequest-new"></span>`fn new(ams_id: i32, tray_id: i32, slot_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../../mqtt/commands/index.md#clampedtaskid)
 
   Creates a request payload to bind a stored K-profile calibration entry to an AMS
   material slot.
@@ -395,6 +402,8 @@ database mislinking on the motion board.
   * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
     Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
+
+  Wire form as given: `slot_id` is the unit-local slot, see [`ExtrusionCaliSelPayload::slot_id`](#extrusioncaliselpayload).
 
 #### Trait Implementations
 
@@ -493,15 +502,28 @@ JSON request wrapper to create or overwrite calibration profile allocations.
 
 ```rust
 struct IdexCaliDelEntry {
+    pub cali_idx: i32,
+    pub filament_id: String,
     pub nozzle_diameter: String,
     pub nozzle_id: String,
     pub extruder_id: u8,
 }
 ```
 
-Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
+Deletion data fields utilized by dual-nozzle IDEX databases (Schema B).
+
+Serialized flat into `print`, as [`StandardCaliDelEntry`](#standardcalidelentry). `cali_idx` and `filament_id` are
+what name the profile; the carriage fields alone name none (#313).
 
 #### Fields
+
+- **`cali_idx`**: `i32`
+
+  Index of the calibration entry to delete (`KProfileEntry::cali_idx`).
+
+- **`filament_id`**: `String`
+
+  Filament preset ID of the entry being deleted (`KProfileEntry::filament_id`).
 
 - **`nozzle_diameter`**: `String`
 
@@ -544,7 +566,7 @@ Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
 ```rust
 struct IdexCaliDelPayload {
     pub command: &'static str,
-    pub filaments: Vec<IdexCaliDelEntry>,
+    pub target: IdexCaliDelEntry,
     pub sequence_id: String,
 }
 ```
@@ -557,9 +579,9 @@ Inner payload for [`IdexCaliDelRequest`](#idexcalidelrequest).
 
   Wire command name, always `"extrusion_cali_del"`.
 
-- **`filaments`**: `Vec<IdexCaliDelEntry>`
+- **`target`**: `IdexCaliDelEntry`
 
-  Entries to delete. `IdexCaliDelRequest::new` always sends exactly one.
+  The entry to delete, flattened into `print`.
 
 - **`sequence_id`**: `String`
 
@@ -635,11 +657,17 @@ struct KProfileEntry {
 
 Structured representation of a Linear Advance calibration profile entry on the printer.
 
+Every field is optional on the read side, defaulting as BambuStudio's
+`from_json(PACalibResult)` does (`DevCalib.cpp:56-72`): one entry missing a key must not fail
+the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out as a timeout
+(#314).
+
 #### Fields
 
 - **`cali_idx`**: `i32`
 
-  Database index corresponding to the stored slot (-1 indicates a fresh write).
+  Database index corresponding to the stored slot (-1 indicates a fresh write, and is the
+  default when the key is absent).
 
 - **`filament_id`**: `String`
 
@@ -698,7 +726,8 @@ Structured representation of a Linear Advance calibration profile entry on the p
   
   Bound permissively for the same reason as [`nozzle_diameter`](#kprofileentry):
   firmware may send the numeric form (`0.02`) on the read side. A number is rendered back
-  to its decimal text, so callers see one representation either way.
+  to its decimal text, so callers see one representation either way. `"0"` when absent,
+  matching BambuStudio's `0.0` default.
 
 - **`n_coef`**: `Option<String>`
 
@@ -747,6 +776,7 @@ Structured representation of a Linear Advance calibration profile entry on the p
 
 ```rust
 struct StandardCaliDelEntry {
+    pub extruder_id: u8,
     pub cali_idx: i32,
     pub filament_id: String,
     pub nozzle_diameter: String,
@@ -757,7 +787,15 @@ struct StandardCaliDelEntry {
 
 Deletion data fields utilized by standard single-nozzle databases (Schema A).
 
+Serialized **flat into `print`**, not inside a `filaments` array: BambuStudio, bambuddy and
+OrcaSlicer all send `extrusion_cali_del` that way (`reference/07_diagnostics_hms.md` §7.2,
+#313).
+
 #### Fields
+
+- **`extruder_id`**: `u8`
+
+  Carriage index of the entry being deleted — `0` on a single-nozzle printer.
 
 - **`cali_idx`**: `i32`
 
@@ -808,7 +846,7 @@ Deletion data fields utilized by standard single-nozzle databases (Schema A).
 ```rust
 struct StandardCaliDelPayload {
     pub command: &'static str,
-    pub filaments: Vec<StandardCaliDelEntry>,
+    pub target: StandardCaliDelEntry,
     pub sequence_id: String,
 }
 ```
@@ -821,9 +859,9 @@ Inner payload for [`StandardCaliDelRequest`](#standardcalidelrequest).
 
   Wire command name, always `"extrusion_cali_del"`.
 
-- **`filaments`**: `Vec<StandardCaliDelEntry>`
+- **`target`**: `StandardCaliDelEntry`
 
-  Entries to delete. `StandardCaliDelRequest::new` always sends exactly one.
+  The entry to delete, flattened into `print`.
 
 - **`sequence_id`**: `String`
 

@@ -422,8 +422,8 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 ```rust
 struct AmsUnit {
     pub id: String,
-    pub temp: String,
-    pub humidity: String,
+    pub temp: Option<String>,
+    pub humidity: Option<String>,
     pub humidity_raw: Option<String>,
     pub dry_time: Option<u32>,
     pub dry_setting: Option<AmsDrySetting>,
@@ -447,13 +447,16 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   and the mapping builders all agree; `MaterialSource::AmsLite` puts the physical 16 back
   on the outbound `ams_mapping2`.
 
-- **`temp`**: `String`
+- **`temp`**: `Option<String>`
 
   Ambient temperature inside the expansion enclosure, in degrees Celsius.
+  
+  Optional because BambuStudio reads it only when present (`ParseAmsInfo`,
+  `DevFilaSystem.cpp:667-684`): a partial unit push without it must not fail the frame.
 
-- **`humidity`**: `String`
+- **`humidity`**: `Option<String>`
 
-  Enclosure climate relative humidity index (1-5 scale).
+  Enclosure climate relative humidity index (1-5 scale). Optional, as for `temp`.
 
 - **`humidity_raw`**: `Option<String>`
 

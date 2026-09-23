@@ -59,11 +59,6 @@ Conservative quirks for an unrecognized printer model — see the module docs.
 
 - <span id="unknownquirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
 
-- <span id="unknownquirks-modelquirks-has-stg-cur-idle-bug"></span>`fn has_stg_cur_idle_bug(&self) -> bool`
-
-  Assumes the bug is present — treating a real `stg_cur` idle report as suspect costs a
-  redundant state check, while missing the bug reports a running print as finished.
-
 - <span id="unknownquirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
 
 - <span id="unknownquirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)

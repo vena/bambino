@@ -19,7 +19,7 @@ The client applies model-aware safety checks automatically:
 - **Chamber heater guards** — `set_chamber_temperature()` rejects requests on models
   without an active PTC heater (open-frame machines like A1/P1).
 - **Fan routing** — Fan commands are directed to the correct controller, including
-  the secondary right-side auxiliary fan on models that have one (P2S, X2D, etc.).
+  the second left-side auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
 
 ## Quick Reference
 
@@ -108,7 +108,9 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   Whether an AMS drying cycle can run while a print is in progress.
 
   Strictly narrower than [`supports_ams_remote_drying`](capabilities/index.md#capabilities),
-  and defaults to `false` when the firmware version is unknown. See
+  and defaults to `false` when the firmware version is unknown — except on X2D and A2L,
+  whose earliest firmware already has the feature, so they report `true` before
+  `get_version()` completes. See
   [`ModelQuirks::supports_ams_drying_while_printing`](../quirks/index.md#modelquirks) for the sourcing.
 
 - <span id="capabilities-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
@@ -431,7 +433,7 @@ client
 
 - <span id="dryingcycle-send"></span>`async fn send(self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
-  Validates and publishes the cycle, returning the command's sequence ID [REF-AMS-DRYER].
+  Validates and publishes the cycle, returning the published command's [`CommandHandle`](command/index.md#commandhandle) [REF-AMS-DRYER].
 
   Every gate lives here — this is the only path that publishes `ams_filament_drying`, so it
   is the only place a future check has to be added.
@@ -445,13 +447,15 @@ client
   [`Error::ModelMismatch`](../error/index.md#error) on a host where
   [`supports_ams_remote_drying()`](#printerclient) is `false` —
   the printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
-  A1/A1 Mini or P1P/P1S, and below the minimum firmware on X1C/P2S/H2D/H2S/H2C. Such
+  A1/A1 Mini, P1P/P1S or X1C, and below the minimum firmware on
+  H2D/H2D Pro/H2S/H2C/P2S/X2D. Such
   firmware acks this command `result: success` and silently discards it rather than driving
   the AMS heater.
 
   [`Error::ModelMismatch`](../error/index.md#error) also when the addressed unit has no drying chamber — an
-  external-spool sentinel (`254`/`255`), or a cached
-  [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) whose [`supports_drying`](../types/telemetry/ams/index.md#amsunitmodel) is `false`.
+  external-spool sentinel (`254`/`255`), an AMS Lite on an A2L (`6`/`16`, an id only that
+  heaterless unit takes), or a cached [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) whose
+  [`supports_drying`](../types/telemetry/ams/index.md#amsunitmodel) is `false`.
   These are two independent gates on purpose, matching the pair BambuStudio writes out
   longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
   attached box must have a heater.
@@ -471,6 +475,13 @@ client
   commands without polling. Call [`poll_telemetry()`](#printerclient) first
   to arm it. When the unit is unobserved the temperature range falls back to the
   `ams_id`-derived ceiling, the best guess the address alone supports.
+
+  A temperature above the filament's heat-distortion temperature
+  ([`DryingMaterial::heat_distortion_temp`](../types/drying/index.md#dryingmaterial), for a filament string
+  [`DryingMaterial::from_filament_type`](../types/drying/index.md#dryingmaterial) recognizes) is sent as asked but logged with
+  `log::warn!`. BambuStudio refuses such a cycle on a loaded tray; here an explicit
+  [`temp()`](drying/index.md#dryingcycle) is the caller's call, and [`material()`](drying/index.md#dryingcycle) never
+  picks one.
 
 #### Trait Implementations
 
@@ -784,19 +795,27 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Set to `true` to skip the firmware priming quirk — useful if you handle priming
   yourself or target firmware that does not require it.
 
-- <span id="superprinterclient-attach-camera"></span>`fn attach_camera(&mut self, camera: BinaryCameraStream<<CameraTls as >::Stream>)` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector)
+- <span id="superprinterclient-attach-camera"></span>`async fn attach_camera(&mut self, camera: BinaryCameraStream<<CameraTls as >::Stream>)` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector)
 
   Injects a pre-connected [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream) directly.
 
   Use this for test mocks or Embassy where the caller manages the camera
-  connection. For lazy connection, use [`.with_camera()`](#printerclient).
+  connection. For lazy connection, use [`.with_camera()`](#printerclient). On a
+  [`from_mqtt()`](#printerclient) client, whose camera type parameters are placeholders,
+  use [`.with_attached_camera()`](#printerclient) instead.
+
+  A session already in the slot is disconnected first, as
+  [`disconnect_camera()`](#printerclient) does. The attached stream is closed on a
+  later disconnect only if a connector is configured (`.with_camera()` or
+  `.with_attached_camera()`); without one it is dropped without `close_notify`.
 
 - <span id="superprinterclient-camera"></span>`async fn camera(&mut self) -> Result<&mut BinaryCameraStream<<CameraTls as >::Stream>, Error>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), auto-connecting if needed.
 
-  Requires prior camera configuration via [`.with_camera()`](#printerclient) or
-  [`.attach_camera()`](#printerclient). Returns `Error::ProtocolViolation`
+  Requires prior camera configuration via [`.with_camera()`](#printerclient),
+  [`.attach_camera()`](#printerclient) or
+  [`.with_attached_camera()`](#printerclient). Returns `Error::ProtocolViolation`
   immediately for RTSPS models — see `ensure_camera()`'s doc
   comment.
 
@@ -837,13 +856,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns whether the MQTT session is currently established.
 
-- <span id="superprinterclient-attach-mqtt"></span>`fn attach_mqtt(&mut self, mqtt: MqttClient<<MqttTls as >::Stream>)` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector)
+- <span id="superprinterclient-attach-mqtt"></span>`async fn attach_mqtt(&mut self, mqtt: MqttClient<<MqttTls as >::Stream>)` — [`MqttClient`](../mqtt/client/index.md#mqttclient), [`TlsConnector`](../io/index.md#tlsconnector)
 
   Injects a pre-connected [`MqttClient`](../mqtt/client/index.md#mqttclient) directly.
 
   Use this for test mocks or Embassy where the caller manages the MQTT connection,
   mirroring [`attach_camera()`](#printerclient)/
   [`attach_storage()`](#printerclient).
+
+  A session already in the slot is closed first, as
+  [`disconnect_mqtt()`](#printerclient) does. The new one then gets every step a
+  session this client dials itself gets: the connection-scoped cache is invalidated, the
+  sequence counter is reseeded (under a timer with a real clock), and a `pushall` refills
+  the cache.
 
 - <span id="superprinterclient-disconnect-mqtt"></span>`async fn disconnect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -864,14 +889,16 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Idempotent. Reconnecting requires [`.attach_mqtt()`](#printerclient) with a fresh
   `MqttClient` for a [`from_mqtt()`](#printerclient)-built client — its
   `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
-  only recovers a `connect()`-built client, never one built via `from_mqtt()`.
+  only recovers a `new()`-built client, never one built via `from_mqtt()`.
 
 - <span id="superprinterclient-with-timer"></span>`fn with_timer<NewTimer: TimerProvider>(self, timer: NewTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, NewTimer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`PrinterClient`](#printerclient)
 
   Sets a [`TimerProvider`](../io/index.md#timerprovider) for wall-clock command-response timeouts.
 
   Consuming builder — works on both [`new()`](#printerclient) and
-  [`from_mqtt()`](#printerclient) construction paths.
+  [`from_mqtt()`](#printerclient) construction paths. On a client already holding
+  a session (`from_mqtt()`), the sequence counter is reseeded from the new timer's clock,
+  which `from_mqtt()` itself cannot do under its `DummyTimer`.
 
 - <span id="superprinterclient-with-mqtt-port"></span>`fn with_mqtt_port(self, port: u16) -> Self`
 
@@ -903,10 +930,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
   so there's no call site to thread `self.timer` through the way MQTT/camera do.
 
-  Must not be called on a client with an already-connected FTPS session — the existing
-  connection is dropped (not explicitly disconnected) when the new struct is built.
-  Functionally safe (LAN-only TCP/TLS, `Drop`-based teardown), but callers should
-  disconnect first if they want an explicit, orderly teardown.
+  Call [`disconnect_storage()`](#printerclient) first on a client with a
+  connected FTPS session: this builder is synchronous and cannot close it, so the session is
+  dropped without `close_notify` (see `.claude/rules/tls-session-teardown.md`).
 
 - <span id="superprinterclient-with-ftps-port"></span>`fn with_ftps_port(self, port: u16) -> Self`
 
@@ -1019,8 +1045,38 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Consuming builder — changes the `CameraRawIO`, `CameraTls`, and `CameraFactory` type
   parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
 
-  Must not be called on a client with an already-connected camera session — see
-  `.with_ftps()`'s doc comment for why.
+  Call [`disconnect_camera()`](#printerclient) first on a client with a connected
+  camera session, for the same reason as `.with_ftps()`.
+
+- <span id="superprinterclient-with-attached-camera"></span>`fn with_attached_camera<NewCameraRawIO, NewCameraTls>(self, tls: NewCameraTls, camera: BinaryCameraStream<<NewCameraTls as >::Stream>) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, NewCameraRawIO, NewCameraTls, super::PreConnected<NewCameraRawIO>>` — [`BinaryCameraStream`](../camera/binary/index.md#binarycamerastream), [`TlsConnector`](../io/index.md#tlsconnector), [`PrinterClient`](#printerclient)
+
+  Installs a camera stream the caller connected, changing the camera type parameters to match it.
+
+  The attach path for a [`from_mqtt()`](#printerclient) client: its camera slots
+  are fixed to placeholder types, so [`attach_camera()`](#printerclient) cannot take a
+  real stream there, and [`with_camera()`](#printerclient) needs the ip/access code such
+  a client lacks. `tls` is the connector that produced the stream; it is kept so
+  [`disconnect_camera()`](#printerclient) can send `close_notify`. There is no
+  dialer, so after a disconnect the next camera call returns
+  [`SocketError::NotConnected`](../io/index.md#socketerror) until a camera is
+  attached again.
+
+  Call [`disconnect_camera()`](#printerclient) first on a client with a connected
+  camera session, for the same reason as `.with_ftps()`.
+
+- <span id="superprinterclient-with-attached-storage"></span>`fn with_attached_storage<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(self, ftps_client: FtpsClient<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`PrinterClient`](#printerclient)
+
+  Installs an FTPS client the caller connected, changing the FTPS type parameters to match it.
+
+  The FTPS counterpart of [`with_attached_camera()`](#printerclient), for a
+  [`from_mqtt()`](#printerclient) client whose FTPS slots are placeholders.
+  [`FtpsClient`](../ftps/client/index.md#ftpsclient) carries its own connector, so
+  [`disconnect_storage()`](#printerclient) closes it as usual. No FTPS
+  configuration is kept, so after a disconnect [`storage()`](#printerclient) reports FTPS
+  as not configured until a client is attached again.
+
+  Call [`disconnect_storage()`](#printerclient) first on a client with a
+  connected FTPS session, for the same reason as `.with_ftps()`.
 
 - <span id="superprinterclient-with-camera-port"></span>`fn with_camera_port(self, port: u16) -> Self`
 
@@ -1081,9 +1137,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Sends a G-code command with model-aware safety validation.
 
-  Rejects commands that would be unsafe on the active model (e.g., partial-axis
-  homing on bed-on-Z platforms). Use [`send_gcode_raw()`](#printerclient)
-  to bypass validation when you need unchecked access.
+  Rejects, without sending anything, G-code that is unsafe on the active model: partial-axis
+  homing on bed-on-Z platforms, heater targets above the model's nozzle/bed/chamber ceilings,
+  and any chamber-heater command on a model without one — see
+  [`ModelQuirks::validate_gcode`](../quirks/index.md#modelquirks) for the exact
+  rules. Nothing is clamped, and relative moves are not bounded. The bed ceiling uses the
+  same mains region as [`set_bed_temperature()`](#printerclient). Use
+  [`send_gcode_raw()`](#printerclient) to bypass validation when you need unchecked
+  access.
 
   # Example
 
@@ -1093,6 +1154,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   // This will be rejected on CoreXY printers (unsafe partial homing):
   // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
+  // And on an A1 Mini (80°C bed ceiling):
+  // printer.send_gcode("M140 S100").await?;  // -> Err(ModelMismatch)
   ```
 
 - <span id="superprinterclient-send-gcode-raw"></span>`async fn send_gcode_raw(&mut self, gcode_line: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
@@ -1230,7 +1293,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   ).await?;
   ```
 
-  The returned `u16` is the published command's `sequence_id`, not a completion signal, but
+  The returned [`CommandHandle`](command/index.md#commandhandle) tracks the published command, not a completion signal, but
   the run is observable while it happens (verified on a P1S, firmware `01.10.00.00`):
 
   - [`print_progress()`](#printerclient) tracks it.
@@ -1258,6 +1321,15 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
   remaining routines still run.
 
+  **Vibration compensation (bit 2) is kept on every model, P2S included**, even though
+  [`start_print`](#printerclient) forces `vibration_cali` off on P2S through
+  [`supports_vibration_compensation`](../quirks/index.md#modelquirks).
+  That quirk is about the print job's `vibration_cali` field. For this standalone command
+  both upstreams send the bit for any model: BambuStudio's calibration dialog offers
+  Vibration Compensation with no model gate (`Calibration.cpp:57`, gates at `:225-260`), and
+  bambuddy's `start_calibration` (`bambu_mqtt.py:6295-6345`) sets it unconditionally (#358).
+  The print-job quirk's own basis is open in #375.
+
   # Errors
 
   [`Error::ModelMismatch`](../error/index.md#error) when *none* of the requested routines are supported on this
@@ -1275,12 +1347,18 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   config left it `None`, and forces it off on a single-nozzle model even if the caller set
   it explicitly.
 
-- <span id="superprinterclient-attach-storage"></span>`fn attach_storage(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
+- <span id="superprinterclient-attach-storage"></span>`async fn attach_storage(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
 
   Injects a pre-connected [`FtpsClient`](../ftps/client/index.md#ftpsclient) directly.
 
   Use this for test mocks or Embassy where the caller manages the FTPS
-  connection. For lazy connection, use [`.with_ftps()`](#printerclient).
+  connection. For lazy connection, use [`.with_ftps()`](#printerclient). On a
+  [`from_mqtt()`](#printerclient) client, whose FTPS type parameters are placeholders,
+  use [`.with_attached_storage()`](#printerclient) instead.
+
+  A session already in the slot is disconnected first, as
+  [`disconnect_storage()`](#printerclient) does, so its TLS session is closed
+  rather than dropped mid-stream.
 
 - <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`Error`](../error/index.md#error)
 
@@ -1690,11 +1768,16 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Use this when you have a pre-established MQTT session (tests, Embassy,
   or any context where the caller manages the connection). The resulting client uses
-  `PreConnected` for both the MQTT `Tls` and `Factory` slots — `ensure_mqtt()`
-  short-circuits on `self.mqtt.is_some()` before either is ever called, so
-  `PreConnected`'s `RawStreamFactory::dial` (which returns
-  [`SocketError::NotConnected`](../io/index.md#socketerror)) is unreachable in
-  practice.
+  `PreConnected` for both the MQTT `Tls` and `Factory` slots. `ensure_mqtt()`
+  short-circuits on `self.mqtt.is_some()`, so `PreConnected`'s `RawStreamFactory::dial` is
+  reachable only after [`disconnect_mqtt()`](#printerclient): the next command then
+  returns [`SocketError::NotConnected`](../io/index.md#socketerror) until
+  [`attach_mqtt()`](#printerclient) supplies a new session.
+
+  Being synchronous, this skips the connect-time `pushall` a dialled session gets, so
+  connection-scoped telemetry stays `None` until the printer next reports it. Call
+  [`request_pushall()`](#printerclient) once to refill it. The sequence counter is
+  reseeded when [`with_timer()`](#printerclient) supplies a real clock.
 
 - <span id="printerclient-next-sequence-id"></span>`fn next_sequence_id(&mut self) -> u64`
 

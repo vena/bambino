@@ -262,8 +262,8 @@ only against a peer that insists on 1.3.
   explaining why, rather than reaching ESP-IDF's opaque
   `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
 
-  **Not yet verified against real hardware** -- flash `esp32-hw-probe` (see its
-  `CLAUDE.md`) against a real printer before relying on this in a shipped app.
+  **Confirmed on a real ESP32-C6 against a live P1S** (`esp32-hw-probe`, GitHub issue
+  #168): the unverified handshake completed over TLS 1.2 and returned the printer's chain.
 
   Prefer [`Self::with_certs`](#espidftlsconnector) wherever the caller can supply the
   printer's CA — it needs no sdkconfig change and actually verifies the peer.

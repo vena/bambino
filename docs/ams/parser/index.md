@@ -118,11 +118,15 @@ fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8>
 
 Computes the unique global channel identifier for a given expansion unit and local tray.
 
-Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3,
-AMS-HT 128–135, external 254–255) or if `tray_id >= 4` on the standard path.
+Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3, the
+A2L-attached AMS Lite's normalized 6, AMS-HT 128–135, external 254–255) or if
+`tray_id >= 4` on a four-slot path.
 
 The physical mapping aligns as:
 * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
+* **AMS Lite on an A2L**: the normalized id 6 through the same formula, giving global ids
+  24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`](#normalize-ams-unit-id)
+  first (`.claude/rules/ams-lite-on-a2l-unit-id.md`).
 * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 
@@ -155,4 +159,7 @@ construction from real wire data is itself an unresolved, unconfirmed design que
 (no field in this crate's telemetry types currently sources it), and the map can be
 genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
 a caller with its own confirmed `ams_extruder_map` source may still use this directly.
+
+Map entries may be wire ids: each is passed through [`normalize_ams_unit_id`](#normalize-ams-unit-id), so an
+A2L-attached AMS Lite resolves under either its physical 16 or its normalized 6 (#344).
 

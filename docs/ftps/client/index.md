@@ -173,5 +173,9 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
   itself goes out of scope (GitHub issue #293).
 
+  A poisoned client skips `QUIT` and the close — its stream may be desynced or dead — but
+  still drops the control session here, so its memory is returned now rather than when the
+  client goes out of scope (#320).
+
 #### Trait Implementations
 

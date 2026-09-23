@@ -42,7 +42,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 | [`gcode`](gcode/index.md) | mod | G-code dispatch command payload. |
 | [`hardware`](hardware/index.md) | mod | Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound). |
 | [`print_job`](print_job/index.md) | mod | Print job dispatch (file selection, AMS material mapping, plate/timelapse config). |
-| [`status`](status/index.md) | mod | Status query commands (pushall, get_version, get_access_code, clean_print_error). |
+| [`status`](status/index.md) | mod | Status query commands (pushall, get_version, get_access_code). |
 | [`ClampedTaskId`](#clampedtaskid) | struct | A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via its `From<u64>` impl, which always clamps. |
 | [`clamp_task_id`](#clamp-task-id) | fn | Wraps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) into the strict boundary limits of a 32-bit signed integer (`2147483647`) via modulo, not saturation. |
 
@@ -53,7 +53,7 @@ Handles complex polymorphic rules such as the string-vs-array mapping schemas fo
 - [`gcode`](gcode/index.md) — G-code dispatch command payload.
 - [`hardware`](hardware/index.md) — Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
 - [`print_job`](print_job/index.md) — Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
-- [`status`](status/index.md) — Status query commands (pushall, get_version, get_access_code, clean_print_error).
+- [`status`](status/index.md) — Status query commands (pushall, get_version, get_access_code).
 
 
 ---

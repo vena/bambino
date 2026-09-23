@@ -453,8 +453,8 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 ```rust
 struct AmsUnit {
     pub id: String,
-    pub temp: String,
-    pub humidity: String,
+    pub temp: Option<String>,
+    pub humidity: Option<String>,
     pub humidity_raw: Option<String>,
     pub dry_time: Option<u32>,
     pub dry_setting: Option<AmsDrySetting>,
@@ -478,13 +478,16 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   and the mapping builders all agree; `MaterialSource::AmsLite` puts the physical 16 back
   on the outbound `ams_mapping2`.
 
-- **`temp`**: `String`
+- **`temp`**: `Option<String>`
 
   Ambient temperature inside the expansion enclosure, in degrees Celsius.
+  
+  Optional because BambuStudio reads it only when present (`ParseAmsInfo`,
+  `DevFilaSystem.cpp:667-684`): a partial unit push without it must not fail the frame.
 
-- **`humidity`**: `String`
+- **`humidity`**: `Option<String>`
 
-  Enclosure climate relative humidity index (1-5 scale).
+  Enclosure climate relative humidity index (1-5 scale). Optional, as for `temp`.
 
 - **`humidity_raw`**: `Option<String>`
 
@@ -1392,7 +1395,7 @@ struct NozzleInfo {
     pub tm: Option<u32>,
     pub max_temp: Option<u32>,
     pub nozzle_type: Option<String>,
-    pub wear: Option<u32>,
+    pub wear: Option<f32>,
     pub serial_number: Option<String>,
     pub sn: Option<String>,
     pub filament_colour: Option<String>,
@@ -1445,9 +1448,12 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   `nozzle_id` on a K-profile entry uses the flow-code vocabulary only — see
   `crate::diagnostics::KProfileEntry::nozzle_id`.
 
-- **`wear`**: `Option<u32>`
+- **`wear`**: `Option<f32>`
 
   Normalized physical wear tracker value.
+  
+  A float: H2C, P2S and X2D send `0.0`, and BambuStudio stores it as `float m_wear`
+  (`DevNozzleSystem.h:104`).
 
 - **`serial_number`**: `Option<String>`
 
@@ -2138,7 +2144,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`stg_cur`**: `Option<i32>`
 
-  Stage currently executing, drawn from the same ID space as [`Self::stg`](report/index.md#printertelemetry). Leveraged by the quirks engine to verify stg_cur idle anomalies [REF-MQTT-IDLEBUG].
+  Stage currently executing, drawn from the same ID space as [`Self::stg`](report/index.md#printertelemetry).
+  
+  Reads `0` ("printing") while genuinely idle on A1/P1 firmware [REF-MQTT-IDLEBUG], so the
+  stage accessor gates it on `gcode_state` for every model rather than per-model quirk.
   
   Emitted in incremental pushes, so it is usable for real-time stage tracking subject to
   the [REF-MQTT-IDLEBUG] `gcode_state` gate — A1/P1 firmware reports `0` ("printing") while

@@ -123,7 +123,8 @@ Standardized representation of an entry retrieved from physical printer storage.
   The parsed file or directory name, exactly as reported by the raw `LIST` line
   — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
   and rejoining with a single space, so internal runs of multiple consecutive spaces
-  round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
+  round-trip exactly and remain usable as-is in `delete_file`/`download_file`. Leading and
+  trailing spaces are kept too; only the one separator before the name is dropped.
 
 - **`is_dir`**: `bool`
 
