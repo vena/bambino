@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use bambino::Error;
 use bambino::ftps::CurrentDateTime;
@@ -36,6 +37,14 @@ pub enum FilesAction {
         local_path: String,
         remote_path: String,
     },
+    /// Download a remote card file to a local path
+    #[command(
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH>"
+    )]
+    Download {
+        remote_path: String,
+        local_path: String,
+    },
     /// Remove a file from the remote filesystem path
     #[command(
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>"
@@ -55,6 +64,19 @@ pub enum FilesAction {
     /// Query available MicroSD card capacity
     #[command(override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space")]
     Space,
+}
+
+/// Prints how long a transfer call took, from the command through the final `226` and any
+/// `SIZE` check the call makes.
+///
+/// Exists to measure whether the `226` arrives promptly after the data channel's TLS
+/// `close_notify` (GitHub issue #322): a server waiting on a reply to that alert would show
+/// here as a transfer that takes most of the control-channel read deadline.
+fn print_transfer_time(command: &str, started: Instant) {
+    println!(
+        "{command} completed in {:.2}s",
+        started.elapsed().as_secs_f64()
+    );
 }
 
 /// Dynamic calendar epoch helper converting the current wall-clock time to calendar date parts.
@@ -107,9 +129,11 @@ pub async fn run(
                 let now = current_date_utc();
 
                 println!("Traversing remote files on directory '{}'...", remote_path);
+                let started = Instant::now();
                 let files = client
                     .list_directory(&remote_path, now)
                     .await?;
+                print_transfer_time("LIST", started);
 
                 if files.is_empty() {
                     println!("Directory is empty or path does not exist.");
@@ -144,10 +168,27 @@ pub async fn run(
                 println!(
                     "Note: Under heavy write latency, standard SD card flushing may require up to 300 seconds [REF-FTPS-FLUSH]."
                 );
+                let started = Instant::now();
                 client.upload_file(&remote_path, &payload).await?;
+                print_transfer_time("STOR", started);
 
                 println!(
                     "Success: File uploaded and non-volatile write-buffers successfully flushed."
+                );
+            }
+            FilesAction::Download {
+                remote_path,
+                local_path,
+            } => {
+                println!("Downloading remote file '{}'...", remote_path);
+                let started = Instant::now();
+                let payload = client.download_file(&remote_path).await?;
+                print_transfer_time("RETR", started);
+                fs::write(&local_path, &payload)?;
+                println!(
+                    "Success: {} bytes written to '{}'.",
+                    payload.len(),
+                    local_path
                 );
             }
             FilesAction::Delete { remote_path } => {

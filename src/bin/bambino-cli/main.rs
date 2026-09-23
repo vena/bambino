@@ -54,7 +54,7 @@ Control actions:  home  move  extrude  fan  temp  led  speed  clear-error
                   gcode-raw prompts for interactive confirmation unless --unsafe is
                   passed, and bypasses all model safety checks; see its --help.
                   ams (dry | dry-stop)
-Files actions:    list  upload  delete  space  clock-check
+Files actions:    list  upload  download  delete  space  clock-check
 Camera actions:   snapshot
 Probe options:    -o/--output  -t/--tests
 Ack-probe:        -o/--output  -t/--tests  --window"
@@ -175,7 +175,7 @@ enum Commands {
     /// Traverse and transfer files on the printer's MicroSD card
     #[command(
         flatten_help = true,
-        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+        override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Files {
         ip: String,
