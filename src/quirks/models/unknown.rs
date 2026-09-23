@@ -60,12 +60,6 @@ impl ModelQuirks for UnknownQuirks {
         true
     }
 
-    /// Assumes the bug is present — treating a real `stg_cur` idle report as suspect costs a
-    /// redundant state check, while missing the bug reports a running print as finished.
-    fn has_stg_cur_idle_bug(&self) -> bool {
-        true
-    }
-
     fn physical_nozzle_count(&self) -> u8 {
         1
     }

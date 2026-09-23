@@ -13,6 +13,10 @@ use alloc::string::String;
 
 use crate::models::{PrinterModel, resolve_model};
 
+/// Header slots `httparse` gets per SSDP packet. A packet with more headers than this fails to
+/// parse and is dropped silently; current Bambu packets carry about 15, so 32 leaves headroom.
+pub(crate) const SSDP_MAX_HEADERS: usize = 32;
+
 /// Normalized device details extracted directly from SSDP UDP datagram payloads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SsdpDevice {
@@ -59,13 +63,15 @@ fn eq_case_insensitive(a: &str, b: &str) -> bool {
 /// Handles both full URIs (`http://192.168.1.150:80/`) and bare IPs (`192.168.1.158`)
 /// as documented in [REF-NET-DISC] Protocol Violation #3.
 fn parse_location(loc: &str) -> Option<(&str, u16)> {
-    let without_proto = if let Some(stripped) = loc.strip_prefix("http://") {
-        stripped
-    } else if let Some(stripped) = loc.strip_prefix("https://") {
-        stripped
-    } else {
-        loc
+    // Case-insensitive scheme, like every other comparison in this file (firmware casing drift,
+    // [REF-NET-DISC] Violation #5): an `HTTP://` location used to drop the printer (#328).
+    let strip_scheme = |scheme: &str| {
+        let (prefix, rest) = loc.split_at_checked(scheme.len())?;
+        prefix.eq_ignore_ascii_case(scheme).then_some(rest)
     };
+    let without_proto = strip_scheme("http://")
+        .or_else(|| strip_scheme("https://"))
+        .unwrap_or(loc);
 
     let host_port = without_proto.split('/').next()?;
 
@@ -196,7 +202,7 @@ fn extract_model_from_nt_st(value: &str) -> Option<&str> {
 /// advertisements map to HTTP requests. This parser automatically evaluates the envelope
 /// and routes the payload buffer to the appropriate parsing schema of `httparse`.
 pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
-    let mut headers = [httparse::EMPTY_HEADER; 32];
+    let mut headers = [httparse::EMPTY_HEADER; SSDP_MAX_HEADERS];
 
     // Case-insensitive, consistent with this file's otherwise-thorough
     // case-insensitive header handling (eq_case_insensitive) — a non-canonical-case status
@@ -322,6 +328,16 @@ mod tests {
         let (ip2, port2) = parse_location("https://10.0.0.42:8080/path").unwrap();
         assert_eq!(ip2, "10.0.0.42");
         assert_eq!(port2, 8080);
+
+        // Regression (#328): the scheme is case-insensitive like the rest of this parser.
+        assert_eq!(
+            parse_location("HTTP://192.168.1.150:80/"),
+            Some(("192.168.1.150", 80))
+        );
+        assert_eq!(
+            parse_location("Https://10.0.0.42:8080/"),
+            Some(("10.0.0.42", 8080))
+        );
     }
 
     #[test]

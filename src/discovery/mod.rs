@@ -56,6 +56,21 @@ pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u128 = 3000;
 #[cfg(feature = "std")]
 const SSDP_POLL_BACKOFF_MS: u64 = 50;
 
+/// M-SEARCH rounds sent per bound port before the listen loop starts; the periodic
+/// `SSDP_REBROADCAST_INTERVAL_MS` re-broadcast covers the rest of the window.
+#[cfg(feature = "std")]
+const SSDP_INITIAL_BURST_COUNT: usize = 2;
+
+/// Pause between the initial M-SEARCH rounds. Equal to `SSDP_POLL_BACKOFF_MS` today but a
+/// separate knob: one paces a burst, the other a busy listen loop.
+#[cfg(feature = "std")]
+const SSDP_INTER_BURST_DELAY_MS: u64 = 50;
+
+/// Receive buffer for one SSDP datagram — a standard Ethernet MTU. Bambu NOTIFY/response
+/// packets are a few hundred bytes.
+#[cfg(feature = "std")]
+const SSDP_RECV_BUF_LEN: usize = 1500;
+
 const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
                                      HOST: 239.255.255.250:2021\r\n\
                                      MAN: \"ssdp:discover\"\r\n\
@@ -294,7 +309,7 @@ where
         );
     }
 
-    for i in 0..2 {
+    for i in 0..SSDP_INITIAL_BURST_COUNT {
         log::debug!("Initializing active query scan block #{}", i + 1);
         for (engine, _) in &engines {
             // Tolerate a per-engine send failure here too, matching the degraded-mode
@@ -306,7 +321,10 @@ where
         // Non-fatal for the same reason as the broadcast above and the backoff sleep below: a
         // TimerError on this 50ms inter-burst pause used to abort the entire sweep with both
         // sockets already bound and the listen loop never entered.
-        if let Err(e) = timer.sleep(core::time::Duration::from_millis(50)).await {
+        if let Err(e) = timer
+            .sleep(core::time::Duration::from_millis(SSDP_INTER_BURST_DELAY_MS))
+            .await
+        {
             log::debug!(
                 "Inter-burst pacing sleep failed: {:?} (continuing sweep)",
                 e
@@ -316,9 +334,11 @@ where
 
     let mut devices: Vec<SsdpDevice> = Vec::new();
     let mut seen_serials: BTreeSet<String> = BTreeSet::new();
-    let mut buf = [0u8; 1500];
+    let mut buf = [0u8; SSDP_RECV_BUF_LEN];
 
-    let total_millis = timeout.as_millis() as u64;
+    // Saturate rather than truncate: `as u64` keeps the low 64 bits of the u128, so a huge
+    // "wait forever" timeout could wrap to 0 and return an instant empty sweep (#327).
+    let total_millis = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
     let start = timer.now_millis();
     let mut last_search = start;
 

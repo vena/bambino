@@ -49,6 +49,8 @@ Labels follow rust-lang's `P-` convention.
 
 The commit that fixes a bug or lands an enhancement closes its issue in its message (`Closes #42`). For several issues, repeat the keyword: `Closes #42, Closes #43` — `Closes #42, #43` closes only #42. No separate tracker-update step. The message is also the only link from `git blame` on the fixed line back to the issue.
 
+**Record the decision in the issue.** When an issue was resolved by a choice — a decide-first option the user picked, or a judgment call the fixer made between fix directions (e.g. reject vs. clamp, a behavior kept or dropped, a doc reworded instead of code changed) — comment on the issue with the option chosen, what it concretely does, what it deliberately does not do, and the landing commit. Post it once the commit is pushed. The commit message alone isn't enough: the issue is where a later reader checking "why this way?" lands.
+
 Resolving `needs-verification`: swap in a real priority label, or close as not-a-bug with `gh issue close <N> --comment "<why>"`. Either way, state what resolved it (wire capture, upstream source).
 
 Re-verify, don't assume settled: reopen, or file a new issue referencing the old one, if a stronger source later contradicts a prior fix.

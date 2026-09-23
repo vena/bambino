@@ -53,10 +53,6 @@ macro_rules! impl_a1_shared {
                 true
             }
 
-            fn has_stg_cur_idle_bug(&self) -> bool {
-                true
-            }
-
             fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
 
 

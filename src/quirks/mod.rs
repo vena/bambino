@@ -193,9 +193,6 @@ pub trait ModelQuirks {
     /// Returns true if the model is an open-frame or entry-level machine lacking a physical chamber temperature sensor [REF-THER-DECODE].
     fn ignores_chamber_temperature(&self) -> bool;
 
-    /// Returns true if the model series exhibits the idle state-machine bug where `stg_cur = 0` (Printing) is reported in idle phases [REF-MQTT-IDLEBUG].
-    fn has_stg_cur_idle_bug(&self) -> bool;
-
     /// Returns the number of physical extruder carriages present on the machine carriage bus.
     ///
     /// * `1` for standard single-nozzle configurations.
@@ -218,9 +215,8 @@ pub trait ModelQuirks {
     /// Default `false`. Observed inert on a P1S: the firmware accepts the bit, acknowledges the
     /// command `"result": "success"`, and queues no stage for it [REF-MQTT-LIFECYCLE]. Since the
     /// wire reports success either way, a model is assumed not to support this until a capture
-    /// shows a stage queued for it — the same fail-safe direction as
-    /// [`Self::has_stg_cur_idle_bug`], where guessing wrong toward "unsupported" costs a
-    /// rejected command rather than a silently skipped calibration.
+    /// shows a stage queued for it: guessing wrong toward "unsupported" costs a rejected command
+    /// rather than a silently skipped calibration.
     fn supports_heatbed_thermal_calibration(&self) -> bool {
         false
     }
@@ -895,7 +891,6 @@ mod tests {
         assert!(!q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
-        assert!(q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
@@ -920,7 +915,6 @@ mod tests {
         assert!(!q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
-        assert!(!q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
@@ -945,7 +939,6 @@ mod tests {
         assert!(!q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
         assert!(q.ignores_chamber_temperature());
-        assert!(q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
@@ -971,7 +964,6 @@ mod tests {
             assert!(!q.has_door_sensor());
             assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
             assert!(q.ignores_chamber_temperature());
-            assert!(q.has_stg_cur_idle_bug());
             assert_eq!(q.active_chamber_heater_max_temp_c(), None);
             assert_eq!(q.physical_nozzle_count(), 1);
             assert!(!q.supports_nozzle_offset_calibration());
@@ -997,7 +989,6 @@ mod tests {
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
-        assert!(!q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
@@ -1040,7 +1031,6 @@ mod tests {
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
-        assert!(!q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
@@ -1067,7 +1057,6 @@ mod tests {
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
-        assert!(!q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), Some(60));
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
@@ -1090,7 +1079,6 @@ mod tests {
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
-        assert!(!q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
@@ -1114,7 +1102,6 @@ mod tests {
         assert!(q.has_door_sensor());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
         assert!(!q.ignores_chamber_temperature());
-        assert!(!q.has_stg_cur_idle_bug());
         assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());

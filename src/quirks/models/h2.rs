@@ -115,10 +115,6 @@ macro_rules! impl_h2_shared {
                 false
             }
 
-            fn has_stg_cur_idle_bug(&self) -> bool {
-                false
-            }
-
             fn physical_nozzle_count(&self) -> u8 {
                 $nozzle_count
             }

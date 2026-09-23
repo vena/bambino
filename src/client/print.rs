@@ -187,6 +187,15 @@ where
     /// instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
     /// remaining routines still run.
     ///
+    /// **Vibration compensation (bit 2) is kept on every model, P2S included**, even though
+    /// [`start_print`](Self::start_print) forces `vibration_cali` off on P2S through
+    /// [`supports_vibration_compensation`](crate::quirks::ModelQuirks::supports_vibration_compensation).
+    /// That quirk is about the print job's `vibration_cali` field. For this standalone command
+    /// both upstreams send the bit for any model: BambuStudio's calibration dialog offers
+    /// Vibration Compensation with no model gate (`Calibration.cpp:57`, gates at `:225-260`), and
+    /// bambuddy's `start_calibration` (`bambu_mqtt.py:6295-6345`) sets it unconditionally (#358).
+    /// The print-job quirk's own basis is open in #375.
+    ///
     /// # Errors
     ///
     /// [`Error::ModelMismatch`] when *none* of the requested routines are supported on this

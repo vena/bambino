@@ -13,7 +13,7 @@
 //! |--------|---------|-----|---------------|
 //! | Host (desktop/server) | tokio | rustls | `default` = `["std", "tokio"]` |
 //! | ESP-IDF (ESP32, FreeRTOS) | std threads | ESP-TLS | `esp-idf` |
-//! | Bare-metal (embassy) | embassy | mbedtls-rs | `embassy` (implies `no_std` + `alloc`) |
+//! | Bare-metal (embassy) | embassy | mbedtls-rs | `embassy` with `default-features = false` (implies `alloc`) |
 //!
 //! All network I/O goes through abstract traits in the [`io`] module, so library
 //! code never touches `tokio::` or `std::net::` directly.
@@ -68,7 +68,7 @@
 //! | `tokio` | Tokio runtime, rustls TLS (implies `std`) |
 //! | `cli` | The `bambino-cli` binary (implies `tokio`) |
 //! | `esp-idf` | ESP-IDF system services for embedded Linux-like targets (implies `std`) |
-//! | `embassy` | Embassy async runtime, mbedtls-rs TLS, embassy-net (implies `no_std` + `alloc`) |
+//! | `embassy` | Embassy async runtime, mbedtls-rs TLS, embassy-net (implies `alloc`; pair with `default-features = false` / `--no-default-features` for a no_std build, since features only add) |
 //! | `alloc` | Heap allocation for `no_std` environments (String, Vec, format!) |
 //!
 //! # Module guide

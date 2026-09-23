@@ -1,4 +1,4 @@
-//! Status query commands (pushall, get_version, get_access_code, clean_print_error).
+//! Status query commands (pushall, get_version, get_access_code).
 
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};

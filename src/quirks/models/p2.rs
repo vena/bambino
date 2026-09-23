@@ -79,10 +79,6 @@ impl ModelQuirks for P2Quirks {
         false
     }
 
-    fn has_stg_cur_idle_bug(&self) -> bool {
-        false
-    }
-
     fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
         None
     }

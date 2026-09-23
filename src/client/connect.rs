@@ -862,7 +862,7 @@ where
     /// a client lacks. `tls` is the connector that produced the stream; it is kept so
     /// [`disconnect_camera()`](Self::disconnect_camera) can send `close_notify`. There is no
     /// dialer, so after a disconnect the next camera call returns
-    /// [`SocketError::NotConnected`](crate::io::SocketError::NotConnected) until a camera is
+    /// [`SocketError::NotConnected`] until a camera is
     /// attached again.
     ///
     /// Call [`disconnect_camera()`](Self::disconnect_camera) first on a client with a connected
