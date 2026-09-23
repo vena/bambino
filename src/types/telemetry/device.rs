@@ -319,7 +319,10 @@ pub struct NozzleInfo {
     pub nozzle_type: Option<String>,
 
     /// Normalized physical wear tracker value.
-    pub wear: Option<u32>,
+    ///
+    /// A float: H2C, P2S and X2D send `0.0`, and BambuStudio stores it as `float m_wear`
+    /// (`DevNozzleSystem.h:104`).
+    pub wear: Option<f32>,
 
     /// Hotend manufacturer serial number (verbose IDEX platform representation).
     pub serial_number: Option<String>,

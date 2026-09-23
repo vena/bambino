@@ -299,10 +299,15 @@ pub struct AmsUnit {
     pub id: String,
 
     /// Ambient temperature inside the expansion enclosure, in degrees Celsius.
-    pub temp: String,
+    ///
+    /// Optional because BambuStudio reads it only when present (`ParseAmsInfo`,
+    /// `DevFilaSystem.cpp:667-684`): a partial unit push without it must not fail the frame.
+    #[serde(default)]
+    pub temp: Option<String>,
 
-    /// Enclosure climate relative humidity index (1-5 scale).
-    pub humidity: String,
+    /// Enclosure climate relative humidity index (1-5 scale). Optional, as for `temp`.
+    #[serde(default)]
+    pub humidity: Option<String>,
 
     /// Actual relative humidity percentage (1-100) from the onboard sensor.
     /// Sent as a string on the wire (e.g., `"17"`).
@@ -342,12 +347,10 @@ impl AmsUnit {
     /// `self` wholesale.
     ///
     /// Confirmed against BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`,
-    /// ~L590-720) — every field here (`humidity_raw`, `dry_time` via `ParseVal`'s no-default
-    /// overload, `dry_setting`, `dry_sf_reason`) is gated behind `.contains()` or `ParseVal`'s
-    /// no-default overload against a persistent per-unit object, i.e. preserve-on-absence.
-    /// `temp`/`humidity` aren't `Option` in this crate's model (they deserialize as required —
-    /// a unit object omitting them entirely wouldn't parse as `AmsUnit` at all), so they
-    /// always take the incoming value with no merge needed. `dry_time` specifically:
+    /// ~L590-720) — every field here (`temp`, `humidity`, `humidity_raw`, `dry_time` via
+    /// `ParseVal`'s no-default overload, `dry_setting`, `dry_sf_reason`) is gated behind
+    /// `.contains()` or `ParseVal`'s no-default overload against a persistent per-unit object,
+    /// i.e. preserve-on-absence. `dry_time` specifically:
     /// `pybambu`'s own git history (`c517861` "Fix AMS2 updates") shows a hard `KeyError` on
     /// absence was replaced with a naive `.get(..., 0)` default to fix a real crash —
     /// confirming the field can be absent, but its own fix is the same naive-default class
@@ -362,8 +365,12 @@ impl AmsUnit {
     /// loop — but *only* when the `tray` key itself was present in this push (`tray: None`
     /// leaves the cached trays untouched entirely, matching every other field here).
     pub(crate) fn merge_from(&mut self, incoming: &AmsUnit) {
-        self.temp = incoming.temp.clone();
-        self.humidity = incoming.humidity.clone();
+        if incoming.temp.is_some() {
+            self.temp = incoming.temp.clone();
+        }
+        if incoming.humidity.is_some() {
+            self.humidity = incoming.humidity.clone();
+        }
         if incoming.humidity_raw.is_some() {
             self.humidity_raw = incoming.humidity_raw.clone();
         }

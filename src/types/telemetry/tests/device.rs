@@ -59,6 +59,52 @@ fn test_door_open_from_stat() {
 }
 
 #[test]
+fn test_door_open_from_long_new_gen_stat() {
+    // Regression (#341): H2/P2/X2 `stat` values are 9-13 hex digits and overflowed the old u32
+    // parse, reading every door as closed.
+    for (stat, open) in [
+        ("640A58000", true),
+        ("640258000", false),
+        ("1001000208070", false),
+        ("1001000A08070", true),
+    ] {
+        let json = format!(r#"{{ "print": {{ "stat": "{stat}" }} }}"#);
+        let print = serde_json::from_str::<TelemetryReport>(&json)
+            .expect("valid json")
+            .print
+            .expect("print present");
+        assert_eq!(print.is_door_open_from_stat(), open, "stat {stat}");
+    }
+}
+
+#[test]
+fn test_new_gen_numeric_ids_and_float_wear_keep_the_frame() {
+    // Regression (#339, #340): new-generation pushalls send `canvas_id`/`batch_id` as integers
+    // and nozzle `wear` as a float, and either one used to fail the whole report.
+    let json = r#"{ "print": {
+        "gcode_state": "IDLE",
+        "canvas_id": 0,
+        "batch_id": 0,
+        "task_id": 12345,
+        "subtask_id": "67890",
+        "design_id": 0,
+        "device": { "nozzle": { "info": [ { "id": 0, "wear": 0.0 } ] } }
+    } }"#;
+    let print = serde_json::from_str::<TelemetryReport>(json)
+        .expect("new-gen report must deserialize")
+        .print
+        .expect("print present");
+    assert_eq!(print.canvas_id.as_deref(), Some("0"));
+    assert_eq!(print.batch_id.as_deref(), Some("0"));
+    assert_eq!(print.task_id.as_deref(), Some("12345"));
+    assert_eq!(print.subtask_id.as_deref(), Some("67890"));
+
+    let nozzle: NozzleInfo =
+        serde_json::from_str(r#"{ "id": 0, "wear": 0.5 }"#).expect("float wear");
+    assert_eq!(nozzle.wear, Some(0.5));
+}
+
+#[test]
 fn test_door_open_missing_fields() {
     let json_empty = r#"{ "print": {} }"#;
     let print = serde_json::from_str::<TelemetryReport>(json_empty)

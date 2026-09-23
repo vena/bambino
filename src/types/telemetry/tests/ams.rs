@@ -37,8 +37,8 @@ fn test_ams_nested_wire_format() {
 
     let unit = &ams_status.ams[0];
     assert_eq!(unit.id, "0");
-    assert_eq!(unit.temp, "26.0");
-    assert_eq!(unit.humidity, "3");
+    assert_eq!(unit.temp.as_deref(), Some("26.0"));
+    assert_eq!(unit.humidity.as_deref(), Some("3"));
     let unit_tray = unit.tray.as_ref().unwrap();
     assert_eq!(unit_tray.len(), 4);
 
@@ -299,8 +299,8 @@ fn test_ams_unit_dry_fan_status() {
     // "3c0000" = 0b0011_1100 at bits 16-23: fan1 (bits18-19) = 0b11 = 3, fan2 (bits20-21) = 0b11 = 3.
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -518,8 +518,8 @@ fn test_ams_unit_model_slot_count() {
 fn test_ams_unit_model_none_when_info_absent_or_unknown() {
     let mut unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -544,8 +544,8 @@ fn test_p1s_capture_reports_an_ams_2_pro() {
     // previously read as an AMS Lite.
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "28.4".into(),
-        humidity: "5".into(),
+        temp: Some("28.4".into()),
+        humidity: Some("5".into()),
         humidity_raw: Some("12".into()),
         dry_time: None,
         dry_setting: None,
@@ -598,8 +598,8 @@ fn test_ams_unit_info_accessors_full_bitmask() {
     // "11002103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-23 = 0
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -619,8 +619,8 @@ fn test_ams_unit_info_accessors_short_bitmask() {
     // "2103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-25 = 0
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -645,8 +645,8 @@ fn test_ams_unit_info_accessors_dry_sub_status_distinct_bits() {
     // fixtures elsewhere in this file.
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -667,8 +667,8 @@ fn test_ams_unit_info_accessors_right_extruder() {
     // "2003": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 0 (right/main)
     let unit = AmsUnit {
         id: "1".into(),
-        temp: "25.0".into(),
-        humidity: "4".into(),
+        temp: Some("25.0".into()),
+        humidity: Some("4".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -687,8 +687,8 @@ fn test_filament_switch_inlet_decodes_four_bits_not_two() {
     // bind_switch_in occupies bits 24-27 (BUG-136). Raw 0 => In-B, 1 => In-A.
     let unit = |info: &str| AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -732,8 +732,8 @@ fn test_ams_unit_info_uninitialized_extruder() {
     // 0xE in bits 8-11 → extruder_assignment returns None
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -749,8 +749,8 @@ fn test_ams_unit_info_uninitialized_extruder() {
 fn test_ams_unit_info_absent() {
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -770,8 +770,8 @@ fn test_ams_unit_info_with_dry_status() {
     // bits 4-7 = 5 → dry_status = 5
     let unit = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -792,8 +792,8 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
     let mut cached = AmsStatusReport {
         ams: vec![AmsUnit {
             id: "0".into(),
-            temp: "26.0".into(),
-            humidity: "3".into(),
+            temp: Some("26.0".into()),
+            humidity: Some("3".into()),
             humidity_raw: None,
             dry_time: None,
             dry_setting: None,
@@ -866,8 +866,8 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
     let mut cached = AmsStatusReport {
         ams: vec![AmsUnit {
             id: "0".into(),
-            temp: "26.0".into(),
-            humidity: "3".into(),
+            temp: Some("26.0".into()),
+            humidity: Some("3".into()),
             humidity_raw: None,
             dry_time: None,
             dry_setting: None,
@@ -895,8 +895,8 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
     let partial = AmsStatusReport {
         ams: vec![AmsUnit {
             id: "1".into(),
-            temp: "27.0".into(),
-            humidity: "4".into(),
+            temp: Some("27.0".into()),
+            humidity: Some("4".into()),
             humidity_raw: None,
             dry_time: None,
             dry_setting: None,
@@ -939,8 +939,8 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
     // matched unit, rather than a partial per-unit push nulling out previously-known values.
     let mut cached = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: Some("42".into()),
         dry_time: Some(120),
         dry_setting: Some(AmsDrySetting {
@@ -955,8 +955,8 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
 
     let partial = AmsUnit {
         id: "0".into(),
-        temp: "27.0".into(),
-        humidity: "4".into(),
+        temp: Some("27.0".into()),
+        humidity: Some("4".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -967,10 +967,15 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
 
     cached.merge_from(&partial);
 
-    assert_eq!(cached.temp, "27.0", "temp always takes the incoming value");
     assert_eq!(
-        cached.humidity, "4",
-        "humidity always takes the incoming value"
+        cached.temp.as_deref(),
+        Some("27.0"),
+        "a present temp takes the incoming value"
+    );
+    assert_eq!(
+        cached.humidity.as_deref(),
+        Some("4"),
+        "a present humidity takes the incoming value"
     );
     assert_eq!(
         cached.humidity_raw.as_deref(),
@@ -1148,8 +1153,8 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
     // be pruned — confirmed against `ParseAmsInfo`'s `existing_tray_set`-gated erase loop.
     let mut cached = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -1176,8 +1181,8 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
     // (pruned), tray 2 is new (added).
     let partial = AmsUnit {
         id: "0".into(),
-        temp: "27.0".into(),
-        humidity: "4".into(),
+        temp: Some("27.0".into()),
+        humidity: Some("4".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -1231,8 +1236,8 @@ fn test_ams_unit_merge_from_absent_tray_key_leaves_cache_untouched() {
     // which prunes every cached tray. See AmsUnit::tray's doc comment.
     let mut cached = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -1247,8 +1252,8 @@ fn test_ams_unit_merge_from_absent_tray_key_leaves_cache_untouched() {
 
     let partial = AmsUnit {
         id: "0".into(),
-        temp: "27.0".into(),
-        humidity: "4".into(),
+        temp: Some("27.0".into()),
+        humidity: Some("4".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -1267,14 +1272,39 @@ fn test_ams_unit_merge_from_absent_tray_key_leaves_cache_untouched() {
 }
 
 #[test]
+fn test_partial_ams_unit_without_temp_or_humidity_keeps_cached_values() {
+    // Regression (#338): `temp`/`humidity` were required, so a partial unit push without them
+    // failed `print.ams` and with it the whole frame.
+    let partial: AmsUnit =
+        serde_json::from_str(r#"{ "id": "0", "dry_time": 30 }"#).expect("partial unit");
+    assert_eq!(partial.temp, None);
+    assert_eq!(partial.humidity, None);
+
+    let mut cached: AmsUnit =
+        serde_json::from_str(r#"{ "id": "0", "temp": "26.0", "humidity": "3" }"#).expect("unit");
+    cached.merge_from(&partial);
+    assert_eq!(
+        cached.temp.as_deref(),
+        Some("26.0"),
+        "absent temp keeps the cached value"
+    );
+    assert_eq!(
+        cached.humidity.as_deref(),
+        Some("3"),
+        "absent humidity keeps the cached value"
+    );
+    assert_eq!(cached.dry_time, Some(30));
+}
+
+#[test]
 fn test_ams_unit_merge_from_present_empty_tray_prunes_all() {
     // `tray: Some(vec![])` — key present but empty — must prune every cached tray, matching
     // `ParseAmsInfo`'s prune loop running (with an empty existing_tray_set) whenever the
     // `tray` key is present at all, even with zero elements.
     let mut cached = AmsUnit {
         id: "0".into(),
-        temp: "26.0".into(),
-        humidity: "3".into(),
+        temp: Some("26.0".into()),
+        humidity: Some("3".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,
@@ -1289,8 +1319,8 @@ fn test_ams_unit_merge_from_present_empty_tray_prunes_all() {
 
     let partial = AmsUnit {
         id: "0".into(),
-        temp: "27.0".into(),
-        humidity: "4".into(),
+        temp: Some("27.0".into()),
+        humidity: Some("4".into()),
         humidity_raw: None,
         dry_time: None,
         dry_setting: None,

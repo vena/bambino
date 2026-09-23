@@ -103,6 +103,7 @@ pub struct PrinterTelemetry {
     pub subtask_name: Option<String>,
 
     /// Hardware-enforced unique 32-bit transaction identifier tracking active jobs.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub subtask_id: Option<String>,
 
     /// Active layer progress tracker.
@@ -336,11 +337,11 @@ pub struct PrinterTelemetry {
     pub print_real_action: Option<i32>,
 
     /// Cloud task identifier.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub task_id: Option<String>,
 
     /// Cloud job identifier.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub job_id: Option<String>,
 
     /// Alternative remaining time field (minutes).
@@ -412,15 +413,15 @@ pub struct PrinterTelemetry {
     pub fail_reason: Option<String>,
 
     /// Cloud canvas project ID.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub canvas_id: Option<String>,
 
     /// Cloud design ID.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub design_id: Option<String>,
 
     /// Cloud model ID.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub model_id: Option<String>,
 
     /// Which plate of a multi-plate 3MF the current job was sliced for.
@@ -438,15 +439,15 @@ pub struct PrinterTelemetry {
     pub plate_idx: Option<i32>,
 
     /// Cloud profile ID.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub profile_id: Option<String>,
 
     /// Cloud project ID.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub project_id: Option<String>,
 
     /// Cloud batch ID.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_string")]
     pub batch_id: Option<String>,
 }
 
@@ -650,16 +651,19 @@ impl PrinterTelemetry {
         self.stat
             .as_ref()
             .and_then(|s| Self::parse_hex_string(s))
-            .map(|val| (val & DOOR_SENSOR_BITMASK) != 0)
+            .map(|val| (val & u64::from(DOOR_SENSOR_BITMASK)) != 0)
             .unwrap_or(false)
     }
 
     /// Helper converting raw hexadecimal state strings cleanly into standard numeric values.
-    pub(crate) fn parse_hex_string(hex_str: &str) -> Option<u32> {
+    ///
+    /// `u64`, not `u32`: new-generation `stat` values run 9-13 hex digits (X2D
+    /// `"1001000208070"`), which overflow a `u32` and would read as `None`.
+    pub(crate) fn parse_hex_string(hex_str: &str) -> Option<u64> {
         let clean = hex_str
             .strip_prefix("0x")
             .or_else(|| hex_str.strip_prefix("0X"))
             .unwrap_or(hex_str);
-        u32::from_str_radix(clean, 16).ok()
+        u64::from_str_radix(clean, 16).ok()
     }
 }
