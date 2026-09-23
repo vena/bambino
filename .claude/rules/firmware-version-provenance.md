@@ -6,7 +6,7 @@ paths:
 
 Firmware-version thresholds in `src/quirks/` must be sourced from Bambu Lab's own documentation, not ported from one upstream table. Three drying constants were wrong at once (#272, #273, #274) for exactly that reason. The resolved values and the rejected ones are tabulated in `reference/05_materials_ams.md` §5.4 ("Remote-drying firmware thresholds").
 
-**Source order, strongest first** (extends the backlog skill's two-upstream bar for version numbers only):
+**Source order, strongest first** (extends the two-upstream bar in `.claude/skills/backlog/evidence.md` for version numbers only):
 
 1. The model's firmware release history — `https://wiki.bambulab.com/en/<model>/manual/<model>-firmware-release-history`. Exceptions: `h2d-pro/manual/firmware-release-history`, `x1/manual/X1-X1C-firmware-release-history`, `x1/manual/X1E-firmware-release-history`.
 2. A Bambu feature wiki page with a minimum-firmware table (e.g. *Filament drying guide for AMS 2 Pro and AMS HT*). The only source that states non-support outright; can lag the per-model notes.

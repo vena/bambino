@@ -1,88 +1,62 @@
 ---
 name: backlog
-description: Rules for filing, triaging, and closing this repo's bug/finding tracker on GitHub Issues — issue format, label schema (P-critical/P-high/P-low/needs-verification plus a bug/enhancement kind label), the release bar, and the commit-closes-issue convention. Use whenever opening a new bug, finding, or enhancement issue, closing or triaging an existing one, reassigning a needs-verification issue to a real priority, checking whether the crate meets its release bar, or deciding how a fix commit should reference the issue it closes. Invoked by `triage-review` when filing a deep-review sweep's findings — don't duplicate these rules elsewhere; this file is the one source of truth.
+description: Rules for this repo's GitHub Issues tracker — issue format, labels (P-critical/P-high/P-low/needs-verification plus bug/enhancement), release bar, and closing via commit. Use when opening, triaging, closing, reprioritizing, or fixing issues, or checking the release bar.
 ---
 
 # Backlog rules (bambino)
 
-The tracker is GitHub Issues, not a file in this repo. `gh issue` is the interface. There is no local BACKLOG.md — don't recreate one; a bulk-imported history of hundreds of closed nits reads as noise to anyone landing on the repo, which is exactly why it was retired (see git history for `BACKLOG.md` if the old rationale is ever needed).
+The tracker is GitHub Issues; `gh issue` is the interface. There is no local `BACKLOG.md` — don't recreate one.
 
-Check for, load, and use lean-ctx tools (loaded as ctx\_\*, unloaded as mcp\_\_lean-ctx\_\_\*), prefer them over native. Use ctx_shell instead of bash, ctx_search instead of grep, etc. Instruct any sub-agents to do the same.
+**Step 0:** `gh auth status`. If it fails, stop and tell the user.
 
-**Step 0, every invocation:** run `gh auth status` first. If it fails, stop and tell the user — don't silently fall back to guessing or to a local file.
+Supporting files — read only when the task needs them:
+- [evidence.md](evidence.md) — what counts as confirmation of a protocol/wire claim. Read before choosing `needs-verification` vs. a real tier, or before resolving one.
+- [fixing.md](fixing.md) — batching fixes into commits and the docs-regen check. Read before fixing issues.
 
-## Entry point
+## Entry points
 
-Rules, not a self-driving procedure. Invoked bare: `gh issue list --state open --limit 100`, summarize, ask what to do. Adding a new bug: dedupe first — `gh issue list --search "<keyword>" --state all --limit 100` (a finding resurfacing from a closed issue is a regression, not a new bug — say so in the new issue). Closing/triaging a specific issue: `gh issue view <N>`, no need to list everything else. Checking the release bar: `gh issue list --state open --label P-critical` and `--label P-high` separately (`--label` ANDs, not ORs — two calls). "Fix everything open": `gh issue list --state open --limit 200 --json number,title,labels,blockedBy`, work `P-critical` → `P-high` → `P-low` so an interruption leaves the least release-blocking bugs behind. **Priority is the sort key, not the whole order — skip any issue with an unclosed `blockedBy` and come back to it once its blocker lands.** Plain `gh issue list` doesn't show that field, so a session that omits it will pick up blocked work and not know: `.blockedBy.nodes|map(.number)`, per the `gh` notes in root `CLAUDE.md`. A blocker is recorded when the dependent fix would be *wrong* done first (hand-rolling at one layer what is arriving at another), not merely inconvenient — so landing it out of order means writing code to delete, even though both issues look independently actionable. Invoked by `triage-review` while filing a batch: it already supplies the finding and has already deduped — no separate lookup here.
+- **Bare invocation:** `gh issue list --state open --limit 100`, summarize, ask what to do.
+- **New issue:** dedupe first — `gh issue list --search "<keyword>" --state all --limit 100`. A match to a closed issue is a regression; say so in the new issue.
+- **One specific issue:** `gh issue view <N>`.
+- **Release bar check:** `gh issue list --state open --label P-critical`, then again with `--label P-high` (`--label` ANDs, so two calls).
+- **"Fix everything open":** `gh issue list --state open --limit 200 --json number,title,labels,blockedBy`. Work `P-critical` → `P-high` → `P-low`, skipping any issue with an open blocker (`.blockedBy.nodes|map(.number)`) until the blocker lands. A blocker is recorded when doing the dependent fix first would be *wrong* (code written to be deleted), not just inconvenient. Then read `fixing.md`.
 
 ## What counts as an issue
 
-Not every finding gets one. A confirmed real bug or an outstanding needs-verification item gets an issue. **A finding that turns out not to be a bug does not** — there's no equivalent of an old `Wontfix` row; a non-bug doesn't belong in a public tracker. Note it inline in whatever review file triaged it and move on. Deliberate asymmetry, not an oversight — the whole point of moving off a build-log model.
-
-**Enhancements are in scope too, and they are not the same as a not-a-bug finding.** An enhancement is work worth doing where nothing is currently broken: a missing capability, a diagnostic the crate cannot express, an API a consumer can't build on. Issue #157 is the worked example — every certificate-verification failure correctly failed closed, so nothing was broken, but a consumer could not tell an untrusted anchor from a name mismatch and therefore couldn't build trust-on-first-use on top. That's an enhancement, and it belongs in the tracker. The test isn't "did something misbehave", it's "is there work here someone should be able to find later". A finding with no work attached still gets no issue.
+- A confirmed bug or an outstanding `needs-verification` item gets an issue.
+- **An enhancement** gets one too: work worth doing where nothing is broken — a missing capability, a diagnostic the crate can't express, an API a consumer can't build on (#157: verification failures correctly failed closed, but a consumer couldn't tell an untrusted anchor from a name mismatch). The test is "is there work someone should be able to find later".
+- **A finding that turns out not to be a bug gets no issue.** Note it in whatever review file triaged it and move on.
 
 ## Issue format
 
-1. **Title**: one line, states the problem, not "bug in X."
-2. **Body**: self-contained. `file:line`, the failure mechanism, and a one-sentence fix direction, all pasted in — plus whatever code, `reference/` docs, `.claude/rules/` files, or related issue numbers the reader needs. **Never point the body at a review file, a `*_PLAN.md`, or a commit SHA for the substance.** A `*-REVIEW.md` is deleted by `triage-review` the moment its findings are filed, so a link to one is dead on arrival and costs whoever picks the issue up a wasted lookup; a plan file has the same fate. Length is not the constraint — an issue nobody can act on without fetching a second document is the thing to avoid. Keep the investigative narrative (what was ruled out, how it was verified, which agent found it) out of the issue; that's the review file's job while it exists, and it isn't needed to fix the bug.
-3. **Labels**: exactly one priority label (`P-critical`/`P-high`/`P-low`/`needs-verification`, see Severity below) plus exactly one _kind_ label — `bug` when something misbehaves, `enhancement` when nothing is broken but work is wanted (see "What counts as an issue"). Never both: the kind label is what tells a reader whether the issue describes a defect or an addition, and an issue carrying both answers neither. GitHub's stock `question`/`documentation`/`duplicate`/`wontfix` labels exist in the repo but aren't part of this schema — don't reach for them to avoid deciding between `bug` and `enhancement`. No separate status label — issue `open`/`closed` state is the status.
-4. **No manual numbering.** GitHub assigns the issue number.
-
-## Closing
-
-**The commit that fixes a bug — or lands an enhancement — closes its issue in the same commit's message** (`Closes #42`) — GitHub auto-closes on push to the default branch when the message contains that keyword. No separate "update the tracker" follow-up; that's exactly how the old file went stale, and an issue left open after its fix landed is worse than a file row, since it's publicly visible. Referencing the issue number in the commit message is the one direction `git blame` doesn't cover for free: blame on the _fixed source line_ doesn't find the issue that tracked it unless the message says so.
-
-## What counts as confirmation
-
-**BambuStudio and bambuddy agreeing is confirmation — align with them.** Not "strong evidence pending hardware". State it plainly, drop the hedging, and change the code to match; there is nothing further to wait for. They are independent in the way that matters: BambuStudio is the vendor's own client, bambuddy an independent reverse-engineering of the same wire. A capture from our own printer corroborates and is worth citing, but is not required for a shape both already agree on.
-
-**Those two specifically.** ha-bambulab is good supporting evidence and often the most readable account of a field, but it does not carry confirmation on its own or as the second source — a finding resting on ha-bambulab plus one other still needs BambuStudio and bambuddy checked. Cite it freely; don't count it.
-
-- **One upstream is not two.** Where BambuStudio has an opinion, read it — checking only the more readable source looks thorough and isn't. **BambuStudio is authoritative when the two disagree**, and bambuddy marks its own guesses in its docstrings; take those at face value rather than inheriting them.
-- **Read the whole call, not just the field in question.** Upstream frequently sends more than a finding describes, and matching the first source found reproduces the original defect one field over.
-- **A parse site proves the field, not its unit — the unit may live at the call sites.** Grep the accessor as well as the assignment; upstream often stores a raw value and converts only where it renders it.
-- **A capture proves presence, never absence.** A key missing from one model's payload says nothing about another model; that is what the upstreams are for. A key present in a capture is real regardless of what upstream does with it.
-- **Don't soften a cleared claim to sound careful.** Hedging something already settled costs the next reader a full re-derivation.
-
-`needs-verification` is for what this bar cannot close: physical behavior on a model nobody here has, or a wire shape no upstream implements. A *shape* confirmed by both upstreams is triageable even when the *harm* is unmeasured — that is a `P-low` footgun, not an open question.
-
-**Reassigning `needs-verification`:** when hardware evidence lands, swap the label to a real priority tier (or close as not-a-bug — see "What counts as an issue" above; if it turns out not to be a bug, close it with a one-line comment stating why, `gh issue close <N> --comment "..."`, rather than leaving it open indefinitely). State what resolved it (wire capture, cross-reference to a known-good source) in the closing comment.
-
-**If applying these rules hits a genuine conflict or an undefined case, stop and flag it — don't resolve it silently and move on.** Same standing as any other design tradeoff on the actual code.
-
-**Re-verify, don't assume settled.** A closed issue reflects what the commit changed at the time, not a permanent guarantee — re-open (or file a new issue referencing the old one) if a stronger source later contradicts a prior fix. Cheap to recheck, costly to carry forward stale.
-
-## Batching fixes to save verification cost
-
-When fixing multiple open issues in one sitting, batch bugs that touch the same file or tightly-related files into **one commit** running `make check-fast` **once**, instead of one commit-and-verify cycle per bug — `check-fast` is expensive (multi-target build/test/clippy) and mostly redundant between two tiny adjacent fixes in the same file. The commit message lists every issue it closes (`Closes #42, Closes #43`).
-
-Don't fold in a bug that's paused mid-sitting (blocked on a decide-first question, or waiting on user input) just because its edits happen to be sitting in the working tree at commit time — `git add -A` will silently sweep up unrelated in-progress changes. Stage only the batch's own files explicitly, or `git reset` the paused bug's files first. Treat this as a real footgun, not a hypothetical — it's happened once already under the old system and the risk is identical here.
-
-Group by what's naturally already being read/edited together, not by an artificial cap — one file touched by 3 unrelated bugs is one batch; two files each touched by one bug you happen to be doing back-to-back is two batches.
+1. **Title:** one line stating the problem, not "bug in X".
+2. **Body — self-contained.** Current `file:line`, the offending code quoted, the failure mechanism, a one-sentence fix direction, plus any code, `reference/` or `.claude/rules/` passages (quoted, not just linked) and related issue numbers the fixer needs. **Never point at a `*-REVIEW.md`, a `*_PLAN.md`, or a commit SHA for the substance, and don't mention review sweeps, finding IDs, or agents** — review and plan files are deleted (review files are never even committed), so the reference is dead on arrival. Leave out the investigative narrative. Length is not the constraint; needing a second document to act is.
+3. **Labels:** exactly one priority (`P-critical`/`P-high`/`P-low`/`needs-verification`) plus exactly one kind — `bug` if something misbehaves, `enhancement` if nothing is broken. Never both. Don't use the stock `question`/`documentation`/`duplicate`/`wontfix` labels to dodge the choice. No status labels — open/closed is the status. No area/team labels.
+4. **Numbering:** GitHub assigns it.
 
 ## Severity
 
-Labels use rust-lang/rust's `P-` priority convention rather than an invented "sev" scheme — idiomatic to anyone who's filed a Rust issue before, and each tier here is narrowly enough scoped that no separate impact axis (rust-lang's `I-unsound`/`I-crash`, etc.) is needed on top.
+Labels follow rust-lang's `P-` convention.
 
-- **`P-critical`** — can cause unsafe physical behavior (temp overshoot past a real hardware ceiling, uncommanded/unsafe motion, bypass of a documented safety guard) — and only that; nothing else lives in this tier. Blocks release.
-- **`P-high`** — silent data corruption, silent success-on-failure, or a core feature broken under a plausible/common condition. Blocks release.
-- **`P-low`** — everything else: narrow edge cases, footguns with a workaround, doc drift, process gaps. Tracked, non-blocking.
-- **`needs-verification`** — can't be triaged into the above without something only real hardware can confirm (a wire capture, physical behavior on a specific model). Not a priority tier in itself — means "outstanding, blocked on evidence." Resolve per "Reassigning `needs-verification`" above once evidence lands.
+- **`P-critical`** — can cause unsafe physical behavior (temperature past a real hardware ceiling, uncommanded/unsafe motion, bypass of a documented safety guard). Only that. Blocks release.
+- **`P-high`** — silent data corruption, silent success-on-failure, or a core feature broken under a plausible condition. Blocks release.
+- **`P-low`** — everything else: narrow edge cases, footguns with a workaround, doc drift, process gaps.
+- **`needs-verification`** — can't be placed above without evidence only hardware can give. Means "blocked on evidence", not a tier. See `evidence.md` for what closes it.
 
-**Enhancements are `P-low`, always.** The tiers above are written in defect terms on purpose — `P-critical` and `P-high` describe things going _wrong_, and an enhancement by definition has nothing going wrong yet, so it cannot reach either. If an issue seems to demand a blocking tier while wearing an `enhancement` label, that's the signal it was mislabelled: something _is_ broken and it's a bug. Re-decide the kind label rather than promoting the priority. (`needs-verification` still applies to an enhancement whose shape depends on hardware evidence — it means "blocked on evidence", not "a defect we can't rank yet".)
+**Enhancements are always `P-low`** (or `needs-verification` if their shape depends on hardware evidence). An enhancement that seems to need a blocking tier is really a bug — change the kind label, not the priority.
 
-No `A-`/`T-`/area or team labels — those exist in large multi-team projects for routing and faceted search across thousands of issues; free-text title/body plus GitHub's own search covers a crate this size. Revisit only if issue volume genuinely grows past what search handles well.
+## Closing
+
+The commit that fixes a bug or lands an enhancement closes its issue in its message (`Closes #42`). For several issues, repeat the keyword: `Closes #42, Closes #43` — `Closes #42, #43` closes only #42. No separate tracker-update step. The message is also the only link from `git blame` on the fixed line back to the issue.
+
+Resolving `needs-verification`: swap in a real priority label, or close as not-a-bug with `gh issue close <N> --comment "<why>"`. Either way, state what resolved it (wire capture, upstream source).
+
+Re-verify, don't assume settled: reopen, or file a new issue referencing the old one, if a stronger source later contradicts a prior fix.
+
+If these rules hit a genuine conflict or an undefined case, stop and flag it — don't resolve it silently.
 
 ## Release bar
 
-Zero open `P-critical`, zero open `P-high`. `P-low` doesn't block. (This bar itself can change — if it does, edit this one line, don't restate it elsewhere.)
+Zero open `P-critical`, zero open `P-high`. `P-low` doesn't block. (If this changes, edit this line only.)
 
-## Docs regen
-
-Before ending a session that closed one or more issues, check whether any changed the **shape of the public API** — items added, removed, or renamed, or signatures changed — **or the prose inside a `///` block**. If so, run `make docs` and commit the result in its own commit, not folded into a fix commit (same batching-cost reasoning as above).
-
-Doc-comment prose counts as of #143: `make docs` now emits `///` bodies, so a prose-only edit does change `docs/` and skipping the regen leaves the generated reference stale. Before that fix the pipeline emitted signatures and type structure only, and this rule told sessions to skip the multi-minute Docker pass for prose edits — it no longer does.
-
-## Relationship to a future `CHANGELOG.md`
-
-Different audience — issue tracker vs. user-facing release notes. Don't conflate or auto-generate one from the other. When `CHANGELOG.md` exists, build a `changelog` skill the same way this one exists, and have its entries cite issue numbers for traceability. Until then, this note is enough — don't build the changelog skill speculatively for a file that doesn't exist yet.
+`CHANGELOG.md` doesn't exist yet. When it does, give it its own skill, with entries citing issue numbers — don't generate one from the other.

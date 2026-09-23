@@ -22,6 +22,8 @@ env/
 .lean-ctx/
 /reference/*
 /review
+# deep-review working files — local only, deleted by triage-review once filed.
+/*-REVIEW.md
 probe_report*.json
 # ack-probe reports carry the printer serial in a `serial` field — same handling as above.
 ack_probe_report*.json
