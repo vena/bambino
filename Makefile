@@ -32,10 +32,9 @@ CHIP ?= esp32c6
 #   - No step is redundant. Measured: `cargo build` after `cargo test` still costs
 #     its full ~10s, and `cargo build --bin` after `cargo test --bin` costs 29s --
 #     the cfg(test) and non-test builds are separate compilations, so neither pair
-#     collapses. Likewise `cargo clippy --all-targets --features cli` is 77s
-#     against 49s for the two clippy calls it would replace: it lints tests/ and
-#     the bin's test modules that nothing lints today, so it is a coverage gain at
-#     a cost, not a saving. Don't "simplify" any of these three into each other.
+#     collapses. Don't "simplify" either pair into each other. (check-fast's
+#     clippy has since become one `--all-targets --features cli` call, 77s
+#     against the 49s pair measured above -- a coverage gain at a cost, #297.)
 #
 # What is here and why: fmt and the two scripts are free. `cargo clippy` type-checks
 # the whole default-feature lib, so it catches a compile error without a separate
@@ -82,6 +81,13 @@ check-commit:
 # combination was broken until `extern crate alloc` stopped being gated on
 # `not(feature = "std")` (see the comment at that declaration in src/lib.rs), with
 # no consumer-side workaround, and nothing in the gate would have caught it.
+#
+# Clippy is one `--all-targets --features cli` call, not the plain `cargo clippy`
+# plus `--bin bambino-cli` pair it replaced (#297): neither of those lints test
+# code, since a normal build cfg's `#[cfg(test)]` out and never builds tests/.
+# `cli` only adds dependencies (no `cfg(feature = "cli")` outside src/bin/), so
+# the lib lints the same either way. It stays out of check-commit: 77s against
+# the 49s pair, too much for the per-commit budget above.
 check-fast:
 	cargo fmt --check
 	scripts/check-rules-globs.sh
@@ -94,8 +100,7 @@ check-fast:
 	cargo check --no-default-features --features embassy --lib
 	cargo check --features embassy --lib
 	$(MAKE) test-embassy-host
-	cargo clippy
-	cargo clippy --bin bambino-cli --features cli
+	cargo clippy --all-targets --features cli
 
 # Runs the embassy backend's code on the host, which the `cargo check`es above cannot: a check
 # proves io/embassy.rs compiles, never that it behaves. It runs in the `embassy` + `std`

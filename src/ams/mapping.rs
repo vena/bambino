@@ -799,7 +799,10 @@ mod tests {
 
         // A job fed exclusively from the AMS Lite is a physical-AMS job: use_ams must stay on,
         // or the printer rejects the task with 07FF_8012 per [REF-AMS-USEAMS].
-        assert!(is_external_spool_safety_valid(true, &[lite.clone()]));
+        assert!(is_external_spool_safety_valid(
+            true,
+            core::slice::from_ref(&lite)
+        ));
 
         // And the pool validator must not hard-reject a mapping containing it on an A2L.
         assert!(is_ams_pool_composition_valid(

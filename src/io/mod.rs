@@ -1129,7 +1129,7 @@ mod pem_bundle_tests {
     #[test]
     fn exact_line_width_boundary_wraps_once() {
         let mut out = Vec::new();
-        append_base64_wrapped(&vec![0u8; 48], &mut out);
+        append_base64_wrapped(&[0u8; 48], &mut out);
         assert_eq!(out.len(), PEM_LINE_WIDTH + 1);
         assert_eq!(out.last(), Some(&b'\n'));
         assert_eq!(out.iter().filter(|&&b| b == b'\n').count(), 1);

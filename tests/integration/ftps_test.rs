@@ -913,7 +913,7 @@ async fn test_ftps_pasv_rejection_reply_does_not_poison_client() {
 
     let next_result = client.get_available_space().await;
     assert!(
-        matches!(next_result, Ok(_)),
+        next_result.is_ok(),
         "A rejected PASV must leave the control channel usable, got {:?}",
         next_result
     );

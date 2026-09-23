@@ -285,6 +285,7 @@ fn test_xcam_cfg_standalone_bits() {
 #[test]
 fn test_xcam_cfg_mixed_sensitivities_follow_bambustudio_phase() {
     // Enable bits 7/10/13/16 set; sensitivity pairs above each: low(0), medium(1), high(2), low(0).
+    #[allow(clippy::identity_op)] // `0 << 8` spells out the low(0) pair, not a no-op typo.
     let cfg = (1 << 7) | (0 << 8) | (1 << 10) | (1 << 11) | (1 << 13) | (2 << 14) | (1 << 16);
     let xcam = XcamTelemetry {
         cfg: Some(cfg),
