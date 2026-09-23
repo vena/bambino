@@ -112,8 +112,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   Uploads a binary payload directly to MicroSD card storage.
 
   **Flush and Close Race Mitigation:**
-  1. Immediately drop the passive data channel upon finishing transmissions. This prevents
-     standard TLS graceful shutdown waits which would trigger indefinite hangs on physical vsFTPd.
+  1. Send a TLS `close_notify` on the passive data channel once the payload is written,
+     bounded by `FTPS_WRITE_TIMEOUT_SECS`. The close does not wait for the printer's own
+     `close_notify` (vsFTPd doesn't send one), and a failure or timeout is logged and ignored
+     rather than failing the transfer. Plaintext data channels are simply dropped.
   2. Wait up to 300 seconds for the `226` transfer confirmation to print. Issuing downstream
      print commands prior to this confirmation halts the printer due to microSD write latency exceptions [REF-FTPS-FLUSH].
   3. Unconditionally verify the uploaded size via the `SIZE` command on both a `226` and a
