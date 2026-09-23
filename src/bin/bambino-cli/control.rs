@@ -208,21 +208,26 @@ pub enum ControlAction {
     Airduct { mode: AirductModeArg },
     /// Trigger one or more calibration routines
     #[command(
-        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch]"
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch [--show-serials]]"
     )]
     Calibrate {
         #[arg(required = true)]
         routines: Vec<CalibrationArg>,
-        /// Stay connected after publishing and stream every subsequent `print`-bearing push as
-        /// one compact NDJSON line until interrupted (Ctrl+C), instead of exiting immediately.
+        /// Stay connected after publishing and stream every subsequent push, unfiltered, as one
+        /// compact NDJSON line until interrupted (Ctrl+C), instead of exiting immediately.
         ///
-        /// Same output shape as `dump --follow`, but subscribed before the command is published
-        /// — running `dump --follow` in a second terminal races the trigger and can miss the
-        /// first pushes of the run.
+        /// Unlike `dump --follow`, which streams only `print`-bearing pushes, this keeps every
+        /// root (`info`, `system`, ...). It also subscribes before the command is published —
+        /// running `dump --follow` in a second terminal races the trigger and can miss the first
+        /// pushes of the run.
         // Exists to capture evidence for issue #227: whether a standalone calibration reports
         // any progress at all is unverified.
         #[arg(short = 'w', long)]
         watch: bool,
+        /// Under --watch, print serials and access codes as the printer sent them instead of
+        /// `<redacted>` (a stdout redirect captures whatever this prints)
+        #[arg(long, requires = "watch")]
+        show_serials: bool,
     },
     /// AMS filament management
     #[command(flatten_help = true)]
@@ -505,12 +510,15 @@ pub async fn run(
             feedrate,
         } => {
             let feedrate = feedrate.unwrap_or(3000);
-            dispatch(
-                "Dispatching motion G-code G0 relative move...",
-                "Motion command published successfully.",
-                client.move_relative(axis.as_char(), distance, feedrate),
-            )
-            .await?;
+            println!("Dispatching motion G-code G0 relative move...");
+            // `None` means the library dropped a zero-distance move without publishing.
+            match client
+                .move_relative(axis.as_char(), distance, feedrate)
+                .await?
+            {
+                Some(_) => println!("Motion command published successfully."),
+                None => println!("Zero-distance move: nothing was sent."),
+            }
         }
         ControlAction::Extrude { length, feedrate } => {
             let feedrate = feedrate.unwrap_or(900);
@@ -669,7 +677,11 @@ pub async fn run(
             )
             .await?;
         }
-        ControlAction::Calibrate { routines, watch } => {
+        ControlAction::Calibrate {
+            routines,
+            watch,
+            show_serials,
+        } => {
             let mut options = CalibrationOption(0);
             for routine in routines {
                 let flag = match routine {
@@ -698,7 +710,7 @@ pub async fn run(
                 );
                 // `false` — capture every root, not just `print`. See issue #227: the
                 // indicator being hunted may live under a root bambino does not model.
-                return crate::monitor::follow_pushes(&mut client, false).await;
+                return crate::monitor::follow_pushes(&mut client, false, show_serials).await;
             }
             println!("Calibration command published successfully.");
         }

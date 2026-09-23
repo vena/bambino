@@ -241,7 +241,8 @@ The call returns when the command is published, not when the routine finishes. T
 Stage IDs, per-model capture notes, and the rest of the wire detail are in
 `reference/03_mqtt_telemetry.md`. To capture a run yourself,
 `bambino-cli control <IP> <SERIAL> calibrate <ROUTINES>... --watch` publishes the command and then
-streams the report topic as unfiltered NDJSON on stdout until Ctrl+C.
+streams the report topic as unfiltered NDJSON on stdout until Ctrl+C. Serials and access codes
+in that stream (and in `dump`'s) are replaced with `<redacted>` unless `--show-serials` is passed.
 
 ### AMS filament control
 
@@ -667,7 +668,8 @@ Options:
                       Verify the printer's TLS certificate against these CA certs
                       instead of skipping verification entirely. Accepts a single
                       PEM/DER file or a directory of them. Applies to every
-                      printer-facing subcommand: MQTT, FTPS, camera.
+                      printer-facing subcommand (MQTT, FTPS, camera) except
+                      inspect-cert, which never verifies.
   -h, --help          Print help
 
 Most commands require positional args: <IP> <SERIAL> <ACCESS_CODE>

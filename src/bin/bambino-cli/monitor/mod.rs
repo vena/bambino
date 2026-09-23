@@ -16,6 +16,7 @@ use tokio::time::interval;
 
 use crate::connection::{Printer, create_printer};
 use crate::error::CliError;
+use crate::redact::redact_secrets;
 
 /// Prints incoming pushes as compact NDJSON, one line each, until interrupted or the
 /// connection fails.
@@ -31,9 +32,16 @@ use crate::error::CliError;
 ///   progress indicator must not pre-filter those away — the field being looked for may well be
 ///   under a root nobody has declared yet (see issue #227).
 ///
+/// Each line goes through [`redact_secrets`] unless `show_serials` is set: `info` replies carry
+/// module serials, and this output is meant to be attached to bug reports.
+///
 /// Never returns `Ok` — the caller ends the capture with Ctrl+C, so the only exit is the `?`
 /// on a poll/ping error.
-pub(crate) async fn follow_pushes(printer: &mut Printer, print_only: bool) -> Result<(), CliError> {
+pub(crate) async fn follow_pushes(
+    printer: &mut Printer,
+    print_only: bool,
+    show_serials: bool,
+) -> Result<(), CliError> {
     // MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
     // the broker resets the connection once that elapses with no packet from the client.
     // Mirrors run()'s PING_TICK_SECS/ping_timer below.
@@ -48,6 +56,7 @@ pub(crate) async fn follow_pushes(printer: &mut Printer, print_only: bool) -> Re
                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
                     && (!print_only || v.get("print").is_some())
                 {
+                    let v = if show_serials { v } else { redact_secrets(v) };
                     println!("{}", serde_json::to_string(&v).unwrap_or_default());
                 }
             }
@@ -60,11 +69,23 @@ pub(crate) async fn follow_pushes(printer: &mut Printer, print_only: bool) -> Re
     }
 }
 
-/// Connects, sends `pushall`, and either dumps the first response containing a `print` object
+/// Connects, sends `pushall`, and either dumps the first response carrying `print.gcode_state`
 /// as pretty JSON (default) or, with `follow`, keeps printing every subsequent `print`-bearing
 /// push as one compact NDJSON line until interrupted (Ctrl+C) — for capturing a sequence of
 /// incremental pushes (e.g. across a tray-load event) rather than a single snapshot.
-pub async fn dump(ip: &str, serial: &str, access_code: &str, follow: bool) -> Result<(), CliError> {
+///
+/// Output is redacted with [`redact_secrets`] unless `show_serials` is set. A one-shot dump that
+/// sees no pushall response within `DUMP_TIMEOUT_SECS` returns an error, so the process exits
+/// non-zero rather than handing a script empty output as success.
+pub async fn dump(
+    ip: &str,
+    serial: &str,
+    access_code: &str,
+    follow: bool,
+    show_serials: bool,
+) -> Result<(), CliError> {
+    const DUMP_TIMEOUT_SECS: u64 = 10;
+
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
@@ -72,10 +93,10 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str, follow: bool) -> Re
 
     if follow {
         eprintln!("Following telemetry pushes as NDJSON — Ctrl+C to stop.");
-        return follow_pushes(&mut printer, true).await;
+        return follow_pushes(&mut printer, true, show_serials).await;
     }
 
-    let timeout = tokio::time::sleep(Duration::from_secs(10));
+    let timeout = tokio::time::sleep(Duration::from_secs(DUMP_TIMEOUT_SECS));
     tokio::pin!(timeout);
 
     loop {
@@ -85,13 +106,15 @@ pub async fn dump(ip: &str, serial: &str, access_code: &str, follow: bool) -> Re
                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
                     && v.get("print").and_then(|p| p.get("gcode_state")).is_some()
                 {
+                    let v = if show_serials { v } else { redact_secrets(v) };
                     println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
                     return Ok(());
                 }
             }
             _ = &mut timeout => {
-                eprintln!("Timed out waiting for pushall response.");
-                return Ok(());
+                return Err(CliError::Network(format!(
+                    "timed out after {DUMP_TIMEOUT_SECS}s waiting for a pushall response"
+                )));
             }
         }
     }
@@ -126,6 +149,19 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Sets the key-reader thread's shutdown flag on drop.
+///
+/// A drop guard rather than a store after the loop, so a panic or early return in the dashboard
+/// loop still stops the thread: a tokio runtime waits for running blocking tasks on shutdown,
+/// so a thread left polling would keep the process alive after the terminal was restored.
+struct ShutdownOnDrop(Arc<AtomicBool>);
+
+impl Drop for ShutdownOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
 pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
     eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
@@ -143,6 +179,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_flag = shutdown.clone();
+    let _shutdown = ShutdownOnDrop(shutdown);
     let (key_tx, mut key_rx) = mpsc::channel::<KeyEvent>(4);
     tokio::task::spawn_blocking(move || {
         while !shutdown_flag.load(Ordering::Relaxed) {
@@ -161,7 +198,19 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
     // `log::warn!` calls, which reach stderr on the same raw-mode tty the dashboard is
     // drawing to and corrupt it; the CLI's logger is silenced for this subcommand
     // (see main.rs), so the footer is now the only place they surface.
+    // Cleared only once a frame has drawn it, and drawn immediately when set (see `redraw`):
+    // the dashboard otherwise redraws only on telemetry, so a stall warning would surface only
+    // after the stall ended, and a push that draws nothing would clear it unseen.
     let mut warning: Option<String> = None;
+    let redraw = |printer: &Printer, state: &serde_json::Map<_, _>, warning: Option<&str>| {
+        dashboard::draw_dashboard(
+            state,
+            quirks,
+            printer.print_progress(),
+            printer.bed_temperatures(),
+            warning,
+        );
+    };
 
     // NOTE: racing `poll_telemetry()` against `ping_timer.tick()` here means a silently
     // dropped connection is caught by `tick_zombie_check`'s 60s `secs_since_last_message`
@@ -174,25 +223,22 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
             telemetry_res = printer.poll_telemetry() => {
                 match telemetry_res {
                     Ok(event) => {
-                        // Read the progress cache after `poll_telemetry()` has folded this
-                        // frame in, so the dashboard shows the same values a library consumer
-                        // would see rather than re-deriving them from the raw map.
-                        let progress = printer.print_progress();
                         // An outcome no message produced (a timeout, a disconnect) has nothing
                         // to render; this monitor sends no commands after its pushall anyway.
                         let Some(raw) = event.raw() else { continue };
-                        let payload = &raw.payload;
-                        match dashboard::render_dashboard(
-                            payload,
-                            &mut state,
-                            quirks,
-                            progress,
-                            warning.as_deref(),
-                        ) {
-                            Ok(()) => warning = None,
+                        // Progress and bed temperature are read from the client cache inside
+                        // `redraw`, after `poll_telemetry()` has folded this frame in, so the
+                        // dashboard shows what a library consumer would see.
+                        match dashboard::merge_update(&raw.payload, &mut state) {
+                            Ok(true) => {
+                                redraw(&printer, &state, warning.as_deref());
+                                warning = None;
+                            }
+                            Ok(false) => {}
                             Err(e) => {
                                 warning =
-                                    Some(format!("Failed to render telemetry updates: {:?}", e));
+                                    Some(format!("Failed to parse telemetry update: {:?}", e));
+                                redraw(&printer, &state, warning.as_deref());
                             }
                         }
                     }
@@ -208,6 +254,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
                             "Connection stalled (no telemetry within the read deadline) — retrying"
                                 .to_string(),
                         );
+                        redraw(&printer, &state, warning.as_deref());
                     }
                     Err(e) => break Err(e),
                 }
@@ -216,6 +263,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
             _ = ping_timer.tick() => {
                 if let Err(e) = printer.send_ping().await {
                     warning = Some(format!("Failed to dispatch keep-alive ping: {:?}", e));
+                    redraw(&printer, &state, warning.as_deref());
                 }
                 // `tick_zombie_check` logs its own `log::warn!` describing which liveness
                 // condition tripped before returning `Err` (discarded under this subcommand's
@@ -243,7 +291,6 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
         }
     };
 
-    shutdown.store(true, Ordering::Relaxed);
     result.map_err(CliError::from)
 }
 

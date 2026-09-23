@@ -127,7 +127,7 @@ pub(crate) fn load_trust_anchors(path: &str) -> Result<Vec<CertificateDer<'stati
         )));
     }
 
-    println!(
+    eprintln!(
         "TLS certificate verification ENABLED: {} trust anchor(s) from {path}",
         anchors.len()
     );
@@ -138,8 +138,8 @@ pub(crate) fn load_trust_anchors(path: &str) -> Result<Vec<CertificateDer<'stati
     if crate::is_verbose() {
         for (der, origin) in anchors.iter().zip(origins.iter()) {
             match x509_parser::parse_x509_certificate(der.as_ref()) {
-                Ok((_, cert)) => println!("  trust anchor: {} [{origin}]", cert.subject()),
-                Err(e) => println!("  trust anchor: <unparsable: {e}> [{origin}]"),
+                Ok((_, cert)) => eprintln!("  trust anchor: {} [{origin}]", cert.subject()),
+                Err(e) => eprintln!("  trust anchor: <unparsable: {e}> [{origin}]"),
             }
         }
     }

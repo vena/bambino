@@ -11,6 +11,19 @@ use crate::trust::build_cli_tls_config;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
 
+/// Bounds one connect-phase await (TCP dial or TLS handshake) by `CONNECT_TIMEOUT_SECS`.
+///
+/// For the diagnostics that dial outside `PrinterClient` and so don't get its connect timeout:
+/// a port that accepts TCP but never answers TLS would otherwise hang them indefinitely.
+pub(crate) async fn with_connect_timeout<T>(
+    what: &str,
+    fut: impl Future<Output = Result<T, CliError>>,
+) -> Result<T, CliError> {
+    ::tokio::time::timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS), fut)
+        .await
+        .map_err(|_| CliError::Network(format!("{what} timed out after {CONNECT_TIMEOUT_SECS}s")))?
+}
+
 /// Environment variable consulted as a fallback source for the access code when the positional `access_code` CLI argument is omitted or empty.
 /// Lets scripted/CI usage avoid putting the access code in shell history; the positional arg still
 /// takes precedence when non-empty.

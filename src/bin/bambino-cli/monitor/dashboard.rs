@@ -2,10 +2,15 @@
 
 use std::io::{self, Write};
 
+use bambino::ams::clean_stale_tray_data;
 use bambino::diagnostics::{decode_hms_alert, decode_print_error};
 use bambino::quirks::{ModelQuirks, decode_fan_percentage};
-use bambino::types::{DeviceTelemetry, PrinterTelemetry, decode_nozzle_temperatures};
+use bambino::types::{AmsTray, DeviceTelemetry, PrinterTelemetry, decode_nozzle_temperatures};
 use serde::Deserialize;
+
+/// AMS-HT unit ids. Mirrors the library's `AMS_HT_ID_MIN..=AMS_HT_ID_MAX` (`ams/parser.rs`),
+/// which are crate-private.
+const AMS_HT_IDS: std::ops::RangeInclusive<u8> = 128..=135;
 
 /// `write!`, ignoring the error — every `render_*` helper below targets an in-memory or
 /// raw-mode terminal writer where a failed write means the terminal session is gone, which
@@ -77,19 +82,12 @@ fn deep_merge(target: &mut serde_json::Value, incoming: &serde_json::Value) {
     }
 }
 
-/// Merges a partial telemetry update into accumulated state and redraws the dashboard.
-///
-/// `warning` is the monitor loop's most recent non-fatal diagnostic, rendered in the footer
-/// through the same [`RawWriter`] as everything else. It cannot go to `log::warn!`: the CLI's
-/// logger writes to the tty this dashboard has put in raw mode, so a record would land
-/// mid-screen at the current cursor with stair-stepped line breaks.
-pub(super) fn render_dashboard(
+/// Merges a partial telemetry update into accumulated state, returning whether it carried
+/// anything the dashboard draws (`print` or `device`); `info`/`system`/`mc_print` pushes don't.
+pub(super) fn merge_update(
     payload: &[u8],
     state: &mut serde_json::Map<String, serde_json::Value>,
-    quirks: &dyn ModelQuirks,
-    progress: bambino::client::PrintProgress,
-    warning: Option<&str>,
-) -> Result<(), serde_json::Error> {
+) -> Result<bool, serde_json::Error> {
     let v: serde_json::Value = serde_json::from_slice(payload)?;
 
     let mut had_update = false;
@@ -104,7 +102,11 @@ pub(super) fn render_dashboard(
         had_update = true;
     }
 
-    if let Some(device_obj) = v.get("device") {
+    // H2/P2/X2 pushalls carry `device` inside `print`; older models send it at the top level
+    // (`types/telemetry/device.rs`). Merge the nested one first so a top-level `device` in the
+    // same payload takes precedence, as `TelemetryReport::device()` does.
+    let nested_device = v.get("print").and_then(|p| p.get("device"));
+    for device_obj in [nested_device, v.get("device")].into_iter().flatten() {
         deep_merge(
             state
                 .entry("_device".to_string())
@@ -114,16 +116,28 @@ pub(super) fn render_dashboard(
         had_update = true;
     }
 
-    if !had_update {
-        return Ok(());
-    }
+    Ok(had_update)
+}
 
+/// Redraws the dashboard from accumulated state.
+///
+/// `warning` is the monitor loop's most recent non-fatal diagnostic, rendered in the footer
+/// through the same [`RawWriter`] as everything else. It cannot go to `log::warn!`: the CLI's
+/// logger writes to the tty this dashboard has put in raw mode, so a record would land
+/// mid-screen at the current cursor with stair-stepped line breaks.
+pub(super) fn draw_dashboard(
+    state: &serde_json::Map<String, serde_json::Value>,
+    quirks: &dyn ModelQuirks,
+    progress: bambino::client::PrintProgress,
+    bed: (u16, u16),
+    warning: Option<&str>,
+) {
     let mut w = RawWriter(io::stdout());
     dwrite!(w, "\x1B[1;1H\x1B[2J");
 
     render_print_status(state, progress, &mut w);
     render_nozzles(state, &mut w);
-    render_thermal(state, quirks, &mut w);
+    render_thermal(state, quirks, bed, &mut w);
     render_fans_and_system(state, &mut w);
     render_ams(state, &mut w);
     render_external_spool(state, &mut w);
@@ -141,8 +155,6 @@ pub(super) fn render_dashboard(
 
     dwriteln!(w, "\n\x1B[2m[q/x/Esc to quit]\x1B[0m");
     w.flush().unwrap_or(());
-
-    Ok(())
 }
 
 fn render_print_status(
@@ -322,17 +334,11 @@ fn populate_nozzle_temps(
 fn render_thermal(
     state: &serde_json::Map<String, serde_json::Value>,
     quirks: &dyn ModelQuirks,
+    // From `PrinterClient::bed_temperatures()`, which decodes H2D-style `device.bed.info.temp`
+    // as well as the flat `bed_temper`/`bed_target_temper` pair.
+    (bed_act, bed_tgt): (u16, u16),
     w: &mut impl Write,
 ) {
-    let bed_act = state
-        .get("bed_temper")
-        .and_then(|t| t.as_f64())
-        .unwrap_or(0.0) as u16;
-    let bed_tgt = state
-        .get("bed_target_temper")
-        .and_then(|t| t.as_f64())
-        .unwrap_or(0.0) as u16;
-
     dwriteln!(
         w,
         "\n--- Thermal -----------------------------------------------------------"
@@ -459,22 +465,33 @@ fn render_ams(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl W
             let mut table =
                 crate::table::Table::new(vec!["Slot", "Status", "Material", "Remaining"]);
 
+            // The unit id is a string on the wire; an unparsable one is treated as standard.
+            let ams_id: u8 = unit_id.parse().unwrap_or(0);
+            let is_ht = AMS_HT_IDS.contains(&ams_id);
+
             for tray in trays {
                 let tray_id = json_as_str_or_num(tray.get("id"));
 
-                let tray_state = tray.get("state").and_then(|s| s.as_u64()).map(|s| s as u8);
-                let status = match tray_state {
+                // Same absence rules the library's `sanitized_ams()` applies: a tray with no
+                // `state` key but real filament metadata is present, and AMS-HT states 9/10 are
+                // not emptiness signals. A tray this can't parse renders as "Unknown".
+                let Ok(mut parsed) = AmsTray::deserialize(tray) else {
+                    table.add_row(vec![&tray_id, "Unknown", "", ""]);
+                    continue;
+                };
+                clean_stale_tray_data(&mut parsed, ams_id);
+
+                let material = parsed.tray_type.as_deref().unwrap_or("");
+                let status = match parsed.state {
                     Some(11) => "Loaded",
-                    Some(10) => "Present",
-                    Some(9) | Some(0) | None => "Empty",
+                    Some(10) if !is_ht => "Present",
+                    _ if !material.is_empty() => "Present",
+                    Some(0 | 9 | 10) | None => "Empty",
                     _ => "Unknown",
                 };
 
-                let material = tray.get("tray_type").and_then(|t| t.as_str()).unwrap_or("");
-
-                let remain = tray
-                    .get("remain")
-                    .and_then(|r| r.as_i64())
+                let remain = parsed
+                    .remain
                     .filter(|r| *r >= 0)
                     .map(|r| format!("{}%", r))
                     .unwrap_or_default();

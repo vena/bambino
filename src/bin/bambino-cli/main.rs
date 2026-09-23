@@ -66,8 +66,10 @@ struct Cli {
 
     /// Verify the printer's TLS certificate against these CA certs instead of skipping
     /// verification entirely. Accepts a single PEM/DER file or a directory of them (e.g.
-    /// --with-certs certs/). Applies to every printer-facing subcommand: MQTT, FTPS, camera.
-    /// Without it the CLI performs no certificate verification at all.
+    /// --with-certs certs/). Applies to every printer-facing subcommand (MQTT, FTPS, camera)
+    /// except inspect-cert, which never verifies because its job is to capture whatever
+    /// certificate the printer presents. Without it the CLI performs no certificate
+    /// verification at all.
     #[arg(long, value_name = "PATH", global = true)]
     with_certs: Option<String>,
 
@@ -114,6 +116,10 @@ enum Commands {
         /// for capturing a sequence of incremental pushes (e.g. across a tray-load event).
         #[arg(short = 'f', long)]
         follow: bool,
+        /// Print serials and access codes as the printer sent them instead of `<redacted>`
+        /// (a stdout redirect captures whatever this prints)
+        #[arg(long)]
+        show_serials: bool,
     },
 
     /// Run command response capture suite and write report
@@ -146,15 +152,15 @@ enum Commands {
         /// Comma-separated wire command names to test (default: all non-actuating ones)
         #[arg(short = 't', long)]
         tests: Option<String>,
-        /// Seconds to listen for a correlated ack after each command
-        #[arg(long)]
+        /// Seconds to listen for a correlated ack after each command (1-3600)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
         window: Option<u64>,
     },
 
     /// Dispatch a movement or hardware control command
     #[command(
         flatten_help = true,
-        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>...\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> <TEMP> <HOURS> <ROTATE> <FILAMENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry-stop <ID>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams help [COMMAND]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
+        override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch [--show-serials]]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> --material <NAME> | --temp <C> --duration-hours <H>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry-stop <ID>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams help [COMMAND]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Control {
         ip: String,
@@ -290,7 +296,17 @@ async fn main() {
             serial,
             access_code,
             follow,
-        } => monitor::dump(&ip, &serial, &resolve_access_code(access_code), follow).await,
+            show_serials,
+        } => {
+            monitor::dump(
+                &ip,
+                &serial,
+                &resolve_access_code(access_code),
+                follow,
+                show_serials,
+            )
+            .await
+        }
         Commands::Probe {
             ip,
             serial,

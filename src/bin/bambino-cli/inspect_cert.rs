@@ -34,8 +34,9 @@ use std::path::{Path, PathBuf};
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config};
 use bambino::io::{RawStreamFactory, TlsConnector};
 
-use crate::connection::validate_ip_serial;
+use crate::connection::{validate_ip_serial, with_connect_timeout};
 use crate::error::CliError;
+use crate::trust::trusted_roots;
 
 /// Builds the on-disk path for chain position `index`, counting the leaf as 0.
 ///
@@ -72,23 +73,38 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
 
     let addr = format!("{ip}:{port}");
 
-    let raw_stream = TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {
-        CliError::Network(format!(
-            "TCP connect to {addr} failed: {}",
-            bambino::Error::from(e)
-        ))
-    })?;
+    // Capturing an unverifiable chain is the point of this command, so `--with-certs` is not
+    // applied; say so rather than let a user read a completed handshake as a verified one.
+    if trusted_roots().is_some() {
+        eprintln!(
+            "Note: inspect-cert ignores --with-certs and does NOT verify the certificate; use \
+             verify-tls for a verified handshake."
+        );
+    }
+
+    let raw_stream = with_connect_timeout(&format!("TCP connect to {addr}"), async {
+        TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {
+            CliError::Network(format!(
+                "TCP connect to {addr} failed: {}",
+                bambino::Error::from(e)
+            ))
+        })
+    })
+    .await?;
 
     let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(
         build_unsafe_client_config(),
     ));
 
-    let tls_stream = connector.connect(serial, raw_stream).await.map_err(|e| {
-        CliError::Network(format!(
-            "TLS handshake with {addr} (SNI={serial}) failed: {}",
-            bambino::Error::from(e)
-        ))
-    })?;
+    let tls_stream = with_connect_timeout(&format!("TLS handshake with {addr}"), async {
+        connector.connect(serial, raw_stream).await.map_err(|e| {
+            CliError::Network(format!(
+                "TLS handshake with {addr} (SNI={serial}) failed: {}",
+                bambino::Error::from(e)
+            ))
+        })
+    })
+    .await?;
 
     // Must be read before the stream is dropped: the chain is owned by the live session.
     let chain = connector.peer_chain_der(&tls_stream).ok_or_else(|| {

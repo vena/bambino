@@ -11,7 +11,7 @@
 use bambino::io::tokio::build_verified_client_config;
 use rustls_pki_types::ServerName;
 
-use crate::connection::validate_ip_serial;
+use crate::connection::{validate_ip_serial, with_connect_timeout};
 use crate::error::CliError;
 use crate::trust::trusted_roots;
 
@@ -39,14 +39,22 @@ pub async fn run(ip: &str, serial: &str, port: u16) -> Result<(), CliError> {
     let connector = tokio_rustls::TlsConnector::from(config);
 
     let addr = format!("{ip}:{port}");
-    let stream = ::tokio::net::TcpStream::connect(&addr)
-        .await
-        .map_err(|e| CliError::Network(format!("TCP connect to {addr} failed: {e}")))?;
+    let stream = with_connect_timeout(&format!("TCP connect to {addr}"), async {
+        ::tokio::net::TcpStream::connect(&addr)
+            .await
+            .map_err(|e| CliError::Network(format!("TCP connect to {addr} failed: {e}")))
+    })
+    .await?;
 
     let server_name = ServerName::try_from(serial.to_string())
         .map_err(|_| CliError::InvalidArgs(format!("invalid serial for SNI: '{serial}'")))?;
 
-    match connector.connect(server_name, stream).await {
+    let handshake = with_connect_timeout(&format!("TLS handshake with {addr}"), async {
+        Ok(connector.connect(server_name, stream).await)
+    })
+    .await?;
+
+    match handshake {
         Ok(_) => {
             println!(
                 "Verified TLS handshake with {addr} (SNI={serial}) succeeded — \

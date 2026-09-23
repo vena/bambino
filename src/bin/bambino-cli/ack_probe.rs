@@ -715,12 +715,8 @@ pub async fn run(
     window_secs: Option<u64>,
 ) -> Result<(), CliError> {
     let tests = select_tests(tests_arg)?;
+    // `main` bounds --window to 1..=3600, so `capture_ack`'s `Instant + window` can't overflow.
     let window = Duration::from_secs(window_secs.unwrap_or(DEFAULT_ACK_WINDOW_SECS));
-    if window.is_zero() {
-        return Err(CliError::InvalidArgs(
-            "--window must be at least 1 second".to_string(),
-        ));
-    }
 
     if !confirm_actuating_tests(&tests)? {
         return Ok(());

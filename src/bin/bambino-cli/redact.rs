@@ -2,7 +2,7 @@
 //! # Secret Redaction for Captured Payloads
 //!
 //! Used by every harness that writes a printer's own words to a file or to stdout — today
-//! `ack_probe` and `probe`. Root `CLAUDE.md` forbids an access code or serial number landing
+//! `ack_probe`, `probe`, `dump` and `calibrate --watch`. Root `CLAUDE.md` forbids an access code or serial number landing
 //! in a file in this repository, and both are exactly what a capture picks up:
 //! `get_access_code`'s whole reply is a credential, and module lists and job payloads carry
 //! serials. Kept as its own module rather than folded back into `ack_probe` because the rule
