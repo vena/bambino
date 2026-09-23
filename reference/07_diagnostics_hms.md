@@ -240,43 +240,39 @@ On IDEX platforms (such as the `H2D`), the `"filaments"` array inside `"extrusio
 The `"setting_id"` parameter inside K-profile calibration payloads (`extrusion_cali_set` and `extrusion_cali_del`) must conform strictly to a 19-character numeric string format consisting of the `"PF"` header prefix followed by exactly 17 numeric digits (e.g., `"PF12345678901234567"`). Alphanumeric setting ID formats (such as `"PFUS9be9e18f81828a"`) are strictly reserved for slicer-side filament presets (`ams_filament_setting` / `tray_info_idx` mappings). Transmitting an alphanumeric setting ID inside K-profile operations will result in execution failure or local EEPROM table corruption.
 
 #### Delete a Calibration Profile
-Because single-carriage and dual-carriage (IDEX) models manage their EEPROM databases differently, deletions must be executed using separate, mutually exclusive command schemas:
+The delete fields sit **flat in `print`** — there is no `filaments` array, unlike `extrusion_cali_set`. Every upstream client agrees on this: BambuStudio `MachineObject::command_delete_pa_calibration` (`DeviceManager.cpp:2012-2028`), bambuddy `delete_kprofile` (`bambu_mqtt.py:6932-6998`) and OrcaSlicer (`DeviceManager.cpp:1991-2000`). An earlier version of this section nested the fields in `filaments[]` and gave the IDEX form no field naming the profile (no `cali_idx`, no `filament_id`); both were wrong (#313). Not yet verified against a wire capture.
+
+The profile is identified by `cali_idx` + `filament_id` (plus `extruder_id`/`nozzle_id`/`nozzle_diameter`) on every model. BambuStudio sends no `setting_id`; bambuddy adds it on single-nozzle printers.
 
 ##### Schema A: Standard Single-Nozzle Deletion (X1, P1, A1, P2S, H2S)
-The database on single-nozzle platforms is globally keyed on `"setting_id"`. The deletion schema must mirror the nested `"filaments"` array structure used during profile creation:
 
 ```json
 {
   "print": {
     "command": "extrusion_cali_del",
-    "filaments": [
-      {
-        "cali_idx": 4,
-        "filament_id": "GFA01",
-        "nozzle_diameter": "0.4",
-        "nozzle_id": "HS00-0.4",
-        "setting_id": "PF12345678901234567"
-      }
-    ],
+    "extruder_id": 0,
+    "nozzle_id": "HS00-0.4",
+    "filament_id": "GFA01",
+    "cali_idx": 4,
+    "nozzle_diameter": "0.4",
+    "setting_id": "PF12345678901234567",
     "sequence_id": "50003"
   }
 }
 ```
 
 ##### Schema B: Dual-Nozzle IDEX Deletion (H2D, X2D, H2C)
-The database on IDEX platforms is keyed by physical carriage coordinate parameters. Deletions target these fields within a nested `"filaments"` array, identical to the structure used by Schema A:
+The same flat shape without `setting_id`, with `extruder_id` naming the carriage. BambuStudio also sends `nozzle_pos`/`nozzle_sn` when the profile belongs to a specific rack nozzle (H2C); bambino does not send them yet.
 
 ```json
 {
   "print": {
     "command": "extrusion_cali_del",
-    "filaments": [
-      {
-        "nozzle_diameter": "0.4",
-        "nozzle_id": "HS00-0.4",
-        "extruder_id": 0
-      }
-    ],
+    "extruder_id": 1,
+    "nozzle_id": "HS00-0.4",
+    "filament_id": "GFA01",
+    "cali_idx": 4,
+    "nozzle_diameter": "0.4",
     "sequence_id": "50004"
   }
 }

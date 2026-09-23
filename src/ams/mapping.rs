@@ -256,30 +256,27 @@ pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
 /// caller-supplied data. On `alloc`/`embassy` that is an OOM abort in a fixed heap, not a
 /// recoverable error.
 ///
-/// The ceiling is the physical one: 16 flat channels (4 standard units × 4 slots) plus every id
-/// an AMS-HT configuration can add. H2C/H2D/H2D Pro/H2S/X2D report
-/// `AmsPoolComposition::Independent { max_standard: 4, max_ht: 8 }`, so the real maximum is 24,
-/// not the 20 this once assumed — the earlier value silently dropped ids 21-24 on a project
-/// using all 4 standard units plus all 8 AMS-HT units. Derived from the parser's id ranges
-/// rather than written as a literal so a future range change carries through here.
+/// The ceiling is BambuStudio's project-filament limit, not the physical channel count:
+/// `filament_id` is the slicer's 1-based *project filament index*, and several project filaments
+/// can print from one spool, so a project can use more filament ids than the printer has
+/// channels. BambuStudio allows 32 (`EnforcerBlockerType::ExtruderMax = Extruder32`,
+/// `Model.hpp:755`). Capping at the 24 physical channels (#146's reasoning) dropped ids 25-32
+/// (#342).
 ///
 /// This is deliberately a single crate-wide cap rather than a per-model one: the mapping
 /// builders take raw project allocations with no `PrinterModel` in hand, so the quirks engine
-/// is not reachable from here. It bounds an allocation sized from untrusted input; a model that
-/// physically has fewer channels rejects the surplus ids on its own side.
+/// is not reachable from here. It bounds an allocation sized from untrusted input.
 ///
 /// Allocations above it are dropped through the same `log::warn!` path as any other
 /// out-of-range filament id.
-pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize =
-    (super::parser::AMS_MAX_STANDARD_ID as usize + 1) * super::parser::AMS_SLOTS_PER_UNIT as usize
-        + (super::parser::AMS_HT_ID_MAX - super::parser::AMS_HT_ID_MIN + 1) as usize;
+pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize = 32;
 
 /// Builds the flat `ams_mapping` integer array from raw project allocations.
 ///
 /// `allocations` is a slice of `(filament_id, MaterialSource)` pairs where `filament_id`
 /// represents the 1-based index (1 to N) of the project material defined in the slicer.
-/// Ids above the physical ceiling of `AMS_MAX_PROJECT_FILAMENTS` (16 flat channels plus the 8
-/// an AMS-HT configuration adds) are dropped with a warning rather than sizing the output array.
+/// Ids above `AMS_MAX_PROJECT_FILAMENTS` (BambuStudio's 32-filament project limit) are dropped
+/// with a warning rather than sizing the output array.
 ///
 /// **Array Length Rule [REF-AMS-MAP]:**
 /// The length of the array is governed by the highest filament ID index present in the project,
@@ -519,14 +516,21 @@ pub fn is_external_spool_safety_valid_flat(is_single_nozzle: bool, ams_mapping: 
     if !is_single_nozzle {
         return true;
     }
-    let max_standard_channel = (super::parser::AMS_MAX_STANDARD_ID as i32 + 1)
-        * super::parser::AMS_SLOTS_PER_UNIT as i32
+    ams_mapping.iter().any(|&v| is_physical_flat_channel(v))
+}
+
+/// Returns true if `v` is a flat `ams_mapping` channel naming a physical AMS slot: a standard channel (0–15) or an AMS-HT id (128–135).
+///
+/// The one definition of that range, shared by this module's safety interlock, the print-job
+/// mapping sanitizer and the client's tray validation: two hand-kept copies could drift so that
+/// the sanitizer rewrote every channel to `-1` while the interlock still passed (#316).
+pub(crate) fn is_physical_flat_channel(v: i32) -> bool {
+    let max_standard_channel = (i32::from(super::parser::AMS_MAX_STANDARD_ID) + 1)
+        * i32::from(super::parser::AMS_SLOTS_PER_UNIT)
         - 1;
-    ams_mapping.iter().any(|&v| {
-        (0..=max_standard_channel).contains(&v)
-            || (super::parser::AMS_HT_ID_MIN as i32..=super::parser::AMS_HT_ID_MAX as i32)
-                .contains(&v)
-    })
+    (0..=max_standard_channel).contains(&v)
+        || (i32::from(super::parser::AMS_HT_ID_MIN)..=i32::from(super::parser::AMS_HT_ID_MAX))
+            .contains(&v)
 }
 
 #[cfg(test)]
@@ -942,7 +946,6 @@ mod tests {
         // H2D, H2D Pro, H2S and X2D all report Independent { max_standard: 4, max_ht: 8 }, so
         // a project using every unit reaches filament id 24 and ids 21-24 were silently
         // dropped — and max_id.min(cap) shrank the array below what the project needed.
-        assert_eq!(AMS_MAX_PROJECT_FILAMENTS, 24);
 
         let mut allocations = Vec::new();
         for ams_id in 0..=3u8 {
@@ -968,6 +971,43 @@ mod tests {
         );
 
         assert_eq!(build_ams_mapping2(&allocations).len(), 24);
+    }
+
+    #[test]
+    fn test_project_filament_ids_above_the_channel_count_are_kept() {
+        // Regression (#342): filament ids are project indices, not channels, and BambuStudio
+        // allows 32 of them. Filament 27 printing from a shared spool used to be dropped.
+        let allocations = [
+            (
+                1,
+                MaterialSource::StandardAms {
+                    ams_id: 0,
+                    slot_id: 0,
+                },
+            ),
+            (
+                27,
+                MaterialSource::StandardAms {
+                    ams_id: 0,
+                    slot_id: 0,
+                },
+            ),
+        ];
+        let flat_map = build_ams_mapping(&allocations);
+        assert_eq!(flat_map.len(), 27);
+        assert_eq!(flat_map[26], 0);
+        assert_eq!(build_ams_mapping2(&allocations).len(), 27);
+        assert_eq!(
+            build_ams_mapping(&[(
+                33,
+                MaterialSource::StandardAms {
+                    ams_id: 0,
+                    slot_id: 0
+                }
+            )])
+            .len(),
+            32
+        );
     }
 
     #[test]

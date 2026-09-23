@@ -274,7 +274,7 @@ The `"ams_mapping2"` parameter is a JSON array of structured objects that mainta
 On single-nozzle platforms (such as the X1C, P1S, A1, and H2S), if all mapped filaments reside on the external spool (no active spool is routed to a physical AMS unit), the `use_ams` command parameter must be set strictly to `false` in the dispatch payload. If `use_ams: true` is transmitted when printing exclusively from the external spool, the print processor fails to build the material routing table, rejecting the task with error `07FF_8012`.
 
 #### Select Calibration Profile Command (`extrusion_cali_sel`)
-To bind a stored pressure advance (K-profile) to an AMS slot, both `"ams_id"` and `"tray_id"` must be transmitted. `"tray_id"` must be formatted as the absolute global tray ID. Furthermore, the `setting_id` field must be strictly omitted to prevent database mislinking.
+To bind a stored pressure advance (K-profile) to an AMS slot, `"ams_id"`, `"tray_id"` and `"slot_id"` must be transmitted. `"tray_id"` must be formatted as the absolute global tray ID; `"slot_id"` is the local slot — `tray_id - ams_id * 4` for a standard AMS, `tray_id - 24` for an AMS Lite on an A2L, and `0` for an AMS-HT or external spool. BambuStudio `commnad_select_pa_calibration` (`DeviceManager.cpp:2061-2078`) and bambuddy (`bambu_mqtt.py:7830-7866`) both send `slot_id` (#315). Furthermore, the `setting_id` field must be strictly omitted to prevent database mislinking.
 
 ```json
 {
@@ -282,6 +282,7 @@ To bind a stored pressure advance (K-profile) to an AMS slot, both `"ams_id"` an
     "command": "extrusion_cali_sel",
     "ams_id": 0,
     "tray_id": 1,
+    "slot_id": 1,
     "cali_idx": 4,
     "filament_id": "GFA01",
     "nozzle_diameter": "0.4",

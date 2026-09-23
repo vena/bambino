@@ -7,13 +7,11 @@
 //! * **Setting ID Validation**: Enforces the 19-character numeric `setting_id` boundary
 //!   (`"PF"` followed by exactly 17 decimal digits) to prevent memory table corruption in the local
 //!   EEPROM partition database.
-//! * **Polymorphic Deletions**: Separates deletion schemas cleanly between standard single-nozzle
-//!   platforms (keyed on `setting_id`) and dual-nozzle IDEX platforms (keyed on coordinate/carriage parameters).
+//! * **Polymorphic Deletions**: Separate deletion entry types for single-nozzle platforms (which
+//!   also carry `setting_id`) and dual-nozzle IDEX platforms, both sent flat in `print`.
 
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
-#[cfg(not(feature = "std"))]
-use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
@@ -57,12 +55,28 @@ fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
 // 1. Database Representation Structs
 // ============================================================================
 
+fn default_cali_idx() -> i32 {
+    -1
+}
+
+fn default_k_value() -> String {
+    String::from("0")
+}
+
 /// Structured representation of a Linear Advance calibration profile entry on the printer.
+///
+/// Every field is optional on the read side, defaulting as BambuStudio's
+/// `from_json(PACalibResult)` does (`DevCalib.cpp:56-72`): one entry missing a key must not fail
+/// the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out as a timeout
+/// (#314).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KProfileEntry {
-    /// Database index corresponding to the stored slot (-1 indicates a fresh write).
+    /// Database index corresponding to the stored slot (-1 indicates a fresh write, and is the
+    /// default when the key is absent).
+    #[serde(default = "default_cali_idx")]
     pub cali_idx: i32,
     /// Preset identifier associated with the base filament category (e.g. `"GFA01"`).
+    #[serde(default)]
     pub filament_id: String,
     /// Physical orifice size matching the calibrated tool (e.g. `"0.4"`).
     ///
@@ -103,17 +117,24 @@ pub struct KProfileEntry {
     ///
     /// See `reference/07_diagnostics_hms.md` §7.2 for the full slot-resolution rule, including
     /// why `cali_idx` alone does not identify a profile.
+    #[serde(default)]
     pub nozzle_id: String,
     /// Carriage layout indicator (0 = Right/Primary extruder, 1 = Left/Deputy extruder).
+    #[serde(default)]
     pub extruder_id: u8,
     /// Custom user-defined name assigned to label the profile slot.
+    #[serde(default)]
     pub name: String,
     /// Calibrated Linear Advance constant serialized as a float string.
     ///
     /// Bound permissively for the same reason as [`nozzle_diameter`](Self::nozzle_diameter):
     /// firmware may send the numeric form (`0.02`) on the read side. A number is rendered back
-    /// to its decimal text, so callers see one representation either way.
-    #[serde(deserialize_with = "deserialize_permissive_string")]
+    /// to its decimal text, so callers see one representation either way. `"0"` when absent,
+    /// matching BambuStudio's `0.0` default.
+    #[serde(
+        default = "default_k_value",
+        deserialize_with = "deserialize_permissive_string"
+    )]
     pub k_value: String,
     /// Extrusion coefficient parameters.
     #[serde(
@@ -123,6 +144,7 @@ pub struct KProfileEntry {
     )]
     pub n_coef: Option<String>,
     /// Secure 19-character unique setting identifier.
+    #[serde(default)]
     pub setting_id: String,
     /// Links K-profile to AMS unit (default 0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -345,6 +367,10 @@ pub struct ExtrusionCaliSelPayload {
     pub ams_id: i32,
     /// Absolute global tray ID (not local slot index).
     pub tray_id: i32,
+    /// Local slot within the unit: `0..=3` on a standard AMS or an AMS Lite on an A2L, `0` on
+    /// an AMS-HT or external spool. BambuStudio (`DeviceManager.cpp:2061-2078`) and bambuddy
+    /// both send it alongside the global `tray_id` (#315).
+    pub slot_id: i32,
     /// Index of the calibration entry within the target's profile database (`KProfileEntry::cali_idx`).
     pub cali_idx: i32,
     /// Filament preset ID this K-profile applies to (`KProfileEntry::filament_id`).
@@ -382,9 +408,12 @@ impl ExtrusionCaliSelRequest {
     /// * `ams_filament_setting` — Single-Nozzle Platforms: `ams_id: 255` / `tray_id: 254`.
     ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     ///   `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
+    ///
+    /// Wire form as given: `slot_id` is the unit-local slot, see [`ExtrusionCaliSelPayload::slot_id`].
     pub fn new(
         ams_id: i32,
         tray_id: i32,
+        slot_id: i32,
         cali_idx: i32,
         filament_id: &str,
         nozzle_diameter: &str,
@@ -395,6 +424,7 @@ impl ExtrusionCaliSelRequest {
                 command: "extrusion_cali_sel",
                 ams_id,
                 tray_id,
+                slot_id,
                 cali_idx,
                 filament_id: String::from(filament_id),
                 nozzle_diameter: String::from(nozzle_diameter),
@@ -409,8 +439,14 @@ impl ExtrusionCaliSelRequest {
 // ============================================================================
 
 /// Deletion data fields utilized by standard single-nozzle databases (Schema A).
+///
+/// Serialized **flat into `print`**, not inside a `filaments` array: BambuStudio, bambuddy and
+/// OrcaSlicer all send `extrusion_cali_del` that way (`reference/07_diagnostics_hms.md` §7.2,
+/// #313).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StandardCaliDelEntry {
+    /// Carriage index of the entry being deleted — `0` on a single-nozzle printer.
+    pub extruder_id: u8,
     /// Index of the calibration entry to delete (`KProfileEntry::cali_idx`).
     pub cali_idx: i32,
     /// Filament preset ID of the entry being deleted (`KProfileEntry::filament_id`).
@@ -423,9 +459,16 @@ pub struct StandardCaliDelEntry {
     pub setting_id: String,
 }
 
-/// Deletion coordinate metrics utilized by dual-nozzle IDEX databases (Schema B).
+/// Deletion data fields utilized by dual-nozzle IDEX databases (Schema B).
+///
+/// Serialized flat into `print`, as [`StandardCaliDelEntry`]. `cali_idx` and `filament_id` are
+/// what name the profile; the carriage fields alone name none (#313).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IdexCaliDelEntry {
+    /// Index of the calibration entry to delete (`KProfileEntry::cali_idx`).
+    pub cali_idx: i32,
+    /// Filament preset ID of the entry being deleted (`KProfileEntry::filament_id`).
+    pub filament_id: String,
     /// Nozzle diameter of the entry being deleted (`KProfileEntry::nozzle_diameter`).
     pub nozzle_diameter: String,
     /// System nozzle profile designation of the entry being deleted (`KProfileEntry::nozzle_id`).
@@ -439,8 +482,9 @@ pub struct IdexCaliDelEntry {
 pub struct StandardCaliDelPayload {
     /// Wire command name, always `"extrusion_cali_del"`.
     pub command: &'static str,
-    /// Entries to delete. `StandardCaliDelRequest::new` always sends exactly one.
-    pub filaments: Vec<StandardCaliDelEntry>,
+    /// The entry to delete, flattened into `print`.
+    #[serde(flatten)]
+    pub target: StandardCaliDelEntry,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
@@ -463,7 +507,7 @@ impl StandardCaliDelRequest {
         Ok(Self {
             print: StandardCaliDelPayload {
                 command: "extrusion_cali_del",
-                filaments: vec![target],
+                target,
                 sequence_id: sequence_id.into().to_string(),
             },
         })
@@ -475,8 +519,9 @@ impl StandardCaliDelRequest {
 pub struct IdexCaliDelPayload {
     /// Wire command name, always `"extrusion_cali_del"`.
     pub command: &'static str,
-    /// Entries to delete. `IdexCaliDelRequest::new` always sends exactly one.
-    pub filaments: Vec<IdexCaliDelEntry>,
+    /// The entry to delete, flattened into `print`.
+    #[serde(flatten)]
+    pub target: IdexCaliDelEntry,
     /// Request sequence ID, serialized as a string on the wire.
     pub sequence_id: String,
 }
@@ -494,7 +539,7 @@ impl IdexCaliDelRequest {
         Self {
             print: IdexCaliDelPayload {
                 command: "extrusion_cali_del",
-                filaments: vec![target],
+                target,
                 sequence_id: sequence_id.into().to_string(),
             },
         }
@@ -574,11 +619,12 @@ mod tests {
 
     #[test]
     fn test_extrusion_cali_sel_json() {
-        let req = ExtrusionCaliSelRequest::new(0, 1, 4, "GFA01", "0.4", 40003);
+        let req = ExtrusionCaliSelRequest::new(0, 1, 1, 4, "GFA01", "0.4", 40003);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"extrusion_cali_sel"#));
         assert!(json.contains(r#""ams_id":0"#));
         assert!(json.contains(r#""tray_id":1"#));
+        assert!(json.contains(r#""slot_id":1"#));
         assert!(json.contains(r#""cali_idx":4"#));
         assert!(json.contains(r#""filament_id":"GFA01""#));
         assert!(json.contains(r#""nozzle_diameter":"0.4""#));
@@ -589,6 +635,7 @@ mod tests {
     #[test]
     fn test_standard_cali_del_json() {
         let entry = StandardCaliDelEntry {
+            extruder_id: 0,
             cali_idx: 4,
             filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
@@ -596,16 +643,40 @@ mod tests {
             setting_id: "PF12345678901234567".into(),
         };
         let req = StandardCaliDelRequest::new(entry, 50003).unwrap();
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains(r#""command":"extrusion_cali_del"#));
-        assert!(json.contains(r#""cali_idx":4"#));
-        assert!(json.contains(r#""setting_id":"PF12345678901234567""#));
-        assert!(json.contains(r#""sequence_id":"50003""#));
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        // Flat in `print`, as BambuStudio/bambuddy/OrcaSlicer send it — no `filaments` (#313).
+        assert_eq!(
+            json,
+            serde_json::json!({"print": {
+                "command": "extrusion_cali_del",
+                "extruder_id": 0,
+                "cali_idx": 4,
+                "filament_id": "GFA01",
+                "nozzle_diameter": "0.4",
+                "nozzle_id": "HS00-0.4",
+                "setting_id": "PF12345678901234567",
+                "sequence_id": "50003"
+            }})
+        );
+    }
+
+    #[test]
+    fn test_kprofile_entry_missing_keys_default_like_bambustudio() {
+        // Regression (#314): one entry missing an upstream-optional key failed the whole reply.
+        let entry: KProfileEntry =
+            serde_json::from_str(r#"{"name": "PLA", "k_value": "0.02"}"#).expect("partial entry");
+        assert_eq!(entry.cali_idx, -1);
+        assert_eq!(entry.extruder_id, 0);
+        assert_eq!(entry.filament_id, "");
+        assert_eq!(entry.setting_id, "");
+        let entry: KProfileEntry = serde_json::from_str("{}").expect("empty entry");
+        assert_eq!(entry.k_value, "0");
     }
 
     #[test]
     fn test_standard_cali_del_invalid_id() {
         let entry = StandardCaliDelEntry {
+            extruder_id: 0,
             cali_idx: 4,
             filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
@@ -618,18 +689,27 @@ mod tests {
     #[test]
     fn test_idex_cali_del_json() {
         let entry = IdexCaliDelEntry {
+            cali_idx: 4,
+            filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
+            extruder_id: 1,
         };
         let req = IdexCaliDelRequest::new(entry, 50004);
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains(r#""command":"extrusion_cali_del"#));
-        assert!(json.contains(r#""extruder_id":0"#));
-        assert!(json.contains(r#""nozzle_id":"HS00-0.4""#));
-        assert!(json.contains(r#""sequence_id":"50004""#));
-        // IDEX deletion must not contain setting_id
-        assert!(!json.contains("setting_id"));
+        let json: serde_json::Value = serde_json::to_value(&req).unwrap();
+        // Flat, and naming the profile by cali_idx + filament_id; no setting_id (#313).
+        assert_eq!(
+            json,
+            serde_json::json!({"print": {
+                "command": "extrusion_cali_del",
+                "cali_idx": 4,
+                "filament_id": "GFA01",
+                "nozzle_diameter": "0.4",
+                "nozzle_id": "HS00-0.4",
+                "extruder_id": 1,
+                "sequence_id": "50004"
+            }})
+        );
     }
 
     #[test]
@@ -845,13 +925,14 @@ mod tests {
         );
 
         assert_clamped(
-            &ExtrusionCaliSelRequest::new(0, 1, 4, "GFA01", "0.4", raw)
+            &ExtrusionCaliSelRequest::new(0, 1, 1, 4, "GFA01", "0.4", raw)
                 .print
                 .sequence_id,
             "ExtrusionCaliSelRequest",
         );
 
         let standard_entry = StandardCaliDelEntry {
+            extruder_id: 0,
             cali_idx: 4,
             filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
@@ -867,6 +948,8 @@ mod tests {
         );
 
         let idex_entry = IdexCaliDelEntry {
+            cali_idx: 4,
+            filament_id: "GFA01".into(),
             nozzle_diameter: "0.4".into(),
             nozzle_id: "HS00-0.4".into(),
             extruder_id: 0,

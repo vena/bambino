@@ -39,6 +39,12 @@ pub(crate) fn is_valid_ams_id(ams_id: i32) -> bool {
         || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID)
 }
 
+/// Returns true for an AMS-HT unit id (128–135), a single-slot unit.
+fn is_ams_ht_id(ams_id: i32) -> bool {
+    (i32::from(crate::ams::parser::AMS_HT_ID_MIN)..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
+        .contains(&ams_id)
+}
+
 /// Translates a caller-supplied `ams_id` into the id the wire carries.
 ///
 /// Only the A2L-attached AMS Lite differs: telemetry normalizes its physical id 16 to 6, but
@@ -165,7 +171,10 @@ where
         let pair_valid = slot_id != 254
             || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
             || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID);
-        if !ams_valid || !slot_valid || !pair_valid {
+        // An AMS-HT unit has one slot, so only slot 0 (or 255 to unload) addresses it (#357),
+        // matching `resolve_global_tray_id`.
+        let ht_slot_valid = !is_ams_ht_id(ams_id) || slot_id == 0 || slot_id == 255;
+        if !ams_valid || !slot_valid || !pair_valid || !ht_slot_valid {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for change_filament".into(),
             ));
@@ -313,7 +322,13 @@ where
     /// same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
     pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<CommandHandle, Error> {
         let ams_valid = is_valid_ams_bus_unit_id(ams_id);
-        let slot_valid = (0..=3).contains(&slot_id);
+        // AMS-HT is single-slot (#357); without this the np path published a nonexistent slot
+        // while the legacy path's `resolve_global_tray_id` rejected the same input.
+        let slot_valid = if is_ams_ht_id(ams_id) {
+            slot_id == 0
+        } else {
+            (0..=3).contains(&slot_id)
+        };
         if !ams_valid || !slot_valid {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for scan_rfid".into(),
@@ -388,7 +403,9 @@ where
         let ams_valid = is_valid_ams_id(ams_id);
         let tray_valid = (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
             || AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS.contains(&tray_id)
-            || (128..=135).contains(&tray_id)
+            || (i32::from(crate::ams::parser::AMS_HT_ID_MIN)
+                ..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
+                .contains(&tray_id)
             || tray_id == 254
             || tray_id == 255;
         if !ams_valid || !tray_valid {
@@ -397,11 +414,22 @@ where
             ));
         }
 
+        // The unit-local slot BambuStudio and bambuddy send next to the global tray (#315):
+        // standard units and the A2L-attached AMS Lite have four slots, whose global ids are
+        // contiguous blocks of four; AMS-HT and external spools have one.
+        let slot_id = if (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
+            || AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS.contains(&tray_id)
+        {
+            tray_id % i32::from(crate::ams::parser::AMS_SLOTS_PER_UNIT)
+        } else {
+            0
+        };
         let ams_id = wire_ams_id(ams_id);
         self.dispatch(|seq| {
             crate::diagnostics::ExtrusionCaliSelRequest::new(
                 ams_id,
                 tray_id,
+                slot_id,
                 cali_idx,
                 filament_id,
                 nozzle_diameter,

@@ -239,11 +239,15 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
 
 /// Computes the unique global channel identifier for a given expansion unit and local tray.
 ///
-/// Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3,
-/// AMS-HT 128–135, external 254–255) or if `tray_id >= 4` on the standard path.
+/// Returns `None` if `ams_id` falls outside all valid ranges (standard 0–3, the
+/// A2L-attached AMS Lite's normalized 6, AMS-HT 128–135, external 254–255) or if
+/// `tray_id >= 4` on a four-slot path.
 ///
 /// The physical mapping aligns as:
 /// * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
+/// * **AMS Lite on an A2L**: the normalized id 6 through the same formula, giving global ids
+///   24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`]
+///   first (`.claude/rules/ams-lite-on-a2l-unit-id.md`).
 /// * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 /// * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
 ///
@@ -308,6 +312,9 @@ pub fn normalize_ams_unit_id(ams_id: u8) -> u8 {
 /// (no field in this crate's telemetry types currently sources it), and the map can be
 /// genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
 /// a caller with its own confirmed `ams_extruder_map` source may still use this directly.
+///
+/// Map entries may be wire ids: each is passed through [`normalize_ams_unit_id`], so an
+/// A2L-attached AMS Lite resolves under either its physical 16 or its normalized 6 (#344).
 #[must_use]
 pub fn resolve_printing_global_id(
     tray_now: u8,
@@ -315,13 +322,20 @@ pub fn resolve_printing_global_id(
     ams_extruder_map: &[u8],
 ) -> Option<u8> {
     let extruder = active_extruder?;
-    let ams_id = ams_extruder_map.get(extruder as usize)?;
-    resolve_global_tray_id(*ams_id, tray_now)
+    let ams_id = normalize_ams_unit_id(*ams_extruder_map.get(extruder as usize)?);
+    resolve_global_tray_id(ams_id, tray_now)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_resolve_printing_global_id_normalizes_a2l_ams_lite_wire_id() {
+        // Regression (#344): a map built from wire ids carries the physical 16.
+        assert_eq!(resolve_printing_global_id(1, Some(0), &[16]), Some(25));
+        assert_eq!(resolve_printing_global_id(1, Some(0), &[6]), Some(25));
+    }
 
     #[test]
     fn test_evaluate_spool_presence_standard() {

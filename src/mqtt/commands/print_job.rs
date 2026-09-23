@@ -30,7 +30,7 @@ fn sanitize_flat_mapping(mapping: Vec<i32>, ctx: &str) -> Vec<i32> {
     mapping
         .into_iter()
         .map(|v| {
-            if v == -1 || (0..=15).contains(&v) || (128..=135).contains(&v) {
+            if v == -1 || crate::ams::mapping::is_physical_flat_channel(v) {
                 v
             } else {
                 log::warn!("{ctx}: out-of-range flat channel id {v}, mapping to -1 (unmapped)");
