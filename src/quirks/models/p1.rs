@@ -94,9 +94,12 @@ macro_rules! impl_p1_shared {
             /// printing.
             fn ams_drying_while_printing_support(
                 &self,
-                _ctx: &crate::quirks::QuirkContext,
+                ctx: &crate::quirks::QuirkContext,
             ) -> crate::quirks::Support {
-                crate::quirks::Support::Inferred(false)
+                crate::quirks::dry_while_printing_unless_reported_off(
+                    ctx,
+                    crate::quirks::Support::Inferred(false),
+                )
             }
 
             fn is_bed_on_z(&self) -> bool {

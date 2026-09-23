@@ -1381,11 +1381,6 @@ async fn test_ams_commands_address_ams_lite_on_a2l() {
         assert_eq!(json["print"]["command"], "extrusion_cali_sel");
         assert_eq!(json["print"]["ams_id"], 16);
         assert_eq!(json["print"]["tray_id"], 25);
-
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "ams_filament_drying");
-        assert_eq!(json["print"]["ams_id"], 16);
-        assert_eq!(json["print"]["mode"], 1);
     });
 
     let mut client =
@@ -1401,14 +1396,14 @@ async fn test_ams_commands_address_ams_lite_on_a2l() {
         .select_k_profile(6, 25, 4, "GFA01", "0.4")
         .await
         .expect("select_k_profile failed");
-    // No AMS telemetry has arrived, so the unit-model gate passes the unobserved unit through.
-    client
-        .dry(16)
-        .temp(50)
-        .duration_hours(4)
-        .send()
-        .await
-        .expect("drying cycle failed");
+    // Issue #355: no AMS telemetry has arrived, but the address alone says AMS Lite — no heater.
+    for id in [6, 16] {
+        let err = client.dry(id).temp(50).duration_hours(4).send().await;
+        assert!(
+            matches!(err, Err(Error::ModelMismatch(_))),
+            "dry({id}) should be rejected, got {err:?}"
+        );
+    }
 
     broker_task.await.expect("Broker task panicked");
 }

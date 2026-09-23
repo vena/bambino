@@ -95,7 +95,9 @@ impl<'a> Capabilities<'a> {
     /// Whether an AMS drying cycle can run while a print is in progress.
     ///
     /// Strictly narrower than [`supports_ams_remote_drying`](Self::supports_ams_remote_drying),
-    /// and defaults to `false` when the firmware version is unknown. See
+    /// and defaults to `false` when the firmware version is unknown — except on X2D and A2L,
+    /// whose earliest firmware already has the feature, so they report `true` before
+    /// `get_version()` completes. See
     /// [`ModelQuirks::supports_ams_drying_while_printing`] for the sourcing.
     #[must_use]
     pub fn supports_ams_drying_while_printing(&self) -> bool {

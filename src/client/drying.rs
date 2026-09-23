@@ -17,6 +17,7 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 
+use crate::ams::parser::{AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_LITE_ON_A2L_PHYSICAL_ID};
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::types::DryingMaterial;
@@ -263,7 +264,7 @@ where
         self
     }
 
-    /// Validates and publishes the cycle, returning the command's sequence ID [REF-AMS-DRYER].
+    /// Validates and publishes the cycle, returning the published command's [`CommandHandle`] [REF-AMS-DRYER].
     ///
     /// Every gate lives here — this is the only path that publishes `ams_filament_drying`, so it
     /// is the only place a future check has to be added.
@@ -277,13 +278,15 @@ where
     /// [`Error::ModelMismatch`] on a host where
     /// [`supports_ams_remote_drying()`](PrinterClient::supports_ams_remote_drying) is `false` —
     /// the printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
-    /// A1/A1 Mini or P1P/P1S, and below the minimum firmware on X1C/P2S/H2D/H2S/H2C. Such
+    /// A1/A1 Mini, P1P/P1S or X1C, and below the minimum firmware on
+    /// H2D/H2D Pro/H2S/H2C/P2S/X2D. Such
     /// firmware acks this command `result: success` and silently discards it rather than driving
     /// the AMS heater.
     ///
     /// [`Error::ModelMismatch`] also when the addressed unit has no drying chamber — an
-    /// external-spool sentinel (`254`/`255`), or a cached
-    /// [`AmsUnitModel`] whose [`supports_drying`](AmsUnitModel::supports_drying) is `false`.
+    /// external-spool sentinel (`254`/`255`), an AMS Lite on an A2L (`6`/`16`, an id only that
+    /// heaterless unit takes), or a cached [`AmsUnitModel`] whose
+    /// [`supports_drying`](AmsUnitModel::supports_drying) is `false`.
     /// These are two independent gates on purpose, matching the pair BambuStudio writes out
     /// longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
     /// attached box must have a heater.
@@ -303,6 +306,13 @@ where
     /// commands without polling. Call [`poll_telemetry()`](PrinterClient::poll_telemetry) first
     /// to arm it. When the unit is unobserved the temperature range falls back to the
     /// `ams_id`-derived ceiling, the best guess the address alone supports.
+    ///
+    /// A temperature above the filament's heat-distortion temperature
+    /// ([`DryingMaterial::heat_distortion_temp`], for a filament string
+    /// [`DryingMaterial::from_filament_type`] recognizes) is sent as asked but logged with
+    /// `log::warn!`. BambuStudio refuses such a cycle on a loaded tray; here an explicit
+    /// [`temp()`](Self::temp) is the caller's call, and [`material()`](Self::material) never
+    /// picks one.
     pub async fn send(self) -> Result<CommandHandle, Error> {
         if self.temp == 0 {
             return Err(Error::InvalidArgument(
@@ -330,6 +340,15 @@ where
         if self.ams_id == 254 || self.ams_id == 255 {
             return Err(Error::ModelMismatch(
                 "external spool has no drying chamber — drying needs an AMS 2 Pro or AMS-HT".into(),
+            ));
+        }
+        // Same for an AMS Lite on an A2L: `6`/`16` is never any other unit, so the address alone
+        // settles it before telemetry has named the unit.
+        if self.ams_id == i32::from(AMS_LITE_ON_A2L_NORMALIZED_ID)
+            || self.ams_id == i32::from(AMS_LITE_ON_A2L_PHYSICAL_ID)
+        {
+            return Err(Error::ModelMismatch(
+                "AMS Lite has no drying chamber — drying needs an AMS 2 Pro or AMS-HT".into(),
             ));
         }
 
@@ -361,6 +380,16 @@ where
                 )
                 .into(),
             ));
+        }
+        if let Some(hdt) = DryingMaterial::from_filament_type(&self.filament)
+            .map(DryingMaterial::heat_distortion_temp)
+            && temp > hdt
+        {
+            log::warn!(
+                "AMS dry temperature {temp}°C exceeds {}'s heat-distortion temperature {hdt}°C — \
+                 BambuStudio refuses this on a loaded tray; sending as requested",
+                self.filament
+            );
         }
 
         let Self {

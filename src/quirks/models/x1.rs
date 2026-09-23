@@ -81,8 +81,11 @@ fn x1c_remote_drying_support(ctx: &crate::quirks::QuirkContext) -> crate::quirks
 /// bambuddy's `_DRY_WHILE_PRINTING_MIN_FIRMWARE` lists `01.11.02.00` for X1C; that release's
 /// notes carry no drying entry, and Bambu Lab has stated the feature needs hardware the X1 Carbon
 /// lacks.
-fn x1c_drying_while_printing_support(_ctx: &crate::quirks::QuirkContext) -> crate::quirks::Support {
-    crate::quirks::Support::Inferred(false)
+fn x1c_drying_while_printing_support(ctx: &crate::quirks::QuirkContext) -> crate::quirks::Support {
+    crate::quirks::dry_while_printing_unless_reported_off(
+        ctx,
+        crate::quirks::Support::Inferred(false),
+    )
 }
 
 /// X1E is deliberately **not** firmware-gated.

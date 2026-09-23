@@ -159,7 +159,7 @@ where
     /// ).await?;
     /// ```
     ///
-    /// The returned `u16` is the published command's `sequence_id`, not a completion signal, but
+    /// The returned [`CommandHandle`] tracks the published command, not a completion signal, but
     /// the run is observable while it happens (verified on a P1S, firmware `01.10.00.00`):
     ///
     /// - [`print_progress()`](crate::client::PrinterClient::print_progress) tracks it.

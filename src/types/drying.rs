@@ -120,7 +120,7 @@ impl DryingMaterial {
         let matches = |name: &str| base.eq_ignore_ascii_case(name);
 
         // `PAHT`/`PA6`/`PA12` are nylons; check the prefix rather than enumerating grades.
-        if base.len() >= 2 && base[..2].eq_ignore_ascii_case("PA") && !matches("PPA") {
+        if base.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("PA")) && !matches("PPA") {
             return Some(Self::Pa);
         }
         ALL.iter()
@@ -207,13 +207,20 @@ impl DryingMaterial {
     ///
     /// **This is a starting value, not a bound.** It always falls inside
     /// [`AmsUnitModel::dry_temp_range`], but the range is the hardware limit and this is the
-    /// vendor's recommendation within it. BambuStudio additionally floors the printing-column
-    /// value at use: `min(printing_temp, softening_temp, heat_distortion_temp)`
-    /// (`AMSDryControl.cpp:1723-1725`) — see [`softening_temp`](Self::softening_temp) and
-    /// [`heat_distortion_temp`](Self::heat_distortion_temp) to reproduce that clamp.
+    /// vendor's recommendation within it.
+    ///
+    /// **Capped at [`heat_distortion_temp`](Self::heat_distortion_temp) in both columns.**
+    /// BambuStudio disables Start whenever the temperature exceeds the heat-distortion
+    /// temperature and a tray is loaded, idle or printing (`AMSDryControl.cpp:1213-1230`), yet
+    /// three raw profile values break that rule (TPU idle on both units, PVA idle on the AMS-HT).
+    /// The value returned is the one BambuStudio would let a loaded tray start with. It also
+    /// floors the printing column at the softening temperature
+    /// (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`);
+    /// no published printing value exceeds [`softening_temp`](Self::softening_temp), so that
+    /// half is a no-op here.
     #[must_use]
     pub fn default_temp(self, unit: AmsUnitModel, printing: bool) -> Option<u32> {
-        Self::row_index(unit, printing).map(|i| self.temp_row()[i])
+        Self::row_index(unit, printing).map(|i| self.temp_row()[i].min(self.heat_distortion_temp()))
     }
 
     /// Vendor default drying duration in whole hours for this material on this unit.
@@ -260,16 +267,18 @@ impl DryingMaterial {
         self.softening_temp() as i32
     }
 
-    /// Heat-distortion temperature (°C)
-    /// (`filament_dev_ams_drying_heat_distortion_temperature`), where the profile publishes one.
+    /// Heat-distortion temperature (°C) (`filament_dev_ams_drying_heat_distortion_temperature`).
     ///
-    /// `None` for [`Pe`](Self::Pe) and [`Pha`](Self::Pha), whose profiles omit the key. One of
-    /// the three inputs to BambuStudio's while-printing clamp
-    /// (`min(printing_temp, softening_temp, heat_distortion_temp)`, `AMSDryControl.cpp:1723-1725`).
+    /// [`Pe`](Self::Pe) and [`Pha`](Self::Pha) publish no value of their own and inherit 45 °C
+    /// from `fdm_filament_common.json:108-110`; BambuStudio reads the merged parent+child config
+    /// (`PresetBundle.cpp:5081-5109`). BambuStudio refuses to start a cycle above this on a
+    /// loaded tray (`AMSDryControl.cpp:1213-1230`), and it is one of the three inputs to the
+    /// while-printing clamp (`min(printing_temp, softening_temp, heat_distortion_temp)`,
+    /// `AMSDryControl.cpp:1723-1725`).
     #[must_use]
-    pub fn heat_distortion_temp(self) -> Option<u32> {
-        Some(match self {
-            Self::Pla | Self::Tpu | Self::Eva => 45,
+    pub fn heat_distortion_temp(self) -> u32 {
+        match self {
+            Self::Pla | Self::Tpu | Self::Eva | Self::Pe | Self::Pha => 45,
             Self::Pp => 60,
             Self::Bvoh => 65,
             Self::Petg | Self::Pctg | Self::Pva => 75,
@@ -277,8 +286,7 @@ impl DryingMaterial {
             Self::Asa => 100,
             Self::Pc => 105,
             Self::Pa | Self::Ppa | Self::Pps => 165,
-            Self::Pe | Self::Pha => return None,
-        })
+        }
     }
 
     /// Returns true if this unit can dry this material *completely*.
@@ -292,28 +300,28 @@ impl DryingMaterial {
     /// and `"1"` the AMS-HT (`s_ams_type_map`, `DevUtilBackend.cpp:58-61`), where `DevAmsType`
     /// makes them `3` and `4`. `["-1"]` means neither unit qualifies.
     ///
-    /// **A profile that omits the key entirely behaves exactly like `["-1"]`.** BambuStudio
-    /// builds an empty set when the key is absent and then warns on set non-membership
-    /// (`AMSDryControl.cpp:1184` and `1203`), so the seven materials with no key published —
-    /// ABS, ASA, HIPS, PC, PA, PVA, TPU — get the same warning as PPA and PPS, which name
-    /// `["-1"]` explicitly. This method reports `false` for all nine rather than treating an
-    /// absent key as permission.
+    /// **A profile that omits the key inherits `["1"]` (AMS-HT only)** from
+    /// `fdm_filament_common.json:105-107`, which every material preset inherits; BambuStudio
+    /// reads the merged parent+child config (`PresetBundle.cpp:5081-5109`,
+    /// `DevUtilBackend.cpp:63-113`). So the seven materials with no key of their own — ABS, ASA,
+    /// HIPS, PC, PA, PVA, TPU — are fully dryable by the AMS-HT and not the AMS 2 Pro. PPA and
+    /// PPS name `["-1"]` explicitly.
     #[must_use]
     pub fn fully_dryable_by(self, unit: AmsUnitModel) -> bool {
-        if !unit.supports_drying() {
-            return false;
-        }
-        matches!(
-            self,
+        match self {
             Self::Pla
-                | Self::Petg
-                | Self::Pctg
-                | Self::Bvoh
-                | Self::Pp
-                | Self::Pe
-                | Self::Pha
-                | Self::Eva
-        )
+            | Self::Petg
+            | Self::Pctg
+            | Self::Bvoh
+            | Self::Pp
+            | Self::Pe
+            | Self::Pha
+            | Self::Eva => unit.supports_drying(),
+            Self::Abs | Self::Asa | Self::Hips | Self::Pc | Self::Pa | Self::Pva | Self::Tpu => {
+                unit == AmsUnitModel::AmsHt
+            }
+            Self::Ppa | Self::Pps => false,
+        }
     }
 }
 
@@ -342,10 +350,10 @@ mod tests {
             Some(8)
         );
 
-        // PVA is the row where the HT printing column drops below its idle column (85 -> 70)
-        // and hours go up rather than down.
+        // PVA is the row where the HT printing column drops below its idle column (85, capped
+        // at the 75 heat-distortion temp -> 70) and hours go up rather than down.
         let pva = DryingMaterial::Pva;
-        assert_eq!(pva.default_temp(AmsUnitModel::AmsHt, false), Some(85));
+        assert_eq!(pva.default_temp(AmsUnitModel::AmsHt, false), Some(75));
         assert_eq!(pva.default_temp(AmsUnitModel::AmsHt, true), Some(70));
         assert_eq!(
             pva.default_duration_hours(AmsUnitModel::AmsHt, false),
@@ -391,6 +399,38 @@ mod tests {
             }
             assert!(!DryingMaterial::Pla.fully_dryable_by(unit));
         }
+    }
+
+    #[test]
+    fn test_default_temp_never_exceeds_heat_distortion_temp() {
+        // Regression (#334): TPU idle (65 on the 2 Pro, 75 on the HT) and PVA idle on the HT (85)
+        // sat above the HDT BambuStudio refuses to start a loaded tray past.
+        assert_eq!(
+            DryingMaterial::Tpu.default_temp(AmsUnitModel::Ams2Pro, false),
+            Some(45)
+        );
+        assert_eq!(
+            DryingMaterial::Tpu.default_temp(AmsUnitModel::AmsHt, false),
+            Some(45)
+        );
+        for &material in DryingMaterial::all() {
+            for unit in [AmsUnitModel::Ams2Pro, AmsUnitModel::AmsHt] {
+                for printing in [false, true] {
+                    let temp = material.default_temp(unit, printing).unwrap();
+                    assert!(
+                        temp <= material.heat_distortion_temp(),
+                        "{material:?} on {unit:?} (printing: {printing}) defaults to {temp}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_from_filament_type_non_ascii_does_not_panic() {
+        // Regression (#337): byte index 2 falls inside a multi-byte char in both.
+        assert_eq!(DryingMaterial::from_filament_type("中"), None);
+        assert_eq!(DryingMaterial::from_filament_type("Pé"), None);
     }
 
     #[test]
@@ -510,8 +550,8 @@ mod tests {
             );
         }
 
-        // Key absent from the profile. BambuStudio builds an empty set and warns on
-        // non-membership, so these behave identically to `["-1"]` rather than as permission.
+        // Key absent from the profile: inherited `["1"]` from `fdm_filament_common` — the
+        // AMS-HT qualifies, the AMS 2 Pro does not (#335).
         for material in [
             DryingMaterial::Abs,
             DryingMaterial::Asa,
@@ -523,24 +563,20 @@ mod tests {
         ] {
             assert!(
                 !material.fully_dryable_by(AmsUnitModel::Ams2Pro),
-                "{material:?} has no ams_limitations key and must not claim full drying"
+                "{material:?} inherits AMS-HT-only limitations"
+            );
+            assert!(
+                material.fully_dryable_by(AmsUnitModel::AmsHt),
+                "{material:?} inherits AMS-HT-only limitations"
             );
         }
     }
 
     #[test]
-    fn test_heat_distortion_temp_absent_only_where_profile_omits_it() {
-        // `fdm_filament_pe.json` and `fdm_filament_pha.json` publish no HDT value.
-        assert_eq!(DryingMaterial::Pe.heat_distortion_temp(), None);
-        assert_eq!(DryingMaterial::Pha.heat_distortion_temp(), None);
-        for material in DryingMaterial::all() {
-            if matches!(material, DryingMaterial::Pe | DryingMaterial::Pha) {
-                continue;
-            }
-            assert!(
-                material.heat_distortion_temp().is_some(),
-                "{material:?} publishes an HDT value"
-            );
-        }
+    fn test_heat_distortion_temp_inherited_where_profile_omits_it() {
+        // `fdm_filament_pe.json` and `fdm_filament_pha.json` publish no HDT value and inherit
+        // `fdm_filament_common`'s 45 (#336).
+        assert_eq!(DryingMaterial::Pe.heat_distortion_temp(), 45);
+        assert_eq!(DryingMaterial::Pha.heat_distortion_temp(), 45);
     }
 }

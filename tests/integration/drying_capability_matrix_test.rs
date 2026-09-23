@@ -92,7 +92,7 @@ fn test_firmware_at_threshold_allows() {
 
 /// A reported `fun2` bit 5 outranks every model rule in both directions — including the
 /// never-supported tier, which is the case most worth pinning since it is the one place a
-/// reported bit could contradict a hardware fact.
+/// reported bit could contradict a model rule.
 #[test]
 fn test_reported_bit_outranks_every_model_rule() {
     let set = QuirkContext::empty().with_fun2(Some("20"));
@@ -113,8 +113,9 @@ fn test_reported_bit_outranks_every_model_rule() {
         PrinterModel::X2D,
         PrinterModel::A2L,
     ] {
-        // A1/A1 Mini are the deliberate exception: their rule is a hardware fact about what
-        // can be attached, not a firmware capability, so no reported bit overrides it.
+        // A1/A1 Mini are the deliberate exception. Not a hardware limit — the A1 takes an AMS 2
+        // Pro or AMS-HT — but no A1 firmware exposes remote drying, and the A1 family sends no
+        // `fun2` at all, so there is no reported bit for the rule to defer to.
         let expected_when_set = !matches!(model, PrinterModel::A1 | PrinterModel::A1Mini);
         assert_eq!(
             model.quirks().supports_ams_remote_drying(&set),
