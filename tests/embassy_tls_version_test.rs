@@ -13,13 +13,15 @@
 //! cargo test --no-default-features --features "embassy,std" --test embassy_tls_version_test
 //! ```
 //!
-//! This must be an integration test rather than a `#[cfg(test)]` module: the crate's unit tests
-//! unconditionally import `crate::io::tokio`, which does not exist under this feature set.
+//! It needs a real TLS peer and only the public API, so it lives here; the crate's unit tests
+//! also run under this feature set (`make test-embassy-host`, #291), so `pub(crate)` embassy
+//! code belongs in `--lib` tests instead.
 //!
 //! **What this covers and what it does not.** It covers the accessor and both arms of the
 //! `mbedtls_rs::TlsVersion` -> `io::TlsVersion` mapping against real handshakes, which is what
-//! #289 changed. It does not exercise embassy-net, esp-hal, or any printer, and is not a
-//! substitute for first-ever hardware verification of this backend — see `src/io/CLAUDE.md`.
+//! #289 changed. It does not exercise embassy-net, esp-hal, or any printer; the backend's
+//! hardware verification is the `embassy-hw-probe` run against a P1S recorded in
+//! `src/io/CLAUDE.md` (#292).
 #![cfg(all(feature = "embassy", feature = "std"))]
 
 use std::io::{Read as _, Write as _};

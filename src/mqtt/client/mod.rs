@@ -120,14 +120,6 @@ pub struct MqttClient<IO: AsyncIo> {
     /// report topic: the printer's `push_status` counter and other clients' commands mint ids
     /// from overlapping ranges.
     write_pending_echo: Option<(String, String)>,
-    /// Whether a PINGREQ has been sent with no PINGRESP yet received.
-    ///
-    /// Set by `send_ping_with_timer`, cleared by `poll_wire`'s PINGRESP arm, and checked on the
-    /// *next* `send_ping_with_timer`: a second ping falling due while one is still outstanding
-    /// means the broker has stopped answering keepalives. `MQTT_STALE_CONNECTION_SECS` alone
-    /// cannot catch that — any inbound traffic resets the staleness counter, so a broker still
-    /// streaming telemetry while ignoring PINGREQ would never be flagged.
-    ping_outstanding: bool,
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
     secs_since_last_message: u32,
@@ -150,6 +142,9 @@ pub struct MqttClient<IO: AsyncIo> {
     /// retry via `FrameReadState`), a write has no resumable partial-progress state.
     /// Every subsequent write fails fast instead of writing again into a desynced stream.
     write_poisoned: bool,
+    /// Set for the duration of a `write_frame_guarded` write. Still set on entry means the
+    /// previous write's future was dropped mid-frame, which poisons like a failed write.
+    write_in_progress: bool,
 }
 
 /// Advances an MQTT packet identifier, skipping 0 (reserved) on wraparound.
@@ -266,40 +261,18 @@ pub(crate) fn extract_command_and_sequence_id(payload: &[u8]) -> Option<(String,
     Some((command, sequence_id))
 }
 
-/// Maps an `embedded_io_async::ErrorKind` (the only information a generic `AsyncIo` error
-/// exposes, regardless of platform) to the closest `SocketError` variant — the
-/// `embedded_io_async::ErrorKind` counterpart to `map_io_error_kind`
-/// (`std::io::ErrorKind -> embedded_io_async::ErrorKind`, `src/io/mod.rs`), used here since
-/// `write_frame` operates over the generic `AsyncIo` trait rather than a concrete
-/// `std::io::Error`, so `map_io_error_kind` itself doesn't apply. Falls back to `Other` for
-/// kinds with no direct `SocketError` equivalent.
-fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError {
-    use embedded_io_async::ErrorKind;
-    match kind {
-        ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
-        ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
-        ErrorKind::ConnectionReset => SocketError::ConnectionReset,
-        ErrorKind::NotConnected => SocketError::NotConnected,
-        ErrorKind::TimedOut => SocketError::TimedOut,
-        ErrorKind::AddrInUse => SocketError::AddressInUse,
-        ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
-        ErrorKind::InvalidInput => SocketError::InvalidInput,
-        _ => SocketError::Other("MQTT write_frame I/O error".into()),
-    }
-}
-
-/// Writes and flushes a complete packet to `stream`, mapping I/O failures via `map_embedded_io_error_kind` instead of collapsing everything to a fixed `ConnectionAborted`.
+/// Writes and flushes a complete packet to `stream`, mapping I/O failures via `crate::io::map_embedded_io_error_kind` — the one mapping the read side uses too — instead of collapsing everything to a fixed `ConnectionAborted`.
 /// A free function (not a method) so `connect()` can call it before `Self` exists.
 async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), Error> {
     use embedded_io_async::Error as _;
     stream
         .write_all(packet)
         .await
-        .map_err(|e| Error::Network(map_embedded_io_error_kind(e.kind())))?;
+        .map_err(|e| Error::Network(crate::io::map_embedded_io_error_kind(e.kind())))?;
     stream
         .flush()
         .await
-        .map_err(|e| Error::Network(map_embedded_io_error_kind(e.kind())))
+        .map_err(|e| Error::Network(crate::io::map_embedded_io_error_kind(e.kind())))
 }
 
 /// Same as [`write_frame`], but races the write against `MQTT_WRITE_TIMEOUT_SECS` when `timer`
@@ -321,7 +294,7 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
     let sleep_fut = timer.sleep(core::time::Duration::from_secs(MQTT_WRITE_TIMEOUT_SECS));
     match race(write_fut, sleep_fut).await {
         Raced::Left(result) => result,
-        Raced::Right(_) => Err(Error::Network(SocketError::TimedOut)),
+        Raced::Right(r) => Err(Error::Network(crate::io::deadline_error(r))),
     }
 }
 
@@ -342,16 +315,26 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// unlike a read timeout (safe to retry via `FrameReadState`), a write has no resumable
     /// partial-progress state — once poisoned, every subsequent call fails immediately
     /// without touching the stream again.
+    ///
+    /// Cancel-safe in the same sense: a caller racing this in `select!` can drop it mid-write,
+    /// where no `inspect_err` runs. `write_in_progress` is still set in that case, and the next
+    /// call poisons on entry rather than writing into a stream that may hold half a frame (#306).
     async fn write_frame_guarded<T: TimerProvider>(
         &mut self,
         packet: &[u8],
         timer: &T,
     ) -> Result<(), Error> {
+        if self.write_in_progress {
+            log::warn!("a previous MQTT write was cancelled mid-frame; poisoning the connection");
+            self.write_poisoned = true;
+        }
         if self.write_poisoned {
             return Err(Error::Network(SocketError::ConnectionAborted));
         }
-        write_frame_with_timer(&mut self.stream, packet, timer)
-            .await
+        self.write_in_progress = true;
+        let result = write_frame_with_timer(&mut self.stream, packet, timer).await;
+        self.write_in_progress = false;
+        result
             .inspect_err(|_| self.write_poisoned = true)
             .inspect(|_| {
                 // Every outbound frame resets the keepalive clock, not just PINGREQ: the broker
@@ -528,11 +511,11 @@ impl<IO: AsyncIo> MqttClient<IO> {
             pending_bytes: 0,
             write_pending_secs: None,
             write_pending_echo: None,
-            ping_outstanding: false,
             last_outbound_ms: None,
             secs_since_last_message: 0,
             read_state: FrameReadState::default(),
             write_poisoned: false,
+            write_in_progress: false,
         })
     }
 
@@ -654,10 +637,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         &mut self,
         timer: &T,
     ) -> Result<MqttMessage, Error> {
-        if let Some(buffered) = self.pending_messages.pop_front() {
-            self.pending_bytes = self
-                .pending_bytes
-                .saturating_sub(Self::message_size(&buffered));
+        if let Some(buffered) = self.take_pending() {
             return Ok(buffered);
         }
         // The keepalive lives in `poll_wire` itself, so every read-loop consumer gets it —
@@ -785,39 +765,6 @@ impl<IO: AsyncIo> MqttClient<IO> {
                         payload.len()
                     );
 
-                    // QoS 1 requires PUBACK; QoS 2 requires a PUBREC/PUBREL/PUBCOMP handshake,
-                    // which this client doesn't implement — Bambu printers never
-                    // publish above QoS 1 in practice, so this stays a logged, non-fatal gap
-                    // rather than a full protocol extension for a case never observed against
-                    // real hardware. A broker that did send genuine QoS 2 would see no PUBREC
-                    // and may retransmit with DUP set.
-                    if qos == 1 {
-                        let id = packet_id.expect("QoS 1 always has packet_id");
-                        log::trace!("Sending automatic PUBACK for packet_id: {}", id);
-
-                        // Deliver the message even if the ack write fails: the payload is
-                        // already off the wire and parsed, and `write_frame_guarded` sets
-                        // `write_poisoned` internally, so propagating here would destroy
-                        // received data and then reject every subsequent QoS 1 PUBLISH the
-                        // same way, silently ending telemetry on a still-readable socket.
-                        let ack = encode_puback(id);
-                        if let Err(e) = self.write_frame_guarded(&ack, timer).await {
-                            log::warn!(
-                                "Failed to PUBACK packet_id {}: {:?} (write channel poisoned, \
-                                 message still delivered)",
-                                id,
-                                e
-                            );
-                        }
-                    } else if qos >= 2 {
-                        log::warn!(
-                            "Received QoS {} PUBLISH (packet_id: {:?}) — QoS 2 handshake \
-                             (PUBREC/PUBREL/PUBCOMP) is not implemented; broker may retransmit",
-                            qos,
-                            packet_id
-                        );
-                    }
-
                     // Reset write channel zombie tracking only when this PUBLISH's echoed
                     // command and sequence_id [REF-MQTT-ACK] match the outstanding command's — not
                     // on any incoming PUBLISH. Background telemetry (push_status) carries its own
@@ -836,7 +783,56 @@ impl<IO: AsyncIo> MqttClient<IO> {
                         self.write_pending_echo = None;
                     }
 
-                    return Ok(MqttMessage { topic, payload });
+                    let message = MqttMessage { topic, payload };
+
+                    // QoS 1 requires PUBACK; QoS 2 requires a PUBREC/PUBREL/PUBCOMP handshake,
+                    // which this client doesn't implement — Bambu printers never
+                    // publish above QoS 1 in practice, so this stays a logged, non-fatal gap
+                    // rather than a full protocol extension for a case never observed against
+                    // real hardware. A broker that did send genuine QoS 2 would see no PUBREC
+                    // and may retransmit with DUP set.
+                    if qos == 1 {
+                        let id = packet_id.expect("QoS 1 always has packet_id");
+                        log::trace!("Sending automatic PUBACK for packet_id: {}", id);
+
+                        // Park the message in the pending buffer across the ack write. The frame
+                        // is already consumed and `read_state` reset, so if a `select!` drops this
+                        // future while the write is pending, the next poll delivers the message
+                        // from the buffer instead of losing it (#306).
+                        let size = Self::message_size(&message);
+                        self.pending_messages.push_front(message);
+                        self.pending_bytes += size;
+
+                        // Deliver the message even if the ack write fails: the payload is
+                        // already off the wire and parsed, and `write_frame_guarded` sets
+                        // `write_poisoned` internally, so propagating here would destroy
+                        // received data and then reject every subsequent QoS 1 PUBLISH the
+                        // same way, silently ending telemetry on a still-readable socket.
+                        let ack = encode_puback(id);
+                        let ack_result = self.write_frame_guarded(&ack, timer).await;
+
+                        let message = self
+                            .take_pending()
+                            .expect("message parked above; nothing else runs in between");
+                        if let Err(e) = ack_result {
+                            log::warn!(
+                                "Failed to PUBACK packet_id {}: {:?} (write channel poisoned, \
+                                 message still delivered)",
+                                id,
+                                e
+                            );
+                        }
+                        return Ok(message);
+                    } else if qos >= 2 {
+                        log::warn!(
+                            "Received QoS {} PUBLISH (packet_id: {:?}) — QoS 2 handshake \
+                             (PUBREC/PUBREL/PUBCOMP) is not implemented; broker may retransmit",
+                            qos,
+                            packet_id
+                        );
+                    }
+
+                    return Ok(message);
                 }
                 PACKET_TYPE_PUBACK => {
                     if payload_buf.len() < 2 {
@@ -853,7 +849,6 @@ impl<IO: AsyncIo> MqttClient<IO> {
                 }
                 PACKET_TYPE_PINGRESP => {
                     log::trace!("Received keep-alive PINGRESP from broker");
-                    self.ping_outstanding = false;
                 }
                 _ => {
                     log::debug!("Ignoring un-handled control frame code: {}", packet_type);
@@ -877,21 +872,16 @@ impl<IO: AsyncIo> MqttClient<IO> {
         &mut self,
         timer: &T,
     ) -> Result<(), Error> {
-        // A ping already outstanding when the next one falls due means the broker acknowledged
-        // neither. Callers ping on their own schedule, so "a second ping is due" is the only
-        // point at which enough time has demonstrably passed to call it a failure — and it is a
-        // failure the staleness counter cannot see, since inbound telemetry keeps resetting it.
-        if self.ping_outstanding {
-            log::warn!("Broker did not answer the previous PINGREQ; treating the link as dead");
-            return Err(Error::Timeout);
-        }
-
+        // No "previous ping unanswered" check. Its PINGRESP may be sitting unread in the socket
+        // behind telemetry the caller hasn't polled yet, so failing here — before any read —
+        // declared a healthy link dead and kept declaring it on every later poll, since the read
+        // that would have cleared it never ran (#305). A dead link sends no bytes at all, which
+        // the read deadline (`MQTT_READ_TIMEOUT_SECS`) and `MQTT_STALE_CONNECTION_SECS` catch;
+        // one still delivering telemetry is alive whatever it does with PINGREQ.
         log::trace!("Transmitting PINGREQ keep-alive packet");
 
         let ping = encode_pingreq();
-        self.write_frame_guarded(&ping, timer).await?;
-        self.ping_outstanding = true;
-        Ok(())
+        self.write_frame_guarded(&ping, timer).await
     }
 
     /// Returns true once a write has failed and left the stream possibly desynced.
@@ -1120,8 +1110,10 @@ mod tests {
             // field with a real (non-Dummy) timer, the exact combination `PrinterClient` uses via
             // `poll_telemetry_with_timer`. A regression reconstructing a fresh `FrameReadState`
             // per `poll_wire()` call (instead of reusing `self.read_state`) would go uncaught
-            // without this.
+            // without this. The first poll must genuinely end mid-frame and a *second* call must
+            // resume (#310): the server holds the second half until the first poll is gone.
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+            let (resume_tx, resume_rx) = tokio::sync::oneshot::channel::<()>();
 
             let server_task = tokio::spawn(async move {
                 let mut discard = vec![0u8; 256];
@@ -1140,15 +1132,14 @@ mod tests {
                     .unwrap();
                 server_stream.flush().await.unwrap();
 
-                // Split a real PUBLISH QoS 1 frame across two write_all calls with a real sleep
-                // between them, so the client's first poll attempt reads a partial frame,
-                // stashes it in self.read_state, and the second attempt must resume from there.
+                // Split a real PUBLISH QoS 1 frame across two writes, releasing the second half
+                // only after the client's first poll has read the first half and been dropped.
                 let frame =
                     encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
                 let split = frame.len() / 2;
                 server_stream.write_all(&frame[..split]).await.unwrap();
                 server_stream.flush().await.unwrap();
-                tokio::time::sleep(core::time::Duration::from_millis(200)).await;
+                resume_rx.await.unwrap();
                 server_stream.write_all(&frame[split..]).await.unwrap();
                 server_stream.flush().await.unwrap();
 
@@ -1169,6 +1160,21 @@ mod tests {
             .expect("connect should succeed");
 
             let timer = crate::io::tokio::TokioTimer::new();
+            let first = tokio::time::timeout(
+                core::time::Duration::from_millis(200),
+                client.poll_telemetry_with_timer(&timer),
+            )
+            .await;
+            assert!(
+                first.is_err(),
+                "the first poll must end with only half a frame read"
+            );
+            assert!(
+                !matches!(client.read_state, FrameReadState::Idle),
+                "the partial frame must be held in the persistent read_state"
+            );
+            resume_tx.send(()).unwrap();
+
             let msg = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
                 client.poll_telemetry_with_timer(&timer),
@@ -1249,6 +1255,78 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_publish_survives_poll_dropped_during_puback_and_write_poisons() {
+            // Regression (#306): dropping poll_wire while its PUBACK write was pending lost the
+            // already-parsed PUBLISH, and left a possibly half-written frame unpoisoned since
+            // inspect_err never runs on a drop. The client->server direction is filled first so
+            // the PUBACK write blocks, and a timeout drops the poll the way a select! loser is.
+            const CAPACITY: usize = 64;
+            let (client_stream, mut server_stream) = tokio::io::duplex(CAPACITY);
+
+            let server_task = tokio::spawn(async move {
+                let mut discard = vec![0u8; 256];
+                let _ = server_stream.read(&mut discard).await;
+                server_stream
+                    .write_all(&[0x20, 0x02, 0x00, 0x00])
+                    .await
+                    .unwrap();
+                let _ = server_stream.read(&mut discard).await;
+                server_stream
+                    .write_all(&[0x90, 0x03, 0x00, 0x01, 0x01])
+                    .await
+                    .unwrap();
+                let frame =
+                    encode_publish_qos1(1, "device/01P000000000000/report", b"{\"print\":{}}");
+                server_stream.write_all(&frame).await.unwrap();
+                // Never read again, so the client's writes back up; stay alive meanwhile.
+                tokio::time::sleep(core::time::Duration::from_secs(5)).await;
+            });
+
+            let mut client = MqttClient::connect(
+                TokioIo(client_stream),
+                &PrinterIdentity {
+                    ip: String::new(),
+                    serial: "01P000000000000".into(),
+                    access_code: "12345678".into(),
+                    model: PrinterModel::P1S,
+                },
+            )
+            .await
+            .expect("connect should succeed");
+
+            client
+                .stream
+                .0
+                .write_all(&[0u8; CAPACITY])
+                .await
+                .expect("fill the client->server buffer");
+
+            let dropped = tokio::time::timeout(
+                core::time::Duration::from_millis(200),
+                client.poll_telemetry(),
+            )
+            .await;
+            assert!(dropped.is_err(), "the PUBACK write must have been pending");
+
+            let msg = client
+                .poll_telemetry()
+                .await
+                .expect("the parsed PUBLISH must be delivered from the pending buffer");
+            assert_eq!(msg.payload, b"{\"print\":{}}");
+
+            assert!(matches!(
+                client.send_ping().await,
+                Err(Error::Network(SocketError::ConnectionAborted))
+            ));
+            assert!(
+                client.is_poisoned(),
+                "a write dropped mid-frame must poison"
+            );
+
+            server_task.abort();
+        }
+
+        #[tokio::test]
         async fn test_publish_command_does_not_reset_zombie_timer_while_pending() {
             // publish_command() used to unconditionally set write_pending_secs to
             // Some(0) on every call, even while an earlier command's response was still
@@ -1276,11 +1354,11 @@ mod tests {
                 pending_bytes: 0,
                 write_pending_secs: None,
                 write_pending_echo: None,
-                ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
+                write_in_progress: false,
             };
 
             client
@@ -1344,11 +1422,11 @@ mod tests {
                 pending_bytes: 0,
                 write_pending_secs: None,
                 write_pending_echo: None,
-                ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
+                write_in_progress: false,
             };
 
             // First call stamps the clock instead of pinging, so the interval is measured from
@@ -1357,9 +1435,9 @@ mod tests {
                 .send_keepalive_if_due(&timer)
                 .await
                 .expect("stamping call should not error");
-            assert!(!client.ping_outstanding, "first call must not ping");
-            assert!(
-                client.last_outbound_ms.is_some(),
+            assert_eq!(
+                client.last_outbound_ms,
+                Some(1_000),
                 "first call must stamp the clock"
             );
 
@@ -1368,8 +1446,9 @@ mod tests {
                 .send_keepalive_if_due(&timer)
                 .await
                 .expect("in-interval call should not error");
-            assert!(
-                !client.ping_outstanding,
+            assert_eq!(
+                client.last_outbound_ms,
+                Some(1_000),
                 "no ping is due while the connection has recent outbound traffic"
             );
 
@@ -1383,10 +1462,23 @@ mod tests {
                 .send_keepalive_if_due(&timer)
                 .await
                 .expect("keepalive ping should send");
-            assert!(
-                client.ping_outstanding,
+            assert_eq!(
+                client.last_outbound_ms,
+                Some(timer.now_ms.get()),
                 "a ping must be sent once the outbound-silence interval has elapsed"
             );
+
+            // Regression (#305): a second ping falling due before the first PINGRESP has been
+            // read — the caller simply hasn't polled — used to return Timeout before any read,
+            // on every later poll, wedging a healthy link. It must just ping again.
+            timer
+                .now_ms
+                .set(timer.now_ms.get() + (MQTT_PING_INTERVAL_SECS + 1) * 1000);
+            client
+                .send_keepalive_if_due(&timer)
+                .await
+                .expect("an unread PINGRESP must not fail the next keepalive");
+            assert_eq!(client.last_outbound_ms, Some(timer.now_ms.get()));
         }
 
         #[tokio::test]
@@ -1408,11 +1500,11 @@ mod tests {
                 pending_bytes: 0,
                 write_pending_secs: None,
                 write_pending_echo: None,
-                ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
+                write_in_progress: false,
             };
 
             let result = client.publish_command(b"{}").await;
@@ -1461,11 +1553,11 @@ mod tests {
                 pending_bytes: 0,
                 write_pending_secs: Some(0),
                 write_pending_echo: Some(("gcode_line".to_string(), "100002".to_string())),
-                ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
+                write_in_progress: false,
             };
 
             // Unrelated telemetry with its own low-value sequence_id must not clear the timer.
@@ -1547,11 +1639,11 @@ mod tests {
                 pending_bytes: 0,
                 write_pending_secs: None,
                 write_pending_echo: None,
-                ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
+                write_in_progress: false,
             };
 
             client

@@ -227,7 +227,7 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
         .await
         {
             crate::io::Raced::Left(result) => result,
-            crate::io::Raced::Right(_) => Err(Error::Network(SocketError::TimedOut)),
+            crate::io::Raced::Right(r) => Err(Error::Network(crate::io::deadline_error(r))),
         }
     }
 

@@ -113,21 +113,30 @@ impl<IO: AsyncIo> MqttClient<IO> {
         self.pending_messages = survivors;
         result
     }
+
+    /// Pops the oldest buffered message, keeping `pending_bytes` in sync.
+    pub(crate) fn take_pending(&mut self) -> Option<MqttMessage> {
+        let msg = self.pending_messages.pop_front()?;
+        self.pending_bytes = self.pending_bytes.saturating_sub(Self::message_size(&msg));
+        Some(msg)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "tokio")]
-    mod async_tests {
+    // Not tokio-gated: these are pure buffer logic, so they also run under `make
+    // test-embassy-host`, which is the only gate that checks the embedded
+    // `MQTT_PENDING_BUFFER_MAX_BYTES`.
+    mod buffer_tests {
         use super::super::*;
-        use crate::io::TokioIo;
         use crate::mqtt::client::frame::FrameReadState;
+        use crate::test_support::MockIo;
         use std::collections::BTreeMap;
 
-        /// Builds a `MqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below, so an unread/unwritten in-memory cursor is sufficient.
-        fn test_client() -> MqttClient<TokioIo<std::io::Cursor<Vec<u8>>>> {
+        /// Builds a `MqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below.
+        fn test_client() -> MqttClient<MockIo> {
             MqttClient {
-                stream: TokioIo(std::io::Cursor::new(Vec::new())),
+                stream: MockIo::empty(),
                 request_topic: "device/test/request".to_string(),
                 serial: "test".to_string(),
                 next_packet_id: 2,
@@ -136,11 +145,11 @@ mod tests {
                 pending_bytes: 0,
                 write_pending_secs: None,
                 write_pending_echo: None,
-                ping_outstanding: false,
                 last_outbound_ms: None,
                 secs_since_last_message: 0,
                 read_state: FrameReadState::default(),
                 write_poisoned: false,
+                write_in_progress: false,
             }
         }
 
@@ -151,7 +160,8 @@ mod tests {
         fn test_push_pending_evicts_oldest_beyond_max_bytes() {
             let mut client = test_client();
 
-            // ~8 KiB payload per message; 320 messages ≈ 2.5 MiB, comfortably past the 2 MiB cap.
+            // ~8 KiB payload per message; 320 messages ≈ 2.5 MiB, past both the host (2 MiB) and
+            // the embedded cap.
             let payload_size = 8 * 1024;
             let total_messages = 320;
             for i in 0..total_messages {

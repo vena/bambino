@@ -505,10 +505,32 @@ where
     /// to send on a connection that just broke, and adding one would mean awaiting a peer that
     /// may be the reason the transfer failed.
     async fn close_data_channel(&self, channel: DataChannel<RawIO, Tls::Stream>) {
-        if let DataChannel::Secure(mut secure) = channel
-            && let Err(e) = self.tls_connector.close(&mut secure).await
-        {
-            log::debug!("FTPS data-channel TLS close failed: {e:?}");
+        if let DataChannel::Secure(mut secure) = channel {
+            self.close_bounded(&mut secure, "data-channel").await;
+        }
+    }
+
+    /// Sends `close_notify` on `stream`, bounded by `FTPS_WRITE_TIMEOUT_SECS` under a real clock.
+    ///
+    /// Every other network await in this client is bounded; an unbounded close could block
+    /// forever on a printer that stopped draining its receive buffer, and on the data channel
+    /// that happens before the `226` read, so the transfer call would never return (#323). A
+    /// failure or timeout is logged and the stream is dropped by the caller either way.
+    async fn close_bounded(&self, stream: &mut Tls::Stream, channel: &str) {
+        let result = if self.timer.has_real_clock() {
+            let close_fut = self.tls_connector.close(stream);
+            let sleep_fut = self
+                .timer
+                .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
+            match crate::io::race(close_fut, sleep_fut).await {
+                crate::io::Raced::Left(r) => r,
+                crate::io::Raced::Right(r) => Err(crate::io::deadline_error(r)),
+            }
+        } else {
+            self.tls_connector.close(stream).await
+        };
+        if let Err(e) = result {
+            log::debug!("FTPS {channel} TLS close failed: {e:?}");
         }
     }
 
@@ -748,9 +770,9 @@ where
                     .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
                 match crate::io::race(write_fut, sleep_fut).await {
                     crate::io::Raced::Left(r) => r,
-                    crate::io::Raced::Right(_) => {
+                    crate::io::Raced::Right(r) => {
                         self.poisoned = true;
-                        return Err(Error::Network(SocketError::TimedOut));
+                        return Err(Error::Network(crate::io::deadline_error(r)));
                     }
                 }
             } else {
@@ -768,9 +790,9 @@ where
                 .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
             match crate::io::race(flush_fut, sleep_fut).await {
                 crate::io::Raced::Left(r) => r,
-                crate::io::Raced::Right(_) => {
+                crate::io::Raced::Right(r) => {
                     self.poisoned = true;
-                    return Err(Error::Network(SocketError::TimedOut));
+                    return Err(Error::Network(crate::io::deadline_error(r)));
                 }
             }
         } else {
@@ -1012,8 +1034,13 @@ where
     /// actually returns its memory — MbedTLS frees a session's record buffers in `Drop`, not in
     /// `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
     /// itself goes out of scope (GitHub issue #293).
+    ///
+    /// A poisoned client skips `QUIT` and the close — its stream may be desynced or dead — but
+    /// still drops the control session here, so its memory is returned now rather than when the
+    /// client goes out of scope (#320).
     pub async fn disconnect(&mut self) {
         if self.check_poisoned().is_err() {
+            self.control_stream = None;
             return;
         }
         let write_deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
@@ -1030,10 +1057,8 @@ where
             )
             .await;
         }
-        if let Some(mut stream) = self.control_stream.take()
-            && let Err(e) = self.tls_connector.close(&mut stream).await
-        {
-            log::debug!("FTPS control-channel TLS close failed: {e:?}");
+        if let Some(mut stream) = self.control_stream.take() {
+            self.close_bounded(&mut stream, "control").await;
         }
         self.poisoned = true;
     }

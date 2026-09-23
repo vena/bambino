@@ -26,7 +26,8 @@ pub struct FtpFile {
     /// The parsed file or directory name, exactly as reported by the raw `LIST` line
     /// — recovered via `SplitWhitespace::remainder()` rather than re-tokenizing
     /// and rejoining with a single space, so internal runs of multiple consecutive spaces
-    /// round-trip exactly and remain usable as-is in `delete_file`/`download_file`.
+    /// round-trip exactly and remain usable as-is in `delete_file`/`download_file`. Leading and
+    /// trailing spaces are kept too; only the one separator before the name is dropped.
     pub name: String,
     /// Identifies directory nodes versus standard data payloads.
     pub is_dir: bool,
@@ -261,8 +262,10 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
     let mut files = Vec::new();
 
     for line in payload.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        // Only the column whitespace before the permissions and the line terminator go: a
+        // trailing space can belong to the filename (#319). `lines()` already strips `\r\n`.
+        let trimmed = line.trim_start();
+        if trimmed.trim_end().is_empty() {
             continue;
         }
 
@@ -322,10 +325,13 @@ pub fn parse_unix_listing(payload: &str, now: CurrentDateTime) -> Vec<FtpFile> {
         // down to one, confirmed on real hardware (a P1S) to desync the reported name from the
         // printer's actual on-disk name and make `delete_file`/`download_file` silently no-op
         // (masked by `delete_file`'s intentional idempotent "already gone" 550 handling) when
-        // called with the reported name. `trim_start()` only strips the whitespace run
-        // *before* the filename (the 8/9-column separator); the whole line was already
-        // `.trim()`-med above, so there's no trailing whitespace to strip.
-        let name = rest.trim_start();
+        // called with the reported name. Exactly one separator character is stripped, not the
+        // whole whitespace run: vsftpd pads *inside* the fixed-width date column and emits a
+        // single space before the name (`reference/02_ftps.md`), so any further leading space
+        // — FAT keeps them — is part of the name (#319).
+        let name = rest
+            .strip_prefix(|c: char| c == ' ' || c == '\t')
+            .unwrap_or(rest);
         if name.is_empty() {
             continue;
         }
@@ -562,7 +568,7 @@ mod tests {
         // behavior) desyncs the reported name from the printer's actual on-disk name,
         // silently breaking delete_file/download_file for that file.
         let payload =
-            "-rwxrwxrwx   1 root     root           12 Jan  1  2030  weird_spacing   name.3mf";
+            "-rwxrwxrwx   1 root     root           12 Jan  1  2030 weird_spacing   name.3mf";
         let files = parse_unix_listing(
             payload,
             CurrentDateTime {
@@ -578,6 +584,23 @@ mod tests {
         let f = &files[0];
         assert_eq!(f.name, "weird_spacing   name.3mf");
         assert_eq!(f.size, 12);
+
+        // Regression (#319): leading and trailing spaces are part of the name, so they must
+        // survive too — only the single column separator before the name is dropped.
+        let now = CurrentDateTime {
+            year: 2026,
+            month: 6,
+            day: 17,
+            hour: 12,
+            minute: 0,
+        };
+        let files = parse_unix_listing(
+            "-rw-r--r--    1 1000     1000      1024 Jun 17 12:00  lead.3mf\r\n\
+             -rw-r--r--    1 1000     1000      1024 Jun 17 12:00 trail.3mf  \r\n",
+            now,
+        );
+        let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec![" lead.3mf", "trail.3mf  "]);
         assert_eq!(f.year, 2030);
     }
 

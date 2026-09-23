@@ -404,9 +404,9 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
         || code == ::esp_idf_svc::sys::ESP_TLS_ERR_SSL_WANT_WRITE
 }
 
-/// Reads and clears the last ESP-type error recorded on `tls`'s error handle, if any.
+/// Reads and clears the last error of `err_type` (an `esp_tls_error_type_t`) recorded on `tls`'s error handle, if any.
 ///
-/// The one caller uses it to tell ESP-IDF v5.5.5's "this call's `timeout_ms` budget expired,
+/// The handshake loop reads the ESP type to tell ESP-IDF v5.5.5's "this call's `timeout_ms` budget expired,
 /// handshake still in progress" apart from a real handshake failure. v5.5.5 signals the former as
 /// a `-1` return from `esp_tls_conn_new_sync` plus `ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT` here,
 /// where v5.5.3/v5.5.4/v6.0.1 return `0` (which reaches Rust as `EWOULDBLOCK`, already retryable
@@ -416,10 +416,12 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
 /// Clearing is what makes the answer trustworthy: every version records
 /// `ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT` on expiry, so a value left behind by an earlier retryable
 /// step would otherwise read as "retryable" on a later genuine failure that recorded no ESP-type
-/// error of its own.
+/// error of its own. It also reads the mbedTLS type, which carries the actual cause of a failed
+/// step (`MBEDTLS_ERR_NET_CONN_RESET` and friends) — see [`map_esp_tls_connect_error`].
 #[cfg(feature = "esp-idf")]
 fn take_esp_tls_error<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
+    err_type: ::esp_idf_svc::sys::esp_tls_error_type_t,
 ) -> Option<i32> {
     let mut handle: ::esp_idf_svc::sys::esp_tls_error_handle_t = core::ptr::null_mut();
 
@@ -435,55 +437,69 @@ fn take_esp_tls_error<S: ::esp_idf_svc::tls::Socket>(
     // SAFETY: `handle` is non-null and owned by `tls`; `code` is a valid out-pointer into this
     // stack frame. Returns `ESP_OK` only when it actually populated `code`.
     let ret = unsafe {
-        ::esp_idf_svc::sys::esp_tls_get_and_clear_error_type(
-            handle,
-            ::esp_idf_svc::sys::esp_tls_error_type_t_ESP_TLS_ERR_TYPE_ESP,
-            &mut code,
-        )
+        ::esp_idf_svc::sys::esp_tls_get_and_clear_error_type(handle, err_type, &mut code)
     };
 
     (ret == ::esp_idf_svc::sys::ESP_OK).then_some(code)
 }
 
-/// Maps a non-WouldBlock `EspError` from a failed TLS connect/negotiate attempt to a
-/// `SocketError`, distinguishing DNS/address failures and genuine connection refusals from
-/// opaque/other failures instead of collapsing everything to `ConnectionRefused` (the
-/// previous behavior — actively misleading for e.g. a bad CA cert or an out-of-memory
-/// condition inside mbedTLS, both of which used to read as "refused").
-///
-/// Checks two families of codes, both surfaced by `EspTls::connect`/`negotiate` in practice:
-/// `esp_tls`'s own `ESP_ERR_ESP_TLS_*` codes (returned when `esp_tls` fails before or during
-/// the TCP dial itself, e.g. DNS resolution) and raw BSD errno codes (`ECONNREFUSED` etc.,
-/// the same family `is_would_block` above already inspects for `EWOULDBLOCK`) that can also
-/// surface directly. Anything not recognized falls back to `SocketError::Other`, with the
-/// real code preserved at `log::debug!` — still an improvement over silently mapping to
-/// `ConnectionRefused`, since `Other` doesn't claim a specific (and possibly wrong) cause.
+// `mbedtls/net_sockets.h` (ESP-IDF v5.5.3 `components/mbedtls`). Not in esp-idf-sys's generated
+// bindings, which don't include that header. ESP-IDF's `port/net_sockets.c` turns EPIPE/ECONNRESET
+// into `CONN_RESET` and every other socket failure into `RECV_FAILED`/`SEND_FAILED`.
 #[cfg(feature = "esp-idf")]
-fn map_esp_tls_connect_error(err: &::esp_idf_svc::sys::EspError) -> SocketError {
-    let code = err.code();
+const MBEDTLS_ERR_NET_RECV_FAILED: i32 = -0x004C;
+#[cfg(feature = "esp-idf")]
+const MBEDTLS_ERR_NET_SEND_FAILED: i32 = -0x004E;
+#[cfg(feature = "esp-idf")]
+const MBEDTLS_ERR_NET_CONN_RESET: i32 = -0x0050;
 
-    if code == ::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CANNOT_RESOLVE_HOSTNAME
-        || code == ::esp_idf_svc::sys::EHOSTUNREACH as i32
-        || code == ::esp_idf_svc::sys::ENETUNREACH as i32
-        || code == ::esp_idf_svc::sys::EADDRNOTAVAIL as i32
-    {
-        return SocketError::AddressNotAvailable;
+/// Classifies an mbedTLS error code into the connection-shaped `ErrorKind` it describes, if any.
+///
+/// Shared by the handshake path (reading the mbedTLS record `esp_tls` keeps) and the
+/// post-handshake read/write path (where `esp_tls_conn_read`/`write` return the mbedTLS code
+/// itself). A peer's `close_notify` and a bare EOF both mean the peer ended the session.
+#[cfg(feature = "esp-idf")]
+fn mbedtls_error_kind(code: i32) -> Option<embedded_io_async::ErrorKind> {
+    match code {
+        MBEDTLS_ERR_NET_CONN_RESET
+        | ::esp_idf_svc::sys::MBEDTLS_ERR_SSL_CONN_EOF
+        | ::esp_idf_svc::sys::MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY => {
+            Some(embedded_io_async::ErrorKind::ConnectionReset)
+        }
+        MBEDTLS_ERR_NET_RECV_FAILED | MBEDTLS_ERR_NET_SEND_FAILED => {
+            Some(embedded_io_async::ErrorKind::ConnectionAborted)
+        }
+        _ => None,
     }
+}
 
-    if code == ::esp_idf_svc::sys::ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST
-        || code == ::esp_idf_svc::sys::ECONNREFUSED as i32
-    {
-        return SocketError::ConnectionRefused;
+/// Maps a non-retryable failed handshake step to a `SocketError`, from the error records `esp_tls` kept for it.
+///
+/// A failed step always reaches Rust as the same opaque `ESP_FAIL` (see
+/// `negotiate_unverified_step`, mirroring esp-idf-svc 0.53.0's `internal_connect`), so the
+/// `EspError` itself cannot route anything: the cause lives in the mbedTLS-type record, drained
+/// by [`take_esp_tls_error`] before this runs. DNS/dial codes never apply here — the connector
+/// adopts an already-connected socket. Certificate rejections are routed earlier, by
+/// `query_verify_failure`. Anything unrecognized falls back to `SocketError::Other` carrying both
+/// recorded codes (#302).
+#[cfg(feature = "esp-idf")]
+fn map_esp_tls_connect_error(
+    err: &::esp_idf_svc::sys::EspError,
+    esp_err: Option<i32>,
+    mbedtls_err: Option<i32>,
+) -> SocketError {
+    if let Some(kind) = mbedtls_err.and_then(mbedtls_error_kind) {
+        return super::map_embedded_io_error_kind(kind);
     }
-
-    if code == ::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT
-        || code == ::esp_idf_svc::sys::ETIMEDOUT as i32
-    {
-        return SocketError::TimedOut;
-    }
-
-    log::debug!("ESP-IDF TLS handshake failed: {err}");
-    SocketError::Other(std::format!("ESP-IDF TLS handshake failed: {err}").into())
+    log::debug!(
+        "ESP-IDF TLS handshake failed: {err} (esp_tls {esp_err:?}, mbedtls {mbedtls_err:?})"
+    );
+    SocketError::Other(
+        std::format!(
+            "ESP-IDF TLS handshake failed: {err} (esp_tls {esp_err:?}, mbedtls {mbedtls_err:?})"
+        )
+        .into(),
+    )
 }
 
 /// Cert bundle used by `EspIdfTlsConnector`'s `ca_pem`/`client_cert`/`client_key` fields and `new()`/`with_certs()` constructors.
@@ -893,28 +909,19 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspIdfTlsStream
     }
 }
 
-/// Classifies a post-handshake `EspTls` read/write failure into the closest
-/// `embedded_io_async::ErrorKind`, mirroring `map_esp_tls_connect_error`'s connect-phase
-/// classification so `map_embedded_io_error_kind` (`src/io/mod.rs`) doesn't have to fall back
-/// to its `ConnectionReset` catch-all for every real cause (see #46 — that catch-all previously
-/// received nothing but `Other` here, defeating its own point). Unrecognized codes still fall
-/// back to `Other`, with the real code preserved at `log::debug!`.
+/// Classifies a post-handshake `EspTls` read/write failure into the closest `embedded_io_async::ErrorKind`.
+///
+/// `esp_tls_conn_read`/`write` return `esp_mbedtls_read`/`write`'s result (ESP-IDF
+/// `esp_tls_mbedtls.c`), so the code is an mbedTLS one — a positive errno never reaches here,
+/// which is why the old `ECONNRESET`/`ETIMEDOUT` arms were dead and a peer reset read as
+/// "non-network I/O error" (#303, a regression of #46). Unrecognized codes fall back to
+/// `Other`, with the real code preserved at `log::debug!`.
 #[cfg(feature = "esp-idf")]
 fn esp_tls_io_error_kind(err: &::esp_idf_svc::sys::EspError) -> embedded_io_async::ErrorKind {
-    let code = err.code();
-
-    if code == ::esp_idf_svc::sys::ECONNRESET as i32 {
-        return embedded_io_async::ErrorKind::ConnectionReset;
-    }
-    if code == ::esp_idf_svc::sys::ECONNREFUSED as i32 {
-        return embedded_io_async::ErrorKind::ConnectionRefused;
-    }
-    if code == ::esp_idf_svc::sys::ETIMEDOUT as i32 {
-        return embedded_io_async::ErrorKind::TimedOut;
-    }
-
-    log::debug!("ESP-IDF TLS I/O failed: {err}");
-    embedded_io_async::ErrorKind::Other
+    mbedtls_error_kind(err.code()).unwrap_or_else(|| {
+        log::debug!("ESP-IDF TLS I/O failed: {err}");
+        embedded_io_async::ErrorKind::Other
+    })
 }
 
 /// Shared `WouldBlock` retry loop for `EspIdfTlsStream::read`/`write` — both wrap a single `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on `is_would_block`, differing only in which `EspTls` method is invoked and the log message text.
@@ -1377,8 +1384,8 @@ impl EspIdfTlsConnector {
     /// explaining why, rather than reaching ESP-IDF's opaque
     /// `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
     ///
-    /// **Not yet verified against real hardware** -- flash `esp32-hw-probe` (see its
-    /// `CLAUDE.md`) against a real printer before relying on this in a shipped app.
+    /// **Confirmed on a real ESP32-C6 against a live P1S** (`esp32-hw-probe`, GitHub issue
+    /// #168): the unverified handshake completed over TLS 1.2 and returned the printer's chain.
     ///
     /// Prefer [`Self::with_certs`] wherever the caller can supply the
     /// printer's CA — it needs no sdkconfig change and actually verifies the peer.
@@ -1634,11 +1641,24 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             // see `take_esp_tls_error` and the `cfg.timeout_ms` comment above. Drained
             // unconditionally on every error, including the already-retryable ones, so the
             // record can never outlive the step that produced it.
-            let retryable = step.as_ref().err().is_some_and(|e| {
-                let esp_err = take_esp_tls_error(&tls);
-                is_would_block(e)
-                    || esp_err == Some(::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT)
-            });
+            // The mbedTLS record is drained alongside it for the same reason, and kept: it is
+            // the only place a non-retryable step's real cause survives (#302).
+            let (retryable, esp_err, mbedtls_err) = match &step {
+                Ok(_) => (false, None, None),
+                Err(e) => {
+                    let esp_err = take_esp_tls_error(
+                        &tls,
+                        ::esp_idf_svc::sys::esp_tls_error_type_t_ESP_TLS_ERR_TYPE_ESP,
+                    );
+                    let mbedtls_err = take_esp_tls_error(
+                        &tls,
+                        ::esp_idf_svc::sys::esp_tls_error_type_t_ESP_TLS_ERR_TYPE_MBEDTLS,
+                    );
+                    let retryable = is_would_block(e)
+                        || esp_err == Some(::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT);
+                    (retryable, esp_err, mbedtls_err)
+                }
+            };
 
             match step {
                 Ok(_) => {
@@ -1688,7 +1708,7 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     if let Some(failure) = query_verify_failure(&tls) {
                         return Err(SocketError::CertificateInvalid(failure));
                     }
-                    return Err(map_esp_tls_connect_error(&e));
+                    return Err(map_esp_tls_connect_error(&e, esp_err, mbedtls_err));
                 }
             }
         }

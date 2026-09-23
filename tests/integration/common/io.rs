@@ -45,8 +45,13 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for VersionReportingTlsConnector {
 }
 
 /// A pass-through TLS connector that reports a different negotiated version on the first
-/// `connect()` call (the FTPS control channel) than on every subsequent call (a data-channel
-/// connect) — exercises `open_data_channel`'s own `require_tls_1_2_if_enforced` recheck
+/// `negotiated_version()` call than on every later one.
+///
+/// It counts `negotiated_version()` calls, not `connect()`s: the stream is the raw stream passed
+/// through, so it carries no tag saying which connect produced it. The first call is the control
+/// channel's only because `FtpsClient::require_tls_1_2_if_enforced` asks exactly once per
+/// connect, and only on a model that enforces TLS 1.2 — use this with such a model (P2S), and
+/// revisit it if that check gains a second call site. Exercises `open_data_channel`'s own `require_tls_1_2_if_enforced` recheck
 /// (`src/ftps/client.rs`'s "defense in depth" comment) independently of the control-channel
 /// check `FtpsClient::connect` already performs, since TLS session resumption isn't
 /// verified to carry the negotiated version forward.

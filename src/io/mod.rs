@@ -244,6 +244,11 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
         std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
         std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
         std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
+        // Peer closed its end (e.g. tokio-rustls's "tls handshake eof") — connection-shaped,
+        // as in `map_io_error_kind` (#298).
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => {
+            SocketError::ConnectionReset
+        }
         _ => {
             log::debug!("{other_msg}: {err}");
             SocketError::Other(Cow::Borrowed(other_msg))
@@ -285,6 +290,19 @@ pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::
         std::io::ErrorKind::TimedOut => embedded_io_async::ErrorKind::TimedOut,
         std::io::ErrorKind::AddrInUse => embedded_io_async::ErrorKind::AddrInUse,
         std::io::ErrorKind::AddrNotAvailable => embedded_io_async::ErrorKind::AddrNotAvailable,
+        std::io::ErrorKind::BrokenPipe => embedded_io_async::ErrorKind::BrokenPipe,
+        std::io::ErrorKind::InvalidInput => embedded_io_async::ErrorKind::InvalidInput,
+        std::io::ErrorKind::InvalidData => embedded_io_async::ErrorKind::InvalidData,
+        std::io::ErrorKind::Interrupted => embedded_io_async::ErrorKind::Interrupted,
+        std::io::ErrorKind::OutOfMemory => embedded_io_async::ErrorKind::OutOfMemory,
+        std::io::ErrorKind::PermissionDenied => embedded_io_async::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::Unsupported => embedded_io_async::ErrorKind::Unsupported,
+        std::io::ErrorKind::NotFound => embedded_io_async::ErrorKind::NotFound,
+        std::io::ErrorKind::AlreadyExists => embedded_io_async::ErrorKind::AlreadyExists,
+        std::io::ErrorKind::WriteZero => embedded_io_async::ErrorKind::WriteZero,
+        // The peer closed without `close_notify` (rustls reports it this way): the most common
+        // way a printer session ends, and connection-shaped, not "non-network" (#298).
+        std::io::ErrorKind::UnexpectedEof => embedded_io_async::ErrorKind::ConnectionReset,
         _ => embedded_io_async::ErrorKind::Other,
     }
 }
@@ -510,10 +528,9 @@ pub(crate) enum Raced<A, B> {
 /// `#[cfg]` branching needed. If both futures happen to be ready on the same poll, `a`
 /// wins arbitrarily (checked first).
 ///
-/// `pub(crate)` — reused by `PrinterClient::ensure_mqtt`/`ensure_ftps` (`src/client/mod.rs`) to
-/// race their two-step dial+connect sequences against a connect-timeout deadline, and by
-/// `BinaryCameraStream::read_next_frame_with_timer` (`src/camera/binary.rs`) for the same
-/// per-read deadline purpose `mqtt::client`'s own `read_chunk`/`read_exact_packet` is built on.
+/// `pub(crate)` — the one primitive behind every deadline in the crate (connect timeouts, and
+/// per-read/per-write bounds in MQTT, FTPS and the camera). Classify a lost race against a
+/// timer with [`deadline_error`], not a bare `TimedOut`. Search for `race(` for the callers.
 pub(crate) async fn race<A, B>(a: A, b: B) -> Raced<A::Output, B::Output>
 where
     A: Future,
@@ -619,7 +636,7 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
         // operation, an unsupported call, malformed data, etc. Surfacing these as
         // `ConnectionReset` drives a reconnect/retry loop that can never succeed, or masks a
         // retryable local condition (`Interrupted`) as a dropped link. `Other` is the honest
-        // catch-all, matching `mqtt/client/mod.rs`'s write-side mapping — but the specific kind
+        // catch-all (MQTT's write side uses this same function) — but the specific kind
         // is carried into the message rather than collapsed to one opaque string, since nothing
         // in the crate today matches on `SocketError` variants to decide whether to retry (so
         // `Interrupted` doesn't need its own variant; a caller that wants to retry on it can
@@ -698,19 +715,25 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
                 &e,
             )))
         }
-        Raced::Right(Ok(())) => Err(SocketError::TimedOut),
-        // A failing timer is not a timeout. `EspIdfTimer::sleep` returns `Err(TimerError)`
-        // *before awaiting anything* when `new_async_timer()` fails (esp_timer slot
-        // exhaustion), so `sleep_fut` is instantly ready and wins every race: reporting
-        // TimedOut there made every read look like a zero-elapsed timeout and drove the
-        // reconnect loop at full speed — the exact failure `has_real_clock()` exists to
-        // prevent, through a door it cannot detect. Surface it as a distinct error so callers
-        // stop retrying instead of spinning.
-        Raced::Right(Err(e)) => {
-            log::warn!("read deadline timer failed: {:?}", e);
-            Err(SocketError::Other(Cow::Borrowed(
-                "read deadline timer failed",
-            )))
+        Raced::Right(r) => Err(deadline_error(r)),
+    }
+}
+
+/// Classifies the deadline side of a [`race`] against a `TimerProvider::sleep`.
+///
+/// A failing timer is not a timeout. `EspIdfTimer::sleep` returns `Err(TimerError)` *before
+/// awaiting anything* when `new_async_timer()` fails (esp_timer slot exhaustion), so the sleep
+/// is instantly ready and wins every race: reporting `TimedOut` there made every bounded
+/// operation look like a zero-elapsed timeout and drove callers' retry loops at full speed —
+/// the exact failure `has_real_clock()` exists to prevent, through a door it cannot detect.
+/// Surfacing it as a distinct error lets callers stop retrying instead of spinning. Every
+/// deadline race routes through here so no call site has to remember that (#81, #318).
+pub(crate) fn deadline_error(timer_result: Result<(), TimerError>) -> SocketError {
+    match timer_result {
+        Ok(()) => SocketError::TimedOut,
+        Err(e) => {
+            log::warn!("deadline timer failed: {:?}", e);
+            SocketError::Other(Cow::Borrowed("deadline timer failed"))
         }
     }
 }
@@ -1173,6 +1196,32 @@ mod error_kind_mapping_tests {
         assert_eq!(
             map_embedded_io_error_kind(ErrorKind::BrokenPipe),
             SocketError::ConnectionReset
+        );
+    }
+
+    /// Regression (#298): the std backends collapsed BrokenPipe/UnexpectedEof to `Other` before
+    /// this mapping ever saw them, so a peer drop read as "non-network I/O error".
+    #[cfg(feature = "std")]
+    #[test]
+    fn std_peer_drop_kinds_survive_the_backend_mapping() {
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            assert_eq!(
+                map_embedded_io_error_kind(super::map_io_error_kind(kind)),
+                SocketError::ConnectionReset,
+                "{kind:?}"
+            );
+            assert_eq!(
+                super::map_std_io_error(std::io::Error::from(kind), "test"),
+                SocketError::ConnectionReset,
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            map_embedded_io_error_kind(super::map_io_error_kind(std::io::ErrorKind::InvalidInput)),
+            SocketError::InvalidInput
         );
     }
 

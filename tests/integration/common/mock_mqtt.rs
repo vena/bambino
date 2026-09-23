@@ -62,9 +62,9 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
 /// `.claude/rules/wire-framing-hardware-verification.md`). It consumes the stream with
 /// `read_exact` regardless of how many `write_all` calls produced the bytes, so it cannot tell
 /// `write_frame` from `write_frame_with_timer`'s raced write, and cannot detect a partial frame
-/// a timed-out write left on the wire. `tests/mqtt_test.rs` covers only the happy path:
+/// a timed-out write left on the wire. `tests/integration/mqtt_test.rs` covers only the happy path:
 /// `write_poisoned`, `MQTT_WRITE_TIMEOUT_SECS`, `MQTT_READ_TIMEOUT_SECS`, and frame resumption
-/// live in in-crate unit tests over `tokio::io::duplex`. A green `tests/mqtt_test.rs` is
+/// live in in-crate unit tests over `tokio::io::duplex`. A green `tests/integration/mqtt_test.rs` is
 /// therefore not evidence for that class of change — it needs hardware.
 pub async fn read_packet<R: AsyncRead + Unpin>(
     stream: &mut R,

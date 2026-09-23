@@ -5,11 +5,12 @@ use alloc::vec::Vec;
 
 use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 
-/// Largest MQTT payload this client will allocate for, on a full host.
+/// Largest MQTT payload this client will accept, on a full host.
 ///
-/// `read_exact_packet` sizes its payload buffer from the *declared* remaining length before a
-/// single payload byte has arrived, so this constant is the ceiling on what a peer can make
-/// this client allocate by asserting a length. It also bounds the outbound side via
+/// The ceiling on the remaining length this client accepts from a peer: a frame declaring more
+/// is rejected before any payload is read. The payload buffer itself grows in
+/// `PAYLOAD_GROWTH_CHUNK` steps as bytes actually arrive, so declaring a large length does not
+/// by itself make this client allocate it. It also bounds the outbound side via
 /// `publish_command`, and is load-bearing for `pending.rs`'s `MQTT_PENDING_BUFFER_MAX_BYTES`
 /// assertion.
 ///
@@ -18,7 +19,7 @@ use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
 #[cfg(all(feature = "std", not(feature = "esp-idf")))]
 pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 
-/// Largest MQTT payload this client will allocate for on a memory-constrained target.
+/// Largest MQTT payload this client will accept on a memory-constrained target.
 ///
 /// Scaled down from the host's 1 MiB because that value is not survivable here: a heap that
 /// cannot satisfy an allocation calls `handle_alloc_error` and aborts rather than returning a
@@ -118,6 +119,25 @@ pub(crate) enum FrameReadState {
     Poisoned,
 }
 
+/// Reads exactly one byte from `stream`, retrying partial reads via `read_chunk`.
+///
+/// Either fully succeeds (one byte consumed and returned) or fails before any byte is
+/// consumed — there's no partial-byte state for a caller to lose across a timeout, unlike
+/// the multi-byte payload read in [`read_exact_packet`], which must stay a manual loop.
+async fn read_one_byte<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<u8, SocketError> {
+    let mut b = [0u8; 1];
+    let mut filled = 0;
+    while filled < b.len() {
+        let n = read_chunk(stream, &mut b[filled..], timer, deadline_ms).await?;
+        filled += n;
+    }
+    Ok(b[0])
+}
+
 /// Reads exactly one standard MQTT frame asynchronously from our abstract socket, resuming from `state` if a prior call on this same stream timed out partway through.
 ///
 /// **Correctness invariant — never violate this:** on a `SocketError::TimedOut` return,
@@ -140,25 +160,6 @@ pub(crate) enum FrameReadState {
 /// Callers outside tests should pass `MQTT_READ_TIMEOUT_SECS * 1000`; tests use a small
 /// `budget_ms` directly so stalled-read regression tests don't need to wait out the real
 /// production timeout.
-/// Reads exactly one byte from `stream`, retrying partial reads via `read_chunk`.
-///
-/// Either fully succeeds (one byte consumed and returned) or fails before any byte is
-/// consumed — there's no partial-byte state for a caller to lose across a timeout, unlike
-/// the multi-byte payload read in [`read_exact_packet`], which must stay a manual loop.
-async fn read_one_byte<IO: AsyncIo, T: TimerProvider>(
-    stream: &mut IO,
-    timer: &T,
-    deadline_ms: Option<u64>,
-) -> Result<u8, SocketError> {
-    let mut b = [0u8; 1];
-    let mut filled = 0;
-    while filled < b.len() {
-        let n = read_chunk(stream, &mut b[filled..], timer, deadline_ms).await?;
-        filled += n;
-    }
-    Ok(b[0])
-}
-
 pub(crate) async fn read_exact_packet<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     state: &mut FrameReadState,
@@ -393,11 +394,6 @@ mod tests {
             );
         }
 
-        /// Regression test for the correctness hinge above: bytes already read into a partial-packet buffer before a timeout must never be lost.
-        /// Simulates a connection that delivers *part* of a frame, stalls long enough to time out, then
-        /// delivers the rest — and asserts the second `read_exact_packet` call reconstructs the exact
-        /// original frame (not corrupted, not desynced, not duplicated), proving `FrameReadState` correctly
-        /// carried the partial payload across the timed-out attempt.
         #[tokio::test]
         async fn test_read_exact_packet_does_not_preallocate_the_declared_length() {
             use tokio::io::AsyncWriteExt;
@@ -488,6 +484,11 @@ mod tests {
             assert!(matches!(state, FrameReadState::Idle));
         }
 
+        /// Regression test for the correctness hinge above: bytes already read into a partial-packet buffer before a timeout must never be lost.
+        /// Simulates a connection that delivers *part* of a frame, stalls long enough to time out, then
+        /// delivers the rest — and asserts the second `read_exact_packet` call reconstructs the exact
+        /// original frame (not corrupted, not desynced, not duplicated), proving `FrameReadState` correctly
+        /// carried the partial payload across the timed-out attempt.
         #[tokio::test]
         async fn test_read_exact_packet_resumes_after_timeout_without_losing_bytes() {
             use tokio::io::AsyncWriteExt;

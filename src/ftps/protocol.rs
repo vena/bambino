@@ -128,7 +128,7 @@ async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
     match race(read_fut, sleep_fut).await {
         Raced::Left(Ok(n)) => Ok(n),
         Raced::Left(Err(_)) => Err(SocketError::ConnectionReset),
-        Raced::Right(_) => Err(SocketError::TimedOut),
+        Raced::Right(r) => Err(crate::io::deadline_error(r)),
     }
 }
 
@@ -178,7 +178,7 @@ async fn write_bounded<T: TimerProvider, E>(
     match race(write_fut, sleep_fut).await {
         Raced::Left(Ok(())) => Ok(()),
         Raced::Left(Err(_)) => Err(Error::Network(SocketError::ConnectionAborted)),
-        Raced::Right(_) => Err(Error::Network(SocketError::TimedOut)),
+        Raced::Right(r) => Err(Error::Network(crate::io::deadline_error(r))),
     }
 }
 
