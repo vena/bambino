@@ -20,7 +20,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 
 ## Two levels of API
 
-`PrinterClient` is the high-level interface; it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits, Z-axis homing validation, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
+`PrinterClient` is the high-level interface; it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits in the typed setters, raw G-code rejected when it homes unsafely or targets a heater past its limit, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
 For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `MqttClient` and `FtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
 
@@ -125,7 +125,7 @@ printer.home_axes(false).await?;               // false = bare G28; true = Z-onl
 printer.set_bed_temperature(60).await?;        // clamped to model max
 printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
 printer.set_led("chamber_light", true).await?; // turn on the chamber light
-printer.send_gcode("M106 P1 S255").await?;     // with PrinterClient, gcode is checked against unsafe homing
+printer.send_gcode("M106 P1 S255").await?;     // rejected if it homes unsafely or exceeds a heater limit; not clamped
 ```
 
 Every model-level limit is reachable through `printer.quirks()` (a shortcut for `printer.model().quirks()`) — e.g. `printer.quirks().nozzle_temp_max()`. The one exception, `bed_temp_max()`, additionally needs the printer's mains region: `printer.quirks().bed_temp_max(printer.is_220v_power())`.

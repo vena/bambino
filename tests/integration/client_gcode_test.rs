@@ -42,6 +42,49 @@ async fn test_send_gcode_rejects_unsafe_homing() {
 }
 
 #[tokio::test]
+async fn test_send_gcode_rejects_over_limit_heater_targets() {
+    // Regression (#353): send_gcode checked only G28, so raw heater commands bypassed every
+    // ceiling the typed setters clamp to.
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+
+        // Only the in-range bed target should arrive
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["param"], "M140 S60\n");
+    });
+
+    let mut client = connect_test_client(
+        TokioIo(client_stream),
+        "01P000000000000",
+        PrinterModel::A1Mini,
+    )
+    .await;
+
+    for gcode in [
+        "M140 S200",
+        "M190 S81",
+        "M104 S500",
+        "G91\nM109 S999",
+        "M141 S60",
+    ] {
+        let err = client.send_gcode(gcode).await;
+        assert!(
+            matches!(err, Err(Error::ModelMismatch(_))),
+            "{gcode:?} should be rejected on A1 Mini, got {err:?}"
+        );
+    }
+
+    client
+        .send_gcode("M140 S60")
+        .await
+        .expect("In-range bed target should pass");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+#[tokio::test]
 async fn test_send_gcode_raw_bypasses_safety() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
 

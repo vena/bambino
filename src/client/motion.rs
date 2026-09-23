@@ -98,9 +98,14 @@ where
 
     /// Sends a G-code command with model-aware safety validation.
     ///
-    /// Rejects commands that would be unsafe on the active model (e.g., partial-axis
-    /// homing on bed-on-Z platforms). Use [`send_gcode_raw()`](Self::send_gcode_raw)
-    /// to bypass validation when you need unchecked access.
+    /// Rejects, without sending anything, G-code that is unsafe on the active model: partial-axis
+    /// homing on bed-on-Z platforms, heater targets above the model's nozzle/bed/chamber ceilings,
+    /// and any chamber-heater command on a model without one — see
+    /// [`ModelQuirks::validate_gcode`](crate::quirks::ModelQuirks::validate_gcode) for the exact
+    /// rules. Nothing is clamped, and relative moves are not bounded. The bed ceiling uses the
+    /// same mains region as [`set_bed_temperature()`](Self::set_bed_temperature). Use
+    /// [`send_gcode_raw()`](Self::send_gcode_raw) to bypass validation when you need unchecked
+    /// access.
     ///
     /// # Example
     ///
@@ -110,18 +115,15 @@ where
     ///
     /// // This will be rejected on CoreXY printers (unsafe partial homing):
     /// // printer.send_gcode("G28 Z").await?;  // -> Err(ModelMismatch)
+    /// // And on an A1 Mini (80°C bed ceiling):
+    /// // printer.send_gcode("M140 S100").await?;  // -> Err(ModelMismatch)
     /// ```
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<CommandHandle, Error> {
-        if self
-            .identity
+        let mains_220v = self.is_220v_power();
+        self.identity
             .model
             .quirks()
-            .is_unsafe_homing_command(gcode_line)
-        {
-            return Err(Error::ModelMismatch(
-                "partial-axis homing unsafe on bed-on-Z model".into(),
-            ));
-        }
+            .validate_gcode(gcode_line, mains_220v)?;
         self.send_gcode_raw(gcode_line).await
     }
 

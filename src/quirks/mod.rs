@@ -11,6 +11,7 @@
 //! with the low-resolution PWM fan telemetry common across most models.
 
 pub mod context;
+mod gcode;
 pub mod models;
 
 pub use context::{QuirkContext, firmware_at_least};
@@ -21,6 +22,7 @@ use alloc::format;
 use alloc::string::String;
 
 use crate::camera::CameraProtocol;
+use crate::error::Error;
 use crate::models::PrinterModel;
 use crate::types::PrinterTelemetry;
 
@@ -248,16 +250,37 @@ pub trait ModelQuirks {
     /// Default: bed-on-Z models reject G28 with axis constraints (Z, X, or Y) to prevent
     /// nozzle-to-plate collisions. Bed-slingers allow all homing variants.
     ///
-    /// Scans every line of `gcode` independently — multi-statement `\n`-joined payloads are a
-    /// documented, supported wire shape (see `GCodeRequest`) — and recognizes `G28` as a
-    /// case-insensitive prefix match on a line rather than requiring it to be the entire leading
-    /// whitespace-split token, so glued forms like `G28X` (no space before the axis letter) are
-    /// caught too, alongside the already-handled space-separated form (`G28 X`).
+    /// Scans every statement of `gcode` independently, splitting on `\n` and a bare `\r` —
+    /// multi-statement payloads are a documented, supported wire shape (see `GCodeRequest`).
+    /// Comments and a leading `M117` message are skipped; `G28X`, `G 28 Z` and `G028 Z` are all
+    /// recognized as `G28`, since the firmware's parser is undocumented and the scan resolves
+    /// every ambiguity toward rejecting.
     fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
-        if !self.is_bed_on_z() {
-            return false;
-        }
-        gcode.lines().any(line_has_unsafe_homing)
+        self.is_bed_on_z() && gcode::validate(gcode, true, None).is_err()
+    }
+
+    /// Checks raw G-code against this model's limits: what `PrinterClient::send_gcode` enforces.
+    ///
+    /// Rejects, with [`Error::ModelMismatch`]:
+    ///
+    /// - axis-constrained `G28` on a bed-on-Z model (see [`Self::is_unsafe_homing_command`]);
+    /// - an `M104`/`M109` `S`/`R`/`B` above [`Self::nozzle_temp_max`];
+    /// - an `M140`/`M190` `S`/`R` above [`Self::bed_temp_max`] for `mains_220v`;
+    /// - any `M141`/`M191` on a model without an active chamber heater, and an `S`/`R` above
+    ///   [`Self::active_chamber_heater_max_temp_c`] on one with a heater.
+    ///
+    /// A temperature argument that isn't a plain decimal (`S3e2`, `S0x1F`) is rejected with
+    /// [`Error::InvalidArgument`] rather than interpreted. Unlike the typed setters, nothing is
+    /// clamped: the G-code is either sent as written or refused. Relative moves are **not**
+    /// bounded — the printer reports no absolute position, so there is nothing to bound them
+    /// against; `move_relative` caps a single move's distance instead.
+    fn validate_gcode(&self, gcode: &str, mains_220v: Option<bool>) -> Result<(), Error> {
+        let temps = gcode::TempLimits {
+            nozzle_max: self.nozzle_temp_max(),
+            bed_max: self.bed_temp_max(mains_220v),
+            chamber_max: self.active_chamber_heater_max_temp_c(),
+        };
+        gcode::validate(gcode, self.is_bed_on_z(), Some(&temps))
     }
 
     /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
@@ -528,78 +551,6 @@ impl PrinterModel {
 // ============================================================================
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
-
-/// Returns true if `line` contains an axis-constrained `G28` homing command.
-///
-/// Recognizes `G28` as a case-insensitive prefix match rather than requiring the whole token to
-/// equal `G28` — this catches axis letters glued directly to the command (`G28X`) in addition to
-/// the space-separated form (`G28 X`). Rejects numeric extensions of the command number (e.g.
-/// `G280`, `G281`), which are distinct G-codes, not `G28` with a trailing digit. `no_std` rules
-/// out `regex`, hence the manual byte/char scan.
-///
-/// Each line is reduced to its executable G-code (see [`executable_gcode`]) *before* the scan
-/// starts, so neither the `G28` match itself nor the axis letters after it can come from
-/// non-executable text: `"; G28 Z"` (match inside a comment), `"G28 ; home Z"` (axis letter
-/// inside a trailing comment), and `"M117 G28 Z"` (match inside a display message) are all
-/// correctly treated as safe.
-fn line_has_unsafe_homing(line: &str) -> bool {
-    let code_only = executable_gcode(line);
-    let bytes = code_only.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if is_g28_prefix(bytes, i) {
-            let code = &code_only[i + 3..];
-            let next_is_digit = code
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false);
-            if !next_is_digit
-                && code
-                    .chars()
-                    .any(|c| matches!(c.to_ascii_uppercase(), 'X' | 'Y' | 'Z'))
-            {
-                return true;
-            }
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Returns the executable portion of one G-code line — the part a `G28` scan may legitimately
-/// match inside.
-///
-/// Two kinds of non-executable text are removed:
-///
-/// 1. Comments: everything from the first `;` or `(`. Both markers are located in one pass
-///    because either may come first, and only the earlier one bounds the executable text —
-///    splitting on `;` first would keep a `(`-comment that opened before it, and vice versa.
-/// 2. `M117` display-message operands: `M117` consumes the rest of its line as free-form text
-///    for the printer's LCD, so a `G28` appearing there is a message, not a command. `M117` is
-///    handled and its `M118`-style siblings are not because it is the case actually observed;
-///    the scan stays conservative (it only ever *drops* rejections it can prove are text).
-fn executable_gcode(line: &str) -> &str {
-    let end = line.find([';', '(']).unwrap_or(line.len());
-    let code = &line[..end];
-
-    let trimmed = code.trim_start();
-    let is_m117 = trimmed.len() >= 4
-        && trimmed[..4].eq_ignore_ascii_case("M117")
-        && trimmed[4..]
-            .chars()
-            .next()
-            .is_none_or(|c| !c.is_ascii_alphanumeric());
-    if is_m117 { "" } else { code }
-}
-
-/// Returns true if `bytes[i..]` starts with `G28` (case-insensitive on the `G`; `2`/`8` are digits with no case to normalize).
-fn is_g28_prefix(bytes: &[u8], i: usize) -> bool {
-    bytes.len() >= i + 3
-        && bytes[i].eq_ignore_ascii_case(&b'G')
-        && bytes[i + 1] == b'2'
-        && bytes[i + 2] == b'8'
-}
 
 /// Generates a relative Z-axis movement G-code block, bounded by a client-side `z_max` distance
 /// cap on the single move (not true position-aware crash prevention — the printer reports no
