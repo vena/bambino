@@ -175,12 +175,19 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
     ///
     /// Per [REF-CAM-BINARY], this handshake protocol has no ack byte: a successful return only
     /// means the packet was written and flushed to the socket, **not** that the printer accepted
-    /// the access code. If the code is wrong, the printer's real-world response (closing the
-    /// socket, or simply never sending a frame) only surfaces later, on the *next*
-    /// [`Self::read_next_frame`] call, as `Error::Network(SocketError::ConnectionReset)`
-    /// — the same error variant a mid-stream network blip would produce. Callers that need to
-    /// distinguish "wrong access code" from "transient network hiccup" cannot do so from this
-    /// API alone.
+    /// the access code. A wrong code surfaces only on the *next* frame read, in one of three
+    /// ways depending on what the printer does and which read is used:
+    ///
+    /// - the printer closes the socket: `Error::Network(SocketError::ConnectionReset)`;
+    /// - the printer stays silent, read with a real timer (e.g.
+    ///   [`PrinterClient::read_camera_frame`](crate::client::PrinterClient::read_camera_frame)):
+    ///   `Error::Network(SocketError::TimedOut)` after `CAMERA_READ_TIMEOUT_SECS` (30s);
+    /// - the printer stays silent, read with [`Self::read_next_frame`] (no timer): the read
+    ///   blocks indefinitely.
+    ///
+    /// Each is also what a network fault would produce, so a caller cannot distinguish "wrong
+    /// access code" from a network problem through this API alone, and matching only
+    /// `ConnectionReset` misses the silent cases.
     pub async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error> {
         self.authenticate_with_timer(
             &identity.access_code,
