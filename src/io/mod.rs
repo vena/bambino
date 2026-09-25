@@ -233,7 +233,9 @@ pub(crate) fn map_mbedtls_verify_flags(flags: u32) -> Option<CertificateFailure>
 /// Shared by every platform backend that surfaces `std::io::Error` (tokio, ESP-IDF).
 /// `other_msg` fills `SocketError::Other` for kinds with no direct mapping — pass a
 /// platform-specific message so the catch-all error stays attributable.
-#[cfg(feature = "std")]
+// Gated on the backends that call these helpers, not bare `std`: `embassy,std` without either
+// (`make test-embassy-host`) is a real build, and there they would be dead code.
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
 pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> SocketError {
     match err.kind() {
         std::io::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
@@ -262,7 +264,7 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
 /// are logged and otherwise ignored (best-effort, not fatal to discovery), while a
 /// `set_nonblocking` failure is returned since every caller requires it (Tokio panics on
 /// thread-local registration otherwise; ESP-IDF's recv pacing assumes it).
-#[cfg(feature = "std")]
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
 pub(crate) fn configure_std_udp_socket(socket: &std::net::UdpSocket) -> Result<(), SocketError> {
     if let Err(e) = socket.set_broadcast(true) {
         log::debug!("configure_std_udp_socket: set_broadcast failed: {e}");
@@ -280,7 +282,7 @@ pub(crate) fn configure_std_udp_socket(socket: &std::net::UdpSocket) -> Result<(
 /// Maps a `std::io::ErrorKind` to the closest `embedded_io_async::ErrorKind`.
 /// Shared by every std-based platform's `embedded_io_async::Error::kind()` impl (`TokioIoError`,
 /// `EspIdfIoError`) — both previously duplicated this exact match.
-#[cfg(feature = "std")]
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
 pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::ErrorKind {
     match kind {
         std::io::ErrorKind::ConnectionRefused => embedded_io_async::ErrorKind::ConnectionRefused,
@@ -1201,7 +1203,7 @@ mod error_kind_mapping_tests {
 
     /// Regression (#298): the std backends collapsed BrokenPipe/UnexpectedEof to `Other` before
     /// this mapping ever saw them, so a peer drop read as "non-network I/O error".
-    #[cfg(feature = "std")]
+    #[cfg(any(feature = "tokio", feature = "esp-idf"))]
     #[test]
     fn std_peer_drop_kinds_survive_the_backend_mapping() {
         for kind in [
