@@ -1256,6 +1256,63 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
 
+- <span id="superprinterclient-ignore-error-and-resume"></span>`async fn ignore_error_and_resume(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Ignores `error_code` and resumes the paused print (the error dialog's "Ignore and resume").
+
+  Sends `ignore`, which skips the firmware's next re-check of that one fault. A plain
+  [`resume_print`](#printerclient) means "fixed it, re-check", so a fault such as a wrong
+  build plate is re-detected and pauses the print again a second later (bambuddy #1869).
+  `error_code` is the raw `print_error` register value; the cached `job_id` is echoed back,
+  or an empty string before any telemetry carried one. [REF-MQTT-LIFECYCLE]
+
+- <span id="superprinterclient-resume-print-after-error"></span>`async fn resume_print_after_error(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Resumes naming the fault being answered — BambuStudio's error-dialog form of `resume`.
+
+  An opt-in alternative to [`resume_print`](#printerclient), which stays the default:
+  bambuddy sends the plain shape from its own error dialog and has it confirmed on H2D/H2S.
+  Takes the same `error_code` and cached `job_id` as
+  [`ignore_error_and_resume`](#printerclient). [REF-MQTT-LIFECYCLE]
+
+- <span id="superprinterclient-stop-print-after-error"></span>`async fn stop_print_after_error(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Stops naming the fault being answered — BambuStudio's error-dialog form of `stop`.
+
+  An opt-in alternative to [`stop_print`](#printerclient), on the same terms as
+  [`resume_print_after_error`](#printerclient). [REF-MQTT-LIFECYCLE]
+
+- <span id="superprinterclient-dismiss-error"></span>`async fn dismiss_error(&mut self, error_code: u32, persistent: bool) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Dismisses a non-pausing warning without resuming anything (`idle_ignore`).
+
+  `persistent` suppresses the same warning permanently (`type: 1`) instead of just this
+  occurrence. [REF-MQTT-LIFECYCLE]
+
+- <span id="superprinterclient-close-error-dialog"></span>`async fn close_error_dialog(&mut self, error_code: u32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Closes the `print_error` dialog on the printer's own screen (`system.uiop`).
+
+  Separate from [`clear_print_error`](#printerclient), which clears the error
+  latch but leaves the on-screen dialog; BambuStudio sends this once whenever its own copy
+  of the dialog closes. [REF-MQTT-LIFECYCLE]
+
+- <span id="superprinterclient-refresh-nozzle"></span>`async fn refresh_nozzle(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Asks the printer to re-read its nozzle information (`refresh_nozzle`) [REF-MQTT-LIFECYCLE].
+
+- <span id="superprinterclient-disable-air-purification"></span>`async fn disable_air_purification(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Turns off air purification (`close_air_filt`), the error dialog's "disable purification" [REF-MQTT-LIFECYCLE].
+
+- <span id="superprinterclient-auto-stop-ams-drying"></span>`async fn auto_stop_ams_drying(&mut self) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Sends `auto_stop_ams_dry`, the error dialog's "stop drying" [REF-MQTT-LIFECYCLE].
+
+  A different command from [`stop_drying`](#printerclient), which sends
+  `ams_filament_drying` for one unit. Whether the two are equivalent is not known, so this
+  is offered alongside it rather than in place of it.
+
 - <span id="superprinterclient-set-print-speed"></span>`async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error>` — [`PrintSpeed`](types/index.md#printspeed), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
