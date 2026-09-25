@@ -25,8 +25,8 @@ pub use ams::{
     AmsFilamentSettingRequest, AmsGetRfidRequest,
 };
 pub use control::{
-    CalibrationRequest, CleanPrintErrorRequest, PrintSpeedRequest, SkipObjectsRequest,
-    StandardControlRequest,
+    CalibrationRequest, CleanPrintErrorRequest, HmsActionRequest, IdleIgnoreRequest,
+    PrintSpeedRequest, SkipObjectsRequest, StandardControlRequest, UiopRequest,
 };
 pub use gcode::GCodeRequest;
 pub use hardware::{
@@ -413,6 +413,40 @@ mod tests {
         assert_eq!(
             json,
             r#"{"print":{"command":"clean_print_error","sequence_id":"20010"}}"#
+        );
+    }
+
+    #[test]
+    fn test_hms_action_json_sends_err_in_decimal() {
+        // 0x0500C010 = 83935248: BambuStudio sends `std::to_string(m_error_code)`.
+        let req = HmsActionRequest::ignore(0x0500_C010, "4242", 20011);
+        assert_eq!(
+            serde_json::to_string(&req).unwrap(),
+            r#"{"print":{"command":"ignore","err":"83935248","param":"reserve","job_id":"4242","sequence_id":"20011"}}"#
+        );
+        let resume = serde_json::to_string(&HmsActionRequest::resume(1, "", 1)).unwrap();
+        assert!(resume.contains(r#""command":"resume","err":"1","param":"reserve","job_id":"""#));
+        let stop = serde_json::to_string(&HmsActionRequest::stop(1, "", 1)).unwrap();
+        assert!(stop.contains(r#""command":"stop""#));
+    }
+
+    #[test]
+    fn test_idle_ignore_json() {
+        let once = serde_json::to_string(&IdleIgnoreRequest::new(0x0500_C010, false, 7)).unwrap();
+        assert_eq!(
+            once,
+            r#"{"print":{"command":"idle_ignore","err":"83935248","type":0,"sequence_id":"7"}}"#
+        );
+        let always = serde_json::to_string(&IdleIgnoreRequest::new(1, true, 7)).unwrap();
+        assert!(always.contains(r#""type":1"#));
+    }
+
+    #[test]
+    fn test_uiop_close_json_sends_err_in_hex() {
+        let req = UiopRequest::close_print_error(0x0500_c010, 9);
+        assert_eq!(
+            serde_json::to_string(&req).unwrap(),
+            r#"{"system":{"command":"uiop","sequence_id":"9","name":"print_error","action":"close","source":1,"type":"dialog","err":"0500C010"}}"#
         );
     }
 

@@ -622,3 +622,61 @@ async fn test_peripheral_signals_and_climate_controls() {
 
     broker_task_p1s.await.expect("P1S broker task panicked");
 }
+
+/// The error-dialog commands echo the job's `job_id`, cached from telemetry (sent as a number by
+/// the firmware, as BambuStudio's `get_longlong_val` reads it), and encode `err` in decimal —
+/// except `uiop`, which is 8-digit hex.
+#[tokio::test]
+async fn test_error_dialog_commands_reach_the_wire() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+    let topic = "device/01P000000000000/report".to_string();
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        send_publish_payload(
+            &mut server_stream,
+            &topic,
+            4601,
+            br#"{"print":{"job_id":4242,"print_error":83935248}}"#,
+        )
+        .await;
+        read_puback(&mut server_stream).await;
+
+        let ignore = read_publish_payload(&mut server_stream).await;
+        assert_eq!(ignore["print"]["command"], "ignore");
+        assert_eq!(ignore["print"]["err"], "83935248");
+        assert_eq!(ignore["print"]["param"], "reserve");
+        assert_eq!(ignore["print"]["job_id"], "4242");
+
+        let dismiss = read_publish_payload(&mut server_stream).await;
+        assert_eq!(dismiss["print"]["command"], "idle_ignore");
+        assert_eq!(dismiss["print"]["type"], 1);
+
+        let close = read_publish_payload(&mut server_stream).await;
+        assert_eq!(close["system"]["command"], "uiop");
+        assert_eq!(close["system"]["err"], "0500C010");
+
+        let refresh = read_publish_payload(&mut server_stream).await;
+        assert_eq!(refresh["print"]["command"], "refresh_nozzle");
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    client
+        .poll_telemetry()
+        .await
+        .expect("poll_telemetry failed");
+
+    client
+        .ignore_error_and_resume(0x0500_C010)
+        .await
+        .expect("ignore");
+    client
+        .dismiss_error(0x0500_C010, true)
+        .await
+        .expect("idle_ignore");
+    client.close_error_dialog(0x0500_C010).await.expect("uiop");
+    client.refresh_nozzle().await.expect("refresh_nozzle");
+
+    broker_task.await.expect("Broker task panicked");
+}

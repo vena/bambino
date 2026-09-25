@@ -44,6 +44,9 @@ pub(crate) struct TelemetryCache {
     pub(crate) last_gcode_state: Option<String>,
     pub(crate) last_door_open: Option<bool>,
     pub(crate) last_print_error: Option<u32>,
+    // Echoed back by the error-dialog commands (`ignore`, error-aware `resume`/`stop`), as
+    // BambuStudio's `command_hms_*` do; `job_id` is sparse in telemetry, so it is cached.
+    pub(crate) last_job_id: Option<String>,
     pub(crate) last_progress: PrintProgress,
     pub(crate) last_bed_temper: Option<f64>,
     pub(crate) last_bed_target_temper: Option<f64>,
@@ -340,6 +343,9 @@ where
         }
         if let Some(print_error) = print.print_error {
             self.cache.last_print_error = Some(print_error);
+        }
+        if let Some(job_id) = &print.job_id {
+            self.cache.last_job_id = Some(job_id.clone());
         }
         if let Some(hms) = &print.hms {
             self.cache.last_hms = Some(hms.clone());

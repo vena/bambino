@@ -816,6 +816,59 @@ Clears active error codes from the printer's active status state.
 }
 ```
 
+`clean_print_error` clears the error latch only. The printer's on-screen dialog, and the choice between resuming, ignoring or dismissing the fault, are separate commands — the ones BambuStudio's error-dialog buttons send (`DeviceErrorDialog.cpp`, built in `DeviceManager.cpp`).
+
+##### Error-Dialog Actions
+
+| Command | Extra fields | Purpose | bambino |
+| --- | --- | --- | --- |
+| `ignore` | `err`, `param: "reserve"`, `job_id` | Skip the next re-check of this fault **and** resume | `ignore_error_and_resume` |
+| `resume` / `stop` | `err`, `param: "reserve"`, `job_id` | Resume or stop, naming the fault | `resume_print_after_error` / `stop_print_after_error` |
+| `idle_ignore` | `err`, `type` (`0` once, `1` permanently) | Dismiss a non-pausing warning without resuming | `dismiss_error` |
+| `refresh_nozzle` | — | Re-read nozzle information | `refresh_nozzle` |
+| `close_air_filt` | — | Turn off air purification | `disable_air_purification` |
+| `auto_stop_ams_dry` | — | Stop AMS drying (a different command from `ams_filament_drying` mode `0`; equivalence unknown) | `auto_stop_ams_drying` |
+
+```json
+{
+  "print": {
+    "command": "ignore",
+    "err": "83935248",
+    "param": "reserve",
+    "job_id": "4242",
+    "sequence_id": "20011"
+  }
+}
+```
+
+*   **`err` is decimal** here — the `print_error` register value through `std::to_string` (`0x0500C010` → `"83935248"`). `job_id` is the current job's, or `""` when unknown (bambuddy's fallback).
+*   **`ignore` vs. `resume`.** A plain `resume` means "I fixed it, re-check": for a fault such as a wrong build plate the firmware re-detects it and pauses again with the same code 1-2 s later. `ignore` suppresses that re-check (bambuddy #1869, which fixed exactly this by switching from `resume`). BambuStudio routes both "ignore and resume" and "ignore, no reminder next time" to `ignore`.
+*   **Plain vs. error-aware `resume`/`stop`.** bambuddy deliberately sends the plain `{"command":"resume","param":""}` shape from its own error dialog, confirmed by a user on H2D/H2S to leave `PAUSE` cleanly, so bambino keeps `resume_print`/`stop_print` as the default and offers the error-aware form separately.
+*   BambuStudio refuses `ignore`/`idle_ignore`/`resume` from the desktop for non-FDM (laser) jobs; irrelevant to bambino.
+*   "Don't remind next time" (`command_dont_remind_next_time`) re-sends a command named by the error's own entry in Bambu's cloud HMS dictionary, with an `err_ignored` integer list. bambino has no access to that metadata and does not implement it.
+
+##### Close the On-Screen Error Dialog
+
+```json
+{
+  "system": {
+    "command": "uiop",
+    "sequence_id": "9",
+    "name": "print_error",
+    "action": "close",
+    "source": 1,
+    "type": "dialog",
+    "err": "0500C010"
+  }
+}
+```
+
+Unlike the commands above, `err` is **8 uppercase hex digits** (`%08X`). `source` is `0` for the printer's own UI and `1` for BambuStudio. BambuStudio sends it once whenever its own copy of the dialog closes (`m_uiop_sent`); bambuddy sends it after `clean_print_error` for its "double-check OK" button. bambino: `close_error_dialog`.
+
+`ignore`, `idle_ignore`, `uiop`, `refresh_nozzle`, `close_air_filt` and `auto_stop_ams_dry` are not in bambino's ack-correlated set: no `ack-probe` run has shown that they echo their `sequence_id`, so their handles settle on publish. The error-aware `resume`/`stop` share the plain commands' names and so are correlated like them.
+
+*(Verification source: BambuStudio `MachineObject::command_hms_ignore`/`_resume`/`_stop`/`_idle_ignore`, `command_clean_print_error_uiop`, `command_refresh_nozzle`, `command_purification_disable`, `command_ams_drying_stop` in `src/slic3r/GUI/DeviceManager.cpp`, and their call sites in `DeviceErrorDialog.cpp`; bambuddy's HMS action dispatcher in `backend/app/services/bambu_mqtt.py`, September 2026.)*
+
 #### Command Acknowledgment Envelope [REF-MQTT-ACK]
 
 All commands published to the request topic produce an acknowledgment response on the report topic. The ack echoes the command name and the client's `sequence_id`, enabling correlation. The envelope varies by command family:

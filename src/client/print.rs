@@ -94,6 +94,95 @@ where
             .await
     }
 
+    /// Ignores `error_code` and resumes the paused print (the error dialog's "Ignore and resume").
+    ///
+    /// Sends `ignore`, which skips the firmware's next re-check of that one fault. A plain
+    /// [`resume_print`](Self::resume_print) means "fixed it, re-check", so a fault such as a wrong
+    /// build plate is re-detected and pauses the print again a second later (bambuddy #1869).
+    /// `error_code` is the raw `print_error` register value; the cached `job_id` is echoed back,
+    /// or an empty string before any telemetry carried one. [REF-MQTT-LIFECYCLE]
+    pub async fn ignore_error_and_resume(
+        &mut self,
+        error_code: u32,
+    ) -> Result<CommandHandle, Error> {
+        let job_id = self.cache.last_job_id.clone().unwrap_or_default();
+        self.dispatch(|seq| crate::mqtt::HmsActionRequest::ignore(error_code, &job_id, seq))
+            .await
+    }
+
+    /// Resumes naming the fault being answered — BambuStudio's error-dialog form of `resume`.
+    ///
+    /// An opt-in alternative to [`resume_print`](Self::resume_print), which stays the default:
+    /// bambuddy sends the plain shape from its own error dialog and has it confirmed on H2D/H2S.
+    /// Takes the same `error_code` and cached `job_id` as
+    /// [`ignore_error_and_resume`](Self::ignore_error_and_resume). [REF-MQTT-LIFECYCLE]
+    pub async fn resume_print_after_error(
+        &mut self,
+        error_code: u32,
+    ) -> Result<CommandHandle, Error> {
+        let job_id = self.cache.last_job_id.clone().unwrap_or_default();
+        self.dispatch(|seq| crate::mqtt::HmsActionRequest::resume(error_code, &job_id, seq))
+            .await
+    }
+
+    /// Stops naming the fault being answered — BambuStudio's error-dialog form of `stop`.
+    ///
+    /// An opt-in alternative to [`stop_print`](Self::stop_print), on the same terms as
+    /// [`resume_print_after_error`](Self::resume_print_after_error). [REF-MQTT-LIFECYCLE]
+    pub async fn stop_print_after_error(
+        &mut self,
+        error_code: u32,
+    ) -> Result<CommandHandle, Error> {
+        let job_id = self.cache.last_job_id.clone().unwrap_or_default();
+        self.dispatch(|seq| crate::mqtt::HmsActionRequest::stop(error_code, &job_id, seq))
+            .await
+    }
+
+    /// Dismisses a non-pausing warning without resuming anything (`idle_ignore`).
+    ///
+    /// `persistent` suppresses the same warning permanently (`type: 1`) instead of just this
+    /// occurrence. [REF-MQTT-LIFECYCLE]
+    pub async fn dismiss_error(
+        &mut self,
+        error_code: u32,
+        persistent: bool,
+    ) -> Result<CommandHandle, Error> {
+        self.dispatch(|seq| crate::mqtt::IdleIgnoreRequest::new(error_code, persistent, seq))
+            .await
+    }
+
+    /// Closes the `print_error` dialog on the printer's own screen (`system.uiop`).
+    ///
+    /// Separate from [`clear_print_error`](Self::clear_print_error), which clears the error
+    /// latch but leaves the on-screen dialog; BambuStudio sends this once whenever its own copy
+    /// of the dialog closes. [REF-MQTT-LIFECYCLE]
+    pub async fn close_error_dialog(&mut self, error_code: u32) -> Result<CommandHandle, Error> {
+        self.dispatch(|seq| crate::mqtt::UiopRequest::close_print_error(error_code, seq))
+            .await
+    }
+
+    /// Asks the printer to re-read its nozzle information (`refresh_nozzle`) [REF-MQTT-LIFECYCLE].
+    pub async fn refresh_nozzle(&mut self) -> Result<CommandHandle, Error> {
+        self.dispatch(|seq| StandardControlRequest::new("refresh_nozzle", seq))
+            .await
+    }
+
+    /// Turns off air purification (`close_air_filt`), the error dialog's "disable purification" [REF-MQTT-LIFECYCLE].
+    pub async fn disable_air_purification(&mut self) -> Result<CommandHandle, Error> {
+        self.dispatch(|seq| StandardControlRequest::new("close_air_filt", seq))
+            .await
+    }
+
+    /// Sends `auto_stop_ams_dry`, the error dialog's "stop drying" [REF-MQTT-LIFECYCLE].
+    ///
+    /// A different command from [`stop_drying`](Self::stop_drying), which sends
+    /// `ams_filament_drying` for one unit. Whether the two are equivalent is not known, so this
+    /// is offered alongside it rather than in place of it.
+    pub async fn auto_stop_ams_drying(&mut self) -> Result<CommandHandle, Error> {
+        self.dispatch(|seq| StandardControlRequest::new("auto_stop_ams_dry", seq))
+            .await
+    }
+
     /// Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
     pub async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error> {
         let speed_str = match level {
