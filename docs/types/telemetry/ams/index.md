@@ -155,7 +155,8 @@ the intermediate `print.ams` object.
 
 - **`tray_reading_bits`**: `Option<String>`
 
-  Active RFID read bitmask (hex string).
+  Active RFID read bitmask (hex string), in the same bit layout as `tray_exist_bits`
+  ([REF-AMS-DECODE]).
 
 - **`insert_flag`**: `Option<bool>`
 

@@ -164,9 +164,8 @@ yourself.
   Builds an `extrusion_cali_get` request.
 
   `filament_id` and `nozzle_diameter` scope the query; both are omitted from the wire when
-  `None`, which reproduces the bare request shape exactly. Pass a `nozzle_diameter` on any
-  machine that can hold more than one — see [`ExtrusionCaliGetPayload::nozzle_diameter`](kprofile/index.md#extrusioncaligetpayload)
-  for why a bare request returns a silently partial table there.
+  `None`, which reproduces the bare request shape exactly. Whether to scope by diameter
+  depends on the machine — see [`ExtrusionCaliGetPayload::nozzle_diameter`](kprofile/index.md#extrusioncaligetpayload).
 
   Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
   documented above.

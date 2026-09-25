@@ -333,6 +333,7 @@ and source error tracing are derived automatically via `thiserror`.
 ```rust
 enum PrinterModel {
     X1C,
+    X1,
     X1E,
     X2D,
     A1Mini,
@@ -355,7 +356,11 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 
 - **`X1C`**
 
-  X1 and X1C Series (CoreXY architecture, RTSP-capable)
+  X1 Carbon (CoreXY architecture, RTSP-capable)
+
+- **`X1`**
+
+  X1, the original non-Carbon X1 (CoreXY architecture, RTSP-capable)
 
 - **`X1E`**
 

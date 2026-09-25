@@ -69,7 +69,7 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   Whether this printer honors `ams_filament_drying` sent over MQTT.
 
   Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
-  supported on A1/A1 Mini, P1P/P1S and X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
+  supported on A1/A1 Mini, P1P/P1S and X1/X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
   always on A2L, assumed allowed elsewhere. See
   [`ModelQuirks::supports_ams_remote_drying`](../../quirks/index.md#modelquirks)
   for the sourcing.

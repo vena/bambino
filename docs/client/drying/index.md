@@ -140,7 +140,7 @@ client
   [`Error::ModelMismatch`](../../error/index.md#error) on a host where
   [`supports_ams_remote_drying()`](../index.md#printerclient) is `false` —
   the printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
-  A1/A1 Mini, P1P/P1S or X1C, and below the minimum firmware on
+  A1/A1 Mini, P1P/P1S or X1/X1C, and below the minimum firmware on
   H2D/H2D Pro/H2S/H2C/P2S/X2D. Such
   firmware acks this command `result: success` and silently discards it rather than driving
   the AMS heater.

@@ -77,7 +77,7 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   Whether this printer honors `ams_filament_drying` sent over MQTT.
 
   Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
-  supported on A1/A1 Mini, P1P/P1S and X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
+  supported on A1/A1 Mini, P1P/P1S and X1/X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
   always on A2L, assumed allowed elsewhere. See
   [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks)
   for the sourcing.
@@ -447,7 +447,7 @@ client
   [`Error::ModelMismatch`](../error/index.md#error) on a host where
   [`supports_ams_remote_drying()`](#printerclient) is `false` —
   the printer's own `fun2` bit 5 where it reported one, else the model's rule: never on
-  A1/A1 Mini, P1P/P1S or X1C, and below the minimum firmware on
+  A1/A1 Mini, P1P/P1S or X1/X1C, and below the minimum firmware on
   H2D/H2D Pro/H2S/H2C/P2S/X2D. Such
   firmware acks this command `result: success` and silently discards it rather than driving
   the AMS heater.
@@ -774,12 +774,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   firmware silently ignores the initial `extrusion_cali_get` command. Use
   `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
 
-  **A response is the complete table for exactly one nozzle diameter.** `nozzle_diameter`
-  scopes the query, and the reply echoes the diameter that was *requested* rather than
-  reflecting installed hardware. Passing `None` sends the bare request, whose reply covers
-  whichever single diameter the firmware picks — on a machine that can hold more than one,
-  that is a partial table which looks complete to the caller. Call once per fitted diameter
-  and merge the results.
+  `nozzle_diameter` scopes the query to one diameter; that reply is the complete table for
+  the diameter *requested*, not a reflection of installed hardware. Passing `None` sends the
+  bare request, which BambuStudio relies on to return the full table on multi-extruder and
+  nozzle-rack machines. On other machines BambuStudio calls once per diameter the model
+  supports and merges the results — see [REF-DIAG-KPROF].
 
   `filament_id` scopes the query the same way, to a single filament preset id. `None` omits
   the field entirely; `Some("")` is the "every filament" form `reference/07_diagnostics_hms.md`
@@ -1184,8 +1183,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `z_max` distance cap (bounding how far a single command can travel — not true
   position-aware crash prevention, since the printer reports no absolute axis position
   over MQTT) and safe reference-mode push/pop blocks (`M1002 push_ref_mode` /
-  `M1002 pop_ref_mode`) to prevent frame shifting. `M211 S1` is also sent, but per real
-  H2D hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
+  `M1002 pop_ref_mode`) to prevent frame shifting, inside BambuStudio's `M211 S` /
+  `M211 X1 Y1 Z1` … `M211 R` save-enable-restore of the soft-endstop state. Per real H2D
+  hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
   software travel limits on G-code received over MQTT regardless of `M211` state — it is
   not a source of crash protection here. X/Y moves get the same kind of client-side
   `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
@@ -1673,12 +1673,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Sets the heated bed target temperature.
 
   Values exceeding the model's maximum are clamped automatically. Most models have a flat
-  per-model ceiling (e.g. 80°C for A1 Mini), but X1C's ceiling is voltage-dependent — 110°C
-  on a 220V-region unit, 120°C on a 110V-region unit, per the official spec sheet. This is
+  per-model ceiling (e.g. 80°C for A1 Mini), but the X1C's and X1's ceiling is
+  voltage-dependent — 110°C on a 220V-region unit, 120°C on a 110V-region unit, per the
+  official spec sheet. This is
   derived from the most recently observed `home_flag` telemetry
   (`self.cache.last_home_flag`, bit 3 — see `PrinterTelemetry::is_220v_power`);
   before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
-  region is unknown and X1C conservatively clamps to 110°C.
+  region is unknown and the X1C/X1 conservatively clamp to 110°C.
 
   # Example
 

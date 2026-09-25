@@ -341,9 +341,9 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   `mains_220v` is `Some(true)`/`Some(false)` when the printer's mains voltage region is
   known (from `PrinterTelemetry::is_220v_power()`, derived from `home_flag` bit 3), or
-  `None` before any `home_flag` telemetry has been received. Every model except X1C ignores
-  this parameter and returns a flat constant — see `X1CQuirks::bed_temp_max` for the one
-  model where the ceiling is genuinely voltage-dependent per the official spec sheet
+  `None` before any `home_flag` telemetry has been received. Every model except X1C and X1
+  ignores this parameter and returns a flat constant — see `X1CQuirks::bed_temp_max` for
+  the ceiling that is genuinely voltage-dependent per the official spec sheet
   ("Max Build Plate Temperature: 110°C @220V, 120°C @110V").
 
 - `fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
@@ -450,9 +450,9 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 
   Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
 
-  Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan)
-  and P1P (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) override
-  this to `false`.
+  Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan),
+  P1P (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) and the plain X1
+  (BambuStudio's X1 profile sets `auxiliary_fan` to `0`) override this to `false`.
 
 - `fn has_chamber_exhaust_fan(&self) -> bool`
 
@@ -519,7 +519,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
     manual agrees ("P1S connected AMS drying functions may only be controlled from the P1S
     screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and this
     crate's own drying command was tested against a P1S directly.
-  * **X1C — never.** The drying guide names it alongside P1 and A1 as "not supported yet";
+  * **X1, X1C — never.** The drying guide names the X1C alongside P1 and A1 as "not supported yet";
     X1 `01.09.00.00` (2025-04-29) carries the same screen-only sentence as P1 `01.08.00.00`,
     and no X1/X1C release through `01.12.00.00` mentions remote drying. Bambu Lab has stated
     the related dry-while-printing feature needs hardware the X1 Carbon lacks.
@@ -595,6 +595,7 @@ Polymorphic interface tracking model-specific hardware variations and transport 
 - [`UnknownQuirks`](models/unknown/index.md#unknownquirks)
 - [`X1CQuirks`](models/x1/index.md#x1cquirks)
 - [`X1EQuirks`](models/x1/index.md#x1equirks)
+- [`X1Quirks`](models/x1/index.md#x1quirks)
 - [`X2Quirks`](models/x2/index.md#x2quirks)
 
 

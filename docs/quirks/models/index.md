@@ -20,7 +20,7 @@ one per `PrinterModel` variant.
 | [`p1`](p1/index.md) | mod | # P1 Series (P1P & P1S CoreXY) Quirks |
 | [`p2`](p2/index.md) | mod | # P2 Series (P2S CoreXY) Quirks |
 | [`unknown`](unknown/index.md) | mod | # Unrecognized Model Fallback Quirks |
-| [`x1`](x1/index.md) | mod | # X1 Series (X1C, X1E CoreXY) Quirks |
+| [`x1`](x1/index.md) | mod | # X1 Series (X1, X1C, X1E CoreXY) Quirks |
 | [`x2`](x2/index.md) | mod | # X2 Series (X2D CoreXY) Quirks |
 
 ## Modules
@@ -31,6 +31,6 @@ one per `PrinterModel` variant.
 - [`p1`](p1/index.md) — # P1 Series (P1P & P1S CoreXY) Quirks
 - [`p2`](p2/index.md) — # P2 Series (P2S CoreXY) Quirks
 - [`unknown`](unknown/index.md) — # Unrecognized Model Fallback Quirks
-- [`x1`](x1/index.md) — # X1 Series (X1C, X1E CoreXY) Quirks
+- [`x1`](x1/index.md) — # X1 Series (X1, X1C, X1E CoreXY) Quirks
 - [`x2`](x2/index.md) — # X2 Series (X2D CoreXY) Quirks
 

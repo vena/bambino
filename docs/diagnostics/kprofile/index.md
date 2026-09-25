@@ -98,10 +98,11 @@ Inner payload for [`ExtrusionCaliGetRequest`](#extrusioncaligetrequest).
 
   Nozzle diameter to scope the query to (e.g. `"0.4"`).
   
-  **A response is the complete table for exactly one nozzle diameter**, and it echoes the
-  *requested* diameter rather than reflecting installed hardware. On a dual-diameter
-  machine a single bare request therefore returns a partial table that looks complete.
-  Query once per fitted diameter and merge.
+  **A diameter-scoped response is the complete table for that one diameter**, and it echoes
+  the *requested* diameter rather than reflecting installed hardware. BambuStudio omits this
+  on multi-extruder and nozzle-rack machines, where a bare request returns the full table,
+  and otherwise sends one request per diameter the model supports and merges the replies —
+  see [REF-DIAG-KPROF].
 
 - **`extruder_id`**: `Option<u8>`
 
@@ -178,9 +179,8 @@ yourself.
   Builds an `extrusion_cali_get` request.
 
   `filament_id` and `nozzle_diameter` scope the query; both are omitted from the wire when
-  `None`, which reproduces the bare request shape exactly. Pass a `nozzle_diameter` on any
-  machine that can hold more than one — see [`ExtrusionCaliGetPayload::nozzle_diameter`](#extrusioncaligetpayload)
-  for why a bare request returns a silently partial table there.
+  `None`, which reproduces the bare request shape exactly. Whether to scope by diameter
+  depends on the machine — see [`ExtrusionCaliGetPayload::nozzle_diameter`](#extrusioncaligetpayload).
 
   Callers should prefer `PrinterClient::get_k_profiles()`, which handles the priming quirk
   documented above.
