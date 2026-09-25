@@ -46,7 +46,7 @@ The client must parse the size `N`, validate that `N` does not exceed a sanity l
 
 #### Media Control Protocol (Port 6000) [REF-CAM-MEDIA]
 
-Port 6000 carries more than the JPEG chamber stream above. The **same port, with the same 16-byte frame header**, also speaks a TLS control protocol that lists and downloads files from **internal/eMMC storage** — which FTPS on port 990 does not expose. This matters because newer firmware (H2D `01.03`, H2S `01.02`, P2S) hides the print file from FTPS unless external storage is enabled, leaving a LAN client with no route to it. bambino does not implement this today; `src/ftps/` is its only file-access path.
+Port 6000 carries more than the JPEG chamber stream above. The **same port, with the same 16-byte frame header**, also speaks a TLS control protocol that lists and downloads files from **internal/eMMC storage** — which FTPS on port 990 does not expose. This matters because newer firmware (H2D `01.03`, H2S `01.02`, P2S, X2D) hides the print file from FTPS unless external storage is enabled, leaving a LAN client with no route to it. (X2D per bambuddy issue #3126, from a user report; the firmware version is not recorded.) bambino does not implement this today; `src/ftps/` is its only file-access path.
 
 The `mtype` values below (12289 / 12291) sit adjacent to the chamber-image handshake's command id 12288 (`src/camera/binary.rs`), share the same 16-byte header, and use the same little-endian length at offset 0. This is one command family, of which bambino currently speaks half.
 

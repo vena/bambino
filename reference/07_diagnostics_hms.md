@@ -119,7 +119,14 @@ To retrieve all stored profiles from the machine's database, publish the `"extru
 }
 ```
 
-**A response is the complete table for exactly one nozzle diameter, and it echoes the *requested* diameter rather than reflecting installed hardware.** The bare request shape (`command` + `sequence_id` only) is accepted, but on a dual-diameter machine its reply covers whichever single diameter the firmware picks — a partial table that looks complete to the caller, with no way to ask for the rest. Query once per fitted diameter and merge. `filament_id` scopes the query to one preset; upstream sends an empty string for "all filaments".
+**A diameter-scoped response is the complete table for that one nozzle diameter, and it echoes the *requested* diameter rather than reflecting installed hardware.** What a bare request (`command` + `sequence_id` only, no `nozzle_diameter`/`extruder_id`/`nozzle_id`) returns depends on the machine, and BambuStudio fetches in two regimes accordingly:
+
+*   **Multi-extruder machines, or machines with a supported nozzle rack** (`MachineObject::supports_full_pa_calib_table()`): one bare request, whose reply is treated as the complete table across every diameter and extruder.
+*   **Every other machine**: one request per nozzle diameter *the model supports* — not per installed nozzle, since `cali_version` does not change on a nozzle swap — falling back to `0.4` when the model lists none. Replies are merged, each replacing only the rows its own request covered.
+
+Requests are sent one at a time, and `nozzle_diameter` is written only when the request is diameter-scoped. `filament_id` scopes the query to one preset; upstream sends an empty string for "all filaments".
+
+*(Verification source: BambuStudio `src/slic3r/GUI/DeviceCore/DevCalib.cpp` `DevCalib::PrepareFetchQueue` and `src/slic3r/GUI/DeviceManager.cpp` `supports_full_pa_calib_table` / `command_get_pa_calibration_tab`, September 2026. That the firmware's bare reply really is complete on those machines is the vendor's reliance, not a bambino hardware capture.)*
 
 ##### Optional Request Scoping Fields
 

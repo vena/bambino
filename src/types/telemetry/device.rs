@@ -510,7 +510,11 @@ pub struct ExtruderInfo {
     /// `bool(flags & 0b10)`. Bits 0 and 4+ have no recorded meaning.
     pub info: Option<u32>,
 
-    /// Filament backup slot indices.
+    /// Filament backup groups, one bitmask per group — not slot indices.
+    ///
+    /// Each set bit is a member tray in the `tray_exist_bits` layout (bits 0-15 standard AMS
+    /// `ams_id*4 + slot`, 16-23 AMS-HT 128-135, 24-27 an A2L's AMS Lite); a slot's backups are
+    /// the other members of its group. See `reference/05_materials_ams.md`.
     #[serde(default)]
     pub filam_bak: Vec<u32>,
 

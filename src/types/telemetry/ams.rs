@@ -173,7 +173,8 @@ pub struct AmsStatusReport {
     #[serde(default)]
     pub tray_read_done_bits: Option<String>,
 
-    /// Active RFID read bitmask (hex string).
+    /// Active RFID read bitmask (hex string), in the same bit layout as `tray_exist_bits`
+    /// ([REF-AMS-DECODE]).
     #[serde(default)]
     pub tray_reading_bits: Option<String>,
 

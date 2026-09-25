@@ -496,12 +496,11 @@ where
     /// firmware silently ignores the initial `extrusion_cali_get` command. Use
     /// `set_k_profile_primed(true)` to skip the automatic prime if you handle it yourself.
     ///
-    /// **A response is the complete table for exactly one nozzle diameter.** `nozzle_diameter`
-    /// scopes the query, and the reply echoes the diameter that was *requested* rather than
-    /// reflecting installed hardware. Passing `None` sends the bare request, whose reply covers
-    /// whichever single diameter the firmware picks — on a machine that can hold more than one,
-    /// that is a partial table which looks complete to the caller. Call once per fitted diameter
-    /// and merge the results.
+    /// `nozzle_diameter` scopes the query to one diameter; that reply is the complete table for
+    /// the diameter *requested*, not a reflection of installed hardware. Passing `None` sends the
+    /// bare request, which BambuStudio relies on to return the full table on multi-extruder and
+    /// nozzle-rack machines. On other machines BambuStudio calls once per diameter the model
+    /// supports and merges the results — see [REF-DIAG-KPROF].
     ///
     /// `filament_id` scopes the query the same way, to a single filament preset id. `None` omits
     /// the field entirely; `Some("")` is the "every filament" form `reference/07_diagnostics_hms.md`

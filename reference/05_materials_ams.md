@@ -38,6 +38,8 @@ slot_exists = (tray_exist_bits >> shift_standard) & 1
 
 *   **AMS-HT Units (IDs 128-135)**: These single-slot, high-temperature dry-chamber units reside on a separate bus address but still occupy a dedicated range in `tray_exist_bits`, immediately following the standard units': `shift_ht = 16 + (ams_id - 128) + slot_id` (BUG-114; confirmed against BambuStudio's `DevAms::GetTrayId` N3S branch, `DevFilaSystem.cpp:833`). Note the standard-unit ID cap above is `0` to `3` (BUG-125), not `0` to `7` — the base offset `16` for AMS-HT only holds if standard units never reach bits 16+.
 
+**`tray_reading_bits` shares this layout.** The active-RFID-read bitmask uses the same bit positions: `ams_id*4 + slot` for AMS / AMS Lite / AMS 2 Pro, `16 + (ams_id - 128) + slot` for AMS-HT, and `24 + slot` for an AMS Lite on an A2L (next section). *(Verification source: BambuStudio `DevAmsTray::is_reading` via `sGetAmsFlagBit`, `DeviceCore/DevFilaSystem.cpp:111-128`.)*
+
 ##### Unit ID of an AMS Lite Attached to an A2L
 
 **"AMS Lite" is the unit; "A2L" is the printer.** The pairing is what matters here, because the same physical AMS Lite reports a different id depending on which printer it is plugged into. On an A1 / A1 mini it is the machine's *only* possible AMS (see the pool table above) and takes id `0`. An A2L can run it alongside up to four shared-pool units already occupying ids `0`-`3`, so there it reports physical unit **id 16**, outside every other range (standard `0`-`3`, AMS-HT `128`-`135`, external `254`/`255`).
@@ -63,6 +65,10 @@ The resolution is to normalize `16 -> 6` at the telemetry ingest boundary, so gl
 
 ##### The Printer-Shutdown Telemetry Exception
 During printer shutdown routines, the firmware emits a final status update where `tray_exist_bits` evaluates to `0` and the `power_on_flag` boolean is set to `false`. To prevent telemetry parsers from falsely interpreting this final update as a physical spool-removal event, updates where `tray_exist_bits = 0` must be ignored strictly when `power_on_flag` is `false`. Conversely, if `power_on_flag` is `false` but `tray_exist_bits` is non-zero, this represents a valid idle-printer state and changes must be processed normally.
+
+##### Filament Backup Groups (`filam_bak`)
+
+Each entry of `device.extruder.info[].filam_bak` is an independent **backup-group bitmask**, not a slot index. A set bit names a member tray in the same global-tray layout as `tray_exist_bits`: bits `0`-`15` are standard AMS trays (`ams_id*4 + slot`), bits `16`-`23` are AMS-HT units `128`-`135`, and bits `24`-`27` are the slots of an AMS Lite on an A2L. The backup candidates for a slot are the *other* members of whichever group contains it. *(Verification source: BambuStudio `DevExtder::GetBackupStatus` and `DevExtderSystem::GetBackupAmsSlotInGroup`, `DeviceCore/DevExtruderSystem.cpp`.)*
 
 #### Over-the-Wire Slot State Mappings
 The physical printer's AMS controller represents spool presence and active routing status using native integer codes in the `"state"` parameter of each tray object.
@@ -272,6 +278,8 @@ The `"ams_mapping2"` parameter is a JSON array of structured objects that mainta
 
 ##### Mandatory use_ams Override on Single-Nozzle Systems [REF-AMS-USEAMS]
 On single-nozzle platforms (such as the X1C, P1S, A1, and H2S), if all mapped filaments reside on the external spool (no active spool is routed to a physical AMS unit), the `use_ams` command parameter must be set strictly to `false` in the dispatch payload. If `use_ams: true` is transmitted when printing exclusively from the external spool, the print processor fails to build the material routing table, rejecting the task with error `07FF_8012`.
+
+This includes a multi-filament project whose unused filament slots are padded with `-1`: a mapping such as `[-1,-1,-1,-1,-1,-1,254]` is still all-external. Sent with `use_ams: true` on a P1S, it sat at "Heatbed preheating" for about 10 minutes before pausing with `07FF_8012` — so the failure is not an immediate rejection. bambino's `is_external_spool_safety_valid[_flat]` (`src/ams/mapping.rs`) keeps `use_ams: true` only when some entry is a physical AMS slot. *(Verification source: bambuddy issue #3087, fixed in its print scheduler by sending `use_ams: false` when every filament the plate prints is external.)*
 
 #### Select Calibration Profile Command (`extrusion_cali_sel`)
 To bind a stored pressure advance (K-profile) to an AMS slot, `"ams_id"`, `"tray_id"` and `"slot_id"` must be transmitted. `"tray_id"` must be formatted as the absolute global tray ID; `"slot_id"` is the local slot — `tray_id - ams_id * 4` for a standard AMS, `tray_id - 24` for an AMS Lite on an A2L, and `0` for an AMS-HT or external spool. BambuStudio `commnad_select_pa_calibration` (`DeviceManager.cpp:2061-2078`) and bambuddy (`bambu_mqtt.py:7830-7866`) both send `slot_id` (#315). Furthermore, the `setting_id` field must be strictly omitted to prevent database mislinking.

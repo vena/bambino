@@ -255,6 +255,8 @@ Discovery systems may match the leading 3-character prefix of the printer serial
 | **`039`** | A1 | A1 |
 | **`26A`** | A2L | A2 |
 
+**Non-FDM devices resolve to `Unknown` by design.** BambuStudio's `resources/printers/N8.json` describes a "Bambu Lab N8" (dev token `N8`, serial prefix `35F`) whose `printer_modes` is `["laser"]`; public BambuStudio builds drop any device without `"fdm"` in `printer_modes` from discovery (`DeviceCore/DevManager.cpp`). bambino controls FDM printers only, so neither table above lists it, and `N8`/`35F` deliberately falls through to `Unknown` — not a missing row.
+
 ---
 
 ### 1.6 Mechanical & Firmware Discovery Quirks
