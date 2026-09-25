@@ -169,8 +169,9 @@ where
     /// `z_max` distance cap (bounding how far a single command can travel — not true
     /// position-aware crash prevention, since the printer reports no absolute axis position
     /// over MQTT) and safe reference-mode push/pop blocks (`M1002 push_ref_mode` /
-    /// `M1002 pop_ref_mode`) to prevent frame shifting. `M211 S1` is also sent, but per real
-    /// H2D hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
+    /// `M1002 pop_ref_mode`) to prevent frame shifting, inside BambuStudio's `M211 S` /
+    /// `M211 X1 Y1 Z1` … `M211 R` save-enable-restore of the soft-endstop state. Per real H2D
+    /// hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
     /// software travel limits on G-code received over MQTT regardless of `M211` state — it is
     /// not a source of crash protection here. X/Y moves get the same kind of client-side
     /// `x_max()`/`y_max()` distance cap — same limitation, not position-aware.

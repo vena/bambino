@@ -530,11 +530,12 @@ impl PrinterModel {
 /// Generates a relative Z-axis movement G-code block, bounded by a client-side `z_max` distance
 /// cap on the single move (not true position-aware crash prevention — the printer reports no
 /// absolute axis position over MQTT, so neither firmware nor client can clamp from actual
-/// position; this only bounds how far one relative command can travel). `M211 S1` is sent for
-/// parity with the touchscreen's own G-code sequence, but per real H2D hardware testing
-/// (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce software travel limits on
-/// G-code received over MQTT regardless of `M211` state — it provides no actual crash
-/// protection here, unlike what earlier revisions of this doc comment claimed.
+/// position; this only bounds how far one relative command can travel). The move is wrapped in
+/// BambuStudio's own jog sequence (`DevAxisCtrl.cpp`): `M211 S` saves the soft-endstop state,
+/// `M211 X1 Y1 Z1` enables it, and `M211 R` restores the saved state afterwards, so the
+/// printer's `M211` setting is left as it was. Per real H2D hardware testing (bambuddy #2579,
+/// confirmed 2026-07-16) firmware does not enforce software travel limits on G-code received
+/// over MQTT regardless of `M211` state — it provides no actual crash protection here.
 ///
 /// Returns an empty string if `distance` is zero or exceeds the model's Z bounds.
 pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> String {
@@ -542,7 +543,7 @@ pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> S
         return String::new();
     }
     format!(
-        "M211 S1\nM1002 push_ref_mode\nG91\nG0 Z{:.2} F{}\nG90\nM1002 pop_ref_mode",
+        "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z{:.2} F{}\nG90\nM1002 pop_ref_mode\nM211 R",
         distance, feedrate
     )
 }
@@ -1159,7 +1160,8 @@ mod tests {
         let gcode = format_z_move_gcode(10.0, 3000, 256.0);
         assert!(gcode.contains("Z10.00"));
         assert!(gcode.contains("F3000"));
-        assert!(gcode.contains("M211 S1"));
+        assert!(gcode.starts_with("M211 S\nM211 X1 Y1 Z1\n"));
+        assert!(gcode.ends_with("M1002 pop_ref_mode\nM211 R"));
         assert!(gcode.contains("push_ref_mode"));
     }
 

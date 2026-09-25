@@ -155,14 +155,16 @@ M106 P10 S255
 #### Manual Relative Axis Movement
 Performs manual positioning on the Z-axis. To ensure safe execution during an `IDLE` state, motion blocks wrap relative commands with travel limit registrations:
 ```gcode
-M211 S1
+M211 S
+M211 X1 Y1 Z1
 M1002 push_ref_mode
 G91
 G0 Z10.00 F3000
 G90
 M1002 pop_ref_mode
+M211 R
 ```
-*   `M211 S1`: Sent for parity with the touchscreen's own G-code sequence. **Does not actually protect against crashes** — confirmed via real H2D hardware testing (bambuddy #2579, 2026-07-16) that firmware does not enforce software travel limits on G-code received over MQTT, regardless of `M211` state. The only real protection here is bambino's own client-side `z_max` distance cap on the single relative move (bounds how far one command can travel, not true position-aware crash prevention — the printer reports no absolute axis position over MQTT).
+*   `M211 S` / `M211 X1 Y1 Z1` / `M211 R`: Save the soft-endstop state, enable it on all axes, and restore the saved state after the move — BambuStudio's own jog sequence (`src/slic3r/GUI/DeviceCore/DevAxisCtrl.cpp`), so the printer's `M211` setting is left as it was. **Does not actually protect against crashes** — confirmed via real H2D hardware testing (bambuddy #2579, 2026-07-16) that firmware does not enforce software travel limits on G-code received over MQTT, regardless of `M211` state. The only real protection here is bambino's own client-side `z_max` distance cap on the single relative move (bounds how far one command can travel, not true position-aware crash prevention — the printer reports no absolute axis position over MQTT).
 *   `M1002 push_ref_mode` / `pop_ref_mode`: Isolates and restores coordinate references to prevent frame shifting.
 *   `G91` / `G90`: Switches to relative positioning for the move, then restores absolute mode.
 

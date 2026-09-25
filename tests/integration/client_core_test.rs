@@ -82,11 +82,11 @@ async fn test_kinematic_and_extrusion_moves() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
-        // Read Z move packet: must carry safety limits M211 S1 and reference coordinate wraps
+        // Read Z move packet: BambuStudio's M211 save/enable/restore and reference coordinate wraps
         let json_z = read_publish_payload(&mut server_stream).await;
         assert_eq!(
             json_z["print"]["param"],
-            "M211 S1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode\n"
+            "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z10.00 F3000\nG90\nM1002 pop_ref_mode\nM211 R\n"
         );
 
         // Read X move packet: plain relative move G91 -> G0 -> G90
