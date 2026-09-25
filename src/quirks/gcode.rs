@@ -127,6 +127,12 @@ fn scan_statement(
 
     for word in (Words { code, pos: 0 }) {
         if matches!(word.letter, b'G' | b'M') {
+            // A number-less `G`/`M` is a marker, not a new command: BambuStudio emits
+            // `M104 M S<temp>` for layer-change temperatures, so the `S` still belongs to M104.
+            if word.value.is_empty() {
+                first_command = false;
+                continue;
+            }
             command = command_number(word.value).map(|n| (word.letter, n));
             // `M117` consumes the rest of its statement as LCD text — but only as the
             // statement's first command; anywhere else the text after it is still scanned.
@@ -266,6 +272,15 @@ mod tests {
         assert!(validate("M140 S100 ; ceiling is 120", false, Some(&HEATED)).is_ok());
         assert!(validate("M106 P1 S255", false, Some(&LIMITS)).is_ok());
         assert!(validate("M1400 S999", false, Some(&LIMITS)).is_ok());
+    }
+
+    #[test]
+    fn test_bare_command_marker_keeps_the_temperature_check() {
+        assert!(validate("M104 M S999", false, Some(&LIMITS)).is_err());
+        assert!(validate("M140 G S200", false, Some(&LIMITS)).is_err());
+        assert!(validate("M104 M S220", false, Some(&LIMITS)).is_ok());
+        // A leading bare marker still counts as the first command, so M117 can't swallow the rest.
+        assert!(homing("M M117 G28 Z"));
     }
 
     #[test]
