@@ -1,7 +1,8 @@
-//! # X1 Series (X1C, X1E CoreXY) Quirks
+//! # X1 Series (X1, X1C, X1E CoreXY) Quirks
 //!
 //! Implements hardware safety guidelines and thermal parameters for the premium CoreXY platforms.
-//! X1C and X1E share all behavior except active chamber heater support (X1E only).
+//! X1C and X1E share all behavior except active chamber heater support (X1E only). The plain X1
+//! is the X1C minus a stock auxiliary part-cooling fan — see [`X1Quirks`].
 
 use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
@@ -30,6 +31,15 @@ pub const X1E_CHAMBER_TEMP_MAX: u16 = 60;
 pub struct X1CQuirks;
 /// Quirks for the X1E — active chamber heater, higher nozzle ceiling than X1C.
 pub struct X1EQuirks;
+/// Quirks for the original, non-Carbon X1 — the X1C's limits and rules, without the auxiliary fan.
+///
+/// BambuStudio's `resources/printers/BL-P002.json` (X1) and `BL-P001.json` (X1 Carbon) differ
+/// only in names, model id and serial prefix, and its `Bambu Lab X1 0.4 nozzle` machine profile
+/// differs from the X1 Carbon's in no limit field — but it sets `auxiliary_fan` to `0` where the
+/// X1 Carbon inherits `1`. The aux fan is therefore treated like the P1P's: not guaranteed
+/// present. The X1 and X1C also share one firmware line and release history, so the X1C's
+/// drying rules below apply to it unchanged.
+pub struct X1Quirks;
 
 fn x1_is_door_open(telemetry: &PrinterTelemetry) -> bool {
     telemetry.is_door_open_from_home_flag()
@@ -109,7 +119,7 @@ fn x1e_drying_while_printing_support(ctx: &crate::quirks::QuirkContext) -> crate
 }
 
 macro_rules! impl_x1_shared {
-    ($quirks_type:ty, $chamber_heater_max:expr, $nozzle_max:expr, $bed_max_fn:expr, $remote_dry_fn:expr, $dry_while_printing_fn:expr) => {
+    ($quirks_type:ty, $chamber_heater_max:expr, $nozzle_max:expr, $bed_max_fn:expr, $remote_dry_fn:expr, $dry_while_printing_fn:expr, $aux_left_fan:expr) => {
         impl ModelQuirks for $quirks_type {
             fn uses_plaintext_ftps_data_channel(&self) -> bool {
                 false
@@ -133,6 +143,10 @@ macro_rules! impl_x1_shared {
 
             fn camera_protocol(&self) -> CameraProtocol {
                 CameraProtocol::Rtsps
+            }
+
+            fn supports_auxiliary_left_fan(&self) -> bool {
+                $aux_left_fan
             }
 
             fn ignores_chamber_temperature(&self) -> bool {
@@ -205,7 +219,17 @@ impl_x1_shared!(
     X1C_NOZZLE_TEMP_MAX,
     x1c_bed_temp_max,
     x1c_remote_drying_support,
-    x1c_drying_while_printing_support
+    x1c_drying_while_printing_support,
+    true
+);
+impl_x1_shared!(
+    X1Quirks,
+    None,
+    X1C_NOZZLE_TEMP_MAX,
+    x1c_bed_temp_max,
+    x1c_remote_drying_support,
+    x1c_drying_while_printing_support,
+    false
 );
 impl_x1_shared!(
     X1EQuirks,
@@ -213,5 +237,6 @@ impl_x1_shared!(
     X1E_NOZZLE_TEMP_MAX,
     x1e_bed_temp_max,
     x1e_remote_drying_support,
-    x1e_drying_while_printing_support
+    x1e_drying_while_printing_support,
+    true
 );

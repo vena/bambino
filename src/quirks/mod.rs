@@ -324,9 +324,9 @@ pub trait ModelQuirks {
 
     /// Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
     ///
-    /// Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan)
-    /// and P1P (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) override
-    /// this to `false`.
+    /// Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan),
+    /// P1P (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) and the plain X1
+    /// (BambuStudio's X1 profile sets `auxiliary_fan` to `0`) override this to `false`.
     fn supports_auxiliary_left_fan(&self) -> bool {
         true
     }
@@ -398,7 +398,7 @@ pub trait ModelQuirks {
     ///   manual agrees ("P1S connected AMS drying functions may only be controlled from the P1S
     ///   screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and this
     ///   crate's own drying command was tested against a P1S directly.
-    /// * **X1C — never.** The drying guide names it alongside P1 and A1 as "not supported yet";
+    /// * **X1, X1C — never.** The drying guide names the X1C alongside P1 and A1 as "not supported yet";
     ///   X1 `01.09.00.00` (2025-04-29) carries the same screen-only sentence as P1 `01.08.00.00`,
     ///   and no X1/X1C release through `01.12.00.00` mentions remote drying. Bambu Lab has stated
     ///   the related dry-while-printing feature needs hardware the X1 Carbon lacks.
@@ -473,9 +473,9 @@ pub trait ModelQuirks {
     ///
     /// `mains_220v` is `Some(true)`/`Some(false)` when the printer's mains voltage region is
     /// known (from `PrinterTelemetry::is_220v_power()`, derived from `home_flag` bit 3), or
-    /// `None` before any `home_flag` telemetry has been received. Every model except X1C ignores
-    /// this parameter and returns a flat constant — see `X1CQuirks::bed_temp_max` for the one
-    /// model where the ceiling is genuinely voltage-dependent per the official spec sheet
+    /// `None` before any `home_flag` telemetry has been received. Every model except X1C and X1
+    /// ignores this parameter and returns a flat constant — see `X1CQuirks::bed_temp_max` for
+    /// the ceiling that is genuinely voltage-dependent per the official spec sheet
     /// ("Max Build Plate Temperature: 110°C @220V, 120°C @110V").
     fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16;
 
@@ -505,6 +505,7 @@ impl PrinterModel {
             PrinterModel::P1S => &models::p1::P1SQuirks,
             PrinterModel::P2S => &models::p2::P2Quirks,
             PrinterModel::X1C => &models::x1::X1CQuirks,
+            PrinterModel::X1 => &models::x1::X1Quirks,
             PrinterModel::X1E => &models::x1::X1EQuirks,
             PrinterModel::X2D => &models::x2::X2Quirks,
             PrinterModel::H2S => &models::h2::H2SQuirks,
@@ -694,7 +695,7 @@ mod tests {
         let none = QuirkContext::empty();
         let newest = QuirkContext::empty().with_firmware(Some("99.99.99.99"));
 
-        // Never, regardless of firmware: A1 (no remote-dry command path), P1 (screen-only), X1C
+        // Never, regardless of firmware: A1 (no remote-dry command path), P1 (screen-only), X1/X1C
         // (named unsupported by the drying guide).
         for model in [
             PrinterModel::A1,
@@ -702,6 +703,7 @@ mod tests {
             PrinterModel::P1P,
             PrinterModel::P1S,
             PrinterModel::X1C,
+            PrinterModel::X1,
         ] {
             assert_eq!(
                 model.quirks().ams_remote_drying_support(&none),
@@ -774,6 +776,7 @@ mod tests {
             PrinterModel::P1P,
             PrinterModel::P1S,
             PrinterModel::X1C,
+            PrinterModel::X1,
         ] {
             assert_eq!(
                 model.quirks().ams_drying_while_printing_support(&none),
@@ -1009,6 +1012,23 @@ mod tests {
         assert!(!q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
         assert!(!q.supports_buzzer());
+    }
+
+    #[test]
+    fn test_x1_quirks_match_x1c_except_aux_fan() {
+        let x1 = PrinterModel::X1.quirks();
+        let x1c = PrinterModel::X1C.quirks();
+        assert!(!x1.supports_auxiliary_left_fan());
+        assert_eq!(x1.nozzle_temp_max(), x1c.nozzle_temp_max());
+        for mains in [Some(true), Some(false), None] {
+            assert_eq!(x1.bed_temp_max(mains), x1c.bed_temp_max(mains));
+        }
+        assert_eq!(x1.z_max(), x1c.z_max());
+        assert_eq!(x1.camera_protocol(), x1c.camera_protocol());
+        assert_eq!(x1.active_chamber_heater_max_temp_c(), None);
+        assert_eq!(x1.physical_nozzle_count(), 1);
+        assert!(x1.is_bed_on_z());
+        assert!(x1.has_door_sensor());
     }
 
     #[test]

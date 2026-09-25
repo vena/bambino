@@ -14,12 +14,14 @@ use bambino::quirks::QuirkContext;
 fn test_nothing_reported() {
     let ctx = QuirkContext::empty();
     let cases = [
-        // Never: no remote-dry command path (A1), screen-only (P1), named unsupported (X1C).
+        // Never: no remote-dry command path (A1), screen-only (P1), named unsupported (X1C, and
+        // the X1 on the same firmware line).
         (PrinterModel::A1, false),
         (PrinterModel::A1Mini, false),
         (PrinterModel::P1P, false),
         (PrinterModel::P1S, false),
         (PrinterModel::X1C, false),
+        (PrinterModel::X1, false),
         // Firmware-gated, but an unread version falls back to the model answer rather than
         // denying — "nobody asked" is not "too old".
         (PrinterModel::P2S, true),
@@ -60,6 +62,7 @@ fn test_firmware_below_threshold_denies_only_gated_models() {
         (PrinterModel::A1, "99.99.99.99", false),
         (PrinterModel::P1S, "99.99.99.99", false),
         (PrinterModel::X1C, "99.99.99.99", false),
+        (PrinterModel::X1, "99.99.99.99", false),
     ];
     for (model, firmware, expected) in cases {
         let ctx = QuirkContext::empty().with_firmware(Some(firmware));
@@ -104,6 +107,7 @@ fn test_reported_bit_outranks_every_model_rule() {
         PrinterModel::P1P,
         PrinterModel::P1S,
         PrinterModel::X1C,
+        PrinterModel::X1,
         PrinterModel::X1E,
         PrinterModel::H2D,
         PrinterModel::H2DPro,

@@ -297,7 +297,7 @@ printer.stop_drying(0).await?;                  // ams_id only—every other fie
 
 `DryingCycle::send()` returns `Error::ModelMismatch` in two cases:
 
-- **The printer can't dry remotely:** A1/A1 Mini, P1P/P1S and X1C, and H2D/H2D Pro/H2S/H2C/P2S/X2D
+- **The printer can't dry remotely:** A1/A1 Mini, P1P/P1S and X1/X1C, and H2D/H2D Pro/H2S/H2C/P2S/X2D
   below their minimum firmware. That firmware acks the command and then silently discards it instead of
   driving the AMS heater. `printer.supports_ams_remote_drying()` gives the same answer up front.
 - **The unit has no heater:** an external spool, an AMS Lite on an A2L (id `6`/`16`), or a unit

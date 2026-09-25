@@ -48,12 +48,13 @@ where
     /// Sets the heated bed target temperature.
     ///
     /// Values exceeding the model's maximum are clamped automatically. Most models have a flat
-    /// per-model ceiling (e.g. 80°C for A1 Mini), but X1C's ceiling is voltage-dependent — 110°C
-    /// on a 220V-region unit, 120°C on a 110V-region unit, per the official spec sheet. This is
+    /// per-model ceiling (e.g. 80°C for A1 Mini), but the X1C's and X1's ceiling is
+    /// voltage-dependent — 110°C on a 220V-region unit, 120°C on a 110V-region unit, per the
+    /// official spec sheet. This is
     /// derived from the most recently observed `home_flag` telemetry
     /// (`self.cache.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
     /// before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
-    /// region is unknown and X1C conservatively clamps to 110°C.
+    /// region is unknown and the X1C/X1 conservatively clamp to 110°C.
     ///
     /// # Example
     ///

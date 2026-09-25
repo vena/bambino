@@ -9,7 +9,7 @@ The physical printer monitors modular material expansion units connected to its 
 #### Per-Model AMS Pool Composition (BUG-122)
 The wire-decode boundary constants (`AMS_MAX_STANDARD_ID`, `AMS_HT_ID_MIN`/`AMS_HT_ID_MAX`) are protocol-wide, not model-dependent — every model uses the same bit addressing. What *is* model-dependent is how many units of each type a given machine physically supports, confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row (user-supplied official Bambu documentation):
 
-*   **Shared pool** (X1C, X1E, P1P, P1S, A1, A1 Mini, A2L): standard AMS and AMS-HT units draw from one combined pool of up to 4 units total.
+*   **Shared pool** (X1, X1C, X1E, P1P, P1S, A1, A1 Mini, A2L): standard AMS and AMS-HT units draw from one combined pool of up to 4 units total.
     *   **A2L**: one AMS Lite attaches *in addition* to the full pool (5 units). It reports its own unit id (16), so it is counted separately.
     *   **A1, A1 Mini**: one AMS Lite attaches *instead of* the pool, never combined with it. It uses the standard ids `0..=3`, so an `ams_mapping2` cannot say which unit is the Lite; only the unit type in telemetry (`AmsUnitModel`) can.
 *   **Independent pools** (H2C, H2D, H2D Pro, H2S, X2D): up to 4 standard AMS units *and* up to 8 AMS-HT units simultaneously, capped separately.
@@ -448,7 +448,7 @@ Supported AMS units (AMS 2 Pro and AMS-HT) feature built-in heaters and air-reci
     | P2S | `01.02.00.00` (2026-04-09) | `01.02.00.00` | P2S firmware release history; drying guide |
     | X2D | `01.01.00.00` (2026-04-14, earliest release) | `01.01.00.00` | X2D firmware release history; drying guide |
     | A2L | `01.01.00.00` (2026-06-01, earliest release) | `01.01.00.00` | A2L firmware release history; drying guide |
-    | X1C | never | never | drying guide: "P1S/P1P/X1C/A1/A1mini are not supported yet"; X1 `01.09.00.00` is screen-only |
+    | X1, X1C | never | never | drying guide: "P1S/P1P/X1C/A1/A1mini are not supported yet"; X1 `01.09.00.00` is screen-only; the X1 shares the X1C's firmware line |
     | P1P / P1S | never | never | P1 `01.08.00.00` is screen-only; drying guide |
     | A1 / A1 Mini | never | never | drying guide |
     | X1E | not stated — allowed | not stated — denied | no entry in any X1E release |

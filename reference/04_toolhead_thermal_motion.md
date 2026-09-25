@@ -71,6 +71,7 @@ Maximum safe operating temperatures per model, sourced from OrcaSlicer printer c
 | P1S | 300 | 100 | — | |
 | P2S | 300 | 110 | — | Has chamber sensor but no active PTC heater |
 | X1C | 300 | 120 | — | Bed limit 110°C on 220V, 120°C on 110V |
+| X1 | 300 | 120 | — | Same limits as X1C; BambuStudio's X1 and X1 Carbon profiles share every limit field |
 | X1E | 320 | 110 | 60 | |
 | X2D | 300 | 120 | 65 | |
 | H2S | 350 | 120 | 65 | |

@@ -15,8 +15,10 @@ use core::fmt;
 /// Enumeration of physical Bambu Lab printer models supported on the local interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrinterModel {
-    /// X1 and X1C Series (CoreXY architecture, RTSP-capable)
+    /// X1 Carbon (CoreXY architecture, RTSP-capable)
     X1C,
+    /// X1, the original non-Carbon X1 (CoreXY architecture, RTSP-capable)
+    X1,
     /// X1E (Enterprise CoreXY architecture, wired Ethernet)
     X1E,
     /// X2D Series (CoreXY architecture, dual auxiliary cooling)
@@ -81,7 +83,7 @@ const MODELS: &[ModelSpec] = &[
         model: PrinterModel::X1C,
         display_name: "X1C",
         serial_prefix: "00M",
-        dev_tokens: &["BL-P001", "X1", "X1C"],
+        dev_tokens: &["BL-P001", "X1C"],
     },
     ModelSpec {
         model: PrinterModel::X1E,
@@ -154,6 +156,12 @@ const MODELS: &[ModelSpec] = &[
         display_name: "H2S",
         serial_prefix: "093",
         dev_tokens: &["O1S", "H2S"],
+    },
+    ModelSpec {
+        model: PrinterModel::X1,
+        display_name: "X1",
+        serial_prefix: "00W",
+        dev_tokens: &["BL-P002", "X1"],
     },
 ];
 
@@ -272,6 +280,7 @@ mod tests {
     #[test]
     fn test_all_prefix_resolution() {
         assert_eq!(resolve_model("00M123456789", None), PrinterModel::X1C);
+        assert_eq!(resolve_model("00W123456789", None), PrinterModel::X1);
         assert_eq!(resolve_model("03W123456789", None), PrinterModel::X1E);
         assert_eq!(resolve_model("20P123456789", None), PrinterModel::X2D);
         assert_eq!(resolve_model("01S123456789", None), PrinterModel::P1P);
@@ -291,6 +300,10 @@ mod tests {
         assert_eq!(
             resolve_model("999000000", Some("BL-P001")),
             PrinterModel::X1C
+        );
+        assert_eq!(
+            resolve_model("999000000", Some("BL-P002")),
+            PrinterModel::X1
         );
         assert_eq!(resolve_model("999000000", Some("C13")), PrinterModel::X1E);
         assert_eq!(resolve_model("999000000", Some("N6")), PrinterModel::X2D);
@@ -321,6 +334,8 @@ mod tests {
         // urn:bambulab-com:device:P1S:1) must resolve, not just DevModel codes.
         assert_eq!(resolve_model("999000000", Some("P1S")), PrinterModel::P1S);
         assert_eq!(resolve_model("999000000", Some("X1C")), PrinterModel::X1C);
+        // "X1" is the plain X1, not the X1 Carbon (BambuStudio BL-P002.json).
+        assert_eq!(resolve_model("999000000", Some("X1")), PrinterModel::X1);
         assert_eq!(resolve_model("999000000", Some("X1E")), PrinterModel::X1E);
         assert_eq!(resolve_model("999000000", Some("X2D")), PrinterModel::X2D);
         assert_eq!(resolve_model("999000000", Some("P1P")), PrinterModel::P1P);
@@ -380,6 +395,7 @@ mod tests {
         fn is_supported(model: PrinterModel) -> bool {
             match model {
                 PrinterModel::X1C
+                | PrinterModel::X1
                 | PrinterModel::X1E
                 | PrinterModel::X2D
                 | PrinterModel::A1Mini
@@ -398,6 +414,7 @@ mod tests {
 
         const VARIANTS: &[PrinterModel] = &[
             PrinterModel::X1C,
+            PrinterModel::X1,
             PrinterModel::X1E,
             PrinterModel::X2D,
             PrinterModel::A1Mini,

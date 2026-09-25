@@ -218,7 +218,8 @@ Discovery systems parse the incoming `DevModel.bambu.com` (or `DevModel`) header
 
 | SSDP DevModel Value | Display Name | Core Architecture Family | Camera Protocol Target |
 | :--- | :--- | :--- | :--- |
-| **`BL-P001`** | X1 / X1C | CoreXY | RTSPS (Port 322) |
+| **`BL-P001`** | X1C | CoreXY | RTSPS (Port 322) |
+| **`BL-P002`** | X1 | CoreXY | RTSPS (Port 322) |
 | **`C13`** | X1E | CoreXY | RTSPS (Port 322) |
 | **`N6`** | X2D | CoreXY | RTSPS (Port 322) |
 | **`N1`** | A1 Mini | Bed Slinger | Binary JPEG Stream (Port 6000) |
@@ -245,7 +246,8 @@ Discovery systems may match the leading 3-character prefix of the printer serial
 | **`093`** | H2S | H2 |
 | **`239`** | H2D Pro | H2 |
 | **`31B`** | H2C | H2 |
-| **`00M`** | X1C / X1 | X1 |
+| **`00M`** | X1C | X1 |
+| **`00W`** | X1 | X1 |
 | **`03W`** | X1E | X1 |
 | **`20P`** | X2D | X2 |
 | **`01S`** | P1P | P1 |
