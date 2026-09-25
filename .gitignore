@@ -21,6 +21,8 @@ env/
 *.der
 .lean-ctx/
 /reference/*
+# Tracked specs; un-ignored so .gitignore-honouring tools (lean-ctx, rg) can search them.
+!/reference/*.md
 /review
 # deep-review working files — local only, deleted by triage-review once filed.
 /*-REVIEW.md
