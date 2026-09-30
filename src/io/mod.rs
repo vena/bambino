@@ -80,16 +80,20 @@ pub enum SocketError {
     CertificateInvalid(CertificateFailure),
     /// The device ran out of memory before the operation could finish.
     ///
-    /// A local condition that says nothing about the peer, which may never have been contacted:
-    /// an ESP-IDF handshake that cannot allocate its trust store fails before its first byte is
-    /// sent. Retrying once memory has recovered may succeed; retrying at once usually makes it
-    /// worse, since each TLS session needs tens of KB. Separate from `Other` so a caller can make
+    /// A local condition that says nothing about the peer, which may not have been reached: an
+    /// ESP-IDF handshake that cannot allocate its trust store fails before sending anything over
+    /// TLS. Retrying once memory has been freed may succeed; retrying before that fails the same
+    /// way, since each TLS session needs tens of KB. Separate from `Other` so a caller can make
     /// that retry decision without parsing a message.
     ///
     /// Produced from an OS `ENOMEM` (`std::io::ErrorKind::OutOfMemory`) on every std platform,
     /// from an mbedTLS `*_ALLOC_FAILED` code on ESP-IDF and Embassy, and from `ESP_ERR_NO_MEM` on
-    /// ESP-IDF. Never from a failed Rust heap allocation, which aborts rather than returning.
-    /// `ENOBUFS` and file-descriptor exhaustion are deliberately not included (GitHub issue #385).
+    /// ESP-IDF. Not every out-of-memory failure arrives here: a failed Rust heap allocation
+    /// aborts rather than returning, `ENOBUFS` and file-descriptor exhaustion are deliberately
+    /// left as `Other`, and ESP-IDF's hardware-AES path reports its allocation failure as
+    /// mbedTLS's generic error, which also stays `Other` (GitHub issue #385). FTPS data reads
+    /// and writes, FTP control writes, and the camera handshake write discard the I/O error's
+    /// kind and report `ConnectionReset`/`ConnectionAborted` whatever the cause.
     ResourceExhausted,
     /// Catch-all variant for atypical OS-specific networking errors.
     Other(Cow<'static, str>),
@@ -154,9 +158,9 @@ pub enum CertificateFailure {
     /// went missing may be the one this chain needed: the certificate may be one the caller
     /// already trusts. So, unlike `UntrustedAnchor`, this is **not** a trust-on-first-use
     /// candidate. Two causes: memory ran short while the handshake parsed its trust store
-    /// (mbedTLS skips an anchor it cannot allocate and carries on), or an anchor never parses at
-    /// all, which is also logged at error level when the connector is built. Retrying may help
-    /// with the first; the second needs the anchor fixed.
+    /// (mbedTLS skips an anchor whose PEM decode cannot allocate and carries on), or an anchor
+    /// never parses at all, which is also logged at error level when the connector is built.
+    /// Retrying may help with the first; the second needs the anchor fixed.
     ///
     /// Only the ESP-IDF backend can see how many anchors a handshake actually held, so only it
     /// produces this (GitHub issue #384).
@@ -279,7 +283,7 @@ pub(crate) mod mbedtls_err {
     pub(crate) const CIPHER_ALLOC_FAILED: i32 = -0x6180;
     pub(crate) const SSL_ALLOC_FAILED: i32 = -0x7F00;
 
-    /// Every module's allocation-failure code a TLS client can hit.
+    /// The allocation-failure codes of the mbedTLS modules a TLS client uses.
     pub(crate) const ALLOC_FAILED: [i32; 10] = [
         MPI_ALLOC_FAILED,
         ASN1_ALLOC_FAILED,
@@ -309,7 +313,8 @@ pub(crate) mod mbedtls_err {
 /// failure maps to `OutOfMemory`, which [`map_embedded_io_error_kind`] turns into
 /// [`SocketError::ResourceExhausted`]. mbedTLS can add a high-level and a low-level code into
 /// one (`MBEDTLS_ERROR_ADD`, e.g. an X.509 parse error carrying `ASN1_ALLOC_FAILED`), so the
-/// allocation check tests both parts; the connection codes are only ever returned bare.
+/// allocation check tests both parts. The connection codes are matched as whole codes, the form
+/// mbedTLS's network and SSL layers return them in.
 #[cfg(any(feature = "esp-idf", feature = "embassy", test))]
 pub(crate) fn mbedtls_error_kind(code: i32) -> Option<embedded_io_async::ErrorKind> {
     use mbedtls_err as e;

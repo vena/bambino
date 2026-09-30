@@ -17,7 +17,7 @@ rustflags = [
 [env]
 # esp-println's logger reads this at init; `info` keeps the probe's own stage lines visible
 # without esp-radio's per-packet chatter. Raise to `debug` when a stage hangs.
-# `bambino::io::embassy=debug` for the #385 sweep: that is where the raw `MbedtlsError(..)`
-# codes are logged, and they decide whether an `Other` hid an allocation failure. Parsed at
-# build time by esp-println, so a change here needs a rebuild.
+# `bambino::io::embassy=debug`: that is where the raw `MbedtlsError(..)` codes behind a failed
+# handshake or read are logged (added for the #385 sweep, kept because the codes are what a
+# probe transcript needs). Parsed at build time by esp-println, so a change here needs a rebuild.
 ESP_LOG = "info,bambino::io::embassy=debug"

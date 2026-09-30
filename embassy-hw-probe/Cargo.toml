@@ -64,8 +64,8 @@ esp-radio = { version = "0.18.0", features = ["esp32c6", "log-04", "wifi"] }
 # three-live-sessions peak inside the FTPS stage was invisible.
 esp-alloc = { version = "0.10.0", features = ["internal-heap-stats"] }
 # `custom-halt`: after printing a panic, esp-backtrace calls the probe's `custom_halt()`
-# instead of spinning forever. The current probe resets the board there so a sweep that
-# crashed resumes; every `src/main.rs` must therefore define `custom_halt`, or the link fails.
+# instead of spinning forever. Probes reset the board there (the #385 sweep used that to resume
+# after a crash); every `src/main.rs` must therefore define `custom_halt`, or the link fails.
 esp-backtrace = { version = "0.19.0", features = [
     "custom-halt",
     "esp32c6",

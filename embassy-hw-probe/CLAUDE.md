@@ -1,7 +1,8 @@
 # embassy-hw-probe
 
-Flashable harness for hardware questions about `src/io/embassy.rs` — the one
-backend that has never run on real hardware (GitHub issue #292). Excluded from
+Flashable harness for hardware questions about `src/io/embassy.rs`, the backend
+that had never run on real hardware until this probe's first run (GitHub issue
+#292). Excluded from
 `bambino`'s published crate via the root `Cargo.toml` `exclude` entry; never a
 dependency of `bambino` itself.
 
@@ -12,13 +13,13 @@ against `bambino`'s `esp-idf` feature (std, ESP-IDF SDK), this one builds for
 esp-radio + embassy-net). Different target triple, different runtime, mutually
 exclusive feature sets. Same board though — one ESP32-C6 runs both.
 
-**To reuse for a new investigation:** replace the stage bodies in
-`src/main.rs`, keeping the bring-up above stage 1 (heap, `esp_rtos::start`,
-Wi-Fi, embassy-net, TRNG, the single `Tls`). That bring-up is most of the file
-and is the part that took the work; the stages are the cheap part. Also keep a
+**To reuse for a new investigation:** replace the investigation-specific part
+of `src/main.rs`, keeping the bring-up (heap, `esp_rtos::start`, Wi-Fi,
+embassy-net, TRNG, the single `Tls`). That bring-up is most of the file and is
+the part that took the work. Also keep a
 `#[unsafe(no_mangle)] fn custom_halt() -> !`: `esp-backtrace`'s `custom-halt`
-feature calls it after printing a panic (the #385 sweep resets the board there to
-resume), and without it the link fails. Same
+feature calls it after printing a panic (current probes reset the board there;
+the #385 sweep used that to resume), and without it the link fails. Same
 convention as `esp32-hw-probe`: the file holds only the *current*
 investigation, and `git log -- embassy-hw-probe/src/main.rs` is the record of
 what has been probed before.
@@ -47,8 +48,10 @@ dependency).
 
 **Credentials:** copy `.env.example` to `.env` (gitignored) and fill it in.
 `build.rs` compiles the values in via `env!`; all five keys are required here,
-unlike `esp32-hw-probe` where the access code is optional, because this probe's
-MQTT and FTPS stages authenticate. The serial and access code are credentials —
+unlike `esp32-hw-probe` where the access code is optional, because probes here
+routinely reach MQTT/FTPS authentication. `build.rs` also emits
+`PROBE_BUILD_ID` (changes whenever `src/` does) for probes that keep state
+across resets. The serial and access code are credentials —
 never paste a run's log into the repo without scrubbing them.
 
 **Flash and run:** `cd embassy-hw-probe && cargo run --release` (the target's

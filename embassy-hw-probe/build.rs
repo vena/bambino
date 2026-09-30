@@ -35,8 +35,8 @@ fn main() {
 
 /// Emits `PROBE_BUILD_ID`, which changes whenever `src/` does.
 ///
-/// A probe that keeps state across resets (the #385 sweep keeps it in RTC RAM) compares this
-/// to tell "resume after a crash" from "a new build was flashed". The value is the build time,
+/// A probe that keeps state across resets (the #385 sweep kept it in RTC RAM) compares this to
+/// tell "resume after a crash" from "a new build was flashed". Probes that keep no state ignore it. The value is the build time,
 /// and the build script only reruns when `src/` or `.env` changes, so an unchanged rebuild
 /// keeps its id.
 fn emit_build_id() {

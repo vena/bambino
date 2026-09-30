@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """TCP listener that aborts a TLS handshake after the client's first flight.
 
-Hardware aid for GitHub issue #386, used by esp32-hw-probe's case 5: a client
+Hardware aid for GitHub issue #386 (the esp32-hw-probe check that used it,
+cases 5a/5b, is in that probe's git history): a client
 dials this, sends its ClientHello, and the listener closes the connection
 before answering. The client's next read fails partway through the handshake,
 which is the "peer reset mid-handshake" condition bambino's ESP-IDF backend

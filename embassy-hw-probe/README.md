@@ -8,16 +8,17 @@ published crate via the root `Cargo.toml`'s `exclude` entry.
 ## Why it exists
 
 `bambino` compiles to three targets — host (tokio), ESP-IDF (std), and
-bare-metal (embassy/no_std). Two of those have run on real hardware. The
-embassy backend never has: its verification to date is mock tests plus
+bare-metal (embassy/no_std). Until this harness, the embassy backend had never
+run on real hardware: its verification was mock tests plus
 `tests/embassy_tls_version_test.rs`, which compiles the real
 `EmbassyTlsConnector` on the host and drives a loopback handshake against a
 rustls server. That proves the `mbedtls-rs` wiring and the `negotiated_version`
 mapping, and nothing about the embedded stack — no esp-hal, no esp-radio, no
 embassy-net, no printer.
 
-This is the harness that closes that gap. See
-[issue #292](https://github.com/vena/bambino/issues/292).
+This harness closed that gap ([issue #292](https://github.com/vena/bambino/issues/292))
+and is now where every hardware question about the embassy backend gets
+answered.
 
 ## Why not reuse `esp32-hw-probe`
 
@@ -30,29 +31,23 @@ and brings its own stack (esp-hal + esp-radio + embassy-net). Different target
 triple, different runtime, mutually exclusive feature sets. The same ESP32-C6
 board runs both.
 
-## What it does
+## What's in `src/main.rs`
 
-`src/main.rs` runs six stages in order and logs each one with the heap
-headroom at that point. Stages 0-2 are stack bring-up and the low-level I/O
-traits; stage 3 onward drives the same public API a consumer would use.
+Only the **current** investigation; its doc comment says what it measures and
+how to read the result. `git log -- embassy-hw-probe/src/main.rs` is the record
+of earlier ones. To start a new one, keep the bring-up (heap, `esp_rtos::start`,
+Wi-Fi, embassy-net, TRNG, the single `mbedtls_rs::Tls`) and the `custom_halt`
+function, and replace the rest.
 
-| Stage | What it proves |
-|-------|----------------|
-| 0 | Wi-Fi associates and embassy-net gets a DHCP lease |
-| 1 | `EmbassyRawStreamFactory` dials the printer (plain TCP, pre-TLS) |
-| 2 | `EmbassyTlsConnector` completes a real handshake; `negotiated_version` reports it |
-| 3 | `PrinterClient::connect_mqtt` plus one decoded telemetry event |
-| 4 | `FtpsClient::connect` plus one `list_directory` |
-| 5 | `EmbassyTimer` is monotonic and `sleep` paces correctly |
+The first investigation (#292) ran six stages: Wi-Fi and DHCP; a raw
+`EmbassyRawStreamFactory` dial; a real `EmbassyTlsConnector` handshake with
+`negotiated_version`; `PrinterClient::connect_mqtt` plus one telemetry event;
+`FtpsClient::connect` plus one `list_directory`; and `EmbassyTimer` pacing. It
+is the reference for how to construct each of those on this stack.
 
-Most of the code is bring-up that runs *before* any `bambino` code does, which
-is why the stage number matters more than the final line: it tells you whether
-the crate under test was even reached.
-
-Three TLS connectors share one `mbedtls_rs::Tls` instance here (MQTT, FTPS
-control, FTPS data), which is exactly the case `EmbassyTlsConnector`'s
-`TlsReference` design exists for — MbedTLS permits only one instance per
-process.
+Any number of TLS connectors share the one `mbedtls_rs::Tls` instance, which is
+the case `EmbassyTlsConnector`'s `TlsReference` design exists for: MbedTLS
+permits only one instance per process.
 
 `bambino` is a path dependency on purpose: a probe should drive the *shipped*
 types, because a reimplementation of them in this file can pass while the real
@@ -73,7 +68,7 @@ that is a difference from `esp32-hw-probe`, not an omission here.
 The serial and the access code are credentials: don't paste an unscrubbed run
 log into the repo.
 
-The probe loops forever after its last stage (standard bare-metal convention —
+The probe loops forever once it finishes (standard bare-metal convention —
 `main` never returns), so the monitor won't exit on its own; Ctrl-C detaches it
 without resetting the board. Pipe through `tee` to keep the transcript:
 
@@ -96,9 +91,10 @@ which the bare-metal sysroot does not provide — a link-time failure that
 
 ## Memory
 
-`mbedtls-rs` allocates 16 KiB in + 16 KiB out per TLS session by default, and
-three sessions are live by stage 4. That, not CPU, is the first thing expected
-to run out on a C6. `src/main.rs`'s heap sizes are the knob; the
+`mbedtls-rs` allocates 16 KiB in + 16 KiB out per TLS session by default, and a
+C6 at the heap sizes in `src/main.rs` fits two live sessions, not three
+(measured; see `src/io/CLAUDE.md`). Memory, not CPU, is the first thing to run
+out. `src/main.rs`'s heap sizes are the knob; the
 `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features on `mbedtls-rs` are
 the other. Numbers measured here belong back in the `mbedtls-rs` dependency
 comment in the root `Cargo.toml`.
