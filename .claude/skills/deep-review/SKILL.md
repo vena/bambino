@@ -11,7 +11,7 @@ Rediscover the layout every run — never reuse a previous run's partition.
 
 ## Step 0 — Setup
 
-1. Use lean-ctx throughout, including `ctx_graph`/`ctx_callgraph` for cross-cutting invariant checks.
+1. Use lean-ctx throughout.
 2. `gh auth status` — stop and tell the user if it fails (Step 4 dedupes against issues).
 3. `date +%m-%d` and `git rev-parse --short HEAD` — don't infer either from context.
 4. `ctx_read(README.md, mode="full")` — `map` returns only headings on prose. Root `CLAUDE.md` is already loaded.
@@ -70,7 +70,7 @@ Review ONLY these bambino files for correctness; other agents cover the rest: <f
 
 Architecture (from README.md): <opening paragraph — LAN-only, no cloud> <unit-specific passage, if any>. If a finding seems to contradict this, ctx_read README.md with mode="full".
 
-Invariants for these files: <matched excerpts>. If a finding looks like it collides with an unstated cross-cutting convention, ctx_search(pattern="paths:", path=".claude/rules") for your files in case a rule was missed.
+Invariants for these files: <matched excerpts>. If a finding looks like it collides with an unstated cross-cutting convention, ctx_search(pattern="paths:", path=".claude/rules") for your files in case a rule was missed. When a finding depends on code outside your files, check it rather than assume: ctx_callgraph for who calls a function, ctx_graph for which files depend on a file. Both track call edges and file dependencies only; for uses of a const, static or type, use ctx_search.
 
 In scope: correctness bugs; violations of CLAUDE.md, .claude/rules/, or nested CLAUDE.md invariants; missing error handling at real boundaries (network I/O, FFI); names or doc comments that state the opposite of what the code does.
 Out of scope: hypothetical internal-invariant validation; minor security issues that follow from the crate being LAN-only (cert-verification bypass, plaintext fallback) unless they contradict the crate's own stated behavior; style, naming and refactor suggestions.
