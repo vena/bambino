@@ -13,8 +13,9 @@
 #   scripts/check-esp-idf.sh esp32s3         # Xtensa
 #   scripts/check-esp-idf.sh esp32c3         # RISC-V
 #
-# Wired into CI via .github/workflows/esp-idf.yml, path-filtered to only run when
-# src/io/esp_idf.rs, this script, or Cargo.toml change. Also fine to run manually.
+# Wired into CI via .github/workflows/esp-idf.yml, which runs it on any push that
+# touches the library build's inputs (its path list says which and why). Also fine
+# to run manually.
 set -euo pipefail
 
 CHIP="${1:-esp32c6}"

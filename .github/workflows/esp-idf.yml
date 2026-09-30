@@ -1,29 +1,43 @@
 name: ESP-IDF check
 
-# Live (repo has a GitHub remote), path-filtered rather than run on every push:
-# scripts/check-esp-idf.sh only
-# needs to run when esp-idf-gated code actually changes (CLAUDE.md's existing
-# manual-run rule). Note this job pays the full ~5.5min cold cost on every
-# run, not just the first — GitHub-hosted runners are ephemeral VMs, so the
-# named Docker volumes the script uses for caching (cargo registry, rustup,
-# target/) don't persist between separate workflow runs the way they do on a
-# long-lived dev machine. Making repeat runs fast here would mean teaching
-# the script to cache into a host bind-mount instead of/alongside named
-# volumes so actions/cache has something to save — not done speculatively;
-# revisit if this job's cadence and the 5.5min cost start to actually hurt.
+# Runs on any change that can affect the esp-idf build, not only esp-idf-named
+# files: the job compiles the whole library with `--features esp-idf` for a
+# 32-bit RISC-V target, and `cfg(feature = "esp-idf")` code also lives in shared
+# files (src/io/mod.rs, src/mqtt/client/). A hand-kept list of esp-idf files
+# missed real inputs (build.rs, Cargo.lock, src/io/mod.rs), so the filter now
+# lists everything the `--lib` build reads and skips only pushes touching none
+# of it (docs, tests/, the hw probes). Cost is not a constraint: Actions on standard
+# GitHub-hosted runners is free for public repositories. The two path lists
+# below must stay identical.
+#
+# Note this job pays the full ~5min cold cost on every run, not just the first —
+# GitHub-hosted runners are ephemeral VMs, so the named Docker volumes the script
+# uses for caching (cargo registry, rustup, target/) don't persist between
+# separate workflow runs the way they do on a long-lived dev machine. Making
+# repeat runs fast here would mean teaching the script to cache into a host
+# bind-mount instead of/alongside named volumes so actions/cache has something to
+# save — not done speculatively; revisit if the cost starts to actually hurt.
 
 on:
   push:
     branches: [main]
     paths:
-      - "src/io/esp_idf.rs"
-      - "scripts/check-esp-idf.sh"
+      - "src/**"
+      - "build.rs"
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - "scripts/check-esp-idf.sh"
+      - ".github/workflows/esp-idf.yml"
   pull_request:
     paths:
-      - "src/io/esp_idf.rs"
-      - "scripts/check-esp-idf.sh"
+      - "src/**"
+      - "build.rs"
       - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - "scripts/check-esp-idf.sh"
+      - ".github/workflows/esp-idf.yml"
 
 jobs:
   check-esp-idf:
