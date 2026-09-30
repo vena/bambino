@@ -83,6 +83,8 @@ pub(crate) enum ReadExhausted {
 pub(crate) struct MockIo {
     reads: VecDeque<Vec<u8>>,
     exhausted: ReadExhausted,
+    /// When set, every `read()`, `write()` and `flush()` fails with this kind.
+    fail: Option<embedded_io_async::ErrorKind>,
     /// One entry per `write()` call, in order.
     pub(crate) writes: Vec<Vec<u8>>,
 }
@@ -93,7 +95,17 @@ impl MockIo {
         Self {
             reads: chunks.iter().map(|c| c.to_vec()).collect(),
             exhausted: ReadExhausted::Eof,
+            fail: None,
             writes: Vec::new(),
+        }
+    }
+
+    /// A stream whose every `read()`, `write()` and `flush()` fails with `kind`, for asserting
+    /// how a caller classifies an I/O error.
+    pub(crate) fn failing(kind: embedded_io_async::ErrorKind) -> Self {
+        Self {
+            fail: Some(kind),
+            ..Self::empty()
         }
     }
 
@@ -108,6 +120,7 @@ impl MockIo {
         Self {
             reads: VecDeque::new(),
             exhausted: ReadExhausted::Infinite,
+            fail: None,
             writes: Vec::new(),
         }
     }
@@ -124,6 +137,9 @@ impl embedded_io_async::ErrorType for MockIo {
 
 impl embedded_io_async::Read for MockIo {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        if let Some(kind) = self.fail {
+            return Err(kind);
+        }
         let Some(mut chunk) = self.reads.pop_front() else {
             return match self.exhausted {
                 ReadExhausted::Eof => Ok(0),
@@ -149,12 +165,15 @@ impl embedded_io_async::Read for MockIo {
 
 impl embedded_io_async::Write for MockIo {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        if let Some(kind) = self.fail {
+            return Err(kind);
+        }
         self.writes.push(buf.to_vec());
         Ok(buf.len())
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        Ok(())
+        self.fail.map_or(Ok(()), Err)
     }
 }
 

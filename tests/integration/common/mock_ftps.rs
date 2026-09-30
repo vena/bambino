@@ -558,6 +558,27 @@ pub async fn run_mock_server_data_channel_failure(
     // before it would ever consume this reply.
 }
 
+/// Mock server for a data-channel write failure during `STOR`: sends the `150` reply, then
+/// drains the data channel until the client drops it, and never sends a final reply. Paired
+/// with a connector whose data stream fails its writes or flush, so the client returns before
+/// reading that reply. Draining keeps the data channel open while the client writes, so a
+/// write that is meant to pass through doesn't fail on a closed pipe instead.
+pub async fn run_mock_server_upload_data_failure(
+    mut server_control: tokio::io::DuplexStream,
+    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+) {
+    let mut buf = vec![0u8; 1024];
+
+    run_standard_handshake(&mut server_control, &mut buf, true).await;
+
+    let mut server_data = handle_pasv(&mut server_control, &mut buf, &data_container).await;
+    let cmd = read_cmd(&mut server_control, &mut buf).await;
+    assert_eq!(cmd, "STOR /model/job.3mf\r\n");
+    respond(&mut server_control, b"150 Ok to send data.\r\n").await;
+
+    while matches!(server_data.read(&mut buf).await, Ok(n) if n > 0) {}
+}
+
 /// Mock server for the single-reply-command poisoning regression test.
 ///
 /// Reads the `DELE` command and then drops the control stream without ever replying — the

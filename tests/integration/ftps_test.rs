@@ -20,7 +20,7 @@ use bambino::models::PrinterModel;
 use bambino::io::TlsVersion;
 
 use crate::common::io::{
-    CloseCountingTlsConnector, DummyTlsConnector, FailingDataTlsConnector,
+    CloseCountingTlsConnector, DummyTlsConnector, FailingDataTlsConnector, FaultyDataTlsConnector,
     HostCapturingTlsConnector, MockDataStreamFactory, PerCallVersionReportingTlsConnector,
     VersionReportingTlsConnector,
 };
@@ -790,6 +790,70 @@ async fn test_ftps_upload_size_mismatch_returns_disk_failure() {
     );
 
     server_handle.await.expect("Mock server panicked");
+}
+
+/// A data-channel write or flush failure during `upload_file` keeps its error kind: running out
+/// of memory reports `ResourceExhausted`, not a dropped link (issue #389). Either failure also
+/// poisons the client, since the server's final `STOR` reply is still pending.
+#[tokio::test]
+async fn test_ftps_upload_data_failure_keeps_its_error_kind() {
+    use bambino::io::SocketError;
+    use embedded_io_async::ErrorKind;
+
+    let cases = [
+        (
+            Some(ErrorKind::OutOfMemory),
+            None,
+            SocketError::ResourceExhausted,
+        ),
+        (
+            None,
+            Some(ErrorKind::OutOfMemory),
+            SocketError::ResourceExhausted,
+        ),
+        (
+            Some(ErrorKind::ConnectionReset),
+            None,
+            SocketError::ConnectionReset,
+        ),
+    ];
+    for (write_error, flush_error, expected) in cases {
+        let (client_control, server_control, data_container, factory) = setup();
+        let server_handle = tokio::spawn(mock_ftps::run_mock_server_upload_data_failure(
+            server_control,
+            data_container.clone(),
+        ));
+
+        let mut client = FtpsClient::connect(
+            TokioIo(client_control),
+            FaultyDataTlsConnector::new(write_error, flush_error),
+            factory,
+            PrinterIdentity {
+                ip: "127.0.0.1".into(),
+                serial: "TEST0000000001".into(),
+                access_code: "12345678".into(),
+                model: PrinterModel::P1S,
+            },
+            DummyTimer,
+            false,
+        )
+        .await
+        .expect("FTPS handshake failed");
+
+        let result = client.upload_file("/model/job.3mf", b"TEST_DATA").await;
+        assert!(
+            matches!(&result, Err(Error::Network(e)) if *e == expected),
+            "write {write_error:?}, flush {flush_error:?}: {result:?}"
+        );
+
+        let next_result = client.get_available_space().await;
+        assert!(
+            matches!(next_result, Err(Error::ProtocolViolation(_))),
+            "Expected the poisoned client to reject the next command, got {next_result:?}"
+        );
+
+        server_handle.await.expect("Mock server panicked");
+    }
 }
 
 /// Regression: a `write_command`/`read_response` failure on `LIST`'s *initial*

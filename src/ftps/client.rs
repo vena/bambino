@@ -19,7 +19,7 @@ use crate::ftps::parser::{
     CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
 };
 use crate::identity::PrinterIdentity;
-use crate::io::{AsyncIo, RawStreamFactory, SocketError, TimerProvider, TlsConnector, TlsVersion};
+use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector, TlsVersion};
 use crate::models::PrinterModel;
 
 use super::protocol::*;
@@ -780,9 +780,11 @@ where
             } else {
                 data_channel.write_all(chunk).await
             };
-            if let Err(_e) = write_result {
+            if let Err(e) = write_result {
                 self.poisoned = true;
-                return Err(Error::Network(SocketError::ConnectionAborted));
+                return Err(Error::Network(crate::io::map_embedded_io_error_kind(
+                    e.kind(),
+                )));
             }
         }
         let flush_result = if self.timer.has_real_clock() {
@@ -800,9 +802,11 @@ where
         } else {
             data_channel.flush().await
         };
-        if let Err(_e) = flush_result {
+        if let Err(e) = flush_result {
             self.poisoned = true;
-            return Err(Error::Network(SocketError::ConnectionAborted));
+            return Err(Error::Network(crate::io::map_embedded_io_error_kind(
+                e.kind(),
+            )));
         }
         self.close_data_channel(data_channel).await;
 

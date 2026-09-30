@@ -315,3 +315,60 @@ fn test_validate_ftp_path_rejects_non_crlf_control_chars() {
         Err(Error::ProtocolViolation(_))
     ));
 }
+
+/// Each I/O error kind paired with the `SocketError` it must reach: out-of-memory keeps its own
+/// variant instead of reading as a dropped link (#389), and a genuine drop still reads as one.
+const KIND_CASES: [(embedded_io_async::ErrorKind, SocketError); 3] = [
+    (
+        embedded_io_async::ErrorKind::OutOfMemory,
+        SocketError::ResourceExhausted,
+    ),
+    (
+        embedded_io_async::ErrorKind::ConnectionReset,
+        SocketError::ConnectionReset,
+    ),
+    (
+        embedded_io_async::ErrorKind::ConnectionAborted,
+        SocketError::ConnectionAborted,
+    ),
+];
+
+#[tokio::test]
+async fn test_data_read_failure_keeps_its_error_kind() {
+    let timer = crate::test_support::MockTimer::new();
+    for (kind, expected) in KIND_CASES {
+        let mut out = Vec::new();
+        let unbounded = read_to_eof_bounded(
+            &mut MockIo::failing(kind),
+            &mut out,
+            &DummyTimer,
+            30_000,
+            64,
+        )
+        .await;
+        assert!(
+            matches!(&unbounded, Err(Error::Network(e)) if *e == expected),
+            "{kind:?}: {unbounded:?}"
+        );
+
+        let mut buf = [0u8; 16];
+        let bounded =
+            read_transfer_chunk(&mut MockIo::failing(kind), &mut buf, &timer, Some(1_000)).await;
+        assert_eq!(bounded, Err(expected), "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn test_control_write_failure_keeps_its_error_kind() {
+    let timer = crate::test_support::MockTimer::new();
+    for (kind, expected) in KIND_CASES {
+        for deadline_ms in [None, Some(1_000)] {
+            let result =
+                write_command(&mut MockIo::failing(kind), "NOOP", &timer, deadline_ms).await;
+            assert!(
+                matches!(&result, Err(Error::Network(e)) if *e == expected),
+                "{kind:?}, deadline {deadline_ms:?}: {result:?}"
+            );
+        }
+    }
+}

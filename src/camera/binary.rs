@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 use crate::client::dummy::DummyTimer;
 use crate::error::Error;
 use crate::identity::PrinterIdentity;
-use crate::io::{AsyncIo, SocketError, TimerProvider, read_chunk};
+use crate::io::{AsyncIo, TimerProvider, map_embedded_io_error_kind, read_chunk};
 
 pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
 pub(crate) const CAMERA_HANDSHAKE_MAGIC: u32 = 64;
@@ -213,14 +213,16 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
         let handshake = build_handshake_packet(access_code)?;
 
         let write_fut = async {
-            self.stream
-                .write_all(&handshake)
-                .await
-                .map_err(|_| Error::Network(SocketError::ConnectionAborted))?;
-            self.stream
-                .flush()
-                .await
-                .map_err(|_| Error::Network(SocketError::ConnectionAborted))
+            self.stream.write_all(&handshake).await.map_err(|e| {
+                Error::Network(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+                    &e,
+                )))
+            })?;
+            self.stream.flush().await.map_err(|e| {
+                Error::Network(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+                    &e,
+                )))
+            })
         };
 
         if !timer.has_real_clock() {
@@ -451,6 +453,40 @@ mod tests {
             build_handshake_packet(""),
             Err(Error::ProtocolViolation(_))
         ));
+    }
+
+    /// The handshake write keeps the I/O error's kind, so running out of memory mid-handshake
+    /// reports `ResourceExhausted` rather than a dropped link (#389) — with and without a timer.
+    #[tokio::test]
+    async fn test_authenticate_write_failure_keeps_its_error_kind() {
+        use crate::io::SocketError;
+        use crate::test_support::{MockIo, MockTimer};
+        use embedded_io_async::ErrorKind;
+
+        let cases = [
+            (ErrorKind::OutOfMemory, SocketError::ResourceExhausted),
+            (ErrorKind::ConnectionReset, SocketError::ConnectionReset),
+            (ErrorKind::ConnectionAborted, SocketError::ConnectionAborted),
+        ];
+        for (kind, expected) in cases {
+            let mut camera = BinaryCameraStream::new(MockIo::failing(kind));
+            let untimed = camera
+                .authenticate_with_timer("ABCDEF12", &DummyTimer, 1_000)
+                .await;
+            assert!(
+                matches!(&untimed, Err(Error::Network(e)) if *e == expected),
+                "{kind:?}: {untimed:?}"
+            );
+
+            let mut camera = BinaryCameraStream::new(MockIo::failing(kind));
+            let timed = camera
+                .authenticate_with_timer("ABCDEF12", &MockTimer::new(), 1_000)
+                .await;
+            assert!(
+                matches!(&timed, Err(Error::Network(e)) if *e == expected),
+                "{kind:?}: {timed:?}"
+            );
+        }
     }
 
     #[cfg(feature = "tokio")]

@@ -4,7 +4,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::error::Error;
-use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race, read_chunk};
+use crate::io::{
+    AsyncIo, Raced, SocketError, TimerProvider, map_embedded_io_error_kind, race, read_chunk,
+};
 
 // FTP response codes (RFC 959)
 pub(crate) const FTP_GREETING: u16 = 220;
@@ -114,7 +116,7 @@ async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
         return stream
             .read(buf)
             .await
-            .map_err(|_| SocketError::ConnectionReset);
+            .map_err(|e| map_embedded_io_error_kind(embedded_io_async::Error::kind(&e)));
     };
 
     let remaining_ms = deadline_ms.saturating_sub(timer.now_millis());
@@ -127,7 +129,9 @@ async fn read_transfer_chunk<IO: AsyncIo, T: TimerProvider>(
 
     match race(read_fut, sleep_fut).await {
         Raced::Left(Ok(n)) => Ok(n),
-        Raced::Left(Err(_)) => Err(SocketError::ConnectionReset),
+        Raced::Left(Err(e)) => Err(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+            &e,
+        ))),
         Raced::Right(r) => Err(crate::io::deadline_error(r)),
     }
 }
@@ -157,16 +161,18 @@ pub(crate) async fn write_command<IO: AsyncIo, T: TimerProvider>(
 }
 
 /// Races one control-channel write future against `deadline_ms`, mapping the timeout branch to
-/// `SocketError::TimedOut` and any write failure to `ConnectionAborted`.
-async fn write_bounded<T: TimerProvider, E>(
+/// `SocketError::TimedOut` and a write failure through [`map_embedded_io_error_kind`].
+async fn write_bounded<T: TimerProvider, E: embedded_io_async::Error>(
     write_fut: impl core::future::Future<Output = Result<(), E>>,
     timer: &T,
     deadline_ms: Option<u64>,
 ) -> Result<(), Error> {
     let Some(deadline_ms) = deadline_ms else {
-        return write_fut
-            .await
-            .map_err(|_| Error::Network(SocketError::ConnectionAborted));
+        return write_fut.await.map_err(|e| {
+            Error::Network(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+                &e,
+            )))
+        });
     };
 
     let remaining_ms = deadline_ms.saturating_sub(timer.now_millis());
@@ -177,7 +183,9 @@ async fn write_bounded<T: TimerProvider, E>(
     let sleep_fut = timer.sleep(core::time::Duration::from_millis(remaining_ms));
     match race(write_fut, sleep_fut).await {
         Raced::Left(Ok(())) => Ok(()),
-        Raced::Left(Err(_)) => Err(Error::Network(SocketError::ConnectionAborted)),
+        Raced::Left(Err(e)) => Err(Error::Network(map_embedded_io_error_kind(
+            embedded_io_async::Error::kind(&e),
+        ))),
         Raced::Right(r) => Err(Error::Network(crate::io::deadline_error(r))),
     }
 }

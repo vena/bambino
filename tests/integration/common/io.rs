@@ -127,6 +127,88 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for FailingDataTlsConnector {
     }
 }
 
+/// A stream whose writes or flushes fail with a chosen `ErrorKind`; reads pass through.
+pub struct FaultyStream<RawIO> {
+    inner: RawIO,
+    write_error: Option<embedded_io_async::ErrorKind>,
+    flush_error: Option<embedded_io_async::ErrorKind>,
+}
+
+impl<RawIO: AsyncIo> embedded_io_async::ErrorType for FaultyStream<RawIO> {
+    type Error = embedded_io_async::ErrorKind;
+}
+
+impl<RawIO: AsyncIo> embedded_io_async::Read for FaultyStream<RawIO> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.inner
+            .read(buf)
+            .await
+            .map_err(|e| embedded_io_async::Error::kind(&e))
+    }
+}
+
+impl<RawIO: AsyncIo> embedded_io_async::Write for FaultyStream<RawIO> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        if let Some(kind) = self.write_error {
+            return Err(kind);
+        }
+        self.inner
+            .write(buf)
+            .await
+            .map_err(|e| embedded_io_async::Error::kind(&e))
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        if let Some(kind) = self.flush_error {
+            return Err(kind);
+        }
+        self.inner
+            .flush()
+            .await
+            .map_err(|e| embedded_io_async::Error::kind(&e))
+    }
+}
+
+/// A pass-through TLS connector whose first `connect()` (the FTPS control channel) yields a
+/// working stream and every later one (a data channel) a [`FaultyStream`] that fails its writes
+/// or flush with the configured kinds.
+///
+/// For asserting that a data-channel write failure keeps its error kind, e.g. that running out
+/// of memory mid-upload reports `ResourceExhausted` rather than a dropped link (issue #389).
+pub struct FaultyDataTlsConnector {
+    control_channel_connected: std::sync::atomic::AtomicBool,
+    write_error: Option<embedded_io_async::ErrorKind>,
+    flush_error: Option<embedded_io_async::ErrorKind>,
+}
+
+impl FaultyDataTlsConnector {
+    pub fn new(
+        write_error: Option<embedded_io_async::ErrorKind>,
+        flush_error: Option<embedded_io_async::ErrorKind>,
+    ) -> Self {
+        Self {
+            control_channel_connected: std::sync::atomic::AtomicBool::new(false),
+            write_error,
+            flush_error,
+        }
+    }
+}
+
+impl<RawIO: AsyncIo> TlsConnector<RawIO> for FaultyDataTlsConnector {
+    type Stream = FaultyStream<RawIO>;
+
+    async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
+        let is_data_channel = self
+            .control_channel_connected
+            .swap(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(FaultyStream {
+            inner: raw_stream,
+            write_error: self.write_error.filter(|_| is_data_channel),
+            flush_error: self.flush_error.filter(|_| is_data_channel),
+        })
+    }
+}
+
 /// A pass-through TLS connector that records the `host` string it was given, so tests can
 /// assert *which* identity value (serial vs. IP) a connect call site actually sent — see
 /// `.claude/rules/tls-identity-sni.md`.
