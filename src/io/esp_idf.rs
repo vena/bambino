@@ -290,6 +290,12 @@ fn poll_connect_revents(fd: core::ffi::c_int) -> Result<i16, SocketError> {
     // information that tells a driver refusal apart from a genuine socket fault.
     if rc < 0 {
         let err = std::io::Error::last_os_error();
+        // `select()` allocates; under memory pressure it fails `ENOMEM`, which reached callers
+        // as `Other` until an ESP32-C6 out-of-memory sweep caught it (GitHub issue #385).
+        if err.kind() == std::io::ErrorKind::OutOfMemory {
+            log::debug!("poll() failed while polling ESP-IDF TCP connect: {err}");
+            return Err(SocketError::ResourceExhausted);
+        }
         return Err(SocketError::Other(
             std::format!("poll() failed while polling ESP-IDF TCP connect: {err}").into(),
         ));
