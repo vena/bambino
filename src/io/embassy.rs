@@ -7,7 +7,7 @@
 #[cfg(feature = "embassy")]
 use crate::io::{
     AsyncIo, AsyncUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
-    TlsConnector, TlsVersion, map_mbedtls_verify_flags,
+    TlsConnector, TlsVersion, map_mbedtls_verify_flags, mbedtls_error_kind,
 };
 
 #[cfg(all(feature = "embassy", not(feature = "std")))]
@@ -179,15 +179,93 @@ impl<'a> EmbassyTlsConnector<'a> {
     }
 }
 
+/// TLS stream returned by [`EmbassyTlsConnector::connect`], wrapping an `mbedtls-rs` [`Session`](::mbedtls_rs::Session) so a failed read or write keeps its cause.
+///
+/// `Session` implements `embedded_io_async` itself, but its error reports every mbedTLS failure
+/// as `ErrorKind::Other` (`mbedtls-rs` 0.3.0, `impl embedded_io::Error for SessionError`), so
+/// running out of memory, a peer reset, and a send failure all looked the same to a caller.
+/// This stream reclassifies the mbedTLS code with the table the ESP-IDF backend uses, so an
+/// allocation failure surfaces as `OutOfMemory` and from there as
+/// [`SocketError::ResourceExhausted`] (GitHub issue #385). Errors from the underlying stream
+/// keep their own kind. Reads and writes forward to `Session` unchanged otherwise, including
+/// its lack of cancel safety.
+///
+/// [`session`](Self::session) and [`session_mut`](Self::session_mut) reach the `Session` for
+/// anything else it offers.
+#[cfg(feature = "embassy")]
+pub struct EmbassyTlsStream<'a, T: AsyncIo>(::mbedtls_rs::Session<'a, T>);
+
+#[cfg(feature = "embassy")]
+impl<'a, T: AsyncIo> EmbassyTlsStream<'a, T> {
+    /// Returns the underlying `mbedtls-rs` session.
+    pub fn session(&self) -> &::mbedtls_rs::Session<'a, T> {
+        &self.0
+    }
+
+    /// Returns the underlying `mbedtls-rs` session mutably.
+    ///
+    /// Reading or writing through it directly bypasses this stream's error classification.
+    pub fn session_mut(&mut self) -> &mut ::mbedtls_rs::Session<'a, T> {
+        &mut self.0
+    }
+}
+
+/// Classifies an `mbedtls-rs` session failure: an underlying stream error keeps its kind, and an mbedTLS code goes through [`mbedtls_error_kind`].
+#[cfg(feature = "embassy")]
+fn session_error_kind(err: &::mbedtls_rs::SessionError) -> embedded_io_async::ErrorKind {
+    match err {
+        ::mbedtls_rs::SessionError::Io(kind) => *kind,
+        ::mbedtls_rs::SessionError::MbedTls(e) => {
+            mbedtls_error_kind(e.code()).unwrap_or_else(|| {
+                log::debug!("mbedtls-rs session failed: {e:?}");
+                embedded_io_async::ErrorKind::Other
+            })
+        }
+    }
+}
+
+/// Maps a failed session setup, handshake, or close to a `SocketError`.
+///
+/// `ResourceExhausted` for an allocation failure (GitHub issue #385); everything else stays the
+/// `ConnectionAborted` these steps have always reported.
+#[cfg(feature = "embassy")]
+fn session_setup_error(err: &::mbedtls_rs::SessionError) -> SocketError {
+    if session_error_kind(err) == embedded_io_async::ErrorKind::OutOfMemory {
+        SocketError::ResourceExhausted
+    } else {
+        SocketError::ConnectionAborted
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl<T: AsyncIo> embedded_io_async::ErrorType for EmbassyTlsStream<'_, T> {
+    type Error = embedded_io_async::ErrorKind;
+}
+
+#[cfg(feature = "embassy")]
+impl<T: AsyncIo> embedded_io_async::Read for EmbassyTlsStream<'_, T> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.0.read(buf).await.map_err(|e| session_error_kind(&e))
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl<T: AsyncIo> embedded_io_async::Write for EmbassyTlsStream<'_, T> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.0.write(buf).await.map_err(|e| session_error_kind(&e))
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.0.flush().await.map_err(|e| session_error_kind(&e))
+    }
+}
+
 #[cfg(feature = "embassy")]
 impl<'a, RawStream> TlsConnector<RawStream> for EmbassyTlsConnector<'a>
 where
     RawStream: AsyncIo,
 {
-    // `Session<'a, T>` implements `embedded_io_async::{ErrorType, Read, Write}` directly (see
-    // `mbedtls-rs`'s `session/asynch.rs`), so it already satisfies `AsyncIo` via this crate's
-    // blanket impl — no wrapper stream type is needed.
-    type Stream = ::mbedtls_rs::Session<'a, RawStream>;
+    type Stream = EmbassyTlsStream<'a, RawStream>;
 
     async fn connect(
         &self,
@@ -211,7 +289,7 @@ where
         )
         .map_err(|e| {
             log::debug!("mbedtls-rs Session::new failed: {e:?}");
-            SocketError::ConnectionAborted
+            session_setup_error(&e)
         })?;
 
         // `ClientSessionConfig.server_name` can't hold `host` directly: its lifetime is
@@ -223,7 +301,7 @@ where
         let host_cstring = alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
         session.set_server_name(&host_cstring).map_err(|e| {
             log::debug!("mbedtls-rs set_server_name failed: {e:?}");
-            SocketError::ConnectionAborted
+            session_setup_error(&e)
         })?;
 
         // `tls_verification_details()` is the one post-handshake inspector `mbedtls-rs` does
@@ -231,18 +309,14 @@ where
         // absence is why `peer_chain_der` returns `None` below) — it wraps
         // `mbedtls_ssl_get_verify_result`, so this backend can name *why* a certificate was
         // rejected even though it cannot hand the certificate itself back (GitHub issue #157).
-        // A mask with no verdict keeps the pre-existing `ConnectionAborted`.
+        // A mask with no verdict falls back to the error's own mapping.
         if let Err(e) = session.connect().await {
             log::debug!("mbedtls-rs Session::connect failed: {e:?}");
-            return Err(
-                map_mbedtls_verify_flags(session.tls_verification_details()).map_or(
-                    SocketError::ConnectionAborted,
-                    SocketError::CertificateInvalid,
-                ),
-            );
+            return Err(map_mbedtls_verify_flags(session.tls_verification_details())
+                .map_or_else(|| session_setup_error(&e), SocketError::CertificateInvalid));
         }
 
-        Ok(session)
+        Ok(EmbassyTlsStream(session))
     }
 
     /// Sends `close_notify` via `mbedtls-rs` 0.3's `Session::close()`.
@@ -256,9 +330,9 @@ where
     /// `Drop`, which on an ESP32-C6 is ~48 KB per session (GitHub issue #293). Callers that
     /// need the memory back must drop the stream, not merely close it.
     async fn close(&self, stream: &mut Self::Stream) -> Result<(), SocketError> {
-        stream.close().await.map_err(|e| {
+        stream.0.close().await.map_err(|e| {
             log::debug!("mbedtls-rs Session::close failed: {e:?}");
-            SocketError::ConnectionAborted
+            session_setup_error(&e)
         })
     }
 
@@ -270,7 +344,7 @@ where
     /// because MbedTLS seeds the underlying field with the *configured maximum* version at
     /// setup and on every reset, which is not a version the peers have agreed on.
     fn negotiated_version(&self, stream: &Self::Stream) -> Option<TlsVersion> {
-        match stream.tls_version()? {
+        match stream.0.tls_version()? {
             ::mbedtls_rs::TlsVersion::Tls1_2 => Some(TlsVersion::Tls12),
             ::mbedtls_rs::TlsVersion::Tls1_3 => Some(TlsVersion::Tls13),
         }

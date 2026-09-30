@@ -78,6 +78,19 @@ pub enum SocketError {
     /// populates this; a backend that only knows "the handshake failed" still returns the
     /// error it always did rather than guessing a cause (GitHub issue #157).
     CertificateInvalid(CertificateFailure),
+    /// The device ran out of memory before the operation could finish.
+    ///
+    /// A local condition that says nothing about the peer, which may never have been contacted:
+    /// an ESP-IDF handshake that cannot allocate its trust store fails before its first byte is
+    /// sent. Retrying once memory has recovered may succeed; retrying at once usually makes it
+    /// worse, since each TLS session needs tens of KB. Separate from `Other` so a caller can make
+    /// that retry decision without parsing a message.
+    ///
+    /// Produced from an OS `ENOMEM` (`std::io::ErrorKind::OutOfMemory`) on every std platform,
+    /// from an mbedTLS `*_ALLOC_FAILED` code on ESP-IDF and Embassy, and from `ESP_ERR_NO_MEM` on
+    /// ESP-IDF. Never from a failed Rust heap allocation, which aborts rather than returning.
+    /// `ENOBUFS` and file-descriptor exhaustion are deliberately not included (GitHub issue #385).
+    ResourceExhausted,
     /// Catch-all variant for atypical OS-specific networking errors.
     Other(Cow<'static, str>),
 }
@@ -135,6 +148,19 @@ pub enum CertificateFailure {
     Missing,
     /// A certificate could not be parsed at all.
     Malformed,
+    /// No trusted anchor matched, but the handshake held fewer anchors than the connector was given.
+    ///
+    /// Reported *instead of* [`UntrustedAnchor`](Self::UntrustedAnchor), because the anchor that
+    /// went missing may be the one this chain needed: the certificate may be one the caller
+    /// already trusts. So, unlike `UntrustedAnchor`, this is **not** a trust-on-first-use
+    /// candidate. Two causes: memory ran short while the handshake parsed its trust store
+    /// (mbedTLS skips an anchor it cannot allocate and carries on), or an anchor never parses at
+    /// all, which is also logged at error level when the connector is built. Retrying may help
+    /// with the first; the second needs the anchor fixed.
+    ///
+    /// Only the ESP-IDF backend can see how many anchors a handshake actually held, so only it
+    /// produces this (GitHub issue #384).
+    IncompleteTrustStore,
     /// Rejected for a reason with no portable counterpart above.
     Unspecified,
 }
@@ -228,6 +254,129 @@ pub(crate) fn map_mbedtls_verify_flags(flags: u32) -> Option<CertificateFailure>
     Some(failure)
 }
 
+/// mbedTLS error codes the mbedTLS-backed platforms classify, in mbedTLS's own negative convention.
+///
+/// Redeclared for the same reason as [`mbedtls_badcert`]: one table serves ESP-IDF and Embassy
+/// and stays testable on the host. Values are mbedTLS 3.6.6's public constants
+/// (`net_sockets.h`, `ssl.h`, and each module's header for its `*_ALLOC_FAILED`); the `NET_*`
+/// ones are not in esp-idf-sys's bindings at all.
+#[cfg(any(feature = "esp-idf", feature = "embassy", test))]
+pub(crate) mod mbedtls_err {
+    pub(crate) const NET_RECV_FAILED: i32 = -0x004C;
+    pub(crate) const NET_SEND_FAILED: i32 = -0x004E;
+    pub(crate) const NET_CONN_RESET: i32 = -0x0050;
+    pub(crate) const SSL_CONN_EOF: i32 = -0x7280;
+    pub(crate) const SSL_PEER_CLOSE_NOTIFY: i32 = -0x7880;
+
+    pub(crate) const MPI_ALLOC_FAILED: i32 = -0x0010;
+    pub(crate) const ASN1_ALLOC_FAILED: i32 = -0x006A;
+    pub(crate) const PEM_ALLOC_FAILED: i32 = -0x1180;
+    pub(crate) const X509_ALLOC_FAILED: i32 = -0x2880;
+    pub(crate) const DHM_ALLOC_FAILED: i32 = -0x3400;
+    pub(crate) const PK_ALLOC_FAILED: i32 = -0x3F80;
+    pub(crate) const ECP_ALLOC_FAILED: i32 = -0x4D80;
+    pub(crate) const MD_ALLOC_FAILED: i32 = -0x5180;
+    pub(crate) const CIPHER_ALLOC_FAILED: i32 = -0x6180;
+    pub(crate) const SSL_ALLOC_FAILED: i32 = -0x7F00;
+
+    /// Every module's allocation-failure code a TLS client can hit.
+    pub(crate) const ALLOC_FAILED: [i32; 10] = [
+        MPI_ALLOC_FAILED,
+        ASN1_ALLOC_FAILED,
+        PEM_ALLOC_FAILED,
+        X509_ALLOC_FAILED,
+        DHM_ALLOC_FAILED,
+        PK_ALLOC_FAILED,
+        ECP_ALLOC_FAILED,
+        MD_ALLOC_FAILED,
+        CIPHER_ALLOC_FAILED,
+        SSL_ALLOC_FAILED,
+    ];
+
+    /// Bits of an mbedTLS code's magnitude that hold its low-level part (`error.h`: low-level
+    /// codes are `0x0001`-`0x007F`, high-level ones are multiples of `0x80` above that).
+    pub(crate) const LOW_LEVEL_MASK: i32 = 0x7F;
+}
+
+/// Classifies an mbedTLS error code into the `ErrorKind` it describes, if any.
+///
+/// `code` must be in mbedTLS's own negative convention, as mbedTLS functions return it. A code
+/// read from ESP-IDF's `esp_tls` error record is stored negated and must go through
+/// [`mbedtls_code_from_esp_tls_record`] first; a positive value never matches (GitHub issue
+/// #386).
+///
+/// A peer's `close_notify` and a bare EOF both mean the peer ended the session. An allocation
+/// failure maps to `OutOfMemory`, which [`map_embedded_io_error_kind`] turns into
+/// [`SocketError::ResourceExhausted`]. mbedTLS can add a high-level and a low-level code into
+/// one (`MBEDTLS_ERROR_ADD`, e.g. an X.509 parse error carrying `ASN1_ALLOC_FAILED`), so the
+/// allocation check tests both parts; the connection codes are only ever returned bare.
+#[cfg(any(feature = "esp-idf", feature = "embassy", test))]
+pub(crate) fn mbedtls_error_kind(code: i32) -> Option<embedded_io_async::ErrorKind> {
+    use mbedtls_err as e;
+
+    match code {
+        e::NET_CONN_RESET | e::SSL_CONN_EOF | e::SSL_PEER_CLOSE_NOTIFY => {
+            Some(embedded_io_async::ErrorKind::ConnectionReset)
+        }
+        e::NET_RECV_FAILED | e::NET_SEND_FAILED => {
+            Some(embedded_io_async::ErrorKind::ConnectionAborted)
+        }
+        _ if is_mbedtls_alloc_failure(code) => Some(embedded_io_async::ErrorKind::OutOfMemory),
+        _ => None,
+    }
+}
+
+/// True if either part of an mbedTLS code (see [`mbedtls_error_kind`]) is an allocation failure.
+#[cfg(any(feature = "esp-idf", feature = "embassy", test))]
+fn is_mbedtls_alloc_failure(code: i32) -> bool {
+    use mbedtls_err as e;
+
+    // `checked_neg` rejects `i32::MIN`, which has no positive counterpart and is no mbedTLS code.
+    let Some(magnitude) = code.checked_neg().filter(|m| *m > 0) else {
+        return false;
+    };
+    let low = -(magnitude & e::LOW_LEVEL_MASK);
+    let high = -(magnitude & !e::LOW_LEVEL_MASK);
+    e::ALLOC_FAILED.contains(&low) || e::ALLOC_FAILED.contains(&high)
+}
+
+/// Converts a code read from `esp_tls`'s mbedTLS error record back to mbedTLS's own negative convention.
+///
+/// ESP-IDF v5.5.5 records every mbedTLS failure negated: each capture in
+/// `components/esp-tls/esp_tls_mbedtls.c` is
+/// `ESP_INT_EVENT_TRACKER_CAPTURE(tls->error_handle, ESP_TLS_ERR_TYPE_MBEDTLS, -ret)`, so
+/// `MBEDTLS_ERR_NET_CONN_RESET` (`-0x0050`) is stored as `0x50`. Only the record is negated:
+/// `esp_tls_conn_read`/`write` return mbedTLS's value unchanged. `wrapping_neg` because the
+/// record is an arbitrary `int` (GitHub issue #386).
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) fn mbedtls_code_from_esp_tls_record(recorded: i32) -> i32 {
+    recorded.wrapping_neg()
+}
+
+/// Replaces an `UntrustedAnchor` verdict with `IncompleteTrustStore` when the handshake held fewer anchors than the connector was given.
+///
+/// `loaded` is how many anchors the failed handshake's trust store actually held; `expected`
+/// is how many the caller supplied. Only `UntrustedAnchor` depends on which anchors were
+/// present, so every other verdict passes through unchanged. The comparison is against what
+/// the caller supplied, not against the construction-time parse: that parse can itself run
+/// short, and matching it would still let a genuine certificate read as untrusted
+/// (GitHub issue #384).
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) fn account_for_trust_store(
+    failure: CertificateFailure,
+    loaded: usize,
+    expected: usize,
+) -> CertificateFailure {
+    if failure == CertificateFailure::UntrustedAnchor && loaded < expected {
+        log::warn!(
+            "TLS trust store held {loaded} of {expected} anchor(s) during this handshake; \
+             reporting IncompleteTrustStore rather than UntrustedAnchor"
+        );
+        return CertificateFailure::IncompleteTrustStore;
+    }
+    failure
+}
+
 /// Maps standard library IO error kinds to the runtime-agnostic `SocketError` enum.
 ///
 /// Shared by every platform backend that surfaces `std::io::Error` (tokio, ESP-IDF).
@@ -246,6 +395,8 @@ pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> 
         std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
         std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
         std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
+        // std's name for `ENOMEM` (its unix `decode_error_kind`, which ESP-IDF targets use too).
+        std::io::ErrorKind::OutOfMemory => SocketError::ResourceExhausted,
         // Peer closed its end (e.g. tokio-rustls's "tls handshake eof") — connection-shaped,
         // as in `map_io_error_kind` (#298).
         std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => {
@@ -618,9 +769,10 @@ where
 /// `embedded_io_async::ErrorKind`, which every `AsyncIo` implementor (tokio, ESP-IDF, Embassy)
 /// already produces via `embedded_io_async::Error::kind()`. Used by `read_chunk` so a genuine
 /// `ConnectionRefused`/`TimedOut`/etc. isn't collapsed to a generic `ConnectionReset` the way it
-/// was before this mapping existed. Non-network kinds (`Interrupted`, `OutOfMemory`,
-/// `PermissionDenied`, and the rest below) map to `Other` rather than `ConnectionReset`, so a
-/// caller's reconnect/retry loop is not driven by a local failure that reconnecting cannot fix.
+/// was before this mapping existed. `OutOfMemory` gets its own [`SocketError::ResourceExhausted`].
+/// The other non-network kinds (`Interrupted`, `PermissionDenied`, and the rest below) map to
+/// `Other` rather than `ConnectionReset`, so a caller's reconnect/retry loop is not driven by a
+/// local failure that reconnecting cannot fix.
 pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> SocketError {
     match kind {
         embedded_io_async::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
@@ -634,7 +786,8 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
         // Connection-shaped: the peer closed its end, the same "peer dropped — reconnect/retry"
         // outcome `ConnectionReset` describes.
         embedded_io_async::ErrorKind::BrokenPipe => SocketError::ConnectionReset,
-        // Not network failures: an allocation failure, a permission error, an interrupted
+        embedded_io_async::ErrorKind::OutOfMemory => SocketError::ResourceExhausted,
+        // Not network failures: a permission error, an interrupted
         // operation, an unsupported call, malformed data, etc. Surfacing these as
         // `ConnectionReset` drives a reconnect/retry loop that can never succeed, or masks a
         // retryable local condition (`Interrupted`) as a dropped link. `Other` is the honest
@@ -644,7 +797,6 @@ pub(crate) fn map_embedded_io_error_kind(kind: embedded_io_async::ErrorKind) -> 
         // `Interrupted` doesn't need its own variant; a caller that wants to retry on it can
         // still tell from the message).
         kind @ (embedded_io_async::ErrorKind::Interrupted
-        | embedded_io_async::ErrorKind::OutOfMemory
         | embedded_io_async::ErrorKind::PermissionDenied
         | embedded_io_async::ErrorKind::Unsupported
         | embedded_io_async::ErrorKind::InvalidData
@@ -852,6 +1004,129 @@ impl core::fmt::Display for RedactedHost<'_> {
             .nth(3)
             .map_or(self.0.len(), |(i, _)| i);
         write!(f, "{}***", &self.0[..split])
+    }
+}
+
+#[cfg(test)]
+mod mbedtls_error_tests {
+    use super::mbedtls_err as e;
+    use super::*;
+    use embedded_io_async::ErrorKind;
+
+    #[test]
+    fn classifies_codes_as_esp_tls_records_them() {
+        // GitHub issue #386: ESP-IDF stores `-ret`, so a reset arrives as +0x50. Fed through
+        // the conversion it classifies; fed raw it must not, or the sign bug is back.
+        let reset = mbedtls_code_from_esp_tls_record(0x0050);
+        assert_eq!(reset, e::NET_CONN_RESET);
+        assert_eq!(mbedtls_error_kind(reset), Some(ErrorKind::ConnectionReset));
+        assert_eq!(mbedtls_error_kind(0x0050), None);
+
+        // The capture observed on an ESP32-P4: `mbedtls Some(10368)`, i.e. +0x2880.
+        let observed = mbedtls_code_from_esp_tls_record(10368);
+        assert_eq!(observed, e::X509_ALLOC_FAILED);
+        assert_eq!(mbedtls_error_kind(observed), Some(ErrorKind::OutOfMemory));
+    }
+
+    #[test]
+    fn connection_codes_keep_their_existing_kinds() {
+        for code in [e::NET_CONN_RESET, e::SSL_CONN_EOF, e::SSL_PEER_CLOSE_NOTIFY] {
+            assert_eq!(mbedtls_error_kind(code), Some(ErrorKind::ConnectionReset));
+        }
+        for code in [e::NET_RECV_FAILED, e::NET_SEND_FAILED] {
+            assert_eq!(mbedtls_error_kind(code), Some(ErrorKind::ConnectionAborted));
+        }
+    }
+
+    #[test]
+    fn every_alloc_code_is_out_of_memory_and_reaches_resource_exhausted() {
+        for code in e::ALLOC_FAILED {
+            assert_eq!(
+                mbedtls_error_kind(code),
+                Some(ErrorKind::OutOfMemory),
+                "{code:#x}"
+            );
+        }
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::OutOfMemory),
+            SocketError::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn composite_codes_match_on_either_part() {
+        // MBEDTLS_ERR_X509_INVALID_FORMAT (-0x2180) + ASN1_ALLOC_FAILED: low-level part.
+        assert_eq!(
+            mbedtls_error_kind(-0x2180 + e::ASN1_ALLOC_FAILED),
+            Some(ErrorKind::OutOfMemory)
+        );
+        // PK_ALLOC_FAILED + ASN1_OUT_OF_DATA (-0x0060): high-level part.
+        assert_eq!(
+            mbedtls_error_kind(e::PK_ALLOC_FAILED + -0x0060),
+            Some(ErrorKind::OutOfMemory)
+        );
+        // X509_INVALID_FORMAT + ASN1_OUT_OF_DATA: neither part is an allocation failure.
+        assert_eq!(mbedtls_error_kind(-0x2180 + -0x0060), None);
+    }
+
+    #[test]
+    fn unrelated_and_degenerate_codes_are_unclassified() {
+        // MBEDTLS_ERR_X509_CERT_VERIFY_FAILED: a certificate verdict, routed elsewhere.
+        assert_eq!(mbedtls_error_kind(-0x2700), None);
+        assert_eq!(mbedtls_error_kind(0), None);
+        assert_eq!(mbedtls_error_kind(i32::MIN), None);
+        assert_eq!(mbedtls_error_kind(i32::MAX), None);
+    }
+
+    #[test]
+    fn short_trust_store_never_reports_untrusted_anchor() {
+        // GitHub issue #384: 4 of 5 anchors loaded, and the missing one may be the match.
+        assert_eq!(
+            account_for_trust_store(CertificateFailure::UntrustedAnchor, 4, 5),
+            CertificateFailure::IncompleteTrustStore
+        );
+        assert_eq!(
+            account_for_trust_store(CertificateFailure::UntrustedAnchor, 0, 5),
+            CertificateFailure::IncompleteTrustStore
+        );
+    }
+
+    #[test]
+    fn full_trust_store_keeps_untrusted_anchor() {
+        assert_eq!(
+            account_for_trust_store(CertificateFailure::UntrustedAnchor, 5, 5),
+            CertificateFailure::UntrustedAnchor
+        );
+    }
+
+    #[test]
+    fn verdicts_that_do_not_depend_on_anchors_pass_through() {
+        for failure in [
+            CertificateFailure::NameMismatch,
+            CertificateFailure::Expired,
+            CertificateFailure::InvalidPurpose,
+            CertificateFailure::Missing,
+        ] {
+            assert_eq!(account_for_trust_store(failure, 1, 5), failure);
+        }
+    }
+}
+
+#[cfg(all(test, any(feature = "tokio", feature = "esp-idf")))]
+mod std_io_error_tests {
+    use super::*;
+
+    #[test]
+    fn enomem_is_resource_exhausted() {
+        let err = std::io::Error::from(std::io::ErrorKind::OutOfMemory);
+        assert_eq!(
+            map_std_io_error(err, "unused"),
+            SocketError::ResourceExhausted
+        );
+        assert_eq!(
+            map_embedded_io_error_kind(map_io_error_kind(std::io::ErrorKind::OutOfMemory)),
+            SocketError::ResourceExhausted
+        );
     }
 }
 
@@ -1172,7 +1447,6 @@ mod error_kind_mapping_tests {
         // caller's reconnect/retry loop churns forever against a local failure it cannot fix.
         for kind in [
             ErrorKind::Interrupted,
-            ErrorKind::OutOfMemory,
             ErrorKind::PermissionDenied,
             ErrorKind::Unsupported,
             ErrorKind::InvalidData,
@@ -1190,6 +1464,16 @@ mod error_kind_mapping_tests {
                 other => panic!("{kind:?} mapped to {other:?}, expected SocketError::Other"),
             }
         }
+    }
+
+    #[test]
+    fn out_of_memory_is_resource_exhausted_not_other() {
+        // Local like the kinds above, but with its own variant so a caller can back off and
+        // retry without parsing a message (GitHub issue #385).
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::OutOfMemory),
+            SocketError::ResourceExhausted
+        );
     }
 
     #[test]

@@ -6,7 +6,8 @@
 #[cfg(feature = "esp-idf")]
 use crate::io::{
     AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
-    TimerError, TimerProvider, TlsConnector, TlsVersion, map_mbedtls_verify_flags,
+    TimerError, TimerProvider, TlsConnector, TlsVersion, account_for_trust_store,
+    map_mbedtls_verify_flags, mbedtls_code_from_esp_tls_record, mbedtls_error_kind,
 };
 
 #[cfg(feature = "esp-idf")]
@@ -134,8 +135,10 @@ impl BindableUdpSocket for EspIdfUdpSocket {
         crate::io::configure_std_udp_socket(&inner)?;
 
         let timer = EspIdfTimer::new().map_err(|e| {
-            log::debug!("failed to create ESP-IDF async timer for UDP recv pacing: {e}");
-            SocketError::Other("failed to create ESP-IDF async timer for UDP recv pacing".into())
+            esp_setup_error(
+                &e,
+                "failed to create ESP-IDF async timer for UDP recv pacing",
+            )
         })?;
 
         Ok(Self { inner, timer })
@@ -196,9 +199,10 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
 
 /// True if `err` is lwIP momentarily running out of send buffers, rather than a real fault.
 ///
-/// Matched on `raw_os_error` rather than `ErrorKind` because std maps neither `ENOMEM` nor
-/// `ENOBUFS` to a kind that distinguishes "retry me" from "give up": both fall through to the
-/// catch-all. See `send_to`'s doc comment for where these errnos come from.
+/// Matched on `raw_os_error` rather than `ErrorKind` because std has no kind for `ENOBUFS` (it
+/// decodes to `Uncategorized`). `ENOMEM` does decode, to `OutOfMemory`, but is matched the same
+/// way so both lwIP buffer shortages stay together. See `send_to`'s doc comment for where these
+/// errnos come from.
 #[cfg(feature = "esp-idf")]
 fn is_transient_send_shortage(err: &std::io::Error) -> bool {
     if err.kind() == std::io::ErrorKind::WouldBlock {
@@ -215,6 +219,21 @@ fn is_transient_send_shortage(err: &std::io::Error) -> bool {
 #[cfg(feature = "esp-idf")]
 fn to_esp_socket_error(err: std::io::Error) -> SocketError {
     crate::io::map_std_io_error(err, "ESP-IDF platform BSD network error")
+}
+
+/// Maps an `EspError` from an ESP-IDF allocation call to `ResourceExhausted` when it is `ESP_ERR_NO_MEM`, else to `Other(context)`.
+///
+/// Used for `EspIdfTimer::new` (`esp_timer_create` returns `ESP_ERR_NO_MEM`) and `EspTls::adopt`
+/// (esp-idf-svc 0.53.0 turns `esp_tls_init` returning `NULL` into `ESP_ERR_NO_MEM`). GitHub
+/// issue #385.
+#[cfg(feature = "esp-idf")]
+fn esp_setup_error(err: &::esp_idf_svc::sys::EspError, context: &'static str) -> SocketError {
+    log::debug!("{context}: {err}");
+    if err.code() == ::esp_idf_svc::sys::ESP_ERR_NO_MEM {
+        SocketError::ResourceExhausted
+    } else {
+        SocketError::Other(context.into())
+    }
 }
 
 /// True if `err` indicates a non-blocking `connect()` is still in progress rather than a genuine failure.
@@ -443,36 +462,6 @@ fn take_esp_tls_error<S: ::esp_idf_svc::tls::Socket>(
     (ret == ::esp_idf_svc::sys::ESP_OK).then_some(code)
 }
 
-// `mbedtls/net_sockets.h` (ESP-IDF v5.5.3 `components/mbedtls`). Not in esp-idf-sys's generated
-// bindings, which don't include that header. ESP-IDF's `port/net_sockets.c` turns EPIPE/ECONNRESET
-// into `CONN_RESET` and every other socket failure into `RECV_FAILED`/`SEND_FAILED`.
-#[cfg(feature = "esp-idf")]
-const MBEDTLS_ERR_NET_RECV_FAILED: i32 = -0x004C;
-#[cfg(feature = "esp-idf")]
-const MBEDTLS_ERR_NET_SEND_FAILED: i32 = -0x004E;
-#[cfg(feature = "esp-idf")]
-const MBEDTLS_ERR_NET_CONN_RESET: i32 = -0x0050;
-
-/// Classifies an mbedTLS error code into the connection-shaped `ErrorKind` it describes, if any.
-///
-/// Shared by the handshake path (reading the mbedTLS record `esp_tls` keeps) and the
-/// post-handshake read/write path (where `esp_tls_conn_read`/`write` return the mbedTLS code
-/// itself). A peer's `close_notify` and a bare EOF both mean the peer ended the session.
-#[cfg(feature = "esp-idf")]
-fn mbedtls_error_kind(code: i32) -> Option<embedded_io_async::ErrorKind> {
-    match code {
-        MBEDTLS_ERR_NET_CONN_RESET
-        | ::esp_idf_svc::sys::MBEDTLS_ERR_SSL_CONN_EOF
-        | ::esp_idf_svc::sys::MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY => {
-            Some(embedded_io_async::ErrorKind::ConnectionReset)
-        }
-        MBEDTLS_ERR_NET_RECV_FAILED | MBEDTLS_ERR_NET_SEND_FAILED => {
-            Some(embedded_io_async::ErrorKind::ConnectionAborted)
-        }
-        _ => None,
-    }
-}
-
 /// Maps a non-retryable failed handshake step to a `SocketError`, from the error records `esp_tls` kept for it.
 ///
 /// A failed step always reaches Rust as the same opaque `ESP_FAIL` (see
@@ -482,6 +471,11 @@ fn mbedtls_error_kind(code: i32) -> Option<embedded_io_async::ErrorKind> {
 /// adopts an already-connected socket. Certificate rejections are routed earlier, by
 /// `query_verify_failure`. Anything unrecognized falls back to `SocketError::Other` carrying both
 /// recorded codes (#302).
+///
+/// `mbedtls_err` must already be in mbedTLS's negative convention (see
+/// [`mbedtls_code_from_esp_tls_record`]), and is printed that way in the `Other` message.
+/// `ESP_ERR_NO_MEM` in the ESP-type record (e.g. `set_client_config` failing to copy the
+/// hostname) is an allocation failure with no mbedTLS code, so it is checked separately.
 #[cfg(feature = "esp-idf")]
 fn map_esp_tls_connect_error(
     err: &::esp_idf_svc::sys::EspError,
@@ -490,6 +484,9 @@ fn map_esp_tls_connect_error(
 ) -> SocketError {
     if let Some(kind) = mbedtls_err.and_then(mbedtls_error_kind) {
         return super::map_embedded_io_error_kind(kind);
+    }
+    if esp_err == Some(::esp_idf_svc::sys::ESP_ERR_NO_MEM) {
+        return SocketError::ResourceExhausted;
     }
     log::debug!(
         "ESP-IDF TLS handshake failed: {err} (esp_tls {esp_err:?}, mbedtls {mbedtls_err:?})"
@@ -513,6 +510,9 @@ fn map_esp_tls_connect_error(
 #[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
     ca_pem: Option<Vec<u8>>,
+    /// How many DER anchors the caller supplied, i.e. how many `ca_pem` should load. The
+    /// baseline a failed handshake's trust store is compared against (GitHub issue #384).
+    anchor_count: usize,
     client_cert: Option<Vec<u8>>,
     client_key: Option<Vec<u8>>,
 }
@@ -522,6 +522,7 @@ impl EspIdfTlsCerts {
     fn new() -> Self {
         Self {
             ca_pem: None,
+            anchor_count: 0,
             client_cert: None,
             client_key: None,
         }
@@ -551,6 +552,7 @@ impl EspIdfTlsCerts {
 
         Self {
             ca_pem,
+            anchor_count,
             client_cert,
             client_key,
         }
@@ -580,10 +582,14 @@ impl EspIdfTlsCerts {
 /// running at the default level can tell a complete trust store from an unreported one). Same
 /// call, same buffer, same length — `set_ca_cert`
 /// passes `cacert_buf`/`cacert_bytes` straight through, and `X509::pem_until_nul` sets those to
-/// this slice up to and including its single trailing NUL — so the result is the same integer
-/// `set_ca_cert` will get. Reported, not returned as an error: mbedTLS's own policy is that a
-/// partial store is still usable, and failing the connector here would reject a configuration
-/// ESP-IDF accepts.
+/// this slice up to and including its single trailing NUL. Same input is **not** the same
+/// result, though: `mbedtls_x509_crt_parse` allocates as it goes and skips an anchor whose PEM
+/// decode cannot allocate, so a handshake under memory pressure can hold fewer anchors than this
+/// parse reported (observed on an ESP32-P4: partial here, aborted at handshake). This report
+/// therefore covers the anchors themselves, not every handshake; a handshake that ran short is
+/// caught afterwards by [`count_handshake_anchors`] (GitHub issue #384). Reported, not returned
+/// as an error: mbedTLS's own policy is that a partial store is still usable, and failing the
+/// connector here would reject a configuration ESP-IDF accepts.
 ///
 /// `expected` is the number of DER certificates that went into the bundle.
 #[cfg(feature = "esp-idf")]
@@ -652,7 +658,9 @@ static ESP_TLS_LOG_QUIET: std::sync::Mutex<(usize, u32)> = std::sync::Mutex::new
 /// `create_ssl_handle` — the partial-anchor-parse one, which
 /// [`report_anchor_bundle_parse`] re-reports at construction time and at higher severity, and
 /// a "TLS 1.3 is not enabled in config" notice about the peer's offered protocol, not the
-/// trust store.
+/// trust store. The construction-time report cannot see a parse that runs short only at
+/// handshake time; what covers that case is `connect` counting the failed handshake's anchors
+/// and reporting `IncompleteTrustStore` (GitHub issue #384), not this warning.
 ///
 /// Nesting-counted because MQTT and FTPS can handshake concurrently on separate tasks: without
 /// it the inner guard's drop would un-silence the tag while the outer handshake was still
@@ -912,8 +920,9 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspIdfTlsStream
 /// Classifies a post-handshake `EspTls` read/write failure into the closest `embedded_io_async::ErrorKind`.
 ///
 /// `esp_tls_conn_read`/`write` return `esp_mbedtls_read`/`write`'s result (ESP-IDF
-/// `esp_tls_mbedtls.c`), so the code is an mbedTLS one — a positive errno never reaches here,
-/// which is why the old `ECONNRESET`/`ETIMEDOUT` arms were dead and a peer reset read as
+/// `esp_tls_mbedtls.c`), so the code is an mbedTLS one, in mbedTLS's own negative convention
+/// (unlike the handshake path's error record, nothing here is negated). A positive errno never
+/// reaches here, which is why the old `ECONNRESET`/`ETIMEDOUT` arms were dead and a peer reset read as
 /// "non-network I/O error" (#303, a regression of #46). Unrecognized codes fall back to
 /// `Other`, with the real code preserved at `log::debug!`.
 #[cfg(feature = "esp-idf")]
@@ -1079,6 +1088,53 @@ fn query_verify_failure<S: ::esp_idf_svc::tls::Socket>(
     map_mbedtls_verify_flags(flags)
 }
 
+/// Counts the trust anchors a failed handshake actually held.
+///
+/// A failed handshake leaves the SSL context and its config alive in ESP-IDF v5.5.5: on
+/// failure `esp_mbedtls_handshake` only sets `conn_state = ESP_TLS_FAIL`, and
+/// `esp_mbedtls_cleanup` runs on a setup failure or on delete, never here. The config's CA
+/// chain is `tls->cacert`, installed by `set_ca_cert` through `mbedtls_ssl_conf_ca_chain`.
+/// mbedTLS unlinks a certificate that fails to parse (`mbedtls_x509_crt_parse_der_internal`),
+/// and an initialized but unused head node has `version == 0`, so the nodes with a nonzero
+/// version are exactly the anchors loaded.
+///
+/// mbedTLS offers no getter for a config's CA chain, so this reads the `MBEDTLS_PRIVATE`
+/// fields bindgen exposes as `private_conf`/`private_ca_chain`. Read-only, and bindgen
+/// regenerates them from the headers being built against, so a layout change breaks the build
+/// rather than this read; it is still not an mbedTLS API guarantee, so re-check on an
+/// ESP-IDF/mbedTLS bump. A missing context or config counts as zero anchors: in a path where
+/// `query_verify_failure` has already read a verdict off this same context that cannot happen,
+/// and if it did, reporting a short store is the answer that does not over-claim.
+#[cfg(feature = "esp-idf")]
+fn count_handshake_anchors<S: ::esp_idf_svc::tls::Socket>(
+    tls: &::esp_idf_svc::tls::EspTls<S>,
+) -> usize {
+    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
+        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
+    if ssl_ctx.is_null() {
+        return 0;
+    }
+
+    // SAFETY: `ssl_ctx` is the live context owned by `tls`, which outlives this call; `conf` and
+    // each chain node are owned by that context's `esp_tls_t` and are only read here.
+    let conf = unsafe { (*ssl_ctx).private_conf };
+    if conf.is_null() {
+        return 0;
+    }
+    let mut node = unsafe { (*conf).private_ca_chain }.cast_const();
+
+    let mut loaded = 0;
+    while !node.is_null() {
+        // SAFETY: as above; `next` is either null or another node of the same chain.
+        let (version, next) = unsafe { ((*node).version, (*node).next) };
+        if version != 0 {
+            loaded += 1;
+        }
+        node = next.cast_const();
+    }
+    loaded
+}
+
 /// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
 #[cfg(feature = "esp-idf")]
 #[derive(Debug)]
@@ -1163,8 +1219,7 @@ impl EspIdfTcpStream {
             .map_err(to_esp_socket_error)?;
 
         let timer = EspIdfTimer::new().map_err(|e| {
-            log::debug!("failed to create ESP-IDF async timer for TCP connect: {e}");
-            SocketError::Other("failed to create ESP-IDF async timer for TCP connect".into())
+            esp_setup_error(&e, "failed to create ESP-IDF async timer for TCP connect")
         })?;
 
         let mut last_err = None;
@@ -1590,15 +1645,11 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
         // where it belongs, by `EspTlsLogQuiet` around the loop below (GitHub issue #156).
         cfg.timeout_ms = TLS_HANDSHAKE_STEP_BUDGET_MS;
 
-        let timer = EspIdfTimer::new().map_err(|e| {
-            log::debug!("failed to create ESP-IDF async timer for TLS: {e}");
-            SocketError::Other("failed to create ESP-IDF async timer for TLS".into())
-        })?;
+        let timer = EspIdfTimer::new()
+            .map_err(|e| esp_setup_error(&e, "failed to create ESP-IDF async timer for TLS"))?;
 
-        let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream).map_err(|e| {
-            log::debug!("ESP-TLS adopt of raw socket failed: {e}");
-            SocketError::Other("ESP-TLS adopt of raw socket failed".into())
-        })?;
+        let mut tls = ::esp_idf_svc::tls::EspTls::adopt(raw_stream)
+            .map_err(|e| esp_setup_error(&e, "ESP-TLS adopt of raw socket failed"))?;
 
         let start = timer.now_millis();
 
@@ -1650,10 +1701,12 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                         &tls,
                         ::esp_idf_svc::sys::esp_tls_error_type_t_ESP_TLS_ERR_TYPE_ESP,
                     );
+                    // Stored negated by ESP-IDF; see `mbedtls_code_from_esp_tls_record`.
                     let mbedtls_err = take_esp_tls_error(
                         &tls,
                         ::esp_idf_svc::sys::esp_tls_error_type_t_ESP_TLS_ERR_TYPE_MBEDTLS,
-                    );
+                    )
+                    .map(mbedtls_code_from_esp_tls_record);
                     let retryable = is_would_block(e)
                         || esp_err == Some(::esp_idf_svc::sys::ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT);
                     (retryable, esp_err, mbedtls_err)
@@ -1706,7 +1759,11 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     // cannot route it. `None` means mbedTLS has no verdict to give and the
                     // code-based mapping stands.
                     if let Some(failure) = query_verify_failure(&tls) {
-                        return Err(SocketError::CertificateInvalid(failure));
+                        return Err(SocketError::CertificateInvalid(account_for_trust_store(
+                            failure,
+                            count_handshake_anchors(&tls),
+                            self.certs.anchor_count,
+                        )));
                     }
                     return Err(map_esp_tls_connect_error(&e, esp_err, mbedtls_err));
                 }
