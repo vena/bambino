@@ -225,12 +225,15 @@ fn main() {
 
     // `map_esp_tls_connect_error`'s `(esp_tls .., mbedtls ..)` codes are logged at debug; they
     // are what decides whether an `Other` hid an allocation failure.
+    // `bambino::io`, not just `::esp_idf`: `map_std_io_error` logs the raw errno behind an
+    // `Other("ESP-IDF platform BSD network error")` there, and the first run could not say
+    // which errno that was.
     let logger = esp_idf_svc::log::init_from_esp_idf();
     if let Err(e) = logger
         .filter()
-        .set_target_level("bambino::io::esp_idf", log::LevelFilter::Debug)
+        .set_target_level("bambino::io", log::LevelFilter::Debug)
     {
-        log::warn!("could not raise bambino::io::esp_idf to debug: {e:?}");
+        log::warn!("could not raise bambino::io to debug: {e:?}");
     }
 
     log::info!("esp32-hw-probe: issue #385 out-of-memory sweep");

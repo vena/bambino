@@ -24,8 +24,10 @@
 //! - Progress survives a crash in RTC fast RAM (`#[ram(unstable(rtc_fast, persistent))]`)
 //!   rather than NVS. `esp-backtrace`'s `custom-halt` calls `custom_halt` below after printing
 //!   a panic, which resets the board so the sweep resumes.
-//! - The handshake has no timeout of its own, so each attempt is raced against
-//!   `HANDSHAKE_TIMEOUT` to keep a starved Wi-Fi from hanging the sweep.
+//! - Neither the dial nor the handshake has a timeout of its own (embassy-net's `TcpClient`
+//!   defaults to no socket timeout), so each is raced against its own bound; the first run
+//!   hung forever in a dial at 2 KB left, where Wi-Fi was starved. A TIMG1 watchdog, fed once
+//!   per attempt, resets the board if anything else wedges the executor.
 //!
 //! **Reading the result:** pass = `Ok`, `ResourceExhausted`. Fail = `Other`/`ConnectionAborted`
 //! at a level where memory was the cause (read the `mbedtls-rs ... failed: MbedtlsError(..)`
@@ -63,7 +65,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::interrupt::software::SoftwareInterruptControl;
 use esp_hal::ram;
 use esp_hal::rng::{Rng, Trng, TrngSource};
-use esp_hal::timer::timg::TimerGroup;
+use esp_hal::timer::timg::{MwdtStage, TimerGroup};
 
 use esp_radio::wifi::sta::StationConfig;
 use esp_radio::wifi::{Config as WifiConfig, ControllerConfig, Interface, WifiController};
@@ -100,7 +102,11 @@ const COARSE_STEP: u32 = 2 * 1024;
 const FINE_STEP: u32 = 256;
 const BALLAST_CHUNK: usize = 4 * 1024;
 const BALLAST_MIN: usize = 16;
+const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Longest one attempt can legitimately take (dial + handshake bounds, network recovery wait,
+/// spacing) with margin. Past this the executor is wedged and only a reset helps.
+const WATCHDOG_SECS: u64 = 120;
 /// How long to wait for the network to come back after an attempt starved it, before
 /// resetting the board to resume.
 const NETWORK_RECOVERY: Duration = Duration::from_secs(30);
@@ -277,8 +283,8 @@ fn load_state() -> Option<u32> {
     }
     if s[3] != 0 {
         log::warn!(
-            "resuming after a reset during level {}; recording it as Crashed (its panic, if \
-             any, is printed above the reset)",
+            "resuming after a reset during level {}; recording it as Crashed (a panic printed \
+             above the reset explains it; no panic means the watchdog fired on a hang)",
             s[3]
         );
         push_record(Record {
@@ -444,7 +450,17 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut ballast: Vec<(*mut u8, Layout)> = Vec::with_capacity(256);
 
+    // Armed only now, after Wi-Fi and DHCP: bring-up can legitimately take longer than one
+    // attempt. Its first stage resets the whole system (`Wdt::set_wdt_enabled`).
+    let mut wdt = TimerGroup::new(peripherals.TIMG1).wdt;
+    wdt.set_timeout(
+        MwdtStage::Stage0,
+        esp_hal::time::Duration::from_secs(WATCHDOG_SECS),
+    );
+    wdt.enable();
+
     loop {
+        wdt.feed();
         let results = records();
         let Some(level) = next_level(&results, start) else {
             break;
@@ -465,12 +481,21 @@ async fn main(spawner: Spawner) -> ! {
         fill_to(level as usize, &mut ballast);
         let free_after = esp_alloc::HEAP.free() as u32;
 
-        let outcome = match factory.dial(PRINTER_IP, MQTT_PORT).await {
-            Err(e) => {
+        let outcome = match embassy_time::with_timeout(
+            DIAL_TIMEOUT,
+            factory.dial(PRINTER_IP, MQTT_PORT),
+        )
+        .await
+        {
+            Err(_) => {
+                log::info!("    dial did not finish in {DIAL_TIMEOUT:?}");
+                Outcome::DialFailed
+            }
+            Ok(Err(e)) => {
                 log::info!("    dial failed: {e:?}");
                 Outcome::DialFailed
             }
-            Ok(raw) => {
+            Ok(Ok(raw)) => {
                 match embassy_time::with_timeout(
                     HANDSHAKE_TIMEOUT,
                     connector.connect(PRINTER_SERIAL, raw),
@@ -511,6 +536,7 @@ async fn main(spawner: Spawner) -> ! {
         Timer::after(BETWEEN_ATTEMPTS).await;
     }
 
+    wdt.disable();
     state()[2] = 1;
     print_summary();
 
@@ -544,7 +570,7 @@ fn print_summary() {
     log::info!("  {:>6}  {:>6}  result", "left", "free");
     for r in &sorted {
         let (tag, what) = if r.stage == STAGE_CRASHED {
-            ("note ", "Crashed (see the panic printed before that reset)")
+            ("note ", "Crashed (panic above that reset, or watchdog if none)")
         } else if Outcome::verdict(r.outcome) == Some(true) {
             ("pass ", Outcome::name(r.outcome))
         } else {
