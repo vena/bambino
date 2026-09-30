@@ -30,6 +30,22 @@ const OPTIONAL_KEYS: [&str; 0] = [];
 
 fn main() {
     load_dotenv();
+    emit_build_id();
+}
+
+/// Emits `PROBE_BUILD_ID`, which changes whenever `src/` does.
+///
+/// A probe that keeps state across resets (the #385 sweep keeps it in RTC RAM) compares this
+/// to tell "resume after a crash" from "a new build was flashed". The value is the build time,
+/// and the build script only reruns when `src/` or `.env` changes, so an unchanged rebuild
+/// keeps its id.
+fn emit_build_id() {
+    println!("cargo:rerun-if-changed=src");
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    println!("cargo:rustc-env=PROBE_BUILD_ID={secs}");
 }
 
 /// Parses `.env` (`KEY=VALUE` per line) and forwards each key to the compiler.

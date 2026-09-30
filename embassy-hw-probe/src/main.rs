@@ -1,54 +1,62 @@
-//! First-ever execution of bambino's **embassy** backend on real hardware (GitHub issue
-//! #292).
+//! Current investigation: GitHub issue #385 on the **embassy** backend -- does a real
+//! out-of-memory failure reach the caller as `SocketError::ResourceExhausted`?
 //!
-//! Everything in `src/io/embassy.rs` has until now been verified only by mock tests and by
-//! `tests/embassy_tls_version_test.rs`, which compiles the real `EmbassyTlsConnector` on the
-//! host against a loopback rustls server. That proves the `mbedtls-rs` wiring and the
-//! `negotiated_version` mapping and nothing about the embedded stack: no esp-hal, no
-//! esp-radio, no embassy-net, no printer. This probe is the first thing that runs the
-//! backend where it is meant to run.
+//! `EmbassyTlsConnector` now maps an mbedTLS allocation failure from `Session::new`,
+//! `set_server_name`, the handshake and `close` to `ResourceExhausted`, and returns an
+//! `EmbassyTlsStream` wrapper so reads and writes keep the mbedTLS code too. The mapping is
+//! host-tested; this probe checks a real shortage takes that path on the chip.
 //!
-//! **Read the stage lines, not just the last one.** Most of the work here is stack bring-up
-//! that happens before any bambino code executes, so a failure's stage number is the first
-//! thing that tells you whether the crate under test was even reached. Stages 0-2 are
-//! esp-hal/esp-radio/embassy-net; stage 3 onward is bambino.
+//! Same sweep as `esp32-hw-probe`'s #385 probe: hold ballast on the esp-alloc heap until N
+//! bytes remain free, dial the printer and handshake, release the ballast, step N down. The
+//! heap is shared: mbedTLS's `calloc` resolves to esp-alloc's (`esp-alloc` `malloc.rs`), as do
+//! esp-radio's allocations. Coarse `COARSE_STEP` levels first, then `FINE_STEP` levels between
+//! any two coarse neighbours whose outcomes differ.
 //!
-//! Stages:
+//! **Differences from the ESP-IDF probe, all forced by the platform:**
 //!
-//! 0. Wi-Fi associates and embassy-net gets a DHCP lease.
-//! 1. `EmbassyRawStreamFactory` dials the printer's MQTT port — plain TCP reachability,
-//!    before any TLS.
-//! 2. `EmbassyTlsConnector` completes a real TLS handshake against the printer and
-//!    `negotiated_version` reports what was negotiated (expect `Tls12` on a P1/X1).
-//! 3. `PrinterClient::connect_mqtt` + one decoded telemetry event.
-//! 4. `FtpsClient::connect` + one `list_directory`.
-//! 5. `EmbassyTimer` is monotonic and `TimerProvider::sleep` paces correctly.
+//! - The dial cannot run out of memory: `EmbassyRawStreamFactory` hands out statically
+//!   allocated `TcpClient` buffers. Every memory failure is in the TLS layer.
+//! - No largest-free-block figure: esp-alloc 0.10 reports only total free.
+//! - A failed *Rust* allocation (`Vec`, `CString`, ...) is not an error but a panic. That
+//!   includes bambino's own `CString::new(host)` in `EmbassyTlsConnector::connect`, so a
+//!   `Crashed` row whose panic message just above reads `memory allocation of N bytes failed`
+//!   is a real finding: a path where bambino aborts instead of returning `ResourceExhausted`.
+//! - Progress survives a crash in RTC fast RAM (`#[ram(unstable(rtc_fast, persistent))]`)
+//!   rather than NVS. `esp-backtrace`'s `custom-halt` calls `custom_halt` below after printing
+//!   a panic, which resets the board so the sweep resumes.
+//! - The handshake has no timeout of its own, so each attempt is raced against
+//!   `HANDSHAKE_TIMEOUT` to keep a starved Wi-Fi from hanging the sweep.
 //!
-//! Heap headroom is logged between stages. `mbedtls-rs` allocates 16 KiB in + 16 KiB out
-//! per `Session` by default, and three sessions are live at once by stage 4 — running out
-//! of heap there is the single most likely hardware-only failure, and the numbers this
-//! prints are what should go back into the `mbedtls-rs` dependency comment in the root
-//! `Cargo.toml`.
+//! **Reading the result:** pass = `Ok`, `ResourceExhausted`. Fail = `Other`/`ConnectionAborted`
+//! at a level where memory was the cause (read the `mbedtls-rs ... failed: MbedtlsError(..)`
+//! debug line just above: an `*_ALLOC_FAILED` code there is a miss). Noted = `TimedOut`,
+//! `ConnectionReset`, `Crashed` (read its panic message).
 //!
-//! **Do not self-verify from this file.** Per `.claude/rules/wire-framing-hardware-
-//! verification.md`, whoever runs the probe reports the transcript; an agent editing this
-//! file cannot claim any of the above was confirmed.
+//! A new build (different `PROBE_BUILD_ID`, set by `build.rs`) or a finished sweep starts
+//! fresh. `.cargo/config.toml` raises `bambino::io::embassy` to debug, which is where the raw
+//! mbedTLS codes are logged; everything else stays at info.
+//!
+//! ```sh
+//! cd embassy-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee 385-test1.log
+//! ```
+//!
+//! Prior investigations (#292's first-run bring-up probe and its follow-ups) are recoverable
+//! via `git log -- embassy-hw-probe/src/main.rs`.
 
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-use bambino::client::PrinterClient;
-use bambino::ftps::FtpsClient;
-use bambino::ftps::parser::CurrentDateTime;
-use bambino::identity::PrinterIdentity;
-use bambino::io::embassy::{EmbassyRawStreamFactory, EmbassyTimer, EmbassyTlsConnector};
-use bambino::io::{RawStreamFactory, TimerProvider, TlsConnector};
+use alloc::vec::Vec;
+use core::alloc::Layout;
+
+use bambino::io::embassy::{EmbassyRawStreamFactory, EmbassyTlsConnector};
+use bambino::io::{RawStreamFactory, SocketError, TlsConnector};
 
 use embassy_executor::Spawner;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
-use embassy_net::{Runner, StackResources};
+use embassy_net::{Runner, Stack, StackResources};
 use embassy_time::{Duration, Timer};
 
 use esp_hal::clock::CpuClock;
@@ -77,32 +85,44 @@ const WIFI_SSID: &str = env!("PROBE_WIFI_SSID");
 const WIFI_PASS: &str = env!("PROBE_WIFI_PASS");
 const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
-const ACCESS_CODE: &str = env!("PROBE_ACCESS_CODE");
+/// Changes on every rebuild of `src/` (see `build.rs`); a stored sweep from another build is
+/// discarded rather than resumed.
+const BUILD_ID: &str = env!("PROBE_BUILD_ID");
 
-/// Implicit-FTPS control port and MQTT port, as `src/ftps/protocol.rs` and
-/// `src/mqtt/protocol.rs` use them. Spelled out here rather than imported because both are
-/// `pub(crate)` in the library.
 const MQTT_PORT: u16 = 8883;
-const FTPS_PORT: u16 = 990;
-
-/// TCP buffer sizes for the pools below. 2048 each matches the `EmbassyRawStreamFactory`
-/// defaults documented in the README's Embassy section — raising them is the first thing to
-/// try if a TLS record stalls, and the first thing to lower if the heap runs out.
 const TX_SZ: usize = 2048;
 const RX_SZ: usize = 2048;
 
-/// `list_directory`'s year-rollover reference. This must be the **printer's** clock, not
-/// the host's, and this probe has no way to learn it (that needs `MDTM`, which
-/// `bambino-cli files clock-check` uses). The listing is still a valid stage-4 result — a
-/// wrong reference only mis-stamps the *year* of entries whose `LIST` line omitted it, and
-/// `FtpFile::year_is_inferred` marks exactly those. Don't read years off this run.
-const LIST_CLOCK_REFERENCE: CurrentDateTime = CurrentDateTime {
-    year: 2026,
-    month: 1,
-    day: 1,
-    hour: 0,
-    minute: 0,
-};
+/// Highest level swept. One live `Session` peaked ~55 KB above baseline on the first hardware
+/// run (`src/io/CLAUDE.md`), so this leaves room for a clean success at the top.
+const START_LEFT: u32 = 80 * 1024;
+const COARSE_STEP: u32 = 2 * 1024;
+const FINE_STEP: u32 = 256;
+const BALLAST_CHUNK: usize = 4 * 1024;
+const BALLAST_MIN: usize = 16;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long to wait for the network to come back after an attempt starved it, before
+/// resetting the board to resume.
+const NETWORK_RECOVERY: Duration = Duration::from_secs(30);
+const BETWEEN_ATTEMPTS: Duration = Duration::from_secs(3);
+
+/// Sweep state in RTC fast RAM, which survives a software reset. Layout, in `u32` words:
+/// `[MAGIC, build hash, done, pending level (0 = none), start, count, records...]`, each
+/// record `[bytes left, free after fill, stage << 8 | outcome]`.
+const MAGIC: u32 = 0x3853_5745; // "85SW"
+const HEADER_WORDS: usize = 6;
+const RECORD_WORDS: usize = 3;
+const MAX_RECORDS: usize = 150;
+const STATE_WORDS: usize = HEADER_WORDS + MAX_RECORDS * RECORD_WORDS;
+
+#[ram(unstable(rtc_fast, persistent))]
+static mut SWEEP: [u32; STATE_WORDS] = [0; STATE_WORDS];
+
+fn state() -> &'static mut [u32; STATE_WORDS] {
+    // SAFETY: single-threaded use from `main` only; the executor never runs two of these at
+    // once and no interrupt handler touches it.
+    unsafe { &mut *(&raw mut SWEEP) }
+}
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -111,36 +131,17 @@ macro_rules! mk_static {
     }};
 }
 
-/// Logs a stage banner plus the heap state at that point.
-///
-/// **Sample at both ends of a stage, not just the start.** The first hardware run logged only
-/// at stage entry and so never observed the interesting figure: every TLS session was freed
-/// before the next banner, so all six samples read ~50 KB and the three-sessions-live peak
-/// inside stage 4 went unmeasured. `esp-alloc`'s `internal-heap-stats` feature is enabled for
-/// the same reason — it makes `HeapStats` carry a real allocator-tracked `Max usage`
-/// high-water mark, which no amount of sampling from here can reconstruct after the fact.
-macro_rules! stage {
-    ($n:literal, $($arg:tt)*) => {{
-        log::info!("=== stage {}: {} ===", $n, format_args!($($arg)*));
-        log::info!("heap at stage {} entry: {}", $n, esp_alloc::HEAP.stats());
-    }};
-}
-
-/// Closes a stage, logging the heap again so the peak can be attributed to a stage.
-macro_rules! stage_end {
-    ($n:literal) => {{
-        log::info!("heap at stage {} exit: {}", $n, esp_alloc::HEAP.stats());
-    }};
+/// Called by `esp-backtrace` (feature `custom-halt`) after it has printed a panic: resets the
+/// board so a sweep that crashed resumes from its stored state instead of halting.
+#[unsafe(no_mangle)]
+fn custom_halt() -> ! {
+    esp_hal::system::software_reset()
 }
 
 /// The chip TRNG, presented as the `CryptoRng` that `mbedtls_rs::Tls::new` demands.
 ///
-/// esp-hal's `Trng` already implements rand_core 0.10's `TryRng`, so this wrapper exists for
-/// one reason: to assert `TryCryptoRng`, the marker that promises the stream is suitable for
-/// key material. That promise is true here and is exactly what
-/// `tests/embassy_tls_version_test.rs`'s `TestRng` cannot make — its SplitMix64 stand-in is
-/// deterministic and is documented as never to be lifted into anything real. This is the
-/// real thing: entropy from the hardware source, live only while the `TrngSource` is.
+/// esp-hal's `Trng` already implements rand_core 0.10's `TryRng`, so this wrapper exists only
+/// to assert `TryCryptoRng`, the marker that promises the stream is fit for key material.
 struct HwRng(Trng);
 
 impl rand_core::TryRng for HwRng {
@@ -164,11 +165,206 @@ impl rand_core::TryRng for HwRng {
 // radio active, not from a PRNG seeded at boot.
 impl rand_core::TryCryptoRng for HwRng {}
 
-/// Fresh identity per stage. `PrinterIdentity` is `Clone`, but each stage constructing its
-/// own keeps the credential in one place and makes a stage individually deletable when the
-/// next investigation edits this file.
-fn identity() -> PrinterIdentity {
-    PrinterIdentity::new(PRINTER_IP, PRINTER_SERIAL, ACCESS_CODE)
+const STAGE_HANDSHAKE: u32 = 1;
+const STAGE_CRASHED: u32 = 2;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u32)]
+enum Outcome {
+    Ok = 0,
+    ResourceExhausted = 1,
+    TimedOut = 2,
+    ConnectionReset = 3,
+    ConnectionAborted = 4,
+    Other = 5,
+    Certificate = 6,
+    OtherSocket = 7,
+    DialFailed = 8,
+}
+
+impl Outcome {
+    fn of(err: &SocketError) -> Self {
+        match err {
+            SocketError::ResourceExhausted => Outcome::ResourceExhausted,
+            SocketError::TimedOut => Outcome::TimedOut,
+            SocketError::ConnectionReset => Outcome::ConnectionReset,
+            SocketError::ConnectionAborted => Outcome::ConnectionAborted,
+            SocketError::Other(_) => Outcome::Other,
+            SocketError::CertificateInvalid(_) => Outcome::Certificate,
+            _ => Outcome::OtherSocket,
+        }
+    }
+
+    fn name(code: u32) -> &'static str {
+        match code {
+            0 => "Ok",
+            1 => "ResourceExhausted",
+            2 => "TimedOut",
+            3 => "ConnectionReset",
+            4 => "ConnectionAborted",
+            5 => "Other",
+            6 => "CertificateInvalid",
+            7 => "other SocketError",
+            8 => "dial failed",
+            _ => "unknown",
+        }
+    }
+
+    /// `Some(true)` pass, `None` noted only. Nothing here is an automatic fail: `Other` and
+    /// `ConnectionAborted` are only misses if their debug line shows an allocation code.
+    fn verdict(code: u32) -> Option<bool> {
+        match code {
+            0 | 1 => Some(true),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Record {
+    left: u32,
+    free: u32,
+    stage: u32,
+    outcome: u32,
+}
+
+fn records() -> Vec<Record> {
+    let s = state();
+    let count = (s[5] as usize).min(MAX_RECORDS);
+    (0..count)
+        .map(|i| {
+            let r = &s[HEADER_WORDS + i * RECORD_WORDS..][..RECORD_WORDS];
+            Record {
+                left: r[0],
+                free: r[1],
+                stage: r[2] >> 8,
+                outcome: r[2] & 0xFF,
+            }
+        })
+        .collect()
+}
+
+fn push_record(r: Record) {
+    let s = state();
+    let count = s[5] as usize;
+    if count >= MAX_RECORDS {
+        return;
+    }
+    let base = HEADER_WORDS + count * RECORD_WORDS;
+    s[base] = r.left;
+    s[base + 1] = r.free;
+    s[base + 2] = (r.stage << 8) | (r.outcome & 0xFF);
+    s[5] = count as u32 + 1;
+}
+
+fn build_hash() -> u32 {
+    // FNV-1a; only needs to differ between builds.
+    BUILD_ID
+        .bytes()
+        .fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+}
+
+/// Resumes a sweep in progress, or starts fresh for a new build or after a finished one.
+/// Returns the sweep's top level, `None` when it must be chosen fresh.
+fn load_state() -> Option<u32> {
+    let s = state();
+    if s[0] != MAGIC || s[1] != build_hash() || s[2] == 1 {
+        log::info!("starting a fresh sweep");
+        s.fill(0);
+        s[0] = MAGIC;
+        s[1] = build_hash();
+        return None;
+    }
+    if s[3] != 0 {
+        log::warn!(
+            "resuming after a reset during level {}; recording it as Crashed (its panic, if \
+             any, is printed above the reset)",
+            s[3]
+        );
+        push_record(Record {
+            left: s[3],
+            free: 0,
+            stage: STAGE_CRASHED,
+            outcome: 0,
+        });
+        s[3] = 0;
+    } else {
+        log::info!("resuming a sweep with {} level(s) done", s[5]);
+    }
+    Some(s[4])
+}
+
+/// The next level to try, or `None` when the sweep is complete.
+fn next_level(results: &[Record], start: u32) -> Option<u32> {
+    let done = |level: u32| results.iter().any(|r| r.left == level);
+
+    let mut level = start;
+    loop {
+        if !done(level) {
+            return Some(level);
+        }
+        if level < COARSE_STEP {
+            break;
+        }
+        level -= COARSE_STEP;
+    }
+
+    let mut coarse: Vec<&Record> = results
+        .iter()
+        .filter(|r| (start - r.left.min(start)) % COARSE_STEP == 0)
+        .collect();
+    coarse.sort_by(|a, b| b.left.cmp(&a.left));
+    for pair in coarse.windows(2) {
+        let (hi, lo) = (pair[0], pair[1]);
+        if (hi.stage, hi.outcome) == (lo.stage, lo.outcome) {
+            continue;
+        }
+        let mut level = hi.left - FINE_STEP;
+        while level > lo.left {
+            if !done(level) {
+                return Some(level);
+            }
+            level -= FINE_STEP;
+        }
+    }
+    None
+}
+
+/// Allocates ballast until at most `left` bytes of heap are free. Uses the raw allocator so a
+/// failed allocation returns null instead of panicking.
+fn fill_to(left: usize, ballast: &mut Vec<(*mut u8, Layout)>) {
+    let mut chunk = BALLAST_CHUNK;
+    loop {
+        let free = esp_alloc::HEAP.free();
+        if free <= left || ballast.len() == ballast.capacity() {
+            return;
+        }
+        let size = (free - left).min(chunk);
+        if size < BALLAST_MIN {
+            return;
+        }
+        let Ok(layout) = Layout::from_size_align(size, 4) else {
+            return;
+        };
+        // SAFETY: nonzero size; the pointer is kept with its layout for `release`.
+        let p = unsafe { alloc::alloc::alloc(layout) };
+        if p.is_null() {
+            // Fragmented: try smaller pieces before giving up.
+            chunk /= 2;
+            if chunk < BALLAST_MIN {
+                return;
+            }
+            continue;
+        }
+        ballast.push((p, layout));
+    }
+}
+
+fn release(ballast: &mut Vec<(*mut u8, Layout)>) {
+    for (p, layout) in ballast.drain(..) {
+        // SAFETY: each pointer came from `alloc` with this layout and is freed once.
+        unsafe { alloc::alloc::dealloc(p, layout) };
+    }
 }
 
 #[esp_rtos::main]
@@ -177,11 +373,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
-    // Two heaps: the reclaimed ROM region first, then DRAM. MbedTLS is the reason the DRAM
-    // figure is this large — 32 KiB of record buffers per live `Session`, three of them by
-    // stage 4, on top of embassy-net's own buffers. If stage 4 dies with an allocation
-    // failure, this is the number to raise (or shrink the sessions via `mbedtls-rs`'s
-    // `ssl-in-content-len-<N>`/`ssl-out-content-len-<N>` features).
+    // Same two heaps as the bring-up probe: the reclaimed ROM region, then DRAM.
     esp_alloc::heap_allocator!(#[ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 110 * 1024);
 
@@ -189,7 +381,8 @@ async fn main(spawner: Spawner) -> ! {
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
 
-    stage!(0, "Wi-Fi association and DHCP");
+    log::info!("embassy-hw-probe: issue #385 out-of-memory sweep");
+    let stored_start = load_state();
 
     let station_config = WifiConfig::Station(
         StationConfig::default()
@@ -202,8 +395,7 @@ async fn main(spawner: Spawner) -> ! {
     )
     .expect("esp-radio wifi init");
 
-    // The stack seed only needs to be unpredictable, not cryptographic — it salts TCP ISNs
-    // and the DHCP xid. The TRNG below is built afterwards and reserved for TLS.
+    // The stack seed only needs to be unpredictable, not cryptographic.
     let seed_rng = Rng::new();
     let seed = (seed_rng.random() as u64) << 32 | seed_rng.random() as u64;
 
@@ -219,209 +411,159 @@ async fn main(spawner: Spawner) -> ! {
 
     stack.wait_config_up().await;
     match stack.config_v4() {
-        Some(config) => log::info!("stage 0 OK: DHCP lease {}", config.address),
-        // `wait_config_up` returning without a v4 config would mean the stack came up on a
-        // protocol this build doesn't enable; treat it as a hard stop rather than proceeding
-        // into stages that will fail confusingly.
-        None => panic!("stage 0 FAILED: stack up but no IPv4 config"),
+        Some(config) => log::info!("DHCP lease {}", config.address),
+        None => panic!("stack up but no IPv4 config"),
     }
 
-    // TRNG from here on. `TrngSource` owns ADC1 for as long as it lives, and `Trng::try_new`
-    // fails while no source is active — so this must outlive every TLS session, which is the
-    // whole program. Leaking it into a `StaticCell` is how that lifetime is stated.
+    // `TrngSource` owns ADC1 for as long as it lives; it must outlive every TLS session.
     let _trng_source: &'static mut TrngSource<'static> = mk_static!(
         TrngSource<'static>,
         TrngSource::new(peripherals.RNG, peripherals.ADC1)
     );
     let rng: &'static mut HwRng = mk_static!(HwRng, HwRng(Trng::try_new().expect("TRNG source")));
-
-    // The one MbedTLS instance permitted per process. `src/io/CLAUDE.md` records that a
-    // second `Tls::new` returns `AlreadyCreated`, which is why `EmbassyTlsConnector` holds a
-    // `TlsReference` rather than a `Tls`; the three connectors below share this one, which
-    // is precisely the case that design exists for.
     let tls: &'static mut mbedtls_rs::Tls<'static> = mk_static!(
         mbedtls_rs::Tls<'static>,
         mbedtls_rs::Tls::new(rng).expect("only one Tls instance may exist program-wide")
     );
-
-    // One pool per concurrent connection. MQTT holds its socket open for the life of the
-    // client, so it cannot share a pool with FTPS; FTPS needs two slots of its own because
-    // its control channel stays open while a data channel is checked out for a transfer.
-    let mqtt_pool: &'static TcpClient<'static, 1, TX_SZ, RX_SZ> = mk_static!(
+    let pool: &'static TcpClient<'static, 1, TX_SZ, RX_SZ> = mk_static!(
         TcpClient<'static, 1, TX_SZ, RX_SZ>,
         TcpClient::new(
             stack,
             mk_static!(TcpClientState<1, TX_SZ, RX_SZ>, TcpClientState::new())
         )
     );
-    let ftps_pool: &'static TcpClient<'static, 2, TX_SZ, RX_SZ> = mk_static!(
-        TcpClient<'static, 2, TX_SZ, RX_SZ>,
-        TcpClient::new(
-            stack,
-            mk_static!(TcpClientState<2, TX_SZ, RX_SZ>, TcpClientState::new())
-        )
-    );
 
-    stage!(1, "raw TCP dial to {PRINTER_IP}:{MQTT_PORT}");
-    {
-        let factory = EmbassyRawStreamFactory::new(mqtt_pool);
-        match factory.dial(PRINTER_IP, MQTT_PORT).await {
-            Ok(stream) => {
-                log::info!("stage 1 OK: TCP connected");
-                // Returns its pool slot on drop — stage 2 needs it back.
-                drop(stream);
-            }
-            Err(e) => panic!("stage 1 FAILED: dial: {e:?}"),
+    let free = esp_alloc::HEAP.free() as u32;
+    log::info!("baseline: {free} bytes free; {}", esp_alloc::HEAP.stats());
+    let start = stored_start.unwrap_or_else(|| {
+        let start = START_LEFT.min(free.saturating_sub(4 * 1024));
+        state()[4] = start;
+        start
+    });
+    log::info!("sweeping down from {start} bytes left");
+
+    let mut ballast: Vec<(*mut u8, Layout)> = Vec::with_capacity(256);
+
+    loop {
+        let results = records();
+        let Some(level) = next_level(&results, start) else {
+            break;
+        };
+        drop(results);
+        if state()[5] as usize >= MAX_RECORDS {
+            log::warn!("record limit reached; stopping early");
+            break;
         }
-        stage_end!(1);
-    }
 
-    stage!(2, "TLS handshake against {PRINTER_IP}:{MQTT_PORT}");
-    {
-        let factory = EmbassyRawStreamFactory::new(mqtt_pool);
+        wait_for_network(stack).await;
+        state()[3] = level;
+
+        // Built before the ballast so its own allocation doesn't count against `level`.
         let connector = EmbassyTlsConnector::new(tls.reference());
-        let raw = factory
-            .dial(PRINTER_IP, MQTT_PORT)
-            .await
-            .expect("stage 2 FAILED: dial");
+        let factory = EmbassyRawStreamFactory::new(pool);
 
-        // Verification stays off, matching the crate's unsafe-by-default convention: printer
-        // certs chain to a private BBL CA, and this probe deliberately does not vendor
-        // anchors. `peer_chain_der` is `None` on this backend by design (`mbedtls-rs`
-        // exposes no peer-cert accessor), so a TOFU capture is not available here — that is
-        // recorded behaviour, not a gap for this probe to close.
-        //
-        // No timeout race: `EmbassyTlsConnector::connect` has no bounded-connect loop of its
-        // own, so a hang here is the documented behaviour of a handshake that never
-        // completes, and seeing it hang is more informative on a first run than a timeout
-        // that hides where it stopped.
-        match connector.connect(PRINTER_SERIAL, raw).await {
-            Ok(mut session) => {
-                log::info!(
-                    "stage 2 OK: handshake complete, negotiated_version = {:?}",
-                    connector.negotiated_version(&session)
-                );
-                // Exercises `TlsConnector::close` directly, which no other stage does —
-                // stages 3 and 4 reach it through the crate's own `disconnect_*` paths.
-                // A "Session dropped without being closed properly" warning anywhere in
-                // this run now means a teardown path missed its close (GitHub issue #293),
-                // not an expected gap in the API.
-                if let Err(e) = connector.close(&mut session).await {
-                    log::warn!("stage 2: TLS close failed: {e:?}");
-                }
-                drop(session);
+        fill_to(level as usize, &mut ballast);
+        let free_after = esp_alloc::HEAP.free() as u32;
+
+        let outcome = match factory.dial(PRINTER_IP, MQTT_PORT).await {
+            Err(e) => {
+                log::info!("    dial failed: {e:?}");
+                Outcome::DialFailed
             }
-            Err(e) => panic!("stage 2 FAILED: handshake: {e:?}"),
-        }
-        stage_end!(2);
-    }
-
-    stage!(3, "MQTT connect and one telemetry event");
-    {
-        let mut printer = PrinterClient::new(
-            EmbassyTlsConnector::new(tls.reference()),
-            EmbassyRawStreamFactory::<1, TX_SZ, RX_SZ>::new(mqtt_pool),
-            identity(),
-        )
-        .with_timer(EmbassyTimer)
-        .with_connect_timeout(15);
-
-        match printer.connect_mqtt().await {
-            Ok(()) => log::info!("stage 3: MQTT connected"),
-            Err(e) => panic!("stage 3 FAILED: connect_mqtt: {e:?}"),
-        }
-
-        // Printers publish unprompted, but not necessarily soon; `pushall` makes the wait
-        // bounded by the printer's response rather than by its reporting interval.
-        if let Err(e) = printer.request_pushall().await {
-            log::warn!(
-                "stage 3: request_pushall failed ({e:?}); waiting for an unsolicited report"
-            );
-        }
-
-        match embassy_time::with_timeout(Duration::from_secs(30), printer.poll_telemetry()).await {
-            Ok(Ok(event)) => log::info!("stage 3 OK: telemetry event decoded: {event:?}"),
-            Ok(Err(e)) => panic!("stage 3 FAILED: poll_telemetry: {e:?}"),
-            Err(_) => panic!("stage 3 FAILED: no telemetry within 30s"),
-        }
-        // Graceful teardown rather than a bare drop. Two reasons: it exercises
-        // `disconnect_mqtt` on hardware, which nothing else here does, and it keeps the
-        // "Session dropped without being closed properly" warning meaningful — the first
-        // hardware run emitted it after every stage, so it said nothing about which teardown
-        // was actually impolite.
-        if let Err(e) = printer.disconnect_mqtt().await {
-            log::warn!("stage 3: disconnect_mqtt failed: {e:?}");
-        }
-        stage_end!(3);
-    }
-
-    stage!(4, "FTPS connect and list_directory");
-    {
-        let control = EmbassyRawStreamFactory::<2, TX_SZ, RX_SZ>::new(ftps_pool)
-            .dial(PRINTER_IP, FTPS_PORT)
-            .await
-            .expect("stage 4 FAILED: control dial");
-
-        let mut ftps = match FtpsClient::connect(
-            control,
-            EmbassyTlsConnector::new(tls.reference()),
-            EmbassyRawStreamFactory::<2, TX_SZ, RX_SZ>::new(ftps_pool),
-            identity(),
-            EmbassyTimer,
-            // TLS-1.2 enforcement stays on. On a P2S/X2D this is the check that
-            // `negotiated_version` had to be fixed for (#289); letting it run is the point.
-            false,
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(e) => panic!("stage 4 FAILED: FtpsClient::connect: {e:?}"),
+            Ok(raw) => {
+                match embassy_time::with_timeout(
+                    HANDSHAKE_TIMEOUT,
+                    connector.connect(PRINTER_SERIAL, raw),
+                )
+                .await
+                {
+                    Err(_) => {
+                        log::info!("    handshake did not finish in {HANDSHAKE_TIMEOUT:?}");
+                        Outcome::TimedOut
+                    }
+                    Ok(Ok(mut stream)) => {
+                        if let Err(e) = connector.close(&mut stream).await {
+                            log::info!("    close failed: {e:?}");
+                        }
+                        Outcome::Ok
+                    }
+                    Ok(Err(e)) => {
+                        log::info!("    handshake failed: {e:?}");
+                        Outcome::of(&e)
+                    }
+                }
+            }
         };
 
-        match ftps.list_directory("/", LIST_CLOCK_REFERENCE).await {
-            Ok(files) => {
-                log::info!("stage 4 OK: {} entries in /", files.len());
-                for file in files.iter().take(5) {
-                    log::info!("  {file:?}");
-                }
-            }
-            Err(e) => panic!("stage 4 FAILED: list_directory: {e:?}"),
-        }
-        // Closes the control channel and both TLS sessions the FTPS client owns; see the
-        // note in stage 3 on why this is not a bare drop.
-        ftps.disconnect().await;
-        stage_end!(4);
-    }
-
-    stage!(5, "EmbassyTimer monotonicity and pacing");
-    {
-        let timer = EmbassyTimer;
-        let before = timer.now_millis();
-        timer
-            .sleep(core::time::Duration::from_millis(500))
-            .await
-            .expect("stage 5 FAILED: sleep");
-        let after = timer.now_millis();
-        let elapsed = after.saturating_sub(before);
-
-        // A 500ms sleep that returns in 0ms would mean `now_millis` is not advancing, which
-        // silently disables every timeout in the crate rather than failing loudly — the
-        // reason this stage exists at all.
-        assert!(
-            after > before,
-            "stage 5 FAILED: now_millis did not advance ({before} -> {after})"
+        release(&mut ballast);
+        push_record(Record {
+            left: level,
+            free: free_after,
+            stage: STAGE_HANDSHAKE,
+            outcome: outcome as u32,
+        });
+        state()[3] = 0;
+        log::info!(
+            "  left {level:>6}  free {free_after:>6}  {}",
+            Outcome::name(outcome as u32)
         );
-        log::info!("stage 5 OK: 500ms sleep measured {elapsed}ms");
-        stage_end!(5);
+
+        Timer::after(BETWEEN_ATTEMPTS).await;
     }
 
-    log::info!("=== all stages complete ===");
-    log::info!("final heap: {}", esp_alloc::HEAP.stats());
+    state()[2] = 1;
+    print_summary();
 
-    // Standard bare-metal convention: `main` never returns. Ctrl-C detaches the monitor.
     loop {
         Timer::after(Duration::from_secs(60)).await;
     }
+}
+
+/// Waits for Wi-Fi and DHCP after an attempt may have starved them; resets the board if they
+/// don't come back, which the stored state turns into a resumed sweep.
+async fn wait_for_network(stack: Stack<'static>) {
+    if stack.is_config_up() {
+        return;
+    }
+    log::warn!("network is down after the last attempt; waiting for it to recover");
+    if embassy_time::with_timeout(NETWORK_RECOVERY, stack.wait_config_up())
+        .await
+        .is_err()
+    {
+        log::error!("network did not recover; resetting to resume the sweep");
+        esp_hal::system::software_reset();
+    }
+}
+
+fn print_summary() {
+    let mut sorted = records();
+    sorted.sort_by(|a, b| b.left.cmp(&a.left));
+
+    let (mut pass, mut noted) = (0, 0);
+    log::info!("============ issue #385 out-of-memory sweep (embassy) ============");
+    log::info!("  {:>6}  {:>6}  result", "left", "free");
+    for r in &sorted {
+        let (tag, what) = if r.stage == STAGE_CRASHED {
+            ("note ", "Crashed (see the panic printed before that reset)")
+        } else if Outcome::verdict(r.outcome) == Some(true) {
+            ("pass ", Outcome::name(r.outcome))
+        } else {
+            ("note ", Outcome::name(r.outcome))
+        };
+        if tag == "pass " {
+            pass += 1;
+        } else {
+            noted += 1;
+        }
+        log::info!("  {:>6}  {:>6}  {tag}{what}", r.left, r.free);
+    }
+    log::info!(
+        "RESULT: {pass} pass, {noted} noted. For each noted Other/ConnectionAborted, read the \
+         `mbedtls-rs ... failed: MbedtlsError(..)` line above it: an *_ALLOC_FAILED code there \
+         is a miss. For each Crashed, a `memory allocation of N bytes failed` panic is a path \
+         where bambino aborts instead of returning ResourceExhausted."
+    );
+    log::info!("==================================================================");
 }
 
 /// Keeps the station associated, reconnecting after a drop.

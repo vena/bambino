@@ -15,7 +15,10 @@ exclusive feature sets. Same board though — one ESP32-C6 runs both.
 **To reuse for a new investigation:** replace the stage bodies in
 `src/main.rs`, keeping the bring-up above stage 1 (heap, `esp_rtos::start`,
 Wi-Fi, embassy-net, TRNG, the single `Tls`). That bring-up is most of the file
-and is the part that took the work; the stages are the cheap part. Same
+and is the part that took the work; the stages are the cheap part. Also keep a
+`#[unsafe(no_mangle)] fn custom_halt() -> !`: `esp-backtrace`'s `custom-halt`
+feature calls it after printing a panic (the #385 sweep resets the board there to
+resume), and without it the link fails. Same
 convention as `esp32-hw-probe`: the file holds only the *current*
 investigation, and `git log -- embassy-hw-probe/src/main.rs` is the record of
 what has been probed before.
