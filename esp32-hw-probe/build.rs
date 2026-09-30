@@ -24,7 +24,10 @@ const REQUIRED_KEYS: [&str; 4] = [
 /// stops at the TLS handshake, which happens before authentication), but any probe that
 /// gets as far as subscribing to a topic or listing a directory will need it. It is a
 /// credential in the same sense as the serial — see the repo root's `CLAUDE.md`.
-const OPTIONAL_KEYS: [&str; 1] = ["PROBE_ACCESS_CODE"];
+///
+/// `PROBE_RESET_LISTENER` is `<ip>:<port>` of `scripts/tls-reset-listener.py` on the LAN,
+/// for probes that need a peer to drop a handshake partway through.
+const OPTIONAL_KEYS: [&str; 2] = ["PROBE_ACCESS_CODE", "PROBE_RESET_LISTENER"];
 
 fn main() {
     embuild::espidf::sysenv::output();

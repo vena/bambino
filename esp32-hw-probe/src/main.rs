@@ -1,122 +1,196 @@
-//! Current investigation: GitHub issue #294 -- does `EspIdfTlsConnector::connect`'s handshake
-//! poll loop actually run on ESP-IDF v5.5.5, now that `Config::timeout_ms` is pinned to `1`
-//! instead of `0`?
+//! Current investigation: GitHub issues #384 and #386 on real mbedTLS.
 //!
-//! **Background.** `connect` relies on `esp_tls_conn_new_sync` returning between handshake
-//! steps so that `TLS_POLL_INTERVAL`, the `connect_timeout` deadline and the task's yield point
-//! are evaluated at all. That return is gated on `ret == 0 && cfg->timeout_ms <op> 0`, and
-//! ESP-IDF changed both halves of that branch inside the 5.5 series (read off the provisioned
-//! checkouts):
+//! **#384.** A handshake whose trust store held fewer anchors than the connector was given
+//! must report `CertificateInvalid(IncompleteTrustStore)`, not `UntrustedAnchor`, because the
+//! anchor that went missing may be the one the printer chains to. `connect` decides this with
+//! `count_handshake_anchors` in `src/io/esp_idf.rs`, which walks the failed SSL context's
+//! `private_conf->private_ca_chain` through raw pointers. The decision logic is host-tested;
+//! whether that walk reads the right memory after a failed handshake is not something the host
+//! or `scripts/check-esp-idf.sh` can observe. A garbage DER anchor stands in for the anchor a
+//! low-memory handshake would drop: mbedTLS skips it the same way, every time.
 //!
-//! | ESP-IDF | `<op>` | value returned on expiry |
-//! |---|---|---|
-//! | v5.5.3 / v5.5.4 / v6.0.1 | `>= 0` | `0`, reaching Rust as `EWOULDBLOCK` |
-//! | v5.5.5 | `> 0` | `-1`, reaching Rust as the same opaque `ESP_FAIL` a real failure does |
+//! **#386.** ESP-IDF stores mbedTLS codes in its error record negated, so before the fix a peer
+//! dropping the connection mid-handshake reported `Other("... mbedtls Some(80)")` instead of
+//! `ConnectionReset`. Case 5 dials `scripts/tls-reset-listener.py`, which reads the ClientHello
+//! and closes: first with an RST (`MBEDTLS_ERR_NET_CONN_RESET`), then with a FIN
+//! (`MBEDTLS_ERR_SSL_CONN_EOF`). Both must come back `ConnectionReset`.
 //!
-//! So the previous `timeout_ms = 0` disabled the bound outright on v5.5.5: the test is never
-//! reached, `while (1)` runs the whole handshake, and the calling task blocks uninterruptibly
-//! for its full duration (measured elsewhere: 113 of 113 handshakes reporting `1 steps` with
-//! `0us polling`, worst case 33.8s, tripping the Task Watchdog ~30 times per unattended run).
+//! | # | Dial | Anchors | Expected |
+//! |---|---|---|---|
+//! | 1 | printer | all 5 | handshake OK (control) |
+//! | 2 | printer | 1-4 (BBL CA withheld) | `UntrustedAnchor`: a full store still reports as before |
+//! | 3 | printer | 1-4 + garbage | `IncompleteTrustStore`, with a "held 4 of 5" warning |
+//! | 4 | printer | all 5 + garbage | handshake OK: a partial store is still usable |
+//! | 5a | listener (RST) | all 5 | `ConnectionReset` |
+//! | 5b | listener (FIN) | all 5 | `ConnectionReset` |
 //!
-//! The fix sets `timeout_ms = 1`, which satisfies both comparisons, and adds
-//! `take_esp_tls_error` so v5.5.5's `-1`-plus-`ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT` is
-//! recognised as retryable rather than fatal. Both halves are needed: `timeout_ms = 1` alone
-//! would turn the unbounded block into a hard `connect` failure ~1ms in.
+//! **Reading the result.** Case 1 must pass or nothing else means anything. Case 3 is the #384
+//! answer: `IncompleteTrustStore` means the anchor walk works on hardware; `UntrustedAnchor`
+//! means it counted 5 (or more) where 4 loaded; a crash or panic there means the walk read bad
+//! memory. Case 5: `Other(..)` means the sign fix did not take; `ConnectionAborted` means the
+//! fix works but lwIP reported that close with an errno other than `ECONNRESET`/`EPIPE`.
 //!
-//! **What "pass" looks like**, with `.cargo/config.toml` pinned to `ESP_IDF_VERSION = "v5.5.5"`:
-//!
-//! 1. Every handshake **completes**. A failure here means `take_esp_tls_error` is not
-//!    classifying v5.5.5's expiry `-1` as retryable, and the poll loop is aborting on it.
-//! 2. Every handshake reports **`steps` > 1** and **non-zero `us polling`** in bambino's
-//!    `ESP-TLS handshake with ... completed in ...` debug line. `1 steps, 0us polling` is the
-//!    exact signature of the bug: it means `negotiate()` ran the whole handshake internally
-//!    and the poll loop never executed.
-//! 3. No handshake's wall time is dominated by a single uninterruptible block, and the Task
-//!    Watchdog does not fire.
-//!
-//! Only the MQTT TLS port is exercised; no access code is needed, since the handshake
-//! completes before MQTT authentication.
-//!
-//! **Setup.** Network and printer details come from a gitignored `esp32-hw-probe/.env`, read by
-//! `build.rs` and compiled in via `env!(..)` -- see `.env.example`. Root `CLAUDE.md` treats the
-//! serial as a credential, so it is never written to a tracked file or typed where it would land
-//! in shell history.
+//! **Setup.** `certs/` holds the five BambuStudio anchors (not committed; regenerate as in
+//! `git show 3827d46:esp32-hw-probe/src/main.rs`). Network and printer details come from the
+//! gitignored `.env` (see `.env.example`); case 5 also needs `PROBE_RESET_LISTENER`, and is
+//! skipped without it. On a machine on the same LAN, start the listener fresh (so its first
+//! connection is the RST) before flashing:
 //!
 //! ```sh
-//! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee run.log
+//! scripts/tls-reset-listener.py --port 8884
+//! cd esp32-hw-probe && cargo espflash flash --release --monitor 2>&1 | tee 384-test1.log
 //! ```
 //!
-//! Prior investigations (issue #168's unverified-handshake probe, #160/#161's handshake-timing
-//! and concurrent-connect probes, #157's certificate-failure probe, #145's multi-anchor bundle
-//! probe, #65's concurrent-sleep probe) are recoverable via
-//! `git log -- esp32-hw-probe/src/main.rs`, not kept live here -- see this directory's
-//! `CLAUDE.md` for the reuse convention this follows.
+//! No access code is needed: every case ends at the TLS handshake. Prior investigations
+//! (#294's step-bound check, #157's certificate-failure probe, and others) are recoverable
+//! via `git log -- esp32-hw-probe/src/main.rs`.
 
 use bambino::io::esp_idf::{EspIdfRawStreamFactory, EspIdfTlsConnector};
-use bambino::io::{RawStreamFactory, TlsConnector};
+use bambino::io::{CertificateFailure, RawStreamFactory, SocketError, TlsConnector};
 use core::time::Duration;
-use std::time::Instant;
 
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::hal::peripherals::Peripherals;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi};
 
+/// The five BambuStudio trust anchors, in the order they appear in `printer.cer`.
+/// Index 4 (`bbl_5.der`) is the legacy self-signed `CN=BBL CA` a P1S chains to, so
+/// withholding it is what produces a genuine untrusted-anchor rejection.
+const BBL_ANCHORS: [&[u8]; 5] = [
+    include_bytes!("../certs/bbl_1.der"), // CN=BBL CA2 RSA, self-signed
+    include_bytes!("../certs/bbl_2.der"), // CN=BBL CA2 ECC, self-signed
+    include_bytes!("../certs/bbl_3.der"), // CN=BBL CA2 RSA, issued by BBL CA
+    include_bytes!("../certs/bbl_4.der"), // CN=BBL CA2 ECC, issued by BBL CA
+    include_bytes!("../certs/bbl_5.der"), // CN=BBL CA, self-signed (the P1S anchor)
+];
+
+/// Sentinel in a case's `anchors` list meaning `GARBAGE_ANCHOR` rather than a BBL anchor.
+const GARBAGE: usize = usize::MAX;
+
+/// Not a certificate. `der_certs_to_pem_bundle` wraps it in PEM armour like any other anchor;
+/// the PEM decode then succeeds and the DER parse fails, which is the branch mbedTLS counts
+/// and skips (`mbedtls_x509_crt_parse`, "total_failed++; continue") -- the same outcome as an
+/// anchor dropped for lack of memory.
+const GARBAGE_ANCHOR: &[u8] = b"issue 384: deliberately not a DER certificate";
+
 const WIFI_SSID: &str = env!("PROBE_WIFI_SSID");
 const WIFI_PASS: &str = env!("PROBE_WIFI_PASS");
 const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 /// Passed to `TlsConnector::connect` as the TLS hostname, mirroring `src/client/connect.rs`.
-/// Irrelevant to what this probe measures, but kept so a wire capture of this run looks like a
-/// real client's, not a synthetic one -- and `EspIdfTlsConnector::connect`'s log lines redact
-/// and report it either way.
+/// The printer's leaf is `CN=<serial>` with no SAN, so verifying against the dialled IP would
+/// fail the common-name check for reasons that have nothing to do with anchors.
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
+/// `<ip>:<port>` of `scripts/tls-reset-listener.py`. Optional: case 5 is skipped without it.
+const RESET_LISTENER: Option<&str> = option_env!("PROBE_RESET_LISTENER");
 
-/// MQTT over TLS -- the same port `PrinterClient` dials, and reachable without an access code
-/// since only the handshake (not MQTT authentication) is exercised.
+/// MQTT over TLS: the handshake is the whole test, and this port needs no access code.
 const PRINTER_TLS_PORT: u16 = 8883;
-
-/// Enough handshakes that a single lucky fast one cannot pass for a fix. The reference capture
-/// this is compared against ran 113 handshakes and hit `1 steps` on every one, so the failure
-/// mode is not intermittent -- the point of repeating is to catch the *other* direction, a
-/// pathology that shows up only on a slow handshake.
-const RUNS: usize = 25;
-
-/// Spacing between handshakes. Matches the shorter of the two unattended runs the issue's
-/// numbers come from, and keeps the printer from treating the loop as a reconnect storm.
-const BETWEEN_RUNS: Duration = Duration::from_secs(3);
-
-/// Generous enough that a slow-but-succeeding handshake still reports a clean result rather
-/// than a `TimedOut` that would be misread as this fix not working. #160's probe measured
-/// 1.7-4.0s as the normal range on this class of hardware.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Wall time past which a handshake is counted as slow. The issue's metric: 22.7% of v5.5.5
-/// handshakes landed past this, against a normal range of 1.7-4.0s.
-const SLOW_THRESHOLD: Duration = Duration::from_secs(2);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Target {
+    Printer,
+    ResetListener,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Expect {
+    Ok,
+    Cert(CertificateFailure),
+    Reset,
+}
+
+/// What a case produced, reduced for comparison. The full `SocketError` is logged as it
+/// happens, so nothing is lost by the reduction.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Outcome {
+    Ok,
+    Cert(CertificateFailure),
+    Socket(SocketError),
+    /// The target was not reachable or not configured, so this case is no evidence either way.
+    NoEvidence(&'static str),
+}
+
+struct Case {
+    name: &'static str,
+    target: Target,
+    anchors: &'static [usize],
+    expect: Expect,
+    /// Printed only when the case comes out the other way, so a failing run explains itself.
+    on_surprise: &'static str,
+}
+
+const CASES: [Case; 6] = [
+    Case {
+        name: "1. all 5 anchors (control)",
+        target: Target::Printer,
+        anchors: &[0, 1, 2, 3, 4],
+        expect: Expect::Ok,
+        on_surprise: "the control handshake failed, so no other case in this run means \
+                      anything -- check reachability, the anchors, and the clock first",
+    },
+    Case {
+        name: "2. anchors 1-4, BBL CA withheld",
+        target: Target::Printer,
+        anchors: &[0, 1, 2, 3],
+        expect: Expect::Cert(CertificateFailure::UntrustedAnchor),
+        on_surprise: "a full 4-of-4 store no longer reports UntrustedAnchor. If this says \
+                      IncompleteTrustStore, count_handshake_anchors undercounts a complete \
+                      store and would suppress every legitimate TOFU prompt",
+    },
+    Case {
+        name: "3. anchors 1-4 + garbage, BBL CA withheld",
+        target: Target::Printer,
+        anchors: &[0, 1, 2, 3, GARBAGE],
+        expect: Expect::Cert(CertificateFailure::IncompleteTrustStore),
+        on_surprise: "the #384 answer. UntrustedAnchor means count_handshake_anchors counted \
+                      5+ where 4 loaded (check the version != 0 test and the chain walk); \
+                      Socket/NoEvidence means the handshake failed before verification",
+    },
+    Case {
+        name: "4. all 5 + garbage",
+        target: Target::Printer,
+        anchors: &[0, 1, 2, 3, 4, GARBAGE],
+        expect: Expect::Ok,
+        on_surprise: "a store missing only a garbage anchor failed a handshake the real \
+                      anchor should pass -- mbedTLS no longer treats a partial store as usable",
+    },
+    Case {
+        name: "5a. listener closes with RST after ClientHello",
+        target: Target::ResetListener,
+        anchors: &[0, 1, 2, 3, 4],
+        expect: Expect::Reset,
+        on_surprise: "the #386 answer. Other(..) means the error record is still read with the \
+                      wrong sign; ConnectionAborted means the sign fix works but lwIP reported \
+                      this RST as something other than ECONNRESET/EPIPE. Also confirm the \
+                      listener was restarted, so this was its first (RST) connection",
+    },
+    Case {
+        name: "5b. listener closes with FIN after ClientHello",
+        target: Target::ResetListener,
+        anchors: &[0, 1, 2, 3, 4],
+        expect: Expect::Reset,
+        on_surprise: "a FIN mid-handshake should be MBEDTLS_ERR_SSL_CONN_EOF -> ConnectionReset. \
+                      Other(..) means the sign fix did not take on this path",
+    },
+];
 
 fn main() {
     esp_idf_svc::sys::link_patches();
 
-    // `connect`'s per-handshake breakdown (`steps`, `us in esp_tls`, `us polling`) is logged at
-    // debug level, and it is the whole instrument for this round -- `steps` is what separates
-    // "the poll loop ran" from "one `negotiate()` call swallowed the entire handshake".
-    // `CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y` in `sdkconfig.defaults` raises the compile-time
-    // ceiling; this raises the runtime level for that one target, leaving ESP-IDF's own
-    // components at their defaults rather than flooding the transcript.
+    // `map_esp_tls_connect_error`'s full `(esp_tls .., mbedtls ..)` codes are logged at debug;
+    // raise just that target so a surprise in case 5 shows the raw recorded values.
     let logger = esp_idf_svc::log::init_from_esp_idf();
     if let Err(e) = logger
         .filter()
         .set_target_level("bambino::io::esp_idf", log::LevelFilter::Debug)
     {
-        log::warn!(
-            "could not raise bambino::io::esp_idf to debug: {e:?} -- `steps` counts will be \
-             missing from this run"
-        );
+        log::warn!("could not raise bambino::io::esp_idf to debug: {e:?}");
     }
 
-    log::info!("esp32-hw-probe: issue #294 handshake step-bound check on ESP-IDF v5.5.5");
-    log::info!("target {PRINTER_IP}:{PRINTER_TLS_PORT} (TLS hostname {PRINTER_SERIAL})");
-    log::info!("expecting every handshake to report steps > 1 and non-zero us polling");
+    log::info!("esp32-hw-probe: issues #384 (short trust store) and #386 (mbedTLS code sign)");
+    log::info!("printer {PRINTER_IP}:{PRINTER_TLS_PORT}, reset listener {RESET_LISTENER:?}");
 
     let peripherals = match Peripherals::take() {
         Ok(p) => p,
@@ -140,8 +214,8 @@ fn main() {
         }
     };
 
-    // Held for the rest of `main`: dropping the wifi driver tears down the interface and the
-    // handshake attempts below would fail for reasons unrelated to what this probe is testing.
+    // Held for the rest of `main`: dropping the wifi driver tears down the interface and every
+    // later connect would fail for reasons unrelated to what this probe is testing.
     let _wifi = match connect_wifi(peripherals.modem, sysloop, nvs) {
         Ok(wifi) => wifi,
         Err(e) => {
@@ -150,93 +224,122 @@ fn main() {
         }
     };
 
-    run_probe();
+    let mut results: Vec<(&'static str, Expect, Outcome)> = Vec::new();
+    let mut surprises = 0u32;
+    let mut skipped = 0u32;
+
+    for case in &CASES {
+        log::info!("--- {} ---", case.name);
+        let outcome = run_case(case);
+        let matched = match (case.expect, &outcome) {
+            (Expect::Ok, Outcome::Ok) => true,
+            (Expect::Cert(expected), Outcome::Cert(actual)) => expected == *actual,
+            (Expect::Reset, Outcome::Socket(SocketError::ConnectionReset)) => true,
+            _ => false,
+        };
+
+        if let Outcome::NoEvidence(why) = &outcome {
+            log::warn!("SKIP {}: {why}", case.name);
+            skipped += 1;
+        } else if matched {
+            log::info!("PASS {}: got {outcome:?}", case.name);
+        } else {
+            log::error!(
+                "SURPRISE {}: expected {:?}, got {outcome:?}",
+                case.name,
+                case.expect
+            );
+            log::error!("    -> {}", case.on_surprise);
+            surprises += 1;
+        }
+        results.push((case.name, case.expect, outcome));
+
+        // The printer drops an unauthenticated MQTT session on its own; give it a moment so a
+        // lingering half-open connection can't perturb the next case.
+        std::thread::sleep(Duration::from_secs(2));
+    }
+
+    log::info!("================ issues #384 / #386 probe summary ================");
+    for (name, expected, actual) in &results {
+        log::info!("  {name}: expected {expected:?}, got {actual:?}");
+    }
+    log::info!(
+        "RESULT: {} matched, {surprises} surprise(s), {skipped} skipped. Read any SURPRISE \
+         line above before drawing a conclusion; case 1 must pass for the rest to count.",
+        CASES.len() as u32 - surprises - skipped
+    );
+    log::info!("==================================================================");
+
     park();
 }
 
-/// Runs `RUNS` sequential handshakes, reporting each one's wall time and a summary at the end.
-///
-/// Wall time is measured here rather than read off `connect`'s own log line because the two
-/// answer different questions: `connect` reports how the time inside it split between compute
-/// and polling, while this measures what the *caller* experienced. Under the bug those are the
-/// same number, which is itself the tell -- a handshake with no polling in it blocked its task
-/// for the full duration.
-fn run_probe() {
-    let connector = EspIdfTlsConnector::new().with_connect_timeout(HANDSHAKE_TIMEOUT);
-
-    let mut completed = 0usize;
-    let mut failed = 0usize;
-    let mut slow = 0usize;
-    let mut worst = Duration::ZERO;
-
-    for run in 1..=RUNS {
-        esp_idf_svc::hal::task::block_on(async {
-            let raw = match EspIdfRawStreamFactory
-                .dial(PRINTER_IP, PRINTER_TLS_PORT)
-                .await
-            {
-                Ok(stream) => stream,
-                Err(e) => {
-                    log::error!(
-                        "run {run}/{RUNS} FAIL: TCP dial to {PRINTER_IP}:{PRINTER_TLS_PORT} \
-                         failed: {e:?} -- nothing about issue #294 can be measured if the \
-                         printer isn't reachable"
-                    );
-                    failed += 1;
-                    return;
-                }
+/// Runs one handshake and reduces the result to an [`Outcome`], logging the full error.
+fn run_case(case: &Case) -> Outcome {
+    let (host, port, tls_name) = match case.target {
+        Target::Printer => (PRINTER_IP, PRINTER_TLS_PORT, PRINTER_SERIAL),
+        Target::ResetListener => {
+            let Some(listener) = RESET_LISTENER else {
+                return Outcome::NoEvidence("PROBE_RESET_LISTENER is not set in .env");
             };
-
-            let started = Instant::now();
-            let result = connector.connect(PRINTER_SERIAL, raw).await;
-            let elapsed = started.elapsed();
-
-            if elapsed > worst {
-                worst = elapsed;
-            }
-            if elapsed > SLOW_THRESHOLD {
-                slow += 1;
-            }
-
-            match result {
-                Ok(stream) => {
-                    completed += 1;
-                    log::info!(
-                        "run {run}/{RUNS} OK in {}ms, negotiated {:?} \
-                         (read `steps` off the debug line above: >1 passes, 1 is the bug)",
-                        elapsed.as_millis(),
-                        connector.negotiated_version(&stream)
-                    );
-                }
-                Err(e) => {
-                    failed += 1;
-                    log::error!(
-                        "run {run}/{RUNS} FAIL after {}ms: {e:?} -- if this is a bare \
-                         SocketError::Other/ConnectionRefused rather than TimedOut, the most \
-                         likely cause is `take_esp_tls_error` not classifying v5.5.5's expiry \
-                         `-1` (ESP_ERR_ESP_TLS_CONNECTION_TIMEOUT on the error handle) as \
-                         retryable, so the poll loop aborts on its own pacing signal",
-                        elapsed.as_millis()
-                    );
-                }
-            }
-        });
-
-        if run < RUNS {
-            std::thread::sleep(BETWEEN_RUNS);
+            let Some((ip, port)) = listener.rsplit_once(':') else {
+                return Outcome::NoEvidence("PROBE_RESET_LISTENER must be <ip>:<port>");
+            };
+            let Ok(port) = port.parse::<u16>() else {
+                return Outcome::NoEvidence("PROBE_RESET_LISTENER's port is not a number");
+            };
+            // The listener never answers, so the name is never checked; any name will do.
+            (ip, port, "reset-listener.invalid")
         }
-    }
+    };
 
+    let certs: Vec<Vec<u8>> = case
+        .anchors
+        .iter()
+        .map(|&i| {
+            if i == GARBAGE {
+                GARBAGE_ANCHOR.to_vec()
+            } else {
+                BBL_ANCHORS[i].to_vec()
+            }
+        })
+        .collect();
     log::info!(
-        "RESULT: {completed}/{RUNS} completed, {failed} failed, {slow} slower than {}s, worst {}ms",
-        SLOW_THRESHOLD.as_secs(),
-        worst.as_millis()
+        "    {} anchor(s) supplied, dialing {host}:{port}",
+        certs.len()
     );
-    log::info!(
-        "RESULT: pass requires {RUNS}/{RUNS} completed AND every `completed in ...` line above \
-         showing steps > 1 with non-zero us polling. `1 steps, 0us polling` on any line means \
-         the poll loop did not run and issue #294 is not fixed on this build."
-    );
+
+    // Construction runs `report_anchor_bundle_parse`, whose "N of M anchor(s) failed to parse"
+    // or "all M anchor(s) parsed" line lands here -- the construction-time half of #384.
+    let connector =
+        EspIdfTlsConnector::with_certs(certs, None).with_connect_timeout(HANDSHAKE_TIMEOUT);
+
+    esp_idf_svc::hal::task::block_on(async {
+        let raw = match EspIdfRawStreamFactory.dial(host, port).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                log::error!("    TCP dial to {host}:{port} failed: {e:?}");
+                return Outcome::NoEvidence("TCP dial failed; target unreachable");
+            }
+        };
+
+        match connector.connect(tls_name, raw).await {
+            Ok(stream) => {
+                log::info!(
+                    "    handshake OK, negotiated {:?}",
+                    connector.negotiated_version(&stream)
+                );
+                Outcome::Ok
+            }
+            Err(SocketError::CertificateInvalid(failure)) => {
+                log::info!("    handshake rejected: CertificateInvalid({failure:?})");
+                Outcome::Cert(failure)
+            }
+            Err(e) => {
+                log::info!("    handshake failed: {e:?}");
+                Outcome::Socket(e)
+            }
+        }
+    })
 }
 
 fn connect_wifi(
