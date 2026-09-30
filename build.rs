@@ -16,11 +16,14 @@
 //! enabled only by the `esp-idf` feature.
 
 fn main() {
-    // Declared unconditionally so the `unexpected_cfgs` lint accepts the gate in
+    // Declared unconditionally so the `unexpected_cfgs` lint accepts the gates in
     // `io/esp_idf.rs` on every target, not just the one where the cfg is actually emitted.
     // embuild emits `rustc-cfg` without a matching `rustc-check-cfg`, so this has to be
-    // stated here.
-    println!("cargo::rustc-check-cfg=cfg(esp_idf_mbedtls_certificate_bundle)");
+    // stated here. Every `esp_idf_*` cfg that file tests must be listed.
+    println!(
+        "cargo::rustc-check-cfg=cfg(esp_idf_mbedtls_certificate_bundle, \
+         esp_idf_mbedtls_ssl_proto_tls1_3, esp_idf_esp_tls_client_session_tickets)"
+    );
 
     #[cfg(feature = "esp-idf")]
     ::embuild::espidf::sysenv::output();

@@ -6,8 +6,9 @@
 #[cfg(feature = "esp-idf")]
 use crate::io::{
     AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
-    TimerError, TimerProvider, TlsConnector, TlsVersion, account_for_trust_store,
-    map_mbedtls_verify_flags, mbedtls_code_from_esp_tls_record, mbedtls_error_kind,
+    TimerError, TimerProvider, TlsConnector, TlsVersion, account_for_trust_store, esp_tls_read_cap,
+    esp_tls_read_count, map_mbedtls_verify_flags, mbedtls_code_from_esp_tls_record,
+    mbedtls_error_kind,
 };
 
 #[cfg(feature = "esp-idf")]
@@ -892,6 +893,8 @@ where
 {
     tls: ::esp_idf_svc::tls::EspTls<S>,
     timer: EspIdfTimer,
+    /// Largest read passed to `esp_tls`, from `esp_tls_read_cap` at connect (GitHub issue #387).
+    read_cap: usize,
 }
 
 #[cfg(feature = "esp-idf")]
@@ -901,9 +904,14 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::ErrorType for EspIdfTlsSt
 
 #[cfg(feature = "esp-idf")]
 impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspIdfTlsStream<S> {
+    // Capped, and the count checked, because `esp_tls` can return an error code as a byte count:
+    // see `ESP_TLS_READ_CAP`. A short read is normal, so the cap needs nothing from callers.
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        let len = buf.len().min(self.read_cap);
+        let buf = &mut buf[..len];
         let tls = &mut self.tls;
-        retry_on_would_block(&self.timer, "read", || tls.read(buf)).await
+        let n = retry_on_would_block(&self.timer, "read", || tls.read(buf)).await?;
+        esp_tls_read_count(n, len)
     }
 }
 
@@ -1776,7 +1784,18 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             }
         }
 
-        Ok(EspIdfTlsStream { tls, timer })
+        let read_cap = esp_tls_read_cap(
+            cfg!(all(
+                esp_idf_mbedtls_ssl_proto_tls1_3,
+                esp_idf_esp_tls_client_session_tickets
+            )),
+            query_negotiated_tls_version(&tls),
+        );
+        Ok(EspIdfTlsStream {
+            tls,
+            timer,
+            read_cap,
+        })
     }
 
     // No `close()` override: `esp_idf_svc::tls::EspTls` exposes no shutdown method (only

@@ -359,6 +359,63 @@ pub(crate) fn mbedtls_code_from_esp_tls_record(recorded: i32) -> i32 {
     recorded.wrapping_neg()
 }
 
+/// Largest read `EspIdfTlsStream` asks `esp_tls` for when a read can return an error code as a byte count.
+///
+/// ESP-IDF v5.5.5 and v6.0.3's `esp_mbedtls_read` (`components/esp-tls/esp_tls_mbedtls.c`), built
+/// with `CONFIG_MBEDTLS_SSL_PROTO_TLS1_3` and `CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS`, returns
+/// `ESP_ERR_NO_MEM` (257) or `ESP_ERR_MBEDTLS_SSL_HANDSHAKE_FAILED` (32794) when saving a TLS 1.3
+/// session ticket fails. Both are positive, and esp-idf-svc 0.53.0's `EspTls::read` passes any
+/// non-negative return through as a byte count. Asking for at most 256 bytes makes either code a
+/// count above the request, which [`esp_tls_read_count`] rejects. ESP-IDF fixed this on master,
+/// `release/v5.5` and `release/v6.0` (return `-1` instead), but no release tag had it as of
+/// 2026-09-30; the cap can go once the oldest supported ESP-IDF tag does (GitHub issue #387).
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) const ESP_TLS_READ_CAP: usize = 256;
+
+/// `ESP_ERR_NO_MEM`, the smaller of the two codes [`ESP_TLS_READ_CAP`] exists for.
+#[cfg(any(feature = "esp-idf", test))]
+const ESP_ERR_NO_MEM_AS_COUNT: usize = 0x101;
+
+#[cfg(any(feature = "esp-idf", test))]
+const _: () = assert!(ESP_TLS_READ_CAP < ESP_ERR_NO_MEM_AS_COUNT);
+
+/// Picks the read cap for an `esp_tls` session: [`ESP_TLS_READ_CAP`] where the ticket bug is reachable, otherwise none.
+///
+/// `reachable` is whether the build enables both Kconfig options the bug needs. The ticket code
+/// only runs on a TLS 1.3 session, so a session known to be TLS 1.2 is left uncapped; an unknown
+/// version is capped, since the cap costs read calls but a missed code costs data.
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) fn esp_tls_read_cap(reachable: bool, version: Option<TlsVersion>) -> usize {
+    if reachable && version != Some(TlsVersion::Tls12) {
+        ESP_TLS_READ_CAP
+    } else {
+        usize::MAX
+    }
+}
+
+/// Checks a count `EspTls::read` reported against the `requested` length, rejecting one no read could return.
+///
+/// A count above the request is an `esp_tls` error code, not data (see [`ESP_TLS_READ_CAP`]):
+/// `ESP_ERR_NO_MEM` maps to `OutOfMemory`, which [`map_embedded_io_error_kind`] turns into
+/// [`SocketError::ResourceExhausted`], and anything else to `Other`.
+#[cfg(any(feature = "esp-idf", test))]
+pub(crate) fn esp_tls_read_count(
+    n: usize,
+    requested: usize,
+) -> Result<usize, embedded_io_async::ErrorKind> {
+    if n <= requested {
+        return Ok(n);
+    }
+    log::warn!(
+        "esp_tls read returned {n} for a {requested}-byte read; treating it as an error code"
+    );
+    if n == ESP_ERR_NO_MEM_AS_COUNT {
+        Err(embedded_io_async::ErrorKind::OutOfMemory)
+    } else {
+        Err(embedded_io_async::ErrorKind::Other)
+    }
+}
+
 /// Replaces an `UntrustedAnchor` verdict with `IncompleteTrustStore` when the handshake held fewer anchors than the connector was given.
 ///
 /// `loaded` is how many anchors the failed handshake's trust store actually held; `expected`
@@ -1082,6 +1139,51 @@ mod mbedtls_error_tests {
         assert_eq!(mbedtls_error_kind(0), None);
         assert_eq!(mbedtls_error_kind(i32::MIN), None);
         assert_eq!(mbedtls_error_kind(i32::MAX), None);
+    }
+
+    #[test]
+    fn esp_tls_read_count_passes_counts_within_the_request() {
+        assert_eq!(esp_tls_read_count(0, 0), Ok(0));
+        assert_eq!(esp_tls_read_count(1, 1), Ok(1));
+        assert_eq!(esp_tls_read_count(100, ESP_TLS_READ_CAP), Ok(100));
+        assert_eq!(
+            esp_tls_read_count(ESP_TLS_READ_CAP, ESP_TLS_READ_CAP),
+            Ok(ESP_TLS_READ_CAP)
+        );
+    }
+
+    #[test]
+    fn esp_tls_read_count_rejects_both_codes_at_the_cap() {
+        // GitHub issue #387: ESP_ERR_NO_MEM (257) and ESP_ERR_MBEDTLS_SSL_HANDSHAKE_FAILED
+        // (0x801A) both exceed a capped request, so neither can pass as data.
+        assert_eq!(
+            esp_tls_read_count(257, ESP_TLS_READ_CAP),
+            Err(ErrorKind::OutOfMemory)
+        );
+        assert_eq!(
+            map_embedded_io_error_kind(ErrorKind::OutOfMemory),
+            SocketError::ResourceExhausted
+        );
+        assert_eq!(
+            esp_tls_read_count(0x801A, ESP_TLS_READ_CAP),
+            Err(ErrorKind::Other)
+        );
+        // Any other impossible count is an error too, uncapped or not.
+        assert_eq!(esp_tls_read_count(17, 16), Err(ErrorKind::Other));
+    }
+
+    #[test]
+    fn esp_tls_read_cap_applies_only_where_the_ticket_bug_is_reachable() {
+        assert_eq!(
+            esp_tls_read_cap(true, Some(TlsVersion::Tls13)),
+            ESP_TLS_READ_CAP
+        );
+        // Unknown version: capped, since the ticket code may run.
+        assert_eq!(esp_tls_read_cap(true, None), ESP_TLS_READ_CAP);
+        assert_eq!(esp_tls_read_cap(true, Some(TlsVersion::Tls12)), usize::MAX);
+        for version in [None, Some(TlsVersion::Tls12), Some(TlsVersion::Tls13)] {
+            assert_eq!(esp_tls_read_cap(false, version), usize::MAX);
+        }
     }
 
     #[test]
