@@ -186,6 +186,16 @@ Three things that look like they should help, but don't:
 
 **TLS session resumption does not work with these printers.** The printer offers a 32-byte session ID but never issues a session ticket, and it refuses to resume when the client offers that exact ID back. This was confirmed by reading the handshake messages, not guessed from timing: the client sent the printer's own session ID byte for byte, and the printer started a brand new session anyway. So each connection pays the full cost. This matters more than it first appears, because MQTT, FTPS, and the camera are three separate connections.
 
+**A P1S speaks TLS 1.2 only, on all three services.** Checked 2026-09-30 against a P1S on firmware `01.10.00.00` with OpenSSL 3.6.5 from a laptop on the same LAN:
+
+| Port | Client offering TLS 1.2 and 1.3 | Client offering only TLS 1.3 |
+|---|---|---|
+| 8883 (MQTT) | TLS 1.2, `ECDHE-RSA-AES256-GCM-SHA384` | alert 40 (`handshake_failure`) |
+| 990 (FTPS) | TLS 1.2, `ECDHE-RSA-AES256-GCM-SHA384` | alert 40 |
+| 6000 (camera) | TLS 1.2, `ECDHE-RSA-AES256-GCM-SHA384` | alert 40 |
+
+The first column is the control: a client that offers 1.3 still gets 1.2, so the alert means the printer has no TLS 1.3, not some other handshake problem. It matches the earlier bare-metal ESP32-C6 run, where an mbedTLS client with TLS 1.3 compiled in and no version cap also negotiated 1.2 on 8883 (its ClientHello was not captured). Consequences: no TLS 1.3 behaviour (session tickets, the P2S close race in [REF-FTPS-CONN]) can occur against this printer, and a TLS 1.2 cap is a no-op on it. Note the alert differs from the `TLSV1_ALERT_PROTOCOL_VERSION` (alert 70) that bambuddy's nine-printer probe recorded for a 1.2-only server forced to 1.3 ([REF-FTPS-CONN]), so a client should not rely on the alert number to detect a 1.2-only printer. Other models and firmware versions are unchecked; the P2S history shows TLS behaviour can change between firmware releases.
+
 #### Choosing an elliptic curve that the ESP32 can accelerate
 
 By default mbedTLS asks for Curve25519 first, and Bambu printers accept it. But the ESP32's crypto accelerator only handles the P-192 and P-256 curves, so Curve25519 runs in software and the hardware sits idle.
