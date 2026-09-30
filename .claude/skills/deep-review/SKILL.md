@@ -11,14 +11,14 @@ Rediscover the layout every run — never reuse a previous run's partition.
 
 ## Step 0 — Setup
 
-1. Load lean-ctx and use it throughout, including `ctx_graph`/`ctx_callgraph` for cross-cutting invariant checks: `ToolSearch("select:mcp__lean-ctx__ctx_read,mcp__lean-ctx__ctx_shell,mcp__lean-ctx__ctx_search,mcp__lean-ctx__ctx_tree,mcp__lean-ctx__ctx_patch,mcp__lean-ctx__ctx_compose,mcp__lean-ctx__ctx_explore,mcp__lean-ctx__ctx_call,mcp__lean-ctx__ctx_graph,mcp__lean-ctx__ctx_callgraph")`.
+1. Use lean-ctx throughout, including `ctx_graph`/`ctx_callgraph` for cross-cutting invariant checks.
 2. `gh auth status` — stop and tell the user if it fails (Step 4 dedupes against issues).
 3. `date +%m-%d` and `git rev-parse --short HEAD` — don't infer either from context.
 4. `ctx_read(README.md, mode="full")` — `map` returns only headings on prose. Root `CLAUDE.md` is already loaded.
 
 ## Step 1 — Resume or discover
 
-`ls *-REVIEW.md` at the repo root (use `ls`, not `ctx_glob` — the file is gitignored). If any has a status line reading `IN PROGRESS`, whatever its date, keep that file and its partition and go to Step 3, spawning only its `PENDING` units. Otherwise start fresh:
+Look for `*-REVIEW.md` at the repo root with `ctx_tree(path=".", depth=1, respect_gitignore=false)`. The file is gitignored, so `ctx_glob` never sees it: its `ignore_gitignore` option is refused under lean-ctx's default role. If any has a status line reading `IN PROGRESS`, whatever its date, keep that file and its partition and go to Step 3, spawning only its `PENDING` units. Otherwise start fresh:
 
 ```
 ctx_tree(path="src", depth=3)
@@ -64,7 +64,7 @@ At most 4 agents at once (2–3 for Opus): `Agent`, `subagent_type: general-purp
 Agent prompt — fill in the `<…>` parts:
 
 ```
-Step 0: before any other tool call, run ToolSearch("<the select: string from the skill's Step 0>") and use ctx_* tools instead of native ones throughout.
+Use ctx_* tools instead of native ones throughout.
 
 Review ONLY these bambino files for correctness; other agents cover the rest: <file list>
 

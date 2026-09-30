@@ -11,7 +11,7 @@ Converts the findings `deep-review` staged into GitHub Issues, using the `backlo
 
 ## Which file
 
-`ls *-REVIEW.md` at the repo root (`ls`, not `ctx_glob` — the file is gitignored). None: tell the user. Several: ask which. A file still `IN PROGRESS` can be filed partially; its pending units wait for a later run.
+Look for `*-REVIEW.md` at the repo root with `ctx_tree(path=".", depth=1, respect_gitignore=false)`. The file is gitignored, so `ctx_glob` never sees it: its `ignore_gitignore` option is refused under lean-ctx's default role. None: tell the user. Several: ask which. A file still `IN PROGRESS` can be filed partially; its pending units wait for a later run.
 
 ## Filing
 
