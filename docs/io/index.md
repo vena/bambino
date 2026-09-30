@@ -359,7 +359,8 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
   left as `Other`, and ESP-IDF's hardware-AES path reports its allocation failure as
   mbedTLS's generic error, which also stays `Other` (GitHub issue #385). FTPS data reads
   and writes, FTP control writes, and the camera handshake write discard the I/O error's
-  kind and report `ConnectionReset`/`ConnectionAborted` whatever the cause.
+  kind and report `ConnectionReset`/`ConnectionAborted` whatever the cause (GitHub issue
+  #389).
 
 - **`Other`**
 
