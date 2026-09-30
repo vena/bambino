@@ -17,6 +17,7 @@ stack and `mbedtls-rs`.
 | [`EmbassyRawStreamFactory`](#embassyrawstreamfactory) | struct | Raw (pre-TLS) connection factory for the Embassy network stack. |
 | [`EmbassyTimer`](#embassytimer) | struct | Timer implementation designed for the hardware microsecond clock in Embassy. |
 | [`EmbassyTlsConnector`](#embassytlsconnector) | struct | TLS Secure connector wrapping an `mbedtls-rs` async `Session`. |
+| [`EmbassyTlsStream`](#embassytlsstream) | struct | TLS stream returned by [`EmbassyTlsConnector::connect`](#embassytlsconnector), wrapping an `mbedtls-rs` `Session` so a failed read or write keeps its cause. |
 | [`EmbassyUdpSocket`](#embassyudpsocket) | struct | UDP Socket implementation designed for the Embassy network stack. |
 
 ## Types
@@ -152,7 +153,7 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
 
 ##### `impl<RawStream> TlsConnector<RawStream> for EmbassyTlsConnector<'a>`
 
-- <span id="embassytlsconnector-tlsconnector-type-stream"></span>`type Stream = Session<'a, RawStream>`
+- <span id="embassytlsconnector-tlsconnector-type-stream"></span>`type Stream = EmbassyTlsStream<'a, RawStream>`
 
 - <span id="embassytlsconnector-tlsconnector-connect"></span>`async fn connect(&self, host: &str, raw_stream: RawStream) -> Result<<Self as >::Stream, SocketError>` — [`TlsConnector`](../index.md#tlsconnector), [`SocketError`](../index.md#socketerror)
 
@@ -188,6 +189,56 @@ a bounded connect must race `EmbassyTlsConnector::connect` against
   The ESP-IDF backend can do this only because `esp_tls_get_ssl_context` hands out that
   pointer. Return `None` honestly — a consumer pinning certificates cannot do so on this
   backend today, and must fail closed rather than be handed a fabricated empty chain.
+
+### `EmbassyTlsStream<'a, T: AsyncIo>`
+
+```rust
+struct EmbassyTlsStream<'a, T: AsyncIo>();
+```
+
+TLS stream returned by [`EmbassyTlsConnector::connect`](#embassytlsconnector), wrapping an `mbedtls-rs` `Session` so a failed read or write keeps its cause.
+
+`Session` implements `embedded_io_async` itself, but its error reports every mbedTLS failure
+as `ErrorKind::Other` (`mbedtls-rs` 0.3.0, `impl embedded_io::Error for SessionError`), so
+running out of memory, a peer reset, and a send failure all looked the same to a caller.
+This stream reclassifies the mbedTLS code with the table the ESP-IDF backend uses, so an
+allocation failure surfaces as `OutOfMemory` and from there as
+[`SocketError::ResourceExhausted`](../index.md#socketerror) (GitHub issue #385). Errors from the underlying stream
+keep their own kind. Reads and writes forward to `Session` unchanged otherwise, including
+its lack of cancel safety.
+
+[`session`](#embassytlsstream) and [`session_mut`](#embassytlsstream) reach the `Session` for
+anything else it offers.
+
+#### Implementations
+
+- <span id="embassytlsstream-session"></span>`fn session(&self) -> &::mbedtls_rs::Session<'a, T>`
+
+  Returns the underlying `mbedtls-rs` session.
+
+- <span id="embassytlsstream-session-mut"></span>`fn session_mut(&mut self) -> &mut ::mbedtls_rs::Session<'a, T>`
+
+  Returns the underlying `mbedtls-rs` session mutably.
+
+  Reading or writing through it directly bypasses this stream's error classification.
+
+#### Trait Implementations
+
+##### `impl<T> AsyncIo for EmbassyTlsStream<'a, T>`
+
+##### `impl<T: AsyncIo> ErrorType for EmbassyTlsStream<'_, T>`
+
+- <span id="embassytlsstream-errortype-type-error"></span>`type Error = ErrorKind`
+
+##### `impl<T: AsyncIo> Read for EmbassyTlsStream<'_, T>`
+
+- <span id="embassytlsstream-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
+
+##### `impl<T: AsyncIo> Write for EmbassyTlsStream<'_, T>`
+
+- <span id="embassytlsstream-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
+
+- <span id="embassytlsstream-write-flush"></span>`async fn flush(&mut self) -> Result<(), <Self as >::Error>`
 
 ### `EmbassyUdpSocket<'a>`
 
