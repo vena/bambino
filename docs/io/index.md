@@ -354,10 +354,12 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
   
   Produced from an OS `ENOMEM` (`std::io::ErrorKind::OutOfMemory`) on every std platform,
   from an mbedTLS `*_ALLOC_FAILED` code on ESP-IDF and Embassy, and from `ESP_ERR_NO_MEM` on
-  ESP-IDF. Not every out-of-memory failure arrives here: a failed Rust heap allocation
-  aborts rather than returning, `ENOBUFS` and file-descriptor exhaustion are deliberately
-  left as `Other`, and ESP-IDF's hardware-AES path reports its allocation failure as
-  mbedTLS's generic error, which also stays `Other` (GitHub issue #385).
+  ESP-IDF, including a timer that `EspIdfTimer::sleep` has to allocate mid-operation
+  ([`TimerError::ResourceExhausted`](#timererror), GitHub issue #390). Not every out-of-memory failure
+  arrives here: a failed Rust heap allocation aborts rather than returning, `ENOBUFS` and
+  file-descriptor exhaustion are deliberately left as `Other`, and ESP-IDF's hardware-AES
+  path reports its allocation failure as mbedTLS's generic error, which also stays `Other`
+  (GitHub issue #385).
 
 - **`Other`**
 
@@ -383,17 +385,25 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 
 ```rust
 enum TimerError {
+    ResourceExhausted,
     Other(&'static str),
 }
 ```
 
 Unified timer/sleep errors, agnostic of runtime implementations.
 
-Mirrors [`SocketError`](#socketerror)'s shape. Tokio and Embassy sleeps are infallible, so only
-ESP-IDF's `EspAsyncTimer` (which can fail on FreeRTOS timer/task resource exhaustion)
-ever constructs this.
+Mirrors the subset of [`SocketError`](#socketerror) a timer can fail with. Tokio and Embassy sleeps are
+infallible, so only ESP-IDF's `EspAsyncTimer` (which can fail on FreeRTOS timer/task
+resource exhaustion) ever constructs this.
 
 #### Variants
+
+- **`ResourceExhausted`**
+
+  The device ran out of memory allocating the timer.
+  
+  Every consumer reports it as [`SocketError::ResourceExhausted`](#socketerror) (or its `OutOfMemory`
+  error-kind form), never as `Other` or `TimedOut` (GitHub issue #390).
 
 - **`Other`**
 
