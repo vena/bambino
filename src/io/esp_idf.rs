@@ -60,8 +60,15 @@ impl TimerProvider for EspIdfTimer {
         let taken = self.timer.borrow_mut().take();
         let mut timer = match taken {
             Some(timer) => timer,
-            None => Self::new_async_timer()
-                .map_err(|_| TimerError::Other("ESP-IDF hardware timer allocation failed"))?,
+            // A future cancelled mid-await below leaves the slot empty, so this allocation runs
+            // after every deadline race the I/O side won — not just at startup (#390).
+            None => Self::new_async_timer().map_err(|e| {
+                if e.code() == ::esp_idf_svc::sys::ESP_ERR_NO_MEM {
+                    TimerError::ResourceExhausted
+                } else {
+                    TimerError::Other("ESP-IDF hardware timer allocation failed")
+                }
+            })?,
         };
 
         let result = timer.after(duration).await;
@@ -365,8 +372,8 @@ async fn poll_connect_until_complete(
             return Ok(());
         }
 
-        timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-            SocketError::Other("ESP-IDF timer failed while polling TCP connect".into())
+        timer.sleep(TLS_POLL_INTERVAL).await.map_err(|e| {
+            crate::io::timer_failure_error(e, "ESP-IDF timer failed while polling TCP connect")
         })?;
     }
 }
@@ -964,10 +971,10 @@ where
         match op() {
             Ok(n) => return Ok(n),
             Err(e) if is_would_block(&e) => {
-                timer
-                    .sleep(TLS_POLL_INTERVAL)
-                    .await
-                    .map_err(|_| embedded_io_async::ErrorKind::Other)?;
+                timer.sleep(TLS_POLL_INTERVAL).await.map_err(|e| match e {
+                    TimerError::ResourceExhausted => embedded_io_async::ErrorKind::OutOfMemory,
+                    TimerError::Other(_) => embedded_io_async::ErrorKind::Other,
+                })?;
             }
             Err(e) => {
                 log::debug!("ESP-IDF TLS {op_name} failed: {e}");
@@ -1333,10 +1340,15 @@ where
         match op() {
             Ok(n) => return Ok(n),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                timer.sleep(TLS_POLL_INTERVAL).await.map_err(|_| {
-                    EspIdfIoError(std::io::Error::other(
-                        "ESP-IDF timer failed while polling TCP I/O",
-                    ))
+                timer.sleep(TLS_POLL_INTERVAL).await.map_err(|e| {
+                    EspIdfIoError(match e {
+                        TimerError::ResourceExhausted => {
+                            std::io::Error::from(std::io::ErrorKind::OutOfMemory)
+                        }
+                        TimerError::Other(_) => {
+                            std::io::Error::other("ESP-IDF timer failed while polling TCP I/O")
+                        }
+                    })
                 })?;
             }
             Err(e) => {
@@ -1760,9 +1772,10 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
                     let sleep_start = now_micros();
                     let slept = timer.sleep(TLS_POLL_INTERVAL).await;
                     sleep_us += now_micros().saturating_sub(sleep_start);
-                    slept.map_err(|_| {
-                        SocketError::Other(
-                            "ESP-IDF timer failed while polling TLS handshake".into(),
+                    slept.map_err(|e| {
+                        crate::io::timer_failure_error(
+                            e,
+                            "ESP-IDF timer failed while polling TLS handshake",
                         )
                     })?;
                 }

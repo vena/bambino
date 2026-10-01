@@ -88,10 +88,12 @@ pub enum SocketError {
     ///
     /// Produced from an OS `ENOMEM` (`std::io::ErrorKind::OutOfMemory`) on every std platform,
     /// from an mbedTLS `*_ALLOC_FAILED` code on ESP-IDF and Embassy, and from `ESP_ERR_NO_MEM` on
-    /// ESP-IDF. Not every out-of-memory failure arrives here: a failed Rust heap allocation
-    /// aborts rather than returning, `ENOBUFS` and file-descriptor exhaustion are deliberately
-    /// left as `Other`, and ESP-IDF's hardware-AES path reports its allocation failure as
-    /// mbedTLS's generic error, which also stays `Other` (GitHub issue #385).
+    /// ESP-IDF, including a timer that `EspIdfTimer::sleep` has to allocate mid-operation
+    /// ([`TimerError::ResourceExhausted`], GitHub issue #390). Not every out-of-memory failure
+    /// arrives here: a failed Rust heap allocation aborts rather than returning, `ENOBUFS` and
+    /// file-descriptor exhaustion are deliberately left as `Other`, and ESP-IDF's hardware-AES
+    /// path reports its allocation failure as mbedTLS's generic error, which also stays `Other`
+    /// (GitHub issue #385).
     ResourceExhausted,
     /// Catch-all variant for atypical OS-specific networking errors.
     Other(Cow<'static, str>),
@@ -522,11 +524,16 @@ pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::
 
 /// Unified timer/sleep errors, agnostic of runtime implementations.
 ///
-/// Mirrors [`SocketError`]'s shape. Tokio and Embassy sleeps are infallible, so only
-/// ESP-IDF's `EspAsyncTimer` (which can fail on FreeRTOS timer/task resource exhaustion)
-/// ever constructs this.
+/// Mirrors the subset of [`SocketError`] a timer can fail with. Tokio and Embassy sleeps are
+/// infallible, so only ESP-IDF's `EspAsyncTimer` (which can fail on FreeRTOS timer/task
+/// resource exhaustion) ever constructs this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerError {
+    /// The device ran out of memory allocating the timer.
+    ///
+    /// Every consumer reports it as [`SocketError::ResourceExhausted`] (or its `OutOfMemory`
+    /// error-kind form), never as `Other` or `TimedOut` (GitHub issue #390).
+    ResourceExhausted,
     /// Catch-all for platform-specific timer scheduling failures.
     Other(&'static str),
 }
@@ -945,10 +952,18 @@ pub(crate) async fn read_chunk<IO: AsyncIo, T: TimerProvider>(
 pub(crate) fn deadline_error(timer_result: Result<(), TimerError>) -> SocketError {
     match timer_result {
         Ok(()) => SocketError::TimedOut,
-        Err(e) => {
-            log::warn!("deadline timer failed: {:?}", e);
-            SocketError::Other(Cow::Borrowed("deadline timer failed"))
-        }
+        Err(e) => timer_failure_error(e, "deadline timer failed"),
+    }
+}
+
+/// Maps a failed `TimerProvider::sleep` to `ResourceExhausted` for an out-of-memory timer, else to `Other(context)`.
+///
+/// Never `TimedOut`: see [`deadline_error`] (#81, #318, #390).
+pub(crate) fn timer_failure_error(err: TimerError, context: &'static str) -> SocketError {
+    log::warn!("{context}: {err:?}");
+    match err {
+        TimerError::ResourceExhausted => SocketError::ResourceExhausted,
+        TimerError::Other(_) => SocketError::Other(Cow::Borrowed(context)),
     }
 }
 
@@ -1231,6 +1246,26 @@ mod std_io_error_tests {
         assert_eq!(
             map_embedded_io_error_kind(map_io_error_kind(std::io::ErrorKind::OutOfMemory)),
             SocketError::ResourceExhausted
+        );
+    }
+}
+
+#[cfg(test)]
+mod deadline_error_tests {
+    use super::*;
+
+    // GitHub issue #390: an out-of-memory timer is `ResourceExhausted`; any other timer failure
+    // stays `Other`, and neither is `TimedOut` (#81, #318).
+    #[test]
+    fn timer_failures_are_classified_and_never_timed_out() {
+        assert_eq!(deadline_error(Ok(())), SocketError::TimedOut);
+        assert_eq!(
+            deadline_error(Err(TimerError::ResourceExhausted)),
+            SocketError::ResourceExhausted
+        );
+        assert_eq!(
+            deadline_error(Err(TimerError::Other("scheduling failed"))),
+            SocketError::Other(Cow::Borrowed("deadline timer failed"))
         );
     }
 }

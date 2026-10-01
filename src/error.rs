@@ -216,6 +216,10 @@ mod tests {
                 "Timer scheduling failure: Other(\"scheduling failed\")",
             ),
             (
+                Error::TimerFailure(crate::io::TimerError::ResourceExhausted),
+                "Timer scheduling failure: ResourceExhausted",
+            ),
+            (
                 Error::TlsHandshakeFailed,
                 "TLS secure channel handshake failed",
             ),
