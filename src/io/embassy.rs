@@ -116,8 +116,8 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
 /// **One global `Tls` instance.** MbedTLS only permits one active library instance
 /// program-wide (enforced by `mbedtls-rs` itself — a second `Tls::new()` call errors while one
 /// is already live). The caller constructs that single `::mbedtls_rs::Tls` once at startup
-/// (e.g. behind a `static_cell::StaticCell`, mirroring `EmbassyRawStreamFactory`'s `'static`
-/// storage convention below — see the README's Embassy setup example) and passes a
+/// (e.g. behind a `static_cell::StaticCell`, like [`EmbassySocketBuffers`] below — see the
+/// README's Embassy setup example) and passes a
 /// [`TlsReference`](::mbedtls_rs::TlsReference) — a cheap `Copy` handle, not the `Tls` itself —
 /// into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
 /// control/data connectors all share the one instance concurrently.
