@@ -11,9 +11,10 @@ Find Bambu Lab printers on the local network using SSDP (Simple Service Discover
 [`DiscoveryEngine`](#discoveryengine) sends M-SEARCH queries on UDP port 2021 (and the alternate port 1990)
 and parses incoming NOTIFY/response packets into [`SsdpDevice`](parser/index.md#ssdpdevice) records.
 [`DiscoveryEngine`](#discoveryengine) itself works across std, ESP-IDF, and Embassy via the
-[`AsyncUdpSocket`](../io/index.md#asyncudpsocket) trait. The [`discover_devices()`](#discover-devices) convenience function runs a timed
-broadcast-and-listen sweep and returns all unique printers found, but is std-only
-(`BindableUdpSocket` isn't implemented on Embassy — see
+[`AsyncUdpSocket`](../io/index.md#asyncudpsocket) trait. The
+[`discover_devices()`](#discover-devices)
+convenience function runs a timed broadcast-and-listen sweep and returns all unique
+printers found, but is std-only (`BindableUdpSocket` isn't implemented on Embassy — see
 `.claude/rules/udp-socket-binding.md`); Embassy callers must drive `DiscoveryEngine`
 directly instead.
 

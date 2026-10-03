@@ -209,8 +209,9 @@ struct EspIdfTlsConnector {
 ```
 
 TLS connector for ESP-IDF that wraps an already-connected raw stream (FTPS's data and control channels, and MQTT's lazy connect via `RawStreamFactory`+`TlsConnector`).
-Built on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (confirmed by Phase 3's spike: no raw
-mbedTLS FFI needed to wrap an existing fd) instead of `EspTls::new()` + `connect()`.
+Built on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (a spike when this backend was
+written confirmed it needs no raw mbedTLS FFI to wrap an existing fd) instead of
+`EspTls::new()` + `connect()`.
 
 **No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
 `build_verified_client_config_with_options(..., force_tls_1_2: bool)` /
