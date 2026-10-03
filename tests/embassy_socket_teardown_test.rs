@@ -26,12 +26,11 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::task::{Context, Waker};
 
-use bambino::io::RawStreamFactory;
-use bambino::io::embassy::EmbassyRawStreamFactory;
-use embassy_futures::select::{Either3, select3};
+use bambino::io::embassy::{EmbassyRawStreamFactory, EmbassySocketBuffers, EmbassySocketPool};
+use bambino::io::{RawStreamFactory, SocketError};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_net::driver::{Capabilities, Driver, HardwareAddress, LinkState, RxToken, TxToken};
 use embassy_net::tcp::TcpSocket;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::{Config, Ipv4Address, Ipv4Cidr, Runner, Stack, StackResources, StaticConfigV4};
 use embassy_time::{Duration, with_timeout};
 
@@ -181,7 +180,7 @@ where
     }
 }
 
-/// What the listening side saw after the dialing side dropped its stream.
+/// How the connection ended, as seen by the listening side once the dialing side dropped it.
 #[derive(Debug, PartialEq)]
 enum PeerSaw {
     /// The read returned 0: a FIN arrived.
@@ -190,26 +189,44 @@ enum PeerSaw {
     Reset,
     /// Nothing arrived within `FIN_BOUND`: the connection vanished silently.
     Nothing,
-    /// The read returned data, which nothing in these tests sends.
-    Data(usize),
 }
 
 /// Accepts one connection on `listener`, lets `dial_and_drop` connect and drop it, and reports
-/// what the listening side saw.
+/// how many bytes arrived before the connection ended and how it ended. Leaves the listening
+/// socket open, so the dialing side's socket stays in `FinWait2`.
 async fn peer_view_of_drop<D: Future<Output = ()>>(
     listener: Stack<'static>,
     dial_and_drop: D,
-) -> PeerSaw {
+) -> (usize, PeerSaw) {
     let mut socket = TcpSocket::new(listener, leak([0u8; 1024]), leak([0u8; 1024]));
     let (accepted, ()) = embassy_futures::join::join(socket.accept(PORT), dial_and_drop).await;
     accepted.expect("listener accepts the dial");
-    let mut buf = [0u8; 16];
-    match with_timeout(FIN_BOUND, socket.read(&mut buf)).await {
-        Ok(Ok(0)) => PeerSaw::Fin,
-        Ok(Ok(n)) => PeerSaw::Data(n),
-        Ok(Err(_)) => PeerSaw::Reset,
-        Err(_) => PeerSaw::Nothing,
+    let mut received = 0;
+    let mut buf = [0u8; 64];
+    loop {
+        match with_timeout(FIN_BOUND, socket.read(&mut buf)).await {
+            Ok(Ok(0)) => return (received, PeerSaw::Fin),
+            Ok(Ok(n)) => received += n,
+            Ok(Err(_)) => return (received, PeerSaw::Reset),
+            Err(_) => return (received, PeerSaw::Nothing),
+        }
     }
+}
+
+/// A one-socket pool on `dialer` and a factory over it. The pool task isn't spawned: a dropped
+/// stream's FIN must not depend on it.
+fn one_socket_factory(dialer: Stack<'static>) -> EmbassyRawStreamFactory {
+    let pool = EmbassySocketPool::new(dialer, leak(EmbassySocketBuffers::<1, 1024, 1024>::new()));
+    EmbassyRawStreamFactory::new(pool)
+}
+
+/// Dials the listener, bounded so a pool that never frees a socket fails the test rather than
+/// hanging it.
+async fn dial(factory: EmbassyRawStreamFactory) -> bambino::io::embassy::EmbassyTcpStream {
+    with_timeout(FIN_BOUND, factory.dial(&LISTENER_IP.to_string(), PORT))
+        .await
+        .expect("dial finishes within FIN_BOUND")
+        .expect("dial over the in-memory link")
 }
 
 /// The harness can see a FIN at all: a plain `TcpSocket` closed and flushed by the dialing side.
@@ -227,27 +244,104 @@ fn harness_sees_a_plain_sockets_fin() {
             socket.flush().await.expect("FIN acked");
         })
     });
-    assert_eq!(saw, PeerSaw::Fin);
+    assert_eq!(saw, (0, PeerSaw::Fin));
 }
 
 /// A stream from `EmbassyRawStreamFactory`, dropped without sending a byte (what happens when
 /// `Session::new` fails), must reach the peer as a FIN.
 #[test]
-#[ignore = "fails until EmbassyRawStreamFactory stops dropping sockets before their FIN is sent"]
 fn factory_stream_dropped_unused_sends_fin() {
     let saw = with_two_stacks(|dialer, listener| {
-        let client = leak(TcpClient::new(
-            dialer,
-            leak(TcpClientState::<1, 1024, 1024>::new()),
-        ));
-        let factory = EmbassyRawStreamFactory::new(client);
+        let factory = one_socket_factory(dialer);
+        peer_view_of_drop(listener, async move { drop(dial(factory).await) })
+    });
+    assert_eq!(saw, (0, PeerSaw::Fin));
+}
+
+/// A stream dropped after writing must deliver what it wrote, then a FIN.
+#[test]
+fn factory_stream_dropped_after_write_sends_data_then_fin() {
+    use embedded_io_async::Write;
+    let saw = with_two_stacks(|dialer, listener| {
+        let factory = one_socket_factory(dialer);
         peer_view_of_drop(listener, async move {
-            let stream = factory
-                .dial(&LISTENER_IP.to_string(), PORT)
-                .await
-                .expect("dial over the in-memory link");
+            let mut stream = dial(factory).await;
+            stream.write_all(b"220 hello").await.expect("write");
             drop(stream);
         })
     });
-    assert_eq!(saw, PeerSaw::Fin);
+    assert_eq!(saw, (9, PeerSaw::Fin));
+}
+
+/// A dial cancelled while connecting hands its socket back: the one-socket pool can dial again,
+/// and that stream's drop still sends a FIN.
+#[test]
+fn cancelled_dial_returns_its_socket() {
+    let saw = with_two_stacks(|dialer, listener| {
+        let factory = one_socket_factory(dialer);
+        async move {
+            // `select` polls the dial first; it leases, starts connecting and returns `Pending`,
+            // then the ready branch wins and the dial is dropped in `SynSent`.
+            let cancelled = select(
+                factory.dial(&LISTENER_IP.to_string(), PORT),
+                core::future::ready(()),
+            )
+            .await;
+            assert!(
+                matches!(cancelled, Either::Second(())),
+                "dial was not cancelled"
+            );
+            peer_view_of_drop(listener, async move { drop(dial(factory).await) }).await
+        }
+    });
+    assert_eq!(saw, (0, PeerSaw::Fin));
+}
+
+/// With its only socket held by a live stream, the pool fails a dial at once instead of waiting.
+#[test]
+fn dial_with_every_socket_leased_is_resource_exhausted() {
+    let second = with_two_stacks(|dialer, listener| {
+        let factory = one_socket_factory(dialer);
+        async move {
+            let mut socket = TcpSocket::new(listener, leak([0u8; 1024]), leak([0u8; 1024]));
+            let (accepted, held) =
+                embassy_futures::join::join(socket.accept(PORT), dial(factory)).await;
+            accepted.expect("listener accepts the dial");
+            let second = with_timeout(FIN_BOUND, factory.dial(&LISTENER_IP.to_string(), PORT))
+                .await
+                .expect("dial fails at once rather than waiting");
+            drop(held);
+            second.err()
+        }
+    });
+    assert_eq!(second, Some(SocketError::ResourceExhausted));
+}
+
+/// Once the peer has closed its side too, the socket (now in `TimeWait`) is dialed again.
+#[test]
+fn socket_is_reused_after_the_peer_closes() {
+    let second = with_two_stacks(|dialer, listener| {
+        let factory = one_socket_factory(dialer);
+        async move {
+            let mut first = TcpSocket::new(listener, leak([0u8; 1024]), leak([0u8; 1024]));
+            let (accepted, stream) =
+                embassy_futures::join::join(first.accept(PORT), dial(factory)).await;
+            accepted.expect("listener accepts the first dial");
+            drop(stream);
+            let mut buf = [0u8; 16];
+            let fin = with_timeout(FIN_BOUND, first.read(&mut buf)).await;
+            assert_eq!(fin, Ok(Ok(0)), "first stream's FIN");
+            first.close();
+            // This dial waits for the first connection to finish closing, then reuses its socket.
+            let mut second = TcpSocket::new(listener, leak([0u8; 1024]), leak([0u8; 1024]));
+            let (accepted, redial) = embassy_futures::join::join(
+                second.accept(PORT),
+                with_timeout(FIN_BOUND, factory.dial(&LISTENER_IP.to_string(), PORT)),
+            )
+            .await;
+            accepted.expect("listener accepts the second dial");
+            redial.map(|r| r.is_ok())
+        }
+    });
+    assert_eq!(second, Ok(true));
 }

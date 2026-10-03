@@ -11,7 +11,7 @@ use crate::io::{
 };
 
 #[cfg(all(feature = "embassy", not(feature = "std")))]
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 /// Timer implementation designed for the hardware microsecond clock in Embassy.
 #[cfg(feature = "embassy")]
@@ -362,71 +362,374 @@ where
     }
 }
 
-/// Raw (pre-TLS) connection factory for the Embassy network stack.
-///
-/// Unlike Tokio's `TokioRawStreamFactory` (which dials a fresh `TcpStream` per call),
-/// `embassy_net::tcp::TcpSocket` needs pre-allocated rx/tx buffer slices at construction —
-/// there's no way to dial a raw connection without them. `RawStreamFactory::dial` is called
-/// repeatedly from `&self` (MQTT's lazy reconnect, and FTPS's control channel once plus one
-/// data-channel connect per transfer — `list_directory`, `upload_file`, `download_file` each
-/// open and close their own), so a single buffer pair handed out once (Phase 2's
-/// `EmbassyTlsConnector` pattern) isn't enough here.
-///
-/// Instead of hand-rolling a buffer pool, this wraps `embassy_net::tcp::client::TcpClient` —
-/// embassy-net's own built-in connection pool (`embassy_net::tcp::client` module), which
-/// solves exactly this problem: `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates N buffer
-/// pairs, `TcpClient::connect()` checks one out and returns a `TcpConnection` that
-/// automatically returns its slot to the pool on `Drop` — no unsafe code needed on our side,
-/// and no risk of the panic-based mutual exclusion Phase 2 removed from `EmbassyTlsConnector`
-/// (a pool with `N` slots simply fails a `connect()` call with `Error::ConnectionReset` if
-/// all `N` are checked out, rather than panicking or aliasing memory).
-///
-/// **Why `&'static TcpClient`, not an owned one:** `RawStreamFactory<RawIO>`'s `RawIO`
-/// is a fixed type for the whole trait impl, not parameterized per call — so the returned
-/// `TcpConnection<'x, ...>`'s lifetime `'x` must be a *constant*, chosen once, not tied to
-/// however long any individual `dial` call happens to borrow `&self` for.
-/// Storing an *owned* `TcpClient<'d, ...>` field can't satisfy that: borrowing a field out of
-/// `&self` can never outlive that particular call's borrow of `self`. Storing a `&'static`
-/// *reference* sidesteps the problem entirely — copying a `&'static` reference out from
-/// behind an arbitrarily short `&self` borrow yields an independent value that is itself
-/// still valid for `'static`, so `TcpConnection<'static, ...>` comes out clean regardless of
-/// how briefly any given call borrowed the factory. This pushes the actual `'static` storage
-/// question (a `static` item, `static_cell::StaticCell`, or similar) to application setup
-/// code, matching Phase 2's "caller supplies the buffer storage" philosophy — see the
-/// README's Embassy section for a worked example.
+/// How often a dial rechecks a connection of the pool that is still closing.
 #[cfg(feature = "embassy")]
-pub struct EmbassyRawStreamFactory<
+const DIAL_SETTLE_POLL_MS: u64 = 10;
+/// How often the pool task rechecks while some connection is closing.
+#[cfg(feature = "embassy")]
+const TASK_SETTLE_POLL_MS: u64 = 10;
+/// Bound on waiting for a forced RST to leave the stack.
+#[cfg(feature = "embassy")]
+const RST_FLUSH_BOUND_MS: u64 = 1_000;
+
+/// Buffer storage for an [`EmbassySocketPool`] of `N` sockets.
+///
+/// Each socket gets a `TX_SZ`-byte send buffer and an `RX_SZ`-byte receive buffer. Plain byte
+/// arrays, so it can be built in a `const` context and held in a `static_cell::StaticCell`;
+/// [`EmbassySocketPool::new`] borrows it for the rest of the program.
+#[cfg(feature = "embassy")]
+pub struct EmbassySocketBuffers<
     const N: usize,
     const TX_SZ: usize = 2048,
     const RX_SZ: usize = 2048,
 > {
-    client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>,
+    bufs: [([u8; TX_SZ], [u8; RX_SZ]); N],
 }
 
 #[cfg(feature = "embassy")]
-impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
-    EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>
-{
-    /// `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
-    pub fn new(
-        client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>,
-    ) -> Self {
-        Self { client }
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> EmbassySocketBuffers<N, TX_SZ, RX_SZ> {
+    /// Creates zeroed buffers.
+    pub const fn new() -> Self {
+        Self {
+            bufs: [([0; TX_SZ], [0; RX_SZ]); N],
+        }
     }
 }
 
 #[cfg(feature = "embassy")]
-impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
-    RawStreamFactory<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>>
-    for EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> Default
+    for EmbassySocketBuffers<N, TX_SZ, RX_SZ>
 {
-    async fn dial(
-        &self,
-        host: &str,
-        port: u16,
-    ) -> Result<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>, SocketError>
-    {
-        use ::embedded_nal_async::TcpConnect;
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A fixed set of TCP sockets that every connection bambino makes over embassy-net is dialed on.
+///
+/// **Why bambino owns the sockets.** embassy-net removes a `TcpSocket` from the stack when it is
+/// dropped, and removing it sends nothing: a FIN that `close()` queued a moment earlier is lost,
+/// and the peer is never told the connection ended. embassy-net's own `TcpClient` pool drops its
+/// sockets exactly that way, so it cannot close a connection cleanly. This pool creates its `N`
+/// sockets once and never removes them. A dropped [`EmbassyTcpStream`] calls `close()` and hands
+/// its socket back, the stack runner sends the FIN, and the socket is dialed again once the
+/// connection has fully closed (`connect()` accepts a socket in `Closed` or `TimeWait`). Reusing
+/// the same sockets for the program's life is also what lets their `&'static mut` buffers be
+/// borrowed without `unsafe`.
+///
+/// **How a connection ends.** Always with a FIN, never an RST up front: an RST makes the printer
+/// discard data it has acked but not yet read, such as the end of an uploaded file. The socket
+/// counts as free only once the printer has sent its own FIN. Until then the pool reads and
+/// discards whatever the printer still sends, so a transfer cancelled midway can finish and close
+/// instead of stalling on a full receive window. A connection still closing 10 s after the drop
+/// gets an RST. The pool enforces that bound itself rather than with `TcpSocket::set_timeout`: on
+/// smoltcp 0.13.1, `close()` doesn't restart the timeout clock, so an idle connection would get
+/// an RST in place of its FIN.
+///
+/// **Waiting its turn.** A dial waits while any connection of this pool is still closing, so the
+/// printer, which caps concurrent connections, never holds an old bambino connection alongside a
+/// new one. A dial fails at once with [`SocketError::ResourceExhausted`] when every socket is held
+/// by a live stream. Size `N` as the most connections held at once: FTPS alone holds control and
+/// data together. `N` also caps how many of the printer's connection slots bambino can take, so a
+/// smaller `N` leaves more room for other tools. The `N` sockets stay registered for the
+/// program's life, so the stack's `StackResources` must count them.
+///
+/// **The pool task.** [`run`](Self::run) settles closing connections as soon as the printer
+/// allows; spawn it once. Without it a dial settles them itself, but a connection dropped
+/// mid-transfer then stays half-open, holding a printer slot, until the next dial.
+///
+/// One pool serves every channel: hand copies of the same [`EmbassyRawStreamFactory`] to MQTT,
+/// FTPS and the camera.
+///
+/// ```ignore
+/// static SOCKET_BUFS: StaticCell<EmbassySocketBuffers<3>> = StaticCell::new();
+///
+/// #[embassy_executor::task]
+/// async fn socket_pool_task(pool: &'static EmbassySocketPool) -> ! {
+///     pool.run().await
+/// }
+///
+/// let pool = EmbassySocketPool::new(stack, SOCKET_BUFS.init(EmbassySocketBuffers::new()));
+/// spawner.spawn(socket_pool_task(pool).unwrap());
+/// let factory = EmbassyRawStreamFactory::new(pool);
+/// ```
+///
+/// Like embassy-net's `Stack`, the pool is neither `Send` nor `Sync`: use it from the executor
+/// that runs the network stack.
+#[cfg(feature = "embassy")]
+pub struct EmbassySocketPool {
+    slots: core::cell::RefCell<Vec<Slot>>,
+    /// Signalled whenever a stream is dropped, so an idle pool task wakes to settle it.
+    dropped: ::embassy_sync::signal::Signal<::embassy_sync::blocking_mutex::raw::NoopRawMutex, ()>,
+}
+
+/// One pool socket and what it is being used for.
+#[cfg(feature = "embassy")]
+struct Slot {
+    /// `None` while leased, or while a settle pass has it out to drain or reset it.
+    socket: Option<::embassy_net::tcp::TcpSocket<'static>>,
+    usage: SlotUsage,
+}
+
+#[cfg(feature = "embassy")]
+#[derive(Clone, Copy)]
+enum SlotUsage {
+    Idle,
+    Leased,
+    /// The stream was dropped at `since_ms` and the connection hasn't finished closing.
+    Closing {
+        since_ms: u64,
+    },
+}
+
+#[cfg(feature = "embassy")]
+impl Slot {
+    fn view(&self) -> SlotView {
+        match (self.usage, self.socket.is_some()) {
+            (SlotUsage::Idle, true) => SlotView::Idle,
+            (SlotUsage::Closing { .. }, _) => SlotView::Closing,
+            _ => SlotView::Leased,
+        }
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl EmbassySocketPool {
+    /// Creates one socket per buffer pair in `bufs`, registered on `stack` for good.
+    ///
+    /// The pool is leaked: dropping a socket would lose any FIN it still has to send, and
+    /// `bufs` could never be borrowed again.
+    pub fn new<const N: usize, const TX_SZ: usize, const RX_SZ: usize>(
+        stack: ::embassy_net::Stack<'static>,
+        bufs: &'static mut EmbassySocketBuffers<N, TX_SZ, RX_SZ>,
+    ) -> &'static Self {
+        let slots = bufs
+            .bufs
+            .iter_mut()
+            .map(|(tx, rx)| Slot {
+                socket: Some(::embassy_net::tcp::TcpSocket::new(stack, rx, tx)),
+                usage: SlotUsage::Idle,
+            })
+            .collect();
+        Box::leak(Box::new(Self {
+            slots: core::cell::RefCell::new(slots),
+            dropped: ::embassy_sync::signal::Signal::new(),
+        }))
+    }
+
+    /// Settles closing connections for as long as the program runs; spawn it as a task.
+    ///
+    /// Sleeps while nothing is closing, and wakes when a stream is dropped.
+    pub async fn run(&self) -> ! {
+        loop {
+            if self.settle_pass().await {
+                ::embassy_time::Timer::after_millis(TASK_SETTLE_POLL_MS).await;
+            } else {
+                self.dropped.wait().await;
+            }
+        }
+    }
+
+    /// Applies [`settle`] to every closing socket and returns whether any is still closing.
+    async fn settle_pass(&self) -> bool {
+        let now_ms = ::embassy_time::Instant::now().as_millis();
+        let mut still_closing = false;
+        let count = self.slots.borrow().len();
+        for i in 0..count {
+            let action = {
+                let slots = self.slots.borrow();
+                match (slots[i].usage, slots[i].socket.as_ref()) {
+                    (SlotUsage::Closing { since_ms }, Some(socket)) => {
+                        (settle(socket.state(), since_ms, now_ms), since_ms)
+                    }
+                    // Out of its slot for the other settler (the task or a dial) to drain or reset.
+                    (SlotUsage::Closing { .. }, None) => {
+                        still_closing = true;
+                        continue;
+                    }
+                    _ => continue,
+                }
+            };
+            match action {
+                (SettleAction::Idle, since_ms) => {
+                    self.slots.borrow_mut()[i].usage = SlotUsage::Idle;
+                    log::trace!(
+                        "embassy socket {i} closed {} ms after its stream was dropped",
+                        now_ms.saturating_sub(since_ms)
+                    );
+                }
+                (SettleAction::Drain, _) => {
+                    self.drain(i).await;
+                    still_closing = true;
+                }
+                (SettleAction::Reset, _) => self.reset(i).await,
+            }
+        }
+        still_closing
+    }
+
+    /// Discards whatever socket `i` has received, without waiting for more.
+    async fn drain(&self, i: usize) {
+        let Some(mut socket) = self.slots.borrow_mut()[i].socket.take() else {
+            return;
+        };
+        // `read_with` resolves at once while `can_recv` holds, so this never waits on the peer.
+        // The socket is out of its slot all the same, so no `RefCell` borrow spans the `.await`.
+        let mut drained = 0usize;
+        while socket.can_recv() {
+            match socket.read_with(|buf| (buf.len(), buf.len())).await {
+                Ok(n) if n > 0 => drained += n,
+                _ => break,
+            }
+        }
+        self.slots.borrow_mut()[i].socket = Some(socket);
+        if drained > 0 {
+            log::trace!("embassy socket {i} discarded {drained} B received while closing");
+        }
+    }
+
+    /// Ends socket `i`'s connection with an RST, once it has outlived [`DRAIN_BOUND_MS`].
+    async fn reset(&self, i: usize) {
+        let Some(mut socket) = self.slots.borrow_mut()[i].socket.take() else {
+            return;
+        };
+        log::warn!(
+            "embassy socket {i} still {:?} {DRAIN_BOUND_MS} ms after its stream was dropped; sending RST",
+            socket.state()
+        );
+        socket.abort();
+        // `abort()` only queues the RST; `flush()` waits for the stack to send it.
+        let flushed = ::embassy_time::with_timeout(
+            ::embassy_time::Duration::from_millis(RST_FLUSH_BOUND_MS),
+            socket.flush(),
+        )
+        .await;
+        if flushed.is_err() {
+            log::warn!("embassy socket {i}: RST not confirmed sent within {RST_FLUSH_BOUND_MS} ms");
+        }
+        let mut slots = self.slots.borrow_mut();
+        slots[i].socket = Some(socket);
+        slots[i].usage = SlotUsage::Idle;
+    }
+
+    /// Takes a free socket, first waiting for every closing connection of the pool to settle.
+    async fn lease(&self) -> Result<(usize, ::embassy_net::tcp::TcpSocket<'static>), SocketError> {
+        let started = ::embassy_time::Instant::now();
+        loop {
+            self.settle_pass().await;
+            {
+                let mut slots = self.slots.borrow_mut();
+                let views: Vec<SlotView> = slots.iter().map(Slot::view).collect();
+                match choose_slot(&views) {
+                    Choice::Reuse(i) => {
+                        if let Some(socket) = slots[i].socket.take() {
+                            slots[i].usage = SlotUsage::Leased;
+                            log::trace!(
+                                "embassy socket {i} leased after {} ms",
+                                started.elapsed().as_millis()
+                            );
+                            return Ok((i, socket));
+                        }
+                    }
+                    Choice::Exhausted => return Err(SocketError::ResourceExhausted),
+                    Choice::Wait => {}
+                }
+            }
+            ::embassy_time::Timer::after_millis(DIAL_SETTLE_POLL_MS).await;
+        }
+    }
+
+    /// Ends a dropped stream's connection with a FIN and puts its socket back as closing.
+    fn give_back(&self, i: usize, mut socket: ::embassy_net::tcp::TcpSocket<'static>) {
+        socket.close();
+        let since_ms = ::embassy_time::Instant::now().as_millis();
+        {
+            let mut slots = self.slots.borrow_mut();
+            slots[i].socket = Some(socket);
+            slots[i].usage = SlotUsage::Closing { since_ms };
+        }
+        self.dropped.signal(());
+    }
+}
+
+/// A raw TCP connection from [`EmbassyRawStreamFactory`], on a socket borrowed from an [`EmbassySocketPool`].
+///
+/// Dropping it ends the connection with a FIN and returns the socket to the pool, which keeps it
+/// registered until the printer has closed its side too (see [`EmbassySocketPool`]).
+#[cfg(feature = "embassy")]
+pub struct EmbassyTcpStream {
+    pool: &'static EmbassySocketPool,
+    slot: usize,
+    /// `Some` until `Drop` hands it back.
+    socket: Option<::embassy_net::tcp::TcpSocket<'static>>,
+}
+
+#[cfg(feature = "embassy")]
+impl EmbassyTcpStream {
+    fn socket(
+        &mut self,
+    ) -> Result<&mut ::embassy_net::tcp::TcpSocket<'static>, ::embassy_net::tcp::Error> {
+        // Unreachable: only `Drop` takes the socket.
+        self.socket
+            .as_mut()
+            .ok_or(::embassy_net::tcp::Error::ConnectionReset)
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl Drop for EmbassyTcpStream {
+    fn drop(&mut self) {
+        if let Some(socket) = self.socket.take() {
+            self.pool.give_back(self.slot, socket);
+        }
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl embedded_io_async::ErrorType for EmbassyTcpStream {
+    type Error = ::embassy_net::tcp::Error;
+}
+
+#[cfg(feature = "embassy")]
+impl embedded_io_async::Read for EmbassyTcpStream {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.socket()?.read(buf).await
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl embedded_io_async::Write for EmbassyTcpStream {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        self.socket()?.write(buf).await
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.socket()?.flush().await
+    }
+}
+
+/// Raw (pre-TLS) connection factory for the Embassy network stack, dialing on an [`EmbassySocketPool`].
+///
+/// `Copy`, so one pool can back the factories for every channel. See [`EmbassySocketPool`] for
+/// setup, sizing, and how a dropped connection is ended.
+#[cfg(feature = "embassy")]
+#[derive(Clone, Copy)]
+pub struct EmbassyRawStreamFactory {
+    pool: &'static EmbassySocketPool,
+}
+
+#[cfg(feature = "embassy")]
+impl EmbassyRawStreamFactory {
+    /// Creates a factory that dials on `pool`'s sockets.
+    pub fn new(pool: &'static EmbassySocketPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[cfg(feature = "embassy")]
+impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory {
+    async fn dial(&self, host: &str, port: u16) -> Result<EmbassyTcpStream, SocketError> {
+        use ::embassy_net::tcp::ConnectError;
 
         // IPv4-only is deliberate, not a missing case: `host` here is always
         // `FtpsClient`'s printer IP, which traces back to either a caller-supplied
@@ -436,20 +739,36 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
         // (`proto-ipv6`) also isn't enabled in this crate's `Cargo.toml`, so a hostname or
         // IPv6 literal here is a genuine caller error, not an unsupported-but-valid input.
         let ip: core::net::Ipv4Addr = host.parse().map_err(|_| SocketError::InvalidInput)?;
-        let addr = core::net::SocketAddr::V4(core::net::SocketAddrV4::new(ip, port));
 
-        self.client
-            .connect(addr)
-            .await
-            // `embassy_net::tcp::client`'s `TcpConnect::Error` (`tcp::Error`) has a
-            // single variant, `ConnectionReset` — used for both a genuine remote RST and pool
-            // exhaustion (`TcpConnection::new` on an empty pool). Mapping it to
-            // `ConnectionRefused` fabricated a distinction the source type doesn't make, which
-            // could misroute `SocketError`-keyed retry/backoff decisions.
-            .map_err(|_| SocketError::ConnectionReset)
+        let (slot, mut socket) = self.pool.lease().await?;
+        // Every socket-creating backend disables Nagle; see `src/io/CLAUDE.md`.
+        socket.set_nagle_enabled(false);
+        // Wrapped before connecting, so a cancelled dial still hands the socket back.
+        let mut stream = EmbassyTcpStream {
+            pool: self.pool,
+            slot,
+            socket: Some(socket),
+        };
+        let connected = match stream.socket.as_mut() {
+            Some(socket) => socket.connect(core::net::SocketAddrV4::new(ip, port)).await,
+            None => Err(ConnectError::InvalidState),
+        };
+        connected.map_err(|e| match e {
+            // An RST in answer to our SYN.
+            ConnectError::ConnectionReset => SocketError::ConnectionRefused,
+            ConnectError::TimedOut => SocketError::TimedOut,
+            ConnectError::NoRoute => {
+                SocketError::Other("embassy TCP connect: no route to host".into())
+            }
+            // Unreachable: the pool leases only sockets in `Closed` or `TimeWait`.
+            ConnectError::InvalidState => {
+                log::warn!("embassy socket {slot} leased while still open");
+                SocketError::Other("embassy TCP connect: socket not closed".into())
+            }
+        })?;
+        Ok(stream)
     }
 }
-
 /// How long a dropped connection may take to close before its socket is reset.
 ///
 /// A socket counts as closed once the printer has sent its own FIN, which on a P1S took
@@ -464,7 +783,6 @@ pub(crate) const DRAIN_BOUND_MS: u64 = 10_000;
 
 /// What the socket pool does next with a socket whose connection is closing.
 #[cfg(feature = "embassy")]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettleAction {
     /// The printer has closed its side too, so the socket can be dialed again.
@@ -484,7 +802,6 @@ pub(crate) enum SettleAction {
 /// may reuse the socket (smoltcp rejects only `is_open()`, which is false there). A socket that
 /// settles exactly at the bound is `Idle`, not reset.
 #[cfg(feature = "embassy")]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
 pub(crate) fn settle(state: ::embassy_net::tcp::State, since_ms: u64, now_ms: u64) -> SettleAction {
     use ::embassy_net::tcp::State;
     if matches!(state, State::Closed | State::TimeWait) {
@@ -498,7 +815,6 @@ pub(crate) fn settle(state: ::embassy_net::tcp::State, since_ms: u64, now_ms: u6
 
 /// What the socket pool knows about one slot when `dial` picks a socket.
 #[cfg(feature = "embassy")]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlotView {
     /// Held by a live stream.
@@ -511,7 +827,6 @@ pub(crate) enum SlotView {
 
 /// The slot `dial` takes, if any.
 #[cfg(feature = "embassy")]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
     /// Dial on this slot's socket.
@@ -529,7 +844,6 @@ pub(crate) enum Choice {
 /// [`DRAIN_BOUND_MS`], so the wait ends. Only when every slot is held by a live stream does
 /// the dial fail at once: freeing one is the consumer's call, not the pool's.
 #[cfg(feature = "embassy")]
-#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
 pub(crate) fn choose_slot(slots: &[SlotView]) -> Choice {
     if slots.contains(&SlotView::Closing) {
         Choice::Wait

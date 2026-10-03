@@ -78,7 +78,7 @@ pub enum SocketError {
     /// populates this; a backend that only knows "the handshake failed" still returns the
     /// error it always did rather than guessing a cause (GitHub issue #157).
     CertificateInvalid(CertificateFailure),
-    /// The device ran out of memory before the operation could finish.
+    /// The device ran out of memory, or of a fixed local resource, before the operation could finish.
     ///
     /// A local condition that says nothing about the peer, which may not have been reached: an
     /// ESP-IDF handshake that cannot allocate its trust store fails before sending anything over
@@ -94,6 +94,10 @@ pub enum SocketError {
     /// file-descriptor exhaustion are deliberately left as `Other`, and ESP-IDF's hardware-AES
     /// path reports its allocation failure as mbedTLS's generic error, which also stays `Other`
     /// (GitHub issue #385).
+    ///
+    /// Also produced on Embassy when a dial finds every socket of its `EmbassySocketPool` held by
+    /// a live stream. That too is local, says nothing about the printer, and clears once a stream
+    /// is dropped.
     ResourceExhausted,
     /// Catch-all variant for atypical OS-specific networking errors.
     Other(Cow<'static, str>),

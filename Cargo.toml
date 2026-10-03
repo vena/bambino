@@ -47,7 +47,7 @@ embassy = [
     "dep:embassy-net",
     "dep:embassy-time",
     "dep:mbedtls-rs",
-    "dep:embedded-nal-async",
+    "dep:embassy-sync",
     "dep:rand_core",
     "alloc",
 ]
@@ -108,6 +108,21 @@ esp-idf-svc = { version = "0.53.0", optional = true }
 socket2 = { version = "0.6", optional = true }
 
 # Embassy runtime stack components (for bare-metal integrations)
+#
+# WARNING: do not change the `embassy-net` version (or let the TCP stack under it change)
+# without re-running the hardware check. bambino must close every TCP connection cleanly, so
+# the printer is always told it has ended. embassy-net's own `TcpClient` cannot: dropping a
+# `TcpConnection` removes the socket before its FIN is sent. `io/embassy.rs` therefore never
+# removes a socket. It pools them, ends each connection with `close()` (an `abort()` RST only
+# after a bound), and reuses the socket once the printer has closed its side. That relies on
+# stack behavior the compiler cannot check:
+#   - a socket left registered after `close()`/`abort()` still sends its FIN/RST;
+#   - `connect()` accepts a socket in `Closed`/`TimeWait`;
+#   - `close()` does not reset the socket timeout clock (smoltcp 0.13.1; xarxa differs),
+#     which is why the pool bounds closing itself instead of using `set_timeout`.
+# Before changing it: `make test-embassy-host`, then the socket-teardown stages of
+# `embassy-hw-probe` against a printer (see that directory's README).
+#
 # Explicitly propagate "proto-ipv4" and "medium-ethernet" features to satisfy smoltcp stack requirements
 # when default-features are disabled in non-std environments.
 embassy-net = { version = "0.9.1", default-features = false, features = [
@@ -117,6 +132,9 @@ embassy-net = { version = "0.9.1", default-features = false, features = [
     "medium-ethernet",
 ], optional = true }
 embassy-time = { version = "0.5.1", optional = true }
+# `Signal`, which wakes `EmbassySocketPool`'s task when a stream is dropped. Already a
+# dependency of embassy-net 0.9.1 at this version, so this adds no new crate.
+embassy-sync = { version = "0.8.0", optional = true }
 # Real TLS 1.2+1.3 for Embassy via MbedTLS (hw-accelerated crypto on ESP32 targets).
 # `log` routes MbedTLS's own debug logging into this crate's `log` facade; the `tls` bundle
 # (default) gives X.509 parsing, ECDSA/RSA, and the record-buffer sizes FTPS/MQTT need.
@@ -144,14 +162,6 @@ mbedtls-rs = { version = "0.3", default-features = false, features = [
     "tls",
     "log",
 ], optional = true }
-
-# TcpConnect trait for embassy-net's built-in TCP connection pool (`embassy_net::tcp::client`),
-# used by `EmbassyFtpDataStreamFactory` to hand out repeatable data-channel connections from a
-# `&self`-only factory method — see that type's doc comment for why a pool (not a single
-# reused socket, and not a per-call fresh allocation) is the right shape here. Already an
-# unconditional (non-optional) dependency of embassy-net itself, at the same version this
-# pins, so this adds no new transitive dependency, just makes the trait nameable in our code.
-embedded-nal-async = { version = "0.9.0", default-features = false, optional = true }
 
 # Cryptographically secure random number generators for standard embedded workspace interfaces.
 rand_core = { version = "0.10.1", default-features = false, optional = true }

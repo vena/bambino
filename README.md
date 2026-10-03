@@ -568,22 +568,34 @@ There's no buffer-consumption limit. `connect()` can be called repeatedly on the
 
 **`negotiated_version` reports the real version**, via `mbedtls-rs` 0.3's `Session::tls_version()`. `FtpsClient`'s TLS-1.2 enforcement check for P2S/X2D therefore passes under Embassy whenever the printer negotiates 1.2 of its own accord, which is what those two models appear to do. `None` from this method means the handshake hasn't completed (or the session was closed), never "this backend can't tell". The connector sets only a minimum version, so it cannot force 1.2 on a peer that insists on 1.3 — in that case the check fails closed, and `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` is the way through; see the "TLS configuration" section above.
 
-**Embassy raw streams:** `EmbassyRawStreamFactory` wraps `embassy_net`'s own `TcpClient`/`TcpClientState` connection pool, used for both MQTT's lazy connect and FTPS's data channel. `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates `N` buffer pairs; `N = 1` covers FTPS's usage, since data-channel connections are always sequential (MQTT needs its own factory instance since it's a separate, concurrent connection). Both need `'static` storage (`static_cell::StaticCell` is the standard way to get that; it's not a bambino dependency). `dial`'s host must be a literal IPv4 address. Bambu printers are always addressed that way, so this isn't a limitation in practice:
+**Embassy raw streams:** `EmbassyRawStreamFactory` dials on an `EmbassySocketPool`, a fixed set of TCP sockets that bambino creates once and keeps registered with the network stack for the life of the program. One pool serves every channel: the factory is `Copy`, so hand the same one to MQTT, FTPS and the camera. The pool needs `'static` buffer storage (`static_cell::StaticCell` is the standard way to get that; it isn't a bambino dependency), and a task that you spawn once:
 
 ```rust
-use bambino::io::embassy::{EmbassyRawStreamFactory, EmbassyTimer};
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use bambino::io::embassy::{
+    EmbassyRawStreamFactory, EmbassySocketBuffers, EmbassySocketPool, EmbassyTimer,
+};
 use static_cell::StaticCell;
 
-static TCP_CLIENT_STATE: StaticCell<TcpClientState<1, 2048, 2048>> = StaticCell::new();
-static TCP_CLIENT: StaticCell<TcpClient<'static, 1, 2048, 2048>> = StaticCell::new();
+static SOCKET_BUFS: StaticCell<EmbassySocketBuffers<3, 2048, 2048>> = StaticCell::new();
 
-let state = TCP_CLIENT_STATE.init(TcpClientState::new());
-let client = TCP_CLIENT.init(TcpClient::new(stack, state));
-let factory = EmbassyRawStreamFactory::new(client);
+#[embassy_executor::task]
+async fn socket_pool_task(pool: &'static EmbassySocketPool) -> ! {
+    pool.run().await
+}
 
-let mut printer = printer.with_ftps(ftps_tls, factory, EmbassyTimer);
+let pool = EmbassySocketPool::new(stack, SOCKET_BUFS.init(EmbassySocketBuffers::new()));
+spawner.spawn(socket_pool_task(pool).unwrap());
+let factory = EmbassyRawStreamFactory::new(pool);
+
+let mut printer = PrinterClient::new(mqtt_tls, factory, identity)
+    .with_timer(EmbassyTimer)
+    .with_ftps(ftps_tls, factory, EmbassyTimer);
 ```
+
+- **Why a pool, and why the task.** Dropping a connection closes it cleanly, with a FIN, so the printer always learns the connection is over. embassy-net's own `TcpClient` can't do that: it loses the FIN by removing the socket before it is sent, which is why bambino doesn't use it. A closing socket is reused only once the printer has closed its side too. Until then the pool discards whatever the printer still sends, and after 10 s it ends the connection with an RST. The task does this as soon as the printer allows. Without it, a dial does it instead, but a transfer cancelled midway then holds one of the printer's connection slots until your next dial.
+- **Sizing.** `N` is the most connections bambino holds at once. FTPS alone holds two, control and data, through the same factory. `connect_all` with MQTT, FTPS and the camera holds three, and four once a file transfer starts. A dial waits while one of bambino's own earlier connections is still closing, so it never needs a spare socket. When all `N` are held by live streams, a dial fails at once with `SocketError::ResourceExhausted`. Printers cap their connections (a P1S accepts 4 FTPS sessions and 2 camera clients), and slicers, the mobile app and Home Assistant often share them. A smaller `N` caps bambino's share and leaves room for those tools.
+- **Count the sockets in `StackResources`.** The pool's `N` sockets stay registered for good, on top of whatever else the stack needs (DHCP, DNS, UDP discovery).
+- `dial`'s host must be a literal IPv4 address. Bambu printers are always addressed that way, so this isn't a limitation in practice.
 
 **ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK`, so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI. `PrinterClient::with_connect_timeout()` and `EspIdfTlsConnector::with_connect_timeout()` are two independent budgets on this platform. The connector is opaque by the time it reaches `PrinterClient::new()`, so setting one doesn't affect the other. Set both explicitly and keep them in sync (including `0`, which disables the timeout on either).
 
