@@ -207,3 +207,15 @@ rustls = "0.23.41"
 # The `std` impl (a plain mutex) is the intended stand-in for exactly this case. Dev-only, so
 # no impl is ever registered for a real firmware build — registering two would be a hard error.
 critical-section = { version = "1.2.0", features = ["std"] }
+
+# A host time driver for `tests/embassy_socket_teardown_test.rs`, which runs two real
+# embassy-net stacks on the host: their runners need `embassy_time::Instant::now()`, and on a
+# real target the HAL supplies that driver. Dev-only for the same reason as `critical-section`
+# above: a firmware build must register its own, and two would be a link error.
+# `generic-queue-8`: the test has no embassy-executor, whose integrated timer queue would
+# otherwise supply `__embassy_time_queue_item_from_waker`; without it the link fails.
+embassy-time = { version = "0.5.1", features = ["std", "generic-queue-8"] }
+
+# `block_on`, `select3` and `join` for that test, which polls both stack runners and its own
+# body on one thread. Already in the dependency tree via embassy-net, at this version.
+embassy-futures = "0.1.2"

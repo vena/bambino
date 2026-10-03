@@ -118,9 +118,15 @@ check-fast:
 #
 # Kept inside check-fast rather than check-all: it guards a backend nobody can test on
 # hardware here, so the cheap host-side half should not be the part that gets skipped.
+#
+# embassy_socket_teardown_test runs two real embassy-net stacks over an in-memory link and
+# checks what a dropped raw stream puts on the wire. It is the guard against an embassy-net
+# change silently bringing back a connection that ends with no FIN, which the compiler cannot
+# see.
 test-embassy-host:
 	cargo test --no-default-features --features "embassy,std" --lib
 	cargo test --no-default-features --features "embassy,std" --test embassy_tls_version_test
+	cargo test --no-default-features --features "embassy,std" --test embassy_socket_teardown_test
 
 # Wraps scripts/check-esp-idf.sh. Not run by check-fast/check-all's CI job on
 # every push — see .github/workflows/esp-idf.yml for why (path-filtered, and
