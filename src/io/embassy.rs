@@ -449,3 +449,206 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize>
             .map_err(|_| SocketError::ConnectionReset)
     }
 }
+
+/// How long a dropped connection may take to close before its socket is reset.
+///
+/// A socket counts as closed once the printer has sent its own FIN, which on a P1S took
+/// 2–609 ms after ours on every port bambino uses, and 1610 ms once. Until then the printer's
+/// application may still be reading what we sent, and an RST would make its TCP stack discard
+/// that data (the end of an uploaded file, say). Past this bound the printer is not reading, so
+/// an RST has nothing left to destroy. Not enforced with `TcpSocket::set_timeout`: on smoltcp
+/// 0.13.1, `close()` doesn't restart the timeout clock, so an idle connection would get an RST
+/// in place of its FIN.
+#[cfg(feature = "embassy")]
+pub(crate) const DRAIN_BOUND_MS: u64 = 10_000;
+
+/// What the socket pool does next with a socket whose connection is closing.
+#[cfg(feature = "embassy")]
+#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettleAction {
+    /// The printer has closed its side too, so the socket can be dialed again.
+    Idle,
+    /// Still closing: read and discard whatever the printer sends, so a printer that was
+    /// mid-transfer can finish and close instead of stalling on a full receive window.
+    Drain,
+    /// Still closing at [`DRAIN_BOUND_MS`]: end it with an RST.
+    Reset,
+}
+
+/// Decides what to do with a closing socket in `state` whose stream was dropped at `since_ms`.
+///
+/// Only `Closed` and `TimeWait` are settled. `FinWait2` is not: the printer's TCP stack has
+/// acked our FIN, but until the printer sends its own, its application may not have read
+/// everything we sent. `TimeWait` is local only; the printer has already closed, so `connect()`
+/// may reuse the socket (smoltcp rejects only `is_open()`, which is false there). A socket that
+/// settles exactly at the bound is `Idle`, not reset.
+#[cfg(feature = "embassy")]
+#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
+pub(crate) fn settle(state: ::embassy_net::tcp::State, since_ms: u64, now_ms: u64) -> SettleAction {
+    use ::embassy_net::tcp::State;
+    if matches!(state, State::Closed | State::TimeWait) {
+        SettleAction::Idle
+    } else if now_ms.saturating_sub(since_ms) >= DRAIN_BOUND_MS {
+        SettleAction::Reset
+    } else {
+        SettleAction::Drain
+    }
+}
+
+/// What the socket pool knows about one slot when `dial` picks a socket.
+#[cfg(feature = "embassy")]
+#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SlotView {
+    /// Held by a live stream.
+    Leased,
+    /// Free: never used, or its last connection has fully closed.
+    Idle,
+    /// Its stream was dropped and the connection hasn't finished closing (see [`settle`]).
+    Closing,
+}
+
+/// The slot `dial` takes, if any.
+#[cfg(feature = "embassy")]
+#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Choice {
+    /// Dial on this slot's socket.
+    Reuse(usize),
+    /// A previous connection is still closing; settle it and check again.
+    Wait,
+    /// Every slot is held by a live stream.
+    Exhausted,
+}
+
+/// Picks the slot for a new connection, after closing slots have been settled.
+///
+/// Any closing slot means [`Choice::Wait`], even with an idle one free, so the printer never
+/// holds an old connection of ours alongside a new one. [`settle`] resets a closing socket at
+/// [`DRAIN_BOUND_MS`], so the wait ends. Only when every slot is held by a live stream does
+/// the dial fail at once: freeing one is the consumer's call, not the pool's.
+#[cfg(feature = "embassy")]
+#[cfg_attr(not(test), expect(dead_code, reason = "used by the socket pool"))]
+pub(crate) fn choose_slot(slots: &[SlotView]) -> Choice {
+    if slots.contains(&SlotView::Closing) {
+        Choice::Wait
+    } else {
+        slots
+            .iter()
+            .position(|s| *s == SlotView::Idle)
+            .map_or(Choice::Exhausted, Choice::Reuse)
+    }
+}
+
+#[cfg(all(test, feature = "embassy"))]
+mod pool_policy_tests {
+    use super::{Choice, DRAIN_BOUND_MS, SettleAction, SlotView, choose_slot, settle};
+    use ::embassy_net::tcp::State;
+
+    const SINCE: u64 = 1_000;
+
+    /// Every state a socket can be in after `close()`, other than the two settled ones.
+    const STILL_CLOSING: [State; 9] = [
+        State::Listen,
+        State::SynSent,
+        State::SynReceived,
+        State::Established,
+        State::FinWait1,
+        State::FinWait2,
+        State::CloseWait,
+        State::Closing,
+        State::LastAck,
+    ];
+
+    #[test]
+    fn closed_and_time_wait_are_idle_at_any_age() {
+        for state in [State::Closed, State::TimeWait] {
+            for now in [
+                SINCE,
+                SINCE + 1,
+                SINCE + DRAIN_BOUND_MS,
+                SINCE + 10 * DRAIN_BOUND_MS,
+            ] {
+                assert_eq!(
+                    settle(state, SINCE, now),
+                    SettleAction::Idle,
+                    "{state:?} at {now}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_other_state_drains_before_the_bound() {
+        for state in STILL_CLOSING {
+            for now in [SINCE, SINCE + DRAIN_BOUND_MS - 1] {
+                assert_eq!(
+                    settle(state, SINCE, now),
+                    SettleAction::Drain,
+                    "{state:?} at {now}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_other_state_resets_from_the_bound() {
+        for state in STILL_CLOSING {
+            for now in [SINCE + DRAIN_BOUND_MS, SINCE + DRAIN_BOUND_MS + 1] {
+                assert_eq!(
+                    settle(state, SINCE, now),
+                    SettleAction::Reset,
+                    "{state:?} at {now}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fin_wait_2_is_not_settled() {
+        // Our FIN is acked, but the printer may not have read our data yet; an RST here could
+        // truncate an upload.
+        assert_eq!(
+            settle(State::FinWait2, SINCE, SINCE + 1),
+            SettleAction::Drain
+        );
+    }
+
+    #[test]
+    fn clock_before_drop_time_drains() {
+        assert_eq!(
+            settle(State::FinWait1, SINCE, SINCE - 1),
+            SettleAction::Drain
+        );
+    }
+
+    #[test]
+    fn reuses_first_idle_slot() {
+        let slots = [SlotView::Leased, SlotView::Idle, SlotView::Idle];
+        assert_eq!(choose_slot(&slots), Choice::Reuse(1));
+    }
+
+    #[test]
+    fn waits_behind_a_closing_slot_even_with_one_idle() {
+        let slots = [SlotView::Idle, SlotView::Closing, SlotView::Leased];
+        assert_eq!(choose_slot(&slots), Choice::Wait);
+    }
+
+    #[test]
+    fn waits_when_the_only_free_slot_is_closing() {
+        let slots = [SlotView::Leased, SlotView::Closing];
+        assert_eq!(choose_slot(&slots), Choice::Wait);
+    }
+
+    #[test]
+    fn exhausted_when_every_slot_is_leased() {
+        let slots = [SlotView::Leased, SlotView::Leased];
+        assert_eq!(choose_slot(&slots), Choice::Exhausted);
+    }
+
+    #[test]
+    fn empty_pool_is_exhausted() {
+        assert_eq!(choose_slot(&[]), Choice::Exhausted);
+    }
+}
