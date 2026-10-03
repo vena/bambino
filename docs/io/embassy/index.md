@@ -14,7 +14,10 @@ stack and `mbedtls-rs`.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`EmbassyRawStreamFactory`](#embassyrawstreamfactory) | struct | Raw (pre-TLS) connection factory for the Embassy network stack. |
+| [`EmbassyRawStreamFactory`](#embassyrawstreamfactory) | struct | Raw (pre-TLS) connection factory for the Embassy network stack, dialing on an [`EmbassySocketPool`](#embassysocketpool). |
+| [`EmbassySocketBuffers`](#embassysocketbuffers) | struct | Buffer storage for an [`EmbassySocketPool`](#embassysocketpool) of `N` sockets. |
+| [`EmbassySocketPool`](#embassysocketpool) | struct | A fixed set of TCP sockets that every connection bambino makes over embassy-net is dialed on. |
+| [`EmbassyTcpStream`](#embassytcpstream) | struct | A raw TCP connection from [`EmbassyRawStreamFactory`](#embassyrawstreamfactory), on a socket borrowed from an [`EmbassySocketPool`](#embassysocketpool). |
 | [`EmbassyTimer`](#embassytimer) | struct | Timer implementation designed for the hardware microsecond clock in Embassy. |
 | [`EmbassyTlsConnector`](#embassytlsconnector) | struct | TLS Secure connector wrapping an `mbedtls-rs` async `Session`. |
 | [`EmbassyTlsStream`](#embassytlsstream) | struct | TLS stream returned by [`EmbassyTlsConnector::connect`](#embassytlsconnector), wrapping an `mbedtls-rs` `Session` so a failed read or write keeps its cause. |
@@ -22,58 +25,178 @@ stack and `mbedtls-rs`.
 
 ## Types
 
-### `EmbassyRawStreamFactory<const N: usize, const TX_SZ: usize, const RX_SZ: usize>`
+### `EmbassyRawStreamFactory`
 
 ```rust
-struct EmbassyRawStreamFactory<const N: usize, const TX_SZ: usize, const RX_SZ: usize> {
+struct EmbassyRawStreamFactory {
     // [REDACTED: Private Fields]
 }
 ```
 
-Raw (pre-TLS) connection factory for the Embassy network stack.
+Raw (pre-TLS) connection factory for the Embassy network stack, dialing on an [`EmbassySocketPool`](#embassysocketpool).
 
-Unlike Tokio's `TokioRawStreamFactory` (which dials a fresh `TcpStream` per call),
-`embassy_net::tcp::TcpSocket` needs pre-allocated rx/tx buffer slices at construction —
-there's no way to dial a raw connection without them. `RawStreamFactory::dial` is called
-repeatedly from `&self` (MQTT's lazy reconnect, and FTPS's control channel once plus one
-data-channel connect per transfer — `list_directory`, `upload_file`, `download_file` each
-open and close their own), so a single buffer pair handed out once (Phase 2's
-`EmbassyTlsConnector` pattern) isn't enough here.
-
-Instead of hand-rolling a buffer pool, this wraps `embassy_net::tcp::client::TcpClient` —
-embassy-net's own built-in connection pool (`embassy_net::tcp::client` module), which
-solves exactly this problem: `TcpClientState<N, TX_SZ, RX_SZ>` pre-allocates N buffer
-pairs, `TcpClient::connect()` checks one out and returns a `TcpConnection` that
-automatically returns its slot to the pool on `Drop` — no unsafe code needed on our side,
-and no risk of the panic-based mutual exclusion Phase 2 removed from `EmbassyTlsConnector`
-(a pool with `N` slots simply fails a `connect()` call with `Error::ConnectionReset` if
-all `N` are checked out, rather than panicking or aliasing memory).
-
-**Why `&'static TcpClient`, not an owned one:** `RawStreamFactory<RawIO>`'s `RawIO`
-is a fixed type for the whole trait impl, not parameterized per call — so the returned
-`TcpConnection<'x, ...>`'s lifetime `'x` must be a *constant*, chosen once, not tied to
-however long any individual `dial` call happens to borrow `&self` for.
-Storing an *owned* `TcpClient<'d, ...>` field can't satisfy that: borrowing a field out of
-`&self` can never outlive that particular call's borrow of `self`. Storing a `&'static`
-*reference* sidesteps the problem entirely — copying a `&'static` reference out from
-behind an arbitrarily short `&self` borrow yields an independent value that is itself
-still valid for `'static`, so `TcpConnection<'static, ...>` comes out clean regardless of
-how briefly any given call borrowed the factory. This pushes the actual `'static` storage
-question (a `static` item, `static_cell::StaticCell`, or similar) to application setup
-code, matching Phase 2's "caller supplies the buffer storage" philosophy — see the
-README's Embassy section for a worked example.
+`Copy`, so one pool can back the factories for every channel. See [`EmbassySocketPool`](#embassysocketpool) for
+setup, sizing, and how a dropped connection is ended.
 
 #### Implementations
 
-- <span id="embassyrawstreamfactory-new"></span>`fn new(client: &'static ::embassy_net::tcp::client::TcpClient<'static, N, TX_SZ, RX_SZ>) -> Self`
+- <span id="embassyrawstreamfactory-new"></span>`fn new(pool: &'static EmbassySocketPool) -> Self` — [`EmbassySocketPool`](#embassysocketpool)
 
-  `client` must be `'static` (e.g. built from a `static`/`StaticCell`-held `TcpClientState<N, TX_SZ, RX_SZ>`) — see this type's doc comment for why.
+  Creates a factory that dials on `pool`'s sockets.
 
 #### Trait Implementations
 
-##### `impl RawStreamFactory<TcpConnection<'static, N, TX_SZ, RX_SZ>> for EmbassyRawStreamFactory<N, TX_SZ, RX_SZ>`
+##### `impl Clone for EmbassyRawStreamFactory`
 
-- <span id="embassyrawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<::embassy_net::tcp::client::TcpConnection<'static, N, TX_SZ, RX_SZ>, SocketError>` — [`SocketError`](../index.md#socketerror)
+- <span id="embassyrawstreamfactory-clone"></span>`fn clone(&self) -> EmbassyRawStreamFactory` — [`EmbassyRawStreamFactory`](#embassyrawstreamfactory)
+
+##### `impl Copy for EmbassyRawStreamFactory`
+
+##### `impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory`
+
+- <span id="embassyrawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<EmbassyTcpStream, SocketError>` — [`EmbassyTcpStream`](#embassytcpstream), [`SocketError`](../index.md#socketerror)
+
+### `EmbassySocketBuffers<const N: usize, const TX_SZ: usize, const RX_SZ: usize>`
+
+```rust
+struct EmbassySocketBuffers<const N: usize, const TX_SZ: usize, const RX_SZ: usize> {
+    // [REDACTED: Private Fields]
+}
+```
+
+Buffer storage for an [`EmbassySocketPool`](#embassysocketpool) of `N` sockets.
+
+Each socket gets a `TX_SZ`-byte send buffer and an `RX_SZ`-byte receive buffer. Plain byte
+arrays, so it can be built in a `const` context and held in a `static_cell::StaticCell`;
+[`EmbassySocketPool::new`](#embassysocketpool) borrows it for the rest of the program.
+
+#### Implementations
+
+- <span id="embassysocketbuffers-new"></span>`const fn new() -> Self`
+
+  Creates zeroed buffers.
+
+#### Trait Implementations
+
+##### `impl Default for EmbassySocketBuffers<N, TX_SZ, RX_SZ>`
+
+- <span id="embassysocketbuffers-default"></span>`fn default() -> Self`
+
+### `EmbassySocketPool`
+
+```rust
+struct EmbassySocketPool {
+    // [REDACTED: Private Fields]
+}
+```
+
+A fixed set of TCP sockets that every connection bambino makes over embassy-net is dialed on.
+
+**Why bambino owns the sockets.** embassy-net removes a `TcpSocket` from the stack when it is
+dropped, and removing it sends nothing: a FIN that `close()` queued a moment earlier is lost,
+and the peer is never told the connection ended. embassy-net's own `TcpClient` pool drops its
+sockets exactly that way, so it cannot close a connection cleanly. This pool creates its `N`
+sockets once and never removes them. A dropped [`EmbassyTcpStream`](#embassytcpstream) calls `close()` and hands
+its socket back, the stack runner sends the FIN, and the socket is dialed again once the
+connection has fully closed (`connect()` accepts a socket in `Closed` or `TimeWait`). Reusing
+the same sockets for the program's life is also what lets their `&'static mut` buffers be
+borrowed without `unsafe`.
+
+**How a connection ends.** Always with a FIN, never an RST up front: an RST makes the printer
+discard data it has acked but not yet read, such as the end of an uploaded file. The socket
+counts as free only once the printer has sent its own FIN. Until then the pool reads and
+discards whatever the printer still sends, so a transfer cancelled midway can finish and close
+instead of stalling on a full receive window. A connection still closing 10 s after the drop
+gets an RST. The pool enforces that bound itself rather than with `TcpSocket::set_timeout`: on
+smoltcp 0.13.1, `close()` doesn't restart the timeout clock, so an idle connection would get
+an RST in place of its FIN.
+
+**Waiting its turn.** A dial waits while any connection of this pool is still closing, so the
+printer, which caps concurrent connections, never holds an old bambino connection alongside a
+new one. A dial fails at once with [`SocketError::ResourceExhausted`](../index.md#socketerror) when every socket is held
+by a live stream. Size `N` as the most connections held at once: FTPS alone holds control and
+data together. `N` also caps how many of the printer's connection slots bambino can take, so a
+smaller `N` leaves more room for other tools. The `N` sockets stay registered for the
+program's life, so the stack's `StackResources` must count them.
+
+**The pool task.** [`run`](#embassysocketpool) settles closing connections as soon as the printer
+allows; spawn it once. Without it a dial settles them itself, but a connection dropped
+mid-transfer then stays half-open, holding a printer slot, until the next dial.
+
+One pool serves every channel: hand copies of the same [`EmbassyRawStreamFactory`](#embassyrawstreamfactory) to MQTT,
+FTPS and the camera.
+
+```ignore
+static SOCKET_BUFS: StaticCell<EmbassySocketBuffers<3>> = StaticCell::new();
+
+#[embassy_executor::task]
+async fn socket_pool_task(pool: &'static EmbassySocketPool) -> ! {
+    pool.run().await
+}
+
+let pool = EmbassySocketPool::new(stack, SOCKET_BUFS.init(EmbassySocketBuffers::new()));
+spawner.spawn(socket_pool_task(pool).unwrap());
+let factory = EmbassyRawStreamFactory::new(pool);
+```
+
+Like embassy-net's `Stack`, the pool is neither `Send` nor `Sync`: use it from the executor
+that runs the network stack.
+
+#### Implementations
+
+- <span id="embassysocketpool-new"></span>`fn new<const N: usize, const TX_SZ: usize, const RX_SZ: usize>(stack: ::embassy_net::Stack<'static>, bufs: &'static mut EmbassySocketBuffers<N, TX_SZ, RX_SZ>) -> &'static Self` — [`EmbassySocketBuffers`](#embassysocketbuffers)
+
+  Creates one socket per buffer pair in `bufs`, registered on `stack` for good.
+
+  The pool is leaked: dropping a socket would lose any FIN it still has to send, and
+  `bufs` could never be borrowed again.
+
+- <span id="embassysocketpool-run"></span>`async fn run(&self) -> never`
+
+  Settles closing connections for as long as the program runs; spawn it as a task.
+
+  Sleeps while nothing is closing, and wakes when a stream is dropped.
+
+#### Trait Implementations
+
+### `EmbassyTcpStream`
+
+```rust
+struct EmbassyTcpStream {
+    // [REDACTED: Private Fields]
+}
+```
+
+A raw TCP connection from [`EmbassyRawStreamFactory`](#embassyrawstreamfactory), on a socket borrowed from an [`EmbassySocketPool`](#embassysocketpool).
+
+Dropping it ends the connection with a FIN and returns the socket to the pool, which keeps it
+registered until the printer has closed its side too (see [`EmbassySocketPool`](#embassysocketpool)).
+
+#### Trait Implementations
+
+##### `impl AsyncIo for EmbassyTcpStream`
+
+##### `impl Drop for EmbassyTcpStream`
+
+- <span id="embassytcpstream-drop"></span>`fn drop(&mut self)`
+
+##### `impl ErrorType for EmbassyTcpStream`
+
+- <span id="embassytcpstream-errortype-type-error"></span>`type Error = Error`
+
+##### `impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory`
+
+- <span id="embassyrawstreamfactory-rawstreamfactory-dial"></span>`async fn dial(&self, host: &str, port: u16) -> Result<EmbassyTcpStream, SocketError>` — [`EmbassyTcpStream`](#embassytcpstream), [`SocketError`](../index.md#socketerror)
+
+##### `impl Read for EmbassyTcpStream`
+
+- <span id="embassytcpstream-read"></span>`async fn read(&mut self, buf: &mut [u8]) -> Result<usize, <Self as >::Error>`
+
+##### `impl Write for EmbassyTcpStream`
+
+- <span id="embassytcpstream-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
+
+- <span id="embassytcpstream-write-flush"></span>`async fn flush(&mut self) -> Result<(), <Self as >::Error>`
 
 ### `EmbassyTimer`
 
