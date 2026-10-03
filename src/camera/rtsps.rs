@@ -60,7 +60,7 @@ pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 ///
 /// Returns [`Error::ProtocolViolation`] if `access_code` is empty or contains any
 /// character outside ASCII letters/digits. Genuine printer-issued LAN access codes are
-/// always 8 uppercase ASCII alphanumeric characters, so a rejection here almost always
+/// always 8 case-sensitive ASCII alphanumeric characters, so a rejection here almost always
 /// means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
 /// valid-but-unusual code — surfacing it as an error catches that mistake instead of
 /// silently building a malformed URL.

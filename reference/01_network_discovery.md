@@ -218,7 +218,7 @@ Two caveats before relying on this:
 #### Authentication Credentials
 Local MQTTS and FTPS sessions utilize a unified credential pair:
 *   **Username**: `bblp`
-*   **Password**: The 8-character, uppercase alphanumeric access code printed on the machine's physical LCD screen.
+*   **Password**: The 8-character alphanumeric access code shown on the machine's LCD screen. It is case-sensitive and is not always uppercase: a P1S showed a code of digits and lowercase letters, which authenticated over both FTPS (`bambino-cli files list`) and MQTT (`bambino-cli monitor`) as shown and was refused on both with the letters uppercased. Pass it through exactly as displayed; never case-normalize it.
 
 ---
 

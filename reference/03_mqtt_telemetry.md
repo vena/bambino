@@ -10,7 +10,7 @@ Local broker interaction occurs via MQTT over TLS (MQTTS) on Port `8883`. The lo
 *   **Host Port**: `8883`
 *   **MQTT Authentication**:
     *   **Username**: `bblp`
-    *   **Password**: `<access_code>` (The uppercase 8-character LAN access code)
+    *   **Password**: `<access_code>` (The case-sensitive 8-character LAN access code, exactly as displayed — it may contain lowercase letters; see `01_network_discovery.md`, Authentication Credentials)
 *   **Topic Topology**:
     *   **Publish Topic (Command channel)**: `device/{serial_number}/request`
     *   **Subscription Topic (Status channel)**: `device/{serial_number}/report`
