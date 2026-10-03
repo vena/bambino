@@ -20,6 +20,7 @@ rustflags = [
 # `bambino::io::embassy=debug`: that is where the raw `MbedtlsError(..)` codes behind a failed
 # handshake or read are logged (added for the #385 sweep, kept because the codes are what a
 # probe transcript needs). Parsed at build time by esp-println, so a change here needs a rebuild.
-# All of `bambino` at debug shows where `connect_all()` and a reconnect spend their time;
-# narrow it again for the next investigation.
-ESP_LOG = "info,bambino=debug"
+# `bambino::io::embassy=trace`: the socket pool logs when each dropped connection closed, how
+# much it discarded while closing, how long a dial waited, and any RST it sent. The socket-pool
+# hardware check reads its close times from those lines.
+ESP_LOG = "info,bambino=debug,bambino::io::embassy=trace"

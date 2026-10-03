@@ -53,6 +53,18 @@ permits only one instance per process.
 types, because a reimplementation of them in this file can pass while the real
 code still fails.
 
+## Re-running the socket teardown check
+
+The root `Cargo.toml` warning above `embassy-net` asks for this before any
+embassy-net or smoltcp change. bambino must close every TCP connection cleanly,
+with a FIN, and only hardware shows whether a stack change still lets it.
+
+The check is the probe committed as "probe: hardware check of bambino's embassy
+socket pool" (`git log --grep 'embassy socket pool' -- embassy-hw-probe/`).
+Restore its `src/main.rs`, `Cargo.toml` and `.cargo/config.toml`, run it, then
+put the current investigation back. The `src/main.rs` doc comment has the
+stages, the pass conditions and how to run it.
+
 ## Running it
 
 ```sh

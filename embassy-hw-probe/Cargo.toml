@@ -16,8 +16,21 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[features]
+# Stage 1 only, with the drop done the way embassy-net's `TcpClient` does it (`close()`, then
+# the socket removed before its FIN is sent), for comparison with the default run.
+control = []
+
 [dependencies]
 log = { version = "0.4", default-features = false }
+
+# `Read`/`Write` for the probe's read-capped stream wrapper (`Capped` in `src/main.rs`), at the
+# version bambino's `AsyncIo` is built on.
+embedded-io-async = "0.7.0"
+
+# SHA-256 of files uploaded to and downloaded from the printer, logged so a download from a
+# computer can be compared against them.
+sha2 = { version = "0.10", default-features = false }
 
 # Path dep on the crate under test so the probe exercises the *shipped* types rather than a
 # copy of them — a reimplementation here could pass while the real code still fails. Fine
