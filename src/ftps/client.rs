@@ -571,8 +571,8 @@ where
         // From here on, the server has committed to sending a final reply once the data
         // transfer concludes. Any error before that reply is read off the control channel
         // leaves it desynced for the next command — poison the client on every such path
-        // (Phase 2) so a caller gets an immediate, clear error instead of a later command
-        // silently misreading this stale reply.
+        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
+        // instead of a later command silently misreading this stale reply.
         let mut listing_payload = Vec::new();
         let mut data_channel = self.open_data_channel(raw_data_socket).await?;
         if let Err(e) = read_to_eof(
@@ -760,8 +760,8 @@ where
         // From here on, the server has committed to sending a final reply once the data
         // transfer concludes. Any error before that reply is read off the control channel
         // leaves it desynced for the next command — poison the client on every such path
-        // (Phase 2) so a caller gets an immediate, clear error instead of a later command
-        // silently misreading this stale reply.
+        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
+        // instead of a later command silently misreading this stale reply.
         let mut data_channel = self.open_data_channel(raw_data_socket).await?;
 
         for chunk in data.chunks(FTPS_UPLOAD_CHUNK_SIZE) {
@@ -868,8 +868,8 @@ where
         // From here on, the server has committed to sending a final reply once the data
         // transfer concludes. Any error before that reply is read off the control channel
         // leaves it desynced for the next command — poison the client on every such path
-        // (Phase 2) so a caller gets an immediate, clear error instead of a later command
-        // silently misreading this stale reply.
+        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
+        // instead of a later command silently misreading this stale reply.
         let mut file_payload = Vec::new();
         let mut data_channel = self.open_data_channel(raw_data_socket).await?;
         if let Err(e) = read_to_eof(

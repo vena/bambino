@@ -1,6 +1,6 @@
 //! # End-to-End Telemetry Accessor Replay
 //!
-//! Phase 2 of `TELEMETRY_TEST_PLAN.md`: replays a real P1S wire capture through the actual
+//! Replays a real P1S wire capture through the actual
 //! stateful `PrinterClient` telemetry pipeline (MQTT framing -> `poll_telemetry()` ->
 //! `update_telemetry_cache()`), one message at a time, exercising every public telemetry
 //! accessor after each poll. Every other telemetry test drives a single hand-written or
@@ -9,12 +9,13 @@
 //! after N messages of accumulated state has coverage.
 //!
 //! Chose the existing mock-MQTT-broker harness (already proven by
-//! `mqtt_test.rs::test_mqtt_client_lifecycle_and_telemetry` and
-//! `client_test.rs`'s `PrinterClient::from_mqtt` tests) over refactoring
-//! `update_telemetry_cache` to take `&mut TelemetryCache` explicitly: this session's Phase 1
-//! sweep confirmed only one new bug (not a merge-logic shape) and left five
-//! `needs-verification`, well under the three-plus-instances threshold this crate's
-//! quirks-engine precedent uses to justify a shared-strategy refactor.
+//! `mqtt_test.rs::test_mqtt_client_lifecycle_and_telemetry` and the `client_*_test.rs` files'
+//! `PrinterClient::from_mqtt` setup in `common/client.rs`) over refactoring
+//! `update_telemetry_cache` to take `&mut TelemetryCache` explicitly: the gap-finding sweep
+//! that preceded this test (upstream parsers cross-referenced against captures) confirmed only
+//! one new bug (not a merge-logic shape) and left five `needs-verification`, well under the
+//! three-plus-instances threshold this crate's quirks-engine precedent uses to justify a
+//! shared-strategy refactor.
 
 use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;

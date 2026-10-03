@@ -369,8 +369,8 @@ async fn test_ftps_directory_operations() {
     server_handle.await.expect("Mock server panicked");
 }
 
-/// review/ftps.md Phase 7c: the STAT fallback was removed (confirmed dead against real
-/// firmware — a P1S capture found `STAT` unimplemented, `502 Command not implemented`).
+/// There is no STAT fallback (it was removed as dead code: a P1S capture found `STAT`
+/// unimplemented, `502 Command not implemented`).
 /// `get_available_space()` must now surface `Err(ProtocolViolation)` directly off a failed
 /// `AVBL` reply, without ever attempting a STAT round-trip.
 #[tokio::test]
@@ -486,10 +486,11 @@ async fn test_ftps_mdtm_malformed_body_returns_error() {
     server_handle.await.expect("Mock server panicked");
 }
 
-/// Regression test for review/ftps.md Phase 2: a data-channel TLS connect failure after the
-/// server has already sent its `150` reply must poison the client, so the *next* command on the
-/// same instance fails immediately and cleanly instead of hanging, panicking, or silently
-/// misreading a stale trailing reply as its own response.
+/// Regression test for control-channel desync (`.claude/rules/ftps-poisoning.md`): a
+/// data-channel TLS connect failure after the server has already sent its `150` reply must
+/// poison the client, so the *next* command on the same instance fails immediately and cleanly
+/// instead of hanging, panicking, or silently misreading a stale trailing reply as its own
+/// response.
 #[tokio::test]
 async fn test_ftps_data_channel_failure_poisons_client() {
     let (client_control, server_control, data_container, factory) = setup();

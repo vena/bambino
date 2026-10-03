@@ -354,7 +354,7 @@ pub async fn run_mock_server_dir_ops(
 
 /// Mock server for `get_available_space()` when AVBL is unsupported.
 ///
-/// review/ftps.md Phase 7c: the STAT fallback was removed — real Bambu firmware (P1S capture)
+/// There is no STAT fallback: real Bambu firmware (P1S capture)
 /// responds to `STAT` with `502 Command not implemented`, so the fallback was dead code. The
 /// client must now surface `Err(ProtocolViolation)` directly off the failed `AVBL` reply,
 /// without ever sending `STAT`.
@@ -531,7 +531,8 @@ pub async fn run_mock_server_upload_size_mismatch(
     respond(&mut server_control, b"213 0\r\n").await;
 }
 
-/// Mock server for the Phase 2 desync regression test.
+/// Mock server for the data-channel desync regression test
+/// (`ftps_test.rs::test_ftps_data_channel_failure_poisons_client`).
 ///
 /// Sends the `150` reply for a `LIST` command and then stops — it deliberately never sends the
 /// matching `226`. The test pairs this with a `TlsConnector` that fails the data-channel

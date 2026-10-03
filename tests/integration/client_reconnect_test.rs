@@ -1,6 +1,7 @@
 //! # Client Coordinator — Connection Lifecycle / Reconnect Tests
 //!
-//! Split from `client_test.rs` Phase 18 section (see issue #35).
+//! Split from the "Command-response round-trip tests" section of the former
+//! `client_test.rs` (see issue #35).
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -360,10 +361,10 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
 
 #[tokio::test]
 async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
-    // `disconnect_storage()` (review/client.md Phase 5) must leave `self.ftps` as `None`
-    // afterward, so a later `storage()` call falls through to `ensure_ftps()`'s existing
-    // "FTPS not configured" error instead of ever handing back the poisoned client that
-    // `FtpsClient::disconnect()` leaves behind (review/ftps.md Phase 2/7).
+    // `disconnect_storage()` exists to clear a poisoned FTPS client: it must leave
+    // `self.ftps` as `None` afterward, so a later `storage()` call falls through to
+    // `ensure_ftps()`'s existing "FTPS not configured" error instead of ever handing back the
+    // poisoned client that `FtpsClient::disconnect()` leaves behind.
     //
     // The FTPS client is genuinely poisoned first, via a control-channel transport failure
     // (`.claude/rules/ftps-poisoning.md`) — without that this test only reproved that
@@ -505,8 +506,9 @@ async fn test_camera_trio_unconfigured_error() {
 
 #[tokio::test]
 async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
-    // review/client.md Phase 1: `ensure_mqtt()`'s race must cover the full
-    // dial+TLS+`MqttClient::connect()` handshake, not just dial+TLS. Simulate a peer
+    // `ensure_mqtt()`'s connect-timeout race must cover the full
+    // dial+TLS+`MqttClient::connect()` handshake, not just dial+TLS (see
+    // `.claude/rules/connect-timeouts.md`). Simulate a peer
     // that completes TCP/TLS but never sends CONNACK — the duplex's server side is left
     // idle forever, so any read from the client side blocks indefinitely unless the
     // handshake itself is inside the timeout race.

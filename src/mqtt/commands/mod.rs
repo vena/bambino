@@ -88,11 +88,12 @@ mod tests {
 
     #[test]
     fn test_command_constructor_clamps_unclamped_sequence_id() {
-        // Phase 4.4 regression: every command constructor's `sequence_id: u64` parameter must
-        // be clamped even when called directly (bypassing PrinterClient::next_sequence_id(),
-        // which already clamps internally) — an external consumer of this public API could
-        // otherwise pass a raw epoch-millisecond value and reproduce the documented 32-bit
-        // overflow firmware lockup.
+        // Every command constructor's `sequence_id` must come out clamped even when called
+        // directly with a raw `u64` (bypassing PrinterClient::next_sequence_id(), which keeps
+        // its own ids in range) — an external consumer of this public API could otherwise pass
+        // a raw epoch-millisecond value and reproduce the documented 32-bit overflow firmware
+        // lockup. Constructors take `impl Into<ClampedTaskId>`, so this holds by construction;
+        // see `.claude/rules/task-id-clamping.md`.
         let req = GCodeRequest::new("G28", u64::MAX);
         let json = serde_json::to_string(&req).unwrap();
         assert!(
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_ams_mapping2_sets_use_ams_true() {
-        // Phase 2.2 regression: `.with_ams_mapping2(...)` alone (no `.with_ams(...)`) must
+        // Regression test: `.with_ams_mapping2(...)` alone (no `.with_ams(...)`) must
         // set `use_ams` so the mapping2 array isn't silently dropped by `from_config`'s
         // `use_ams`-gated serialization below.
         use crate::ams::mapping::AmsMapping2Entry;
@@ -272,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_ams_mapping2_dropped_when_safety_interlock_trips() {
-        // Phase 2.2 regression: an all-external-spool `ams_mapping2` on a single-nozzle
+        // Regression test: an all-external-spool `ams_mapping2` on a single-nozzle
         // printer trips `is_external_spool_safety_valid`, forcing `use_ams` to `false` — the
         // wire payload must not also carry a populated `ams_mapping2` array in that case
         // (the exact contradictory shape that causes firmware error `0700_8012`).

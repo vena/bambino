@@ -638,8 +638,8 @@ mod tests {
         // "HTTP/" token in the status line and rejects "Http/1.1" regardless of which
         // parser it's routed to, so the packet is still correctly rejected end-to-end
         // (None), just no longer via the wrong parser. Real firmware has never been
-        // observed emitting non-canonical case (per 07-11-REVIEW.md finding #10), so this
-        // is a defense-in-depth correctness fix, not a behavior change for real traffic.
+        // observed emitting non-canonical case, so this is a defense-in-depth correctness
+        // fix, not a behavior change for real traffic.
         let payload = b"Http/1.1 200 OK\r\n\
                         LOCATION: http://10.0.0.5:80/\r\n\
                         USN: 01P06A521703222\r\n\

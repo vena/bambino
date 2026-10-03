@@ -1,6 +1,7 @@
 //! # Client Coordinator — get_version Round-Trip Tests
 //!
-//! Split from `client_test.rs` Phase 18 section (see issue #35).
+//! Split from the "Command-response round-trip tests" section of the former
+//! `client_test.rs` (see issue #35).
 
 use bambino::error::Error;
 use bambino::io::TokioIo;
@@ -12,7 +13,7 @@ use crate::common::mock_mqtt::{
 };
 
 // ============================================================================
-// Command-response round-trip tests (Phase 18)
+// Command-response round-trip tests
 // ============================================================================
 
 const VERSION_RESPONSE: &str = r#"{"info":{"command":"get_version","sequence_id":"30001","module":[{"product_name":"Bambu Lab P1S","name":"ota","hw_ver":"OTA","sw_ver":"01.09.00.00","sn":"01P000000000001","visible":true},{"name":"esp32","sw_ver":"01.02.03.04","sn":"01P000000000002"}]}}"#;

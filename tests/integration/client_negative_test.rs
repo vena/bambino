@@ -1731,7 +1731,7 @@ async fn test_get_k_profiles_manual_prime_skip() {
     broker_task.await.expect("Broker task panicked");
 }
 
-// Phase 9: sequence ID correlation hygiene
+// Sequence ID correlation hygiene
 
 #[tokio::test]
 async fn test_get_k_profiles_ignores_mismatched_sequence_id() {

@@ -1,6 +1,7 @@
 //! # Client Coordinator — Session/Polling/Homing Round-Trip Tests
 //!
-//! Split from `client_test.rs` Phase 18 section (see issue #35).
+//! Split from the "Command-response round-trip tests" section of the former
+//! `client_test.rs` (see issue #35).
 
 use bambino::error::Error;
 use bambino::io::TokioIo;
@@ -125,7 +126,7 @@ async fn test_home_flag_bit31_set_deserializes_as_negative_wire_value() {
     broker_task.await.expect("Broker task panicked");
 }
 
-// Phase 8: wait_for_homing
+// wait_for_homing
 
 #[tokio::test]
 async fn test_wait_for_homing_resolves_after_dip() {

@@ -1,6 +1,7 @@
 //! # Client Coordinator — Telemetry Cache Round-Trip Tests
 //!
-//! Split from `client_test.rs` Phase 18 section (see issue #35).
+//! Split from the "Command-response round-trip tests" section of the former
+//! `client_test.rs` (see issue #35).
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -64,7 +65,7 @@ async fn test_print_status_cache_from_telemetry() {
     broker_task.await.expect("Broker task panicked");
 }
 
-// Phase 14: is_door_open / active_fault telemetry accessors
+// is_door_open / active_fault telemetry accessors
 
 #[tokio::test]
 async fn test_door_open_none_on_sensorless_model() {

@@ -90,16 +90,16 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for PerCallVersionReportingTlsConnector
 /// control channel) but fails on every subsequent call — i.e. it always fails a PASV
 /// data-channel connect attempt.
 ///
-/// Used to exercise the `poisoned` flag regression (review/ftps.md Phase 2): simulates a
+/// Used to exercise the `poisoned` flag (`.claude/rules/ftps-poisoning.md`): simulates a
 /// data-channel TLS handshake failure after the server has already sent its `150`/`125`
 /// "opening data connection" reply, to verify the control channel doesn't get left desynced.
 ///
 /// Tracks connection order via an `AtomicBool` rather than the target port — `TlsConnector`'s
-/// `connect()` no longer takes a `port` parameter (`review/io.md` Phase 5.4: the raw stream is
-/// already connected to its target port by the time `connect()` is called, so no implementer
-/// needs it) — control-vs-data-channel is instead exactly "was this the first `connect()` call
-/// on this instance," matching how `FtpsClient` actually sequences connects (control
-/// channel once in `connect()`, then one data-channel connect per transfer).
+/// `connect()` takes no `port` parameter (the raw stream is already connected to its target
+/// port by the time `connect()` is called, so no implementer needs it) — control-vs-data-channel
+/// is instead exactly "was this the first `connect()` call on this instance," matching how
+/// `FtpsClient` actually sequences connects (control channel once in `connect()`, then one
+/// data-channel connect per transfer).
 pub struct FailingDataTlsConnector {
     control_channel_connected: std::sync::atomic::AtomicBool,
 }
