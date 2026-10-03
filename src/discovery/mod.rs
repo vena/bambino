@@ -5,9 +5,13 @@
 //! [`DiscoveryEngine`] sends M-SEARCH queries on UDP port 2021 (and the alternate port 1990)
 //! and parses incoming NOTIFY/response packets into [`SsdpDevice`] records.
 //! [`DiscoveryEngine`] itself works across std, ESP-IDF, and Embassy via the
-//! [`AsyncUdpSocket`] trait. The [`discover_devices()`] convenience function runs a timed
-//! broadcast-and-listen sweep and returns all unique printers found, but is std-only
-//! (`BindableUdpSocket` isn't implemented on Embassy — see
+//! [`AsyncUdpSocket`] trait. The
+// `discover_devices` exists only with `std`, so it is linked only there: an unconditional link
+// breaks `cargo doc` for the `embassy` and `alloc` builds.
+#![cfg_attr(feature = "std", doc = "[`discover_devices()`]")]
+#![cfg_attr(not(feature = "std"), doc = "`discover_devices()`")]
+//! convenience function runs a timed broadcast-and-listen sweep and returns all unique
+//! printers found, but is std-only (`BindableUdpSocket` isn't implemented on Embassy — see
 //! `.claude/rules/udp-socket-binding.md`); Embassy callers must drive `DiscoveryEngine`
 //! directly instead.
 
