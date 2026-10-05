@@ -20,14 +20,108 @@ use alloc::string::{String, ToString};
 use crate::ams::parser::{AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_LITE_ON_A2L_PHYSICAL_ID};
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::mqtt::{AmsFilamentDryingRequest, DryingParams};
 use crate::types::DryingMaterial;
 use crate::types::drying::DEFAULT_COMMAND_COOLING_TEMP;
 use crate::types::telemetry::AmsUnitModel;
-use crate::types::telemetry::ams::{
-    AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX, AMS_STANDARD_DRY_TEMP_MAX,
-};
 
+use super::ams::{is_ams_ht_id, is_valid_ams_id, wire_ams_id};
 use super::{CommandHandle, PrinterClient};
+
+impl<
+    MqttRawIO,
+    MqttTls,
+    MqttFactory,
+    Timer,
+    FtpsRawIO,
+    FtpsTls,
+    FtpsFactory,
+    FtpsTimer,
+    CameraRawIO,
+    CameraTls,
+    CameraFactory,
+>
+    PrinterClient<
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    >
+where
+    MqttRawIO: AsyncIo,
+    MqttTls: TlsConnector<MqttRawIO>,
+    MqttFactory: RawStreamFactory<MqttRawIO>,
+    Timer: TimerProvider,
+    FtpsRawIO: AsyncIo,
+    FtpsTls: TlsConnector<FtpsRawIO>,
+    FtpsFactory: RawStreamFactory<FtpsRawIO>,
+    FtpsTimer: TimerProvider,
+    CameraRawIO: AsyncIo,
+    CameraTls: TlsConnector<CameraRawIO>,
+    CameraFactory: RawStreamFactory<CameraRawIO>,
+{
+    /// Configures a drying cycle for the unit at `ams_id`, to be sent with
+    /// [`send()`](crate::client::DryingCycle::send).
+    ///
+    /// The way to start drying. Names each parameter at the call site instead of ordering nine
+    /// of them, defaults the four most callers don't set, and lets
+    /// [`material()`](crate::client::DryingCycle::material) fill temperature, duration and
+    /// cooling temperature from one choice:
+    ///
+    /// ```rust,ignore
+    /// client
+    ///     .dry(0)
+    ///     .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+    ///     .rotate_tray(true)
+    ///     .send()
+    ///     .await?;
+    /// ```
+    ///
+    /// Nothing is published until [`send()`](crate::client::DryingCycle::send), which is where
+    /// every gate runs — host capability, AMS addressing, the external-spool sentinels, the
+    /// attached unit's model, and the temperature range [REF-AMS-DRYER].
+    pub fn dry(
+        &mut self,
+        ams_id: i32,
+    ) -> crate::client::DryingCycle<
+        '_,
+        MqttRawIO,
+        MqttTls,
+        MqttFactory,
+        Timer,
+        FtpsRawIO,
+        FtpsTls,
+        FtpsFactory,
+        FtpsTimer,
+        CameraRawIO,
+        CameraTls,
+        CameraFactory,
+    > {
+        crate::client::DryingCycle::new(self, ams_id)
+    }
+
+    /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
+    ///
+    /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
+    /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
+    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<CommandHandle, Error> {
+        if !is_valid_ams_id(ams_id) {
+            return Err(Error::ProtocolViolation(
+                "invalid AMS addressing parameters for stop_drying".into(),
+            ));
+        }
+        let ams_id = wire_ams_id(ams_id);
+        self.dispatch(|seq| AmsFilamentDryingRequest::stop(ams_id, seq))
+            .await
+    }
+}
 
 /// A drying cycle being configured, returned by [`PrinterClient::dry`].
 ///
@@ -83,13 +177,16 @@ pub struct DryingCycle<
         CameraFactory,
     >,
     ams_id: i32,
-    temp: u32,
-    duration_hours: u32,
+    /// Vendor parameters to fill whatever wasn't set explicitly, with the while-printing flag.
+    material: Option<(DryingMaterial, AmsUnitModel)>,
+    printing: bool,
+    temp: Option<u32>,
+    duration_hours: Option<u32>,
+    cooling_temp: Option<u32>,
+    filament: Option<String>,
     humidity: u32,
     rotate_tray: bool,
-    cooling_temp: i32,
     close_power_conflict: bool,
-    filament: String,
 }
 
 impl<
@@ -135,10 +232,9 @@ where
 {
     /// Starts a cycle for the unit at `ams_id`, with vendor defaults for everything optional.
     ///
-    /// `temp` and `duration_hours` default to `0`, which
-    /// [`send()`](Self::send) rejects — a cycle needs a real temperature, and silently picking
-    /// one would start a heating cycle nobody asked for. Set them with
-    /// [`material()`](Self::material) or explicitly.
+    /// `temp` and `duration_hours` have no default, and [`send()`](Self::send) rejects a cycle
+    /// without them — silently picking one would start a heating cycle nobody asked for. Set
+    /// them with [`material()`](Self::material) or explicitly.
     pub(crate) fn new(
         client: &'a mut PrinterClient<
             MqttRawIO,
@@ -158,68 +254,54 @@ where
         Self {
             client,
             ams_id,
-            temp: 0,
-            duration_hours: 0,
+            material: None,
+            printing: false,
+            temp: None,
+            duration_hours: None,
+            cooling_temp: None,
+            filament: None,
             humidity: 0,
             rotate_tray: false,
-            // BambuStudio's own fallback when a tray's filament resolves to no preset
-            // (`AMSDryControl.cpp:813`), not a zero.
-            cooling_temp: DEFAULT_COMMAND_COOLING_TEMP,
             close_power_conflict: false,
-            filament: String::new(),
         }
     }
 
-    /// Fills temperature, duration, cooling temperature and the filament name from the vendor's
-    /// published parameters for `material` on `unit`.
+    /// Uses the vendor's published parameters for `material` on `unit` for temperature,
+    /// duration, cooling temperature and the filament name.
     ///
-    /// Sets four fields at once, which is the whole reason this builder exists — the same choice
-    /// on a positional call means threading three numbers and a string into four of nine slots.
+    /// These are defaults, resolved in [`send()`](Self::send): an explicit
+    /// [`temp()`](Self::temp), [`duration_hours()`](Self::duration_hours),
+    /// [`cooling_temp()`](Self::cooling_temp) or [`filament()`](Self::filament) wins regardless
+    /// of call order. Calling this again replaces the material.
     ///
-    /// Assumes an idle printer. For a cycle that runs alongside a print, follow with
-    /// [`printing()`](Self::printing), which re-reads the lower while-printing column.
-    ///
-    /// A material with no published parameters for this unit (any unit without a drying chamber)
-    /// leaves the values untouched, so [`send()`](Self::send) still rejects rather than
-    /// publishing a guess.
+    /// The cooling temperature sent is the material's
+    /// [`softening_temp`](DryingMaterial::softening_temp), which is what the wire field carries
+    /// (see its doc). A unit without a drying chamber has no published parameters, so temperature
+    /// and duration stay unset and [`send()`](Self::send) rejects rather than publishing a guess.
     pub fn material(mut self, material: DryingMaterial, unit: AmsUnitModel) -> Self {
-        if let (Some(temp), Some(hours)) = (
-            material.default_temp(unit, false),
-            material.default_duration_hours(unit, false),
-        ) {
-            self.temp = temp;
-            self.duration_hours = hours;
-        }
-        self.cooling_temp = material.command_cooling_temp();
-        self.filament = material.wire_name().to_string();
+        self.material = Some((material, unit));
         self
     }
 
-    /// Re-reads the material's parameters from the while-printing column.
+    /// Reads the material's defaults from the lower while-printing column, which exists because
+    /// the AMS sits in the print's thermal envelope.
     ///
-    /// Only meaningful after [`material()`](Self::material); on its own it does nothing, since
-    /// there is no material to re-read. The printing column is lower because the AMS sits in the
-    /// print's thermal envelope.
-    pub fn printing(mut self, material: DryingMaterial, unit: AmsUnitModel) -> Self {
-        if let (Some(temp), Some(hours)) = (
-            material.default_temp(unit, true),
-            material.default_duration_hours(unit, true),
-        ) {
-            self.temp = temp;
-            self.duration_hours = hours;
-        }
+    /// Affects only defaults from [`material()`](Self::material), in either call order; explicit
+    /// values are sent as set.
+    pub fn printing(mut self) -> Self {
+        self.printing = true;
         self
     }
 
     /// Sets the drying temperature in °C, overriding any material default.
     pub fn temp(mut self, temp: u32) -> Self {
-        self.temp = temp;
+        self.temp = Some(temp);
         self
     }
 
     /// Sets the cycle duration in whole hours, overriding any material default.
     pub fn duration_hours(mut self, hours: u32) -> Self {
-        self.duration_hours = hours;
+        self.duration_hours = Some(hours);
         self
     }
 
@@ -228,7 +310,7 @@ where
     /// Free-form by design — the wire field is arbitrary text and BambuStudio sends the tray's
     /// own `filament_type`. Use this for a material [`DryingMaterial`] does not name.
     pub fn filament(mut self, filament: &str) -> Self {
-        self.filament = filament.to_string();
+        self.filament = Some(filament.to_string());
         self
     }
 
@@ -246,12 +328,10 @@ where
 
     /// Sets the cooling temperature sent with the command.
     ///
-    /// Defaults to [`DEFAULT_COMMAND_COOLING_TEMP`], and [`material()`](Self::material) sets it
-    /// to that material's *softening* temperature — which is what the wire field actually
-    /// carries, despite the profiles also having a similarly-named
-    /// `filament_dev_drying_cooling_temperature` that BambuStudio never sends.
-    pub fn cooling_temp(mut self, cooling_temp: i32) -> Self {
-        self.cooling_temp = cooling_temp;
+    /// Defaults to the [`material()`](Self::material)'s softening temperature, else
+    /// [`DEFAULT_COMMAND_COOLING_TEMP`], BambuStudio's own fallback.
+    pub fn cooling_temp(mut self, cooling_temp: u32) -> Self {
+        self.cooling_temp = Some(cooling_temp);
         self
     }
 
@@ -314,22 +394,46 @@ where
     /// [`temp()`](Self::temp) is the caller's call, and [`material()`](Self::material) never
     /// picks one.
     pub async fn send(self) -> Result<CommandHandle, Error> {
-        if self.temp == 0 {
-            return Err(Error::InvalidArgument(
-                "drying temperature not set — call .material(..) or .temp(..)".into(),
-            ));
-        }
-        if self.duration_hours == 0 {
-            return Err(Error::InvalidArgument(
-                "drying duration not set — call .material(..) or .duration_hours(..)".into(),
-            ));
-        }
+        let material = self.material.map(|(material, _)| material);
+        let default = |pick: fn(DryingMaterial, AmsUnitModel, bool) -> Option<u32>| {
+            self.material
+                .and_then(|(material, unit)| pick(material, unit, self.printing))
+        };
+        let temp = self
+            .temp
+            .or_else(|| default(DryingMaterial::default_temp))
+            .filter(|&t| t != 0)
+            .ok_or_else(|| {
+                Error::InvalidArgument(
+                    "drying temperature not set — call .material(..) or .temp(..)".into(),
+                )
+            })?;
+        let duration_hours = self
+            .duration_hours
+            .or_else(|| default(DryingMaterial::default_duration_hours))
+            .filter(|&h| h != 0)
+            .ok_or_else(|| {
+                Error::InvalidArgument(
+                    "drying duration not set — call .material(..) or .duration_hours(..)".into(),
+                )
+            })?;
+        let cooling_temp = self
+            .cooling_temp
+            .or(material.map(DryingMaterial::softening_temp))
+            // BambuStudio's own fallback when a tray's filament resolves to no preset
+            // (`AMSDryControl.cpp:813`), not a zero.
+            .unwrap_or(DEFAULT_COMMAND_COOLING_TEMP);
+        let filament = self
+            .filament
+            .or_else(|| material.map(|m| m.wire_name().to_string()))
+            .unwrap_or_default();
+
         if !self.client.supports_ams_remote_drying() {
             return Err(Error::ModelMismatch(
                 "AMS drying is screen-only on this host printer — firmware acks this command but does not act on it".into(),
             ));
         }
-        if !super::ams::is_valid_ams_id(self.ams_id) {
+        if !is_valid_ams_id(self.ams_id) {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for a drying cycle".into(),
             ));
@@ -362,17 +466,17 @@ where
             ));
         }
 
-        // `dry_temp_range()` is the authority when the unit is known. Unobserved, fall back to
-        // the address-derived ceiling — wrong for an original AMS or an AMS Lite at `0..=3`, but
+        // `dry_temp_range()` is the authority when the unit is known. Unobserved, assume the
+        // dryer the address implies — wrong for an original AMS or an AMS Lite at `0..=3`, but
         // that is exactly the case the gate above cannot rule on either.
-        let (min_temp, max_temp) = unit_model.and_then(AmsUnitModel::dry_temp_range).unwrap_or(
-            if (128..=135).contains(&self.ams_id) {
-                (AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX)
-            } else {
-                (AMS_DRY_TEMP_MIN, AMS_STANDARD_DRY_TEMP_MAX)
-            },
-        );
-        let temp = self.temp;
+        let assumed_model = unit_model.unwrap_or(if is_ams_ht_id(self.ams_id) {
+            AmsUnitModel::AmsHt
+        } else {
+            AmsUnitModel::Ams2Pro
+        });
+        let (min_temp, max_temp) = assumed_model.dry_temp_range().ok_or_else(|| {
+            Error::ModelMismatch("attached AMS unit has no drying chamber".into())
+        })?;
         if temp < min_temp || temp > max_temp {
             return Err(Error::InvalidArgument(
                 format!(
@@ -381,44 +485,29 @@ where
                 .into(),
             ));
         }
-        if let Some(hdt) = DryingMaterial::from_filament_type(&self.filament)
-            .map(DryingMaterial::heat_distortion_temp)
+        if let Some(hdt) =
+            DryingMaterial::from_filament_type(&filament).map(DryingMaterial::heat_distortion_temp)
             && temp > hdt
         {
             log::warn!(
                 "AMS dry temperature {temp}°C exceeds {}'s heat-distortion temperature {hdt}°C — \
                  BambuStudio refuses this on a loaded tray; sending as requested",
-                self.filament
+                filament
             );
         }
 
-        let Self {
-            client,
-            ams_id,
-            duration_hours,
-            humidity,
-            rotate_tray,
-            cooling_temp,
-            close_power_conflict,
+        let params = DryingParams {
             filament,
-            ..
-        } = self;
-        let ams_id = super::ams::wire_ams_id(ams_id);
-        client
-            .dispatch(|seq| {
-                crate::mqtt::AmsFilamentDryingRequest::new(
-                    ams_id,
-                    1,
-                    &filament,
-                    temp,
-                    duration_hours,
-                    humidity,
-                    rotate_tray,
-                    cooling_temp,
-                    close_power_conflict,
-                    seq,
-                )
-            })
+            temp,
+            duration_hours,
+            humidity: self.humidity,
+            rotate_tray: self.rotate_tray,
+            cooling_temp,
+            close_power_conflict: self.close_power_conflict,
+        };
+        let ams_id = wire_ams_id(self.ams_id);
+        self.client
+            .dispatch(|seq| AmsFilamentDryingRequest::start(ams_id, params.clone(), seq))
             .await
     }
 }

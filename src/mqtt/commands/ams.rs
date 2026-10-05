@@ -405,7 +405,7 @@ pub struct AmsFilamentDryingPayload {
     /// Whether to periodically rotate the tray during drying.
     pub rotate_tray: bool,
     /// Cooling temperature applied after the drying cycle completes.
-    pub cooling_temp: i32,
+    pub cooling_temp: u32,
     /// Whether to override the AMS unit's power-conflict interlock.
     pub close_power_conflict: bool,
     /// Request sequence ID, serialized as a string on the wire.
@@ -419,19 +419,57 @@ pub struct AmsFilamentDryingRequest {
     pub print: AmsFilamentDryingPayload,
 }
 
+/// `ams_filament_drying` mode that starts a cycle (`DevAms::DryCtrlMode::OnTime`).
+const DRYING_MODE_START: i32 = 1;
+/// `ams_filament_drying` mode that stops a cycle (`DevAms::DryCtrlMode::Off`).
+const DRYING_MODE_STOP: i32 = 0;
+
+/// Everything a drying-cycle start carries besides the unit and the mode.
+///
+/// `Default` is the all-zero/empty set BambuStudio sends to stop a cycle; a start needs at
+/// least `temp` and `duration_hours`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DryingParams {
+    /// Filament material type being dried (e.g. "PA-CF").
+    pub filament: String,
+    /// Drying temperature (°C).
+    pub temp: u32,
+    /// Drying duration in whole hours.
+    pub duration_hours: u32,
+    /// Target humidity (0 = firmware default / no target).
+    pub humidity: u32,
+    /// Whether to periodically rotate the tray during drying.
+    pub rotate_tray: bool,
+    /// Cooling temperature applied after the cycle; BambuStudio sends the filament's
+    /// softening temperature here.
+    pub cooling_temp: u32,
+    /// Whether to override the AMS unit's power-conflict interlock.
+    pub close_power_conflict: bool,
+}
+
 impl AmsFilamentDryingRequest {
-    /// Builds an `ams_filament_drying` request.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    /// Builds a request starting a drying cycle on the unit at `ams_id`.
+    pub fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self::build(ams_id, DRYING_MODE_START, params, sequence_id)
+    }
+
+    /// Builds a request stopping the drying cycle on the unit at `ams_id`.
+    ///
+    /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`): every field
+    /// but the unit and mode zeroed.
+    pub fn stop(ams_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self::build(
+            ams_id,
+            DRYING_MODE_STOP,
+            DryingParams::default(),
+            sequence_id,
+        )
+    }
+
+    fn build(
         ams_id: i32,
         mode: i32,
-        filament: &str,
-        temp: u32,
-        duration_hours: u32,
-        humidity: u32,
-        rotate_tray: bool,
-        cooling_temp: i32,
-        close_power_conflict: bool,
+        params: DryingParams,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
@@ -439,13 +477,13 @@ impl AmsFilamentDryingRequest {
                 command: "ams_filament_drying",
                 ams_id,
                 mode,
-                filament: String::from(filament),
-                temp,
-                duration: duration_hours,
-                humidity,
-                rotate_tray,
-                cooling_temp,
-                close_power_conflict,
+                filament: params.filament,
+                temp: params.temp,
+                duration: params.duration_hours,
+                humidity: params.humidity,
+                rotate_tray: params.rotate_tray,
+                cooling_temp: params.cooling_temp,
+                close_power_conflict: params.close_power_conflict,
                 sequence_id: sequence_id.into().to_string(),
             },
         }

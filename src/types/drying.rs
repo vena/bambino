@@ -70,34 +70,238 @@ pub enum DryingMaterial {
     Pps,
 }
 
-/// Every material this table carries, in profile order.
+/// Which drying units can dry a material *completely* (`filament_dev_ams_drying_ams_limitations`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FullyDryableBy {
+    /// Any unit with a drying chamber.
+    AnyDryer,
+    /// Only the AMS-HT (`["1"]`, which a profile without the key inherits).
+    AmsHtOnly,
+    /// No unit (`["-1"]`).
+    Neither,
+}
+
+/// One material's row: everything this module knows about it, transcribed from its
+/// `fdm_filament_<type>.json` profile.
+struct Spec {
+    material: DryingMaterial,
+    wire_name: &'static str,
+    /// `[N3F idle, N3S idle, N3F printing, N3S printing]` drying temperatures in °C.
+    temp: [u32; 4],
+    /// Same layout, drying durations in whole hours. The profiles store decimal strings
+    /// (`"8.0"`); every published value is integral, matching the whole-hour wire field.
+    hours: [u32; 4],
+    /// `filament_dev_drying_softening_temperature`.
+    softening: u32,
+    /// `filament_dev_ams_drying_heat_distortion_temperature`.
+    heat_distortion: u32,
+    fully_dryable_by: FullyDryableBy,
+}
+
+/// The material table, in profile order and in [`DryingMaterial`] declaration order, so a
+/// material's row is `SPECS[material as usize]` (pinned by a test).
 ///
-/// Seventeen entries — one per non-template, non-common `fdm_filament_*.json` profile.
-const ALL: [DryingMaterial; 17] = [
-    DryingMaterial::Pla,
-    DryingMaterial::Petg,
-    DryingMaterial::Pctg,
-    DryingMaterial::Abs,
-    DryingMaterial::Asa,
-    DryingMaterial::Hips,
-    DryingMaterial::Pc,
-    DryingMaterial::Pa,
-    DryingMaterial::Pva,
-    DryingMaterial::Bvoh,
-    DryingMaterial::Tpu,
-    DryingMaterial::Pp,
-    DryingMaterial::Pe,
-    DryingMaterial::Pha,
-    DryingMaterial::Eva,
-    DryingMaterial::Ppa,
-    DryingMaterial::Pps,
-];
+/// Seventeen rows — one per non-template, non-common `fdm_filament_*.json` profile.
+const SPECS: [Spec; 17] = {
+    use DryingMaterial::*;
+    use FullyDryableBy::*;
+    const fn row(
+        material: DryingMaterial,
+        wire_name: &'static str,
+        temp: [u32; 4],
+        hours: [u32; 4],
+        softening: u32,
+        heat_distortion: u32,
+        fully_dryable_by: FullyDryableBy,
+    ) -> Spec {
+        Spec {
+            material,
+            wire_name,
+            temp,
+            hours,
+            softening,
+            heat_distortion,
+            fully_dryable_by,
+        }
+    }
+    [
+        row(
+            Pla,
+            "PLA",
+            [45, 45, 45, 45],
+            [12, 12, 12, 12],
+            50,
+            45,
+            AnyDryer,
+        ),
+        row(
+            Petg,
+            "PETG",
+            [65, 65, 55, 55],
+            [12, 12, 12, 12],
+            60,
+            75,
+            AnyDryer,
+        ),
+        row(
+            Pctg,
+            "PCTG",
+            [65, 65, 55, 55],
+            [12, 12, 12, 12],
+            60,
+            75,
+            AnyDryer,
+        ),
+        row(
+            Abs,
+            "ABS",
+            [65, 80, 65, 75],
+            [12, 8, 12, 8],
+            80,
+            90,
+            AmsHtOnly,
+        ),
+        row(
+            Asa,
+            "ASA",
+            [65, 80, 65, 80],
+            [12, 12, 12, 12],
+            85,
+            100,
+            AmsHtOnly,
+        ),
+        row(
+            Hips,
+            "HIPS",
+            [65, 80, 65, 75],
+            [12, 12, 12, 12],
+            80,
+            90,
+            AmsHtOnly,
+        ),
+        row(
+            Pc,
+            "PC",
+            [65, 80, 65, 80],
+            [12, 8, 12, 8],
+            90,
+            105,
+            AmsHtOnly,
+        ),
+        row(
+            Pa,
+            "PA",
+            [65, 85, 65, 85],
+            [12, 12, 12, 12],
+            150,
+            165,
+            AmsHtOnly,
+        ),
+        row(
+            Pva,
+            "PVA",
+            [65, 85, 65, 70],
+            [12, 18, 12, 18],
+            75,
+            75,
+            AmsHtOnly,
+        ),
+        row(
+            Bvoh,
+            "BVOH",
+            [60, 60, 45, 45],
+            [12, 12, 12, 12],
+            50,
+            65,
+            AnyDryer,
+        ),
+        row(
+            Tpu,
+            "TPU",
+            [65, 75, 45, 45],
+            [12, 18, 12, 18],
+            50,
+            45,
+            AmsHtOnly,
+        ),
+        row(
+            Pp,
+            "PP",
+            [60, 60, 50, 50],
+            [12, 12, 12, 12],
+            55,
+            60,
+            AnyDryer,
+        ),
+        row(
+            Pe,
+            "PE",
+            [45, 45, 45, 45],
+            [12, 12, 12, 12],
+            50,
+            45,
+            AnyDryer,
+        ),
+        row(
+            Pha,
+            "PHA",
+            [45, 45, 45, 45],
+            [12, 12, 12, 12],
+            50,
+            45,
+            AnyDryer,
+        ),
+        row(
+            Eva,
+            "EVA",
+            [45, 45, 45, 45],
+            [12, 12, 12, 12],
+            50,
+            45,
+            AnyDryer,
+        ),
+        row(
+            Ppa,
+            "PPA",
+            [65, 85, 65, 85],
+            [12, 12, 12, 12],
+            150,
+            165,
+            Neither,
+        ),
+        row(
+            Pps,
+            "PPS",
+            [65, 85, 65, 85],
+            [12, 12, 12, 12],
+            150,
+            165,
+            Neither,
+        ),
+    ]
+};
+
+/// Every material, derived from [`SPECS`] so the two can't diverge.
+const ALL: [DryingMaterial; SPECS.len()] = {
+    let mut all = [DryingMaterial::Pla; SPECS.len()];
+    let mut i = 0;
+    while i < SPECS.len() {
+        all[i] = SPECS[i].material;
+        i += 1;
+    }
+    all
+};
 
 /// Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset
 /// (`AMSDryControl.cpp:813`, `int cooling_temp = 50;`).
-pub const DEFAULT_COMMAND_COOLING_TEMP: i32 = 50;
+pub const DEFAULT_COMMAND_COOLING_TEMP: u32 = 50;
 
 impl DryingMaterial {
+    /// This material's [`SPECS`] row.
+    fn spec(self) -> &'static Spec {
+        &SPECS[self as usize]
+    }
+
     /// Every material in this table.
     #[must_use]
     pub fn all() -> &'static [DryingMaterial] {
@@ -106,21 +310,23 @@ impl DryingMaterial {
 
     /// Matches a wire `filament_type` string to a material, case-insensitively.
     ///
-    /// Accepts the bare material name and the common composite suffixes that share a base
-    /// profile — `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"` all resolve to [`Pa`](Self::Pa), because
-    /// BambuStudio's own composite presets inherit their drying parameters from the base
-    /// `fdm_filament_pa.json`. `None` for anything unrecognized, which is the case the free-form
+    /// The base material is the leading run of ASCII letters, so composite and variant
+    /// spellings resolve to the profile they inherit from: `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"`
+    /// to [`Pa`](Self::Pa) (BambuStudio's composite presets inherit the base
+    /// `fdm_filament_pa.json`), `"PLA+"` and `"PLA Silk"` to [`Pla`](Self::Pla), `"PETG HF"` to
+    /// [`Petg`](Self::Petg). `None` for anything unrecognized, which is the case the free-form
     /// `&str` parameter on `DryingCycle::filament` exists to serve.
     #[must_use]
     pub fn from_filament_type(filament_type: &str) -> Option<Self> {
-        let trimmed = filament_type.trim();
-        // Composite grades are spelled `<base>-CF`, `<base>-GF`, `<base>-CF10` and so on. The
-        // base material before the first `-` is what carries the drying profile.
-        let base = trimmed.split('-').next().unwrap_or(trimmed);
+        let trimmed = filament_type.trim_start();
+        let letters = trimmed
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(trimmed.len());
+        let base = &trimmed[..letters];
         let matches = |name: &str| base.eq_ignore_ascii_case(name);
 
-        // `PAHT`/`PA6`/`PA12` are nylons; check the prefix rather than enumerating grades.
-        if base.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("PA")) && !matches("PPA") {
+        // Nylon grades: `PA6`/`PA12` reduce to `PA` here, and `PAHT` is the one lettered grade.
+        if matches("PAHT") {
             return Some(Self::Pa);
         }
         ALL.iter()
@@ -133,71 +339,13 @@ impl DryingMaterial {
     /// The canonical material name, as it appears in a wire `filament_type` field.
     #[must_use]
     pub fn wire_name(self) -> &'static str {
-        match self {
-            Self::Pla => "PLA",
-            Self::Petg => "PETG",
-            Self::Pctg => "PCTG",
-            Self::Abs => "ABS",
-            Self::Asa => "ASA",
-            Self::Hips => "HIPS",
-            Self::Pc => "PC",
-            Self::Pa => "PA",
-            Self::Pva => "PVA",
-            Self::Bvoh => "BVOH",
-            Self::Tpu => "TPU",
-            Self::Pp => "PP",
-            Self::Pe => "PE",
-            Self::Pha => "PHA",
-            Self::Eva => "EVA",
-            Self::Ppa => "PPA",
-            Self::Pps => "PPS",
-        }
-    }
-
-    /// `[N3F idle, N3S idle, N3F printing, N3S printing]` drying temperatures in °C.
-    const fn temp_row(self) -> [u32; 4] {
-        match self {
-            Self::Pla => [45, 45, 45, 45],
-            Self::Petg => [65, 65, 55, 55],
-            Self::Pctg => [65, 65, 55, 55],
-            Self::Abs => [65, 80, 65, 75],
-            Self::Asa => [65, 80, 65, 80],
-            Self::Hips => [65, 80, 65, 75],
-            Self::Pc => [65, 80, 65, 80],
-            Self::Pa => [65, 85, 65, 85],
-            Self::Pva => [65, 85, 65, 70],
-            Self::Bvoh => [60, 60, 45, 45],
-            Self::Tpu => [65, 75, 45, 45],
-            Self::Pp => [60, 60, 50, 50],
-            Self::Pe => [45, 45, 45, 45],
-            Self::Pha => [45, 45, 45, 45],
-            Self::Eva => [45, 45, 45, 45],
-            Self::Ppa => [65, 85, 65, 85],
-            Self::Pps => [65, 85, 65, 85],
-        }
-    }
-
-    /// `[N3F idle, N3S idle, N3F printing, N3S printing]` drying durations in hours.
-    ///
-    /// The profiles store these as decimal strings (`"8.0"`); every published value is integral,
-    /// so they are carried as whole hours here — matching the wire `duration` field, which is
-    /// also whole hours.
-    const fn hours_row(self) -> [u32; 4] {
-        match self {
-            Self::Abs | Self::Pc => [12, 8, 12, 8],
-            Self::Pva | Self::Tpu => [12, 18, 12, 18],
-            _ => [12, 12, 12, 12],
-        }
+        self.spec().wire_name
     }
 
     /// Index into a 4-element profile row, or `None` if this unit has no drying chamber.
-    const fn row_index(unit: AmsUnitModel, printing: bool) -> Option<usize> {
-        let base = match unit {
-            AmsUnitModel::Ams2Pro => 0,
-            AmsUnitModel::AmsHt => 1,
-            _ => return None,
-        };
-        Some(if printing { base + 2 } else { base })
+    fn row_index(unit: AmsUnitModel, printing: bool) -> Option<usize> {
+        let column = unit.drying_column()?;
+        Some(if printing { column + 2 } else { column })
     }
 
     /// Vendor default drying temperature in °C for this material on this unit.
@@ -220,7 +368,8 @@ impl DryingMaterial {
     /// half is a no-op here.
     #[must_use]
     pub fn default_temp(self, unit: AmsUnitModel, printing: bool) -> Option<u32> {
-        Self::row_index(unit, printing).map(|i| self.temp_row()[i].min(self.heat_distortion_temp()))
+        Self::row_index(unit, printing)
+            .map(|i| self.spec().temp[i].min(self.heat_distortion_temp()))
     }
 
     /// Vendor default drying duration in whole hours for this material on this unit.
@@ -228,43 +377,20 @@ impl DryingMaterial {
     /// `None` for a unit with no drying chamber.
     #[must_use]
     pub fn default_duration_hours(self, unit: AmsUnitModel, printing: bool) -> Option<u32> {
-        Self::row_index(unit, printing).map(|i| self.hours_row()[i])
+        Self::row_index(unit, printing).map(|i| self.spec().hours[i])
     }
 
     /// Temperature (°C) at which this material begins to soften
     /// (`filament_dev_drying_softening_temperature`).
     ///
-    /// Also the value a drying cycle sends as its `cooling_temp` — see
-    /// [`command_cooling_temp`](Self::command_cooling_temp).
+    /// **Also what a drying cycle sends as its wire `cooling_temp`** — not the profile's
+    /// similarly named `filament_dev_drying_cooling_temperature`. BambuStudio parses that second
+    /// field (`DevUtilBackend.cpp:109-110`) but never sends it: the drying command is built from
+    /// the softening temperature (`AMSDryControl.cpp:816`). See [`DEFAULT_COMMAND_COOLING_TEMP`]
+    /// for what BambuStudio sends when a tray's filament resolves to no preset at all.
     #[must_use]
     pub fn softening_temp(self) -> u32 {
-        match self {
-            Self::Pla | Self::Tpu | Self::Bvoh | Self::Eva | Self::Pe | Self::Pha => 50,
-            Self::Petg | Self::Pctg => 60,
-            Self::Pp => 55,
-            Self::Abs | Self::Hips => 80,
-            Self::Asa => 85,
-            Self::Pc => 90,
-            Self::Pva => 75,
-            Self::Pa | Self::Ppa | Self::Pps => 150,
-        }
-    }
-
-    /// What a drying cycle sends as its `cooling_temp` for this material.
-    ///
-    /// **The wire `cooling_temp` carries the *softening* temperature, not the profile's
-    /// `filament_dev_drying_cooling_temperature`.** That second field exists and BambuStudio
-    /// parses it (`DevUtilBackend.cpp:109-110`), but never sends it — the drying command is
-    /// built from `filament_dev_drying_softening_temperature` (`AMSDryControl.cpp:816`). Reading
-    /// the similarly-named field instead is the obvious mistake here, so this accessor exists to
-    /// make the right one the easy one.
-    ///
-    /// Equal to [`softening_temp`](Self::softening_temp); see
-    /// [`DEFAULT_COMMAND_COOLING_TEMP`] for what BambuStudio sends when a tray's filament
-    /// resolves to no preset at all.
-    #[must_use]
-    pub fn command_cooling_temp(self) -> i32 {
-        self.softening_temp() as i32
+        self.spec().softening
     }
 
     /// Heat-distortion temperature (°C) (`filament_dev_ams_drying_heat_distortion_temperature`).
@@ -277,16 +403,7 @@ impl DryingMaterial {
     /// `AMSDryControl.cpp:1723-1725`).
     #[must_use]
     pub fn heat_distortion_temp(self) -> u32 {
-        match self {
-            Self::Pla | Self::Tpu | Self::Eva | Self::Pe | Self::Pha => 45,
-            Self::Pp => 60,
-            Self::Bvoh => 65,
-            Self::Petg | Self::Pctg | Self::Pva => 75,
-            Self::Abs | Self::Hips => 90,
-            Self::Asa => 100,
-            Self::Pc => 105,
-            Self::Pa | Self::Ppa | Self::Pps => 165,
-        }
+        self.spec().heat_distortion
     }
 
     /// Returns true if this unit can dry this material *completely*.
@@ -308,20 +425,17 @@ impl DryingMaterial {
     /// PPS name `["-1"]` explicitly.
     #[must_use]
     pub fn fully_dryable_by(self, unit: AmsUnitModel) -> bool {
-        match self {
-            Self::Pla
-            | Self::Petg
-            | Self::Pctg
-            | Self::Bvoh
-            | Self::Pp
-            | Self::Pe
-            | Self::Pha
-            | Self::Eva => unit.supports_drying(),
-            Self::Abs | Self::Asa | Self::Hips | Self::Pc | Self::Pa | Self::Pva | Self::Tpu => {
-                unit == AmsUnitModel::AmsHt
-            }
-            Self::Ppa | Self::Pps => false,
+        match self.spec().fully_dryable_by {
+            FullyDryableBy::AnyDryer => unit.supports_drying(),
+            FullyDryableBy::AmsHtOnly => unit == AmsUnitModel::AmsHt,
+            FullyDryableBy::Neither => false,
         }
+    }
+}
+
+impl core::fmt::Display for DryingMaterial {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.wire_name())
     }
 }
 
@@ -492,27 +606,16 @@ mod tests {
         }
     }
 
-    /// The command's `cooling_temp` is the *softening* temperature, not the profile's
-    /// similarly-named `filament_dev_drying_cooling_temperature` — BambuStudio parses that
-    /// second field and never sends it.
+    /// Softening temperatures where they differ from the profile's similarly named
+    /// `filament_dev_drying_cooling_temperature`, which is the value a cycle must *not* send.
     #[test]
-    fn test_command_cooling_temp_is_the_softening_temperature() {
-        // PLA: softening 50, profile cooling 45. The wire value is 50.
+    fn test_softening_temp_is_not_the_profile_cooling_temperature() {
+        // PLA: softening 50, profile cooling 45.
         assert_eq!(DryingMaterial::Pla.softening_temp(), 50);
-        assert_eq!(DryingMaterial::Pla.command_cooling_temp(), 50);
         // TPU: softening 50, profile cooling 40.
-        assert_eq!(DryingMaterial::Tpu.command_cooling_temp(), 50);
-        // ASA: softening 85, profile cooling 85 — equal here, which is why a material where
-        // they differ has to be the one pinning the behavior.
-        assert_eq!(DryingMaterial::Asa.command_cooling_temp(), 85);
-
-        for material in DryingMaterial::all() {
-            assert_eq!(
-                material.command_cooling_temp(),
-                material.softening_temp() as i32,
-                "{material:?}"
-            );
-        }
+        assert_eq!(DryingMaterial::Tpu.softening_temp(), 50);
+        // ASA: softening 85, profile cooling 85 — equal, so it can't pin the distinction.
+        assert_eq!(DryingMaterial::Asa.softening_temp(), 85);
     }
 
     #[test]
@@ -578,5 +681,77 @@ mod tests {
         // `fdm_filament_common`'s 45 (#336).
         assert_eq!(DryingMaterial::Pe.heat_distortion_temp(), 45);
         assert_eq!(DryingMaterial::Pha.heat_distortion_temp(), 45);
+    }
+
+    #[test]
+    fn test_specs_are_indexed_by_declaration_order_and_cover_every_variant() {
+        // Exhaustive, so a new variant fails to compile here until it gets a SPECS row.
+        fn declared_index(m: DryingMaterial) -> usize {
+            use DryingMaterial::*;
+            match m {
+                Pla => 0,
+                Petg => 1,
+                Pctg => 2,
+                Abs => 3,
+                Asa => 4,
+                Hips => 5,
+                Pc => 6,
+                Pa => 7,
+                Pva => 8,
+                Bvoh => 9,
+                Tpu => 10,
+                Pp => 11,
+                Pe => 12,
+                Pha => 13,
+                Eva => 14,
+                Ppa => 15,
+                Pps => 16,
+            }
+        }
+        assert_eq!(SPECS.len(), 17);
+        for (i, spec) in SPECS.iter().enumerate() {
+            assert_eq!(declared_index(spec.material), i, "{:?}", spec.material);
+            assert_eq!(spec.material as usize, i);
+            assert_eq!(ALL[i], spec.material);
+        }
+    }
+
+    #[test]
+    fn test_drying_column_matches_dry_temp_range() {
+        use crate::types::telemetry::AmsUnitModel::*;
+        for unit in [ExternalSpool, Ams, AmsLite, Ams2Pro, AmsHt, AmsLiteMixed] {
+            assert_eq!(
+                unit.drying_column().is_some(),
+                unit.dry_temp_range().is_some(),
+                "{unit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_filament_type_reads_the_leading_letters() {
+        let cases = [
+            ("PLA+", Some(DryingMaterial::Pla)),
+            ("PLA Silk", Some(DryingMaterial::Pla)),
+            ("PETG HF", Some(DryingMaterial::Petg)),
+            ("PAHT-CF", Some(DryingMaterial::Pa)),
+            ("PA6-GF", Some(DryingMaterial::Pa)),
+            ("PA12", Some(DryingMaterial::Pa)),
+            ("PPA-CF", Some(DryingMaterial::Ppa)),
+            ("PAPER", None),
+            ("", None),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(
+                DryingMaterial::from_filament_type(wire),
+                expected,
+                "{wire:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_display_is_the_wire_name() {
+        assert_eq!(DryingMaterial::Petg.to_string(), "PETG");
     }
 }

@@ -40,7 +40,7 @@ pub(crate) fn is_valid_ams_id(ams_id: i32) -> bool {
 }
 
 /// Returns true for an AMS-HT unit id (128–135), a single-slot unit.
-fn is_ams_ht_id(ams_id: i32) -> bool {
+pub(crate) fn is_ams_ht_id(ams_id: i32) -> bool {
     (i32::from(crate::ams::parser::AMS_HT_ID_MIN)..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
         .contains(&ams_id)
 }
@@ -232,63 +232,6 @@ where
     pub fn ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
         let ams_id = crate::ams::parser::normalize_ams_unit_id(u8::try_from(ams_id).ok()?);
         self.ams()?.unit(ams_id)?.unit_model()
-    }
-
-    /// Configures a drying cycle for the unit at `ams_id`, to be sent with
-    /// [`send()`](crate::client::DryingCycle::send).
-    ///
-    /// The way to start drying. Names each parameter at the call site instead of ordering nine
-    /// of them, defaults the four most callers don't set, and lets
-    /// [`material()`](crate::client::DryingCycle::material) fill temperature, duration and
-    /// cooling temperature from one choice:
-    ///
-    /// ```rust,ignore
-    /// client
-    ///     .dry(0)
-    ///     .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
-    ///     .rotate_tray(true)
-    ///     .send()
-    ///     .await?;
-    /// ```
-    ///
-    /// Nothing is published until [`send()`](crate::client::DryingCycle::send), which is where
-    /// every gate runs — host capability, AMS addressing, the external-spool sentinels, the
-    /// attached unit's model, and the temperature range [REF-AMS-DRYER].
-    pub fn dry(
-        &mut self,
-        ams_id: i32,
-    ) -> crate::client::DryingCycle<
-        '_,
-        MqttRawIO,
-        MqttTls,
-        MqttFactory,
-        Timer,
-        FtpsRawIO,
-        FtpsTls,
-        FtpsFactory,
-        FtpsTimer,
-        CameraRawIO,
-        CameraTls,
-        CameraFactory,
-    > {
-        crate::client::DryingCycle::new(self, ams_id)
-    }
-
-    /// Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
-    ///
-    /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
-    /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
-    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<CommandHandle, Error> {
-        if !is_valid_ams_id(ams_id) {
-            return Err(Error::ProtocolViolation(
-                "invalid AMS addressing parameters for stop_drying".into(),
-            ));
-        }
-        let ams_id = wire_ams_id(ams_id);
-        self.dispatch(|seq| {
-            crate::mqtt::AmsFilamentDryingRequest::new(ams_id, 0, "", 0, 0, 0, false, 0, false, seq)
-        })
-        .await
     }
 
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].

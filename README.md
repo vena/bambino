@@ -270,9 +270,10 @@ printer.change_filament(0, 255, -1, -1, None).await?; // unload whatever AMS 0 h
 //   .cooling_temp(°C)         cool down to this once drying finishes
 //   .close_power_conflict(b)  override the unit's power-conflict interlock
 //   .filament("PA-CF")        filament type string, for the unit's own display/logic
-//   .material(m, unit)        shorthand: fills temp/duration/filament from the material's
-//                             row for that unit type (columns differ between AMS 2 Pro and
-//                             AMS-HT), so prefer it over hand-picking a temperature
+//   .material(m, unit)        defaults temp/duration/cooling_temp/filament from the
+//                             material's row for that unit type (columns differ between AMS 2
+//                             Pro and AMS-HT); an explicit setter wins in any call order
+//   .printing()               take those defaults from the while-printing column
 printer
     .dry(0)
     .temp(55)

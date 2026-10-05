@@ -649,7 +649,21 @@ impl AmsUnitModel {
     /// bambuddy (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`).
     #[must_use]
     pub fn supports_drying(self) -> bool {
-        self.dry_temp_range().is_some()
+        self.drying_column().is_some()
+    }
+
+    /// Which column of a material's drying profile applies to this unit: `0` for the AMS 2 Pro
+    /// (BambuStudio `N3F`), `1` for the AMS-HT (`N3S`), `None` without a drying chamber.
+    ///
+    /// The one exhaustive statement of which units dry; [`supports_drying`](Self::supports_drying)
+    /// and [`DryingMaterial`](crate::types::DryingMaterial)'s profile lookups derive from it, and a
+    /// test ties [`dry_temp_range`](Self::dry_temp_range) to it.
+    pub(crate) const fn drying_column(self) -> Option<usize> {
+        match self {
+            Self::Ams2Pro => Some(0),
+            Self::AmsHt => Some(1),
+            Self::ExternalSpool | Self::Ams | Self::AmsLite | Self::AmsLiteMixed => None,
+        }
     }
 
     /// Inclusive `(min, max)` drying-chamber temperature range in °C, or `None` if this unit
@@ -664,7 +678,7 @@ impl AmsUnitModel {
         match self {
             Self::Ams2Pro => Some((AMS_DRY_TEMP_MIN, AMS_STANDARD_DRY_TEMP_MAX)),
             Self::AmsHt => Some((AMS_DRY_TEMP_MIN, AMS_HT_DRY_TEMP_MAX)),
-            _ => None,
+            Self::ExternalSpool | Self::Ams | Self::AmsLite | Self::AmsLiteMixed => None,
         }
     }
 

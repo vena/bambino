@@ -315,7 +315,7 @@ pub struct DryArgs {
     /// Cooling temperature. Defaults to the material's softening temperature, else 50 —
     /// BambuStudio's own fallback. Pass explicitly to override.
     #[arg(long)]
-    cooling_temp: Option<i32>,
+    cooling_temp: Option<u32>,
     /// Override the AMS unit's power-conflict interlock
     #[arg(long, default_value_t = false)]
     close_power_conflict: bool,

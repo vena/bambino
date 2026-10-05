@@ -1011,11 +1011,41 @@ async fn test_dry_builder_printing_column() {
 
     client
         .dry(128)
+        .printing()
         .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
-        .printing(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
         .send()
         .await
-        .expect("printing() must re-read the while-printing column");
+        .expect("printing() must select the while-printing column in either order");
+
+    broker_task.await.expect("Broker task panicked");
+}
+
+/// An explicit value beats the material default whichever is called first (#398): `.temp(60)`
+/// before `.material(..)` used to be overwritten by it.
+#[tokio::test]
+async fn test_dry_builder_explicit_values_beat_material_in_any_order() {
+    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
+
+    let broker_task = tokio::spawn(async move {
+        handle_mqtt_handshake(&mut server_stream).await;
+        let json = read_publish_payload(&mut server_stream).await;
+        assert_eq!(json["print"]["temp"], 60);
+        assert_eq!(json["print"]["duration"], 12);
+        assert_eq!(json["print"]["cooling_temp"], 40);
+        assert_eq!(json["print"]["filament"], "PETG");
+    });
+
+    let mut client =
+        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+
+    client
+        .dry(128)
+        .temp(60)
+        .cooling_temp(40)
+        .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+        .send()
+        .await
+        .expect("explicit temp and cooling_temp must survive a later material()");
 
     broker_task.await.expect("Broker task panicked");
 }

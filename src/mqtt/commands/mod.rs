@@ -22,7 +22,7 @@ pub mod status;
 
 pub use ams::{
     AmsChangeFilamentRequest, AmsControlRequest, AmsFilamentDryingRequest,
-    AmsFilamentSettingRequest, AmsGetRfidRequest,
+    AmsFilamentSettingRequest, AmsGetRfidRequest, DryingParams,
 };
 pub use control::{
     CalibrationRequest, CleanPrintErrorRequest, HmsActionRequest, IdleIgnoreRequest,
@@ -393,7 +393,15 @@ mod tests {
     #[test]
     fn test_ams_filament_drying_json() {
         // Field names/shapes rewritten to match the real wire protocol.
-        let req = AmsFilamentDryingRequest::new(128, 1, "PA-CF", 55, 8, 0, true, 20, false, 40004);
+        let params = DryingParams {
+            filament: "PA-CF".into(),
+            temp: 55,
+            duration_hours: 8,
+            rotate_tray: true,
+            cooling_temp: 20,
+            ..Default::default()
+        };
+        let req = AmsFilamentDryingRequest::start(128, params, 40004);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_filament_drying"#));
         assert!(json.contains(r#""ams_id":128"#));
@@ -405,6 +413,11 @@ mod tests {
         assert!(json.contains(r#""cooling_temp":20"#));
         assert!(json.contains(r#""close_power_conflict":false"#));
         assert!(json.contains(r#""filament":"PA-CF""#));
+
+        let stop = serde_json::to_string(&AmsFilamentDryingRequest::stop(128, 40005)).unwrap();
+        assert!(stop.contains(r#""mode":0"#));
+        assert!(stop.contains(r#""temp":0"#));
+        assert!(stop.contains(r#""filament":"""#));
     }
 
     #[test]
