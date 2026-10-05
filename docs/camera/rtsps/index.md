@@ -73,11 +73,13 @@ Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freez
   Initializes the corrector by capturing the stream's first embedded RTP timestamp as the base coordinate for all subsequent corrections.
   This preserves alignment with the SDP stream definition.
 
-- <span id="rtptimestampcorrector-correct"></span>`fn correct(&self, elapsed_secs: f64) -> u32`
+- <span id="rtptimestampcorrector-correct"></span>`fn correct(&self, elapsed: Duration) -> u32`
 
   Computes the corrected RTP timestamp from host-observed elapsed time.
 
-  * `elapsed_secs`: Total accumulated seconds since the first stream packet arrived.
+  `elapsed` is the time since the first stream packet arrived. The tick count is rounded
+  to the nearest 90 kHz tick and wraps modulo 2^32 like any RTP timestamp, so a stream
+  longer than ~13.25 hours keeps advancing instead of saturating.
 
 #### Trait Implementations
 
@@ -102,12 +104,9 @@ Digest authentication, or used as the target endpoint for a local decryption pro
 
 # Errors
 
-Returns [`Error::ProtocolViolation`](../../error/index.md#error) if `access_code` is empty or contains any
-character outside ASCII letters/digits. Genuine printer-issued LAN access codes are
-always 8 case-sensitive ASCII alphanumeric characters, so a rejection here almost always
-means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
-valid-but-unusual code — surfacing it as an error catches that mistake instead of
-silently building a malformed URL.
+Returns [`Error::InvalidArgument`](../../error/index.md#error) if `access_code` fails
+[`validate_access_code`](../../identity/index.md#validate-access-code), rather than building a
+malformed URL.
 
 `ip` is an [`IpAddr`](https://docs.rs/core/latest/core/net/ip_addr/enum.IpAddr.html) rather than a string so a spoofed host such as
 `"1.2.3.4@attacker.example.com"` can't reach the URL's userinfo component and redirect

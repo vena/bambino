@@ -21,6 +21,19 @@ The client applies model-aware safety checks automatically:
 - **Fan routing** — Fan commands are directed to the correct controller, including
   the second left-side auxiliary fan (port 10) on models that have one (P2S, X2D, etc.).
 
+## Contents
+
+- [Modules](#modules)
+  - [`capabilities`](#capabilities)
+  - [`command`](command/index.md)
+  - [`drying`](drying/index.md)
+  - [`dummy`](dummy/index.md)
+  - [`types`](#types)
+- [Types](#types)
+  - [`PrinterClient`](#printerclient)
+- [Constants](#constants)
+  - [`KEEPALIVE_TICK_SECS`](#keepalive-tick-secs)
+
 ## Quick Reference
 
 | Item | Kind | Description |
@@ -31,6 +44,7 @@ The client applies model-aware safety checks automatically:
 | [`dummy`](dummy/index.md) | mod | Zero-cost dummy implementations for [`PrinterClient`](#printerclient)'s type parameters. |
 | [`types`](#types) | mod | Client-facing enums and helper types (telemetry events, fan targets, print speed, calibration). |
 | [`PrinterClient`](#printerclient) | struct | High-level client for controlling a Bambu Lab printer. |
+| [`KEEPALIVE_TICK_SECS`](#keepalive-tick-secs) | const | How often to call [`PrinterClient::keepalive_tick`]: half the 30s keepalive this client advertises in CONNECT, so a missed tick still leaves margin before the broker's 45s cutoff. |
 
 ## Modules
 
@@ -371,26 +385,26 @@ client
 
 - <span id="dryingcycle-material"></span>`fn material(self, material: DryingMaterial, unit: AmsUnitModel) -> Self` — [`DryingMaterial`](../types/drying/index.md#dryingmaterial), [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel)
 
-  Fills temperature, duration, cooling temperature and the filament name from the vendor's
-  published parameters for `material` on `unit`.
+  Uses the vendor's published parameters for `material` on `unit` for temperature,
+  duration, cooling temperature and the filament name.
 
-  Sets four fields at once, which is the whole reason this builder exists — the same choice
-  on a positional call means threading three numbers and a string into four of nine slots.
+  These are defaults, resolved in [`send()`](drying/index.md#dryingcycle): an explicit
+  [`temp()`](drying/index.md#dryingcycle), [`duration_hours()`](drying/index.md#dryingcycle),
+  [`cooling_temp()`](drying/index.md#dryingcycle) or [`filament()`](drying/index.md#dryingcycle) wins regardless
+  of call order. Calling this again replaces the material.
 
-  Assumes an idle printer. For a cycle that runs alongside a print, follow with
-  [`printing()`](drying/index.md#dryingcycle), which re-reads the lower while-printing column.
+  The cooling temperature sent is the material's
+  [`softening_temp`](../types/drying/index.md#dryingmaterial), which is what the wire field carries
+  (see its doc). A unit without a drying chamber has no published parameters, so temperature
+  and duration stay unset and [`send()`](drying/index.md#dryingcycle) rejects rather than publishing a guess.
 
-  A material with no published parameters for this unit (any unit without a drying chamber)
-  leaves the values untouched, so [`send()`](drying/index.md#dryingcycle) still rejects rather than
-  publishing a guess.
+- <span id="dryingcycle-printing"></span>`fn printing(self) -> Self`
 
-- <span id="dryingcycle-printing"></span>`fn printing(self, material: DryingMaterial, unit: AmsUnitModel) -> Self` — [`DryingMaterial`](../types/drying/index.md#dryingmaterial), [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel)
+  Reads the material's defaults from the lower while-printing column, which exists because
+  the AMS sits in the print's thermal envelope.
 
-  Re-reads the material's parameters from the while-printing column.
-
-  Only meaningful after [`material()`](drying/index.md#dryingcycle); on its own it does nothing, since
-  there is no material to re-read. The printing column is lower because the AMS sits in the
-  print's thermal envelope.
+  Affects only defaults from [`material()`](drying/index.md#dryingcycle), in either call order; explicit
+  values are sent as set.
 
 - <span id="dryingcycle-temp"></span>`fn temp(self, temp: u32) -> Self`
 
@@ -415,14 +429,12 @@ client
 
   Whether to rotate trays during the cycle. Defaults to `false`.
 
-- <span id="dryingcycle-cooling-temp"></span>`fn cooling_temp(self, cooling_temp: i32) -> Self`
+- <span id="dryingcycle-cooling-temp"></span>`fn cooling_temp(self, cooling_temp: u32) -> Self`
 
   Sets the cooling temperature sent with the command.
 
-  Defaults to [`DEFAULT_COMMAND_COOLING_TEMP`](../types/drying/index.md#default-command-cooling-temp), and [`material()`](drying/index.md#dryingcycle) sets it
-  to that material's *softening* temperature — which is what the wire field actually
-  carries, despite the profiles also having a similarly-named
-  `filament_dev_drying_cooling_temperature` that BambuStudio never sends.
+  Defaults to the [`material()`](drying/index.md#dryingcycle)'s softening temperature, else
+  [`DEFAULT_COMMAND_COOLING_TEMP`](../types/drying/index.md#default-command-cooling-temp), BambuStudio's own fallback.
 
 - <span id="dryingcycle-close-power-conflict"></span>`fn close_power_conflict(self, close: bool) -> Self`
 
@@ -631,7 +643,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 #### Implementations
 
-- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: i32, slot_id: i32, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-change-filament"></span>`async fn change_filament(&mut self, ams_id: u8, slot_id: u8, curr_temp: i32, tar_temp: i32, extruder_id: Option<u8>) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Triggers a filament load or unload sequence on a physical AMS unit or external spool [REF-AMS-MAP].
 
@@ -675,37 +687,19 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `capabilities().supports_ams_remote_drying()`;
   see there for how the answer is resolved and what has to be polled first.
 
-- <span id="superprinterclient-dry"></span>`fn dry(&mut self, ams_id: i32) -> crate::client::DryingCycle<'_, MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`DryingCycle`](drying/index.md#dryingcycle)
+- <span id="superprinterclient-ams-unit-model"></span>`fn ams_unit_model(&self, ams_id: u8) -> Option<AmsUnitModel>` — [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel)
 
-  Configures a drying cycle for the unit at `ams_id`, to be sent with
-  `send()`.
+  Looks up the cached [`AmsUnitModel`](../types/telemetry/ams/index.md#amsunitmodel) for the unit at `ams_id`, if one has been observed.
 
-  The way to start drying. Names each parameter at the call site instead of ordering nine
-  of them, defaults the four most callers don't set, and lets
-  `material()` fill temperature, duration and
-  cooling temperature from one choice:
+  `None` covers three distinct cases that all mean the same thing to a caller — no AMS
+  snapshot has arrived yet, no unit answers to this address, or the unit reports a type
+  newer than this crate knows — and all three read as "don't assume a capability".
 
-  ```rust,ignore
-  client
-      .dry(0)
-      .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
-      .rotate_tray(true)
-      .send()
-      .await?;
-  ```
+  Matches on the unit's own `id`, which is already normalized on deserialize (the A2L's AMS
+  Lite reports physical `16` and is stored as `6`), so a caller-supplied physical `16` is
+  normalized the same way before comparing.
 
-  Nothing is published until `send()`, which is where
-  every gate runs — host capability, AMS addressing, the external-spool sentinels, the
-  attached unit's model, and the temperature range [REF-AMS-DRYER].
-
-- <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: i32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
-
-  Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
-
-  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
-  every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
-
-- <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-scan-rfid"></span>`async fn scan_rfid(&mut self, ams_id: u8, slot_id: u8) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
 
@@ -731,7 +725,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
   same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
 
-- <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: i32, tray_id: i32, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-select-k-profile"></span>`async fn select_k_profile(&mut self, ams_id: u8, slot_id: u8, cali_idx: i32, filament_id: &str, nozzle_diameter: &str) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
   Binds a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
 
@@ -748,15 +742,14 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
     Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     `tray_id: 254`.
 
-  **Validation note:** the cheat-sheet above documents only the *external-spool* case.
-  `reference/05_materials_ams.md` §5.3's own primary `extrusion_cali_sel` example binds a
-  perfectly ordinary AMS slot (`"ams_id": 0, "tray_id": 1`) — `tray_id` there is the
-  *global* tray ID (the same `(ams_id * 4) + slot_id` / `128..=135` AMS-HT composite the
-  flat `ams_mapping` array uses, per §5.3's "Hardware Channel Identifiers"), not a
-  per-unit slot index. The validation below therefore accepts the full documented
-  address space — standard AMS units, AMS-HT units, and the external-spool sentinels —
-  not just the two cheat-sheet pairs; restricting to only `(254,254)`/`(255,255)` (as an
-  earlier draft of this check assumed) would incorrectly reject this exact primary example.
+  Takes the unit and its **local** slot, and derives the global `tray_id` the wire carries
+  with `resolve_global_tray_id`: `ams_id * 4 + slot`
+  on a standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1`
+  example is unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's
+  `GetTrayIndexMap`, `DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT
+  (slot 0 only) or an external holder (slot ignored), which gives the cheat-sheet pairs
+  above. Taking the global id from the caller used to let `(2, 1)` bind unit 0's tray 1
+  while claiming unit 2 (#397).
 
 - <span id="superprinterclient-get-version"></span>`async fn get_version(&mut self) -> Result<VersionInfo, Error>` — [`VersionInfo`](../types/version/index.md#versioninfo), [`Error`](../error/index.md#error)
 
@@ -818,9 +811,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   immediately for RTSPS models — see `ensure_camera()`'s doc
   comment.
 
-- <span id="superprinterclient-read-camera-frame"></span>`async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-read-camera-frame"></span>`async fn read_camera_frame(&mut self) -> Result<Vec<u8>, Error>` — [`Error`](../error/index.md#error)
 
-  Reads the next camera frame, auto-connecting (and authenticating) if needed.
+  Reads and returns the next camera frame, auto-connecting (and authenticating) if needed.
 
   Bounds the read against `self.timer` (see
   `BinaryCameraStream::read_next_frame_with_timer`), mirroring
@@ -1084,6 +1077,36 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="superprinterclient-with-camera-max-frame-size"></span>`fn with_camera_max_frame_size(self, bytes: usize) -> Self`
 
   Overrides the default maximum accepted camera frame size (see `BinaryCameraStream::with_max_frame_size`).
+
+- <span id="superprinterclient-dry"></span>`fn dry(&mut self, ams_id: u8) -> crate::client::DryingCycle<'_, MqttRawIO, MqttTls, MqttFactory, Timer, FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`DryingCycle`](drying/index.md#dryingcycle)
+
+  Configures a drying cycle for the unit at `ams_id`, to be sent with
+  `send()`.
+
+  The way to start drying. Names each parameter at the call site instead of ordering nine
+  of them, defaults the four most callers don't set, and lets
+  `material()` fill temperature, duration and
+  cooling temperature from one choice:
+
+  ```rust,ignore
+  client
+      .dry(0)
+      .material(DryingMaterial::Petg, AmsUnitModel::Ams2Pro)
+      .rotate_tray(true)
+      .send()
+      .await?;
+  ```
+
+  Nothing is published until `send()`, which is where
+  every gate runs — host capability, AMS addressing, the external-spool sentinels, the
+  attached unit's model, and the temperature range [REF-AMS-DRYER].
+
+- <span id="superprinterclient-stop-drying"></span>`async fn stop_drying(&mut self, ams_id: u8) -> Result<CommandHandle, Error>` — [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
+
+  Terminates an active dry-chamber heating cycle on an AMS unit [REF-AMS-DRYER].
+
+  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
+  every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
 
 - <span id="superprinterclient-set-fan-speed"></span>`async fn set_fan_speed(&mut self, fan_type: FanTarget, speed_percent: u8) -> Result<CommandHandle, Error>` — [`FanTarget`](types/index.md#fantarget), [`CommandHandle`](command/index.md#commandhandle), [`Error`](../error/index.md#error)
 
@@ -1577,13 +1600,13 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   own `DevFilaSystem.cpp`, whose structural equivalent (`DevAmsTray::reset()`) is dead
   code with zero call sites in its own current codebase; the shipped BambuStudio/
   OrcaSlicer UI instead gates every read of a tray's material fields on
-  `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::state()` here) and
+  `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::is_loaded()` here) and
   never scrubs the raw cache. This crate mirrors that design rather than
   [`clean_stale_tray_data`](../ams/parser/index.md#clean-stale-tray-data)'s proactive-clearing
   approach: wiring proactive clearing into this cache would make it *less* faithful to
   on-wire state than BambuStudio's own model. Two opt-in ways to get sanitized output
   without losing that raw fidelity:
-  - Check `AmsTray::state()` (or
+  - Check `AmsTray::is_loaded()` (or
     `evaluate_spool_presence`) before trusting a
     tray's material fields — the same check-before-trust contract BambuStudio itself
     relies on.
@@ -1864,6 +1887,18 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 - <span id="printerclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
+
+- <span id="printerclient-keepalive-tick"></span>`async fn keepalive_tick(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+
+  Keeps the MQTT connection alive and checks its liveness; call every [`KEEPALIVE_TICK_SECS`](#keepalive-tick-secs).
+
+  For a loop that races [`poll_telemetry()`](#printerclient) against other events
+  in `select!`, where a cancelled poll can't be relied on to notice a dead link: sends a
+  PINGREQ if one is due, then advances
+  [`tick_zombie_check()`](../mqtt/client/index.md#mqttclient) by `KEEPALIVE_TICK_SECS`.
+
+  An `Err` from either step means the connection is unusable — a failed write poisons
+  it, and a zombie is dead by definition — so reconnect rather than retry.
 
 - <span id="printerclient-serial"></span>`fn serial(&self) -> &str`
 
@@ -2289,6 +2324,14 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
   Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"SLICING"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
 
+- <span id="printstatus-is-busy"></span>`fn is_busy(self) -> bool`
+
+  True while a job is in flight — preparing, slicing, running or paused — so the printer
+  shouldn't be given new work or motion that could collide with a part.
+
+  `Unknown` is not busy, so a caller gating on safety must treat a missing status
+  (`PrinterClient::print_status() == None`) or `Unknown` as "can't confirm idle" itself.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrintStatus`
@@ -2376,4 +2419,17 @@ available via [`into_raw`](types/index.md#telemetryevent).
 ##### `impl Debug for TelemetryEvent`
 
 - <span id="telemetryevent-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+
+---
+
+## Constants
+
+### `KEEPALIVE_TICK_SECS`
+```rust
+const KEEPALIVE_TICK_SECS: u32 = 15u32;
+```
+
+How often to call [`PrinterClient::keepalive_tick`]: half the 30s keepalive this client
+advertises in CONNECT, so a missed tick still leaves margin before the broker's 45s cutoff.
 

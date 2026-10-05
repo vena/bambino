@@ -23,8 +23,8 @@ Top-level telemetry report envelope (`print` and `device` wire locations).
 
 ```rust
 struct LightReport {
-    pub node: String,
-    pub mode: String,
+    pub node: Option<String>,
+    pub mode: Option<String>,
 }
 ```
 
@@ -32,13 +32,20 @@ Chamber/work/heatbed light state entry from the `lights_report` array.
 
 #### Fields
 
-- **`node`**: `String`
+- **`node`**: `Option<String>`
 
   Light identifier (e.g. "chamber_light", "work_light").
 
-- **`mode`**: `String`
+- **`mode`**: `Option<String>`
 
-  Current state (e.g. "on", "off", "flashing").
+  Current state (e.g. "on", "off", "flashing"); see [`is_on`](#lightreport).
+
+#### Implementations
+
+- <span id="lightreport-is-on"></span>`fn is_on(&self) -> Option<bool>`
+
+  Whether the light is lit: `true` for `"on"` and `"flashing"`, `false` for `"off"`,
+  `None` when the mode is absent or unrecognized.
 
 #### Trait Implementations
 
@@ -642,7 +649,11 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
 
 - **`gcode_start_time`**: `Option<String>`
 
-  Print start timestamp string.
+  Print start time as Unix epoch seconds in a decimal string (e.g. `"1681479206"`); see
+  [`gcode_start_time_secs`](#printertelemetry).
+  
+  Read from the printer's own clock, which LAN-mode printers don't keep synced. Not seen in
+  local-print captures; see `reference/03_mqtt_telemetry.md`.
 
 - **`cali_version`**: `Option<i32>`
 
@@ -695,6 +706,10 @@ Core printer state machine telemetry, containing kinematics, thermal targets, au
   Cloud batch ID.
 
 #### Implementations
+
+- <span id="printertelemetry-gcode-start-time-secs"></span>`fn gcode_start_time_secs(&self) -> Option<u64>`
+
+  [`gcode_start_time`](#printertelemetry) parsed to epoch seconds.
 
 - <span id="printertelemetry-reports-np-format"></span>`fn reports_np_format(&self) -> bool`
 

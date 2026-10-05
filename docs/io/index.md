@@ -524,6 +524,12 @@ stack cannot support it (see that trait's doc comment).
   turns that loop into a genuine busy-spin, burning 100% CPU and potentially starving
   other tasks on single-core/cooperative-scheduler platforms.
 
+  `Err(SocketError::TimedOut)` is the "no data yet" signal discovery retries on. Any
+  other error reaches `DiscoveryEngine::poll_next_device`'s caller as a socket fault —
+  on Embassy, which drives that engine directly, typically ending the pass — so an
+  implementation must not report a recoverable per-datagram condition (e.g. one
+  oversized packet) as an error.
+
 #### Implementors
 
 - [`EmbassyUdpSocket`](embassy/index.md#embassyudpsocket)

@@ -13,11 +13,14 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
   - [`AmsStatusReport`](#amsstatusreport)
   - [`AmsTray`](#amstray)
   - [`AmsUnit`](#amsunit)
-  - [`VirtualTray`](#virtualtray)
+  - [`AmsDryFanStatus`](#amsdryfanstatus)
+  - [`AmsDryStatus`](#amsdrystatus)
+  - [`AmsDrySubStatus`](#amsdrysubstatus)
   - [`AmsFilamentStep`](#amsfilamentstep)
   - [`AmsUnitModel`](#amsunitmodel)
   - [`DryBlockReason`](#dryblockreason)
   - [`FilamentSwitchInlet`](#filamentswitchinlet)
+  - [`VirtualTray`](#virtualtray)
 
 ## Quick Reference
 
@@ -27,11 +30,14 @@ AMS telemetry types (tray slots, units, dry settings, virtual trays).
 | [`AmsStatusReport`](#amsstatusreport) | struct | Top-level AMS status wrapper containing the units array and bus-wide metadata [REF-AMS-DECODE]. |
 | [`AmsTray`](#amstray) | struct | Material spool state descriptor representing a single physical tray slot. |
 | [`AmsUnit`](#amsunit) | struct | Modular standard expansion unit managing up to 4 physical spool slots. |
-| [`VirtualTray`](#virtualtray) | struct | Virtual/external spool holder telemetry. |
+| [`AmsDryFanStatus`](#amsdryfanstatus) | enum | State of one drying fan from `info` bits 18–19 or 20–21, BambuStudio's `DevAms::DryFanStatus` (`DevFilaSystem.h:167-171`). |
+| [`AmsDryStatus`](#amsdrystatus) | enum | Drying-cycle state from `info` bits 4–7, BambuStudio's `DevAms::DryStatus` (`DevFilaSystem.h:148-158`). |
+| [`AmsDrySubStatus`](#amsdrysubstatus) | enum | Drying sub-state from `info` bits 22–23, BambuStudio's `DevAms::DrySubStatus` (`DevFilaSystem.h:160-165`). |
 | [`AmsFilamentStep`](#amsfilamentstep) | enum | Per-slot filament-change step code. |
 | [`AmsUnitModel`](#amsunitmodel) | enum | Which physical AMS accessory is attached, decoded from `info` bits 0–3. |
 | [`DryBlockReason`](#dryblockreason) | enum | Why the firmware will not, or did not, start a drying cycle — one entry of `dry_sf_reason`. |
 | [`FilamentSwitchInlet`](#filamentswitchinlet) | enum | Which Filament Track Switch inlet an AMS unit feeds through. |
+| [`VirtualTray`](#virtualtray) | type | External spool holder: `vt_tray` on single-nozzle models, each `vir_slot` entry on IDEX. |
 
 ## Types
 
@@ -76,6 +82,10 @@ Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
 ##### `impl Debug for AmsDrySetting`
 
 - <span id="amsdrysetting-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for AmsDrySetting`
+
+- <span id="amsdrysetting-default"></span>`fn default() -> AmsDrySetting` — [`AmsDrySetting`](#amsdrysetting)
 
 ##### `impl Deserialize<'de> for AmsDrySetting`
 
@@ -186,6 +196,16 @@ the intermediate `print.ams` object.
   `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
   consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
 
+#### Implementations
+
+- <span id="amsstatusreport-unit"></span>`fn unit(&self, ams_id: u8) -> Option<&AmsUnit>` — [`AmsUnit`](#amsunit)
+
+  The unit at bus id `ams_id`, as normalized on ingest (an A2L's AMS Lite is `6`).
+
+- <span id="amsstatusreport-tray"></span>`fn tray(&self, ams_id: u8, slot: u8) -> Option<&AmsTray>` — [`AmsTray`](#amstray)
+
+  Slot `slot` of the unit at `ams_id`, if both were reported.
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsStatusReport`
@@ -195,6 +215,10 @@ the intermediate `print.ams` object.
 ##### `impl Debug for AmsStatusReport`
 
 - <span id="amsstatusreport-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for AmsStatusReport`
+
+- <span id="amsstatusreport-default"></span>`fn default() -> AmsStatusReport` — [`AmsStatusReport`](#amsstatusreport)
 
 ##### `impl Deserialize<'de> for AmsStatusReport`
 
@@ -252,7 +276,8 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 - **`id`**: `String`
 
-  The physical index representing the slot (0 to 3). Sent as a string on the wire.
+  The physical index representing the slot (0 to 3), or an external holder's address
+  (`"254"`/`"255"`) for a [`VirtualTray`](#virtualtray). Sent as a string on the wire; empty if omitted.
 
 - **`state`**: `Option<u8>`
 
@@ -378,11 +403,44 @@ standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 
 #### Implementations
 
+- <span id="amstray-slot"></span>`fn slot(&self) -> Option<u8>`
+
+  The slot index parsed from [`id`](#amstray), or `None` if it isn't a number.
+
+- <span id="amstray-material"></span>`fn material(&self) -> Option<&str>`
+
+  The material abbreviation (`"PLA"`, `"PETG"`, ...), or `None` when `tray_type` is
+  absent or explicitly blank (empty or `"Empty"`).
+
+- <span id="amstray-color-rgba"></span>`fn color_rgba(&self) -> Option<[u8; 4]>`
+
+  The `RRGGBBAA` `tray_color` decoded to `[r, g, b, a]`, or `None` if absent or malformed.
+
+- <span id="amstray-nozzle-temp-range"></span>`fn nozzle_temp_range(&self) -> Option<(u16, u16)>`
+
+  `(min, max)` nozzle temperature in °C for the loaded filament, if both were reported.
+
+- <span id="amstray-remain-percent"></span>`fn remain_percent(&self) -> Option<u8>`
+
+  Remaining filament in percent, or `None` for the firmware's `-1` "not calculated"
+  sentinel or any other out-of-range value.
+
 - <span id="amstray-state"></span>`fn state(&self) -> u8`
 
-  Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
+  Retrieves the raw status code of the spool, defaulting to `9` (Empty) if omitted.
 
-  This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
+  **Not a loaded/empty answer on its own:** some firmware sends a fully populated tray
+  with no `state` key, which reads as `9` here. Use [`is_loaded`](#amstray) to ask
+  whether a spool is loaded.
+
+- <span id="amstray-is-loaded"></span>`fn is_loaded(&self, ams_id: u8) -> bool`
+
+  True when this tray, in the unit at `ams_id`, holds a loaded spool.
+
+  The same rule `clean_stale_tray_data` applies before
+  keeping a tray's material data: a missing `state` with filament metadata is loaded,
+  states `9`/`10` mean empty except on AMS-HT units (`ams_id` 128-135, where they don't),
+  and an explicitly blank `tray_type` means empty.
 
 - <span id="amstray-remaining-weight-grams"></span>`fn remaining_weight_grams(&self) -> Option<u32>`
 
@@ -479,10 +537,9 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   
   `None` means this push's `tray` key was absent from the wire — leave previously
   cached trays untouched. `Some(vec![])` means the key was present but empty, which
-  (per `AmsUnit::merge_from`) prunes every cached tray for this unit — bambino's
-  `#[serde(default)]` on `Option<Vec<_>>` gives exactly this absent-vs-present-empty
-  distinction for free (absent key -> `None` via `Default`, present key -> `Some(_)`
-  however short), confirmed against BambuStudio's `DevFilaSystem.cpp`
+  (per `AmsUnit::merge_from`) prunes every cached tray for this unit — `Option` gives
+  exactly this absent-vs-present-empty distinction for free (absent key -> `None`,
+  present key -> `Some(_)` however short), confirmed against BambuStudio's `DevFilaSystem.cpp`
   (`ParseAmsInfo`'s `if (j_ams.contains("tray"))` gate around both the per-tray parse
   loop and the prune-absent-ids loop).
 
@@ -495,6 +552,23 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   Drying failure reason codes per slot (X2D).
 
 #### Implementations
+
+- <span id="amsunit-ams-id"></span>`fn ams_id(&self) -> Option<u8>`
+
+  The unit's bus id parsed from [`id`](#amsunit), or `None` if it isn't a number.
+
+- <span id="amsunit-temperature-c"></span>`fn temperature_c(&self) -> Option<f32>`
+
+  Enclosure temperature in °C, from the `temp` string.
+
+- <span id="amsunit-humidity-percent"></span>`fn humidity_percent(&self) -> Option<u8>`
+
+  Relative humidity in percent, from `humidity_raw`.
+
+- <span id="amsunit-humidity-level"></span>`fn humidity_level(&self) -> Option<u8>`
+
+  Coarse humidity level `1..=5` from `humidity`, where **`1` is wettest and `5` driest**
+  (`reference/05_materials_ams.md`, "Per-Unit Humidity").
 
 - <span id="amsunit-parse-info"></span>`fn parse_info(&self) -> Option<u64>`
 
@@ -522,9 +596,19 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   (`ams_f1/0`, `n3f/0`, `n3s/0`) and BambuStudio falls back to it when the bitmask is
   missing, but that lives in a different payload than this one.
 
-- <span id="amsunit-dry-status"></span>`fn dry_status(&self) -> Option<u8>`
+- <span id="amsunit-dry-status"></span>`fn dry_status(&self) -> Option<AmsDryStatus>` — [`AmsDryStatus`](#amsdrystatus)
 
   Drying status from bits 4–7.
+
+- <span id="amsunit-supports-drying"></span>`fn supports_drying(&self) -> Option<bool>`
+
+  Whether this unit can dry: `None` when its type is unknown (no `info`, or a type newer
+  than this crate), which is not the same as "can't dry".
+
+- <span id="amsunit-dry-temp-range"></span>`fn dry_temp_range(&self) -> Option<(u32, u32)>`
+
+  Inclusive drying temperature range in °C, or `None` if the unit can't dry or its type
+  is unknown — see [`AmsUnitModel::dry_temp_range`](#amsunitmodel).
 
 - <span id="amsunit-extruder-assignment"></span>`fn extruder_assignment(&self) -> Option<u8>`
 
@@ -564,17 +648,17 @@ Modular standard expansion unit managing up to 4 physical spool slots.
   [`filament_switch_inlet`](#amsunit) to tell them apart — an unbound
   `bind_switch_in` alongside `0xE` means uninitialized.
 
-- <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<u8>`
+- <span id="amsunit-dry-sub-status"></span>`fn dry_sub_status(&self) -> Option<AmsDrySubStatus>` — [`AmsDrySubStatus`](#amsdrysubstatus)
 
   Drying sub-status from bits 22–23.
 
-- <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<u8>`
+- <span id="amsunit-dry-fan1-status"></span>`fn dry_fan1_status(&self) -> Option<AmsDryFanStatus>` — [`AmsDryFanStatus`](#amsdryfanstatus)
 
   Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
   `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
 
-- <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<u8>`
+- <span id="amsunit-dry-fan2-status"></span>`fn dry_fan2_status(&self) -> Option<AmsDryFanStatus>` — [`AmsDryFanStatus`](#amsdryfanstatus)
 
   Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
   `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
@@ -606,6 +690,10 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Default for AmsUnit`
+
+- <span id="amsunit-default"></span>`fn default() -> AmsUnit` — [`AmsUnit`](#amsunit)
+
 ##### `impl Deserialize<'de> for AmsUnit`
 
 - <span id="amsunit-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
@@ -616,145 +704,175 @@ Modular standard expansion unit managing up to 4 physical spool slots.
 
 - <span id="amsunit-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
-### `VirtualTray`
+### `AmsDryFanStatus`
 
 ```rust
-struct VirtualTray {
-    pub id: Option<String>,
-    pub tray_type: Option<String>,
-    pub tray_color: Option<String>,
-    pub tray_info_idx: Option<String>,
-    pub tray_sub_brands: Option<String>,
-    pub nozzle_temp_max: Option<String>,
-    pub nozzle_temp_min: Option<String>,
-    pub tray_diameter: Option<String>,
-    pub tray_weight: Option<String>,
-    pub tray_temp: Option<String>,
-    pub tray_time: Option<String>,
-    pub bed_temp: Option<String>,
-    pub bed_temp_type: Option<String>,
-    pub tag_uid: Option<String>,
-    pub tray_uuid: Option<String>,
-    pub tray_id_name: Option<String>,
-    pub xcam_info: Option<String>,
-    pub remain: Option<i32>,
-    pub k: Option<f64>,
-    pub n: Option<i32>,
-    pub cali_idx: Option<i32>,
+enum AmsDryFanStatus {
+    Off,
+    On,
+    Other(u8),
 }
 ```
 
-Virtual/external spool holder telemetry.
-Represents the filament loaded directly into the extruder without going through an AMS unit.
+State of one drying fan from `info` bits 18–19 or 20–21, BambuStudio's
+`DevAms::DryFanStatus` (`DevFilaSystem.h:167-171`).
 
-On the wire, this shares the same schema as `AmsTray` — both physical AMS trays
-and virtual/external spool holders use the same field set.
+#### Variants
 
-#### Fields
+- **`Off`**
 
-- **`id`**: `Option<String>`
+  `0` — off.
 
-  Virtual tray ID (typically `"254"`).
+- **`On`**
 
-- **`tray_type`**: `Option<String>`
+  `1` — on.
 
-  Material class abbreviation (e.g. "PLA", "PETG"). Empty when no filament loaded.
+- **`Other`**
 
-- **`tray_color`**: `Option<String>`
-
-  RRGGBBAA hexadecimal color string.
-
-- **`tray_info_idx`**: `Option<String>`
-
-  Slicer filament preset index.
-
-- **`tray_sub_brands`**: `Option<String>`
-
-  Sub-brand or variant string.
-
-- **`nozzle_temp_max`**: `Option<String>`
-
-  Maximum nozzle temperature for the loaded filament (sent as string).
-
-- **`nozzle_temp_min`**: `Option<String>`
-
-  Minimum nozzle temperature for the loaded filament (sent as string).
-
-- **`tray_diameter`**: `Option<String>`
-
-  Filament diameter in mm (sent as string, e.g. `"1.75"`).
-
-- **`tray_weight`**: `Option<String>`
-
-  Spool net weight in grams (sent as string).
-
-- **`tray_temp`**: `Option<String>`
-
-  Filament temperature setting (sent as string).
-
-- **`tray_time`**: `Option<String>`
-
-  Filament print time accumulator (sent as string).
-
-- **`bed_temp`**: `Option<String>`
-
-  Bed temperature setting (sent as string).
-
-- **`bed_temp_type`**: `Option<String>`
-
-  Bed temperature type/profile (sent as string).
-
-- **`tag_uid`**: `Option<String>`
-
-  16-character hexadecimal RFID tag UID.
-
-- **`tray_uuid`**: `Option<String>`
-
-  32-character globally unique filament spool ID.
-
-- **`tray_id_name`**: `Option<String>`
-
-  Filament preset display name.
-
-- **`xcam_info`**: `Option<String>`
-
-  XCam inspection info hex string.
-
-- **`remain`**: `Option<i32>`
-
-  Remaining filament percentage (0–100, or 0 if unknown).
-
-- **`k`**: `Option<f64>`
-
-  Flow rate calibration K factor.
-
-- **`n`**: `Option<i32>`
-
-  Flow rate calibration N factor.
-
-- **`cali_idx`**: `Option<i32>`
-
-  Calibration index (-1 if uncalibrated).
+  A value this crate doesn't know (`2` or `3`), preserved verbatim.
 
 #### Trait Implementations
 
-##### `impl Clone for VirtualTray`
+##### `impl Clone for AmsDryFanStatus`
 
-- <span id="virtualtray-clone"></span>`fn clone(&self) -> VirtualTray` — [`VirtualTray`](#virtualtray)
+- <span id="amsdryfanstatus-clone"></span>`fn clone(&self) -> AmsDryFanStatus` — [`AmsDryFanStatus`](#amsdryfanstatus)
 
-##### `impl Debug for VirtualTray`
+##### `impl Copy for AmsDryFanStatus`
 
-- <span id="virtualtray-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+##### `impl Debug for AmsDryFanStatus`
 
-##### `impl Deserialize<'de> for VirtualTray`
+- <span id="amsdryfanstatus-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-- <span id="virtualtray-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
+##### `impl Eq for AmsDryFanStatus`
 
-##### `impl DeserializeOwned for VirtualTray`
+##### `impl PartialEq for AmsDryFanStatus`
 
-##### `impl Serialize for VirtualTray`
+- <span id="amsdryfanstatus-partialeq-eq"></span>`fn eq(&self, other: &AmsDryFanStatus) -> bool` — [`AmsDryFanStatus`](#amsdryfanstatus)
 
-- <span id="virtualtray-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+### `AmsDryStatus`
+
+```rust
+enum AmsDryStatus {
+    Off,
+    Checking,
+    Drying,
+    Cooling,
+    Stopping,
+    Error,
+    HeaterOutOfControl,
+    ProductionTest,
+    Other(u8),
+}
+```
+
+Drying-cycle state from `info` bits 4–7, BambuStudio's `DevAms::DryStatus`
+(`DevFilaSystem.h:148-158`).
+
+#### Variants
+
+- **`Off`**
+
+  `0` — not drying.
+
+- **`Checking`**
+
+  `1` — checking conditions before starting.
+
+- **`Drying`**
+
+  `2` — drying.
+
+- **`Cooling`**
+
+  `3` — cooling down after a cycle.
+
+- **`Stopping`**
+
+  `4` — stopping.
+
+- **`Error`**
+
+  `5` — the cycle hit an error.
+
+- **`HeaterOutOfControl`**
+
+  `6` — the heater could not be stopped (BambuStudio `CannotStopHeatOutofControl`).
+
+- **`ProductionTest`**
+
+  `7` — factory production test (BambuStudio `PrdTesting`).
+
+- **`Other`**
+
+  A value this crate doesn't know, preserved verbatim.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsDryStatus`
+
+- <span id="amsdrystatus-clone"></span>`fn clone(&self) -> AmsDryStatus` — [`AmsDryStatus`](#amsdrystatus)
+
+##### `impl Copy for AmsDryStatus`
+
+##### `impl Debug for AmsDryStatus`
+
+- <span id="amsdrystatus-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsDryStatus`
+
+##### `impl PartialEq for AmsDryStatus`
+
+- <span id="amsdrystatus-partialeq-eq"></span>`fn eq(&self, other: &AmsDryStatus) -> bool` — [`AmsDryStatus`](#amsdrystatus)
+
+### `AmsDrySubStatus`
+
+```rust
+enum AmsDrySubStatus {
+    Off,
+    Heating,
+    Dehumidifying,
+    Other(u8),
+}
+```
+
+Drying sub-state from `info` bits 22–23, BambuStudio's `DevAms::DrySubStatus`
+(`DevFilaSystem.h:160-165`).
+
+#### Variants
+
+- **`Off`**
+
+  `0` — idle.
+
+- **`Heating`**
+
+  `1` — heating.
+
+- **`Dehumidifying`**
+
+  `2` — dehumidifying.
+
+- **`Other`**
+
+  A value this crate doesn't know (`3`), preserved verbatim.
+
+#### Trait Implementations
+
+##### `impl Clone for AmsDrySubStatus`
+
+- <span id="amsdrysubstatus-clone"></span>`fn clone(&self) -> AmsDrySubStatus` — [`AmsDrySubStatus`](#amsdrysubstatus)
+
+##### `impl Copy for AmsDrySubStatus`
+
+##### `impl Debug for AmsDrySubStatus`
+
+- <span id="amsdrysubstatus-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsDrySubStatus`
+
+##### `impl PartialEq for AmsDrySubStatus`
+
+- <span id="amsdrysubstatus-partialeq-eq"></span>`fn eq(&self, other: &AmsDrySubStatus) -> bool` — [`AmsDrySubStatus`](#amsdrysubstatus)
 
 ### `AmsFilamentStep`
 
@@ -864,7 +982,7 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 
 ##### `impl Deserialize<'de> for AmsFilamentStep`
 
-- <span id="amsfilamentstep-deserialize"></span>`fn deserialize<D>(deserializer: D) -> Result<Self, <D as >::Error>`
+- <span id="amsfilamentstep-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
 
 ##### `impl DeserializeOwned for AmsFilamentStep`
 
@@ -880,7 +998,7 @@ the source enum). `Unknown` preserves any other raw value rather than failing to
 
 ##### `impl Serialize for AmsFilamentStep`
 
-- <span id="amsfilamentstep-serialize"></span>`fn serialize<S>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+- <span id="amsfilamentstep-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
 ### `AmsUnitModel`
 
@@ -1139,7 +1257,7 @@ instead of being wired to a fixed extruder. A unit routed this way reports `0xE`
 ("not fixed") for its extruder assignment, and the inlet below is the only thing that says
 which physical nozzle it actually reaches.
 
-Deliberately not `Copy`-cheap-`u8` — the wire values (`0` = In-B, `1` = In-A) are inverted
+An enum rather than a bare `u8` because the wire values (`0` = In-B, `1` = In-A) are inverted
 relative to how the inlets read alphabetically, and every prior attempt to remember that from
 a bare integer is a bug waiting to happen.
 
@@ -1170,4 +1288,15 @@ a bare integer is a bug waiting to happen.
 ##### `impl PartialEq for FilamentSwitchInlet`
 
 - <span id="filamentswitchinlet-partialeq-eq"></span>`fn eq(&self, other: &FilamentSwitchInlet) -> bool` — [`FilamentSwitchInlet`](#filamentswitchinlet)
+
+### `VirtualTray`
+
+```rust
+type VirtualTray = AmsTray;
+```
+
+External spool holder: `vt_tray` on single-nozzle models, each `vir_slot` entry on IDEX.
+
+Its wire schema is an AMS tray's, so it is the same type, with the same fields, accessors and
+merge. `id` is the holder's address (`"254"`/`"255"`), or empty if a push omitted it.
 

@@ -64,26 +64,26 @@ client
 
 - <span id="dryingcycle-material"></span>`fn material(self, material: DryingMaterial, unit: AmsUnitModel) -> Self` — [`DryingMaterial`](../../types/drying/index.md#dryingmaterial), [`AmsUnitModel`](../../types/telemetry/ams/index.md#amsunitmodel)
 
-  Fills temperature, duration, cooling temperature and the filament name from the vendor's
-  published parameters for `material` on `unit`.
+  Uses the vendor's published parameters for `material` on `unit` for temperature,
+  duration, cooling temperature and the filament name.
 
-  Sets four fields at once, which is the whole reason this builder exists — the same choice
-  on a positional call means threading three numbers and a string into four of nine slots.
+  These are defaults, resolved in [`send()`](#dryingcycle): an explicit
+  [`temp()`](#dryingcycle), [`duration_hours()`](#dryingcycle),
+  [`cooling_temp()`](#dryingcycle) or [`filament()`](#dryingcycle) wins regardless
+  of call order. Calling this again replaces the material.
 
-  Assumes an idle printer. For a cycle that runs alongside a print, follow with
-  [`printing()`](#dryingcycle), which re-reads the lower while-printing column.
+  The cooling temperature sent is the material's
+  [`softening_temp`](../../types/drying/index.md#dryingmaterial), which is what the wire field carries
+  (see its doc). A unit without a drying chamber has no published parameters, so temperature
+  and duration stay unset and [`send()`](#dryingcycle) rejects rather than publishing a guess.
 
-  A material with no published parameters for this unit (any unit without a drying chamber)
-  leaves the values untouched, so [`send()`](#dryingcycle) still rejects rather than
-  publishing a guess.
+- <span id="dryingcycle-printing"></span>`fn printing(self) -> Self`
 
-- <span id="dryingcycle-printing"></span>`fn printing(self, material: DryingMaterial, unit: AmsUnitModel) -> Self` — [`DryingMaterial`](../../types/drying/index.md#dryingmaterial), [`AmsUnitModel`](../../types/telemetry/ams/index.md#amsunitmodel)
+  Reads the material's defaults from the lower while-printing column, which exists because
+  the AMS sits in the print's thermal envelope.
 
-  Re-reads the material's parameters from the while-printing column.
-
-  Only meaningful after [`material()`](#dryingcycle); on its own it does nothing, since
-  there is no material to re-read. The printing column is lower because the AMS sits in the
-  print's thermal envelope.
+  Affects only defaults from [`material()`](#dryingcycle), in either call order; explicit
+  values are sent as set.
 
 - <span id="dryingcycle-temp"></span>`fn temp(self, temp: u32) -> Self`
 
@@ -108,14 +108,12 @@ client
 
   Whether to rotate trays during the cycle. Defaults to `false`.
 
-- <span id="dryingcycle-cooling-temp"></span>`fn cooling_temp(self, cooling_temp: i32) -> Self`
+- <span id="dryingcycle-cooling-temp"></span>`fn cooling_temp(self, cooling_temp: u32) -> Self`
 
   Sets the cooling temperature sent with the command.
 
-  Defaults to [`DEFAULT_COMMAND_COOLING_TEMP`](../../types/drying/index.md#default-command-cooling-temp), and [`material()`](#dryingcycle) sets it
-  to that material's *softening* temperature — which is what the wire field actually
-  carries, despite the profiles also having a similarly-named
-  `filament_dev_drying_cooling_temperature` that BambuStudio never sends.
+  Defaults to the [`material()`](#dryingcycle)'s softening temperature, else
+  [`DEFAULT_COMMAND_COOLING_TEMP`](../../types/drying/index.md#default-command-cooling-temp), BambuStudio's own fallback.
 
 - <span id="dryingcycle-close-power-conflict"></span>`fn close_power_conflict(self, close: bool) -> Self`
 

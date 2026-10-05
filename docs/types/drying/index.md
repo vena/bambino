@@ -150,10 +150,11 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
   Matches a wire `filament_type` string to a material, case-insensitively.
 
-  Accepts the bare material name and the common composite suffixes that share a base
-  profile — `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"` all resolve to [`Pa`](#dryingmaterial), because
-  BambuStudio's own composite presets inherit their drying parameters from the base
-  `fdm_filament_pa.json`. `None` for anything unrecognized, which is the case the free-form
+  The base material is the leading run of ASCII letters, so composite and variant
+  spellings resolve to the profile they inherit from: `"PA-CF"`, `"PAHT-CF"` and `"PA6-GF"`
+  to [`Pa`](#dryingmaterial) (BambuStudio's composite presets inherit the base
+  `fdm_filament_pa.json`), `"PLA+"` and `"PLA Silk"` to [`Pla`](#dryingmaterial), `"PETG HF"` to
+  [`Petg`](#dryingmaterial). `None` for anything unrecognized, which is the case the free-form
   `&str` parameter on `DryingCycle::filament` exists to serve.
 
 - <span id="dryingmaterial-wire-name"></span>`fn wire_name(self) -> &'static str`
@@ -192,23 +193,11 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
   Temperature (°C) at which this material begins to soften
   (`filament_dev_drying_softening_temperature`).
 
-  Also the value a drying cycle sends as its `cooling_temp` — see
-  [`command_cooling_temp`](#dryingmaterial).
-
-- <span id="dryingmaterial-command-cooling-temp"></span>`fn command_cooling_temp(self) -> i32`
-
-  What a drying cycle sends as its `cooling_temp` for this material.
-
-  **The wire `cooling_temp` carries the *softening* temperature, not the profile's
-  `filament_dev_drying_cooling_temperature`.** That second field exists and BambuStudio
-  parses it (`DevUtilBackend.cpp:109-110`), but never sends it — the drying command is
-  built from `filament_dev_drying_softening_temperature` (`AMSDryControl.cpp:816`). Reading
-  the similarly-named field instead is the obvious mistake here, so this accessor exists to
-  make the right one the easy one.
-
-  Equal to [`softening_temp`](#dryingmaterial); see
-  [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp) for what BambuStudio sends when a tray's filament
-  resolves to no preset at all.
+  **Also what a drying cycle sends as its wire `cooling_temp`** — not the profile's
+  similarly named `filament_dev_drying_cooling_temperature`. BambuStudio parses that second
+  field (`DevUtilBackend.cpp:109-110`) but never sends it: the drying command is built from
+  the softening temperature (`AMSDryControl.cpp:816`). See [`DEFAULT_COMMAND_COOLING_TEMP`](#default-command-cooling-temp)
+  for what BambuStudio sends when a tray's filament resolves to no preset at all.
 
 - <span id="dryingmaterial-heat-distortion-temp"></span>`fn heat_distortion_temp(self) -> u32`
 
@@ -253,11 +242,19 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
 - <span id="dryingmaterial-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Display for DryingMaterial`
+
+- <span id="dryingmaterial-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
 ##### `impl Eq for DryingMaterial`
 
 ##### `impl PartialEq for DryingMaterial`
 
 - <span id="dryingmaterial-partialeq-eq"></span>`fn eq(&self, other: &DryingMaterial) -> bool` — [`DryingMaterial`](#dryingmaterial)
+
+##### `impl ToString for DryingMaterial`
+
+- <span id="dryingmaterial-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 
 ---
@@ -266,7 +263,7 @@ field is free-form — BambuStudio sends the tray's own `filament_type` string �
 
 ### `DEFAULT_COMMAND_COOLING_TEMP`
 ```rust
-const DEFAULT_COMMAND_COOLING_TEMP: i32 = 50i32;
+const DEFAULT_COMMAND_COOLING_TEMP: u32 = 50u32;
 ```
 
 Fallback `cooling_temp` BambuStudio sends when a tray's filament has no drying preset

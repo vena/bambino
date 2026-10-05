@@ -107,7 +107,7 @@ struct HmsEntry {
     pub attr: u32,
     pub code: u32,
     pub ts_boot: Option<u64>,
-    pub ts_unix: Option<String>,
+    pub ts_local: Option<String>,
 }
 ```
 
@@ -130,9 +130,13 @@ Each entry represents an active hardware fault or status indication. Use
 
   Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
 
-- **`ts_unix`**: `Option<String>`
+- **`ts_local`**: `Option<String>`
 
-  UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
+  When the alert was raised, as the calendar string `YYYYMMDDHHmmss` (e.g.
+  `"20260426002648"`) — **not** Unix epoch seconds, despite the wire key `ts_unix`.
+  
+  Read from the printer's own clock, which LAN-mode printers don't keep synced, so it is
+  neither guaranteed UTC nor comparable with host time.
 
 #### Trait Implementations
 
@@ -178,11 +182,13 @@ Camera and recording state telemetry, nested as `print.ipcam` on the wire.
 
 - **`ipcam_record`**: `Option<String>`
 
-  Camera live feed recording status (`"enable"` or `"disable"`).
+  Camera live feed recording status (`"enable"` or `"disable"`); see
+  [`recording`](#ipcamtelemetry).
 
 - **`timelapse`**: `Option<String>`
 
-  Frame-by-layer timelapse recording status (`"enable"` or `"disable"`).
+  Frame-by-layer timelapse recording status (`"enable"` or `"disable"`); see
+  [`timelapse_enabled`](#ipcamtelemetry).
 
 - **`mode_bits`**: `Option<u32>`
 
@@ -199,6 +205,20 @@ Camera and recording state telemetry, nested as `print.ipcam` on the wire.
 - **`rtsp_url`**: `Option<String>`
 
   RTSP streaming URL (e.g. `"rtsps://192.168.1.64/streaming/live/1"`).
+
+#### Implementations
+
+- <span id="ipcamtelemetry-recording"></span>`fn recording(&self) -> Option<bool>`
+
+  Whether live-feed recording is on, from `ipcam_record`.
+
+- <span id="ipcamtelemetry-timelapse-enabled"></span>`fn timelapse_enabled(&self) -> Option<bool>`
+
+  Whether timelapse recording is on, from `timelapse`.
+
+- <span id="ipcamtelemetry-tutk-server-enabled"></span>`fn tutk_server_enabled(&self) -> Option<bool>`
+
+  Whether the TUTK cloud-relay server is on, from `tutk_server`.
 
 #### Trait Implementations
 

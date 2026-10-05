@@ -30,7 +30,6 @@ a standard 16-byte length descriptor.
 |------|------|-------------|
 | [`BinaryCameraStream`](#binarycamerastream) | struct | Abstract state controller parsing incoming frame buffers from raw Port 6000 streams. |
 | [`build_handshake_packet`](#build-handshake-packet) | fn | Constructs the static 80-byte binary authentication packet required by the printer [REF-CAM-BINARY]. |
-| [`CAMERA_PASSWORD_MAX_LEN`](#camera-password-max-len) | const | Maximum accepted access-code length for the camera handshake, in bytes. |
 
 ## Types
 
@@ -72,7 +71,7 @@ to fully close before redialing.
   fits their actual JPEG resolution and buffer budget (e.g. 64-256KB) rather than relying
   on the desktop-sized default.
 
-- <span id="binarycamerastream-authenticate"></span>`async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
+- <span id="binarycamerastream-authenticate"></span>`async fn authenticate(&mut self, access_code: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Transmits the 80-byte authentication handshake to activate the continuous frame-push process.
 
@@ -92,14 +91,13 @@ to fully close before redialing.
   access code" from a network problem through this API alone, and matching only
   `ConnectionReset` misses the silent cases.
 
-- <span id="binarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
+- <span id="binarycamerastream-read-next-frame"></span>`async fn read_next_frame(&mut self) -> Result<Vec<u8>, Error>` — [`Error`](../../error/index.md#error)
 
-  Asynchronously extracts the next complete frame from the stream.
+  Asynchronously extracts and returns the next complete frame from the stream.
 
-  Wholesale-replaces the user-supplied `Vec<u8>` with the decoded frame each call
-  (`*frame_buf = payload`) — no buffer reuse. Delegates to `read_next_frame_with_timer` under
-  `DummyTimer`, which degrades to a plain unbounded read — behavior-preserving for
-  every existing caller not going through `PrinterClient`.
+  Delegates to `read_next_frame_with_timer` under `DummyTimer`, which degrades to a
+  plain unbounded read — behavior-preserving for every existing caller not going through
+  `PrinterClient`.
 
 #### Trait Implementations
 
@@ -124,18 +122,4 @@ Constructs the static 80-byte binary authentication packet required by the print
 * Offset 8-15 (8 bytes): Zero-padding block
 * Offset 16-47 (32 bytes): Null-padded ASCII username (`"bblp"`)
 * Offset 48-79 (32 bytes): Null-padded ASCII LAN access code
-
-
----
-
-## Constants
-
-### `CAMERA_PASSWORD_MAX_LEN`
-```rust
-const CAMERA_PASSWORD_MAX_LEN: usize = 32usize;
-```
-
-Maximum accepted access-code length for the camera handshake, in bytes. RTSPS auth
-(`camera::rtsps::build_rtsps_url`) doesn't enforce this bound itself — the CLI's
-connection-arg validation is the intended enforcement point for that path.
 

@@ -688,7 +688,10 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
 
 - **`tm`**: `Option<u32>`
 
-  Target maximum temperature (Standard Platform abbreviated representation).
+  Target maximum temperature (Standard Platform abbreviated representation). Each of the
+  four values below has two wire spellings; read them through [`max_temp_c`](#nozzleinfo),
+  [`serial`](#nozzleinfo), [`filament_colour`](#nozzleinfo) and
+  [`filament_id`](#nozzleinfo), which fall back from one to the other.
 
 - **`max_temp`**: `Option<u32>`
 
@@ -761,6 +764,22 @@ Integrates both legacy abbreviated keys (standard platforms) and descriptive key
   3600 for an hours sensor (`definitions.py:951`).
 
 #### Implementations
+
+- <span id="nozzleinfo-max-temp-c"></span>`fn max_temp_c(&self) -> Option<u32>`
+
+  Maximum rated temperature in °C, from `max_temp` (IDEX spelling) or else `tm`.
+
+- <span id="nozzleinfo-serial"></span>`fn serial(&self) -> Option<&str>`
+
+  Hotend serial number, from `serial_number` (IDEX spelling) or else `sn`.
+
+- <span id="nozzleinfo-filament-colour"></span>`fn filament_colour(&self) -> Option<&str>`
+
+  Loaded filament colour hex code, from `filament_colour` or else `color_m`.
+
+- <span id="nozzleinfo-filament-id"></span>`fn filament_id(&self) -> Option<&str>`
+
+  Filament preset id, from `filament_id` or else `fila_id`.
 
 - <span id="nozzleinfo-is-rack-stored"></span>`fn is_rack_stored(&self) -> bool`
 

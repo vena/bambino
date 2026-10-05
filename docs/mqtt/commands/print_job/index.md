@@ -6,18 +6,73 @@
 
 Print job dispatch (file selection, AMS material mapping, plate/timelapse config).
 
+## Contents
+
+- [Types](#types)
+  - [`NozzleRack`](#nozzlerack)
+  - [`PrintJobConfig`](#printjobconfig)
+  - [`ProjectFilePayload`](#projectfilepayload)
+  - [`ProjectFileRequest`](#projectfilerequest)
+  - [`AmsMappingTable`](#amsmappingtable)
+  - [`AmsSource`](#amssource)
+  - [`CalibrationMode`](#calibrationmode)
+- [Functions](#functions)
+  - [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping)
+
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
+| [`NozzleRack`](#nozzlerack) | struct | Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) needs. |
 | [`PrintJobConfig`](#printjobconfig) | struct | Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE]. |
 | [`ProjectFilePayload`](#projectfilepayload) | struct | Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage. |
 | [`ProjectFileRequest`](#projectfilerequest) | struct | Submits a `.3mf` print job from the SD card for execution. |
 | [`AmsMappingTable`](#amsmappingtable) | enum | Represents the conditional, polymorphic typing needed for the `ams_mapping` key [REF-MQTT-LIFECYCLE]. |
+| [`AmsSource`](#amssource) | enum | Where a print job's AMS routing comes from: one mapping form or the other, never both. |
 | [`CalibrationMode`](#calibrationmode) | enum | Tri-state calibration setting: force every print, skip entirely, or let the firmware decide based on whether the relevant calibration ran recently [REF-MQTT-LIFECYCLE]. |
 | [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) | fn | Translates a per-slot extruder mapping into an H2C `nozzle_mapping` of physical nozzle IDs. |
 
 ## Types
+
+### `NozzleRack`
+
+```rust
+struct NozzleRack {
+    pub slot_extruders: Vec<i32>,
+    pub rack_nozzle_id: i32,
+}
+```
+
+Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) needs.
+
+#### Fields
+
+- **`slot_extruders`**: `Vec<i32>`
+
+  Extruder index per filament slot, negative for unprinted slots.
+
+- **`rack_nozzle_id`**: `i32`
+
+  Physical nozzle ID of the rack position the printer currently reports as live, in
+  `RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX` (16..=21). The caller must supply this because
+  the mounted hotend can change between slicing and dispatch, and bambino does not model
+  rack telemetry.
+
+#### Trait Implementations
+
+##### `impl Clone for NozzleRack`
+
+- <span id="nozzlerack-clone"></span>`fn clone(&self) -> NozzleRack` — [`NozzleRack`](#nozzlerack)
+
+##### `impl Debug for NozzleRack`
+
+- <span id="nozzlerack-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for NozzleRack`
+
+##### `impl PartialEq for NozzleRack`
+
+- <span id="nozzlerack-partialeq-eq"></span>`fn eq(&self, other: &NozzleRack) -> bool` — [`NozzleRack`](#nozzlerack)
 
 ### `PrintJobConfig`
 
@@ -34,18 +89,15 @@ struct PrintJobConfig {
     pub timelapse: bool,
     pub layer_inspect: bool,
     pub nozzle_offset_cali: Option<CalibrationMode>,
-    pub use_ams: bool,
-    pub ams_mapping: Vec<i32>,
-    pub ams_mapping2: Option<Vec<crate::ams::mapping::AmsMapping2Entry>>,
-    pub nozzle_slot_extruders: Option<Vec<i32>>,
-    pub rack_nozzle_id: Option<i32>,
+    pub ams: Option<AmsSource>,
+    pub nozzle_rack: Option<NozzleRack>,
 }
 ```
 
 Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 
-Replaces the positional parameter list on `start_print()` and `ProjectFileRequest::new()`
-with named fields and sensible defaults for calibration flags.
+Replaces the positional parameter list on `start_print()` with named fields and sensible
+defaults for calibration flags.
 
 #### Fields
 
@@ -97,38 +149,23 @@ with named fields and sensible defaults for calibration flags.
 
   `None` defers to the quirks engine default in `PrinterClient::start_print()`.
 
-- **`use_ams`**: `bool`
+- **`ams`**: `Option<AmsSource>`
 
-  Whether to route filament through the AMS rather than an external spool.
+  AMS routing; `None` prints from the external spool (`use_ams: false`).
 
-- **`ams_mapping`**: `Vec<i32>`
+- **`nozzle_rack`**: `Option<NozzleRack>`
 
-  Flat AMS slot mapping (one entry per plate object, -1 = no AMS slot).
-
-- **`ams_mapping2`**: `Option<Vec<crate::ams::mapping::AmsMapping2Entry>>`
-
-  Structured per-nozzle AMS mapping; takes precedence over `ams_mapping` when set.
-
-- **`nozzle_slot_extruders`**: `Option<Vec<i32>>`
-
-  Extruder index per filament slot for tool-changer models, negative for unprinted slots.
+  Tool-changer rack routing, set via [`PrintJobConfig::with_nozzle_rack`](#printjobconfig).
   
-  Only consulted on a model whose quirks report `uses_nozzle_rack`. Set together with
-  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`](#printjobconfig); either one alone resolves to no
-  `nozzle_mapping` on the wire, which is the safe outcome.
-
-- **`rack_nozzle_id`**: `Option<i32>`
-
-  Physical nozzle ID of the rack position the printer currently reports as live (`16..=21`).
-  
-  The caller must supply this because the mounted hotend can change between slicing and
-  dispatch, and bambino does not model rack telemetry.
+  Only consulted on a model whose quirks report `uses_nozzle_rack`.
 
 #### Implementations
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
 
-  Builds a job config with bed leveling and flow calibration on, vibration compensation off, and AMS disabled.
+  Builds a job config with these defaults: bed leveling and flow calibration on,
+  **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
+  disabled, and the model's own nozzle-offset-calibration default.
 
 - <span id="printjobconfig-with-ams"></span>`fn with_ams(self, mapping: Vec<i32>) -> Self`
 
@@ -141,14 +178,19 @@ with named fields and sensible defaults for calibration flags.
   already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
   (issue #56).
 
-  This is a convenience, not the enforcement point: `ams_mapping` is a public field, so
+  This is a convenience, not the enforcement point: `ams` is a public field, so
   `ProjectFileRequest::from_config` re-runs the same sanitization at serialization time
   (issue #120). Bypassing this builder cannot produce an out-of-range flat channel on the
   wire.
 
+  Replaces any mapping set by [`with_ams_mapping2`](#printjobconfig).
+
 - <span id="printjobconfig-with-ams-mapping2"></span>`fn with_ams_mapping2(self, mapping2: Vec<AmsMapping2Entry>) -> Self` — [`AmsMapping2Entry`](../../../ams/mapping/index.md#amsmapping2entry)
 
-  Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
+  Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`); the flat array is
+  derived from them.
+
+  Replaces any mapping set by [`with_ams`](#printjobconfig).
 
 - <span id="printjobconfig-bed-leveling"></span>`fn bed_leveling(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](#calibrationmode)
 
@@ -172,14 +214,19 @@ with named fields and sensible defaults for calibration flags.
 
   Enables or disables first-layer inspection for this job.
 
-- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self`
+- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Result<Self, Error>` — [`Error`](../../../error/index.md#error)
 
   Supplies the tool-changer rack routing for this job (H2C only).
 
   `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
-  `rack_nozzle_id` is the physical ID of the live rack position (`16..=21`). Both are needed
-  — see [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) for how they combine and when the resulting
+  `rack_nozzle_id` is the physical ID of the live rack position. See
+  [`resolve_rack_nozzle_mapping`](#resolve-rack-nozzle-mapping) for how they combine and when the resulting
   `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../../../error/index.md#error) when `rack_nozzle_id` is outside the rack's physical IDs
+  (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
 
 - <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](#calibrationmode)
 
@@ -205,7 +252,7 @@ struct ProjectFilePayload {
     pub subtask_name: String,
     pub subtask_id: String,
     pub flow_cali: bool,
-    pub profile_id: String,
+    pub profile_id: &'static str,
     pub project_id: String,
     pub task_id: String,
     pub file: String,
@@ -256,7 +303,7 @@ Payload layout to submit and execute a physical `.3mf` print from MicroSD card s
   consumer relying on the wrong one of these two calibration flags silently skipped
   calibration — both are sent so no observer can pick the wrong field.
 
-- **`profile_id`**: `String`
+- **`profile_id`**: `&'static str`
 
   Slicer preset profile ID. Always `"0"` — confirmed against bambuddy and pybambu, both
   of which hardcode this value; no observed non-zero case.
@@ -408,7 +455,7 @@ Submits a `.3mf` print job from the SD card for execution.
 
 ```rust
 enum AmsMappingTable {
-    Inactive(String),
+    Inactive,
     Active(Vec<i32>),
 }
 ```
@@ -418,8 +465,6 @@ Represents the conditional, polymorphic typing needed for the `ams_mapping` key 
 **The Polymorphic Mapping Rule:**
 * When `use_ams` is `false` (external spool mode), the key must serialize to an empty string `""`.
 * When `use_ams` is `true` (AMS active mode), the key must serialize as an integer array (e.g. `[0, -1, 1]`).
-
-Utilizing an untagged enum ensures standard JSON compliance across all execution profiles.
 
 #### Variants
 
@@ -449,7 +494,46 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 
 ##### `impl Serialize for AmsMappingTable`
 
-- <span id="amsmappingtable-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+- <span id="amsmappingtable-serialize"></span>`fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+
+### `AmsSource`
+
+```rust
+enum AmsSource {
+    Flat(Vec<i32>),
+    Structured(Vec<crate::ams::mapping::AmsMapping2Entry>),
+}
+```
+
+Where a print job's AMS routing comes from: one mapping form or the other, never both.
+
+#### Variants
+
+- **`Flat`**
+
+  A flat `ams_mapping` channel array (one entry per project filament, `-1` = unmapped).
+  No `ams_mapping2` is sent.
+
+- **`Structured`**
+
+  Structured `ams_mapping2` entries. The flat array is derived from them, so the two
+  wire arrays always agree index for index [REF-AMS-MAP].
+
+#### Trait Implementations
+
+##### `impl Clone for AmsSource`
+
+- <span id="amssource-clone"></span>`fn clone(&self) -> AmsSource` — [`AmsSource`](#amssource)
+
+##### `impl Debug for AmsSource`
+
+- <span id="amssource-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsSource`
+
+##### `impl PartialEq for AmsSource`
+
+- <span id="amssource-partialeq-eq"></span>`fn eq(&self, other: &AmsSource) -> bool` — [`AmsSource`](#amssource)
 
 ### `CalibrationMode`
 

@@ -17,7 +17,6 @@ tray data, and calculating global indexes.
 |------|------|-------------|
 | [`clean_stale_tray_data`](#clean-stale-tray-data) | fn | Explicitly sanitizes and nullifies telemetry fields when a physical slot becomes empty. |
 | [`evaluate_spool_presence`](#evaluate-spool-presence) | fn | Evaluates if a physical spool is present in a specific standard AMS slot. |
-| [`normalize_ams_unit_id`](#normalize-ams-unit-id) | fn | Normalizes an AMS unit id reported on the wire into the id this crate addresses it by. |
 | [`resolve_global_tray_id`](#resolve-global-tray-id) | fn | Computes the unique global channel identifier for a given expansion unit and local tray. |
 | [`resolve_printing_global_id`](#resolve-printing-global-id) | fn | Resolves the currently printing tray's global ID via `tray_now` + an `ams_extruder_map` inversion, accounting for IDEX map translations. |
 
@@ -92,24 +91,6 @@ in OrcaSlicer with an equivalent formula. This reopens and reverses the earlier 
 doesn't participate" conclusion, which was based on an incomplete read of BambuStudio's
 source.
 
-### `normalize_ams_unit_id`
-
-```rust
-fn normalize_ams_unit_id(ams_id: u8) -> u8
-```
-
-Normalizes an AMS unit id reported on the wire into the id this crate addresses it by.
-
-Only an A2L-attached AMS Lite's physical id 16 is remapped (to 6); every other id passes through
-untouched, and no other Bambu unit reports id 16, so the remap is self-scoping. Applied on
-the inbound telemetry boundary so that `tray_exist_bits`, `resolve_global_tray_id` and the
-mapping builders all agree on one id; the physical 16 is restored only on the outbound wire
-by `crate::ams::MaterialSource::to_mapping2_entry`.
-
-The firmware is internally inconsistent about this unit, which is why one constant cannot
-cover it: `tray_exist_bits` uses bit base 24 (id 6's position, not id 16's), `tray_now`
-reports a local slot 0-3, and only `ams_mapping2` and the per-unit commands carry 16.
-
 ### `resolve_global_tray_id`
 
 ```rust
@@ -125,7 +106,7 @@ A2L-attached AMS Lite's normalized 6, AMS-HT 128–135, external 254–255) or i
 The physical mapping aligns as:
 * **Standard AMS Slots**: Sized in blocks of 4 per expansion unit: `(ams_id * 4) + tray_id`.
 * **AMS Lite on an A2L**: the normalized id 6 through the same formula, giving global ids
-  24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`](#normalize-ams-unit-id)
+  24–27. Its raw wire id 16 is rejected here — run it through [`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id)
   first (`.claude/rules/ams-lite-on-a2l-unit-id.md`).
 * **AMS-HT Units**: Single-slot systems where the channel ID equals the bus `ams_id` directly.
 * **Virtual Spools**: Channels mapped to the external spool holder (ID 254 or 255).
@@ -135,7 +116,7 @@ rather than silently ignored. Without that check this function and its sibling
 [`evaluate_spool_presence`](#evaluate-spool-presence) disagreed on the same `(ams_id, tray_id)` pair — an
 AMS-HT id paired with a bad `tray_id` (from a mis-decoded `tray_now`, say) got a
 silently-accepted `Some(ams_id)` here but `None` there, masking the caller bug the
-sibling catches. [`normalize_ams_unit_id`](#normalize-ams-unit-id)'s doc comment requires the two to agree.
+sibling catches. [`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id)'s doc comment requires the two to agree.
 
 ### `resolve_printing_global_id`
 
@@ -160,6 +141,6 @@ construction from real wire data is itself an unresolved, unconfirmed design que
 genuinely ambiguous (N AMS units per extruder) in ways a flat `&[u8]` array can't express —
 a caller with its own confirmed `ams_extruder_map` source may still use this directly.
 
-Map entries may be wire ids: each is passed through [`normalize_ams_unit_id`](#normalize-ams-unit-id), so an
+Map entries may be wire ids: each is passed through [`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id), so an
 A2L-attached AMS Lite resolves under either its physical 16 or its normalized 6 (#344).
 

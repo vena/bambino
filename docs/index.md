@@ -189,6 +189,16 @@ Address, serial number, and access code identifying one printer on the LAN.
   For callers who need a specific `model` regardless of what the serial
   prefix implies, construct the struct literal directly instead.
 
+- <span id="printeridentity-try-new"></span>`fn try_new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Result<Self, Error>` — [`Error`](error/index.md#error)
+
+  Like [`PrinterIdentity::new`](identity/index.md#printeridentity), but rejects a malformed serial or access code up front.
+
+- <span id="printeridentity-validate"></span>`fn validate(&self) -> Result<(), Error>` — [`Error`](error/index.md#error)
+
+  Checks the serial and access code with [`validate_serial`](identity/index.md#validate-serial) and [`validate_access_code`](identity/index.md#validate-access-code).
+
+  `ip` is not checked: it may be a hostname, which only the dial can resolve.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterIdentity`

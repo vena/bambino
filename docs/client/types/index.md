@@ -363,6 +363,14 @@ needing to tell those apart should inspect the raw `gcode_state` string directly
 
   Classifies a raw `gcode_state` wire value (firmware casing: `"IDLE"`, `"PREPARE"`, `"SLICING"`, `"RUNNING"`, `"PAUSE"`, `"FINISH"`, `"FAILED"` [REF-MQTT-IDLEBUG]).
 
+- <span id="printstatus-is-busy"></span>`fn is_busy(self) -> bool`
+
+  True while a job is in flight — preparing, slicing, running or paused — so the printer
+  shouldn't be given new work or motion that could collide with a part.
+
+  `Unknown` is not busy, so a caller gating on safety must treat a missing status
+  (`PrinterClient::print_status() == None`) or `Unknown` as "can't confirm idle" itself.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrintStatus`

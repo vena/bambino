@@ -25,8 +25,6 @@ Bambu Lab printers expose camera feeds through two protocols:
 | [`binary`](binary/index.md) | mod | # Chamber Image Binary JPEG Socket Protocol (Port 6000) |
 | [`rtsps`](rtsps/index.md) | mod | # RTSPS Stream Helpers (Port 322) |
 | [`CameraProtocol`](#cameraprotocol) | enum | Which camera streaming protocol a printer model uses. |
-| [`CAMERA_PORT_BINARY_JPEG`](#camera-port-binary-jpeg) | const | Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series). |
-| [`CAMERA_PORT_RTSPS`](#camera-port-rtsps) | const | Default port for RTSPS camera streams (X1, X2, H2, P2S series). |
 
 ## Modules
 
@@ -58,10 +56,15 @@ Which camera streaming protocol a printer model uses.
 - **`BinaryJpeg`**
 
   Custom binary TCP packet loop returning JPEG frames on Port 6000 (P1 and A1 series, including A2L).
+  
+  The printer accepts only one connection to this port at a time. A caller redialing it
+  immediately after disconnecting can orphan the prior socket server-side until keepalive
+  reaps it (~20 min stall) — wait for the old connection to fully close, or add a delay,
+  before reconnecting. See [`BinaryCameraStream`](binary/index.md#binarycamerastream)'s doc comment.
 
 #### Implementations
 
-- <span id="cameraprotocol-default-port"></span>`fn default_port(&self) -> u16`
+- <span id="cameraprotocol-default-port"></span>`const fn default_port(self) -> u16`
 
   Returns the standard TCP port associated with the physical interface.
 
@@ -86,28 +89,4 @@ Which camera streaming protocol a printer model uses.
 ##### `impl PartialEq for CameraProtocol`
 
 - <span id="cameraprotocol-partialeq-eq"></span>`fn eq(&self, other: &CameraProtocol) -> bool` — [`CameraProtocol`](#cameraprotocol)
-
-
----
-
-## Constants
-
-### `CAMERA_PORT_BINARY_JPEG`
-```rust
-const CAMERA_PORT_BINARY_JPEG: u16 = 6_000u16;
-```
-
-Default port for binary JPEG camera streams (A1, A1 Mini, A2L, and P1 series).
-
-The printer accepts only one connection to this port at a time. A caller redialing it
-immediately after disconnecting can orphan the prior socket server-side until keepalive
-reaps it (~20 min stall) — wait for the old connection to fully close, or add a delay,
-before reconnecting. See [`BinaryCameraStream`](binary/index.md#binarycamerastream)'s doc comment.
-
-### `CAMERA_PORT_RTSPS`
-```rust
-const CAMERA_PORT_RTSPS: u16 = 322u16;
-```
-
-Default port for RTSPS camera streams (X1, X2, H2, P2S series).
 

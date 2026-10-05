@@ -16,6 +16,10 @@ against a specific printer, instead of passing them as three adjacent same-typed
 | Item | Kind | Description |
 |------|------|-------------|
 | [`PrinterIdentity`](#printeridentity) | struct | Address, serial number, and access code identifying one printer on the LAN. |
+| [`validate_access_code`](#validate-access-code) | fn | Checks that `access_code` is 1 to [`ACCESS_CODE_MAX_LEN`](#access-code-max-len) ASCII letters or digits. |
+| [`validate_serial`](#validate-serial) | fn | Checks that `serial` is 1 to [`SERIAL_MAX_LEN`](#serial-max-len) ASCII letters or digits. |
+| [`ACCESS_CODE_MAX_LEN`](#access-code-max-len) | const | Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field. |
+| [`SERIAL_MAX_LEN`](#serial-max-len) | const | Longest serial number accepted. |
 
 ## Types
 
@@ -62,6 +66,16 @@ Address, serial number, and access code identifying one printer on the LAN.
   For callers who need a specific `model` regardless of what the serial
   prefix implies, construct the struct literal directly instead.
 
+- <span id="printeridentity-try-new"></span>`fn try_new(ip: impl Into<String>, serial: impl Into<String>, access_code: impl Into<String>) -> Result<Self, Error>` — [`Error`](../error/index.md#error)
+
+  Like [`PrinterIdentity::new`](#printeridentity), but rejects a malformed serial or access code up front.
+
+- <span id="printeridentity-validate"></span>`fn validate(&self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+
+  Checks the serial and access code with [`validate_serial`](#validate-serial) and [`validate_access_code`](#validate-access-code).
+
+  `ip` is not checked: it may be a hostname, which only the dial can resolve.
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterIdentity`
@@ -77,4 +91,55 @@ Address, serial number, and access code identifying one printer on the LAN.
 ##### `impl PartialEq for PrinterIdentity`
 
 - <span id="printeridentity-partialeq-eq"></span>`fn eq(&self, other: &PrinterIdentity) -> bool` — [`PrinterIdentity`](#printeridentity)
+
+
+---
+
+## Functions
+
+### `validate_access_code`
+
+```rust
+fn validate_access_code(access_code: &str) -> Result<(), crate::error::Error>
+```
+
+**Types:** [`Error`](../error/index.md#error)
+
+Checks that `access_code` is 1 to [`ACCESS_CODE_MAX_LEN`](#access-code-max-len) ASCII letters or digits.
+
+Printer-issued LAN access codes are 8 case-sensitive alphanumerics, so a rejection almost
+always means a copy-paste mistake (whitespace, a trailing newline). The alphanumeric rule
+is also what keeps the code safe to interpolate into an RTSPS URL's userinfo.
+
+### `validate_serial`
+
+```rust
+fn validate_serial(serial: &str) -> Result<(), crate::error::Error>
+```
+
+**Types:** [`Error`](../error/index.md#error)
+
+Checks that `serial` is 1 to [`SERIAL_MAX_LEN`](#serial-max-len) ASCII letters or digits.
+
+The serial becomes an MQTT topic segment and the TLS SNI name, so anything else would
+reach the wire malformed.
+
+
+---
+
+## Constants
+
+### `ACCESS_CODE_MAX_LEN`
+```rust
+const ACCESS_CODE_MAX_LEN: usize = 32usize;
+```
+
+Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field.
+
+### `SERIAL_MAX_LEN`
+```rust
+const SERIAL_MAX_LEN: usize = 20usize;
+```
+
+Longest serial number accepted. Current Bambu serials are 15 characters.
 

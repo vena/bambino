@@ -19,6 +19,7 @@ The [`parser`](../ams/parser/index.md) submodule handles UNIX-style directory li
 |------|------|-------------|
 | [`client`](client/index.md) | mod | # Implicit FTPS Client Implementation |
 | [`parser`](parser/index.md) | mod | # UNIX Directory Listing Parsing Engine for FTPS |
+| [`FTPS_PORT`](#ftps-port) | const | Implicit-TLS FTPS port every Bambu printer serves its storage on. |
 
 ## Modules
 
@@ -461,4 +462,16 @@ parsed datetime markers against that reference reveals
 that the parsed datetime is in the future, the file belongs to last year's calendar cycle
 (e.g., parsing a December modification date in January). In this event, we decrement the
 calculated year by 1.
+
+
+---
+
+## Constants
+
+### `FTPS_PORT`
+```rust
+const FTPS_PORT: u16 = 990u16;
+```
+
+Implicit-TLS FTPS port every Bambu printer serves its storage on.
 

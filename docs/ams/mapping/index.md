@@ -74,6 +74,10 @@ Structured object detailing unit and slot coordinates within `ams_mapping2` arra
 
   Tray slot index within the unit (0-3 for standard AMS, 0 for single-slot units).
 
+#### Implementations
+
+- <span id="amsmapping2entry-const-unmapped"></span>`const UNMAPPED: Self`
+
 #### Trait Implementations
 
 ##### `impl Clone for AmsMapping2Entry`
@@ -166,7 +170,7 @@ cannot omit a unit type by hand.
 
 ```rust
 enum AmsLiteSlot {
-    None,
+    NotSupported,
     Additive,
     Exclusive,
 }
@@ -178,7 +182,7 @@ Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
 
 #### Variants
 
-- **`None`**
+- **`NotSupported`**
 
   No AMS Lite attaches (X1C, X1E, P1P, P1S).
 
@@ -235,7 +239,7 @@ Per-model AMS unit pool structure, confirmed against `MODEL_MATRIX.csv`'s
 "AMS Unit Limits" row (user-supplied official Bambu documentation).
 
 An A2L-attached AMS Lite reports physical unit id 16, which
-[`normalize_ams_unit_id`](../parser/index.md#normalize-ams-unit-id) maps to 6 on ingest, and
+[`normalize_ams_unit_id`](../index.md#normalize-ams-unit-id) maps to 6 on ingest, and
 [`MaterialSource::AmsLite`](#materialsource) addresses its slots with their own wire encodings.
 
 #### Variants
@@ -323,6 +327,9 @@ Enumeration of possible physical feed locations for loaded spools.
 - **`ExternalSpool`**
 
   Default virtual external spool holder (used for standard single-nozzle models).
+  
+  Same wire address as [`ExternalSpoolRight`](#materialsource): `ams_id` 255,
+  BambuStudio's `VIRTUAL_TRAY_MAIN_ID`. Either name produces an identical entry.
 
 - **`ExternalSpoolLeft`**
 
@@ -331,6 +338,10 @@ Enumeration of possible physical feed locations for loaded spools.
 - **`ExternalSpoolRight`**
 
   Right external spool holder (specifically used on dual-nozzle IDEX systems).
+  
+  Same wire address as [`ExternalSpool`](#materialsource) (`ams_id` 255): the IDEX
+  right carriage is the main one. Only [`ExternalSpoolLeft`](#materialsource)
+  (254) differs.
 
 - **`Unmapped`**
 
@@ -348,10 +359,9 @@ Enumeration of possible physical feed locations for loaded spools.
   "Failed to get AMS mapping table" error. Virtual external spools and unused slots
   must strictly be mapped to the `-1` (unmapped) sentinel in the flat array.
 
-  `StandardAms`/`AmsHt` fields are public `u8`s a caller can hand-build with an
-  out-of-range `ams_id`/`slot_id` (unlike `parser.rs`'s inbound-side bounds-checking on
-  wire data) — validated here the same way, falling back to the `-1` sentinel rather than
-  producing a bogus flat channel value.
+  Derived from [`to_mapping2_entry`](#materialsource) through
+  [`flat_channel_id_for_entry`](#flat-channel-id-for-entry), so the two encodings can't disagree. An out-of-range
+  hand-built `StandardAms`/`AmsHt`/`AmsLite` becomes the unmapped entry there and `-1` here.
 
 - <span id="materialsource-to-mapping2-entry"></span>`fn to_mapping2_entry(&self) -> AmsMapping2Entry` — [`AmsMapping2Entry`](#amsmapping2entry)
 

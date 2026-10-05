@@ -462,13 +462,6 @@ is the split a raw `i32` would otherwise leak to every consumer.
 
   Decodes a raw `stg_cur` / `stg` wire value.
 
-- <span id="printstage-is-idle"></span>`fn is_idle(self) -> bool`
-
-  Returns true for the idle encodings (`-1` on X1, `255` on P1).
-
-  Not a completion test: `stg_cur` reads idle for the tail of a calibration run that is
-  still in progress. Check `gcode_state` for that.
-
 - <span id="printstage-is-paused"></span>`fn is_paused(self) -> bool`
 
   Returns true if this stage is one of the paused states.
@@ -477,8 +470,15 @@ is the split a raw `i32` would otherwise leak to every consumer.
 
   Human-readable label, matching BambuStudio's own wording.
 
-  Returns `None` for [`PrintStage::Unknown`](#printstage) — the caller decides how to render an id no
-  upstream table covers, rather than getting a fabricated label.
+  Returns `None` for [`PrintStage::Unknown`](#printstage) — the caller decides how to render an id
+  no upstream table covers, rather than getting a fabricated label.
+
+- <span id="printstage-is-idle"></span>`fn is_idle(self) -> bool`
+
+  Returns true for the idle encodings (`-1` on X1, `255` on P1).
+
+  Not a completion test: `stg_cur` reads idle for the tail of a calibration run that is
+  still in progress. Check `gcode_state` for that.
 
 #### Trait Implementations
 
@@ -492,6 +492,10 @@ is the split a raw `i32` would otherwise leak to every consumer.
 
 - <span id="printstage-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Display for PrintStage`
+
+- <span id="printstage-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
 ##### `impl Eq for PrintStage`
 
 ##### `impl Hash for PrintStage`
@@ -501,4 +505,8 @@ is the split a raw `i32` would otherwise leak to every consumer.
 ##### `impl PartialEq for PrintStage`
 
 - <span id="printstage-partialeq-eq"></span>`fn eq(&self, other: &PrintStage) -> bool` — [`PrintStage`](#printstage)
+
+##### `impl ToString for PrintStage`
+
+- <span id="printstage-tostring-to-string"></span>`fn to_string(&self) -> String`
 

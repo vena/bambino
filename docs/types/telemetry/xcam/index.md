@@ -148,6 +148,11 @@ and model-dependent, so round-tripping a report must not silently drop what it c
 
 #### Implementations
 
+- <span id="xcamtelemetry-halt-print-sensitivity-level"></span>`fn halt_print_sensitivity_level(&self) -> Option<XcamSensitivity>` — [`XcamSensitivity`](#xcamsensitivity)
+
+  The old-gen [`halt_print_sensitivity`](#xcamtelemetry) string as a typed
+  level, comparable with the per-detector sensitivities. `None` if absent or unrecognized.
+
 - <span id="xcamtelemetry-supports-ai-monitoring"></span>`fn supports_ai_monitoring(&self) -> bool`
 
   Returns whether this printer supports on-device AI failure monitoring.
@@ -254,9 +259,14 @@ nozzle clumping, air printing). Unrelated to skip-objects or to `allow_skip_part
 
 #### Implementations
 
+- <span id="xcamsensitivity-from-wire"></span>`fn from_wire(level: &str) -> Option<Self>`
+
+  Parses the wire spelling (`"low"`/`"medium"`/`"high"`), case-insensitively.
+
 - <span id="xcamsensitivity-as-str"></span>`fn as_str(&self) -> &'static str`
 
-  Returns the wire spelling BambuStudio uses for this level (`"low"`/`"medium"`/`"high"`).
+  Returns the wire spelling BambuStudio uses for this level (`"low"`/`"medium"`/`"high"`),
+  which is also its serde form.
 
 #### Trait Implementations
 

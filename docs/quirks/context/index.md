@@ -75,7 +75,7 @@ site.
 
 - **`firmware`**: `Option<&'a str>`
 
-  The printer's OTA firmware version (`module[name="ota"].sw_ver`, e.g. `"01.09.00.00"`),
+  The printer's OTA firmware version (`module[name="ota"].sw_ver`, see [`OTA_MODULE_NAME`](../../types/version/index.md#ota-module-name), e.g. `"01.09.00.00"`),
   if a `get_version` response has been seen.
   
   Several capabilities ship in a specific firmware release rather than being inherent to

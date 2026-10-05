@@ -12,6 +12,7 @@ Firmware version information returned by the `get_version` command.
 |------|------|-------------|
 | [`VersionInfo`](#versioninfo) | struct | Typed response from a `get_version` command containing all expansion bus modules. |
 | [`VersionModule`](#versionmodule) | struct | Hardware or firmware module entry from the printer's expansion bus version database. |
+| [`OTA_MODULE_NAME`](#ota-module-name) | const | Name of the module carrying the printer's own controller firmware. |
 
 ## Types
 
@@ -42,6 +43,10 @@ Typed response from a `get_version` command containing all expansion bus modules
   All hardware and firmware modules on the expansion bus.
 
 #### Implementations
+
+- <span id="versioninfo-module"></span>`fn module(&self, name: &str) -> Option<&VersionModule>` — [`VersionModule`](#versionmodule)
+
+  The module named `name` (e.g. [`OTA_MODULE_NAME`](#ota-module-name), `"esp32"`, `"mc"`), if reported.
 
 - <span id="versioninfo-firmware-version"></span>`fn firmware_version(&self) -> Option<&str>`
 
@@ -147,4 +152,16 @@ Hardware or firmware module entry from the printer's expansion bus version datab
 - <span id="versionmodule-deserialize"></span>`fn deserialize<__D>(__deserializer: __D) -> _serde::__private228::Result<Self, <__D as >::Error>`
 
 ##### `impl DeserializeOwned for VersionModule`
+
+
+---
+
+## Constants
+
+### `OTA_MODULE_NAME`
+```rust
+const OTA_MODULE_NAME: &str;
+```
+
+Name of the module carrying the printer's own controller firmware.
 

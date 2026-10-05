@@ -154,9 +154,16 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 #### Implementations
 
-- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, filament: &str, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+- <span id="amsfilamentdryingrequest-start"></span>`fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`DryingParams`](ams/index.md#dryingparams), [`ClampedTaskId`](#clampedtaskid)
 
-  Builds an `ams_filament_drying` request.
+  Builds a request starting a drying cycle on the unit at `ams_id`.
+
+- <span id="amsfilamentdryingrequest-stop"></span>`fn stop(ams_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](#clampedtaskid)
+
+  Builds a request stopping the drying cycle on the unit at `ams_id`.
+
+  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`): every field
+  but the unit and mode zeroed.
 
 #### Trait Implementations
 
@@ -338,6 +345,76 @@ Requests an RFID tag scan on a specific AMS slot.
 ##### `impl Serialize for AmsGetRfidRequest`
 
 - <span id="amsgetrfidrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `DryingParams`
+
+```rust
+struct DryingParams {
+    pub filament: String,
+    pub temp: u32,
+    pub duration_hours: u32,
+    pub humidity: u32,
+    pub rotate_tray: bool,
+    pub cooling_temp: u32,
+    pub close_power_conflict: bool,
+}
+```
+
+Everything a drying-cycle start carries besides the unit and the mode.
+
+`Default` is the all-zero/empty set BambuStudio sends to stop a cycle; a start needs at
+least `temp` and `duration_hours`.
+
+#### Fields
+
+- **`filament`**: `String`
+
+  Filament material type being dried (e.g. "PA-CF").
+
+- **`temp`**: `u32`
+
+  Drying temperature (°C).
+
+- **`duration_hours`**: `u32`
+
+  Drying duration in whole hours.
+
+- **`humidity`**: `u32`
+
+  Target humidity (0 = firmware default / no target).
+
+- **`rotate_tray`**: `bool`
+
+  Whether to periodically rotate the tray during drying.
+
+- **`cooling_temp`**: `u32`
+
+  Cooling temperature applied after the cycle; BambuStudio sends the filament's
+  softening temperature here.
+
+- **`close_power_conflict`**: `bool`
+
+  Whether to override the AMS unit's power-conflict interlock.
+
+#### Trait Implementations
+
+##### `impl Clone for DryingParams`
+
+- <span id="dryingparams-clone"></span>`fn clone(&self) -> DryingParams` — [`DryingParams`](ams/index.md#dryingparams)
+
+##### `impl Debug for DryingParams`
+
+- <span id="dryingparams-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for DryingParams`
+
+- <span id="dryingparams-default"></span>`fn default() -> DryingParams` — [`DryingParams`](ams/index.md#dryingparams)
+
+##### `impl Eq for DryingParams`
+
+##### `impl PartialEq for DryingParams`
+
+- <span id="dryingparams-partialeq-eq"></span>`fn eq(&self, other: &DryingParams) -> bool` — [`DryingParams`](ams/index.md#dryingparams)
 
 ### `CalibrationRequest`
 
@@ -828,6 +905,46 @@ Enables or disables the printer's notification sounds.
 
 - <span id="promptsoundrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
 
+### `NozzleRack`
+
+```rust
+struct NozzleRack {
+    pub slot_extruders: Vec<i32>,
+    pub rack_nozzle_id: i32,
+}
+```
+
+Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_mapping`](print_job/index.md#resolve-rack-nozzle-mapping) needs.
+
+#### Fields
+
+- **`slot_extruders`**: `Vec<i32>`
+
+  Extruder index per filament slot, negative for unprinted slots.
+
+- **`rack_nozzle_id`**: `i32`
+
+  Physical nozzle ID of the rack position the printer currently reports as live, in
+  `RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX` (16..=21). The caller must supply this because
+  the mounted hotend can change between slicing and dispatch, and bambino does not model
+  rack telemetry.
+
+#### Trait Implementations
+
+##### `impl Clone for NozzleRack`
+
+- <span id="nozzlerack-clone"></span>`fn clone(&self) -> NozzleRack` — [`NozzleRack`](print_job/index.md#nozzlerack)
+
+##### `impl Debug for NozzleRack`
+
+- <span id="nozzlerack-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for NozzleRack`
+
+##### `impl PartialEq for NozzleRack`
+
+- <span id="nozzlerack-partialeq-eq"></span>`fn eq(&self, other: &NozzleRack) -> bool` — [`NozzleRack`](print_job/index.md#nozzlerack)
+
 ### `PrintJobConfig`
 
 ```rust
@@ -843,18 +960,15 @@ struct PrintJobConfig {
     pub timelapse: bool,
     pub layer_inspect: bool,
     pub nozzle_offset_cali: Option<CalibrationMode>,
-    pub use_ams: bool,
-    pub ams_mapping: Vec<i32>,
-    pub ams_mapping2: Option<Vec<crate::ams::mapping::AmsMapping2Entry>>,
-    pub nozzle_slot_extruders: Option<Vec<i32>>,
-    pub rack_nozzle_id: Option<i32>,
+    pub ams: Option<AmsSource>,
+    pub nozzle_rack: Option<NozzleRack>,
 }
 ```
 
 Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 
-Replaces the positional parameter list on `start_print()` and `ProjectFileRequest::new()`
-with named fields and sensible defaults for calibration flags.
+Replaces the positional parameter list on `start_print()` with named fields and sensible
+defaults for calibration flags.
 
 #### Fields
 
@@ -906,38 +1020,23 @@ with named fields and sensible defaults for calibration flags.
 
   `None` defers to the quirks engine default in `PrinterClient::start_print()`.
 
-- **`use_ams`**: `bool`
+- **`ams`**: `Option<AmsSource>`
 
-  Whether to route filament through the AMS rather than an external spool.
+  AMS routing; `None` prints from the external spool (`use_ams: false`).
 
-- **`ams_mapping`**: `Vec<i32>`
+- **`nozzle_rack`**: `Option<NozzleRack>`
 
-  Flat AMS slot mapping (one entry per plate object, -1 = no AMS slot).
-
-- **`ams_mapping2`**: `Option<Vec<crate::ams::mapping::AmsMapping2Entry>>`
-
-  Structured per-nozzle AMS mapping; takes precedence over `ams_mapping` when set.
-
-- **`nozzle_slot_extruders`**: `Option<Vec<i32>>`
-
-  Extruder index per filament slot for tool-changer models, negative for unprinted slots.
+  Tool-changer rack routing, set via [`PrintJobConfig::with_nozzle_rack`](print_job/index.md#printjobconfig).
   
-  Only consulted on a model whose quirks report `uses_nozzle_rack`. Set together with
-  `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`](print_job/index.md#printjobconfig); either one alone resolves to no
-  `nozzle_mapping` on the wire, which is the safe outcome.
-
-- **`rack_nozzle_id`**: `Option<i32>`
-
-  Physical nozzle ID of the rack position the printer currently reports as live (`16..=21`).
-  
-  The caller must supply this because the mounted hotend can change between slicing and
-  dispatch, and bambino does not model rack telemetry.
+  Only consulted on a model whose quirks report `uses_nozzle_rack`.
 
 #### Implementations
 
 - <span id="printjobconfig-new"></span>`fn new(job_filename: &str, plate_gcode_path: &str, subtask_name: &str, raw_subtask_id: u64, bed_type: &str) -> Self`
 
-  Builds a job config with bed leveling and flow calibration on, vibration compensation off, and AMS disabled.
+  Builds a job config with these defaults: bed leveling and flow calibration on,
+  **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
+  disabled, and the model's own nozzle-offset-calibration default.
 
 - <span id="printjobconfig-with-ams"></span>`fn with_ams(self, mapping: Vec<i32>) -> Self`
 
@@ -950,14 +1049,19 @@ with named fields and sensible defaults for calibration flags.
   already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
   (issue #56).
 
-  This is a convenience, not the enforcement point: `ams_mapping` is a public field, so
+  This is a convenience, not the enforcement point: `ams` is a public field, so
   `ProjectFileRequest::from_config` re-runs the same sanitization at serialization time
   (issue #120). Bypassing this builder cannot produce an out-of-range flat channel on the
   wire.
 
+  Replaces any mapping set by [`with_ams_mapping2`](print_job/index.md#printjobconfig).
+
 - <span id="printjobconfig-with-ams-mapping2"></span>`fn with_ams_mapping2(self, mapping2: Vec<AmsMapping2Entry>) -> Self` — [`AmsMapping2Entry`](../../ams/mapping/index.md#amsmapping2entry)
 
-  Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
+  Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`); the flat array is
+  derived from them.
+
+  Replaces any mapping set by [`with_ams`](print_job/index.md#printjobconfig).
 
 - <span id="printjobconfig-bed-leveling"></span>`fn bed_leveling(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](print_job/index.md#calibrationmode)
 
@@ -981,14 +1085,19 @@ with named fields and sensible defaults for calibration flags.
 
   Enables or disables first-layer inspection for this job.
 
-- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self`
+- <span id="printjobconfig-with-nozzle-rack"></span>`fn with_nozzle_rack(self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Result<Self, Error>` — [`Error`](../../error/index.md#error)
 
   Supplies the tool-changer rack routing for this job (H2C only).
 
   `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
-  `rack_nozzle_id` is the physical ID of the live rack position (`16..=21`). Both are needed
-  — see [`resolve_rack_nozzle_mapping`](print_job/index.md#resolve-rack-nozzle-mapping) for how they combine and when the resulting
+  `rack_nozzle_id` is the physical ID of the live rack position. See
+  [`resolve_rack_nozzle_mapping`](print_job/index.md#resolve-rack-nozzle-mapping) for how they combine and when the resulting
   `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
+
+  # Errors
+
+  [`Error::InvalidArgument`](../../error/index.md#error) when `rack_nozzle_id` is outside the rack's physical IDs
+  (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
 
 - <span id="printjobconfig-nozzle-offset-calibration"></span>`fn nozzle_offset_calibration(self, mode: impl Into<CalibrationMode>) -> Self` — [`CalibrationMode`](print_job/index.md#calibrationmode)
 
@@ -1266,7 +1375,7 @@ Airduct damper operating mode [REF-MQTT-LIFECYCLE].
 
 ```rust
 enum AmsMappingTable {
-    Inactive(String),
+    Inactive,
     Active(Vec<i32>),
 }
 ```
@@ -1276,8 +1385,6 @@ Represents the conditional, polymorphic typing needed for the `ams_mapping` key 
 **The Polymorphic Mapping Rule:**
 * When `use_ams` is `false` (external spool mode), the key must serialize to an empty string `""`.
 * When `use_ams` is `true` (AMS active mode), the key must serialize as an integer array (e.g. `[0, -1, 1]`).
-
-Utilizing an untagged enum ensures standard JSON compliance across all execution profiles.
 
 #### Variants
 
@@ -1307,7 +1414,46 @@ Utilizing an untagged enum ensures standard JSON compliance across all execution
 
 ##### `impl Serialize for AmsMappingTable`
 
-- <span id="amsmappingtable-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+- <span id="amsmappingtable-serialize"></span>`fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<<S as >::Ok, <S as >::Error>`
+
+### `AmsSource`
+
+```rust
+enum AmsSource {
+    Flat(Vec<i32>),
+    Structured(Vec<crate::ams::mapping::AmsMapping2Entry>),
+}
+```
+
+Where a print job's AMS routing comes from: one mapping form or the other, never both.
+
+#### Variants
+
+- **`Flat`**
+
+  A flat `ams_mapping` channel array (one entry per project filament, `-1` = unmapped).
+  No `ams_mapping2` is sent.
+
+- **`Structured`**
+
+  Structured `ams_mapping2` entries. The flat array is derived from them, so the two
+  wire arrays always agree index for index [REF-AMS-MAP].
+
+#### Trait Implementations
+
+##### `impl Clone for AmsSource`
+
+- <span id="amssource-clone"></span>`fn clone(&self) -> AmsSource` — [`AmsSource`](print_job/index.md#amssource)
+
+##### `impl Debug for AmsSource`
+
+- <span id="amssource-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Eq for AmsSource`
+
+##### `impl PartialEq for AmsSource`
+
+- <span id="amssource-partialeq-eq"></span>`fn eq(&self, other: &AmsSource) -> bool` — [`AmsSource`](print_job/index.md#amssource)
 
 ### `CalibrationMode`
 

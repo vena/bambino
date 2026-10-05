@@ -19,6 +19,7 @@ AMS-related MQTT command payloads (filament change, drying, RFID scan, settings)
   - [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest)
   - [`AmsGetRfidPayload`](#amsgetrfidpayload)
   - [`AmsGetRfidRequest`](#amsgetrfidrequest)
+  - [`DryingParams`](#dryingparams)
 
 ## Quick Reference
 
@@ -34,6 +35,7 @@ AMS-related MQTT command payloads (filament change, drying, RFID scan, settings)
 | [`AmsFilamentSettingRequest`](#amsfilamentsettingrequest) | struct | Sets filament properties (type, color, temperature range) on an AMS tray or external spool. |
 | [`AmsGetRfidPayload`](#amsgetrfidpayload) | struct | Triggers physical filament feeder movement to scan proprietary RFID tag properties. |
 | [`AmsGetRfidRequest`](#amsgetrfidrequest) | struct | Requests an RFID tag scan on a specific AMS slot. |
+| [`DryingParams`](#dryingparams) | struct | Everything a drying-cycle start carries besides the unit and the mode. |
 
 ## Types
 
@@ -245,7 +247,7 @@ struct AmsFilamentDryingPayload {
     pub duration: u32,
     pub humidity: u32,
     pub rotate_tray: bool,
-    pub cooling_temp: i32,
+    pub cooling_temp: u32,
     pub close_power_conflict: bool,
     pub sequence_id: String,
 }
@@ -295,7 +297,7 @@ incident #1447).
 
   Whether to periodically rotate the tray during drying.
 
-- **`cooling_temp`**: `i32`
+- **`cooling_temp`**: `u32`
 
   Cooling temperature applied after the drying cycle completes.
 
@@ -339,9 +341,16 @@ Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
 
 #### Implementations
 
-- <span id="amsfilamentdryingrequest-new"></span>`fn new(ams_id: i32, mode: i32, filament: &str, temp: u32, duration_hours: u32, humidity: u32, rotate_tray: bool, cooling_temp: i32, close_power_conflict: bool, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
+- <span id="amsfilamentdryingrequest-start"></span>`fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`DryingParams`](#dryingparams), [`ClampedTaskId`](../index.md#clampedtaskid)
 
-  Builds an `ams_filament_drying` request.
+  Builds a request starting a drying cycle on the unit at `ams_id`.
+
+- <span id="amsfilamentdryingrequest-stop"></span>`fn stop(ams_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self` — [`ClampedTaskId`](../index.md#clampedtaskid)
+
+  Builds a request stopping the drying cycle on the unit at `ams_id`.
+
+  Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`): every field
+  but the unit and mode zeroed.
 
 #### Trait Implementations
 
@@ -686,4 +695,74 @@ Requests an RFID tag scan on a specific AMS slot.
 ##### `impl Serialize for AmsGetRfidRequest`
 
 - <span id="amsgetrfidrequest-serialize"></span>`fn serialize<__S>(&self, __serializer: __S) -> _serde::__private228::Result<<__S as >::Ok, <__S as >::Error>`
+
+### `DryingParams`
+
+```rust
+struct DryingParams {
+    pub filament: String,
+    pub temp: u32,
+    pub duration_hours: u32,
+    pub humidity: u32,
+    pub rotate_tray: bool,
+    pub cooling_temp: u32,
+    pub close_power_conflict: bool,
+}
+```
+
+Everything a drying-cycle start carries besides the unit and the mode.
+
+`Default` is the all-zero/empty set BambuStudio sends to stop a cycle; a start needs at
+least `temp` and `duration_hours`.
+
+#### Fields
+
+- **`filament`**: `String`
+
+  Filament material type being dried (e.g. "PA-CF").
+
+- **`temp`**: `u32`
+
+  Drying temperature (°C).
+
+- **`duration_hours`**: `u32`
+
+  Drying duration in whole hours.
+
+- **`humidity`**: `u32`
+
+  Target humidity (0 = firmware default / no target).
+
+- **`rotate_tray`**: `bool`
+
+  Whether to periodically rotate the tray during drying.
+
+- **`cooling_temp`**: `u32`
+
+  Cooling temperature applied after the cycle; BambuStudio sends the filament's
+  softening temperature here.
+
+- **`close_power_conflict`**: `bool`
+
+  Whether to override the AMS unit's power-conflict interlock.
+
+#### Trait Implementations
+
+##### `impl Clone for DryingParams`
+
+- <span id="dryingparams-clone"></span>`fn clone(&self) -> DryingParams` — [`DryingParams`](#dryingparams)
+
+##### `impl Debug for DryingParams`
+
+- <span id="dryingparams-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for DryingParams`
+
+- <span id="dryingparams-default"></span>`fn default() -> DryingParams` — [`DryingParams`](#dryingparams)
+
+##### `impl Eq for DryingParams`
+
+##### `impl PartialEq for DryingParams`
+
+- <span id="dryingparams-partialeq-eq"></span>`fn eq(&self, other: &DryingParams) -> bool` — [`DryingParams`](#dryingparams)
 
