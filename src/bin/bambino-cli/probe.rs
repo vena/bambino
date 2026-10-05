@@ -1,13 +1,13 @@
 #![cfg(feature = "cli")]
 
 use std::io::{self, Write};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use bambino::Error;
 use bambino::client::{FanTarget, PrintStatus};
 use serde::Serialize;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target, unix_now_secs, write_report};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -273,15 +273,7 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error
 /// this codebase treats as authoritative for busy/idle classification). `Preparing`
 /// (wire `"PREPARE"`) covers homing/bed-leveling/priming motion before `RUNNING`.
 fn printer_is_busy(client: &Printer) -> bool {
-    matches!(
-        client.print_status(),
-        Some(
-            PrintStatus::Preparing
-                | PrintStatus::Slicing
-                | PrintStatus::Running
-                | PrintStatus::Paused,
-        )
-    )
+    client.print_status().is_some_and(PrintStatus::is_busy)
 }
 
 /// Demonstrates a consumer-style holistic homing routine for [`ProbeTest::HomeAxesWithBusyCheck`]:
@@ -397,7 +389,7 @@ async fn capture_responses(
 }
 
 fn confirm_or_abort() -> Result<bool, CliError> {
-    eprintln!(
+    crate::prompt::confirm(
         "\
 ╔══════════════════════════════════════════════════════════════╗
 ║  PROBE: Command Response Capture                           ║
@@ -408,16 +400,9 @@ fn confirm_or_abort() -> Result<bool, CliError> {
 ║  Ensure the bed is at least 50mm from the nozzle.          ║
 ║                                                            ║
 ║  Type 'yes' to continue.                                   ║
-╚══════════════════════════════════════════════════════════════╝"
-    );
-
-    let mut confirmation = String::new();
-    io::stdin().read_line(&mut confirmation)?;
-    if confirmation.trim().to_lowercase() != "yes" {
-        eprintln!("Aborted (expected 'yes').");
-        return Ok(false);
-    }
-    Ok(true)
+╚══════════════════════════════════════════════════════════════╝
+",
+    )
 }
 
 async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> {
@@ -457,12 +442,7 @@ async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> 
 /// of what's under the nozzle — mirrors `ack_probe.rs::refuse_if_busy`.
 fn refuse_if_busy(client: &Printer) -> Result<(), CliError> {
     match client.print_status() {
-        Some(
-            status @ (PrintStatus::Preparing
-            | PrintStatus::Slicing
-            | PrintStatus::Running
-            | PrintStatus::Paused),
-        ) => Err(CliError::Other(format!(
+        Some(status) if status.is_busy() => Err(CliError::Other(format!(
             "printer is busy (gcode_state={status:?}) — probe refuses to run its default \
                  test sweep during a print; HomeAxes/MoveZUnhomed/MoveXUnhomed and friends can \
                  drive motion into an in-progress part"
@@ -617,9 +597,7 @@ async fn run_test_loop(client: &mut Printer, tests: &[ProbeTest]) -> Vec<ProbeEn
 }
 
 pub async fn run(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
+    target: &Target,
     output: &str,
     tests: Option<Vec<ProbeTest>>,
 ) -> Result<(), CliError> {
@@ -630,10 +608,7 @@ pub async fn run(
         return Ok(());
     }
 
-    eprintln!("Connecting to {}:8883...", ip);
-    let mut client = create_printer(ip, serial, access_code)?;
-    client.connect_mqtt().await?;
-    eprintln!("Connected.");
+    let mut client = target.connect_mqtt().await?;
 
     let pushall = run_pushall_capture(&mut client).await;
 
@@ -643,18 +618,11 @@ pub async fn run(
 
     let model = client.model();
     let serial_owned = client.serial().to_string();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let timestamp = unix_now_secs();
 
     let entries = run_test_loop(&mut client, &tests).await;
 
-    eprintln!(
-        "Probing {} (serial {})",
-        format_args!("{:?}", model),
-        serial_owned
-    );
+    eprintln!("Probing {model} (serial {serial_owned})");
 
     let report = ProbeReport {
         model: format!("{:?}", model),
@@ -663,11 +631,5 @@ pub async fn run(
         tests: entries,
     };
 
-    let json = serde_json::to_string_pretty(&report)
-        .map_err(|e| CliError::Other(format!("failed to serialize probe report: {e}")))?;
-
-    std::fs::write(output_path, json.as_bytes())?;
-
-    eprintln!("\nReport written to {}", output_path);
-    Ok(())
+    write_report(output_path, &report)
 }

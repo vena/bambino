@@ -76,11 +76,47 @@ pub(crate) async fn dial_and_handshake(
 const ACCESS_CODE_ENV_VAR: &str = "BAMBINO_ACCESS_CODE";
 
 /// Resolves the access code to actually use: the positional CLI argument if non-empty, otherwise the `BAMBINO_ACCESS_CODE` environment variable (empty string if unset), letting `validate_params`'s existing empty-check produce a consistent error either way.
-pub(crate) fn resolve_access_code(access_code: String) -> String {
+fn resolve_access_code(access_code: &str) -> String {
     if access_code.is_empty() {
         std::env::var(ACCESS_CODE_ENV_VAR).unwrap_or_default()
     } else {
-        access_code
+        access_code.to_owned()
+    }
+}
+
+/// Printer address and credentials, flattened into every printer-facing subcommand.
+///
+/// No `Debug` derive: it would print the access code.
+#[derive(clap::Args)]
+pub struct Target {
+    pub ip: String,
+    pub serial: String,
+    /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
+    #[arg(default_value = "")]
+    access_code: String,
+}
+
+impl Target {
+    /// Validates the target and builds a not-yet-connected printer client for it.
+    pub(crate) fn printer(&self) -> Result<Printer, CliError> {
+        create_printer(
+            &self.ip,
+            &self.serial,
+            &resolve_access_code(&self.access_code),
+        )
+    }
+
+    /// Builds a printer client and connects its MQTT channel, reporting progress on stderr.
+    pub(crate) async fn connect_mqtt(&self) -> Result<Printer, CliError> {
+        eprintln!(
+            "Connecting to {} port {}...",
+            self.ip,
+            bambino::mqtt::MQTTS_PORT
+        );
+        let mut client = self.printer()?;
+        client.connect_mqtt().await?;
+        eprintln!("Connected.");
+        Ok(client)
     }
 }
 
@@ -93,6 +129,23 @@ pub type Printer = PrinterClient<
     DummyTls,
     DummyFactory,
 >;
+
+/// Seconds since the Unix epoch, for report timestamps.
+pub(crate) fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Writes `report` to `path` as pretty-printed JSON and says where on stderr.
+pub(crate) fn write_report(path: &str, report: &impl serde::Serialize) -> Result<(), CliError> {
+    let json = serde_json::to_string_pretty(report)
+        .map_err(|e| CliError::Other(format!("failed to serialize report: {e}")))?;
+    std::fs::write(path, json.as_bytes())?;
+    eprintln!("\nReport written to {path}");
+    Ok(())
+}
 
 pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Printer, CliError> {
     validate_params(ip, serial, access_code)?;

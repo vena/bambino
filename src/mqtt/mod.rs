@@ -16,7 +16,8 @@
 pub mod client;
 pub mod commands;
 
-pub(crate) const MQTTS_PORT: u16 = 8883;
+/// MQTT-over-TLS port every Bambu printer's local broker listens on.
+pub const MQTTS_PORT: u16 = 8883;
 
 pub use client::{MqttClient, MqttMessage};
 pub use commands::{

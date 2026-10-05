@@ -101,6 +101,10 @@ pub(crate) fn clamp_temp(value: u16, max: u16, label: &str) -> u16 {
     }
 }
 
+/// How often to call [`PrinterClient::keepalive_tick`]: half the 30s keepalive this client
+/// advertises in CONNECT, so a missed tick still leaves margin before the broker's 45s cutoff.
+pub const KEEPALIVE_TICK_SECS: u32 = 15;
+
 /// High-level client for controlling a Bambu Lab printer.
 ///
 /// Wraps an MQTT session (connected or lazy) and optionally a [`FtpsClient`] for
@@ -517,6 +521,22 @@ where
     pub async fn send_ping(&mut self) -> Result<(), Error> {
         self.ensure_mqtt().await?;
         self.mqtt.as_mut().unwrap().send_ping(&self.timer).await
+    }
+
+    /// Keeps the MQTT connection alive and checks its liveness; call every [`KEEPALIVE_TICK_SECS`].
+    ///
+    /// For a loop that races [`poll_telemetry()`](Self::poll_telemetry) against other events
+    /// in `select!`, where a cancelled poll can't be relied on to notice a dead link: sends a
+    /// PINGREQ if one is due, then advances
+    /// [`tick_zombie_check()`](MqttClient::tick_zombie_check) by `KEEPALIVE_TICK_SECS`.
+    ///
+    /// An `Err` from either step means the connection is unusable — a failed write poisons
+    /// it, and a zombie is dead by definition — so reconnect rather than retry.
+    pub async fn keepalive_tick(&mut self) -> Result<(), Error> {
+        self.ensure_mqtt().await?;
+        let mqtt = self.mqtt.as_mut().unwrap();
+        mqtt.send_keepalive_if_due(&self.timer).await?;
+        mqtt.tick_zombie_check(KEEPALIVE_TICK_SECS)
     }
 
     /// Returns a reference to the printer's unique hardware serial number.

@@ -25,10 +25,10 @@
 //! `sequence_id` it must correlate against.
 
 use std::io::{self, Write};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use bambino::Error;
-use bambino::client::{BuzzerMode, PrintStatus};
+use bambino::client::BuzzerMode;
 use bambino::io::tokio::TokioTimer;
 use bambino::models::PrinterModel;
 use bambino::mqtt::{
@@ -38,7 +38,7 @@ use bambino::mqtt::{
 };
 use serde::Serialize;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target, unix_now_secs, write_report};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -552,12 +552,7 @@ async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
     }
 
     match client.print_status() {
-        Some(
-            status @ (PrintStatus::Preparing
-            | PrintStatus::Slicing
-            | PrintStatus::Running
-            | PrintStatus::Paused),
-        ) => Err(CliError::Other(format!(
+        Some(status) if status.is_busy() => Err(CliError::Other(format!(
             "printer is busy (gcode_state={status:?}) — ack-probe refuses to run during a \
                  print; skip_objects and project_file are destructive in that state"
         ))),
@@ -609,7 +604,7 @@ fn confirm_actuating_tests(tests: &[AckTest]) -> Result<bool, CliError> {
         return Ok(true);
     }
 
-    eprintln!(
+    crate::prompt::confirm(&format!(
         "\
 WARNING: the following selected tests actuate hardware or dispatch a print job:
 
@@ -623,17 +618,10 @@ latches a `0500_C010` MicroSD read/write exception on its panel. This harness se
 `clean_print_error` afterwards to clear it, which is confirmed to work on a P1S. If that clear
 does not take, run `bambino-cli control <IP> <SERIAL> clear-error`, or reinsert the card.
 
-Clear the build plate, make sure no print is queued, and type 'yes' to continue.",
+Clear the build plate, make sure no print is queued, and type 'yes' to continue.
+",
         actuating.join("\n  ")
-    );
-
-    let mut confirmation = String::new();
-    io::stdin().read_line(&mut confirmation)?;
-    if confirmation.trim().to_lowercase() != "yes" {
-        eprintln!("Aborted (expected 'yes').");
-        return Ok(false);
-    }
-    Ok(true)
+    ))
 }
 
 /// Prints the verdict table plus the copy-paste line for `ACK_CORRELATED_COMMANDS`.
@@ -685,9 +673,7 @@ fn print_summary(report: &AckReport) {
 }
 
 pub async fn run(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
+    target: &Target,
     output: &str,
     tests: Option<Vec<AckTest>>,
     window_secs: u64,
@@ -700,10 +686,7 @@ pub async fn run(
         return Ok(());
     }
 
-    eprintln!("Connecting to {}:8883...", ip);
-    let mut client = create_printer(ip, serial, access_code)?;
-    client.connect_mqtt().await?;
-    eprintln!("Connected.");
+    let mut client = target.connect_mqtt().await?;
 
     refuse_if_busy(&mut client).await?;
 
@@ -714,10 +697,7 @@ pub async fn run(
 
     let model = client.model();
     let serial_owned = client.serial().to_string();
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let timestamp = unix_now_secs();
 
     let mut entries = Vec::new();
     for (idx, test) in tests.iter().enumerate() {
@@ -728,11 +708,7 @@ pub async fn run(
         clear_project_file_error(&mut client).await;
     }
 
-    eprintln!(
-        "Probing {} (serial {})",
-        format_args!("{:?}", model),
-        serial_owned
-    );
+    eprintln!("Probing {model} (serial {serial_owned})");
 
     let report = AckReport {
         model: format!("{:?}", model),
@@ -741,11 +717,6 @@ pub async fn run(
         tests: entries,
     };
 
-    let json = serde_json::to_string_pretty(&report)
-        .map_err(|e| CliError::Other(format!("failed to serialize ack report: {e}")))?;
-    std::fs::write(output, json.as_bytes())?;
-
     print_summary(&report);
-    eprintln!("\nReport written to {}", output);
-    Ok(())
+    write_report(output, &report)
 }

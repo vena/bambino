@@ -8,7 +8,6 @@
 //! Incorporates detailed diagnostic telemetry printing if `--verbose` is enabled
 //! to isolate connection, handshake, and packet serialization issues.
 
-use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use bambino::Error;
@@ -20,7 +19,7 @@ use clap::{Subcommand, ValueEnum};
 
 use crate::error::CliError;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target};
 
 #[derive(Clone, ValueEnum, Debug)]
 pub enum FanTargetArg {
@@ -99,36 +98,7 @@ pub enum AmsAction {
     #[command(
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> --material <NAME> | --temp <C> --duration-hours <H>"
     )]
-    Dry {
-        id: i32,
-        /// Filament material (PLA, PETG, ABS, PA-CF, ...). Fills temperature, duration and
-        /// cooling temperature from Bambu's published drying parameters for the attached unit.
-        #[arg(long)]
-        material: Option<String>,
-        /// Drying temperature in °C. Overrides --material.
-        #[arg(long)]
-        temp: Option<u32>,
-        /// Cycle duration in whole hours. Overrides --material.
-        #[arg(long)]
-        duration_hours: Option<u32>,
-        /// Filament type string sent on the wire. Defaults to --material's name; set this for a
-        /// material the table does not name.
-        #[arg(long)]
-        filament: Option<String>,
-        /// Rotate trays during the cycle
-        #[arg(long, default_value_t = false)]
-        rotate: bool,
-        /// Target humidity (0 = firmware default)
-        #[arg(long)]
-        humidity: Option<u32>,
-        /// Cooling temperature. Defaults to the material's softening temperature, else 50 —
-        /// BambuStudio's own fallback. Pass explicitly to override.
-        #[arg(long)]
-        cooling_temp: Option<i32>,
-        /// Override the AMS unit's power-conflict interlock
-        #[arg(long, default_value_t = false)]
-        close_power_conflict: bool,
-    },
+    Dry(DryArgs),
     /// Stop AMS drying cycle
     DryStop { id: i32 },
 }
@@ -243,14 +213,9 @@ pub enum ControlAction {
 /// column doesn't appear at all — a placeholder would just be a column of noise). Pass
 /// `show_serials` to print the real values, on stdout, as an explicit opt-in: that's what
 /// makes a subsequent redirect the operator's own decision rather than a surprise.
-pub async fn run_info(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-    show_serials: bool,
-) -> Result<(), CliError> {
+pub async fn run_info(target: &Target, show_serials: bool) -> Result<(), CliError> {
     let is_verbose = crate::is_verbose();
-    let mut printer = create_printer(ip, serial, access_code)?;
+    let mut printer = target.printer()?;
 
     println!("Querying expansion bus version database...");
 
@@ -323,16 +288,36 @@ async fn dispatch<T>(
     Ok(result)
 }
 
-/// Parsed `ams dry` flags, passed as one struct so `run()` stays readable.
-struct DryArgs {
+/// `ams dry` flags, parsed by clap and passed straight to [`run_dry`].
+#[derive(clap::Args, Debug)]
+pub struct DryArgs {
     id: i32,
+    /// Filament material (PLA, PETG, ABS, PA-CF, ...). Fills temperature, duration and
+    /// cooling temperature from Bambu's published drying parameters for the attached unit.
+    #[arg(long)]
     material: Option<String>,
+    /// Drying temperature in °C. Overrides --material.
+    #[arg(long)]
     temp: Option<u32>,
+    /// Cycle duration in whole hours. Overrides --material.
+    #[arg(long)]
     duration_hours: Option<u32>,
-    rotate: bool,
+    /// Filament type string sent on the wire. Defaults to --material's name; set this for a
+    /// material the table does not name.
+    #[arg(long)]
     filament: Option<String>,
+    /// Rotate trays during the cycle
+    #[arg(long, default_value_t = false)]
+    rotate: bool,
+    /// Target humidity (0 = firmware default)
+    #[arg(long)]
     humidity: Option<u32>,
+    /// Cooling temperature. Defaults to the material's softening temperature, else 50 —
+    /// BambuStudio's own fallback. Pass explicitly to override.
+    #[arg(long)]
     cooling_temp: Option<i32>,
+    /// Override the AMS unit's power-conflict interlock
+    #[arg(long, default_value_t = false)]
     close_power_conflict: bool,
 }
 
@@ -340,22 +325,6 @@ struct DryArgs {
 /// giving up and warning. Sized to cover a pushall round trip on a busy printer without
 /// stalling an interactive command; the fallback is still a sound answer if it expires.
 const DRY_UNIT_RESOLVE_TIMEOUT_SECS: u64 = 5;
-
-/// Reads the attached unit type for `ams_id` out of the cached telemetry snapshot.
-///
-/// Telemetry stores an A2L-attached AMS Lite under its normalized id 6, so a physical 16 is
-/// normalized before the lookup.
-fn cached_dry_unit(client: &Printer, ams_id: i32) -> Option<AmsUnitModel> {
-    let ams_id = u8::try_from(ams_id).map_or(ams_id, |id| {
-        i32::from(bambino::ams::normalize_ams_unit_id(id))
-    });
-    client.ams().and_then(|ams| {
-        ams.ams
-            .iter()
-            .find(|u| u.id.parse::<i32>() == Ok(ams_id))
-            .and_then(|u| u.unit_model())
-    })
-}
 
 /// Resolves the attached AMS unit so a material's parameters can be read from the right column.
 ///
@@ -382,7 +351,7 @@ async fn resolve_dry_unit(client: &mut Printer, ams_id: i32) -> AmsUnitModel {
     let _ = client.request_pushall().await;
     let deadline = Instant::now() + Duration::from_secs(DRY_UNIT_RESOLVE_TIMEOUT_SECS);
     loop {
-        if let Some(model) = cached_dry_unit(client, ams_id) {
+        if let Some(model) = client.ams_unit_model(ams_id) {
             return model;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -490,15 +459,10 @@ async fn run_dry(client: &mut Printer, args: DryArgs) -> Result<(), CliError> {
 }
 
 /// Dispatches a typed control action to the printer.
-pub async fn run(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-    action: ControlAction,
-) -> Result<(), CliError> {
+pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError> {
     log::debug!("Running control subcommand action: '{:?}'", action);
 
-    let mut client = create_printer(ip, serial, access_code)?;
+    let mut client = target.printer()?;
 
     match action {
         ControlAction::Home => {
@@ -629,19 +593,14 @@ pub async fn run(
             bypass_safety,
             gcode_line,
         } => {
-            if !bypass_safety {
-                eprint!(
+            if !bypass_safety
+                && !crate::prompt::confirm(
                     "WARNING: gcode-raw bypasses all safety checks. \
                      Sending unsafe commands can damage your printer.\n\
-                     Type 'yes' to confirm: "
-                );
-                io::stderr().flush().unwrap_or(());
-                let mut confirmation = String::new();
-                io::stdin().read_line(&mut confirmation)?;
-                if confirmation.trim().to_lowercase() != "yes" {
-                    println!("Aborted.");
-                    return Ok(());
-                }
+                     Type 'yes' to confirm: ",
+                )?
+            {
+                return Ok(());
             }
             println!("Dispatching raw G-code (no safety checks)...");
             client.send_gcode_raw(&gcode_line).await?;
@@ -720,33 +679,7 @@ pub async fn run(
             println!("Calibration command published successfully.");
         }
         ControlAction::Ams { action } => match action {
-            AmsAction::Dry {
-                id,
-                material,
-                temp,
-                duration_hours,
-                rotate,
-                filament,
-                humidity,
-                cooling_temp,
-                close_power_conflict,
-            } => {
-                run_dry(
-                    &mut client,
-                    DryArgs {
-                        id,
-                        material,
-                        temp,
-                        duration_hours,
-                        rotate,
-                        filament,
-                        humidity,
-                        cooling_temp,
-                        close_power_conflict,
-                    },
-                )
-                .await?;
-            }
+            AmsAction::Dry(args) => run_dry(&mut client, args).await?,
             AmsAction::DryStop { id } => {
                 dispatch(
                     &format!("Stopping AMS {} drying cycle...", id),

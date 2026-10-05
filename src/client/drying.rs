@@ -352,7 +352,7 @@ where
             ));
         }
 
-        let unit_model = self.client.cached_ams_unit_model(self.ams_id);
+        let unit_model = self.client.ams_unit_model(self.ams_id);
         if let Some(model) = unit_model
             && !model.supports_drying()
         {

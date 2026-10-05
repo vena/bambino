@@ -642,7 +642,10 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// that would already be too late on the second such read.
     ///
     /// No-op without a real wall-clock (`DummyTimer`), which unit-test clients use.
-    async fn send_keepalive_if_due<T: TimerProvider>(&mut self, timer: &T) -> Result<(), Error> {
+    pub(crate) async fn send_keepalive_if_due<T: TimerProvider>(
+        &mut self,
+        timer: &T,
+    ) -> Result<(), Error> {
         if !timer.has_real_clock() {
             return Ok(());
         }

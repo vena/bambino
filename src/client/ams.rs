@@ -229,7 +229,7 @@ where
     /// Matches on the unit's own `id`, which is already normalized on deserialize (the A2L's AMS
     /// Lite reports physical `16` and is stored as `6`), so a caller-supplied physical `16` is
     /// normalized the same way before comparing.
-    pub(crate) fn cached_ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
+    pub fn ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
         let ams_id = u8::try_from(ams_id).map_or(ams_id, |id| {
             i32::from(crate::ams::parser::normalize_ams_unit_id(id))
         });

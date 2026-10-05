@@ -14,7 +14,7 @@ use bambino::ftps::CurrentDateTime;
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
 use clap::Subcommand;
 
-use crate::connection::create_printer;
+use crate::connection::Target;
 use crate::error::CliError;
 use crate::trust::build_cli_tls_config;
 
@@ -93,13 +93,11 @@ fn current_date_utc() -> CurrentDateTime {
 
 /// Dispatches a typed storage action over FTPS.
 pub async fn run(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
+    target: &Target,
     action: FilesAction,
     allow_unverified_tls_1_2: bool,
 ) -> Result<(), CliError> {
-    let printer = create_printer(ip, serial, access_code)?;
+    let printer = target.printer()?;
     let model = printer.model();
 
     let ftps_config = build_cli_tls_config(model.quirks().enforces_ftps_tls_1_2())?;
@@ -110,8 +108,9 @@ pub async fn run(
         .with_ftps_allow_unverified_tls_1_2(allow_unverified_tls_1_2);
 
     println!(
-        "Connecting to implicitly secure FTPS server at {}:990...",
-        ip
+        "Connecting to implicitly secure FTPS server at {} port {}...",
+        target.ip,
+        bambino::ftps::FTPS_PORT
     );
 
     let client = printer.storage().await?;

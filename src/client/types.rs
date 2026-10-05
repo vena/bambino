@@ -230,11 +230,37 @@ impl PrintStatus {
             _ => PrintStatus::Unknown,
         }
     }
+
+    /// True while a job is in flight — preparing, slicing, running or paused — so the printer
+    /// shouldn't be given new work or motion that could collide with a part.
+    ///
+    /// `Unknown` is not busy, so a caller gating on safety must treat a missing status
+    /// (`PrinterClient::print_status() == None`) or `Unknown` as "can't confirm idle" itself.
+    pub fn is_busy(self) -> bool {
+        matches!(
+            self,
+            PrintStatus::Preparing
+                | PrintStatus::Slicing
+                | PrintStatus::Running
+                | PrintStatus::Paused
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::PrintStatus;
+
+    #[test]
+    fn test_print_status_is_busy() {
+        use PrintStatus::*;
+        for status in [Preparing, Slicing, Running, Paused] {
+            assert!(status.is_busy(), "{status:?}");
+        }
+        for status in [Idle, Finished, Failed, Unknown] {
+            assert!(!status.is_busy(), "{status:?}");
+        }
+    }
 
     #[test]
     fn test_print_status_from_gcode_state() {

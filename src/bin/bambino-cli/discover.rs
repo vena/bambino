@@ -12,16 +12,18 @@ use bambino::discovery::discover;
 
 use crate::error::CliError;
 
+/// Discovery sweep length. Port behavior varies by model: the P1S (firmware 01.10.00.00)
+/// responds to M-SEARCH on port 1990 within ~5s but only sends passive NOTIFY on port 2021 at
+/// ~10.1s intervals. 20 seconds covers both discovery paths across model generations.
+const DISCOVERY_WINDOW_SECS: u64 = 20;
+
 /// Initiates an active multicast SSDP search sweep and displays nearby printers.
 pub async fn run() -> Result<(), CliError> {
     let is_verbose = crate::is_verbose();
-    println!("Scanning for printers (20 seconds)...");
+    println!("Scanning for printers ({DISCOVERY_WINDOW_SECS} seconds)...");
     log::debug!("Resolving network discovery sweep targets utilizing standard Tokio UDP socket");
 
-    // Port behavior varies by model: the P1S (firmware 01.10.00.00) responds to M-SEARCH
-    // on port 1990 within ~5s but only sends passive NOTIFY on port 2021 at ~10.1s intervals.
-    // A 20-second window covers both discovery paths across model generations.
-    let devices = discover(Duration::from_secs(20)).await?;
+    let devices = discover(Duration::from_secs(DISCOVERY_WINDOW_SECS)).await?;
 
     if devices.is_empty() {
         println!("\nNo Bambu Lab printers detected. Ensure LAN Mode is active on the printer.");
@@ -47,42 +49,30 @@ pub async fn run() -> Result<(), CliError> {
     }
 
     println!("\nDetected {} printer(s):\n", devices.len());
+    let mut headers = vec!["Model", "Serial", "IP Address", "Name", "Firmware"];
     if is_verbose {
-        let mut table = crate::table::Table::new(vec![
-            "Model",
-            "Serial",
-            "IP Address",
-            "Name",
-            "Firmware",
-            "SSDP Port",
-        ]);
-        for device in &devices {
-            table.add_row(vec![
-                &format!("{:?}", device.model),
-                &device.serial,
-                &device.ip.to_string(),
-                &device.name,
-                &device.version,
-                &device
-                    .discovery_port
-                    .map_or_else(|| "?".to_owned(), |p| p.to_string()),
-            ]);
-        }
-        table.print();
-    } else {
-        let mut table =
-            crate::table::Table::new(vec!["Model", "Serial", "IP Address", "Name", "Firmware"]);
-        for device in &devices {
-            table.add_row(vec![
-                &format!("{:?}", device.model),
-                &device.serial,
-                &device.ip.to_string(),
-                &device.name,
-                &device.version,
-            ]);
-        }
-        table.print();
+        headers.push("SSDP Port");
     }
+    let mut table = crate::table::Table::new(headers);
+    for device in &devices {
+        let model = device.model.to_string();
+        let ip = device.ip.to_string();
+        let ssdp_port = device
+            .discovery_port
+            .map_or_else(|| "?".to_owned(), |p| p.to_string());
+        let mut row = vec![
+            model.as_str(),
+            &device.serial,
+            &ip,
+            &device.name,
+            &device.version,
+        ];
+        if is_verbose {
+            row.push(&ssdp_port);
+        }
+        table.add_row(row);
+    }
+    table.print();
 
     Ok(())
 }

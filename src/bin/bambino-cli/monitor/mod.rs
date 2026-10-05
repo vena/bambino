@@ -8,13 +8,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bambino::Error;
+use bambino::client::KEEPALIVE_TICK_SECS;
 use bambino::io::SocketError;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -42,12 +43,7 @@ pub(crate) async fn follow_pushes(
     print_only: bool,
     show_serials: bool,
 ) -> Result<(), CliError> {
-    // MQTT_KEEP_ALIVE_SECS (client/codec.rs) is 30 — without a periodic ping,
-    // the broker resets the connection once that elapses with no packet from the client.
-    // Mirrors run()'s PING_TICK_SECS/ping_timer below.
-    const PING_TICK_SECS: u64 = 15;
-    let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
-    ping_timer.tick().await;
+    let mut keepalive = keepalive_interval().await;
 
     loop {
         tokio::select! {
@@ -60,11 +56,7 @@ pub(crate) async fn follow_pushes(
                     println!("{}", serde_json::to_string(&v).unwrap_or_default());
                 }
             }
-            _ = ping_timer.tick() => {
-                printer.send_ping().await?;
-                // Matches run()'s dashboard loop below.
-                printer.mqtt().await?.tick_zombie_check(PING_TICK_SECS as u32)?;
-            }
+            _ = keepalive.tick() => printer.keepalive_tick().await?,
         }
     }
 }
@@ -77,16 +69,14 @@ pub(crate) async fn follow_pushes(
 /// Output is redacted with [`redact_secrets`] unless `show_serials` is set. A one-shot dump that
 /// sees no pushall response within `RESPONSE_TIMEOUT_SECS` returns an error, so the process exits
 /// non-zero rather than handing a script empty output as success.
-pub async fn dump(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-    follow: bool,
-    show_serials: bool,
-) -> Result<(), CliError> {
-    eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
+pub async fn dump(target: &Target, follow: bool, show_serials: bool) -> Result<(), CliError> {
+    eprintln!(
+        "Connecting to {} port {} for raw telemetry dump...",
+        target.ip,
+        bambino::mqtt::MQTTS_PORT
+    );
 
-    let mut printer = create_printer(ip, serial, access_code)?;
+    let mut printer = target.printer()?;
     printer.request_pushall().await?;
 
     if follow {
@@ -160,18 +150,31 @@ impl Drop for ShutdownOnDrop {
     }
 }
 
-/// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
-pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {
-    eprintln!("Connecting to secure MQTT broker at {}:8883...", ip);
+/// Interval driving [`Printer::keepalive_tick`], with its immediate first tick consumed.
+///
+/// Both MQTT loops race telemetry against this in `select!`, which cancels the poll each tick,
+/// so the zombie check here is what catches a silently dropped link
+/// (`.claude/rules/wire-read-deadline.md`) and must stay in the loop.
+async fn keepalive_interval() -> tokio::time::Interval {
+    let mut keepalive = interval(Duration::from_secs(u64::from(KEEPALIVE_TICK_SECS)));
+    keepalive.tick().await;
+    keepalive
+}
 
-    let mut printer = create_printer(ip, serial, access_code)?;
+/// Establishes the secure MQTTS session, sends `pushall`, and runs the dashboard loop.
+pub async fn run(target: &Target) -> Result<(), CliError> {
+    eprintln!(
+        "Connecting to secure MQTT broker at {} port {}...",
+        target.ip,
+        bambino::mqtt::MQTTS_PORT
+    );
+
+    let mut printer = target.printer()?;
     let quirks = printer.model().quirks();
 
     printer.request_pushall().await?;
 
-    const PING_TICK_SECS: u64 = 15;
-    let mut ping_timer = interval(Duration::from_secs(PING_TICK_SECS));
-    ping_timer.tick().await;
+    let mut keepalive = keepalive_interval().await;
 
     let _guard = TerminalGuard::enter()?;
 
@@ -213,7 +216,7 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
     // NOTE: racing `poll_telemetry()` against `ping_timer.tick()` here means a silently
     // dropped connection is caught by `tick_zombie_check`'s 60s `secs_since_last_message`
     // counter below, not by `poll_wire`'s 30s per-read deadline (`mqtt/client/frame.rs`) —
-    // every time this select drops the in-flight telemetry future (every PING_TICK_SECS),
+    // every time this select drops the in-flight telemetry future (every KEEPALIVE_TICK_SECS),
     // that deadline resets before it can fire. Confirmed on real hardware 2026-07-06; see
     // CLAUDE.md's "select!-multiplexed consumers" entry for why this is expected, not a bug.
     let result = loop {
@@ -258,26 +261,11 @@ pub async fn run(ip: &str, serial: &str, access_code: &str) -> Result<(), CliErr
                 }
             }
 
-            _ = ping_timer.tick() => {
-                if let Err(e) = printer.send_ping().await {
-                    warning = Some(format!("Failed to dispatch keep-alive ping: {:?}", e));
-                    redraw(&printer, &state, warning.as_deref());
-                }
-                // `tick_zombie_check` logs its own `log::warn!` describing which liveness
-                // condition tripped before returning `Err` (discarded under this subcommand's
-                // silenced logger, but the `Err` itself surfaces as a `CliError` once the
-                // terminal guard has restored the screen), so a detected zombie is
-                // treated as fatal here (mirroring the `poll_telemetry` error branch above)
-                // rather than logged-and-ignored like a single failed ping write above —
-                // continuing to loop against a connection this check has already confirmed
-                // dead would defeat the point of running it.
-                match printer.mqtt().await {
-                    Ok(mqtt) => {
-                        if let Err(e) = mqtt.tick_zombie_check(PING_TICK_SECS as u32) {
-                            break Err(e);
-                        }
-                    }
-                    Err(e) => break Err(e),
+            // Fatal either way: a failed ping write poisons the client, and a zombie is dead.
+            // The error surfaces as a `CliError` once the terminal guard restores the screen.
+            _ = keepalive.tick() => {
+                if let Err(e) = printer.keepalive_tick().await {
+                    break Err(e);
                 }
             }
 

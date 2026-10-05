@@ -9,7 +9,7 @@ use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector};
 use crate::trust::build_cli_tls_config;
 use clap::Subcommand;
 
-use crate::connection::create_printer;
+use crate::connection::Target;
 use crate::error::CliError;
 
 #[derive(Subcommand, Debug)]
@@ -20,33 +20,23 @@ pub enum CameraAction {
 }
 
 /// Dispatches a typed camera action.
-pub async fn run(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-    action: CameraAction,
-) -> Result<(), CliError> {
+pub async fn run(target: &Target, action: CameraAction) -> Result<(), CliError> {
     match action {
         CameraAction::Snapshot { output } => {
             let output_path = output.as_deref().unwrap_or("snapshot.jpg");
-            run_snapshot(ip, serial, access_code, output_path).await
+            run_snapshot(target, output_path).await
         }
     }
 }
 
-async fn run_snapshot(
-    ip: &str,
-    serial: &str,
-    access_code: &str,
-    output_path: &str,
-) -> Result<(), CliError> {
-    let printer = create_printer(ip, serial, access_code)?;
+async fn run_snapshot(target: &Target, output_path: &str) -> Result<(), CliError> {
+    let printer = target.printer()?;
 
     let protocol = printer.model().quirks().camera_protocol();
     if protocol != CameraProtocol::BinaryJpeg {
         eprintln!(
             "Warning: {} uses RTSPS (port {}), not the binary JPEG protocol.",
-            serial,
+            target.serial,
             protocol.default_port()
         );
         eprintln!("The snapshot command only supports binary camera streaming (A1/P1 series).");
@@ -60,7 +50,11 @@ async fn run_snapshot(
 
     let mut printer = printer.with_camera(tls_connector, TokioRawStreamFactory);
 
-    println!("Connecting to {}:{} ...", ip, protocol.default_port());
+    println!(
+        "Connecting to {} port {} ...",
+        target.ip,
+        protocol.default_port()
+    );
 
     println!("Capturing frame ...");
     let mut frame = Vec::new();

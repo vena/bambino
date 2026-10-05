@@ -19,13 +19,14 @@ mod error;
 mod inspect_cert;
 mod monitor;
 mod probe;
+mod prompt;
 mod redact;
 mod storage;
 mod table;
 mod trust;
 mod verify_tls;
 
-use connection::resolve_access_code;
+use connection::Target;
 
 /// Global static indicating whether verbose debug logging is requested.
 ///
@@ -84,11 +85,8 @@ enum Commands {
 
     /// Query expansion bus module and firmware versions
     Info {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         /// Print expansion bus module serials in the table (they identify physical hardware,
         /// so they're hidden by default; a stdout redirect captures whatever this prints)
         #[arg(long)]
@@ -97,20 +95,14 @@ enum Commands {
 
     /// Stream real-time status telemetry and HMS warnings
     Monitor {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
     },
 
     /// Dump the raw pushall JSON response and exit (or every subsequent push, with --follow)
     Dump {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         /// Keep printing every subsequent `print`-bearing push as one compact NDJSON line
         /// until interrupted (Ctrl+C), instead of exiting after the first pushall response —
         /// for capturing a sequence of incremental pushes (e.g. across a tray-load event).
@@ -124,11 +116,8 @@ enum Commands {
 
     /// Run command response capture suite and write report
     Probe {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         /// Output file path
         #[arg(short = 'o', long, default_value = "probe_report.json")]
         output: String,
@@ -141,11 +130,8 @@ enum Commands {
     // the CLI's `--help` text, so contributor references stay in `//` comments like this one.
     /// Check which MQTT commands echo a correlatable `sequence_id` ack
     AckProbe {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         /// Output file path
         #[arg(short = 'o', long, default_value = "ack_probe_report.json")]
         output: String,
@@ -167,11 +153,8 @@ enum Commands {
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] home\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] extrude <LENGTH> [FEEDRATE]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] temp <TARGET> <VALUE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] resume\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] stop\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] gcode-raw [OPTIONS] <GCODE_LINE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch [--show-serials]]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry <ID> --material <NAME> | --temp <C> --duration-hours <H>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams dry-stop <ID>\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] ams help [COMMAND]\n       bambino-cli control <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Control {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         #[command(subcommand)]
         action: control::ControlAction,
     },
@@ -182,11 +165,8 @@ enum Commands {
         override_usage = "bambino-cli files <IP> <SERIAL> [ACCESS_CODE] list [REMOTE_PATH]\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] upload <LOCAL_PATH> <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] download <REMOTE_PATH> <LOCAL_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] delete <REMOTE_PATH>\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] clock-check\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] space\n       bambino-cli files <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Files {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         #[command(subcommand)]
         action: storage::FilesAction,
         // The embassy escape hatch, ported to the CLI for testing; see src/ftps/CLAUDE.md and
@@ -203,11 +183,8 @@ enum Commands {
         override_usage = "bambino-cli camera <IP> <SERIAL> [ACCESS_CODE] snapshot [OUTPUT]\n       bambino-cli camera <IP> <SERIAL> [ACCESS_CODE] help [COMMAND]..."
     )]
     Camera {
-        ip: String,
-        serial: String,
-        /// Falls back to the BAMBINO_ACCESS_CODE env var if omitted or empty
-        #[arg(default_value = "")]
-        access_code: String,
+        #[command(flatten)]
+        target: Target,
         #[command(subcommand)]
         action: camera::CameraAction,
     },
@@ -221,7 +198,7 @@ enum Commands {
         ip: String,
         serial: String,
         /// TLS port to connect to (990=FTPS, 8883=MQTT, 322=RTSPS, 6000=camera)
-        #[arg(long, default_value_t = 990)]
+        #[arg(long, default_value_t = bambino::ftps::FTPS_PORT)]
         port: u16,
         /// Where to write the leaf certificate's raw DER bytes. Any further chain members are
         /// written beside it with `.chain<N>` before the extension (cert.der → cert.chain1.der)
@@ -239,7 +216,7 @@ enum Commands {
         ip: String,
         serial: String,
         /// TLS port to connect to (990=FTPS, 8883=MQTT, 322=RTSPS, 6000=camera)
-        #[arg(long, default_value_t = 990)]
+        #[arg(long, default_value_t = bambino::ftps::FTPS_PORT)]
         port: u16,
     },
 }
@@ -277,102 +254,33 @@ async fn main() {
     let result = match cli.command {
         Commands::Discover => discover::run().await,
         Commands::Info {
-            ip,
-            serial,
-            access_code,
+            target,
             show_serials,
-        } => {
-            control::run_info(
-                &ip,
-                &serial,
-                &resolve_access_code(access_code),
-                show_serials,
-            )
-            .await
-        }
-        Commands::Monitor {
-            ip,
-            serial,
-            access_code,
-        } => monitor::run(&ip, &serial, &resolve_access_code(access_code)).await,
+        } => control::run_info(&target, show_serials).await,
+        Commands::Monitor { target } => monitor::run(&target).await,
         Commands::Dump {
-            ip,
-            serial,
-            access_code,
+            target,
             follow,
             show_serials,
-        } => {
-            monitor::dump(
-                &ip,
-                &serial,
-                &resolve_access_code(access_code),
-                follow,
-                show_serials,
-            )
-            .await
-        }
+        } => monitor::dump(&target, follow, show_serials).await,
         Commands::Probe {
-            ip,
-            serial,
-            access_code,
+            target,
             output,
             tests,
-        } => {
-            probe::run(
-                &ip,
-                &serial,
-                &resolve_access_code(access_code),
-                &output,
-                tests,
-            )
-            .await
-        }
+        } => probe::run(&target, &output, tests).await,
         Commands::AckProbe {
-            ip,
-            serial,
-            access_code,
+            target,
             output,
             tests,
             window,
-        } => {
-            ack_probe::run(
-                &ip,
-                &serial,
-                &resolve_access_code(access_code),
-                &output,
-                tests,
-                window,
-            )
-            .await
-        }
-        Commands::Control {
-            ip,
-            serial,
-            access_code,
-            action,
-        } => control::run(&ip, &serial, &resolve_access_code(access_code), action).await,
+        } => ack_probe::run(&target, &output, tests, window).await,
+        Commands::Control { target, action } => control::run(&target, action).await,
         Commands::Files {
-            ip,
-            serial,
-            access_code,
+            target,
             action,
             allow_unverified_tls_1_2,
-        } => {
-            storage::run(
-                &ip,
-                &serial,
-                &resolve_access_code(access_code),
-                action,
-                allow_unverified_tls_1_2,
-            )
-            .await
-        }
-        Commands::Camera {
-            ip,
-            serial,
-            access_code,
-            action,
-        } => camera::run(&ip, &serial, &resolve_access_code(access_code), action).await,
+        } => storage::run(&target, action, allow_unverified_tls_1_2).await,
+        Commands::Camera { target, action } => camera::run(&target, action).await,
         Commands::InspectCert {
             ip,
             serial,
