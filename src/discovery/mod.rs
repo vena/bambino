@@ -24,6 +24,9 @@ use crate::io::{BindableUdpSocket, TimerProvider};
 use core::net::{IpAddr, Ipv4Addr, SocketAddr};
 pub use parser::{SsdpDevice, parse_ssdp_payload};
 
+#[cfg(not(feature = "std"))]
+use alloc::{format, string::String};
+
 #[cfg(feature = "std")]
 use std::collections::BTreeSet;
 
@@ -43,9 +46,13 @@ pub const SSDP_PORT: u16 = 2021;
 /// Alternative SSDP port listed in Bambu Lab documentation [REF-NET-PORTS].
 pub const SSDP_PORT_ALT: u16 = 1990;
 
+/// Ports `discover_devices()` binds, one engine each.
+#[cfg(feature = "std")]
+const SSDP_PORTS: [u16; 2] = [SSDP_PORT, SSDP_PORT_ALT];
+
 /// Interval between periodic M-SEARCH re-broadcasts during discovery sweeps (milliseconds).
 #[cfg(feature = "std")]
-pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u128 = 3000;
+pub(crate) const SSDP_REBROADCAST_INTERVAL_MS: u64 = 3000;
 
 /// Pacing sleep inside `discover_devices()`'s listen loop, applied on two paths that would
 /// otherwise busy-spin for the rest of the discovery window:
@@ -75,18 +82,6 @@ const SSDP_INTER_BURST_DELAY_MS: u64 = 50;
 #[cfg(feature = "std")]
 const SSDP_RECV_BUF_LEN: usize = 1500;
 
-const M_SEARCH_QUERY_2021: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
-                                     HOST: 239.255.255.250:2021\r\n\
-                                     MAN: \"ssdp:discover\"\r\n\
-                                     MX: 3\r\n\
-                                     ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
-
-const M_SEARCH_QUERY_1990: &[u8] = b"M-SEARCH * HTTP/1.1\r\n\
-                                     HOST: 239.255.255.250:1990\r\n\
-                                     MAN: \"ssdp:discover\"\r\n\
-                                     MX: 3\r\n\
-                                     ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n";
-
 /// Asynchronous Discovery Engine providing search orchestration and passive monitoring.
 pub struct DiscoveryEngine<U: AsyncUdpSocket> {
     socket: U,
@@ -99,12 +94,21 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
         Self { socket, port }
     }
 
-    fn m_search_query(&self) -> &'static [u8] {
-        if self.port == SSDP_PORT_ALT {
-            M_SEARCH_QUERY_1990
-        } else {
-            M_SEARCH_QUERY_2021
-        }
+    /// The SSDP port this engine sends to and was bound for.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// M-SEARCH request whose `HOST` header names the port it is sent to.
+    fn m_search_query(&self) -> String {
+        format!(
+            "M-SEARCH * HTTP/1.1\r\n\
+             HOST: {MULTICAST_ADDR}:{}\r\n\
+             MAN: \"ssdp:discover\"\r\n\
+             MX: 3\r\n\
+             ST: urn:bambulab-com:device:3dprinter:1\r\n\r\n",
+            self.port
+        )
     }
 
     /// Dispatches active search queries to trigger local printer reports.
@@ -122,14 +126,20 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
             "Transmitting multicast M-SEARCH request to: {}",
             multicast_target
         );
-        let mcast_result = self.socket.send_to(query, multicast_target).await;
+        let mcast_result = self
+            .socket
+            .send_to(query.as_bytes(), multicast_target)
+            .await;
 
         let broadcast_target = SocketAddr::from((IpAddr::V4(BROADCAST_ADDR), self.port));
         log::debug!(
             "Transmitting fallback broadcast M-SEARCH request to: {}",
             broadcast_target
         );
-        let bcast_result = self.socket.send_to(query, broadcast_target).await;
+        let bcast_result = self
+            .socket
+            .send_to(query.as_bytes(), broadcast_target)
+            .await;
 
         match (mcast_result, bcast_result) {
             (Err(_), Err(e)) => Err(Error::Network(e)),
@@ -279,19 +289,17 @@ where
     // Bind sockets on both SSDP ports. Using the specific port is required because
     // printers send NOTIFY advertisements to 239.255.255.250:<port>, and the OS only
     // delivers multicast packets when the socket's bound port matches the destination port.
-    let ports: &[u16] = &[SSDP_PORT, SSDP_PORT_ALT];
-
-    let mut engines: Vec<(DiscoveryEngine<U>, u16)> = Vec::new();
+    let mut engines: Vec<DiscoveryEngine<U>> = Vec::new();
     // Track the last bind failure and keep trying every port, instead of returning
     // as soon as the *first* port fails to bind. Returning early made degraded mode only work
     // when the second port failed after the first succeeded — if the first port failed (e.g.
     // another process already holds it), the second, free port was never even attempted.
     let mut last_bind_err: Option<crate::io::SocketError> = None;
-    for &port in ports {
+    for port in SSDP_PORTS {
         let bind_addr = SocketAddr::from((IpAddr::V4(UNSPECIFIED_ADDR), port));
         log::debug!("Binding UDP socket on '{}'", bind_addr);
         match U::bind(bind_addr).await {
-            Ok(socket) => engines.push((DiscoveryEngine::new(socket, port), port)),
+            Ok(socket) => engines.push(DiscoveryEngine::new(socket, port)),
             Err(e) => {
                 log::debug!("Failed to bind port {}: {:?} (skipping)", port, e);
                 last_bind_err = Some(e);
@@ -305,35 +313,18 @@ where
         )));
     }
 
-    if engines.len() < ports.len() {
+    if engines.len() < SSDP_PORTS.len() {
         log::warn!(
             "SSDP discovery running in degraded mode: only {} of {} ports bound",
             engines.len(),
-            ports.len()
+            SSDP_PORTS.len()
         );
     }
 
     for i in 0..SSDP_INITIAL_BURST_COUNT {
         log::debug!("Initializing active query scan block #{}", i + 1);
-        for (engine, _) in &engines {
-            // Tolerate a per-engine send failure here too, matching the degraded-mode
-            // bind loop above and the periodic re-broadcast loop below — propagating the error
-            // with `?` aborted the whole sweep even when a healthy port could still have found
-            // printers.
-            let _ = engine.broadcast_search().await;
-        }
-        // Non-fatal for the same reason as the broadcast above and the backoff sleep below: a
-        // TimerError on this 50ms inter-burst pause used to abort the entire sweep with both
-        // sockets already bound and the listen loop never entered.
-        if let Err(e) = timer
-            .sleep(core::time::Duration::from_millis(SSDP_INTER_BURST_DELAY_MS))
-            .await
-        {
-            log::debug!(
-                "Inter-burst pacing sleep failed: {:?} (continuing sweep)",
-                e
-            );
-        }
+        broadcast_all(&engines).await;
+        pace(timer, SSDP_INTER_BURST_DELAY_MS).await;
     }
 
     let mut devices: Vec<SsdpDevice> = Vec::new();
@@ -354,16 +345,13 @@ where
 
     while timer.now_millis().saturating_sub(start) < total_millis {
         let pass_start = timer.now_millis();
-        let now = pass_start;
-        if now.saturating_sub(last_search) >= SSDP_REBROADCAST_INTERVAL_MS as u64 {
+        if pass_start.saturating_sub(last_search) >= SSDP_REBROADCAST_INTERVAL_MS {
             log::trace!("Re-broadcasting periodic M-SEARCH queries");
-            for (engine, _) in &engines {
-                let _ = engine.broadcast_search().await;
-            }
+            broadcast_all(&engines).await;
             last_search = timer.now_millis();
         }
 
-        for (engine, port) in &engines {
+        for engine in &engines {
             // Log and pace on Err (previously silently discarded with no backoff) —
             // poll_next_device's Err path is reserved for genuine socket faults (not the
             // TimedOut/Ok(None) transient case), which have no `.await` yield point of their
@@ -372,7 +360,7 @@ where
             match engine.poll_next_device(&mut buf).await {
                 Ok(Some(device)) => {
                     if seen_serials.insert(device.serial.clone()) {
-                        log::debug!("Discovered '{}' via port {}", device.serial, port);
+                        log::debug!("Discovered '{}' via port {}", device.serial, engine.port());
                         on_device(&device);
                         devices.push(device);
                     }
@@ -384,12 +372,10 @@ where
                 Err(e) => {
                     log::debug!(
                         "poll_next_device on port {} failed: {:?} (pacing before retry)",
-                        port,
+                        engine.port(),
                         e
                     );
-                    let _ = timer
-                        .sleep(core::time::Duration::from_millis(SSDP_POLL_BACKOFF_MS))
-                        .await;
+                    pace(timer, SSDP_POLL_BACKOFF_MS).await;
                 }
             }
         }
@@ -400,9 +386,7 @@ where
         // otherwise turn this loop into a genuine 100%-CPU spin for the entire discovery
         // window. Costs nothing when the socket really does block — the branch is not taken.
         if timer.now_millis().saturating_sub(pass_start) == 0 {
-            let _ = timer
-                .sleep(core::time::Duration::from_millis(SSDP_POLL_BACKOFF_MS))
-                .await;
+            pace(timer, SSDP_POLL_BACKOFF_MS).await;
         }
     }
 
@@ -412,6 +396,33 @@ where
     );
 
     Ok(devices)
+}
+
+/// Sends one M-SEARCH round from every engine, tolerating per-engine failures.
+///
+/// A failed engine doesn't abort the sweep, since a healthy port can still find printers.
+/// When every engine fails the sweep can only hear NOTIFY advertisements, so that case is a
+/// `warn!`: an empty result would otherwise be indistinguishable from "no printers".
+#[cfg(feature = "std")]
+async fn broadcast_all<U: AsyncUdpSocket>(engines: &[DiscoveryEngine<U>]) {
+    let mut failed = 0;
+    for engine in engines {
+        if let Err(e) = engine.broadcast_search().await {
+            log::debug!("M-SEARCH on port {} failed: {:?}", engine.port(), e);
+            failed += 1;
+        }
+    }
+    if failed == engines.len() {
+        log::warn!("Every M-SEARCH send failed; only NOTIFY advertisements can be heard");
+    }
+}
+
+/// Pacing sleep that logs a timer failure instead of aborting the sweep.
+#[cfg(feature = "std")]
+async fn pace<T: TimerProvider>(timer: &T, millis: u64) {
+    if let Err(e) = timer.sleep(core::time::Duration::from_millis(millis)).await {
+        log::debug!("Discovery pacing sleep failed: {:?} (continuing sweep)", e);
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +503,20 @@ mod tests {
 
         let empty_device = engine.poll_next_device(&mut buf).await.unwrap();
         assert!(empty_device.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_m_search_host_header_names_the_engine_port() {
+        for port in [SSDP_PORT, SSDP_PORT_ALT, 1900] {
+            let socket = MockDiscoverySocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))
+                .await
+                .unwrap();
+            let query = DiscoveryEngine::new(socket, port).m_search_query();
+            assert!(
+                query.contains(&format!("\r\nHOST: 239.255.255.250:{port}\r\n")),
+                "{query}"
+            );
+        }
     }
 
     struct FailSocket;

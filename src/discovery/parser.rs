@@ -1,7 +1,8 @@
-//! # Zero-Copy HTTP-style SSDP Parsing Engine
+//! # HTTP-style SSDP Parsing
 //!
-//! Provides utilities to parse HTTP-like headers from multicast and unicast
-//! UDP frames on Port 2021 without performing runtime memory allocations.
+//! Parses HTTP-like headers from multicast and unicast UDP frames on port 2021. Header
+//! slicing is zero-copy and a non-Bambu packet is rejected without allocating; an accepted
+//! packet allocates the owned [`SsdpDevice`] it returns.
 //! Differentiates Bambu Lab printers from general UPnP devices and resolves
 //! serial prefixes, falling back to the `DevModel` SSDP header when the prefix
 //! is unrecognized (see [`crate::models::resolve_model`]).
@@ -53,9 +54,16 @@ pub struct SsdpDevice {
     pub security_link: String,
 }
 
-/// Evaluates equality between two standard ASCII string slices case-insensitively.
-fn eq_case_insensitive(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b)
+/// Domain suffix on Bambu's vendor SSDP headers (`DevName.bambu.com`); some firmware omits it.
+const BAMBU_HEADER_SUFFIX: &str = ".bambu.com";
+
+/// Strips an optional, case-insensitive [`BAMBU_HEADER_SUFFIX`] from a header name.
+fn strip_bambu_suffix(name: &str) -> &str {
+    name.len()
+        .checked_sub(BAMBU_HEADER_SUFFIX.len())
+        .and_then(|split| name.split_at_checked(split))
+        .filter(|(_, suffix)| suffix.eq_ignore_ascii_case(BAMBU_HEADER_SUFFIX))
+        .map_or(name, |(short, _)| short)
 }
 
 /// Parses the host IP address and communication port from a LOCATION URI.
@@ -92,6 +100,7 @@ fn parse_location(loc: &str) -> Option<(&str, u16)> {
 }
 
 /// Raw header values extracted from an SSDP packet before post-processing.
+#[derive(Default)]
 struct RawSsdpHeaders<'a> {
     usn: Option<&'a str>,
     location: Option<&'a str>,
@@ -110,66 +119,54 @@ struct RawSsdpHeaders<'a> {
 /// Only bails (`?`) on UTF-8 decode failure for required headers (USN, LOCATION).
 /// Optional headers with non-UTF-8 values are silently skipped per [REF-NET-DISC].
 fn extract_headers<'a>(headers: &[httparse::Header<'a>]) -> Option<RawSsdpHeaders<'a>> {
-    let mut raw = RawSsdpHeaders {
-        usn: None,
-        location: None,
-        dev_name: None,
-        dev_model: None,
-        dev_connect: None,
-        dev_version: None,
-        dev_signal: None,
-        dev_bind: None,
-        dev_seclink: None,
-        nt_or_st: None,
-    };
+    let mut raw = RawSsdpHeaders::default();
 
     for header in headers {
         let name = header.name;
 
-        if eq_case_insensitive(name, "usn") {
+        if name.eq_ignore_ascii_case("usn") {
             raw.usn = Some(core::str::from_utf8(header.value).ok()?);
-        } else if eq_case_insensitive(name, "location") {
+        } else if name.eq_ignore_ascii_case("location") {
             raw.location = Some(core::str::from_utf8(header.value).ok()?);
         } else {
             let Some(value_str) = core::str::from_utf8(header.value).ok() else {
                 continue;
             };
 
-            if eq_case_insensitive(name, "devname.bambu.com")
-                || eq_case_insensitive(name, "devname")
-            {
-                raw.dev_name = Some(value_str);
-            } else if eq_case_insensitive(name, "devmodel.bambu.com")
-                || eq_case_insensitive(name, "devmodel")
-            {
-                raw.dev_model = Some(value_str);
-            } else if eq_case_insensitive(name, "devconnect.bambu.com")
-                || eq_case_insensitive(name, "devconnect")
-            {
-                raw.dev_connect = Some(value_str);
-            } else if eq_case_insensitive(name, "devversion.bambu.com")
-                || eq_case_insensitive(name, "devversion")
-            {
-                raw.dev_version = Some(value_str);
-            } else if eq_case_insensitive(name, "devsignal.bambu.com")
-                || eq_case_insensitive(name, "devsignal")
-            {
-                raw.dev_signal = Some(value_str);
-            } else if eq_case_insensitive(name, "devbind.bambu.com")
-                || eq_case_insensitive(name, "devbind")
-            {
-                raw.dev_bind = Some(value_str);
-            } else if eq_case_insensitive(name, "devseclink.bambu.com")
-                || eq_case_insensitive(name, "devseclink")
-            {
-                raw.dev_seclink = Some(value_str);
-            } else if eq_case_insensitive(name, "nt") || eq_case_insensitive(name, "st") {
-                raw.nt_or_st = Some(value_str);
-            }
+            let short = strip_bambu_suffix(name);
+            let is = |key: &str| short.eq_ignore_ascii_case(key);
+            let slot = if is("devname") {
+                &mut raw.dev_name
+            } else if is("devmodel") {
+                &mut raw.dev_model
+            } else if is("devconnect") {
+                &mut raw.dev_connect
+            } else if is("devversion") {
+                &mut raw.dev_version
+            } else if is("devsignal") {
+                &mut raw.dev_signal
+            } else if is("devbind") {
+                &mut raw.dev_bind
+            } else if is("devseclink") {
+                &mut raw.dev_seclink
+            } else if is("nt") || is("st") {
+                &mut raw.nt_or_st
+            } else {
+                continue;
+            };
+            *slot = Some(value_str);
         }
     }
 
     Some(raw)
+}
+
+/// Case-insensitive substring search that doesn't allocate a lowercased copy.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// Extracts a model identifier from an NT or ST header value.
@@ -190,7 +187,7 @@ fn extract_model_from_nt_st(value: &str) -> Option<&str> {
         return None;
     }
     let model = stripped.split(':').next()?;
-    if eq_case_insensitive(model, "3dprinter") {
+    if model.eq_ignore_ascii_case("3dprinter") {
         return None;
     }
     Some(model)
@@ -205,7 +202,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let mut headers = [httparse::EMPTY_HEADER; SSDP_MAX_HEADERS];
 
     // Case-insensitive, consistent with this file's otherwise-thorough
-    // case-insensitive header handling (eq_case_insensitive) — a non-canonical-case status
+    // case-insensitive header handling — a non-canonical-case status
     // line must route to the response parser, not fall through to the request parser and
     // fail there instead. Note `httparse::Response::parse` itself still requires an
     // exact-case "HTTP/" token and rejects a non-canonical-case status line regardless, so
@@ -292,7 +289,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let is_bambu_device = model != PrinterModel::Unknown
         || raw
             .nt_or_st
-            .is_some_and(|v| v.to_ascii_lowercase().contains("bambulab-com"));
+            .is_some_and(|v| contains_ignore_ascii_case(v, "bambulab-com"));
     if !is_bambu_device {
         return None;
     }
@@ -348,13 +345,24 @@ mod tests {
     }
 
     #[test]
-    fn test_case_insensitive_matching() {
-        assert!(eq_case_insensitive("LOCATION", "location"));
-        assert!(eq_case_insensitive(
-            "devname.bambu.com",
-            "DevName.bambu.com"
+    fn test_strip_bambu_suffix() {
+        assert_eq!(strip_bambu_suffix("DevName.Bambu.COM"), "DevName");
+        assert_eq!(strip_bambu_suffix("devname"), "devname");
+        assert_eq!(strip_bambu_suffix(".bambu.com"), "");
+        assert_eq!(strip_bambu_suffix("com"), "com");
+    }
+
+    #[test]
+    fn test_contains_ignore_ascii_case() {
+        assert!(contains_ignore_ascii_case(
+            "urn:BambuLab-Com:device:3dprinter:1",
+            "bambulab-com"
         ));
-        assert!(!eq_case_insensitive("devmodel", "devversion"));
+        assert!(!contains_ignore_ascii_case(
+            "urn:other:device",
+            "bambulab-com"
+        ));
+        assert!(!contains_ignore_ascii_case("short", "bambulab-com"));
     }
 
     #[test]
