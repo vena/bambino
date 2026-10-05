@@ -128,6 +128,14 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
   `None` for [`PrinterModel::Unknown`](#printermodel). Useful for validating a serial before
   attempting a connection.
 
+- <span id="printermodel-from-serial"></span>`fn from_serial(serial: &str) -> Option<Self>`
+
+  Returns the model whose serial prefix `serial` starts with, case-insensitively.
+
+  `None` when no row matches, so a caller can validate a serial without comparing
+  against [`PrinterModel::Unknown`](#printermodel). [`resolve_model`](#resolve-model) is the lenient form that also
+  consults an SSDP `DevModel` token and falls back to `Unknown`.
+
 - <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
 
   Returns the [`ModelQuirks`](../quirks/index.md#modelquirks) strategy for this model variant.

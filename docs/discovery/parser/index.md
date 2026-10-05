@@ -4,10 +4,11 @@
 
 # Module `parser`
 
-# Zero-Copy HTTP-style SSDP Parsing Engine
+# HTTP-style SSDP Parsing
 
-Provides utilities to parse HTTP-like headers from multicast and unicast
-UDP frames on Port 2021 without performing runtime memory allocations.
+Parses HTTP-like headers from multicast and unicast UDP frames on port 2021. Header
+slicing is zero-copy and a non-Bambu packet is rejected without allocating; an accepted
+packet allocates the owned [`SsdpDevice`](#ssdpdevice) it returns.
 Differentiates Bambu Lab printers from general UPnP devices and resolves
 serial prefixes, falling back to the `DevModel` SSDP header when the prefix
 is unrecognized (see [`resolve_model`](../../models/index.md#resolve-model)).
@@ -28,9 +29,9 @@ struct SsdpDevice {
     pub serial: String,
     pub model: crate::models::PrinterModel,
     pub name: String,
-    pub ip: String,
-    pub port: u16,
-    pub discovery_port: u16,
+    pub ip: core::net::IpAddr,
+    pub location_port: u16,
+    pub discovery_port: Option<u16>,
     pub version: String,
     pub connect_type: String,
     pub raw_model_str: String,
@@ -56,24 +57,24 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
   Human-friendly printer name defined by the user.
 
-- **`ip`**: `String`
+- **`ip`**: `core::net::IpAddr`
 
-  Direct network target IP address extracted from the LOCATION header.
+  Printer IP address from the LOCATION header. A packet whose LOCATION host isn't an IP
+  literal is rejected, so this is always safe to dial or interpolate into a URL.
 
-- **`port`**: `u16`
+- **`location_port`**: `u16`
 
-  Discovery communications port parsed from the LOCATION header.
+  Port of the LOCATION URI (80 when absent). This is an inert HTTP endpoint, **not** the
+  MQTT, FTPS or camera port — see [REF-NET-DISC] Protocol Violation #2.
 
-- **`discovery_port`**: `u16`
+- **`discovery_port`**: `Option<u16>`
 
-  SSDP port on which the device was discovered (2021 or 1990), or `0` if the record has
-  not been stamped with one.
+  SSDP port on which the device was discovered (2021 or 1990), or `None` if unknown.
   
   The port is not carried in the payload, so [`parse_ssdp_payload`](#parse-ssdp-payload) — which sees only the
-  datagram bytes — always leaves this `0`. It is filled in by
+  datagram bytes — always leaves this `None`. It is filled in by
   [`DiscoveryEngine::poll_next_device`](../index.md#discoveryengine),
-  which knows which socket the datagram arrived on. Callers parsing captured datagrams
-  directly must treat `0` as "unknown", not as a real port.
+  which knows which socket the datagram arrived on.
 
 - **`version`**: `String`
 

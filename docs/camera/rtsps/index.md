@@ -89,7 +89,7 @@ Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freez
 ### `build_rtsps_url`
 
 ```rust
-fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, crate::error::Error>
+fn build_rtsps_url(ip: core::net::IpAddr, access_code: &str) -> Result<String, crate::error::Error>
 ```
 
 **Types:** [`Error`](../../error/index.md#error)
@@ -109,19 +109,15 @@ means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
 valid-but-unusual code — surfacing it as an error catches that mistake instead of
 silently building a malformed URL.
 
-Also returns [`Error::ProtocolViolation`](../../error/index.md#error) if `ip` does not parse as a valid IPv4 or
-IPv6 address. Without this check, an `ip` containing an embedded `@` (e.g.
-`"1.2.3.4@attacker.example.com"`, spoofable by any device on the LAN via SSDP/mDNS
-discovery) would place everything up to the last `@` into the URL's userinfo component,
-redirecting the connection — and the LAN access code — to an attacker-controlled host.
+`ip` is an [`IpAddr`](https://docs.rs/core/latest/core/net/ip_addr/enum.IpAddr.html) rather than a string so a spoofed host such as
+`"1.2.3.4@attacker.example.com"` can't reach the URL's userinfo component and redirect
+the connection, with the LAN access code, elsewhere. An IPv6 address is bracketed.
 
 ### `rewrite_rtsp_request_uri`
 
 ```rust
-fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<String, crate::error::Error>
+fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: core::net::IpAddr) -> String
 ```
-
-**Types:** [`Error`](../../error/index.md#error)
 
 Rewrites a plain `rtsp://` proxy URI to the printer's `rtsps://` endpoint.
 
@@ -146,14 +142,5 @@ unchanged.
 This function expects proxy-generated URIs with a simple `rtsp://host:port/path` structure.
 It is not a general-purpose URI parser.
 
-# Errors
-
-Returns [`Error::ProtocolViolation`](../../error/index.md#error) if `printer_ip` does not parse as a valid IPv4 or
-IPv6 address — the same check [`build_rtsps_url`](#build-rtsps-url) applies to its own `ip` parameter, and
-for the same reason: a `printer_ip` containing `@` or `/` (e.g. sourced from a
-spoofable SSDP/mDNS discovery response, same as [`build_rtsps_url`](#build-rtsps-url)'s hazard) could
-otherwise redirect the proxy's outbound connection or produce a malformed URI. This
-function has no other caller in this crate to rely on for pre-validation — it's called
-once per incoming request in a proxy's hot path, but IP-string parsing is cheap enough
-that re-validating here is not a meaningful cost.
+`printer_ip` is an [`IpAddr`](https://docs.rs/core/latest/core/net/ip_addr/enum.IpAddr.html) for the same reason as [`build_rtsps_url`](#build-rtsps-url)'s `ip`.
 

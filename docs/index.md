@@ -430,6 +430,14 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
   `None` for [`PrinterModel::Unknown`](models/index.md#printermodel). Useful for validating a serial before
   attempting a connection.
 
+- <span id="printermodel-from-serial"></span>`fn from_serial(serial: &str) -> Option<Self>`
+
+  Returns the model whose serial prefix `serial` starts with, case-insensitively.
+
+  `None` when no row matches, so a caller can validate a serial without comparing
+  against [`PrinterModel::Unknown`](models/index.md#printermodel). [`resolve_model`](models/index.md#resolve-model) is the lenient form that also
+  consults an SSDP `DevModel` token and falls back to `Unknown`.
+
 - <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
 
   Returns the [`ModelQuirks`](quirks/index.md#modelquirks) strategy for this model variant.
@@ -471,6 +479,30 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
 ---
 
 ## Functions
+
+### `resolve_model`
+
+```rust
+fn resolve_model(serial: &str, dev_model: Option<&str>) -> PrinterModel
+```
+
+**Types:** [`PrinterModel`](models/index.md#printermodel)
+
+Resolves the specific printer model using physical serial number prefixes combined with target SSDP model advertisements as a secondary signal.
+
+Each H2-series model has a distinct serial prefix confirmed by the Bambu Lab wiki:
+`094` = H2D, `093` = H2S, `239` = H2D Pro, `31B` = H2C. When the prefix is
+unrecognized, the optional `DevModel` SSDP header provides a fallback path.
+
+The two lookups are **separate full passes over the table**, and must stay that way:
+a serial prefix on any row outranks a `dev_model` token on every row. Folding them
+into a single pass would let an earlier row's token beat a later row's prefix,
+silently changing which signal wins when the two disagree.
+
+Both `serial` and `dev_model` are matched case-insensitively: SSDP USN serial casing
+varies by firmware compile target (reference/01_network_discovery.md §1.6), and a
+caller can also pass either value straight into [`PrinterIdentity::new`](identity/index.md#printeridentity) with no
+discovery-layer normalization.
 
 ### `supported_models`
 

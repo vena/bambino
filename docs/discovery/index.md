@@ -25,8 +25,10 @@ directly instead.
 - [Types](#types)
   - [`DiscoveryEngine`](#discoveryengine)
 - [Functions](#functions)
+  - [`discover`](#discover)
   - [`discover_devices`](#discover-devices)
   - [`discover_devices_with`](#discover-devices-with)
+  - [`discover_with`](#discover-with)
 - [Constants](#constants)
   - [`MULTICAST_ADDR`](#multicast-addr)
   - [`SSDP_PORT`](#ssdp-port)
@@ -36,17 +38,19 @@ directly instead.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`parser`](parser/index.md) | mod | # Zero-Copy HTTP-style SSDP Parsing Engine |
+| [`parser`](parser/index.md) | mod | # HTTP-style SSDP Parsing |
 | [`DiscoveryEngine`](#discoveryengine) | struct | Asynchronous Discovery Engine providing search orchestration and passive monitoring. |
+| [`discover`](#discover) | fn | Runs [`discover_devices()`](#discover-devices) on the tokio backend. |
 | [`discover_devices`](#discover-devices) | fn | Broadcasts SSDP search queries and listens for printer responses for the given duration. |
 | [`discover_devices_with`](#discover-devices-with) | fn | Runs the same sweep as [`discover_devices()`](#discover-devices), reporting each printer as it is found. |
+| [`discover_with`](#discover-with) | fn | Runs [`discover_devices_with()`](#discover-devices-with) on the tokio backend. |
 | [`MULTICAST_ADDR`](#multicast-addr) | const | Standard Bambu Lab multicast group target for SSDP operations. |
 | [`SSDP_PORT`](#ssdp-port) | const | Primary UDP port allocated to physical Bambu Lab printer local services [REF-NET-PORTS]. |
 | [`SSDP_PORT_ALT`](#ssdp-port-alt) | const | Alternative SSDP port listed in Bambu Lab documentation [REF-NET-PORTS]. |
 
 ## Modules
 
-- [`parser`](parser/index.md) — # Zero-Copy HTTP-style SSDP Parsing Engine
+- [`parser`](parser/index.md) — # HTTP-style SSDP Parsing
 
 
 ---
@@ -60,9 +64,9 @@ struct SsdpDevice {
     pub serial: String,
     pub model: crate::models::PrinterModel,
     pub name: String,
-    pub ip: String,
-    pub port: u16,
-    pub discovery_port: u16,
+    pub ip: core::net::IpAddr,
+    pub location_port: u16,
+    pub discovery_port: Option<u16>,
     pub version: String,
     pub connect_type: String,
     pub raw_model_str: String,
@@ -88,24 +92,24 @@ Normalized device details extracted directly from SSDP UDP datagram payloads.
 
   Human-friendly printer name defined by the user.
 
-- **`ip`**: `String`
+- **`ip`**: `core::net::IpAddr`
 
-  Direct network target IP address extracted from the LOCATION header.
+  Printer IP address from the LOCATION header. A packet whose LOCATION host isn't an IP
+  literal is rejected, so this is always safe to dial or interpolate into a URL.
 
-- **`port`**: `u16`
+- **`location_port`**: `u16`
 
-  Discovery communications port parsed from the LOCATION header.
+  Port of the LOCATION URI (80 when absent). This is an inert HTTP endpoint, **not** the
+  MQTT, FTPS or camera port — see [REF-NET-DISC] Protocol Violation #2.
 
-- **`discovery_port`**: `u16`
+- **`discovery_port`**: `Option<u16>`
 
-  SSDP port on which the device was discovered (2021 or 1990), or `0` if the record has
-  not been stamped with one.
+  SSDP port on which the device was discovered (2021 or 1990), or `None` if unknown.
   
   The port is not carried in the payload, so [`parse_ssdp_payload`](parser/index.md#parse-ssdp-payload) — which sees only the
-  datagram bytes — always leaves this `0`. It is filled in by
+  datagram bytes — always leaves this `None`. It is filled in by
   [`DiscoveryEngine::poll_next_device`](#discoveryengine),
-  which knows which socket the datagram arrived on. Callers parsing captured datagrams
-  directly must treat `0` as "unknown", not as a real port.
+  which knows which socket the datagram arrived on.
 
 - **`version`**: `String`
 
@@ -163,6 +167,10 @@ Asynchronous Discovery Engine providing search orchestration and passive monitor
 
   Creates a new Discovery Engine bound to a specific SSDP port.
 
+- <span id="discoveryengine-port"></span>`fn port(&self) -> u16`
+
+  The SSDP port this engine sends to and was bound for.
+
 - <span id="discoveryengine-broadcast-search"></span>`async fn broadcast_search(&self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches active search queries to trigger local printer reports.
@@ -202,6 +210,29 @@ Under the SSDP specification, responses map to standard HTTP responses, while
 advertisements map to HTTP requests. This parser automatically evaluates the envelope
 and routes the payload buffer to the appropriate parsing schema of `httparse`.
 
+### `discover`
+
+```rust
+async fn discover(timeout: core::time::Duration) -> Result<Vec<SsdpDevice>, crate::error::Error>
+```
+
+**Types:** [`SsdpDevice`](parser/index.md#ssdpdevice), [`Error`](../error/index.md#error)
+
+Runs [`discover_devices()`](#discover-devices) on the tokio backend.
+
+# Example
+
+```rust,ignore
+// Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
+// are found only through their ~10.1s NOTIFY advertisements, so a shorter window
+// intermittently returns nothing at all — see `reference/01_network_discovery.md`.
+let printers = bambino::discovery::discover(std::time::Duration::from_secs(20)).await?;
+
+for printer in &printers {
+    println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
+}
+```
+
 ### `discover_devices`
 
 ```rust
@@ -222,26 +253,19 @@ timing, making this work across std and ESP-IDF (not Embassy — this function i
 must drive `DiscoveryEngine` directly).
 
 See [`discover_devices_with()`](#discover-devices-with) for a variant that reports each printer to a callback as
-it is found, instead of only returning the whole set once the window has elapsed.
+it is found, instead of only returning the whole set once the window has elapsed. On the
+`tokio` backend, `discover()` fixes the socket and timer types so callers need no turbofish.
 
 # Example
 
 ```rust,ignore
 use bambino::discovery::discover_devices;
-use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
+use bambino::io::esp_idf::{EspIdfTimer, EspIdfUdpSocket};
 
-let timer = TokioTimer::new();
-// Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
-// are found only through their ~10.1s NOTIFY advertisements, so a shorter window
-// intermittently returns nothing at all — see `reference/01_network_discovery.md`.
-let printers = discover_devices::<TokioUdpSocket, _>(
-    std::time::Duration::from_secs(20),
-    &timer,
+let printers = discover_devices::<EspIdfUdpSocket, _>(
+    core::time::Duration::from_secs(20),
+    &EspIdfTimer::new()?,
 ).await?;
-
-for printer in &printers {
-    println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
-}
 ```
 
 ### `discover_devices_with`
@@ -273,16 +297,24 @@ The sweep holds no state outside this future, so dropping the future cancels it 
 that wants to stop early, because someone picked a printer at the three-second mark, just
 stops polling. There is no separate cancellation handle to plumb through.
 
+On the `tokio` backend, `discover_with()` is the same call with the socket and timer
+types fixed.
+
+### `discover_with`
+
+```rust
+async fn discover_with<F: FnMut(&SsdpDevice)>(timeout: core::time::Duration, on_device: F) -> Result<Vec<SsdpDevice>, crate::error::Error>
+```
+
+**Types:** [`SsdpDevice`](parser/index.md#ssdpdevice), [`Error`](../error/index.md#error)
+
+Runs [`discover_devices_with()`](#discover-devices-with) on the tokio backend.
+
 # Example
 
 ```rust,ignore
-use bambino::discovery::discover_devices_with;
-use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
-
-let timer = TokioTimer::new();
-let printers = discover_devices_with::<TokioUdpSocket, _, _>(
+let printers = bambino::discovery::discover_with(
     std::time::Duration::from_secs(20),
-    &timer,
     |printer| println!("found {} at {}", printer.name, printer.ip),
 ).await?;
 ```

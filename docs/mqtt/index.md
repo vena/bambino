@@ -9,7 +9,10 @@
 Low-level MQTT v3.1.1 implementation for talking to Bambu Lab printers.
 
 [`MqttClient`](client/index.md#mqttclient) handles the connection handshake, QoS 1 publish/subscribe,
-keep-alive pings, and zombie detection. The [`commands`](commands/index.md) submodule contains all
+keep-alive pings, and zombie detection. Keep-alive pings and read/write deadlines depend on
+the [`TimerProvider`](../io/index.md#timerprovider) passed to `poll_telemetry`,
+`publish_command` and `send_ping`, so pass a real platform timer. Zombie detection still
+needs the caller to call `tick_zombie_check` periodically. The [`commands`](commands/index.md) submodule contains all
 the serializable request structs (G-code dispatch, print control, AMS operations,
 LED/fan/buzzer commands, etc.) that get published to the printer's command topic.
 
@@ -65,7 +68,7 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
 
   Returns the serial number this client authenticated with (`connect()`'s `serial` argument).
 
-- <span id="mqttclient-publish-command"></span>`async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
+- <span id="mqttclient-publish-command"></span>`async fn publish_command<T: TimerProvider>(&mut self, payload: &[u8], timer: &T) -> Result<u16, Error>` — [`Error`](../error/index.md#error)
 
   Submits a serialized JSON command payload to the printer's request channel.
 
@@ -79,11 +82,11 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
   Payloads larger than `MQTT_MAX_PAYLOAD_BYTES` are rejected with
   [`Error::ProtocolViolation`](../error/index.md#error) rather than encoded, mirroring the read path's own cap.
 
-  `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
-  `PrinterClient` callers get the new stalled-write protection via
-  `publish_command_with_timer()` instead, since they have a real `Timer` available.
+  `timer` bounds the write (see `write_frame_with_timer`) and stamps the keepalive clock.
+  Pass a real platform timer: a timer without a real clock
+  ([`TimerProvider::has_real_clock`](../io/index.md#timerprovider)) makes the write unbounded.
 
-- <span id="mqttclient-poll-telemetry"></span>`async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error>` — [`MqttMessage`](client/index.md#mqttmessage), [`Error`](../error/index.md#error)
+- <span id="mqttclient-poll-telemetry"></span>`async fn poll_telemetry<T: TimerProvider>(&mut self, timer: &T) -> Result<MqttMessage, Error>` — [`MqttMessage`](client/index.md#mqttmessage), [`Error`](../error/index.md#error)
 
   Returns the next MQTT message, draining any buffered messages first.
 
@@ -97,13 +100,18 @@ Lightweight MQTT client session running over an established `AsyncIo` stream.
   and acknowledges `PINGRESP` — only application-level `PUBLISH` payloads are
   returned.
 
-- <span id="mqttclient-send-ping"></span>`async fn send_ping(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+  `timer` drives the keepalive PINGREQ the CONNECT keepalive obliges this client to send,
+  and the 30s per-read deadline. Pass a real platform
+  timer: with one that has no real clock ([`TimerProvider::has_real_clock`](../io/index.md#timerprovider)) no keepalive
+  is sent, so the broker drops the connection after about 45s of outbound silence, and a
+  stalled read blocks forever.
+
+- <span id="mqttclient-send-ping"></span>`async fn send_ping<T: TimerProvider>(&mut self, timer: &T) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
   Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
 
-  `DummyTimer` makes the underlying write unbounded here, mirroring `publish_command()`.
-  `PrinterClient` callers get stalled-write protection via `send_ping_with_timer()`
-  instead.
+  `timer` bounds the write (see `write_frame_with_timer`). `poll_telemetry` already pings
+  when one is due, so calling this is only needed when not polling.
 
 - <span id="mqttclient-is-poisoned"></span>`fn is_poisoned(&self) -> bool`
 
