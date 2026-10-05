@@ -1,5 +1,28 @@
 use super::*;
 
+/// A unit carrying only the fields the `info` accessors need.
+fn unit_with_info(info: &str) -> AmsUnit {
+    AmsUnit {
+        id: "0".into(),
+        info: Some(info.into()),
+        ..Default::default()
+    }
+}
+
+/// Every known unit type: wire value (BambuStudio `DevAmsType`, `DevDefs.h:54-62`), drying range
+/// (only the AMS 2 Pro and AMS-HT have heaters: BambuStudio `AMSItem.hpp:255`, bambuddy
+/// `print_scheduler.py:3976`), and slot count (`None` where upstream counts observed trays).
+type UnitModelRow = (u8, AmsUnitModel, Option<(u32, u32)>, Option<u8>);
+
+const UNIT_MODELS: [UnitModelRow; 6] = [
+    (0, AmsUnitModel::ExternalSpool, None, None),
+    (1, AmsUnitModel::Ams, None, Some(4)),
+    (2, AmsUnitModel::AmsLite, None, Some(4)),
+    (3, AmsUnitModel::Ams2Pro, Some((45, 65)), Some(4)),
+    (4, AmsUnitModel::AmsHt, Some((45, 85)), Some(1)),
+    (5, AmsUnitModel::AmsLiteMixed, None, None),
+];
+
 #[test]
 fn test_ams_nested_wire_format() {
     let json_data = r#"{
@@ -297,26 +320,16 @@ fn test_ams_filament_step_unknown_value_preserved() {
 fn test_ams_unit_dry_fan_status() {
     // Bits 18-19 = dry_fan1_status, bits 20-21 = dry_fan2_status.
     // "3c0000" = 0b0011_1100 at bits 16-23: fan1 (bits18-19) = 0b11 = 3, fan2 (bits20-21) = 0b11 = 3.
-    let unit = AmsUnit {
-        id: "0".into(),
-        temp: Some("26.0".into()),
-        humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: Some("3c0000".into()),
-        dry_sf_reason: None,
-    };
-    assert_eq!(unit.dry_fan1_status(), Some(3));
-    assert_eq!(unit.dry_fan2_status(), Some(3));
+    let unit = unit_with_info("3c0000");
+    assert_eq!(unit.dry_fan1_status(), Some(AmsDryFanStatus::Other(3)));
+    assert_eq!(unit.dry_fan2_status(), Some(AmsDryFanStatus::Other(3)));
 
     let unit_off = AmsUnit {
         info: Some("0".into()),
         ..unit
     };
-    assert_eq!(unit_off.dry_fan1_status(), Some(0));
-    assert_eq!(unit_off.dry_fan2_status(), Some(0));
+    assert_eq!(unit_off.dry_fan1_status(), Some(AmsDryFanStatus::Off));
+    assert_eq!(unit_off.dry_fan2_status(), Some(AmsDryFanStatus::Off));
 }
 
 #[test]
@@ -359,21 +372,17 @@ fn test_ams_unit_info_bitmask() {
 }
 
 #[test]
-fn test_ams_unit_model_decodes_every_known_wire_type() {
-    // Numbering is BambuStudio's `DevAmsType` (DevDefs.h:54-62), cast straight from info bits 0-3.
-    for (wire, expected) in [
-        (0, AmsUnitModel::ExternalSpool),
-        (1, AmsUnitModel::Ams),
-        (2, AmsUnitModel::AmsLite),
-        (3, AmsUnitModel::Ams2Pro),
-        (4, AmsUnitModel::AmsHt),
-        (5, AmsUnitModel::AmsLiteMixed),
-    ] {
+fn test_ams_unit_model_table() {
+    for (wire, model, dry_range, slots) in UNIT_MODELS {
         assert_eq!(
             AmsUnitModel::from_wire(wire),
-            Some(expected),
-            "wire type {wire} decoded wrong"
+            Some(model),
+            "wire type {wire}"
         );
+        // Both bounds, not just the ceiling — BambuStudio rejects sub-45 °C as well.
+        assert_eq!(model.dry_temp_range(), dry_range, "{model:?}");
+        assert_eq!(model.supports_drying(), dry_range.is_some(), "{model:?}");
+        assert_eq!(model.slot_count(), slots, "{model:?}");
     }
 
     // An unknown type must not be folded onto a neighbouring variant — a wrong guess here is how
@@ -381,27 +390,6 @@ fn test_ams_unit_model_decodes_every_known_wire_type() {
     for wire in 6..=0xF {
         assert_eq!(AmsUnitModel::from_wire(wire), None, "wire type {wire}");
     }
-}
-
-#[test]
-fn test_ams_unit_model_drying_capability_matches_upstream() {
-    // Only the AMS 2 Pro and AMS-HT have heaters: BambuStudio AMSItem.hpp:255 and bambuddy
-    // print_scheduler.py:3976 both gate on exactly these two.
-    assert!(AmsUnitModel::Ams2Pro.supports_drying());
-    assert!(AmsUnitModel::AmsHt.supports_drying());
-    for model in [
-        AmsUnitModel::ExternalSpool,
-        AmsUnitModel::Ams,
-        AmsUnitModel::AmsLite,
-        AmsUnitModel::AmsLiteMixed,
-    ] {
-        assert!(!model.supports_drying(), "{model:?} must not claim drying");
-        assert_eq!(model.dry_temp_range(), None, "{model:?}");
-    }
-
-    // Both bounds, not just the ceiling — BambuStudio rejects sub-45 °C as well.
-    assert_eq!(AmsUnitModel::Ams2Pro.dry_temp_range(), Some((45, 65)));
-    assert_eq!(AmsUnitModel::AmsHt.dry_temp_range(), Some((45, 85)));
 }
 
 #[test]
@@ -497,35 +485,12 @@ fn test_primary_dry_block_reason_falls_back_to_first_reported() {
 }
 
 #[test]
-fn test_ams_unit_model_slot_count() {
-    // The AMS-HT is the single-slot outlier; the original AMS, AMS Lite and AMS 2 Pro are all 4.
-    assert_eq!(AmsUnitModel::AmsHt.slot_count(), Some(1));
-    for model in [
-        AmsUnitModel::Ams,
-        AmsUnitModel::AmsLite,
-        AmsUnitModel::Ams2Pro,
-    ] {
-        assert_eq!(model.slot_count(), Some(4), "{model:?}");
-    }
-
-    // Upstream has no static answer for these two either (DevAms::GetSlotCount falls back to the
-    // observed tray count), so this returns None rather than inventing one.
-    assert_eq!(AmsUnitModel::ExternalSpool.slot_count(), None);
-    assert_eq!(AmsUnitModel::AmsLiteMixed.slot_count(), None);
-}
-
-#[test]
 fn test_ams_unit_model_none_when_info_absent_or_unknown() {
     let mut unit = AmsUnit {
         id: "0".into(),
         temp: Some("26.0".into()),
         humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
     // Older firmware omits `info` entirely; "unknown" must not read as a capability.
     assert_eq!(unit.unit_model(), None);
@@ -547,11 +512,8 @@ fn test_p1s_capture_reports_an_ams_2_pro() {
         temp: Some("28.4".into()),
         humidity: Some("5".into()),
         humidity_raw: Some("12".into()),
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
         info: Some("2003".into()),
-        dry_sf_reason: None,
+        ..Default::default()
     };
     assert_eq!(unit.unit_model(), Some(AmsUnitModel::Ams2Pro));
     assert!(unit.unit_model().unwrap().supports_drying());
@@ -596,43 +558,23 @@ fn test_kprofile_ams_fields_absent() {
 #[test]
 fn test_ams_unit_info_accessors_full_bitmask() {
     // "11002103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-23 = 0
-    let unit = AmsUnit {
-        id: "0".into(),
-        temp: Some("26.0".into()),
-        humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: Some("11002103".into()),
-        dry_sf_reason: None,
-    };
+    let unit = unit_with_info("11002103");
     assert_eq!(unit.parse_info(), Some(0x11002103));
     assert_eq!(unit.ams_type(), Some(3));
-    assert_eq!(unit.dry_status(), Some(0));
+    assert_eq!(unit.dry_status(), Some(AmsDryStatus::Off));
     assert_eq!(unit.extruder_assignment(), Some(1));
-    assert_eq!(unit.dry_sub_status(), Some(0));
+    assert_eq!(unit.dry_sub_status(), Some(AmsDrySubStatus::Off));
 }
 
 #[test]
 fn test_ams_unit_info_accessors_short_bitmask() {
     // "2103": bits 0-3 = 3, bits 4-7 = 0, bits 8-11 = 1, bits 22-25 = 0
-    let unit = AmsUnit {
-        id: "0".into(),
-        temp: Some("26.0".into()),
-        humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: Some("2103".into()),
-        dry_sf_reason: None,
-    };
+    let unit = unit_with_info("2103");
     assert_eq!(unit.parse_info(), Some(0x2103));
     assert_eq!(unit.ams_type(), Some(3));
-    assert_eq!(unit.dry_status(), Some(0));
+    assert_eq!(unit.dry_status(), Some(AmsDryStatus::Off));
     assert_eq!(unit.extruder_assignment(), Some(1));
-    assert_eq!(unit.dry_sub_status(), Some(0));
+    assert_eq!(unit.dry_sub_status(), Some(AmsDrySubStatus::Off));
 }
 
 #[test]
@@ -643,23 +585,13 @@ fn test_ams_unit_info_accessors_dry_sub_status_distinct_bits() {
     // nonzero value so a shift/mask regression reading a neighboring field's bits instead
     // of its own would fail here, unlike the all-zero-except-one
     // fixtures elsewhere in this file.
-    let unit = AmsUnit {
-        id: "0".into(),
-        temp: Some("26.0".into()),
-        humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: Some("19c0153".into()),
-        dry_sf_reason: None,
-    };
+    let unit = unit_with_info("19c0153");
     assert_eq!(unit.ams_type(), Some(3));
-    assert_eq!(unit.dry_status(), Some(5));
+    assert_eq!(unit.dry_status(), Some(AmsDryStatus::Error));
     assert_eq!(unit.extruder_assignment(), Some(1));
-    assert_eq!(unit.dry_fan1_status(), Some(3));
-    assert_eq!(unit.dry_fan2_status(), Some(1));
-    assert_eq!(unit.dry_sub_status(), Some(2));
+    assert_eq!(unit.dry_fan1_status(), Some(AmsDryFanStatus::Other(3)));
+    assert_eq!(unit.dry_fan2_status(), Some(AmsDryFanStatus::On));
+    assert_eq!(unit.dry_sub_status(), Some(AmsDrySubStatus::Dehumidifying));
 }
 
 #[test]
@@ -669,17 +601,13 @@ fn test_ams_unit_info_accessors_right_extruder() {
         id: "1".into(),
         temp: Some("25.0".into()),
         humidity: Some("4".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
         info: Some("2003".into()),
-        dry_sf_reason: None,
+        ..Default::default()
     };
     assert_eq!(unit.ams_type(), Some(3));
-    assert_eq!(unit.dry_status(), Some(0));
+    assert_eq!(unit.dry_status(), Some(AmsDryStatus::Off));
     assert_eq!(unit.extruder_assignment(), Some(0));
-    assert_eq!(unit.dry_sub_status(), Some(0));
+    assert_eq!(unit.dry_sub_status(), Some(AmsDrySubStatus::Off));
 }
 
 #[test]
@@ -689,12 +617,8 @@ fn test_filament_switch_inlet_decodes_four_bits_not_two() {
         id: "0".into(),
         temp: Some("26.0".into()),
         humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
         info: Some(info.into()),
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     // 0x00000E03: bits 24-27 = 0 => In-B, and bits 8-11 = 0xE => unfixed.
@@ -730,17 +654,7 @@ fn test_filament_switch_inlet_decodes_four_bits_not_two() {
 #[test]
 fn test_ams_unit_info_uninitialized_extruder() {
     // 0xE in bits 8-11 → extruder_assignment returns None
-    let unit = AmsUnit {
-        id: "0".into(),
-        temp: Some("26.0".into()),
-        humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: Some("E03".into()),
-        dry_sf_reason: None,
-    };
+    let unit = unit_with_info("E03");
     assert_eq!(unit.ams_type(), Some(3));
     assert_eq!(unit.extruder_assignment(), None);
 }
@@ -751,12 +665,7 @@ fn test_ams_unit_info_absent() {
         id: "0".into(),
         temp: Some("26.0".into()),
         humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
     assert_eq!(unit.parse_info(), None);
     assert_eq!(unit.ams_type(), None);
@@ -768,19 +677,9 @@ fn test_ams_unit_info_absent() {
 #[test]
 fn test_ams_unit_info_with_dry_status() {
     // bits 4-7 = 5 → dry_status = 5
-    let unit = AmsUnit {
-        id: "0".into(),
-        temp: Some("26.0".into()),
-        humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: Some("2053".into()),
-        dry_sf_reason: None,
-    };
+    let unit = unit_with_info("2053");
     assert_eq!(unit.ams_type(), Some(3));
-    assert_eq!(unit.dry_status(), Some(5));
+    assert_eq!(unit.dry_status(), Some(AmsDryStatus::Error));
     assert_eq!(unit.extruder_assignment(), Some(0));
 }
 
@@ -794,47 +693,19 @@ fn test_ams_status_report_merge_from_preserves_array_on_partial_update() {
             id: "0".into(),
             temp: Some("26.0".into()),
             humidity: Some("3".into()),
-            humidity_raw: None,
-            dry_time: None,
-            dry_setting: None,
-            tray: None,
-            info: None,
-            dry_sf_reason: None,
+            ..Default::default()
         }],
         ams_exist_bits: Some("1".into()),
         tray_exist_bits: Some("b".into()),
-        tray_is_bbl_bits: None,
         tray_now: Some("3".into()),
-        tray_pre: None,
-        tray_tar: None,
         version: Some(20),
-        tray_read_done_bits: None,
-        tray_reading_bits: None,
-        insert_flag: None,
-        power_on_flag: None,
-        cali_id: None,
-        cali_stat: None,
-        calibrate_remain_flag: None,
-        cfs: None,
+        ..Default::default()
     };
 
     let partial = AmsStatusReport {
         ams: vec![],
-        ams_exist_bits: None,
-        tray_exist_bits: None,
-        tray_is_bbl_bits: None,
-        tray_now: None,
-        tray_pre: None,
         tray_tar: Some("3".into()),
-        version: None,
-        tray_read_done_bits: None,
-        tray_reading_bits: None,
-        insert_flag: None,
-        power_on_flag: None,
-        cali_id: None,
-        cali_stat: None,
-        calibrate_remain_flag: None,
-        cfs: None,
+        ..Default::default()
     };
 
     cached.merge_from(&partial);
@@ -868,28 +739,9 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
             id: "0".into(),
             temp: Some("26.0".into()),
             humidity: Some("3".into()),
-            humidity_raw: None,
-            dry_time: None,
-            dry_setting: None,
-            tray: None,
-            info: None,
-            dry_sf_reason: None,
+            ..Default::default()
         }],
-        ams_exist_bits: None,
-        tray_exist_bits: None,
-        tray_is_bbl_bits: None,
-        tray_now: None,
-        tray_pre: None,
-        tray_tar: None,
-        version: None,
-        tray_read_done_bits: None,
-        tray_reading_bits: None,
-        insert_flag: None,
-        power_on_flag: None,
-        cali_id: None,
-        cali_stat: None,
-        calibrate_remain_flag: None,
-        cfs: None,
+        ..Default::default()
     };
 
     let partial = AmsStatusReport {
@@ -897,28 +749,9 @@ fn test_ams_status_report_merge_from_preserves_units_not_in_incoming_array() {
             id: "1".into(),
             temp: Some("27.0".into()),
             humidity: Some("4".into()),
-            humidity_raw: None,
-            dry_time: None,
-            dry_setting: None,
-            tray: None,
-            info: None,
-            dry_sf_reason: None,
+            ..Default::default()
         }],
-        ams_exist_bits: None,
-        tray_exist_bits: None,
-        tray_is_bbl_bits: None,
-        tray_now: None,
-        tray_pre: None,
-        tray_tar: None,
-        version: None,
-        tray_read_done_bits: None,
-        tray_reading_bits: None,
-        insert_flag: None,
-        power_on_flag: None,
-        cali_id: None,
-        cali_stat: None,
-        calibrate_remain_flag: None,
-        cfs: None,
+        ..Default::default()
     };
 
     cached.merge_from(&partial);
@@ -948,21 +781,16 @@ fn test_ams_unit_merge_from_preserves_fields_on_absence() {
             dry_duration: Some(12),
             dry_filament: Some("PA-CF".into()),
         }),
-        tray: None,
         info: Some("10001003".into()),
         dry_sf_reason: Some(vec![1, 2]),
+        ..Default::default()
     };
 
     let partial = AmsUnit {
         id: "0".into(),
         temp: Some("27.0".into()),
         humidity: Some("4".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     cached.merge_from(&partial);
@@ -1155,9 +983,6 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
         id: "0".into(),
         temp: Some("26.0".into()),
         humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
         tray: Some(vec![
             AmsTray {
                 id: "0".into(),
@@ -1173,8 +998,7 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
                 ..Default::default()
             },
         ]),
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     // Incoming push: tray 0 gets a partial field update (remain only), tray 1 is absent
@@ -1183,9 +1007,6 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
         id: "0".into(),
         temp: Some("27.0".into()),
         humidity: Some("4".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
         tray: Some(vec![
             AmsTray {
                 id: "0".into(),
@@ -1199,8 +1020,7 @@ fn test_ams_unit_merge_from_keys_and_prunes_trays() {
                 ..Default::default()
             },
         ]),
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     cached.merge_from(&partial);
@@ -1238,28 +1058,19 @@ fn test_ams_unit_merge_from_absent_tray_key_leaves_cache_untouched() {
         id: "0".into(),
         temp: Some("26.0".into()),
         humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
         tray: Some(vec![AmsTray {
             id: "0".into(),
             tray_type: Some("PLA".into()),
             ..Default::default()
         }]),
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     let partial = AmsUnit {
         id: "0".into(),
         temp: Some("27.0".into()),
         humidity: Some("4".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
-        tray: None,
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     cached.merge_from(&partial);
@@ -1305,28 +1116,20 @@ fn test_ams_unit_merge_from_present_empty_tray_prunes_all() {
         id: "0".into(),
         temp: Some("26.0".into()),
         humidity: Some("3".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
         tray: Some(vec![AmsTray {
             id: "0".into(),
             tray_type: Some("PLA".into()),
             ..Default::default()
         }]),
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     let partial = AmsUnit {
         id: "0".into(),
         temp: Some("27.0".into()),
         humidity: Some("4".into()),
-        humidity_raw: None,
-        dry_time: None,
-        dry_setting: None,
         tray: Some(vec![]),
-        info: None,
-        dry_sf_reason: None,
+        ..Default::default()
     };
 
     cached.merge_from(&partial);
@@ -1336,4 +1139,28 @@ fn test_ams_unit_merge_from_present_empty_tray_prunes_all() {
         0,
         "a present-but-empty tray array must prune every cached tray"
     );
+}
+
+#[test]
+fn test_ams_filament_step_codes_roundtrip() {
+    for code in 0..=0x0E {
+        let step = AmsFilamentStep::from(code);
+        assert!(!matches!(step, AmsFilamentStep::Unknown(_)), "code {code}");
+        assert_eq!(i64::from(step), code);
+    }
+    assert_eq!(i64::from(AmsFilamentStep::Unknown(99)), 99);
+}
+
+#[test]
+fn test_ams_unit_drying_accessors_separate_unknown_from_unable() {
+    // AMS 2 Pro (type 3) dries; the original AMS (type 1) can't; no `info` means unknown.
+    assert_eq!(unit_with_info("3").supports_drying(), Some(true));
+    assert_eq!(unit_with_info("3").dry_temp_range(), Some((45, 65)));
+    assert_eq!(unit_with_info("1").supports_drying(), Some(false));
+    let unknown = AmsUnit {
+        id: "0".into(),
+        ..Default::default()
+    };
+    assert_eq!(unknown.supports_drying(), None);
+    assert_eq!(unknown.dry_temp_range(), None);
 }

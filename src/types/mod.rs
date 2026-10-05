@@ -12,11 +12,11 @@ pub mod version;
 pub use drying::{DEFAULT_COMMAND_COOLING_TEMP, DryingMaterial};
 
 pub use telemetry::{
-    AirductCollection, AirductModeListEntry, AirductPart, AmsDrySetting, AmsFilamentStep,
-    AmsStatusReport, AmsTray, AmsUnit, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry,
-    DeviceTelemetry, ExtToolTelemetry, ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry,
-    LightReport, NetInfo, NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState,
-    TelemetryReport, VirtualTray, XcamDetector, XcamSensitivity, XcamTelemetry,
-    decode_nozzle_temperatures, is_developer_mode,
+    AirductCollection, AirductModeListEntry, AirductPart, AmsDryFanStatus, AmsDrySetting,
+    AmsDryStatus, AmsDrySubStatus, AmsFilamentStep, AmsStatusReport, AmsTray, AmsUnit,
+    AmsUnitModel, BedInfo, BedTelemetry, CtcInfo, CtcTelemetry, DeviceTelemetry, ExtToolTelemetry,
+    ExtruderCollection, ExtruderInfo, HmsEntry, IpcamTelemetry, LightReport, NetInfo,
+    NozzleCollection, NozzleInfo, PrinterTelemetry, SdcardState, TelemetryReport, VirtualTray,
+    XcamDetector, XcamSensitivity, XcamTelemetry, decode_nozzle_temperatures, is_developer_mode,
 };
 pub use version::{VersionInfo, VersionModule};

@@ -184,40 +184,7 @@ pub fn evaluate_spool_presence(
 /// `state` key, and an omitted field is not a report of emptiness — see the inline note on the
 /// `has_filament_metadata` check below.
 pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
-    let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-
-    // An *absent* `state` is not a report of emptiness. Some firmware sends a complete tray
-    // payload (`tray_info_idx`, `tray_type`, `tray_color`, `remain`) with no `state` key at
-    // all, and treating that as absent-equivalent scrubbed the spool's material data on every
-    // `TelemetryCache::sanitized_ams()` call. Fall back to the filament metadata instead —
-    // the same fallback pybambu reaches for in `_has_filament_metadata` /
-    // `_resolve_loaded_state` (`models.py:3517-3538`), which gates on a `_state_reported`
-    // flag and accepts a non-empty `tray_info_idx`, or a `tray_type` that is neither empty
-    // nor `"Empty"`, as proof a spool is loaded.
-    let has_filament_metadata = tray
-        .tray_info_idx
-        .as_ref()
-        .is_some_and(|idx| !idx.is_empty())
-        || tray
-            .tray_type
-            .as_ref()
-            .is_some_and(|t| !t.is_empty() && t != "Empty");
-
-    let is_absent_state = matches!(tray.state, Some(AMS_TRAY_STATE_POWER_OFF))
-        || (tray.state.is_none() && !has_filament_metadata)
-        || (!is_ht
-            && matches!(
-                tray.state,
-                Some(AMS_TRAY_STATE_SPOOL_NOT_FED) | Some(AMS_TRAY_STATE_EMPTY)
-            ));
-
-    let is_type_cleared = tray
-        .tray_type
-        .as_ref()
-        .map(|t| t.is_empty() || t == "Empty")
-        .unwrap_or(false);
-
-    if is_absent_state || is_type_cleared {
+    if !tray_is_loaded(tray, ams_id) {
         // Whole-struct reset rather than a hand-maintained list of per-field clears: the
         // enumeration this replaces silently missed `remain_g` and `filament_setting_id`, so an
         // emptied slot kept reporting the removed spool's gram weight via
@@ -235,6 +202,44 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
             ..Default::default()
         };
     }
+}
+
+/// True for a `tray_type` that explicitly reports no material: empty, or the literal `"Empty"`.
+fn is_blank_type(tray_type: &str) -> bool {
+    tray_type.is_empty() || tray_type == "Empty"
+}
+
+/// The loaded-spool rule behind both [`clean_stale_tray_data`] and [`AmsTray::is_loaded`].
+///
+/// See [`clean_stale_tray_data`]'s doc for the per-state reasoning.
+pub(crate) fn tray_is_loaded(tray: &AmsTray, ams_id: u8) -> bool {
+    let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
+
+    // An *absent* `state` is not a report of emptiness. Some firmware sends a complete tray
+    // payload (`tray_info_idx`, `tray_type`, `tray_color`, `remain`) with no `state` key at
+    // all, and treating that as absent-equivalent scrubbed the spool's material data on every
+    // `TelemetryCache::sanitized_ams()` call. Fall back to the filament metadata instead —
+    // the same fallback pybambu reaches for in `_has_filament_metadata` /
+    // `_resolve_loaded_state` (`models.py:3517-3538`), which gates on a `_state_reported`
+    // flag and accepts a non-empty `tray_info_idx`, or a `tray_type` that is neither empty
+    // nor `"Empty"`, as proof a spool is loaded.
+    let has_filament_metadata = tray
+        .tray_info_idx
+        .as_ref()
+        .is_some_and(|idx| !idx.is_empty())
+        || tray.tray_type.as_ref().is_some_and(|t| !is_blank_type(t));
+
+    let is_absent_state = matches!(tray.state, Some(AMS_TRAY_STATE_POWER_OFF))
+        || (tray.state.is_none() && !has_filament_metadata)
+        || (!is_ht
+            && matches!(
+                tray.state,
+                Some(AMS_TRAY_STATE_SPOOL_NOT_FED) | Some(AMS_TRAY_STATE_EMPTY)
+            ));
+
+    let is_type_cleared = tray.tray_type.as_deref().is_some_and(is_blank_type);
+
+    !(is_absent_state || is_type_cleared)
 }
 
 /// Computes the unique global channel identifier for a given expansion unit and local tray.
@@ -463,9 +468,6 @@ mod tests {
             state: Some(10),            // Supposedly present but retracted
             tray_type: Some("".into()), // Empty type constitutes a clearing signal
             tray_color: Some("FFFFFFFF".into()),
-            tray_info_idx: None,
-            tag_uid: None,
-            tray_uuid: None,
             remain: Some(100),
             ..Default::default()
         };
@@ -665,8 +667,6 @@ mod tests {
             tray_type: Some("PLA".into()),
             tray_color: Some("FF0000FF".into()),
             tray_info_idx: Some("GFA01".into()),
-            tag_uid: None,
-            tray_uuid: None,
             remain: Some(85),
             ..Default::default()
         };
@@ -684,11 +684,7 @@ mod tests {
         let mut tray = AmsTray {
             id: "0".into(),
             state: Some(10),
-            tray_type: None,
             tray_color: Some("FF0000FF".into()),
-            tray_info_idx: None,
-            tag_uid: None,
-            tray_uuid: None,
             remain: Some(85),
             ..Default::default()
         };
@@ -703,13 +699,6 @@ mod tests {
     fn test_clean_stale_tray_data_none_state_defaults_to_9() {
         let mut tray = AmsTray {
             id: "2".into(),
-            state: None,
-            tray_type: None,
-            tray_color: None,
-            tray_info_idx: None,
-            tag_uid: None,
-            tray_uuid: None,
-            remain: None,
             ..Default::default()
         };
 
@@ -726,7 +715,6 @@ mod tests {
         // pybambu's `_has_filament_metadata` does when `state` was never reported.
         let mut tray = AmsTray {
             id: "1".into(),
-            state: None,
             tray_type: Some("PLA".into()),
             tray_color: Some("09FF00FF".into()),
             tray_info_idx: Some("GFA01".into()),
@@ -749,7 +737,6 @@ mod tests {
         // `tray_type`.
         let mut tray = AmsTray {
             id: "1".into(),
-            state: None,
             tray_info_idx: Some("GFA01".into()),
             ..Default::default()
         };
@@ -765,7 +752,6 @@ mod tests {
         // clears — and `is_type_cleared` would fire on it regardless.
         let mut tray = AmsTray {
             id: "1".into(),
-            state: None,
             tray_type: Some("Empty".into()),
             tray_color: Some("FF0000FF".into()),
             ..Default::default()
@@ -787,7 +773,6 @@ mod tests {
         let mut tray = AmsTray {
             id: "0".into(),
             state: Some(11),
-            tray_type: None,
             tray_color: Some("FF0000FF".into()),
             remain: Some(85),
             ..Default::default()
@@ -838,5 +823,58 @@ mod tests {
         assert_eq!(tray.tray_type, Some("PLA".into()));
         assert_eq!(tray.tray_color, Some("FF0000FF".into()));
         assert_eq!(tray.remain, Some(85));
+    }
+
+    #[test]
+    fn test_is_loaded_agrees_with_clean_stale_tray_data() {
+        // #411: a full tray with no `state` key is loaded, though `state()` reads it as 9.
+        let no_state = AmsTray {
+            id: "0".into(),
+            tray_type: Some("PLA".into()),
+            tray_info_idx: Some("GFA00".into()),
+            ..Default::default()
+        };
+        assert_eq!(no_state.state(), AMS_TRAY_STATE_EMPTY);
+        assert!(no_state.is_loaded(0));
+
+        let cases = [
+            (no_state.clone(), 0),
+            (
+                AmsTray {
+                    state: Some(9),
+                    ..no_state.clone()
+                },
+                0,
+            ),
+            (
+                AmsTray {
+                    state: Some(9),
+                    ..no_state.clone()
+                },
+                128,
+            ),
+            (
+                AmsTray {
+                    state: Some(11),
+                    tray_type: Some("".into()),
+                    ..no_state.clone()
+                },
+                0,
+            ),
+            (
+                AmsTray {
+                    id: "1".into(),
+                    ..Default::default()
+                },
+                0,
+            ),
+        ];
+        for (tray, ams_id) in cases {
+            let mut cleaned = tray.clone();
+            clean_stale_tray_data(&mut cleaned, ams_id);
+            // A cleared tray always comes back with the `remain: -1` empty sentinel.
+            let kept = cleaned.remain == tray.remain;
+            assert_eq!(tray.is_loaded(ams_id), kept, "{tray:?} on unit {ams_id}");
+        }
     }
 }

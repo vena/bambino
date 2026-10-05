@@ -116,11 +116,11 @@ Each AMS unit object in the `print.ams.ams[]` array may include an `"info"` fiel
 | Bit Range | Mask | Field | Values |
 | :--- | :--- | :--- | :--- |
 | **0–3** | `0xF` | AMS unit type | Which accessory is attached — see the table below. `3` = AMS 2 Pro, **not** AMS Lite (`2`) |
-| **4–7** | `0xF0` | Dry status | Drying cycle state |
+| **4–7** | `0xF0` | Dry status | `0` off, `1` checking, `2` drying, `3` cooling, `4` stopping, `5` error, `6` heater out of control, `7` production test (BambuStudio `DevAms::DryStatus`, `DevFilaSystem.h:148-158`) |
 | **8–11** | `0xF00` | Extruder assignment | `0` = right/main, `1` = left/deputy, `0xE` = uninitialized |
-| **22–23** | `0xC00000` | Dry sub-status | Drying sub-state detail |
-| **18–19** | `0xC0000` | Dry fan 1 status | Drying fan 1 state (BUG-120; confirmed against BambuStudio's `DevFilaSystem.cpp:696` and independently by `bambu-printer-manager`'s `bambutools.py:685`) |
-| **20–21** | `0x300000` | Dry fan 2 status | Drying fan 2 state (BUG-120; `DevFilaSystem.cpp:697`, `bambutools.py:686`) |
+| **22–23** | `0xC00000` | Dry sub-status | `0` off, `1` heating, `2` dehumidifying (`DevAms::DrySubStatus`, `DevFilaSystem.h:160-165`) |
+| **18–19** | `0xC0000` | Dry fan 1 status | `0` off, `1` on (`DevAms::DryFanStatus`, `DevFilaSystem.h:167-171`) (BUG-120; confirmed against BambuStudio's `DevFilaSystem.cpp:696` and independently by `bambu-printer-manager`'s `bambutools.py:685`) |
+| **20–21** | `0x300000` | Dry fan 2 status | Same values as fan 1 (BUG-120; `DevFilaSystem.cpp:697`, `bambutools.py:686`) |
 | **24–27** | `0xF000000` | `bind_switch_in` | Filament Track Switch inlet this unit feeds. `0` = inlet In-B, `1` = inlet In-A, any other value = not bound |
 | **30–31** | `0xC0000000` | Remain-estimate version | Which filament-remaining estimation algorithm the unit reports (`DevAms::RemainEstimateVersion`; `0` = Legacy) |
 

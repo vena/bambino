@@ -561,13 +561,13 @@ where
     /// own `DevFilaSystem.cpp`, whose structural equivalent (`DevAmsTray::reset()`) is dead
     /// code with zero call sites in its own current codebase; the shipped BambuStudio/
     /// OrcaSlicer UI instead gates every read of a tray's material fields on
-    /// `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::state()` here) and
+    /// `is_exists`/`is_tray_info_ready()`-equivalent checks (`AmsTray::is_loaded()` here) and
     /// never scrubs the raw cache. This crate mirrors that design rather than
     /// [`clean_stale_tray_data`]'s proactive-clearing
     /// approach: wiring proactive clearing into this cache would make it *less* faithful to
     /// on-wire state than BambuStudio's own model. Two opt-in ways to get sanitized output
     /// without losing that raw fidelity:
-    /// - Check [`AmsTray::state()`](crate::types::AmsTray::state) (or
+    /// - Check [`AmsTray::is_loaded()`](crate::types::AmsTray::is_loaded) (or
     ///   [`evaluate_spool_presence`](crate::ams::evaluate_spool_presence)) before trusting a
     ///   tray's material fields — the same check-before-trust contract BambuStudio itself
     ///   relies on.

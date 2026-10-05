@@ -37,7 +37,8 @@ where
 /// (`DevDefs.h:64`) — used to type `AmsStatusReport.cfs`. `CheckPosition` covers both `0x08`
 /// wire values (`STEP_CHECK_POSITION`/`STEP_CONFIRM_EXTRUDED` share the same discriminant in
 /// the source enum). `Unknown` preserves any other raw value rather than failing to decode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "i64", into = "i64")]
 pub enum AmsFilamentStep {
     /// No filament-change activity in progress.
     Idle,
@@ -73,67 +74,44 @@ pub enum AmsFilamentStep {
     Unknown(i64),
 }
 
+/// Wire code of every named [`AmsFilamentStep`], the single table both conversions read.
+const FILAMENT_STEP_CODES: [(i64, AmsFilamentStep); 15] = [
+    (0x00, AmsFilamentStep::Idle),
+    (0x01, AmsFilamentStep::Pause),
+    (0x02, AmsFilamentStep::HeatNozzle),
+    (0x03, AmsFilamentStep::CutFilament),
+    (0x04, AmsFilamentStep::PullCurrFilament),
+    (0x05, AmsFilamentStep::PushNewFilament),
+    (0x06, AmsFilamentStep::GrabNewFilament),
+    (0x07, AmsFilamentStep::PurgeOldFilament),
+    (0x08, AmsFilamentStep::CheckPosition),
+    (0x09, AmsFilamentStep::SwitchExtruder),
+    (0x0A, AmsFilamentStep::SwitchHotend),
+    (0x0B, AmsFilamentStep::AmsFilaCooling),
+    (0x0C, AmsFilamentStep::PushSwitcherFila),
+    (0x0D, AmsFilamentStep::PullSwitcherFila),
+    (0x0E, AmsFilamentStep::SwitcherSwitch),
+];
+
 impl From<i64> for AmsFilamentStep {
     fn from(raw: i64) -> Self {
-        match raw {
-            0x00 => Self::Idle,
-            0x01 => Self::Pause,
-            0x02 => Self::HeatNozzle,
-            0x03 => Self::CutFilament,
-            0x04 => Self::PullCurrFilament,
-            0x05 => Self::PushNewFilament,
-            0x06 => Self::GrabNewFilament,
-            0x07 => Self::PurgeOldFilament,
-            0x08 => Self::CheckPosition,
-            0x09 => Self::SwitchExtruder,
-            0x0A => Self::SwitchHotend,
-            0x0B => Self::AmsFilaCooling,
-            0x0C => Self::PushSwitcherFila,
-            0x0D => Self::PullSwitcherFila,
-            0x0E => Self::SwitcherSwitch,
-            other => Self::Unknown(other),
-        }
+        FILAMENT_STEP_CODES
+            .iter()
+            .find(|(code, _)| *code == raw)
+            .map_or(Self::Unknown(raw), |&(_, step)| step)
     }
 }
 
 impl From<AmsFilamentStep> for i64 {
     fn from(step: AmsFilamentStep) -> Self {
         match step {
-            AmsFilamentStep::Idle => 0x00,
-            AmsFilamentStep::Pause => 0x01,
-            AmsFilamentStep::HeatNozzle => 0x02,
-            AmsFilamentStep::CutFilament => 0x03,
-            AmsFilamentStep::PullCurrFilament => 0x04,
-            AmsFilamentStep::PushNewFilament => 0x05,
-            AmsFilamentStep::GrabNewFilament => 0x06,
-            AmsFilamentStep::PurgeOldFilament => 0x07,
-            AmsFilamentStep::CheckPosition => 0x08,
-            AmsFilamentStep::SwitchExtruder => 0x09,
-            AmsFilamentStep::SwitchHotend => 0x0A,
-            AmsFilamentStep::AmsFilaCooling => 0x0B,
-            AmsFilamentStep::PushSwitcherFila => 0x0C,
-            AmsFilamentStep::PullSwitcherFila => 0x0D,
-            AmsFilamentStep::SwitcherSwitch => 0x0E,
-            AmsFilamentStep::Unknown(other) => other,
+            AmsFilamentStep::Unknown(raw) => raw,
+            named => FILAMENT_STEP_CODES
+                .iter()
+                .find(|(_, s)| *s == named)
+                .map(|&(code, _)| code)
+                .expect("every named AmsFilamentStep is in FILAMENT_STEP_CODES"),
         }
-    }
-}
-
-impl Serialize for AmsFilamentStep {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_i64(i64::from(*self))
-    }
-}
-
-impl<'de> Deserialize<'de> for AmsFilamentStep {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        i64::deserialize(deserializer).map(AmsFilamentStep::from)
     }
 }
 
@@ -141,7 +119,7 @@ impl<'de> Deserialize<'de> for AmsFilamentStep {
 ///
 /// On the wire, AMS telemetry is nested as `print.ams.ams[...]` — this struct represents
 /// the intermediate `print.ams` object.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AmsStatusReport {
     /// Array of connected AMS units on the expansion bus.
     #[serde(default)]
@@ -163,47 +141,38 @@ pub struct AmsStatusReport {
     pub tray_pre: Option<String>,
 
     /// Target tray index.
-    #[serde(default)]
     pub tray_tar: Option<String>,
 
     /// AMS protocol version.
     pub version: Option<i32>,
 
     /// RFID read completion bitmask (hex string).
-    #[serde(default)]
     pub tray_read_done_bits: Option<String>,
 
     /// Active RFID read bitmask (hex string), in the same bit layout as `tray_exist_bits`
     /// ([REF-AMS-DECODE]).
-    #[serde(default)]
     pub tray_reading_bits: Option<String>,
 
     /// AMS insertion event flag.
-    #[serde(default)]
     pub insert_flag: Option<bool>,
 
     /// AMS unit external power state (distinct from printer power; AMS Pro needs external power for drying).
-    #[serde(default)]
     pub power_on_flag: Option<bool>,
 
     /// Calibration tracking ID.
-    #[serde(default)]
     pub cali_id: Option<i32>,
 
     /// Calibration tracking status.
-    #[serde(default)]
     pub cali_stat: Option<i32>,
 
     /// Whether AMS-side remaining-filament detection is enabled. Confirmed
     /// independently by `bambu-printer-manager` (`bambucommands.py:180`, `bambutools.py:90`)
     /// and `OpenBambuAPI/local-printer-api.md:317` (community protocol spec).
-    #[serde(default)]
     pub calibrate_remain_flag: Option<bool>,
 
     /// Per-slot filament-change step codes. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:507-508` (`GetVal<std::vector<DevFilamentStep>>(jj["ams"], "cfs")`);
     /// consistent with pybambu's `MOCK-X2D.json:184-189` fixture (`"cfs": [2, 9, 5, 7]`).
-    #[serde(default)]
     pub cfs: Option<Vec<AmsFilamentStep>>,
 }
 
@@ -287,7 +256,7 @@ impl AmsStatusReport {
 }
 
 /// Modular standard expansion unit managing up to 4 physical spool slots.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AmsUnit {
     /// Unique index representing the unit position on the physical expansion bus.
     ///
@@ -303,11 +272,9 @@ pub struct AmsUnit {
     ///
     /// Optional because BambuStudio reads it only when present (`ParseAmsInfo`,
     /// `DevFilaSystem.cpp:667-684`): a partial unit push without it must not fail the frame.
-    #[serde(default)]
     pub temp: Option<String>,
 
     /// Enclosure climate relative humidity index (1-5 scale). Optional, as for `temp`.
-    #[serde(default)]
     pub humidity: Option<String>,
 
     /// Actual relative humidity percentage (1-100) from the onboard sensor.
@@ -325,21 +292,17 @@ pub struct AmsUnit {
     ///
     /// `None` means this push's `tray` key was absent from the wire — leave previously
     /// cached trays untouched. `Some(vec![])` means the key was present but empty, which
-    /// (per `AmsUnit::merge_from`) prunes every cached tray for this unit — bambino's
-    /// `#[serde(default)]` on `Option<Vec<_>>` gives exactly this absent-vs-present-empty
-    /// distinction for free (absent key -> `None` via `Default`, present key -> `Some(_)`
-    /// however short), confirmed against BambuStudio's `DevFilaSystem.cpp`
+    /// (per `AmsUnit::merge_from`) prunes every cached tray for this unit — `Option` gives
+    /// exactly this absent-vs-present-empty distinction for free (absent key -> `None`,
+    /// present key -> `Some(_)` however short), confirmed against BambuStudio's `DevFilaSystem.cpp`
     /// (`ParseAmsInfo`'s `if (j_ams.contains("tray"))` gate around both the per-tray parse
     /// loop and the prune-absent-ids loop).
-    #[serde(default)]
     pub tray: Option<Vec<AmsTray>>,
 
     /// Hex-encoded bitmask: bits 0–3 = AMS type, bits 4–7 = dry_status, bits 8–11 = extruder assignment (IDEX routing).
-    #[serde(default)]
     pub info: Option<String>,
 
     /// Drying failure reason codes per slot (X2D).
-    #[serde(default)]
     pub dry_sf_reason: Option<Vec<i32>>,
 }
 
@@ -404,7 +367,7 @@ impl AmsUnit {
 }
 
 /// Drying cycle configuration embedded within AMS unit telemetry [REF-AMS-DRYER].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AmsDrySetting {
     /// Target drying temperature in degrees Celsius.
     pub dry_temperature: Option<i32>,
@@ -679,7 +642,6 @@ pub struct AmsTray {
     pub cali_idx: Option<i32>,
 
     /// Multi-color columns array (e.g. `["000000FF"]`).
-    #[serde(default)]
     pub cols: Option<Vec<String>>,
 
     /// Color type indicator.
@@ -713,7 +675,7 @@ pub struct AmsTray {
 /// ("not fixed") for its extruder assignment, and the inlet below is the only thing that says
 /// which physical nozzle it actually reaches.
 ///
-/// Deliberately not `Copy`-cheap-`u8` — the wire values (`0` = In-B, `1` = In-A) are inverted
+/// An enum rather than a bare `u8` because the wire values (`0` = In-B, `1` = In-A) are inverted
 /// relative to how the inlets read alphabetically, and every prior attempt to remember that from
 /// a bare integer is a bug waiting to happen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -807,7 +769,7 @@ impl AmsUnitModel {
     /// bambuddy (`print_scheduler.py:3976`, `if module_type not in ("n3f", "n3s"): skip`).
     #[must_use]
     pub fn supports_drying(self) -> bool {
-        matches!(self, Self::Ams2Pro | Self::AmsHt)
+        self.dry_temp_range().is_some()
     }
 
     /// Inclusive `(min, max)` drying-chamber temperature range in °C, or `None` if this unit
@@ -864,12 +826,105 @@ const AMS_UNIT_INFO_SWITCH_INLET_B: u8 = 0;
 /// `bind_switch_in` value for the Filament Track Switch's In-A inlet.
 const AMS_UNIT_INFO_SWITCH_INLET_A: u8 = 1;
 
+/// Drying-cycle state from `info` bits 4–7, BambuStudio's `DevAms::DryStatus`
+/// (`DevFilaSystem.h:148-158`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmsDryStatus {
+    /// `0` — not drying.
+    Off,
+    /// `1` — checking conditions before starting.
+    Checking,
+    /// `2` — drying.
+    Drying,
+    /// `3` — cooling down after a cycle.
+    Cooling,
+    /// `4` — stopping.
+    Stopping,
+    /// `5` — the cycle hit an error.
+    Error,
+    /// `6` — the heater could not be stopped (BambuStudio `CannotStopHeatOutofControl`).
+    HeaterOutOfControl,
+    /// `7` — factory production test (BambuStudio `PrdTesting`).
+    ProductionTest,
+    /// A value this crate doesn't know, preserved verbatim.
+    Other(u8),
+}
+
+impl AmsDryStatus {
+    fn from_wire(raw: u8) -> Self {
+        match raw {
+            0 => Self::Off,
+            1 => Self::Checking,
+            2 => Self::Drying,
+            3 => Self::Cooling,
+            4 => Self::Stopping,
+            5 => Self::Error,
+            6 => Self::HeaterOutOfControl,
+            7 => Self::ProductionTest,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// Drying sub-state from `info` bits 22–23, BambuStudio's `DevAms::DrySubStatus`
+/// (`DevFilaSystem.h:160-165`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmsDrySubStatus {
+    /// `0` — idle.
+    Off,
+    /// `1` — heating.
+    Heating,
+    /// `2` — dehumidifying.
+    Dehumidifying,
+    /// A value this crate doesn't know (`3`), preserved verbatim.
+    Other(u8),
+}
+
+impl AmsDrySubStatus {
+    fn from_wire(raw: u8) -> Self {
+        match raw {
+            0 => Self::Off,
+            1 => Self::Heating,
+            2 => Self::Dehumidifying,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// State of one drying fan from `info` bits 18–19 or 20–21, BambuStudio's
+/// `DevAms::DryFanStatus` (`DevFilaSystem.h:167-171`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmsDryFanStatus {
+    /// `0` — off.
+    Off,
+    /// `1` — on.
+    On,
+    /// A value this crate doesn't know (`2` or `3`), preserved verbatim.
+    Other(u8),
+}
+
+impl AmsDryFanStatus {
+    fn from_wire(raw: u8) -> Self {
+        match raw {
+            0 => Self::Off,
+            1 => Self::On,
+            other => Self::Other(other),
+        }
+    }
+}
+
 impl AmsUnit {
     /// Parses the hex-encoded `info` bitmask string into an integer.
+    #[must_use]
     pub fn parse_info(&self) -> Option<u64> {
         self.info
             .as_ref()
             .and_then(|s| u64::from_str_radix(s, 16).ok())
+    }
+
+    /// Extracts `(info >> shift) & mask`, every mask here being at most 4 bits wide.
+    fn info_field(&self, shift: u32, mask: u64) -> Option<u8> {
+        self.parse_info().map(|v| ((v >> shift) & mask) as u8)
     }
 
     /// Raw AMS unit type from bits 0–3 — e.g. `3` is an AMS 2 Pro, **not** an AMS Lite (`2`).
@@ -877,9 +932,9 @@ impl AmsUnit {
     /// Prefer [`unit_model`](Self::unit_model), which decodes this into [`AmsUnitModel`] and
     /// carries the capability accessors. This stays for the one case that cannot serve: reading
     /// a unit type newer than this crate knows about.
+    #[must_use]
     pub fn ams_type(&self) -> Option<u8> {
-        self.parse_info()
-            .map(|v| (v & AMS_UNIT_INFO_TYPE_MASK) as u8)
+        self.info_field(0, AMS_UNIT_INFO_TYPE_MASK)
     }
 
     /// Which physical AMS accessory this unit is, decoded from `info` bits 0–3.
@@ -899,22 +954,35 @@ impl AmsUnit {
     }
 
     /// Drying status from bits 4–7.
-    pub fn dry_status(&self) -> Option<u8> {
-        self.parse_info()
-            .map(|v| ((v >> AMS_UNIT_INFO_DRY_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_STATUS_MASK) as u8)
+    #[must_use]
+    pub fn dry_status(&self) -> Option<AmsDryStatus> {
+        self.info_field(
+            AMS_UNIT_INFO_DRY_STATUS_SHIFT,
+            AMS_UNIT_INFO_DRY_STATUS_MASK,
+        )
+        .map(AmsDryStatus::from_wire)
+    }
+
+    /// Whether this unit can dry: `None` when its type is unknown (no `info`, or a type newer
+    /// than this crate), which is not the same as "can't dry".
+    #[must_use]
+    pub fn supports_drying(&self) -> Option<bool> {
+        self.unit_model().map(AmsUnitModel::supports_drying)
+    }
+
+    /// Inclusive drying temperature range in °C, or `None` if the unit can't dry or its type
+    /// is unknown — see [`AmsUnitModel::dry_temp_range`].
+    #[must_use]
+    pub fn dry_temp_range(&self) -> Option<(u32, u32)> {
+        self.unit_model().and_then(AmsUnitModel::dry_temp_range)
     }
 
     /// Extruder assignment from bits 8–11 (0 = right/main, 1 = left/deputy).
     /// Returns `None` when `info` is absent or the value is 0xE (uninitialized).
+    #[must_use]
     pub fn extruder_assignment(&self) -> Option<u8> {
-        self.parse_info().and_then(|v| {
-            let raw = ((v >> AMS_UNIT_INFO_EXTRUDER_SHIFT) & AMS_UNIT_INFO_EXTRUDER_MASK) as u8;
-            if raw == AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED {
-                None
-            } else {
-                Some(raw)
-            }
-        })
+        self.info_field(AMS_UNIT_INFO_EXTRUDER_SHIFT, AMS_UNIT_INFO_EXTRUDER_MASK)
+            .filter(|&raw| raw != AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED)
     }
 
     /// Filament Track Switch inlet this unit feeds, decoded from `bind_switch_in` (bits 24–27).
@@ -937,16 +1005,16 @@ impl AmsUnit {
     /// **Unverified against hardware.** No Filament Track Switch has been available; the decode
     /// follows BambuStudio's `DevFilaSystem.cpp:598-609`, corroborated by bambuddy (`c5e00558`,
     /// `7a42e0a7`). See issue #137.
+    #[must_use]
     pub fn filament_switch_inlet(&self) -> Option<FilamentSwitchInlet> {
-        self.parse_info().and_then(|v| {
-            let raw = ((v >> AMS_UNIT_INFO_BIND_SWITCH_IN_SHIFT)
-                & AMS_UNIT_INFO_BIND_SWITCH_IN_MASK) as u8;
-            match raw {
-                AMS_UNIT_INFO_SWITCH_INLET_B => Some(FilamentSwitchInlet::InB),
-                AMS_UNIT_INFO_SWITCH_INLET_A => Some(FilamentSwitchInlet::InA),
-                _ => None,
-            }
-        })
+        match self.info_field(
+            AMS_UNIT_INFO_BIND_SWITCH_IN_SHIFT,
+            AMS_UNIT_INFO_BIND_SWITCH_IN_MASK,
+        )? {
+            AMS_UNIT_INFO_SWITCH_INLET_B => Some(FilamentSwitchInlet::InB),
+            AMS_UNIT_INFO_SWITCH_INLET_A => Some(FilamentSwitchInlet::InA),
+            _ => None,
+        }
     }
 
     /// True when this unit reports `0xE` ("not wired to a fixed extruder") in bits 8–11.
@@ -956,36 +1024,44 @@ impl AmsUnit {
     /// firmware simply has not initialized. Pair with
     /// [`filament_switch_inlet`](Self::filament_switch_inlet) to tell them apart — an unbound
     /// `bind_switch_in` alongside `0xE` means uninitialized.
+    #[must_use]
     pub fn has_unfixed_extruder(&self) -> bool {
-        self.parse_info().is_some_and(|v| {
-            ((v >> AMS_UNIT_INFO_EXTRUDER_SHIFT) & AMS_UNIT_INFO_EXTRUDER_MASK) as u8
-                == AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED
-        })
+        self.info_field(AMS_UNIT_INFO_EXTRUDER_SHIFT, AMS_UNIT_INFO_EXTRUDER_MASK)
+            == Some(AMS_UNIT_INFO_EXTRUDER_UNINITIALIZED)
     }
 
     /// Drying sub-status from bits 22–23.
-    pub fn dry_sub_status(&self) -> Option<u8> {
-        self.parse_info().map(|v| {
-            ((v >> AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_SUB_STATUS_MASK) as u8
-        })
+    #[must_use]
+    pub fn dry_sub_status(&self) -> Option<AmsDrySubStatus> {
+        self.info_field(
+            AMS_UNIT_INFO_DRY_SUB_STATUS_SHIFT,
+            AMS_UNIT_INFO_DRY_SUB_STATUS_MASK,
+        )
+        .map(AmsDrySubStatus::from_wire)
     }
 
     /// Dry-fan 1 status from bits 18–19. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:696` (`get_flag_bits(info, 18, 2)`) and independently by
     /// `bambu-printer-manager`'s `bambutools.py:685`, an exact match.
-    pub fn dry_fan1_status(&self) -> Option<u8> {
-        self.parse_info().map(|v| {
-            ((v >> AMS_UNIT_INFO_DRY_FAN1_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_FAN_STATUS_MASK) as u8
-        })
+    #[must_use]
+    pub fn dry_fan1_status(&self) -> Option<AmsDryFanStatus> {
+        self.info_field(
+            AMS_UNIT_INFO_DRY_FAN1_STATUS_SHIFT,
+            AMS_UNIT_INFO_DRY_FAN_STATUS_MASK,
+        )
+        .map(AmsDryFanStatus::from_wire)
     }
 
     /// Dry-fan 2 status from bits 20–21. Confirmed against BambuStudio's
     /// `DevFilaSystem.cpp:697` (`get_flag_bits(info, 20, 2)`) and independently by
     /// `bambu-printer-manager`'s `bambutools.py:686`, an exact match.
-    pub fn dry_fan2_status(&self) -> Option<u8> {
-        self.parse_info().map(|v| {
-            ((v >> AMS_UNIT_INFO_DRY_FAN2_STATUS_SHIFT) & AMS_UNIT_INFO_DRY_FAN_STATUS_MASK) as u8
-        })
+    #[must_use]
+    pub fn dry_fan2_status(&self) -> Option<AmsDryFanStatus> {
+        self.info_field(
+            AMS_UNIT_INFO_DRY_FAN2_STATUS_SHIFT,
+            AMS_UNIT_INFO_DRY_FAN_STATUS_MASK,
+        )
+        .map(AmsDryFanStatus::from_wire)
     }
 
     /// Decodes [`dry_sf_reason`](Self::dry_sf_reason) into typed reasons, in reported order.
@@ -1062,40 +1138,40 @@ pub enum DryBlockReason {
     Other(i32),
 }
 
+/// Wire code of every named [`DryBlockReason`], the single table both conversions read.
+const DRY_BLOCK_REASON_CODES: [(i32, DryBlockReason); 10] = [
+    (0, DryBlockReason::PrinterBusy),
+    (1, DryBlockReason::InsufficientPower),
+    (2, DryBlockReason::AmsBusy),
+    (3, DryBlockReason::FilamentAtOutlet),
+    (4, DryBlockReason::AlreadyStarting),
+    (5, DryBlockReason::Unsupported2dMode),
+    (6, DryBlockReason::AlreadyDrying),
+    (7, DryBlockReason::FirmwareUpgrading),
+    (8, DryBlockReason::ExternalPowerRequired),
+    (10, DryBlockReason::FilamentAtOutletManualUnload),
+];
+
 impl DryBlockReason {
     /// Decodes one raw `dry_sf_reason` entry.
     #[must_use]
     pub fn from_code(code: i32) -> Self {
-        match code {
-            0 => Self::PrinterBusy,
-            1 => Self::InsufficientPower,
-            2 => Self::AmsBusy,
-            3 => Self::FilamentAtOutlet,
-            4 => Self::AlreadyStarting,
-            5 => Self::Unsupported2dMode,
-            6 => Self::AlreadyDrying,
-            7 => Self::FirmwareUpgrading,
-            8 => Self::ExternalPowerRequired,
-            10 => Self::FilamentAtOutletManualUnload,
-            other => Self::Other(other),
-        }
+        DRY_BLOCK_REASON_CODES
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map_or(Self::Other(code), |&(_, reason)| reason)
     }
 
     /// The raw wire code this reason decodes from.
     #[must_use]
     pub fn code(self) -> i32 {
         match self {
-            Self::PrinterBusy => 0,
-            Self::InsufficientPower => 1,
-            Self::AmsBusy => 2,
-            Self::FilamentAtOutlet => 3,
-            Self::AlreadyStarting => 4,
-            Self::Unsupported2dMode => 5,
-            Self::AlreadyDrying => 6,
-            Self::FirmwareUpgrading => 7,
-            Self::ExternalPowerRequired => 8,
-            Self::FilamentAtOutletManualUnload => 10,
             Self::Other(code) => code,
+            named => DRY_BLOCK_REASON_CODES
+                .iter()
+                .find(|(_, r)| *r == named)
+                .map(|&(code, _)| code)
+                .expect("every named DryBlockReason is in DRY_BLOCK_REASON_CODES"),
         }
     }
 
@@ -1125,15 +1201,27 @@ impl DryBlockReason {
 }
 
 impl AmsTray {
-    /// Retrieves the status code of the spool, defaulting to `9` (Empty) if omitted.
+    /// Retrieves the raw status code of the spool, defaulting to `9` (Empty) if omitted.
     ///
-    /// This handles symmetrical empty slots safely on standard P1S and A1 Mini lines.
+    /// **Not a loaded/empty answer on its own:** some firmware sends a fully populated tray
+    /// with no `state` key, which reads as `9` here. Use [`is_loaded`](Self::is_loaded) to ask
+    /// whether a spool is loaded.
+    #[must_use]
     pub fn state(&self) -> u8 {
         self.state.unwrap_or(AMS_TRAY_STATE_EMPTY)
     }
-}
 
-impl AmsTray {
+    /// True when this tray, in the unit at `ams_id`, holds a loaded spool.
+    ///
+    /// The same rule [`clean_stale_tray_data`](crate::ams::clean_stale_tray_data) applies before
+    /// keeping a tray's material data: a missing `state` with filament metadata is loaded,
+    /// states `9`/`10` mean empty except on AMS-HT units (`ams_id` 128-135, where they don't),
+    /// and an explicitly blank `tray_type` means empty.
+    #[must_use]
+    pub fn is_loaded(&self, ams_id: u8) -> bool {
+        crate::ams::parser::tray_is_loaded(self, ams_id)
+    }
+
     /// Accurate remaining weight in grams, translating `remain_g`'s raw wire
     /// sentinel to `None`. Mirrors BambuStudio's `DevAmsTray::get_filament_remain_weight()`
     /// (`DevFilaSystem.cpp:116-124`): `remain_g < 0` means "not provided by firmware" and
