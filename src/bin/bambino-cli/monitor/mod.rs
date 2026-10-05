@@ -14,7 +14,7 @@ use crossterm::terminal;
 use tokio::sync::mpsc;
 use tokio::time::interval;
 
-use crate::connection::{Printer, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
@@ -75,7 +75,7 @@ pub(crate) async fn follow_pushes(
 /// incremental pushes (e.g. across a tray-load event) rather than a single snapshot.
 ///
 /// Output is redacted with [`redact_secrets`] unless `show_serials` is set. A one-shot dump that
-/// sees no pushall response within `DUMP_TIMEOUT_SECS` returns an error, so the process exits
+/// sees no pushall response within `RESPONSE_TIMEOUT_SECS` returns an error, so the process exits
 /// non-zero rather than handing a script empty output as success.
 pub async fn dump(
     ip: &str,
@@ -84,8 +84,6 @@ pub async fn dump(
     follow: bool,
     show_serials: bool,
 ) -> Result<(), CliError> {
-    const DUMP_TIMEOUT_SECS: u64 = 10;
-
     eprintln!("Connecting to {}:8883 for raw telemetry dump...", ip);
 
     let mut printer = create_printer(ip, serial, access_code)?;
@@ -96,7 +94,7 @@ pub async fn dump(
         return follow_pushes(&mut printer, true, show_serials).await;
     }
 
-    let timeout = tokio::time::sleep(Duration::from_secs(DUMP_TIMEOUT_SECS));
+    let timeout = tokio::time::sleep(Duration::from_secs(RESPONSE_TIMEOUT_SECS));
     tokio::pin!(timeout);
 
     loop {
@@ -113,7 +111,7 @@ pub async fn dump(
             }
             _ = &mut timeout => {
                 return Err(CliError::Network(format!(
-                    "timed out after {DUMP_TIMEOUT_SECS}s waiting for a pushall response"
+                    "timed out after {RESPONSE_TIMEOUT_SECS}s waiting for a pushall response"
                 )));
             }
         }

@@ -9,9 +9,8 @@
 //! printer's handshake, not just against rcgen fixtures.
 
 use bambino::io::tokio::build_verified_client_config;
-use rustls_pki_types::ServerName;
 
-use crate::connection::{validate_ip_serial, with_connect_timeout};
+use crate::connection::{dial_and_handshake, validate_ip_serial};
 use crate::error::CliError;
 use crate::trust::trusted_roots;
 
@@ -36,34 +35,10 @@ pub async fn run(ip: &str, serial: &str, port: u16) -> Result<(), CliError> {
 
     let config = build_verified_client_config(anchors.to_vec(), None)
         .map_err(|e| CliError::Other(format!("failed to build verified TLS config: {e}")))?;
-    let connector = tokio_rustls::TlsConnector::from(config);
-
-    let addr = format!("{ip}:{port}");
-    let stream = with_connect_timeout(&format!("TCP connect to {addr}"), async {
-        ::tokio::net::TcpStream::connect(&addr)
-            .await
-            .map_err(|e| CliError::Network(format!("TCP connect to {addr} failed: {e}")))
-    })
-    .await?;
-
-    let server_name = ServerName::try_from(serial.to_string())
-        .map_err(|_| CliError::InvalidArgs(format!("invalid serial for SNI: '{serial}'")))?;
-
-    let handshake = with_connect_timeout(&format!("TLS handshake with {addr}"), async {
-        Ok(connector.connect(server_name, stream).await)
-    })
-    .await?;
-
-    match handshake {
-        Ok(_) => {
-            println!(
-                "Verified TLS handshake with {addr} (SNI={serial}) succeeded — \
-                 CnFallbackServerVerifier accepted the printer's cert."
-            );
-            Ok(())
-        }
-        Err(e) => Err(CliError::Network(format!(
-            "Verified TLS handshake with {addr} (SNI={serial}) FAILED: {e}"
-        ))),
-    }
+    dial_and_handshake(ip, serial, port, config).await?;
+    println!(
+        "Verified TLS handshake with {ip} port {port} (SNI={serial}) succeeded — \
+         CnFallbackServerVerifier accepted the printer's cert."
+    );
+    Ok(())
 }

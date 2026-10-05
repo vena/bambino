@@ -20,7 +20,7 @@ use clap::{Subcommand, ValueEnum};
 
 use crate::error::CliError;
 
-use crate::connection::{Printer, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
 
 #[derive(Clone, ValueEnum, Debug)]
 pub enum FanTargetArg {
@@ -254,7 +254,12 @@ pub async fn run_info(
 
     println!("Querying expansion bus version database...");
 
-    match tokio::time::timeout(Duration::from_secs(10), printer.get_version()).await {
+    match tokio::time::timeout(
+        Duration::from_secs(RESPONSE_TIMEOUT_SECS),
+        printer.get_version(),
+    )
+    .await
+    {
         Ok(Ok(info)) => {
             let mut headers = vec!["Product", "Module", "Hardware", "Firmware"];
             if show_serials {
@@ -293,13 +298,13 @@ pub async fn run_info(
             return Err(e.into());
         }
         Err(_) => {
-            println!("\n\x1B[1;33mNotice: Version query timed out after 10 seconds.\x1B[0m");
-            println!(
-                "Note: If this model does not reply, it confirms the physical firmware on this"
+            eprintln!(
+                "Note: a printer that never replies is likely running firmware that ignores \
+                 'get_version' over MQTTS."
             );
-            println!(
-                "specific hardware track discards or ignores 'get_version' payloads over MQTTS.\n"
-            );
+            return Err(CliError::Network(format!(
+                "timed out after {RESPONSE_TIMEOUT_SECS}s waiting for a get_version response"
+            )));
         }
     }
 

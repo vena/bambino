@@ -343,7 +343,13 @@ fn render_thermal(
         w,
         "\n--- Thermal -----------------------------------------------------------"
     );
-    dwriteln!(w, "{:<10} : {}°C / T: {}°C", "Heated Bed", bed_act, bed_tgt);
+    dwriteln!(
+        w,
+        "{:<20} : {:>3}°C / {:>3}°C",
+        "Heated Bed",
+        bed_act,
+        bed_tgt
+    );
 
     if !quirks.ignores_chamber_temperature() {
         let chamber_temper = state

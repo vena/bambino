@@ -7,19 +7,18 @@ use bambino::Error;
 use bambino::client::{FanTarget, PrintStatus};
 use serde::Serialize;
 
-use crate::connection::{Printer, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
 const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 3;
 const LONG_CAPTURE_WINDOW_SECS: u64 = 60;
-const PUSHALL_TIMEOUT_SECS: u64 = 10;
 // Mirrors PrinterClient::wait_for_homing()'s internal timeout override (src/client/motion.rs) —
 // display-only, since that method manages its own deadline rather than taking one.
 const HOMING_WAIT_DISPLAY_SECS: u64 = 90;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProbeTest {
+pub(crate) enum ProbeTest {
     MoveZUnhomed,
     MoveXUnhomed,
     PauseWhenIdle,
@@ -90,7 +89,7 @@ impl ProbeTest {
     }
 
     /// Full registry of every test, in stable order.
-    /// Used for `-t` lookup and the unknown-test help listing — includes manual-intervention tests,
+    /// Used for `-t` parsing and its help listing — includes manual-intervention tests,
     /// which are otherwise excluded from the no-`-t` default run; see
     /// [`default_set()`](Self::default_set).
     fn all_known() -> &'static [ProbeTest] {
@@ -140,9 +139,21 @@ impl ProbeTest {
     fn uses_wait_for_homing(&self) -> bool {
         matches!(self, Self::HomeAxesWait | Self::HomeAxesRepeatWait)
     }
+}
 
-    fn from_name(name: &str) -> Option<ProbeTest> {
-        Self::all_known().iter().find(|t| t.name() == name).copied()
+/// Lets clap parse `-t` and list the tests, from the same name and description tables.
+impl clap::ValueEnum for ProbeTest {
+    fn value_variants<'a>() -> &'a [Self] {
+        Self::all_known()
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        let help = if self.requires_manual_intervention() {
+            format!("{} (manual — not run by default)", self.description())
+        } else {
+            self.description().to_owned()
+        };
+        Some(clap::builder::PossibleValue::new(self.name()).help(help))
     }
 }
 
@@ -413,7 +424,7 @@ async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> 
     eprint!("Requesting pushall state dump... ");
     io::stderr().flush().unwrap_or(());
     match client.request_pushall().await {
-        Ok(_) => match capture_pushall(client, Duration::from_secs(PUSHALL_TIMEOUT_SECS)).await {
+        Ok(_) => match capture_pushall(client, Duration::from_secs(RESPONSE_TIMEOUT_SECS)).await {
             Ok(Some(p)) => {
                 eprintln!("captured.");
                 // A full pushall's `module` list is the densest source of hardware serials
@@ -423,7 +434,7 @@ async fn run_pushall_capture(client: &mut Printer) -> Option<serde_json::Value> 
             Ok(None) => {
                 eprintln!(
                     "timed out ({}s). Continuing without pushall.",
-                    PUSHALL_TIMEOUT_SECS
+                    RESPONSE_TIMEOUT_SECS
                 );
                 None
             }
@@ -610,38 +621,10 @@ pub async fn run(
     serial: &str,
     access_code: &str,
     output: &str,
-    tests_arg: Option<&str>,
+    tests: Option<Vec<ProbeTest>>,
 ) -> Result<(), CliError> {
     let output_path = output;
-    let test_filter: Option<Vec<String>> =
-        tests_arg.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
-
-    let tests: Vec<ProbeTest> = if let Some(ref filter) = test_filter {
-        let mut selected = Vec::new();
-        for name in filter {
-            match ProbeTest::from_name(name) {
-                Some(t) => selected.push(t),
-                None => {
-                    eprintln!("Unknown test: '{}'. Available tests:", name);
-                    for t in ProbeTest::all_known() {
-                        let manual = if t.requires_manual_intervention() {
-                            " (manual — not run by default)"
-                        } else {
-                            ""
-                        };
-                        eprintln!("  {} — {}{}", t.name(), t.description(), manual);
-                    }
-                    return Err(CliError::InvalidArgs(format!(
-                        "Unknown test name: '{}'",
-                        name
-                    )));
-                }
-            }
-        }
-        selected
-    } else {
-        ProbeTest::default_set()
-    };
+    let tests = tests.unwrap_or_else(ProbeTest::default_set);
 
     if !confirm_or_abort()? {
         return Ok(());

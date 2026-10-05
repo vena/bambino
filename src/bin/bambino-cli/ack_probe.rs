@@ -38,18 +38,14 @@ use bambino::mqtt::{
 };
 use serde::Serialize;
 
-use crate::connection::{Printer, create_printer};
+use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, create_printer};
 use crate::error::CliError;
 use crate::redact::redact_secrets;
 
 /// Default per-command listening window. Comfortably longer than the sub-second ack latency
 /// `probe.rs` runs have observed on a P1S, while keeping a full default sweep short enough to
 /// watch interactively.
-const DEFAULT_ACK_WINDOW_SECS: u64 = 5;
-/// Time allowed for `gcode_state` to arrive before the busy gate gives up and refuses to run.
-/// Covers a full `pushall` round trip, not just an incremental delta — matches `probe.rs`'s own
-/// `PUSHALL_TIMEOUT_SECS`.
-const BUSY_WARMUP_SECS: u64 = 10;
+pub(crate) const DEFAULT_ACK_WINDOW_SECS: u64 = 5;
 /// Filename used by the `project_file` test. `project_file` *starts a print job*, so the test
 /// names a file that cannot exist on the SD card rather than a real one — nothing prints.
 ///
@@ -94,7 +90,7 @@ mod verdict {
 /// model, and re-running it is the cheap way to re-verify after a firmware update. Add a variant
 /// for any future command before putting it on the allowlist, never after.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AckTest {
+pub(crate) enum AckTest {
     AmsControl,
     AmsGetRfid,
     AmsChangeFilament,
@@ -107,14 +103,9 @@ enum AckTest {
 }
 
 impl AckTest {
-    /// Test selector accepted by `-t`/`--tests`. Kept identical to the wire command name so a
-    /// summary line can be pasted straight into `ACK_CORRELATED_COMMANDS`.
-    fn name(&self) -> &'static str {
-        self.wire_command()
-    }
-
     /// The `command` string the printer sees, and the exact literal that would be added to
-    /// `ACK_CORRELATED_COMMANDS` on a positive result.
+    /// `ACK_CORRELATED_COMMANDS` on a positive result. Also the `-t`/`--tests` selector, so a
+    /// summary line can be pasted straight into `ACK_CORRELATED_COMMANDS`.
     fn wire_command(&self) -> &'static str {
         match self {
             Self::AmsControl => "ams_control",
@@ -195,10 +186,6 @@ impl AckTest {
             .collect()
     }
 
-    fn from_name(name: &str) -> Option<AckTest> {
-        Self::all_known().iter().find(|t| t.name() == name).copied()
-    }
-
     /// Builds this test's wire payload with `seq` as its `sequence_id`.
     ///
     /// Arguments are chosen to be the least consequential ones the command accepts — the point
@@ -241,6 +228,25 @@ impl AckTest {
     }
 }
 
+/// Lets clap parse `-t` and list the tests, from the same name and description tables.
+impl clap::ValueEnum for AckTest {
+    fn value_variants<'a>() -> &'a [Self] {
+        Self::all_known()
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        let help = if self.is_physically_actuating() {
+            format!(
+                "{} (actuates hardware — not run by default)",
+                self.description()
+            )
+        } else {
+            self.description().to_owned()
+        };
+        Some(clap::builder::PossibleValue::new(self.wire_command()).help(help))
+    }
+}
+
 #[derive(Serialize)]
 struct ObservedMessage {
     elapsed_ms: u64,
@@ -249,7 +255,6 @@ struct ObservedMessage {
 
 #[derive(Serialize)]
 struct AckEntry {
-    test: String,
     wire_command: String,
     description: String,
     /// The `sequence_id` actually put on the wire, as a string (matching the wire encoding).
@@ -418,14 +423,18 @@ async fn run_one(
             ))
         })?
         .to_string();
-    let payload_bytes = serde_json::to_vec(&payload_value)
-        .map_err(|e| CliError::Other(format!("failed to encode {} payload: {e}", test.name())))?;
+    let payload_bytes = serde_json::to_vec(&payload_value).map_err(|e| {
+        CliError::Other(format!(
+            "failed to encode {} payload: {e}",
+            test.wire_command()
+        ))
+    })?;
 
     eprint!(
         "[{}/{}] {} (seq {}, {}s window)... ",
         idx + 1,
         total,
-        test.name(),
+        test.wire_command(),
         sequence_id,
         window.as_secs()
     );
@@ -440,7 +449,6 @@ async fn run_one(
     };
 
     let mut entry = AckEntry {
-        test: test.name().to_string(),
         wire_command: test.wire_command().to_string(),
         description: test.description().to_string(),
         sequence_id: sequence_id.clone(),
@@ -533,7 +541,7 @@ async fn run_one(
 async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
     client.request_pushall().await?;
 
-    let deadline = Instant::now() + Duration::from_secs(BUSY_WARMUP_SECS);
+    let deadline = Instant::now() + Duration::from_secs(RESPONSE_TIMEOUT_SECS);
     while Instant::now() < deadline && client.print_status().is_none() {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(remaining, client.poll_telemetry()).await {
@@ -555,7 +563,7 @@ async fn refuse_if_busy(client: &mut Printer) -> Result<(), CliError> {
         ))),
         Some(_) => Ok(()),
         None => Err(CliError::Other(format!(
-            "no gcode_state received within {BUSY_WARMUP_SECS}s of a pushall — cannot confirm the \
+            "no gcode_state received within {RESPONSE_TIMEOUT_SECS}s of a pushall — cannot confirm the \
              printer is idle, refusing to run"
         ))),
     }
@@ -595,7 +603,7 @@ fn confirm_actuating_tests(tests: &[AckTest]) -> Result<bool, CliError> {
     let actuating: Vec<&str> = tests
         .iter()
         .filter(|t| t.is_physically_actuating())
-        .map(|t| t.name())
+        .map(|t| t.wire_command())
         .collect();
     if actuating.is_empty() {
         return Ok(true);
@@ -626,40 +634,6 @@ Clear the build plate, make sure no print is queued, and type 'yes' to continue.
         return Ok(false);
     }
     Ok(true)
-}
-
-fn select_tests(tests_arg: Option<&str>) -> Result<Vec<AckTest>, CliError> {
-    let Some(arg) = tests_arg else {
-        return Ok(AckTest::default_set());
-    };
-
-    let mut selected = Vec::new();
-    for name in arg.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        match AckTest::from_name(name) {
-            Some(t) => selected.push(t),
-            None => {
-                eprintln!("Unknown test: '{}'. Available tests:", name);
-                for t in AckTest::all_known() {
-                    let gated = if t.is_physically_actuating() {
-                        " (actuates hardware — not run by default)"
-                    } else {
-                        ""
-                    };
-                    eprintln!("  {} — {}{}", t.name(), t.description(), gated);
-                }
-                return Err(CliError::InvalidArgs(format!(
-                    "Unknown test name: '{}'",
-                    name
-                )));
-            }
-        }
-    }
-    if selected.is_empty() {
-        return Err(CliError::InvalidArgs(
-            "--tests matched no test names".to_string(),
-        ));
-    }
-    Ok(selected)
 }
 
 /// Prints the verdict table plus the copy-paste line for `ACK_CORRELATED_COMMANDS`.
@@ -715,12 +689,12 @@ pub async fn run(
     serial: &str,
     access_code: &str,
     output: &str,
-    tests_arg: Option<&str>,
-    window_secs: Option<u64>,
+    tests: Option<Vec<AckTest>>,
+    window_secs: u64,
 ) -> Result<(), CliError> {
-    let tests = select_tests(tests_arg)?;
+    let tests = tests.unwrap_or_else(AckTest::default_set);
     // `main` bounds --window to 1..=3600, so `capture_ack`'s `Instant + window` can't overflow.
-    let window = Duration::from_secs(window_secs.unwrap_or(DEFAULT_ACK_WINDOW_SECS));
+    let window = Duration::from_secs(window_secs);
 
     if !confirm_actuating_tests(&tests)? {
         return Ok(());

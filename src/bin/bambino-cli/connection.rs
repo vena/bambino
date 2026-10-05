@@ -3,13 +3,20 @@
 use bambino::client::PrinterClient;
 use bambino::client::dummy::{DummyFactory, DummyRawIo, DummyTls};
 use bambino::identity::PrinterIdentity;
-use bambino::io::TokioIo;
+use std::sync::Arc;
+
 use bambino::io::tokio::{TokioRawStreamFactory, TokioTimer, TokioTlsConnector};
+use bambino::io::{RawStreamFactory, TlsConnector, TokioIo};
+use tokio_rustls::rustls::ClientConfig;
 
 use crate::error::CliError;
 use crate::trust::build_cli_tls_config;
 
 const CONNECT_TIMEOUT_SECS: u64 = 5;
+
+/// How long a subcommand waits for the printer to answer a request it expects a reply to (a
+/// `pushall` snapshot, a `get_version`) before reporting a timeout.
+pub(crate) const RESPONSE_TIMEOUT_SECS: u64 = 10;
 
 /// Bounds one connect-phase await (TCP dial or TLS handshake) by `CONNECT_TIMEOUT_SECS`.
 ///
@@ -22,6 +29,45 @@ pub(crate) async fn with_connect_timeout<T>(
     ::tokio::time::timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS), fut)
         .await
         .map_err(|_| CliError::Network(format!("{what} timed out after {CONNECT_TIMEOUT_SECS}s")))?
+}
+
+/// TLS stream `dial_and_handshake` returns.
+pub(crate) type TlsStream =
+    <TokioTlsConnector as TlsConnector<TokioIo<::tokio::net::TcpStream>>>::Stream;
+
+/// Dials `ip:port` and completes a TLS handshake under `config`, sending `serial` as the SNI.
+///
+/// Goes through the library's own `TokioRawStreamFactory` and `TokioTlsConnector`, so a
+/// diagnostic exercises the same dial path `PrinterClient` uses. The connector is returned
+/// alongside the stream for `peer_chain_der`.
+pub(crate) async fn dial_and_handshake(
+    ip: &str,
+    serial: &str,
+    port: u16,
+    config: Arc<ClientConfig>,
+) -> Result<(TokioTlsConnector, TlsStream), CliError> {
+    let raw_stream = with_connect_timeout(&format!("TCP connect to {ip} port {port}"), async {
+        TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {
+            CliError::Network(format!(
+                "TCP connect to {ip} port {port} failed: {}",
+                bambino::Error::from(e)
+            ))
+        })
+    })
+    .await?;
+
+    let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(config));
+    let stream = with_connect_timeout(&format!("TLS handshake with {ip} port {port}"), async {
+        connector.connect(serial, raw_stream).await.map_err(|e| {
+            CliError::Network(format!(
+                "TLS handshake with {ip} port {port} (SNI={serial}) failed: {}",
+                bambino::Error::from(e)
+            ))
+        })
+    })
+    .await?;
+
+    Ok((connector, stream))
 }
 
 /// Environment variable consulted as a fallback source for the access code when the positional `access_code` CLI argument is omitted or empty.

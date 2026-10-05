@@ -61,7 +61,7 @@ Ack-probe:        -o/--output  -t/--tests  --window"
 )]
 struct Cli {
     /// Enable verbose connection and packet debugging output
-    #[arg(short = 'v', long)]
+    #[arg(short = 'v', long, global = true)]
     verbose: bool,
 
     /// Verify the printer's TLS certificate against these CA certs instead of skipping
@@ -133,8 +133,8 @@ enum Commands {
         #[arg(short = 'o', long, default_value = "probe_report.json")]
         output: String,
         /// Comma-separated test names to run (default: all non-manual tests)
-        #[arg(short = 't', long)]
-        tests: Option<String>,
+        #[arg(short = 't', long, value_delimiter = ',')]
+        tests: Option<Vec<probe::ProbeTest>>,
     },
 
     // Evidence harness for `ACK_CORRELATED_COMMANDS` (issue #26). Doc comments on this enum are
@@ -150,11 +150,15 @@ enum Commands {
         #[arg(short = 'o', long, default_value = "ack_probe_report.json")]
         output: String,
         /// Comma-separated wire command names to test (default: all non-actuating ones)
-        #[arg(short = 't', long)]
-        tests: Option<String>,
+        #[arg(short = 't', long, value_delimiter = ',')]
+        tests: Option<Vec<ack_probe::AckTest>>,
         /// Seconds to listen for a correlated ack after each command (1-3600)
-        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
-        window: Option<u64>,
+        #[arg(
+            long,
+            default_value_t = ack_probe::DEFAULT_ACK_WINDOW_SECS,
+            value_parser = clap::value_parser!(u64).range(1..=3600)
+        )]
+        window: u64,
     },
 
     /// Dispatch a movement or hardware control command
@@ -319,7 +323,7 @@ async fn main() {
                 &serial,
                 &resolve_access_code(access_code),
                 &output,
-                tests.as_deref(),
+                tests,
             )
             .await
         }
@@ -336,7 +340,7 @@ async fn main() {
                 &serial,
                 &resolve_access_code(access_code),
                 &output,
-                tests.as_deref(),
+                tests,
                 window,
             )
             .await

@@ -31,10 +31,10 @@
 
 use std::path::{Path, PathBuf};
 
-use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, build_unsafe_client_config};
-use bambino::io::{RawStreamFactory, TlsConnector};
+use bambino::io::TlsConnector;
+use bambino::io::tokio::build_unsafe_client_config;
 
-use crate::connection::{validate_ip_serial, with_connect_timeout};
+use crate::connection::{dial_and_handshake, validate_ip_serial};
 use crate::error::CliError;
 use crate::trust::trusted_roots;
 
@@ -71,8 +71,6 @@ fn chain_member_path(output: &str, index: usize) -> PathBuf {
 pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), CliError> {
     validate_ip_serial(ip, serial)?;
 
-    let addr = format!("{ip}:{port}");
-
     // Capturing an unverifiable chain is the point of this command, so `--with-certs` is not
     // applied; say so rather than let a user read a completed handshake as a verified one.
     if trusted_roots().is_some() {
@@ -82,29 +80,8 @@ pub async fn run(ip: &str, serial: &str, port: u16, output: &str) -> Result<(), 
         );
     }
 
-    let raw_stream = with_connect_timeout(&format!("TCP connect to {addr}"), async {
-        TokioRawStreamFactory.dial(ip, port).await.map_err(|e| {
-            CliError::Network(format!(
-                "TCP connect to {addr} failed: {}",
-                bambino::Error::from(e)
-            ))
-        })
-    })
-    .await?;
-
-    let connector = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(
-        build_unsafe_client_config(),
-    ));
-
-    let tls_stream = with_connect_timeout(&format!("TLS handshake with {addr}"), async {
-        connector.connect(serial, raw_stream).await.map_err(|e| {
-            CliError::Network(format!(
-                "TLS handshake with {addr} (SNI={serial}) failed: {}",
-                bambino::Error::from(e)
-            ))
-        })
-    })
-    .await?;
+    let (connector, tls_stream) =
+        dial_and_handshake(ip, serial, port, build_unsafe_client_config()).await?;
 
     // Must be read before the stream is dropped: the chain is owned by the live session.
     let chain = connector.peer_chain_der(&tls_stream).ok_or_else(|| {
