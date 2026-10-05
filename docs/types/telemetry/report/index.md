@@ -310,6 +310,24 @@ struct PrinterTelemetry {
 
 Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
 
+Most fields mirror the wire as-is. Where a decoded accessor exists, prefer it over reading the
+raw field and re-implementing the decode:
+
+| Instead of the raw field | Use |
+| :--- | :--- |
+| `stg_cur`, `stg` | [`current_stage`](#printertelemetry) (gated on `gcode_state` [REF-MQTT-IDLEBUG]), [`stage_queue`](#printertelemetry) |
+| `home_flag` bits 8–9, `sdcard` | [`sdcard_state`](#printertelemetry) |
+| `home_flag` bit 23, `stat` | [`is_door_open_from_home_flag`](#printertelemetry), [`is_door_open_from_stat`](#printertelemetry) |
+| `home_flag` bit 3 | [`is_220v_power`](#printertelemetry) |
+| `net.conf`, `wifi_signal` | [`is_ethernet_active`](#printertelemetry), with [`is_ethernet_active_via_wifi_signal`](#printertelemetry) as the fallback |
+| `gcode_start_time` | [`gcode_start_time_secs`](#printertelemetry) |
+| `chamber_temper` (packed) | [`unpack_temperature`](#printertelemetry) |
+| `bed_temper` / `device.bed` | [`TelemetryReport::bed_temperatures`](../index.md#telemetryreport) |
+| `device`, `fun`, `fun2` | [`TelemetryReport::device`](../index.md#telemetryreport), [`fun`](../index.md#telemetryreport), [`fun2_bit`](../index.md#telemetryreport) (both wire locations) |
+| `ipcam.*` toggles | [`IpcamTelemetry::recording`](../diagnostics/index.md#ipcamtelemetry), [`timelapse_enabled`](../diagnostics/index.md#ipcamtelemetry) |
+| `lights_report[].mode` | [`LightReport::is_on`](#lightreport) |
+| `xcam.cfg`, `xcam.halt_print_sensitivity` | the `XcamTelemetry` detector accessors, [`halt_print_sensitivity_level`](../xcam/index.md#xcamtelemetry) |
+
 #### Fields
 
 - **`gcode_state`**: `Option<String>`

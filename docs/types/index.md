@@ -1880,6 +1880,24 @@ struct PrinterTelemetry {
 
 Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
 
+Most fields mirror the wire as-is. Where a decoded accessor exists, prefer it over reading the
+raw field and re-implementing the decode:
+
+| Instead of the raw field | Use |
+| :--- | :--- |
+| `stg_cur`, `stg` | [`current_stage`](telemetry/report/index.md#printertelemetry) (gated on `gcode_state` [REF-MQTT-IDLEBUG]), [`stage_queue`](telemetry/report/index.md#printertelemetry) |
+| `home_flag` bits 8–9, `sdcard` | [`sdcard_state`](telemetry/report/index.md#printertelemetry) |
+| `home_flag` bit 23, `stat` | [`is_door_open_from_home_flag`](telemetry/report/index.md#printertelemetry), [`is_door_open_from_stat`](telemetry/report/index.md#printertelemetry) |
+| `home_flag` bit 3 | [`is_220v_power`](telemetry/report/index.md#printertelemetry) |
+| `net.conf`, `wifi_signal` | [`is_ethernet_active`](telemetry/report/index.md#printertelemetry), with [`is_ethernet_active_via_wifi_signal`](telemetry/report/index.md#printertelemetry) as the fallback |
+| `gcode_start_time` | [`gcode_start_time_secs`](telemetry/report/index.md#printertelemetry) |
+| `chamber_temper` (packed) | [`unpack_temperature`](telemetry/report/index.md#printertelemetry) |
+| `bed_temper` / `device.bed` | [`TelemetryReport::bed_temperatures`](telemetry/index.md#telemetryreport) |
+| `device`, `fun`, `fun2` | [`TelemetryReport::device`](telemetry/index.md#telemetryreport), [`fun`](telemetry/index.md#telemetryreport), [`fun2_bit`](telemetry/index.md#telemetryreport) (both wire locations) |
+| `ipcam.*` toggles | [`IpcamTelemetry::recording`](telemetry/diagnostics/index.md#ipcamtelemetry), [`timelapse_enabled`](telemetry/diagnostics/index.md#ipcamtelemetry) |
+| `lights_report[].mode` | [`LightReport::is_on`](telemetry/report/index.md#lightreport) |
+| `xcam.cfg`, `xcam.halt_print_sensitivity` | the `XcamTelemetry` detector accessors, [`halt_print_sensitivity_level`](telemetry/xcam/index.md#xcamtelemetry) |
+
 #### Fields
 
 - **`gcode_state`**: `Option<String>`
