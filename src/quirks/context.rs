@@ -46,7 +46,7 @@ pub struct QuirkContext<'a> {
     /// BambuStudio reads this field.
     pub fun2: Option<&'a str>,
 
-    /// The printer's OTA firmware version (`module[name="ota"].sw_ver`, e.g. `"01.09.00.00"`),
+    /// The printer's OTA firmware version (`module[name="ota"].sw_ver`, see [`OTA_MODULE_NAME`](crate::types::version::OTA_MODULE_NAME), e.g. `"01.09.00.00"`),
     /// if a `get_version` response has been seen.
     ///
     /// Several capabilities ship in a specific firmware release rather than being inherent to

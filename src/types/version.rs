@@ -7,6 +7,9 @@ use alloc::vec::Vec;
 
 use serde::Deserialize;
 
+/// Name of the module carrying the printer's own controller firmware.
+pub const OTA_MODULE_NAME: &str = "ota";
+
 fn default_visible() -> bool {
     true
 }
@@ -61,6 +64,12 @@ pub struct VersionInfo {
 }
 
 impl VersionInfo {
+    /// The module named `name` (e.g. [`OTA_MODULE_NAME`], `"esp32"`, `"mc"`), if reported.
+    #[must_use]
+    pub fn module(&self, name: &str) -> Option<&VersionModule> {
+        self.module.iter().find(|m| m.name == name)
+    }
+
     /// The printer's own firmware version — `module[name == "ota"].sw_ver`.
     ///
     /// The `ota` module is the main controller firmware, which is what version-gated
@@ -72,10 +81,7 @@ impl VersionInfo {
     /// `None` when no `ota` module is present in the response.
     #[must_use]
     pub fn firmware_version(&self) -> Option<&str> {
-        self.module
-            .iter()
-            .find(|m| m.name == "ota")
-            .map(|m| m.sw_ver.as_str())
+        self.module(OTA_MODULE_NAME).map(|m| m.sw_ver.as_str())
     }
 }
 
@@ -122,7 +128,13 @@ mod tests {
         assert_eq!(info.module.len(), 2);
 
         assert_eq!(info.module[0].product_name, "Bambu Lab X1 Carbon");
-        assert_eq!(info.module[0].name, "ota");
+        assert_eq!(info.module[0].name, OTA_MODULE_NAME);
+        assert_eq!(info.firmware_version(), Some("01.09.00.00"));
+        assert_eq!(
+            info.module("esp32").map(|m| m.sw_ver.as_str()),
+            Some("01.02.03.04")
+        );
+        assert!(info.module("mc").is_none());
         assert!(info.module[0].visible);
 
         // Second module uses defaults for missing fields
