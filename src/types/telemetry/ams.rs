@@ -423,9 +423,19 @@ impl AmsDrySetting {
 pub type VirtualTray = AmsTray;
 
 /// Native state code meaning "slot empty" [REF-AMS-DECODE].
-/// Lives here (not in `ams::parser`) since `AmsTray::state()` is a pure data accessor and
-/// `types/` must not depend on business-logic modules.
+///
+/// The tray states and the loaded-spool rule live here, with the data they read, so `types/`
+/// depends only on the dependency-free `ams::ids` and not on `ams::parser`.
 pub(crate) const AMS_TRAY_STATE_EMPTY: u8 = 9;
+
+/// Native state code reported by a powered-off AMS: always treated as no spool, on every unit
+/// type including AMS-HT (`reference/05_materials_ams.md`).
+pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
+
+/// True for a `tray_type` that explicitly reports no material: empty, or the literal `"Empty"`.
+fn is_blank_type(tray_type: &str) -> bool {
+    tray_type.is_empty() || tray_type == "Empty"
+}
 
 /// Native state code meaning "spool physically present but not yet fed to the extruder"
 /// [REF-AMS-DECODE]. On H2D-generation firmware this is one of the two explicit
@@ -693,9 +703,7 @@ impl AmsUnitModel {
     pub fn slot_count(self) -> Option<u8> {
         match self {
             Self::AmsHt => Some(1),
-            Self::Ams | Self::AmsLite | Self::Ams2Pro => {
-                Some(crate::ams::parser::AMS_SLOTS_PER_UNIT)
-            }
+            Self::Ams | Self::AmsLite | Self::Ams2Pro => Some(crate::ams::ids::AMS_SLOTS_PER_UNIT),
             Self::ExternalSpool | Self::AmsLiteMixed => None,
         }
     }
@@ -1130,9 +1138,7 @@ impl AmsTray {
     /// absent or explicitly blank (empty or `"Empty"`).
     #[must_use]
     pub fn material(&self) -> Option<&str> {
-        self.tray_type
-            .as_deref()
-            .filter(|t| !crate::ams::parser::is_blank_type(t))
+        self.tray_type.as_deref().filter(|t| !is_blank_type(t))
     }
 
     /// The `RRGGBBAA` `tray_color` decoded to `[r, g, b, a]`, or `None` if absent or malformed.
@@ -1179,7 +1185,31 @@ impl AmsTray {
     /// and an explicitly blank `tray_type` means empty.
     #[must_use]
     pub fn is_loaded(&self, ams_id: u8) -> bool {
-        crate::ams::parser::tray_is_loaded(self, ams_id)
+        // An *absent* `state` is not a report of emptiness. Some firmware sends a complete tray
+        // payload (`tray_info_idx`, `tray_type`, `tray_color`, `remain`) with no `state` key at
+        // all, and treating that as absent-equivalent scrubbed the spool's material data on every
+        // `TelemetryCache::sanitized_ams()` call. Fall back to the filament metadata instead —
+        // the same fallback pybambu reaches for in `_has_filament_metadata` /
+        // `_resolve_loaded_state` (`models.py:3517-3538`), which gates on a `_state_reported`
+        // flag and accepts a non-empty `tray_info_idx`, or a `tray_type` that is neither empty
+        // nor `"Empty"`, as proof a spool is loaded.
+        let has_filament_metadata = self
+            .tray_info_idx
+            .as_ref()
+            .is_some_and(|idx| !idx.is_empty())
+            || self.tray_type.as_ref().is_some_and(|t| !is_blank_type(t));
+
+        let is_absent_state = matches!(self.state, Some(AMS_TRAY_STATE_POWER_OFF))
+            || (self.state.is_none() && !has_filament_metadata)
+            || (!crate::ams::ids::is_ams_ht_id(ams_id)
+                && matches!(
+                    self.state,
+                    Some(AMS_TRAY_STATE_SPOOL_NOT_FED) | Some(AMS_TRAY_STATE_EMPTY)
+                ));
+
+        let is_type_cleared = self.tray_type.as_deref().is_some_and(is_blank_type);
+
+        !(is_absent_state || is_type_cleared)
     }
 
     /// Accurate remaining weight in grams, translating `remain_g`'s raw wire

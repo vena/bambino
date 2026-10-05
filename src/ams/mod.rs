@@ -6,15 +6,17 @@
 //! including multi-AMS index resolution, spool presence detection, and stale tray data
 //! cleanup. Supports standard AMS units, AMS-HT dry chambers, and virtual external spools.
 
+pub(crate) mod ids;
 pub mod mapping;
 pub mod parser;
 
+pub use ids::normalize_ams_unit_id;
 pub use mapping::{
     AmsEntryKind, AmsLiteSlot, AmsMapping2Entry, AmsPoolComposition, MaterialSource,
     build_ams_mapping, build_ams_mapping2, classify_mapping2_entry, is_ams_pool_composition_valid,
     is_external_spool_safety_valid, is_external_spool_safety_valid_flat,
 };
 pub use parser::{
-    clean_stale_tray_data, evaluate_spool_presence, normalize_ams_unit_id, resolve_global_tray_id,
+    clean_stale_tray_data, evaluate_spool_presence, resolve_global_tray_id,
     resolve_printing_global_id,
 };

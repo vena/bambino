@@ -579,7 +579,7 @@ impl ExtruderInfo {
             return None;
         }
         let slot_id = (raw & 0xFF) as u8;
-        let ams_id = crate::ams::parser::normalize_ams_unit_id(((raw >> 8) & 0xFF) as u8);
+        let ams_id = crate::ams::ids::normalize_ams_unit_id(((raw >> 8) & 0xFF) as u8);
         Some((ams_id, slot_id))
     }
 

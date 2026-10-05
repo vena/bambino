@@ -10,7 +10,7 @@ use alloc::vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use super::parser::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
+use super::ids::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use serde::{Deserialize, Serialize};
 
 /// Enumeration of possible physical feed locations for loaded spools.
@@ -73,22 +73,17 @@ impl MaterialSource {
     pub fn flat_channel_id(&self) -> i32 {
         match self {
             MaterialSource::StandardAms { ams_id, slot_id }
-                if *ams_id <= super::parser::AMS_MAX_STANDARD_ID
-                    && *slot_id < super::parser::AMS_SLOTS_PER_UNIT =>
+                if *ams_id <= super::ids::AMS_MAX_STANDARD_ID
+                    && *slot_id < super::ids::AMS_SLOTS_PER_UNIT =>
             {
-                ((*ams_id as i32) * super::parser::AMS_SLOTS_PER_UNIT as i32) + (*slot_id as i32)
+                ((*ams_id as i32) * super::ids::AMS_SLOTS_PER_UNIT as i32) + (*slot_id as i32)
             }
-            MaterialSource::AmsHt { ams_id }
-                if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX)
-                    .contains(ams_id) =>
-            {
-                *ams_id as i32
-            }
+            MaterialSource::AmsHt { ams_id } if super::ids::is_ams_ht_id(*ams_id) => *ams_id as i32,
             // The flat array's encoding is per-unit-type, not uniformly "global channel id":
             // AMS Lite puts a bare local slot 0-3 here. CONFIRMED by bambuddy against the
             // firmware's own mapping — a captured flat `[1]` paired with an `ams_mapping2`
             // entry of `{"ams_id": 16, "slot_id": 1}`.
-            MaterialSource::AmsLite { slot_id } if *slot_id < super::parser::AMS_SLOTS_PER_UNIT => {
+            MaterialSource::AmsLite { slot_id } if *slot_id < super::ids::AMS_SLOTS_PER_UNIT => {
                 *slot_id as i32
             }
             _ => -1, // External and unmapped slots are strictly mapped to -1
@@ -103,8 +98,8 @@ impl MaterialSource {
             // ams_id/slot_id falls back to the same unmapped sentinel entry as
             // MaterialSource::Unmapped, rather than serializing a bogus StandardAms/AmsHt entry.
             MaterialSource::StandardAms { ams_id, slot_id } => {
-                if *ams_id <= super::parser::AMS_MAX_STANDARD_ID
-                    && *slot_id < super::parser::AMS_SLOTS_PER_UNIT
+                if *ams_id <= super::ids::AMS_MAX_STANDARD_ID
+                    && *slot_id < super::ids::AMS_SLOTS_PER_UNIT
                 {
                     AmsMapping2Entry {
                         ams_id: *ams_id,
@@ -118,7 +113,7 @@ impl MaterialSource {
                 }
             }
             MaterialSource::AmsHt { ams_id } => {
-                if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(ams_id) {
+                if super::ids::is_ams_ht_id(*ams_id) {
                     AmsMapping2Entry {
                         ams_id: *ams_id,
                         slot_id: 0,
@@ -135,9 +130,9 @@ impl MaterialSource {
             // (bambuddy's `a2l_lite_wire_ids`) and BambuStudio, which writes the unreduced
             // `ams_id` into its mapping entry (`DevMapping.cpp:88-89`).
             MaterialSource::AmsLite { slot_id } => {
-                if *slot_id < super::parser::AMS_SLOTS_PER_UNIT {
+                if *slot_id < super::ids::AMS_SLOTS_PER_UNIT {
                     AmsMapping2Entry {
-                        ams_id: super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID,
+                        ams_id: super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID,
                         slot_id: *slot_id,
                     }
                 } else {
@@ -213,17 +208,16 @@ pub enum AmsEntryKind {
 /// "external spool" or "unmapped".
 #[must_use]
 pub fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind {
-    if entry.ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID || entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID {
+    if super::ids::is_external_spool_id(entry.ams_id) {
         AmsEntryKind::External
-    } else if entry.ams_id <= super::parser::AMS_MAX_STANDARD_ID
-        && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
+    } else if entry.ams_id <= super::ids::AMS_MAX_STANDARD_ID
+        && entry.slot_id < super::ids::AMS_SLOTS_PER_UNIT
     {
         AmsEntryKind::Standard
-    } else if (super::parser::AMS_HT_ID_MIN..=super::parser::AMS_HT_ID_MAX).contains(&entry.ams_id)
-    {
+    } else if super::ids::is_ams_ht_id(entry.ams_id) {
         AmsEntryKind::Ht
-    } else if entry.ams_id == super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID
-        && entry.slot_id < super::parser::AMS_SLOTS_PER_UNIT
+    } else if entry.ams_id == super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID
+        && entry.slot_id < super::ids::AMS_SLOTS_PER_UNIT
     {
         AmsEntryKind::AmsLite
     } else {
@@ -240,8 +234,7 @@ pub fn classify_mapping2_entry(entry: &AmsMapping2Entry) -> AmsEntryKind {
 pub fn flat_channel_id_for_entry(entry: &AmsMapping2Entry) -> i32 {
     match classify_mapping2_entry(entry) {
         AmsEntryKind::Standard => {
-            (entry.ams_id as i32) * (super::parser::AMS_SLOTS_PER_UNIT as i32)
-                + entry.slot_id as i32
+            (entry.ams_id as i32) * (super::ids::AMS_SLOTS_PER_UNIT as i32) + entry.slot_id as i32
         }
         AmsEntryKind::Ht => entry.ams_id as i32,
         // The flat array's encoding is per-unit-type, not uniformly "global channel id": the
@@ -483,7 +476,7 @@ pub fn is_ams_pool_composition_valid(
             AmsEntryKind::Standard => standard_ids |= 1 << entry.ams_id,
             // One physical id, so at most one unit however many slots reference it.
             AmsEntryKind::AmsLite => uses_ams_lite = true,
-            AmsEntryKind::Ht => ht_ids |= 1 << (entry.ams_id - super::parser::AMS_HT_ID_MIN),
+            AmsEntryKind::Ht => ht_ids |= 1 << (entry.ams_id - super::ids::AMS_HT_ID_MIN),
             // External/unmapped sentinels don't occupy a physical unit slot; anything else is a
             // malformed ams_id/slot_id pair — reject exhaustively rather than silently ignoring
             // it like a legitimate external entry.
@@ -526,11 +519,11 @@ pub fn is_external_spool_safety_valid_flat(is_single_nozzle: bool, ams_mapping: 
 /// mapping sanitizer and the client's tray validation: two hand-kept copies could drift so that
 /// the sanitizer rewrote every channel to `-1` while the interlock still passed (#316).
 pub(crate) fn is_physical_flat_channel(v: i32) -> bool {
-    let max_standard_channel = (i32::from(super::parser::AMS_MAX_STANDARD_ID) + 1)
-        * i32::from(super::parser::AMS_SLOTS_PER_UNIT)
+    let max_standard_channel = (i32::from(super::ids::AMS_MAX_STANDARD_ID) + 1)
+        * i32::from(super::ids::AMS_SLOTS_PER_UNIT)
         - 1;
     (0..=max_standard_channel).contains(&v)
-        || (i32::from(super::parser::AMS_HT_ID_MIN)..=i32::from(super::parser::AMS_HT_ID_MAX))
+        || (i32::from(super::ids::AMS_HT_ID_MIN)..=i32::from(super::ids::AMS_HT_ID_MAX))
             .contains(&v)
 }
 
@@ -788,7 +781,7 @@ mod tests {
         // AmsMapping2Entry and each missed an A2L-attached AMS Lite's physical id 16, which only
         // MaterialSource's own methods handled. They now share classify_mapping2_entry.
         let lite = AmsMapping2Entry {
-            ams_id: super::super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID,
+            ams_id: super::super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID,
             slot_id: 1,
         };
         assert_eq!(classify_mapping2_entry(&lite), AmsEntryKind::AmsLite);
@@ -827,7 +820,7 @@ mod tests {
             .map(|ams_id| AmsMapping2Entry { ams_id, slot_id: 0 })
             .collect();
         mapping.push(AmsMapping2Entry {
-            ams_id: super::super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID,
+            ams_id: super::super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID,
             slot_id: 2,
         });
         let a2l = AmsPoolComposition::Shared {
@@ -848,7 +841,7 @@ mod tests {
     #[test]
     fn test_ams_lite_id_rejected_where_no_additive_lite_attaches() {
         let lite = [AmsMapping2Entry {
-            ams_id: super::super::parser::AMS_LITE_ON_A2L_PHYSICAL_ID,
+            ams_id: super::super::ids::AMS_LITE_ON_A2L_PHYSICAL_ID,
             slot_id: 0,
         }];
         for composition in [

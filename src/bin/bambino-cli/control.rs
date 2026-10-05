@@ -100,7 +100,7 @@ pub enum AmsAction {
     )]
     Dry(DryArgs),
     /// Stop AMS drying cycle
-    DryStop { id: i32 },
+    DryStop { id: u8 },
 }
 
 #[derive(Subcommand, Debug)]
@@ -291,7 +291,7 @@ async fn dispatch<T>(
 /// `ams dry` flags, parsed by clap and passed straight to [`run_dry`].
 #[derive(clap::Args, Debug)]
 pub struct DryArgs {
-    id: i32,
+    id: u8,
     /// Filament material (PLA, PETG, ABS, PA-CF, ...). Fills temperature, duration and
     /// cooling temperature from Bambu's published drying parameters for the attached unit.
     #[arg(long)]
@@ -345,7 +345,7 @@ const DRY_UNIT_RESOLVE_TIMEOUT_SECS: u64 = 5;
 /// gate regardless. The fallback now warns on stderr: erring cool still means the filament
 /// under-dries, and silently substituting a guessed column is the failure this exists to make
 /// visible.
-async fn resolve_dry_unit(client: &mut Printer, ams_id: i32) -> AmsUnitModel {
+async fn resolve_dry_unit(client: &mut Printer, ams_id: u8) -> AmsUnitModel {
     // Neither the pushall nor a failed poll is fatal: the fallback below is a sound answer, and
     // the drying gate still refuses anything the hardware would reject.
     let _ = client.request_pushall().await;

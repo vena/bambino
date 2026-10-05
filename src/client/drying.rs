@@ -17,7 +17,6 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::{String, ToString};
 
-use crate::ams::parser::{AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_LITE_ON_A2L_PHYSICAL_ID};
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::{AmsFilamentDryingRequest, DryingParams};
@@ -25,8 +24,8 @@ use crate::types::DryingMaterial;
 use crate::types::drying::DEFAULT_COMMAND_COOLING_TEMP;
 use crate::types::telemetry::AmsUnitModel;
 
-use super::ams::{is_ams_ht_id, is_valid_ams_id, wire_ams_id};
 use super::{CommandHandle, PrinterClient};
+use crate::ams::ids::{is_ams_ht_id, is_valid_ams_id, wire_ams_id};
 
 impl<
     MqttRawIO,
@@ -89,7 +88,7 @@ where
     /// attached unit's model, and the temperature range [REF-AMS-DRYER].
     pub fn dry(
         &mut self,
-        ams_id: i32,
+        ams_id: u8,
     ) -> crate::client::DryingCycle<
         '_,
         MqttRawIO,
@@ -111,13 +110,13 @@ where
     ///
     /// Mirrors BambuStudio's `CtrlAmsStopDrying` (`DevFilaSystemCtrl.cpp:40-53`) exactly —
     /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
-    pub async fn stop_drying(&mut self, ams_id: i32) -> Result<CommandHandle, Error> {
+    pub async fn stop_drying(&mut self, ams_id: u8) -> Result<CommandHandle, Error> {
         if !is_valid_ams_id(ams_id) {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for stop_drying".into(),
             ));
         }
-        let ams_id = wire_ams_id(ams_id);
+        let ams_id = i32::from(wire_ams_id(ams_id));
         self.dispatch(|seq| AmsFilamentDryingRequest::stop(ams_id, seq))
             .await
     }
@@ -176,7 +175,7 @@ pub struct DryingCycle<
         CameraTls,
         CameraFactory,
     >,
-    ams_id: i32,
+    ams_id: u8,
     /// Vendor parameters to fill whatever wasn't set explicitly, with the while-printing flag.
     material: Option<(DryingMaterial, AmsUnitModel)>,
     printing: bool,
@@ -249,7 +248,7 @@ where
             CameraTls,
             CameraFactory,
         >,
-        ams_id: i32,
+        ams_id: u8,
     ) -> Self {
         Self {
             client,
@@ -441,16 +440,14 @@ where
         // An external spool is a holder on a bracket, not a box with a heater — the one place
         // the address *does* settle the capability, since 254/255 never appear in the `ams`
         // array for the cached lookup below to find.
-        if self.ams_id == 254 || self.ams_id == 255 {
+        if crate::ams::ids::is_external_spool_id(self.ams_id) {
             return Err(Error::ModelMismatch(
                 "external spool has no drying chamber — drying needs an AMS 2 Pro or AMS-HT".into(),
             ));
         }
         // Same for an AMS Lite on an A2L: `6`/`16` is never any other unit, so the address alone
         // settles it before telemetry has named the unit.
-        if self.ams_id == i32::from(AMS_LITE_ON_A2L_NORMALIZED_ID)
-            || self.ams_id == i32::from(AMS_LITE_ON_A2L_PHYSICAL_ID)
-        {
+        if crate::ams::ids::is_ams_lite_on_a2l_id(self.ams_id) {
             return Err(Error::ModelMismatch(
                 "AMS Lite has no drying chamber — drying needs an AMS 2 Pro or AMS-HT".into(),
             ));
@@ -505,7 +502,7 @@ where
             cooling_temp,
             close_power_conflict: self.close_power_conflict,
         };
-        let ams_id = wire_ams_id(self.ams_id);
+        let ams_id = i32::from(wire_ams_id(self.ams_id));
         self.client
             .dispatch(|seq| AmsFilamentDryingRequest::start(ams_id, params.clone(), seq))
             .await

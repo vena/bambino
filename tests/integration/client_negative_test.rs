@@ -1331,7 +1331,7 @@ async fn test_start_drying_rejects_invalid_ams_id() {
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
 
     let result = client
-        .dry(999)
+        .dry(200)
         .temp(55)
         .duration_hours(8)
         .humidity(0)
@@ -1424,7 +1424,7 @@ async fn test_ams_commands_address_ams_lite_on_a2l() {
     client.scan_rfid(16, 2).await.expect("scan_rfid failed");
     client.stop_drying(6).await.expect("stop_drying failed");
     client
-        .select_k_profile(6, 25, 4, "GFA01", "0.4")
+        .select_k_profile(6, 1, 4, "GFA01", "0.4")
         .await
         .expect("select_k_profile failed");
     // Issue #355: no AMS telemetry has arrived, but the address alone says AMS Lite — no heater.
@@ -1579,30 +1579,43 @@ async fn test_select_k_profile_rejects_invalid_combo() {
     broker_task.await.expect("Broker task panicked");
 }
 
+/// The global `tray_id` is derived from the unit and its local slot (#397): `(2, 1)` used to
+/// bind unit 0's tray 1 while claiming unit 2, and `(0, 15)` unit 3's last tray.
 #[tokio::test]
-async fn test_select_k_profile_rejects_standard_tray_id_above_15() {
+async fn test_select_k_profile_derives_tray_from_unit_and_slot() {
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
 
-        // Only the valid (0, 15) call below dispatches — if the rejected (0, 16) call
-        // had leaked a publish, this read would see tray_id 16 and fail the assert.
-        let json = read_publish_payload(&mut server_stream).await;
-        assert_eq!(json["print"]["command"], "extrusion_cali_sel");
-        assert_eq!(json["print"]["tray_id"], 15);
+        // Only the valid calls dispatch — a leaked publish from a rejected one would be read
+        // here first and fail the asserts.
+        for (ams_id, tray_id, slot_id) in [(2, 9, 1), (3, 15, 3), (128, 128, 0)] {
+            let json = read_publish_payload(&mut server_stream).await;
+            assert_eq!(json["print"]["command"], "extrusion_cali_sel");
+            assert_eq!(json["print"]["ams_id"], ams_id);
+            assert_eq!(json["print"]["tray_id"], tray_id);
+            assert_eq!(json["print"]["slot_id"], slot_id);
+        }
     });
 
     let mut client =
         connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
 
-    // Standard-AMS global tray IDs are 0..=15 (4 units × 4 slots); 16..=103 used to
-    // slip through and dispatch an address the firmware rejects or mis-routes.
-    let result = client.select_k_profile(0, 16, 4, "GFA01", "0.4").await;
-    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
-
-    // The upper documented standard boundary (15) must still be accepted.
-    let result = client.select_k_profile(0, 15, 4, "GFA01", "0.4").await;
-    assert!(result.is_ok());
+    for (ams_id, slot_id) in [(0, 4), (0, 15), (128, 1)] {
+        let result = client
+            .select_k_profile(ams_id, slot_id, 4, "GFA01", "0.4")
+            .await;
+        assert!(
+            matches!(result, Err(Error::ProtocolViolation(_))),
+            "({ams_id}, {slot_id}) must be rejected"
+        );
+    }
+    for (ams_id, slot_id) in [(2, 1), (3, 3), (128, 0)] {
+        client
+            .select_k_profile(ams_id, slot_id, 4, "GFA01", "0.4")
+            .await
+            .expect("valid unit/slot pair must dispatch");
+    }
 
     broker_task.await.expect("Broker task panicked");
 }

@@ -154,10 +154,10 @@ impl AmsFilamentSettingRequest {
                 slot_id,
                 // `254` for either external-spool address, the slot otherwise — BambuStudio's
                 // `tag_tray_id` derivation, which never yields `0` for a virtual tray.
-                tray_id: if ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID)
-                    || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
+                tray_id: if ams_id == i32::from(crate::ams::ids::AMS_EXTERNAL_SPOOL_MAIN_ID)
+                    || ams_id == i32::from(crate::ams::ids::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
                 {
-                    i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
+                    i32::from(crate::ams::ids::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
                 } else {
                     slot_id
                 },

@@ -5,74 +5,16 @@
 //! presence via hex bitmasks, managing power-down state anomalies, cleansing stale
 //! tray data, and calculating global indexes.
 
+#[cfg(test)]
+use super::ids::{
+    AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID, AMS_LITE_ON_A2L_PHYSICAL_ID,
+};
+use super::ids::{
+    AMS_HT_ID_MIN, AMS_LITE_ON_A2L_NORMALIZED_ID, AMS_SLOTS_PER_UNIT, is_ams_ht_id,
+    is_external_spool_id, is_standard_id, normalize_ams_unit_id,
+};
 use crate::types::AmsTray;
-use crate::types::telemetry::ams::{AMS_TRAY_STATE_EMPTY, AMS_TRAY_STATE_SPOOL_NOT_FED};
-
-pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
-/// Reverted from `7` back to `3` — the widening to `7` relied on
-/// bambuddy's `ck_ams_id_range` CHECK constraint (0-7), but that range predates bambuddy's
-/// own issue #1274 by a month with no cited evidence of a standard unit above id 3; #1274
-/// itself only confirms `ams_id=128` (AMS-HT). Three independent sources now agree `3` is
-/// correct: user-supplied official Bambu Lab documentation caps standard AMS 2 Pro units at
-/// 4 on every product line; BambuStudio's own `DevAms::GetTrayId` (`DevFilaSystem.cpp:247-269`)
-/// hardcodes AMS-HT's bit-index base offset at `16`, which is only correct if standard units
-/// never reach bits 16+ (i.e. never exceed id 3); and pybambu's uncapped `tray_now >> 2`
-/// decode doesn't corroborate 8 units either — it's simply unbounded, not evidence of an
-/// observed 8th unit.
-pub(crate) const AMS_MAX_STANDARD_ID: u8 = 3;
-/// AMS-HT unit ids are capped at 135 (8 lettered units, "A"-"H"), not BambuStudio's wider
-/// `< 153` bound (`DevFilaSystem.cpp:411` `GetTrayNameByTrayId`, `CalibUtils.cpp:140-141`) —
-/// deliberately, not an oversight. That bound is defensive-margin coding, not a confirmed
-/// protocol ceiling: bambuddy's actual AMS-HT *operational* logic (not just a storage-layer
-/// check) caps at the same 135 bambino uses (`backend/app/api/routes/printers.py:2822,3073-3074`,
-/// `backend/app/main.py:7993-7995`'s 8-letter `HT-{A..H}` labeling). The two upstreams disagree
-/// with each other here; bambino follows the one with real operational AMS-HT-unit logic
-/// behind it. Raise this again only with hardware evidence for a 9th+ AMS-HT unit (id 136+) —
-/// re-litigated without new evidence in the 2026-09-08 telemetry review sweep, same conclusion.
-pub(crate) const AMS_HT_ID_MIN: u8 = 128;
-pub(crate) const AMS_HT_ID_MAX: u8 = 135;
-/// The unit id a 4-slot AMS Lite reports when it is attached to an **A2L printer**.
-///
-/// "AMS Lite" is the unit; "A2L" is the printer it is plugged into, and the pairing is what
-/// selects this id. The same physical unit is an A1/A1 mini's *only* possible AMS and takes id
-/// 0 there; an A2L can run it alongside up to four shared-pool units already holding ids 0-3
-/// (`MODEL_MATRIX.csv`, "AMS Unit Limits"), so it needs an id outside that block and reports
-/// 16.
-///
-/// 16 sits outside every other range (standard 0-3, AMS-HT 128-135, external 254/255), so
-/// untranslated it falls through every branch here and resolves to the unmapped sentinel.
-///
-/// BambuStudio encodes the same pairing as a distinct *unit type* rather than a distinct id —
-/// `AMS_LITE_MIXED = 5`, commented "AMS-Lite for N9" (`DeviceCore/DevDefs.h:61`), N9 being the
-/// A2L's dev token — read from the unit's own `info` type nibble. It therefore never reads
-/// this id at all; see [`AMS_LITE_ON_A2L_NORMALIZED_ID`] for where the two routes reconverge.
-pub(crate) const AMS_LITE_ON_A2L_PHYSICAL_ID: u8 = 16;
-/// The id an [A2L-attached AMS Lite](AMS_LITE_ON_A2L_PHYSICAL_ID) is normalized to on ingest,
-/// so the standard `ams_id * 4 + slot` formula lands its global tray ids at 24-27.
-///
-/// 24 is not an arbitrary choice: it is BambuStudio's own `AMS_LITE_MIXED_TRAY_INDEX_OFFSET`
-/// (`DeviceCore/DevDefs.h:93`), applied as `24 + slot_id` in all three of `DevAms::GetTrayId`
-/// (`DevFilaSystem.cpp:262-263`), `DevMappingUtil::ams_filament_mapping` and
-/// `DevMapping.cpp:102-104` — none of which consult `ams_id`, because the type already told
-/// them which unit this is. bambuddy instead normalizes to the same id 6 this crate uses
-/// (`normalize_am_unit_id` in `bambu_mqtt.py`). Two routes, one answer.
-///
-/// The range collides with nothing — standard units occupy bits/ids 0-15 and AMS-HT 16-23 in
-/// `tray_exist_bits`.
-pub(crate) const AMS_LITE_ON_A2L_NORMALIZED_ID: u8 = 6;
-/// The single-nozzle external spool, and IDEX's right (primary) carriage — BambuStudio's
-/// `VIRTUAL_TRAY_MAIN_ID` (`reference/05_materials_ams.md:165-166,200`). This is the id an
-/// `ams_mapping2` payload must carry for a single-nozzle printer; sending the deputy id
-/// instead targets physical AMS tray 0 and produces firmware error `0700_8012`.
-pub(crate) const AMS_EXTERNAL_SPOOL_MAIN_ID: u8 = 255;
-/// IDEX's left (deputy) carriage — BambuStudio's `VIRTUAL_TRAY_DEPUTY_ID`. Meaningful only on
-/// dual-nozzle IDEX machines.
-///
-/// The previous names had these two roles inverted (`..._ID = 254` / `..._ALT_ID = 255`), which
-/// made the "alternate" constant the main id and was the standing trap behind the repeated
-/// 254/255 confusion in issues #42, #50, and #56.
-pub(crate) const AMS_EXTERNAL_SPOOL_DEPUTY_ID: u8 = 254;
-pub(crate) const AMS_TRAY_STATE_POWER_OFF: u8 = 0;
+use crate::types::telemetry::ams::AMS_TRAY_STATE_EMPTY;
 
 /// Evaluates if a physical spool is present in a specific standard AMS slot.
 ///
@@ -127,10 +69,10 @@ pub fn evaluate_spool_presence(
 /// is below 32. Accepts exactly the addresses [`resolve_global_tray_id`] accepts, minus the
 /// external spools.
 fn tray_exist_bit_index(ams_id: u8, tray_id: u8) -> Option<u32> {
-    if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
+    if is_ams_ht_id(ams_id) {
         return (tray_id == 0).then(|| 16 + u32::from(ams_id - AMS_HT_ID_MIN));
     }
-    if (ams_id <= AMS_MAX_STANDARD_ID || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
+    if (is_standard_id(ams_id) || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
         && tray_id < AMS_SLOTS_PER_UNIT
     {
         return Some(u32::from(ams_id) * u32::from(AMS_SLOTS_PER_UNIT) + u32::from(tray_id));
@@ -173,7 +115,7 @@ fn tray_exist_bit_index(ams_id: u8, tray_id: u8) -> Option<u32> {
 /// `state` key, and an omitted field is not a report of emptiness — see the inline note on the
 /// `has_filament_metadata` check below.
 pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
-    if !tray_is_loaded(tray, ams_id) {
+    if !tray.is_loaded(ams_id) {
         // Whole-struct reset rather than a hand-maintained list of per-field clears: the
         // enumeration this replaces silently missed `remain_g` and `filament_setting_id`, so an
         // emptied slot kept reporting the removed spool's gram weight via
@@ -191,44 +133,6 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
             ..Default::default()
         };
     }
-}
-
-/// True for a `tray_type` that explicitly reports no material: empty, or the literal `"Empty"`.
-pub(crate) fn is_blank_type(tray_type: &str) -> bool {
-    tray_type.is_empty() || tray_type == "Empty"
-}
-
-/// The loaded-spool rule behind both [`clean_stale_tray_data`] and [`AmsTray::is_loaded`].
-///
-/// See [`clean_stale_tray_data`]'s doc for the per-state reasoning.
-pub(crate) fn tray_is_loaded(tray: &AmsTray, ams_id: u8) -> bool {
-    let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-
-    // An *absent* `state` is not a report of emptiness. Some firmware sends a complete tray
-    // payload (`tray_info_idx`, `tray_type`, `tray_color`, `remain`) with no `state` key at
-    // all, and treating that as absent-equivalent scrubbed the spool's material data on every
-    // `TelemetryCache::sanitized_ams()` call. Fall back to the filament metadata instead —
-    // the same fallback pybambu reaches for in `_has_filament_metadata` /
-    // `_resolve_loaded_state` (`models.py:3517-3538`), which gates on a `_state_reported`
-    // flag and accepts a non-empty `tray_info_idx`, or a `tray_type` that is neither empty
-    // nor `"Empty"`, as proof a spool is loaded.
-    let has_filament_metadata = tray
-        .tray_info_idx
-        .as_ref()
-        .is_some_and(|idx| !idx.is_empty())
-        || tray.tray_type.as_ref().is_some_and(|t| !is_blank_type(t));
-
-    let is_absent_state = matches!(tray.state, Some(AMS_TRAY_STATE_POWER_OFF))
-        || (tray.state.is_none() && !has_filament_metadata)
-        || (!is_ht
-            && matches!(
-                tray.state,
-                Some(AMS_TRAY_STATE_SPOOL_NOT_FED) | Some(AMS_TRAY_STATE_EMPTY)
-            ));
-
-    let is_type_cleared = tray.tray_type.as_deref().is_some_and(is_blank_type);
-
-    !(is_absent_state || is_type_cleared)
 }
 
 /// Computes the unique global channel identifier for a given expansion unit and local tray.
@@ -253,40 +157,16 @@ pub(crate) fn tray_is_loaded(tray: &AmsTray, ams_id: u8) -> bool {
 /// sibling catches. [`normalize_ams_unit_id`]'s doc comment requires the two to agree.
 #[must_use]
 pub fn resolve_global_tray_id(ams_id: u8, tray_id: u8) -> Option<u8> {
-    let is_ht = (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id);
-    let is_external =
-        ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID || ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID;
-
-    if is_ht {
+    if is_ams_ht_id(ams_id) {
         if tray_id == 0 { Some(ams_id) } else { None }
-    } else if is_external {
+    } else if is_external_spool_id(ams_id) {
         Some(ams_id)
-    } else if (ams_id <= AMS_MAX_STANDARD_ID || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
+    } else if (is_standard_id(ams_id) || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
         && tray_id < AMS_SLOTS_PER_UNIT
     {
         Some(ams_id * AMS_SLOTS_PER_UNIT + tray_id)
     } else {
         None
-    }
-}
-
-/// Normalizes an AMS unit id reported on the wire into the id this crate addresses it by.
-///
-/// Only an A2L-attached AMS Lite's physical id 16 is remapped (to 6); every other id passes through
-/// untouched, and no other Bambu unit reports id 16, so the remap is self-scoping. Applied on
-/// the inbound telemetry boundary so that `tray_exist_bits`, `resolve_global_tray_id` and the
-/// mapping builders all agree on one id; the physical 16 is restored only on the outbound wire
-/// by [`crate::ams::MaterialSource::to_mapping2_entry`].
-///
-/// The firmware is internally inconsistent about this unit, which is why one constant cannot
-/// cover it: `tray_exist_bits` uses bit base 24 (id 6's position, not id 16's), `tray_now`
-/// reports a local slot 0-3, and only `ams_mapping2` and the per-unit commands carry 16.
-#[must_use]
-pub fn normalize_ams_unit_id(ams_id: u8) -> u8 {
-    if ams_id == AMS_LITE_ON_A2L_PHYSICAL_ID {
-        AMS_LITE_ON_A2L_NORMALIZED_ID
-    } else {
-        ams_id
     }
 }
 

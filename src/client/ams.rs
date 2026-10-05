@@ -3,6 +3,10 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::ToString;
 
+use crate::ams::ids::{
+    AMS_LITE_ON_A2L_PHYSICAL_ID, AMS_SLOTS_PER_UNIT, is_ams_ht_id, is_bus_unit_id,
+    is_external_spool_id, is_unit_slot, is_valid_ams_id, normalize_ams_unit_id, wire_ams_id,
+};
 use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
@@ -12,81 +16,13 @@ use super::{CommandHandle, PrinterClient};
 
 use crate::types::telemetry::AmsUnitModel;
 
-/// Returns true if `ams_id` addresses a physical AMS bus unit.
-///
-/// That is a standard AMS unit (`0..=3`), an AMS-HT unit (`128..=135`), or an A2L-attached AMS
-/// Lite under either spelling — the physical wire id
-/// [`AMS_LITE_ON_A2L_PHYSICAL_ID`](crate::ams::parser::AMS_LITE_ON_A2L_PHYSICAL_ID) or the
-/// [normalized id](crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID) telemetry reports it as.
-/// External-spool sentinels are excluded; see [`is_valid_ams_id`] for the set that includes them.
-#[must_use]
-pub(crate) fn is_valid_ams_bus_unit_id(ams_id: i32) -> bool {
-    (0..=i32::from(crate::ams::parser::AMS_MAX_STANDARD_ID)).contains(&ams_id)
-        || (i32::from(crate::ams::parser::AMS_HT_ID_MIN)
-            ..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
-            .contains(&ams_id)
-        || ams_id == i32::from(crate::ams::parser::AMS_LITE_ON_A2L_PHYSICAL_ID)
-        || ams_id == i32::from(crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID)
-}
-
-/// Returns true if `ams_id` is a bus unit ([`is_valid_ams_bus_unit_id`]) or an external-spool
-/// sentinel (`254`/`255`) — the full documented `ams_id` address space shared by
-/// `change_filament()` and `select_k_profile()`.
-#[must_use]
-pub(crate) fn is_valid_ams_id(ams_id: i32) -> bool {
-    is_valid_ams_bus_unit_id(ams_id)
-        || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
-        || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID)
-}
-
-/// Returns true for an AMS-HT unit id (128–135), a single-slot unit.
-pub(crate) fn is_ams_ht_id(ams_id: i32) -> bool {
-    (i32::from(crate::ams::parser::AMS_HT_ID_MIN)..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
-        .contains(&ams_id)
-}
-
-/// Translates a caller-supplied `ams_id` into the id the wire carries.
-///
-/// Only the A2L-attached AMS Lite differs: telemetry normalizes its physical id 16 to 6, but
-/// every per-unit command addresses it as 16 with a local `0..=3` slot — confirmed from the
-/// firmware's own `ams_mapping2` (`{ams_id: 16, slot_id: 0-3}`, bambuddy `a2l_lite_wire_ids`,
-/// `bambu_mqtt.py:142-163`), and BambuStudio sends `ams_get_rfid {ams_id: 16}` for the unit.
-/// Callers may pass either spelling; every other id passes through untouched.
-#[must_use]
-pub(crate) fn wire_ams_id(ams_id: i32) -> i32 {
-    if ams_id == i32::from(crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID) {
-        i32::from(crate::ams::parser::AMS_LITE_ON_A2L_PHYSICAL_ID)
-    } else {
-        ams_id
-    }
-}
-
-/// Global tray ids of an A2L-attached AMS Lite accepted by tray-id addressing commands:
-/// `AMS_LITE_ON_A2L_NORMALIZED_ID * AMS_SLOTS_PER_UNIT + slot`, i.e. `24..=27`.
-///
-/// This is BambuStudio's calibration tray id for the unit: `extrusion_cali_sel`'s `tray_id` is
-/// filled from `GetTrayIdByAmsSlotId` (`AMSMaterialsSetting.cpp:677`), whose
-/// `DevFilaSystem::GetTrayIndexMap` gives `24 + slot_id` for a mixed AMS Lite and `ams_id` for an
-/// AMS-HT (`DevFilaSystem.cpp:367-373`). Not `DevAms::GetTrayId`, whose AMS-HT
-/// `16 + (ams_id - 128)` is only the `tray_exist_bits` index (#210). bambuddy instead extrapolates
-/// `64..=67` (`16 * 4 + slot`) and marks that as unconfirmed; BambuStudio wins the disagreement.
-pub(crate) const AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS: core::ops::RangeInclusive<i32> =
-    (crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID as i32
-        * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32)
-        ..=(crate::ams::parser::AMS_LITE_ON_A2L_NORMALIZED_ID as i32
-            * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
-            + crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
-            - 1);
+/// `change_filament` slot meaning "unload / retract whatever is loaded".
+const SLOT_UNLOAD: u8 = 255;
+/// `change_filament` slot meaning "load from the single-nozzle external spool".
+const SLOT_EXTERNAL_LOAD: u8 = 254;
 
 /// `ams.tray_now` value meaning no filament is loaded to the toolhead.
 const AMS_TRAY_NOW_UNLOADED: &str = "255";
-
-/// Highest standard-AMS global tray ID accepted by tray-id addressing commands:
-/// `AMS_MAX_STANDARD_ID + 1` units × `AMS_SLOTS_PER_UNIT` slots, zero-indexed (i.e. `15`).
-pub(crate) const STANDARD_AMS_MAX_GLOBAL_TRAY_ID: i32 =
-    (crate::ams::parser::AMS_MAX_STANDARD_ID as i32 + 1)
-        * crate::ams::parser::AMS_SLOTS_PER_UNIT as i32
-        - 1;
 
 impl<
     MqttRawIO,
@@ -155,45 +91,43 @@ where
     /// **discards the command in silence** — load and unload simply do nothing.
     pub async fn change_filament(
         &mut self,
-        ams_id: i32,
-        slot_id: i32,
+        ams_id: u8,
+        slot_id: u8,
         curr_temp: i32,
         tar_temp: i32,
         extruder_id: Option<u8>,
     ) -> Result<CommandHandle, Error> {
-        let ams_valid = is_valid_ams_id(ams_id);
-        let slot_valid = (0..=3).contains(&slot_id) || slot_id == 254 || slot_id == 255;
-        // slot_id 254 is only meaningful as the external-spool load sentinel, so it is valid
-        // only against an external-spool ams_id. `ams_id >= 16` was too loose: it also admits
-        // the AMS-HT bus range 128..=135, and the reference documents an AMS-HT slot only as
-        // `{"ams_id": ams_id, "slot_id": 0}` (`reference/05_materials_ams.md` §5.3). A pair like
-        // (130, 254) therefore derived a correct `target` but shipped a nonsensical slot.
-        let pair_valid = slot_id != 254
-            || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_DEPUTY_ID)
-            || ams_id == i32::from(crate::ams::parser::AMS_EXTERNAL_SPOOL_MAIN_ID);
-        // An AMS-HT unit has one slot, so only slot 0 (or 255 to unload) addresses it (#357),
-        // matching `resolve_global_tray_id`.
-        let ht_slot_valid = !is_ams_ht_id(ams_id) || slot_id == 0 || slot_id == 255;
-        if !ams_valid || !slot_valid || !pair_valid || !ht_slot_valid {
+        let slot_valid = match slot_id {
+            SLOT_UNLOAD => true,
+            // Only meaningful as the external-spool load sentinel. The reference documents an
+            // AMS-HT slot only as `{"ams_id": ams_id, "slot_id": 0}`
+            // (`reference/05_materials_ams.md` §5.3), so (130, 254) is not a load.
+            SLOT_EXTERNAL_LOAD => is_external_spool_id(ams_id),
+            // An external holder takes the local slot range too; a bus unit only its own slots,
+            // which for a single-slot AMS-HT is just 0 (#357), matching `resolve_global_tray_id`.
+            slot if is_external_spool_id(ams_id) => slot < AMS_SLOTS_PER_UNIT,
+            slot => is_unit_slot(ams_id, slot),
+        };
+        if !is_valid_ams_id(ams_id) || !slot_valid {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for change_filament".into(),
             ));
         }
 
         let ams_id = wire_ams_id(ams_id);
-        let target = if slot_id == 255 {
-            255
-        } else if ams_id >= 16 {
+        let target = if slot_id == SLOT_UNLOAD {
+            SLOT_UNLOAD
+        } else if ams_id >= AMS_LITE_ON_A2L_PHYSICAL_ID {
             ams_id
         } else {
-            ams_id * i32::from(crate::ams::parser::AMS_SLOTS_PER_UNIT) + slot_id
+            ams_id * AMS_SLOTS_PER_UNIT + slot_id
         };
 
         self.dispatch(|seq| {
             crate::mqtt::AmsChangeFilamentRequest::new(
-                ams_id,
-                slot_id,
-                target,
+                i32::from(ams_id),
+                i32::from(slot_id),
+                i32::from(target),
                 curr_temp,
                 tar_temp,
                 extruder_id,
@@ -229,9 +163,10 @@ where
     /// Matches on the unit's own `id`, which is already normalized on deserialize (the A2L's AMS
     /// Lite reports physical `16` and is stored as `6`), so a caller-supplied physical `16` is
     /// normalized the same way before comparing.
-    pub fn ams_unit_model(&self, ams_id: i32) -> Option<AmsUnitModel> {
-        let ams_id = crate::ams::parser::normalize_ams_unit_id(u8::try_from(ams_id).ok()?);
-        self.ams()?.unit(ams_id)?.unit_model()
+    pub fn ams_unit_model(&self, ams_id: u8) -> Option<AmsUnitModel> {
+        self.ams()?
+            .unit(normalize_ams_unit_id(ams_id))?
+            .unit_model()
     }
 
     /// Scans proprietary RFID tag properties on a specific AMS tray [REF-AMS-MAP].
@@ -257,16 +192,11 @@ where
     /// the reader: returns [`Error::InvalidState`] when the cached `ams.tray_now` is anything but
     /// `255` (unloaded), matching bambuddy (`bambu_mqtt.py:7601-7615`). BambuStudio refuses the
     /// same case with a dialog (`StatusPanel.cpp:5386-5391`). An unobserved `tray_now` passes.
-    pub async fn scan_rfid(&mut self, ams_id: i32, slot_id: i32) -> Result<CommandHandle, Error> {
-        let ams_valid = is_valid_ams_bus_unit_id(ams_id);
-        // AMS-HT is single-slot (#357); without this the np path published a nonexistent slot
-        // while the legacy path's `resolve_global_tray_id` rejected the same input.
-        let slot_valid = if is_ams_ht_id(ams_id) {
-            slot_id == 0
-        } else {
-            (0..=3).contains(&slot_id)
-        };
-        if !ams_valid || !slot_valid {
+    pub async fn scan_rfid(&mut self, ams_id: u8, slot_id: u8) -> Result<CommandHandle, Error> {
+        // `is_unit_slot` keeps AMS-HT to its single slot (#357); without that the np path
+        // published a nonexistent slot while the legacy path's `resolve_global_tray_id` rejected
+        // the same input.
+        if !is_bus_unit_id(ams_id) || !is_unit_slot(ams_id, slot_id) {
             return Err(Error::ProtocolViolation(
                 "invalid AMS addressing parameters for scan_rfid".into(),
             ));
@@ -282,25 +212,21 @@ where
         }
 
         if self.cache.last_np_format == Some(false) {
-            // Both ids are range-checked above, so the u8 conversions cannot fail.
-            let global_tray = u8::try_from(ams_id)
-                .ok()
-                .zip(u8::try_from(slot_id).ok())
-                .and_then(|(ams, slot)| {
-                    crate::ams::resolve_global_tray_id(crate::ams::normalize_ams_unit_id(ams), slot)
-                })
-                .ok_or_else(|| {
-                    Error::ProtocolViolation(
-                        "AMS address has no global tray index for M620 R".into(),
-                    )
-                })?;
+            let global_tray =
+                crate::ams::resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id)
+                    .ok_or_else(|| {
+                        Error::ProtocolViolation(
+                            "AMS address has no global tray index for M620 R".into(),
+                        )
+                    })?;
             let gcode = format!("M620 R{global_tray}");
             return self
                 .dispatch(|seq| crate::mqtt::GCodeRequest::new(&gcode, seq))
                 .await;
         }
 
-        let ams_id = wire_ams_id(ams_id);
+        let ams_id = i32::from(wire_ams_id(ams_id));
+        let slot_id = i32::from(slot_id);
         self.dispatch(|seq| crate::mqtt::AmsGetRfidRequest::new(ams_id, slot_id, seq))
             .await
     }
@@ -320,53 +246,44 @@ where
     ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     ///   `tray_id: 254`.
     ///
-    /// **Validation note:** the cheat-sheet above documents only the *external-spool* case.
-    /// `reference/05_materials_ams.md` §5.3's own primary `extrusion_cali_sel` example binds a
-    /// perfectly ordinary AMS slot (`"ams_id": 0, "tray_id": 1`) — `tray_id` there is the
-    /// *global* tray ID (the same `(ams_id * 4) + slot_id` / `128..=135` AMS-HT composite the
-    /// flat `ams_mapping` array uses, per §5.3's "Hardware Channel Identifiers"), not a
-    /// per-unit slot index. The validation below therefore accepts the full documented
-    /// address space — standard AMS units, AMS-HT units, and the external-spool sentinels —
-    /// not just the two cheat-sheet pairs; restricting to only `(254,254)`/`(255,255)` (as an
-    /// earlier draft of this check assumed) would incorrectly reject this exact primary example.
+    /// Takes the unit and its **local** slot, and derives the global `tray_id` the wire carries
+    /// with [`resolve_global_tray_id`](crate::ams::resolve_global_tray_id): `ams_id * 4 + slot`
+    /// on a standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1`
+    /// example is unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's
+    /// `GetTrayIndexMap`, `DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT
+    /// (slot 0 only) or an external holder (slot ignored), which gives the cheat-sheet pairs
+    /// above. Taking the global id from the caller used to let `(2, 1)` bind unit 0's tray 1
+    /// while claiming unit 2 (#397).
     pub async fn select_k_profile(
         &mut self,
-        ams_id: i32,
-        tray_id: i32,
+        ams_id: u8,
+        slot_id: u8,
         cali_idx: i32,
         filament_id: &str,
         nozzle_diameter: &str,
     ) -> Result<CommandHandle, Error> {
-        let ams_valid = is_valid_ams_id(ams_id);
-        let tray_valid = (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
-            || AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS.contains(&tray_id)
-            || (i32::from(crate::ams::parser::AMS_HT_ID_MIN)
-                ..=i32::from(crate::ams::parser::AMS_HT_ID_MAX))
-                .contains(&tray_id)
-            || tray_id == 254
-            || tray_id == 255;
-        if !ams_valid || !tray_valid {
-            return Err(Error::ProtocolViolation(
-                "invalid ams_id/tray_id parameters for select_k_profile".into(),
-            ));
-        }
+        let tray_id = is_valid_ams_id(ams_id)
+            .then(|| crate::ams::resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id))
+            .flatten()
+            .ok_or_else(|| {
+                Error::ProtocolViolation(
+                    "invalid ams_id/slot_id parameters for select_k_profile".into(),
+                )
+            })?;
 
         // The unit-local slot BambuStudio and bambuddy send next to the global tray (#315):
-        // standard units and the A2L-attached AMS Lite have four slots, whose global ids are
-        // contiguous blocks of four; AMS-HT and external spools have one.
-        let slot_id = if (0..=STANDARD_AMS_MAX_GLOBAL_TRAY_ID).contains(&tray_id)
-            || AMS_LITE_ON_A2L_GLOBAL_TRAY_IDS.contains(&tray_id)
-        {
-            tray_id % i32::from(crate::ams::parser::AMS_SLOTS_PER_UNIT)
-        } else {
+        // the caller's slot on a four-slot unit, `0` on an AMS-HT or external holder.
+        let slot_id = if is_ams_ht_id(ams_id) || is_external_spool_id(ams_id) {
             0
+        } else {
+            slot_id
         };
-        let ams_id = wire_ams_id(ams_id);
+        let ams_id = i32::from(wire_ams_id(ams_id));
         self.dispatch(|seq| {
             crate::diagnostics::ExtrusionCaliSelRequest::new(
                 ams_id,
-                tray_id,
-                slot_id,
+                i32::from(tray_id),
+                i32::from(slot_id),
                 cali_idx,
                 filament_id,
                 nozzle_diameter,

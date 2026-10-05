@@ -9,8 +9,8 @@ use alloc::vec::Vec;
 
 use serde::Serialize;
 
+use crate::ams::ids::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
-use crate::ams::parser::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use crate::ams::{is_external_spool_safety_valid, is_external_spool_safety_valid_flat};
 use crate::models::PrinterModel;
 
