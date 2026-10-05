@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use bambino::error::Error;
 use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
+use bambino::io::tokio::TokioTimer;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
 
@@ -41,9 +42,13 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     )
     .await
     .expect("Failed to execute MQTT login and subscription handshake");
+    let timer = TokioTimer::new();
 
     let _packet_id = client
-        .publish_command(b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"1\"}}")
+        .publish_command(
+            b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"1\"}}",
+            &timer,
+        )
         .await
         .expect("QoS 1 command publish failed");
 
@@ -64,7 +69,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .expect("Failed to inject telemetry payload 1 into mock broker");
 
     let msg = client
-        .poll_telemetry()
+        .poll_telemetry(&timer)
         .await
         .expect("Telemetry poll returned error instead of injected message");
 
@@ -78,7 +83,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     );
 
     client
-        .send_ping()
+        .send_ping(&timer)
         .await
         .expect("PINGREQ keep-alive dispatch failed");
 
@@ -88,7 +93,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .await
         .expect("Failed to inject telemetry payload 2 into mock broker");
     let _ = client
-        .poll_telemetry()
+        .poll_telemetry(&timer)
         .await
         .expect("Telemetry poll failed after PINGREQ cycle");
 
@@ -97,7 +102,10 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     // uncorrelated fallback-clear path (sequence_id-matching is covered elsewhere, in mod.rs's
     // own async_tests) — the wrapper shape below matches the real Payload+Request pattern.
     client
-        .publish_command(b"{\"print\":{\"command\":\"zombie_test\",\"sequence_id\":\"2\"}}")
+        .publish_command(
+            b"{\"print\":{\"command\":\"zombie_test\",\"sequence_id\":\"2\"}}",
+            &timer,
+        )
         .await
         .expect("Zombie test command publish failed");
 

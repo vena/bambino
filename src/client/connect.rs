@@ -200,7 +200,7 @@ where
         let Some(mqtt) = self.mqtt.as_mut() else {
             return;
         };
-        if let Err(e) = mqtt.publish_command_with_timer(&payload, &self.timer).await {
+        if let Err(e) = mqtt.publish_command(&payload, &self.timer).await {
             log::debug!(
                 "connect-time pushall failed ({e:?}); connection-scoped telemetry stays None until the printer reports"
             );

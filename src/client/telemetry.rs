@@ -192,7 +192,7 @@ where
             .mqtt
             .as_mut()
             .unwrap()
-            .poll_telemetry_with_timer(&self.timer)
+            .poll_telemetry(&self.timer)
             .await?;
         Ok(self.classify_message(msg))
     }
@@ -798,7 +798,7 @@ where
         self.mqtt
             .as_mut()
             .unwrap()
-            .poll_telemetry_with_timer(&self.timer)
+            .poll_telemetry(&self.timer)
             .await
     }
 }

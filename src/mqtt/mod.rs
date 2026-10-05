@@ -3,7 +3,10 @@
 //! Low-level MQTT v3.1.1 implementation for talking to Bambu Lab printers.
 //!
 //! [`MqttClient`] handles the connection handshake, QoS 1 publish/subscribe,
-//! keep-alive pings, and zombie detection. The [`commands`] submodule contains all
+//! keep-alive pings, and zombie detection. Keep-alive pings and read/write deadlines depend on
+//! the [`TimerProvider`](crate::io::TimerProvider) passed to `poll_telemetry`,
+//! `publish_command` and `send_ping`, so pass a real platform timer. Zombie detection still
+//! needs the caller to call `tick_zombie_check` periodically. The [`commands`] submodule contains all
 //! the serializable request structs (G-code dispatch, print control, AMS operations,
 //! LED/fan/buzzer commands, etc.) that get published to the printer's command topic.
 //!

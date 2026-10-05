@@ -65,7 +65,7 @@ pub(crate) const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10;
 pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 
 /// How long the connection may go with no client-to-broker traffic before
-/// `poll_telemetry_with_timer` sends a keepalive PINGREQ.
+/// `poll_telemetry` sends a keepalive PINGREQ.
 ///
 /// `MQTT_KEEP_ALIVE_SECS` (30) obliges this client to send *something* within 1.5× that
 /// window — 45s — or the broker drops the connection (MQTT 3.1.1 §3.1.2.10). Nothing in the
@@ -126,7 +126,7 @@ pub struct MqttClient<IO: AsyncIo> {
     /// Byte-level progress of an in-flight frame read, preserved across a timed-out `read_exact_packet` call so `poll_wire()` resumes correctly instead of desyncing the stream — see `FrameReadState`'s doc comment.
     read_state: FrameReadState,
     /// Monotonic timestamp of the last frame this client wrote, driving the keepalive PINGREQ
-    /// in `poll_telemetry_with_timer` (see [`MQTT_PING_INTERVAL_SECS`]).
+    /// in `poll_telemetry` (see [`MQTT_PING_INTERVAL_SECS`]).
     ///
     /// Deliberately *not* derived from `secs_since_last_message`: that counter only advances
     /// when the caller calls `tick_zombie_check`, so gating keepalives on it would reproduce the
@@ -536,16 +536,10 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// Payloads larger than `MQTT_MAX_PAYLOAD_BYTES` are rejected with
     /// [`Error::ProtocolViolation`] rather than encoded, mirroring the read path's own cap.
     ///
-    /// `DummyTimer` (`has_real_clock() == false`) makes the underlying write unbounded here.
-    /// `PrinterClient` callers get the new stalled-write protection via
-    /// `publish_command_with_timer()` instead, since they have a real `Timer` available.
-    pub async fn publish_command(&mut self, payload: &[u8]) -> Result<u16, Error> {
-        self.publish_command_with_timer(payload, &DummyTimer).await
-    }
-
-    /// Same as [`publish_command()`](Self::publish_command), but honors `timer` for the
-    /// underlying write's per-call deadline (see `write_frame_with_timer`).
-    pub(crate) async fn publish_command_with_timer<T: TimerProvider>(
+    /// `timer` bounds the write (see `write_frame_with_timer`) and stamps the keepalive clock.
+    /// Pass a real platform timer: a timer without a real clock
+    /// ([`TimerProvider::has_real_clock`]) makes the write unbounded.
+    pub async fn publish_command<T: TimerProvider>(
         &mut self,
         payload: &[u8],
         timer: &T,
@@ -621,19 +615,13 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// publishes, clears matching packet IDs from the in-flight tracker on `PUBACK`,
     /// and acknowledges `PINGRESP` — only application-level `PUBLISH` payloads are
     /// returned.
-    pub async fn poll_telemetry(&mut self) -> Result<MqttMessage, Error> {
-        // `DummyTimer` has no real wall-clock (`has_real_clock() == false`), so
-        // `poll_wire()` falls back to an unbounded read here. `PrinterClient` callers get the
-        // new bounded-read protection via `poll_telemetry_with_timer()` instead, since they
-        // have a real `Timer` available.
-        self.poll_telemetry_with_timer(&DummyTimer).await
-    }
-
-    /// Same as [`poll_telemetry()`](Self::poll_telemetry), but honors `timer` for the underlying wire read's per-read deadline (see [`poll_wire`](Self::poll_wire)).
     ///
-    /// Used by `PrinterClient`, which owns its own configurable `Timer` and wants the
-    /// stalled-read protection that requires a genuine wall-clock to be meaningful.
-    pub(crate) async fn poll_telemetry_with_timer<T: TimerProvider>(
+    /// `timer` drives the keepalive PINGREQ the CONNECT keepalive obliges this client to send,
+    /// and the 30s per-read deadline. Pass a real platform
+    /// timer: with one that has no real clock ([`TimerProvider::has_real_clock`]) no keepalive
+    /// is sent, so the broker drops the connection after about 45s of outbound silence, and a
+    /// stalled read blocks forever.
+    pub async fn poll_telemetry<T: TimerProvider>(
         &mut self,
         timer: &T,
     ) -> Result<MqttMessage, Error> {
@@ -653,8 +641,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// `MQTT_READ_TIMEOUT_SECS` on a link with no inbound telemetry, and a ping issued after
     /// that would already be too late on the second such read.
     ///
-    /// No-op without a real wall-clock (`DummyTimer`), which is what `MqttClient::poll_telemetry`
-    /// and test clients use — those keep the pre-existing behavior of never pinging.
+    /// No-op without a real wall-clock (`DummyTimer`), which unit-test clients use.
     async fn send_keepalive_if_due<T: TimerProvider>(&mut self, timer: &T) -> Result<(), Error> {
         if !timer.has_real_clock() {
             return Ok(());
@@ -673,7 +660,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         }
 
         log::trace!("Keepalive due after {}ms of outbound silence", idle_ms);
-        self.send_ping_with_timer(timer).await
+        self.send_ping(timer).await
     }
 
     /// Reads the next message directly from the wire, bypassing the pending buffer.
@@ -685,7 +672,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// so a long wait on a printer sending no QoS1 traffic — whose PUBACKs would otherwise keep
     /// the broker deadline alive incidentally — is not dropped mid-read. This lives here rather
     /// than at each call site because the previous arrangement had exactly one consumer
-    /// (`poll_telemetry_with_timer`) remembering to do it and another (`poll_until`) not.
+    /// (`poll_telemetry`) remembering to do it and another (`poll_until`) not.
     ///
     /// Bounds each individual low-level read step to
     /// [`MQTT_READ_TIMEOUT_SECS`] when `timer` has a real wall-clock (see
@@ -859,19 +846,9 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
     /// Dispatches an asynchronous `PINGREQ` keep-alive frame to maintain socket validity.
     ///
-    /// `DummyTimer` makes the underlying write unbounded here, mirroring `publish_command()`.
-    /// `PrinterClient` callers get stalled-write protection via `send_ping_with_timer()`
-    /// instead.
-    pub async fn send_ping(&mut self) -> Result<(), Error> {
-        self.send_ping_with_timer(&DummyTimer).await
-    }
-
-    /// Same as [`send_ping()`](Self::send_ping), but honors `timer` for the underlying write's
-    /// per-call deadline (see `write_frame_with_timer`).
-    pub(crate) async fn send_ping_with_timer<T: TimerProvider>(
-        &mut self,
-        timer: &T,
-    ) -> Result<(), Error> {
+    /// `timer` bounds the write (see `write_frame_with_timer`). `poll_telemetry` already pings
+    /// when one is due, so calling this is only needed when not polling.
+    pub async fn send_ping<T: TimerProvider>(&mut self, timer: &T) -> Result<(), Error> {
         // No "previous ping unanswered" check. Its PINGRESP may be sitting unread in the socket
         // behind telemetry the caller hasn't polled yet, so failing here — before any read —
         // declared a healthy link dead and kept declaring it on every later poll, since the read
@@ -1103,12 +1080,12 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_poll_telemetry_with_timer_resumes_split_frame_through_persistent_client() {
+        async fn test_poll_telemetry_resumes_split_frame_through_persistent_client() {
             // The resumable-frame-read invariant (.claude/rules/wire-read-deadline.md)
             // was previously only unit-tested against a bare `FrameReadState`/`read_exact_packet`
             // call (frame.rs) — never through a live, persistent `MqttClient::read_state`
             // field with a real (non-Dummy) timer, the exact combination `PrinterClient` uses via
-            // `poll_telemetry_with_timer`. A regression reconstructing a fresh `FrameReadState`
+            // `poll_telemetry`. A regression reconstructing a fresh `FrameReadState`
             // per `poll_wire()` call (instead of reusing `self.read_state`) would go uncaught
             // without this. The first poll must genuinely end mid-frame and a *second* call must
             // resume (#310): the server holds the second half until the first poll is gone.
@@ -1162,7 +1139,7 @@ mod tests {
             let timer = crate::io::tokio::TokioTimer::new();
             let first = tokio::time::timeout(
                 core::time::Duration::from_millis(200),
-                client.poll_telemetry_with_timer(&timer),
+                client.poll_telemetry(&timer),
             )
             .await;
             assert!(
@@ -1177,10 +1154,10 @@ mod tests {
 
             let msg = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
-                client.poll_telemetry_with_timer(&timer),
+                client.poll_telemetry(&timer),
             )
             .await
-            .expect("poll_telemetry_with_timer hung past the meta-safety timeout")
+            .expect("poll_telemetry hung past the meta-safety timeout")
             .expect("split PUBLISH frame should reassemble successfully");
 
             assert_eq!(msg.topic, "device/01P000000000000/report");
@@ -1242,10 +1219,10 @@ mod tests {
             let timer = crate::io::tokio::TokioTimer::new();
             let msg = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
-                client.poll_telemetry_with_timer(&timer),
+                client.poll_telemetry(&timer),
             )
             .await
-            .expect("poll_telemetry_with_timer hung past the meta-safety timeout")
+            .expect("poll_telemetry hung past the meta-safety timeout")
             .expect("PUBLISH must still be delivered when its PUBACK write fails");
 
             assert_eq!(msg.topic, "device/01P000000000000/report");
@@ -1303,19 +1280,19 @@ mod tests {
 
             let dropped = tokio::time::timeout(
                 core::time::Duration::from_millis(200),
-                client.poll_telemetry(),
+                client.poll_telemetry(&DummyTimer),
             )
             .await;
             assert!(dropped.is_err(), "the PUBACK write must have been pending");
 
             let msg = client
-                .poll_telemetry()
+                .poll_telemetry(&DummyTimer)
                 .await
                 .expect("the parsed PUBLISH must be delivered from the pending buffer");
             assert_eq!(msg.payload, b"{\"print\":{}}");
 
             assert!(matches!(
-                client.send_ping().await,
+                client.send_ping(&DummyTimer).await,
                 Err(Error::Network(SocketError::ConnectionAborted))
             ));
             assert!(
@@ -1362,7 +1339,7 @@ mod tests {
             };
 
             client
-                .publish_command(b"{}")
+                .publish_command(b"{}", &DummyTimer)
                 .await
                 .expect("first publish failed");
             assert_eq!(client.write_pending_secs, Some(0));
@@ -1371,7 +1348,7 @@ mod tests {
             assert_eq!(client.write_pending_secs, Some(5));
 
             client
-                .publish_command(b"{}")
+                .publish_command(b"{}", &DummyTimer)
                 .await
                 .expect("second publish failed");
             assert_eq!(
@@ -1507,7 +1484,7 @@ mod tests {
                 write_in_progress: false,
             };
 
-            let result = client.publish_command(b"{}").await;
+            let result = client.publish_command(b"{}", &DummyTimer).await;
             assert!(
                 matches!(result, Err(Error::Backpressure)),
                 "saturation must report Backpressure, not a timeout, got {:?}",
@@ -1529,7 +1506,7 @@ mod tests {
             client.tick_zombie_check(1).expect("tick should not error");
             assert_eq!(client.in_flight_count(), 0);
             client
-                .publish_command(b"{}")
+                .publish_command(b"{}", &DummyTimer)
                 .await
                 .expect("publish must succeed once the leaked entries aged out");
         }
@@ -1649,6 +1626,7 @@ mod tests {
             client
                 .publish_command(
                     b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"20001\"}}",
+                    &DummyTimer,
                 )
                 .await
                 .expect("pushall publish failed");

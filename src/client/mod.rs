@@ -450,7 +450,7 @@ where
         self.mqtt
             .as_mut()
             .unwrap()
-            .publish_command_with_timer(payload, &self.timer)
+            .publish_command(payload, &self.timer)
             .await
             .map(|_packet_id| ())
     }
@@ -516,11 +516,7 @@ where
     /// Dispatches a PINGREQ keep-alive frame to maintain connection liveness.
     pub async fn send_ping(&mut self) -> Result<(), Error> {
         self.ensure_mqtt().await?;
-        self.mqtt
-            .as_mut()
-            .unwrap()
-            .send_ping_with_timer(&self.timer)
-            .await
+        self.mqtt.as_mut().unwrap().send_ping(&self.timer).await
     }
 
     /// Returns a reference to the printer's unique hardware serial number.

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bambino::Error;
 use bambino::client::{BuzzerMode, PrintStatus};
+use bambino::io::tokio::TokioTimer;
 use bambino::models::PrinterModel;
 use bambino::mqtt::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsGetRfidRequest,
@@ -431,7 +432,10 @@ async fn run_one(
     io::stderr().flush().unwrap_or(());
 
     let publish_result: Result<u16, Error> = match client.mqtt().await {
-        Ok(mqtt) => mqtt.publish_command(&payload_bytes).await,
+        Ok(mqtt) => {
+            mqtt.publish_command(&payload_bytes, &TokioTimer::new())
+                .await
+        }
         Err(e) => Err(e),
     };
 
