@@ -331,7 +331,7 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
         host: &str,
         port: u16,
     ) -> Result<TokioIo<::tokio::net::TcpStream>, SocketError> {
-        let stream = ::tokio::net::TcpStream::connect(format!("{}:{}", host, port))
+        let stream = ::tokio::net::TcpStream::connect((host, port))
             .await
             .map_err(SocketError::from)?;
 
