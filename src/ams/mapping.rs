@@ -40,10 +40,17 @@ pub enum MaterialSource {
         slot_id: u8,
     },
     /// Default virtual external spool holder (used for standard single-nozzle models).
+    ///
+    /// Same wire address as [`ExternalSpoolRight`](Self::ExternalSpoolRight): `ams_id` 255,
+    /// BambuStudio's `VIRTUAL_TRAY_MAIN_ID`. Either name produces an identical entry.
     ExternalSpool,
     /// Left external spool holder (specifically used on dual-nozzle IDEX systems).
     ExternalSpoolLeft,
     /// Right external spool holder (specifically used on dual-nozzle IDEX systems).
+    ///
+    /// Same wire address as [`ExternalSpool`](Self::ExternalSpool) (`ams_id` 255): the IDEX
+    /// right carriage is the main one. Only [`ExternalSpoolLeft`](Self::ExternalSpoolLeft)
+    /// (254) differs.
     ExternalSpoolRight,
     /// Virtual unmapped placeholder slot (indicates an unused project filament).
     Unmapped,
@@ -388,7 +395,7 @@ pub fn is_external_spool_safety_valid(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmsLiteSlot {
     /// No AMS Lite attaches (X1C, X1E, P1P, P1S).
-    None,
+    NotSupported,
     /// One AMS Lite attaches *in addition to* the full shared pool (A2L).
     ///
     /// It reports physical unit id 16 ([`AmsEntryKind::AmsLite`]), so it is counted on its own
@@ -466,23 +473,17 @@ pub fn is_ams_pool_composition_valid(
     mapping2: &[AmsMapping2Entry],
     composition: AmsPoolComposition,
 ) -> bool {
-    let mut standard_ids = Vec::new();
-    let mut ht_ids = Vec::new();
+    // Distinct ids as bitmasks: standard ids 0-3 and AMS-HT ids 128-135 each fit in a `u8`, so
+    // there is no allocation and no count that could overflow a cast.
+    let mut standard_ids: u8 = 0;
+    let mut ht_ids: u8 = 0;
     let mut uses_ams_lite = false;
     for entry in mapping2 {
         match classify_mapping2_entry(entry) {
-            AmsEntryKind::Standard => {
-                if !standard_ids.contains(&entry.ams_id) {
-                    standard_ids.push(entry.ams_id);
-                }
-            }
+            AmsEntryKind::Standard => standard_ids |= 1 << entry.ams_id,
             // One physical id, so at most one unit however many slots reference it.
             AmsEntryKind::AmsLite => uses_ams_lite = true,
-            AmsEntryKind::Ht => {
-                if !ht_ids.contains(&entry.ams_id) {
-                    ht_ids.push(entry.ams_id);
-                }
-            }
+            AmsEntryKind::Ht => ht_ids |= 1 << (entry.ams_id - super::parser::AMS_HT_ID_MIN),
             // External/unmapped sentinels don't occupy a physical unit slot; anything else is a
             // malformed ams_id/slot_id pair — reject exhaustively rather than silently ignoring
             // it like a legitimate external entry.
@@ -497,15 +498,15 @@ pub fn is_ams_pool_composition_valid(
             ams_lite,
         } => {
             (!uses_ams_lite || ams_lite == AmsLiteSlot::Additive)
-                && (standard_ids.len() + ht_ids.len()) as u8 <= max_units
+                && standard_ids.count_ones() + ht_ids.count_ones() <= u32::from(max_units)
         }
         AmsPoolComposition::Independent {
             max_standard,
             max_ht,
         } => {
             !uses_ams_lite
-                && standard_ids.len() as u8 <= max_standard
-                && ht_ids.len() as u8 <= max_ht
+                && standard_ids.count_ones() <= u32::from(max_standard)
+                && ht_ids.count_ones() <= u32::from(max_ht)
         }
     }
 }
@@ -681,7 +682,7 @@ mod tests {
             &mapping,
             AmsPoolComposition::Shared {
                 max_units: 4,
-                ams_lite: AmsLiteSlot::None,
+                ams_lite: AmsLiteSlot::NotSupported,
             }
         ));
     }
@@ -715,7 +716,7 @@ mod tests {
             &mapping,
             AmsPoolComposition::Shared {
                 max_units: 4,
-                ams_lite: AmsLiteSlot::None,
+                ams_lite: AmsLiteSlot::NotSupported,
             }
         ));
     }
@@ -776,7 +777,7 @@ mod tests {
             &mapping,
             AmsPoolComposition::Shared {
                 max_units: 1,
-                ams_lite: AmsLiteSlot::None,
+                ams_lite: AmsLiteSlot::NotSupported,
             }
         ));
     }
@@ -853,7 +854,7 @@ mod tests {
         for composition in [
             AmsPoolComposition::Shared {
                 max_units: 4,
-                ams_lite: AmsLiteSlot::None,
+                ams_lite: AmsLiteSlot::NotSupported,
             },
             // An A1's AMS Lite reports as a standard unit, never as id 16.
             AmsPoolComposition::Shared {
@@ -878,7 +879,7 @@ mod tests {
             max_units: 4,
             ams_lite,
         };
-        assert_eq!(shared(AmsLiteSlot::None).max_units(), 4);
+        assert_eq!(shared(AmsLiteSlot::NotSupported).max_units(), 4);
         assert_eq!(shared(AmsLiteSlot::Exclusive).max_units(), 4);
         assert_eq!(shared(AmsLiteSlot::Additive).max_units(), 5);
         assert_eq!(
@@ -903,7 +904,7 @@ mod tests {
             &mapping,
             AmsPoolComposition::Shared {
                 max_units: 4,
-                ams_lite: AmsLiteSlot::None,
+                ams_lite: AmsLiteSlot::NotSupported,
             }
         ));
     }

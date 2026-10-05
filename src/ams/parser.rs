@@ -113,40 +113,29 @@ pub fn evaluate_spool_presence(
         return None;
     }
 
-    // AMS-HT units (IDs 128-135) reside on their own bus addresses but still have a
-    // dedicated bit range in tray_exist_bits, starting right after the standard units'
-    // (base offset 16, since AMS_MAX_STANDARD_ID=3 caps the standard range at bits 0-15).
+    let bit = tray_exist_bit_index(ams_id, tray_id)?;
+    Some(((parsed_mask >> bit) & 1) == 1)
+}
+
+/// The `tray_exist_bits` bit index for slot `tray_id` of unit `ams_id`, or `None` if that
+/// address has no bit.
+///
+/// Standard units (0-3) and the A2L-attached AMS Lite's normalized id 6 use
+/// `ams_id * 4 + tray_id`. AMS-HT units (128-135) sit right after the standard block, at
+/// `16 + (ams_id - 128)`; they are single-slot and consecutive ids occupy consecutive bits, so
+/// any `tray_id` but 0 would alias onto a neighbouring unit's bit and is rejected. Every index
+/// is below 32. Accepts exactly the addresses [`resolve_global_tray_id`] accepts, minus the
+/// external spools.
+fn tray_exist_bit_index(ams_id: u8, tray_id: u8) -> Option<u32> {
     if (AMS_HT_ID_MIN..=AMS_HT_ID_MAX).contains(&ams_id) {
-        // An AMS-HT unit is single-slot, and consecutive unit ids occupy *consecutive* bits, so
-        // the `16 + (ams_id - 128) + tray_id` formula is only unambiguous at `tray_id == 0`: any
-        // other value aliases onto a neighbouring unit's bit (e.g. `(128, 1)` reads unit 129's).
-        // The overflow guard below cannot catch that — it only fires once the alias runs off the
-        // end of the mask — so reject the out-of-range slot explicitly, mirroring the standard
-        // branch's own `tray_id >= AMS_SLOTS_PER_UNIT` check.
-        if tray_id != 0 {
-            return None;
-        }
-        let shift_ht = 16u32 + (ams_id - AMS_HT_ID_MIN) as u32 + tray_id as u32;
-        if shift_ht >= 32 {
-            return None;
-        }
-        return Some(((parsed_mask >> shift_ht) & 1) == 1);
+        return (tray_id == 0).then(|| 16 + u32::from(ams_id - AMS_HT_ID_MIN));
     }
-
-    // Reject ams_id values outside the standard AMS range before computing the shift
-    // amount below (mirrors resolve_global_tray_id's bounds check in this same file) —
-    // otherwise an out-of-range ams_id produces a shift amount >= 32, which panics in
-    // debug builds and silently returns a wrong result in release builds.
-    if (ams_id > AMS_MAX_STANDARD_ID && ams_id != AMS_LITE_ON_A2L_NORMALIZED_ID)
-        || tray_id >= AMS_SLOTS_PER_UNIT
+    if (ams_id <= AMS_MAX_STANDARD_ID || ams_id == AMS_LITE_ON_A2L_NORMALIZED_ID)
+        && tray_id < AMS_SLOTS_PER_UNIT
     {
-        return None;
+        return Some(u32::from(ams_id) * u32::from(AMS_SLOTS_PER_UNIT) + u32::from(tray_id));
     }
-
-    let shift_standard = (ams_id as u32 * AMS_SLOTS_PER_UNIT as u32) + tray_id as u32;
-    let slot_exists = ((parsed_mask >> shift_standard) & 1) == 1;
-
-    Some(slot_exists)
+    None
 }
 
 /// Explicitly sanitizes and nullifies telemetry fields when a physical slot becomes empty.
@@ -367,8 +356,9 @@ mod tests {
         // bit 18 set (16 + (130-128)) -> ams_id 130 present
         assert_eq!(evaluate_spool_presence("40000", 130, 0, true), Some(true));
         assert_eq!(evaluate_spool_presence("0", 130, 0, true), Some(false));
-        // shift_ht >= 32 (out-of-range slot_id) must not panic or wrap — reports None.
+        // AMS-HT is single-slot: a non-zero slot would alias a neighbouring unit's bit.
         assert_eq!(evaluate_spool_presence("f", 135, 9, true), None);
+        assert_eq!(evaluate_spool_presence("20000", 128, 1, true), None);
     }
 
     #[test]
@@ -875,6 +865,28 @@ mod tests {
             // A cleared tray always comes back with the `remain: -1` empty sentinel.
             let kept = cleaned.remain == tray.remain;
             assert_eq!(tray.is_loaded(ams_id), kept, "{tray:?} on unit {ams_id}");
+        }
+    }
+
+    #[test]
+    fn test_tray_exist_bit_index_agrees_with_resolve_global_tray_id() {
+        // The two validate the same (ams_id, tray_id) space and once disagreed (#117, #224).
+        for ams_id in 0..=u8::MAX {
+            if ams_id == AMS_EXTERNAL_SPOOL_MAIN_ID || ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID {
+                continue;
+            }
+            for tray_id in 0..8 {
+                let bit = tray_exist_bit_index(ams_id, tray_id);
+                assert_eq!(
+                    bit.is_some(),
+                    resolve_global_tray_id(ams_id, tray_id).is_some(),
+                    "({ams_id}, {tray_id})"
+                );
+                assert!(
+                    bit.is_none_or(|b| b < 32),
+                    "({ams_id}, {tray_id}) -> {bit:?}"
+                );
+            }
         }
     }
 }
