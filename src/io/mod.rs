@@ -774,6 +774,30 @@ where
     .await
 }
 
+/// Runs `fut` to completion, bounded by `budget_ms` when `timer` has a real wall-clock.
+///
+/// Without one ([`TimerProvider::has_real_clock`] false, e.g. `DummyTimer`) `fut` runs
+/// unbounded. A lost race is classified by [`deadline_error`], so a failing timer is not
+/// reported as a timeout. For whole-operation bounds; a resumable read uses [`read_chunk`].
+pub(crate) async fn with_deadline<F: Future, T: TimerProvider>(
+    fut: F,
+    timer: &T,
+    budget_ms: u64,
+) -> Result<F::Output, SocketError> {
+    if !timer.has_real_clock() {
+        return Ok(fut.await);
+    }
+    match race(
+        fut,
+        timer.sleep(core::time::Duration::from_millis(budget_ms)),
+    )
+    .await
+    {
+        Raced::Left(output) => Ok(output),
+        Raced::Right(r) => Err(deadline_error(r)),
+    }
+}
+
 /// Polls three futures concurrently, resolving once all three have completed.
 ///
 /// The all-must-finish counterpart to [`race`], built on the same

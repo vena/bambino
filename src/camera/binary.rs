@@ -25,24 +25,24 @@ use alloc::vec::Vec;
 
 use crate::client::dummy::DummyTimer;
 use crate::error::Error;
-use crate::identity::PrinterIdentity;
-use crate::io::{AsyncIo, TimerProvider, map_embedded_io_error_kind, read_chunk};
+use crate::identity::{ACCESS_CODE_MAX_LEN, validate_access_code};
+use crate::io::{AsyncIo, TimerProvider, map_embedded_io_error_kind, read_chunk, with_deadline};
 
 pub(crate) const CAMERA_HANDSHAKE_SIZE: usize = 80;
 pub(crate) const CAMERA_HANDSHAKE_MAGIC: u32 = 64;
 pub(crate) const CAMERA_HANDSHAKE_COMMAND_ID: u32 = 12288;
 pub(crate) const CAMERA_USERNAME_OFFSET: usize = 16;
 pub(crate) const CAMERA_PASSWORD_OFFSET: usize = 48;
-/// Maximum accepted access-code length for the camera handshake, in bytes. RTSPS auth
-/// (`camera::rtsps::build_rtsps_url`) doesn't enforce this bound itself — the CLI's
-/// connection-arg validation is the intended enforcement point for that path.
-pub const CAMERA_PASSWORD_MAX_LEN: usize = 32;
+// The password field runs to the end of the packet; `ACCESS_CODE_MAX_LEN` must fit it exactly.
+const _: () = assert!(CAMERA_HANDSHAKE_SIZE - CAMERA_PASSWORD_OFFSET == ACCESS_CODE_MAX_LEN);
 pub(crate) const CAMERA_FRAME_HEADER_SIZE: usize = 16;
 pub(crate) const CAMERA_FRAME_MAX_SIZE: usize = 10 * 1024 * 1024;
-pub(crate) const JPEG_MARKER_SOI_HIGH: u8 = 0xFF;
-pub(crate) const JPEG_MARKER_SOI_LOW: u8 = 0xD8;
-pub(crate) const JPEG_MARKER_EOI_HIGH: u8 = 0xFF;
-pub(crate) const JPEG_MARKER_EOI_LOW: u8 = 0xD9;
+/// JPEG start-of-image marker every frame payload must begin with.
+pub(crate) const JPEG_SOI: [u8; 2] = [0xFF, 0xD8];
+/// JPEG end-of-image marker every frame payload must end with.
+pub(crate) const JPEG_EOI: [u8; 2] = [0xFF, 0xD9];
+/// Shortest payload that can carry both markers without them overlapping (`FF D8 D9` can't).
+const JPEG_MIN_LEN: usize = JPEG_SOI.len() + JPEG_EOI.len();
 
 /// Per-read wall-clock deadline for [`BinaryCameraStream::read_next_frame_with_timer`] when a real timer is available (see [`TimerProvider::has_real_clock`]) — same value and rationale as `MQTT_READ_TIMEOUT_SECS` (`src/mqtt/client/frame.rs`): a 30s gap between frames on an otherwise-live connection indicates a genuine stall, not normal frame-pacing jitter.
 pub(crate) const CAMERA_READ_TIMEOUT_SECS: u64 = 30;
@@ -71,17 +71,8 @@ pub fn build_handshake_packet(access_code: &str) -> Result<[u8; CAMERA_HANDSHAKE
     packet[CAMERA_USERNAME_OFFSET..CAMERA_USERNAME_OFFSET + username.len()]
         .copy_from_slice(username);
 
-    if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(Error::ProtocolViolation(
-            "access_code must be a non-empty ASCII alphanumeric string".into(),
-        ));
-    }
+    validate_access_code(access_code)?;
     let code_bytes = access_code.as_bytes();
-    if code_bytes.len() > CAMERA_PASSWORD_MAX_LEN {
-        return Err(Error::ProtocolViolation(
-            "Access code length exceeds maximum 32-byte authorization boundary".into(),
-        ));
-    }
     packet[CAMERA_PASSWORD_OFFSET..CAMERA_PASSWORD_OFFSET + code_bytes.len()]
         .copy_from_slice(code_bytes);
 
@@ -103,12 +94,8 @@ enum CameraFrameReadState {
         buf: [u8; CAMERA_FRAME_HEADER_SIZE],
         filled: usize,
     },
-    /// Header fully decoded; `size` is the expected payload length, `buf` accumulates bytes as they arrive, `filled` tracks how many are valid so far.
-    ReadingPayload {
-        size: usize,
-        buf: Vec<u8>,
-        filled: usize,
-    },
+    /// Header fully decoded; `buf` is sized to the declared payload and accumulates bytes as they arrive, `filled` tracks how many are valid so far.
+    ReadingPayload { buf: Vec<u8>, filled: usize },
     /// An oversized frame's header was decoded, but its declared payload is still pending on
     /// the wire — `remaining` counts bytes left to discard before the stream is resynced.
     /// Never allocates `remaining` bytes up front (it's an attacker/corruption-controlled
@@ -188,13 +175,9 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
     /// Each is also what a network fault would produce, so a caller cannot distinguish "wrong
     /// access code" from a network problem through this API alone, and matching only
     /// `ConnectionReset` misses the silent cases.
-    pub async fn authenticate(&mut self, identity: &PrinterIdentity) -> Result<(), Error> {
-        self.authenticate_with_timer(
-            &identity.access_code,
-            &DummyTimer,
-            CAMERA_READ_TIMEOUT_SECS * 1000,
-        )
-        .await
+    pub async fn authenticate(&mut self, access_code: &str) -> Result<(), Error> {
+        self.authenticate_with_timer(access_code, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
+            .await
     }
 
     /// Bounds the handshake write+flush against `timer` when a real wall-clock is available (see [`TimerProvider::has_real_clock`]), mirroring [`Self::read_next_frame_with_timer`]'s naming/delegation convention.
@@ -202,8 +185,8 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
     /// preserving — the handshake is a single ~80-byte packet, small enough that losing/retrying the
     /// whole write on timeout is an acceptable simplification (unlike MQTT/camera frame *reads*, which
     /// must not lose already-read bytes) — so this races the whole `write_all`+`flush` sequence against
-    /// `timer.sleep()` directly via the shared `race()` combinator instead of needing a resumable
-    /// chunk-at-a-time helper like `read_chunk`.
+    /// `timer.sleep()` via [`with_deadline`] instead of needing a resumable chunk-at-a-time helper
+    /// like `read_chunk`.
     pub(crate) async fn authenticate_with_timer<T: TimerProvider>(
         &mut self,
         access_code: &str,
@@ -211,33 +194,19 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
         budget_ms: u64,
     ) -> Result<(), Error> {
         let handshake = build_handshake_packet(access_code)?;
-
-        let write_fut = async {
-            self.stream.write_all(&handshake).await.map_err(|e| {
-                Error::Network(map_embedded_io_error_kind(embedded_io_async::Error::kind(
-                    &e,
-                )))
-            })?;
-            self.stream.flush().await.map_err(|e| {
-                Error::Network(map_embedded_io_error_kind(embedded_io_async::Error::kind(
-                    &e,
-                )))
-            })
+        let io_error = |e: IO::Error| {
+            Error::Network(map_embedded_io_error_kind(embedded_io_async::Error::kind(
+                &e,
+            )))
         };
 
-        if !timer.has_real_clock() {
-            return write_fut.await;
-        }
-
-        match crate::io::race(
-            write_fut,
-            timer.sleep(core::time::Duration::from_millis(budget_ms)),
-        )
-        .await
-        {
-            crate::io::Raced::Left(result) => result,
-            crate::io::Raced::Right(r) => Err(Error::Network(crate::io::deadline_error(r))),
-        }
+        let write_fut = async {
+            self.stream.write_all(&handshake).await.map_err(io_error)?;
+            self.stream.flush().await.map_err(io_error)
+        };
+        with_deadline(write_fut, timer, budget_ms)
+            .await
+            .map_err(Error::Network)?
     }
 
     /// Asynchronously extracts the next complete frame from the stream, bounding each low-level read step against `timer` when a real wall-clock is available (see [`TimerProvider::has_real_clock`]).
@@ -253,154 +222,128 @@ impl<IO: AsyncIo> BinaryCameraStream<IO> {
     /// logical frame).
     pub(crate) async fn read_next_frame_with_timer<T: TimerProvider>(
         &mut self,
-        frame_buf: &mut Vec<u8>,
         timer: &T,
         budget_ms: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<u8>, Error> {
         let deadline_ms = if timer.has_real_clock() {
             Some(timer.now_millis().saturating_add(budget_ms))
         } else {
             None
         };
 
-        // Resume draining a prior oversized frame's payload before anything else — bytes still
-        // pending on the wire from that frame must be consumed before a fresh header can be
-        // read, or the next header/payload split would desync against stale payload bytes.
-        if matches!(
-            self.read_state,
-            CameraFrameReadState::DiscardingOversizedPayload { .. }
-        ) {
-            return self.drain_oversized_payload(timer, deadline_ms).await;
+        loop {
+            match &mut self.read_state {
+                CameraFrameReadState::Idle => {
+                    self.read_state = CameraFrameReadState::ReadingHeader {
+                        buf: [0u8; CAMERA_FRAME_HEADER_SIZE],
+                        filled: 0,
+                    };
+                }
+                CameraFrameReadState::ReadingHeader { buf, filled } => {
+                    fill(&mut self.stream, buf, filled, timer, deadline_ms).await?;
+
+                    // Extract little-endian payload size N from first 4 bytes. Use a fallible
+                    // conversion rather than `as usize` — on a hypothetical <32-bit `usize`
+                    // target an `as` cast would silently truncate the length field instead of
+                    // erroring, before the frame-size sanity check below even runs.
+                    let raw_size = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+                    let size = usize::try_from(raw_size).map_err(|_| {
+                        Error::ProtocolViolation(
+                            "Frame size descriptor does not fit in this platform's usize".into(),
+                        )
+                    })?;
+
+                    // Bounded allocation check to guard against memory allocation overflow
+                    // attacks. The declared payload is still pending on the wire, so drain it
+                    // (never allocating `size` bytes) before returning: a caller that keeps
+                    // polling the same instance instead of reconnecting must not be desynced.
+                    if size == 0 {
+                        self.read_state = CameraFrameReadState::Idle;
+                        return Err(Error::ProtocolViolation(
+                            "Acquired empty frame payload descriptor".into(),
+                        ));
+                    }
+                    self.read_state = if size > self.max_frame_size {
+                        CameraFrameReadState::DiscardingOversizedPayload { remaining: size }
+                    } else {
+                        CameraFrameReadState::ReadingPayload {
+                            buf: vec![0u8; size],
+                            filled: 0,
+                        }
+                    };
+                }
+                CameraFrameReadState::ReadingPayload { buf, filled } => {
+                    fill(&mut self.stream, buf, filled, timer, deadline_ms).await?;
+                    let payload = core::mem::take(buf);
+                    self.read_state = CameraFrameReadState::Idle;
+
+                    // Validate frame bounds to protect downstream graphic engines against
+                    // decoding crashes. Pure post-processing on a fully consumed payload, so it
+                    // doesn't interact with resumability.
+                    if payload.len() < JPEG_MIN_LEN
+                        || !payload.starts_with(&JPEG_SOI)
+                        || !payload.ends_with(&JPEG_EOI)
+                    {
+                        return Err(Error::ProtocolViolation(
+                            "Acquired stream packet lacks valid JPEG magic marker boundaries"
+                                .into(),
+                        ));
+                    }
+                    return Ok(payload);
+                }
+                // Drains an oversized frame's declared-but-rejected payload in bounded
+                // `CAMERA_DISCARD_CHUNK_SIZE` chunks (never allocating `remaining` bytes, which
+                // can be attacker/corruption-controlled up to `u32::MAX`), keeping the stream in
+                // sync so a retry on this instance reads the *next* real frame's header.
+                // Resumable: on a mid-drain timeout `remaining` persists in `self.read_state`.
+                CameraFrameReadState::DiscardingOversizedPayload { remaining } => {
+                    let mut scratch = [0u8; CAMERA_DISCARD_CHUNK_SIZE];
+                    while *remaining > 0 {
+                        let want = core::cmp::min(*remaining, scratch.len());
+                        let n =
+                            read_chunk(&mut self.stream, &mut scratch[..want], timer, deadline_ms)
+                                .await
+                                .map_err(Error::Network)?;
+                        *remaining -= n;
+                    }
+                    self.read_state = CameraFrameReadState::Idle;
+                    return Err(Error::ProtocolViolation(
+                        "Extracted JPEG frame size exceeds configured safety allocation limit"
+                            .into(),
+                    ));
+                }
+            }
         }
-
-        // Header bytes (only start a fresh header if not already mid-header from a prior,
-        // timed-out call).
-        if matches!(self.read_state, CameraFrameReadState::Idle) {
-            self.read_state = CameraFrameReadState::ReadingHeader {
-                buf: [0u8; CAMERA_FRAME_HEADER_SIZE],
-                filled: 0,
-            };
-        }
-
-        if let CameraFrameReadState::ReadingHeader { buf, filled } = &mut self.read_state {
-            while *filled < buf.len() {
-                let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
-                    .await
-                    .map_err(Error::Network)?;
-                *filled += n;
-            }
-
-            // Extract little-endian payload size N from first 4 bytes. Use a fallible
-            // conversion rather than `as usize` — on a hypothetical <32-bit `usize` target an
-            // `as` cast would silently truncate the length field instead of erroring, before
-            // the frame-size sanity check below even runs.
-            let raw_size = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-            let size = usize::try_from(raw_size).map_err(|_| {
-                Error::ProtocolViolation(
-                    "Frame size descriptor does not fit in this platform's usize".into(),
-                )
-            })?;
-
-            // Bounded allocation check to guard against memory allocation overflow attacks.
-            // The declared payload is still pending on the wire — drain it (never allocating
-            // `size` bytes) before returning, so a caller that keeps polling the same instance
-            // instead of reconnecting doesn't get permanently desynced (previously this reset
-            // straight to `Idle` without draining, unlike the JPEG-marker-validation failure
-            // path below, which is safe only because its payload was already fully consumed).
-            if size > self.max_frame_size {
-                self.read_state =
-                    CameraFrameReadState::DiscardingOversizedPayload { remaining: size };
-                return self.drain_oversized_payload(timer, deadline_ms).await;
-            }
-            if size == 0 {
-                self.read_state = CameraFrameReadState::Idle;
-                return Err(Error::ProtocolViolation(
-                    "Acquired empty frame payload descriptor".into(),
-                ));
-            }
-
-            self.read_state = CameraFrameReadState::ReadingPayload {
-                size,
-                buf: vec![0u8; size],
-                filled: 0,
-            };
-        }
-
-        // Payload bytes (resumes from `filled` if a prior call stalled mid-payload).
-        if let CameraFrameReadState::ReadingPayload { size, buf, filled } = &mut self.read_state {
-            while *filled < buf.len() {
-                let n = read_chunk(&mut self.stream, &mut buf[*filled..], timer, deadline_ms)
-                    .await
-                    .map_err(Error::Network)?;
-                *filled += n;
-            }
-
-            let size = *size;
-            let payload = core::mem::take(buf);
-            self.read_state = CameraFrameReadState::Idle;
-
-            // Validate frame bounds to protect downstream graphic engines against decoding
-            // crashes (validation only runs after `read_state` has already collapsed back to
-            // `Idle` — pure buffer post-processing, no I/O, doesn't interact with resumability).
-            if size < 4
-                || payload[0] != JPEG_MARKER_SOI_HIGH
-                || payload[1] != JPEG_MARKER_SOI_LOW
-                || payload[size - 2] != JPEG_MARKER_EOI_HIGH
-                || payload[size - 1] != JPEG_MARKER_EOI_LOW
-            {
-                return Err(Error::ProtocolViolation(
-                    "Acquired stream packet lacks valid JPEG magic marker boundaries".into(),
-                ));
-            }
-
-            *frame_buf = payload;
-            return Ok(());
-        }
-
-        unreachable!("CameraFrameReadState must be ReadingPayload after header decode")
     }
 
-    /// Drains an oversized frame's declared-but-rejected payload off the wire in bounded
-    /// `CAMERA_DISCARD_CHUNK_SIZE` chunks (never allocating `remaining` bytes, which can be
-    /// attacker/corruption-controlled up to `u32::MAX`), keeping the stream in sync so a
-    /// caller that retries `read_next_frame`/`read_next_frame_with_timer` on this same
-    /// instance — rather than reconnecting — reads the *next* real frame's header instead of
-    /// misreading stale payload bytes. Resumable: if the deadline hits mid-drain,
-    /// `self.read_state`'s `remaining` count persists and the next call picks up the drain
-    /// before attempting anything else (see the check at the top of
-    /// `read_next_frame_with_timer`).
-    async fn drain_oversized_payload<T: TimerProvider>(
-        &mut self,
-        timer: &T,
-        deadline_ms: Option<u64>,
-    ) -> Result<(), Error> {
-        if let CameraFrameReadState::DiscardingOversizedPayload { remaining } = &mut self.read_state
-        {
-            let mut scratch = [0u8; CAMERA_DISCARD_CHUNK_SIZE];
-            while *remaining > 0 {
-                let want = core::cmp::min(*remaining, scratch.len());
-                let n = read_chunk(&mut self.stream, &mut scratch[..want], timer, deadline_ms)
-                    .await
-                    .map_err(Error::Network)?;
-                *remaining -= n;
-            }
-        }
-        self.read_state = CameraFrameReadState::Idle;
-        Err(Error::ProtocolViolation(
-            "Extracted JPEG frame size exceeds configured safety allocation limit".into(),
-        ))
-    }
-
-    /// Asynchronously extracts the next complete frame from the stream.
+    /// Asynchronously extracts and returns the next complete frame from the stream.
     ///
-    /// Wholesale-replaces the user-supplied `Vec<u8>` with the decoded frame each call
-    /// (`*frame_buf = payload`) — no buffer reuse. Delegates to `read_next_frame_with_timer` under
-    /// [`DummyTimer`], which degrades to a plain unbounded read — behavior-preserving for
-    /// every existing caller not going through `PrinterClient`.
-    pub async fn read_next_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error> {
-        self.read_next_frame_with_timer(frame_buf, &DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
+    /// Delegates to `read_next_frame_with_timer` under [`DummyTimer`], which degrades to a
+    /// plain unbounded read — behavior-preserving for every existing caller not going through
+    /// `PrinterClient`.
+    pub async fn read_next_frame(&mut self) -> Result<Vec<u8>, Error> {
+        self.read_next_frame_with_timer(&DummyTimer, CAMERA_READ_TIMEOUT_SECS * 1000)
             .await
     }
+}
+
+/// Reads into `buf[*filled..]` until it is full, advancing `filled` as bytes arrive.
+///
+/// `filled` lives in the caller's read state, not a local, so bytes read before a timeout are
+/// kept for the next call (`.claude/rules/wire-read-deadline.md`).
+async fn fill<IO: AsyncIo, T: TimerProvider>(
+    stream: &mut IO,
+    buf: &mut [u8],
+    filled: &mut usize,
+    timer: &T,
+    deadline_ms: Option<u64>,
+) -> Result<(), Error> {
+    while *filled < buf.len() {
+        *filled += read_chunk(stream, &mut buf[*filled..], timer, deadline_ms)
+            .await
+            .map_err(Error::Network)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -421,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_handshake_max_length_access_code() {
-        let code = "A".repeat(CAMERA_PASSWORD_MAX_LEN);
+        let code = "A".repeat(ACCESS_CODE_MAX_LEN);
         let packet = build_handshake_packet(&code).unwrap();
         assert_eq!(
             &packet[CAMERA_PASSWORD_OFFSET..CAMERA_PASSWORD_OFFSET + 32],
@@ -431,9 +374,9 @@ mod tests {
 
     #[test]
     fn test_handshake_oversized_access_code() {
-        let code = "A".repeat(CAMERA_PASSWORD_MAX_LEN + 1);
+        let code = "A".repeat(ACCESS_CODE_MAX_LEN + 1);
         let result = build_handshake_packet(&code);
-        assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+        assert!(matches!(result, Err(Error::InvalidArgument(_))));
     }
 
     #[test]
@@ -447,11 +390,10 @@ mod tests {
     fn test_handshake_rejects_empty_access_code() {
         // `.all()` on an empty string's char iterator vacuously returns true, so the
         // alphanumeric check alone let an empty access_code silently build a handshake packet
-        // with a zero-length password field. rtsps.rs's build_rtsps_url already has this
-        // explicit empty-string guard for the same copy-paste-mistake reason.
+        // with a zero-length password field.
         assert!(matches!(
             build_handshake_packet(""),
-            Err(Error::ProtocolViolation(_))
+            Err(Error::InvalidArgument(_))
         ));
     }
 
@@ -506,8 +448,7 @@ mod tests {
             let data = make_frame_header((CAMERA_FRAME_MAX_SIZE + 1) as u32);
             let cursor = std::io::Cursor::new(data);
             let mut camera = BinaryCameraStream::new(TokioIo(cursor));
-            let mut buf = Vec::new();
-            let result = camera.read_next_frame(&mut buf).await;
+            let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::Network(_))));
             // Cursor has no more bytes after the header, so draining the (never-sent) declared
             // payload hits EOF — confirms the drain path is actually exercised (BUG: this used
@@ -527,8 +468,7 @@ mod tests {
             data.extend(vec![0u8; 1024]);
             let cursor = std::io::Cursor::new(data);
             let mut camera = BinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
-            let mut buf = Vec::new();
-            let result = camera.read_next_frame(&mut buf).await;
+            let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
 
@@ -542,25 +482,22 @@ mod tests {
             // misreading stale oversized-payload bytes as a bogus header.
             let mut data = make_frame_header(1024);
             data.extend(vec![0xAAu8; 1024]);
-            let mut valid_frame = vec![JPEG_MARKER_SOI_HIGH, JPEG_MARKER_SOI_LOW];
-            valid_frame.extend([JPEG_MARKER_EOI_HIGH, JPEG_MARKER_EOI_LOW]);
+            let valid_frame = [JPEG_SOI, JPEG_EOI].concat();
             data.extend(make_frame_header(valid_frame.len() as u32));
             data.extend(&valid_frame);
 
             let cursor = std::io::Cursor::new(data);
             let mut camera = BinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
-            let mut buf = Vec::new();
 
-            let oversized_result = camera.read_next_frame(&mut buf).await;
+            let oversized_result = camera.read_next_frame().await;
             assert!(matches!(oversized_result, Err(Error::ProtocolViolation(_))));
 
-            let resynced_result = camera.read_next_frame(&mut buf).await;
-            assert!(
-                resynced_result.is_ok(),
-                "expected the stream to resync onto the next real frame, got {:?}",
-                resynced_result
+            let resynced_result = camera.read_next_frame().await;
+            assert_eq!(
+                resynced_result.ok(),
+                Some(valid_frame),
+                "expected the stream to resync onto the next real frame"
             );
-            assert_eq!(buf, valid_frame);
         }
 
         #[tokio::test]
@@ -568,8 +505,17 @@ mod tests {
             let data = make_frame_header(0);
             let cursor = std::io::Cursor::new(data);
             let mut camera = BinaryCameraStream::new(TokioIo(cursor));
-            let mut buf = Vec::new();
-            let result = camera.read_next_frame(&mut buf).await;
+            let result = camera.read_next_frame().await;
+            assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_read_frame_rejects_overlapping_markers() {
+            // `FF D8 D9` starts with SOI and ends with EOI only by sharing a byte.
+            let mut data = make_frame_header(3);
+            data.extend_from_slice(&[0xFF, 0xD8, 0xD9]);
+            let mut camera = BinaryCameraStream::new(TokioIo(std::io::Cursor::new(data)));
+            let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
 
@@ -579,8 +525,7 @@ mod tests {
             data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
             let cursor = std::io::Cursor::new(data);
             let mut camera = BinaryCameraStream::new(TokioIo(cursor));
-            let mut buf = Vec::new();
-            let result = camera.read_next_frame(&mut buf).await;
+            let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
 
@@ -596,12 +541,11 @@ mod tests {
             let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
             let budget_ms = 50;
-            let mut buf = Vec::new();
 
             let started = std::time::Instant::now();
             let result = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
-                camera.read_next_frame_with_timer(&mut buf, &timer, budget_ms),
+                camera.read_next_frame_with_timer(&timer, budget_ms),
             )
             .await
             .expect(
@@ -675,18 +619,17 @@ mod tests {
             let (client_stream, mut server_stream) = tokio::io::duplex(64);
             let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
-            let mut buf = Vec::new();
 
             // Header declares a 4-byte payload; server sends header + first 2 payload bytes,
             // then stops.
             let mut sent = make_frame_header(4);
-            sent.extend_from_slice(&[JPEG_MARKER_SOI_HIGH, JPEG_MARKER_SOI_LOW]);
+            sent.extend_from_slice(&JPEG_SOI);
             server_stream.write_all(&sent).await.unwrap();
             server_stream.flush().await.unwrap();
 
             let first_attempt = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
-                camera.read_next_frame_with_timer(&mut buf, &timer, 50),
+                camera.read_next_frame_with_timer(&timer, 50),
             )
             .await
             .expect("first attempt hung past the meta-safety timeout");
@@ -702,32 +645,20 @@ mod tests {
             );
 
             // Send the remaining 2 payload bytes to complete a valid JPEG frame.
-            server_stream
-                .write_all(&[JPEG_MARKER_EOI_HIGH, JPEG_MARKER_EOI_LOW])
-                .await
-                .unwrap();
+            server_stream.write_all(&JPEG_EOI).await.unwrap();
             server_stream.flush().await.unwrap();
 
             let second_attempt = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
-                camera.read_next_frame_with_timer(&mut buf, &timer, 50),
+                camera.read_next_frame_with_timer(&timer, 50),
             )
             .await
             .expect("second attempt hung past the meta-safety timeout");
 
-            assert!(
-                second_attempt.is_ok(),
-                "expected the resumed read to succeed, got {:?}",
-                second_attempt
-            );
             assert_eq!(
-                buf,
-                vec![
-                    JPEG_MARKER_SOI_HIGH,
-                    JPEG_MARKER_SOI_LOW,
-                    JPEG_MARKER_EOI_HIGH,
-                    JPEG_MARKER_EOI_LOW
-                ]
+                second_attempt.ok(),
+                Some([JPEG_SOI, JPEG_EOI].concat()),
+                "expected the resumed read to reconstruct the original frame"
             );
         }
     }

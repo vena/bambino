@@ -78,18 +78,18 @@ where
             .expect("ensure_camera() just verified self.camera is Some"))
     }
 
-    /// Reads the next camera frame, auto-connecting (and authenticating) if needed.
+    /// Reads and returns the next camera frame, auto-connecting (and authenticating) if needed.
     ///
     /// Bounds the read against `self.timer` (see
     /// `BinaryCameraStream::read_next_frame_with_timer`), mirroring
     /// [`poll_telemetry()`](Self::poll_telemetry)'s relationship to
     /// [`.mqtt()`](Self::mqtt).
-    pub async fn read_camera_frame(&mut self, frame_buf: &mut Vec<u8>) -> Result<(), Error> {
+    pub async fn read_camera_frame(&mut self) -> Result<Vec<u8>, Error> {
         self.ensure_camera().await?;
         self.camera
             .as_mut()
             .expect("ensure_camera() just verified self.camera is Some")
-            .read_next_frame_with_timer(frame_buf, &self.timer, CAMERA_READ_TIMEOUT_SECS * 1000)
+            .read_next_frame_with_timer(&self.timer, CAMERA_READ_TIMEOUT_SECS * 1000)
             .await
     }
 

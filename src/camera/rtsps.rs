@@ -45,6 +45,7 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 use core::net::{IpAddr, SocketAddr};
+use core::time::Duration;
 
 use crate::camera::CAMERA_PORT_RTSPS;
 use crate::error::Error;
@@ -59,22 +60,15 @@ pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 ///
 /// # Errors
 ///
-/// Returns [`Error::ProtocolViolation`] if `access_code` is empty or contains any
-/// character outside ASCII letters/digits. Genuine printer-issued LAN access codes are
-/// always 8 case-sensitive ASCII alphanumeric characters, so a rejection here almost always
-/// means a copy-paste mistake (stray whitespace, a trailing newline) rather than a
-/// valid-but-unusual code — surfacing it as an error catches that mistake instead of
-/// silently building a malformed URL.
+/// Returns [`Error::InvalidArgument`] if `access_code` fails
+/// [`validate_access_code`](crate::identity::validate_access_code), rather than building a
+/// malformed URL.
 ///
 /// `ip` is an [`IpAddr`] rather than a string so a spoofed host such as
 /// `"1.2.3.4@attacker.example.com"` can't reach the URL's userinfo component and redirect
 /// the connection, with the LAN access code, elsewhere. An IPv6 address is bracketed.
 pub fn build_rtsps_url(ip: IpAddr, access_code: &str) -> Result<String, Error> {
-    if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(Error::ProtocolViolation(
-            "access_code must be a non-empty ASCII alphanumeric string".into(),
-        ));
-    }
+    crate::identity::validate_access_code(access_code)?;
     Ok(format!(
         "rtsps://bblp:{}@{}/streaming/live/1",
         access_code,
@@ -129,7 +123,6 @@ fn rtsps_authority(ip: IpAddr) -> SocketAddr {
 /// Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freezes.
 pub struct RtpTimestampCorrector {
     base_timestamp: u32,
-    frequency_hz: u32,
 }
 
 impl RtpTimestampCorrector {
@@ -138,19 +131,20 @@ impl RtpTimestampCorrector {
     pub fn new(embedded_rtp: u32) -> Self {
         Self {
             base_timestamp: embedded_rtp,
-            frequency_hz: RTP_CLOCK_FREQUENCY_HZ,
         }
     }
 
     /// Computes the corrected RTP timestamp from host-observed elapsed time.
     ///
-    /// * `elapsed_secs`: Total accumulated seconds since the first stream packet arrived.
-    pub fn correct(&self, elapsed_secs: f64) -> u32 {
-        let raw = elapsed_secs * self.frequency_hz as f64;
-        // Truncate via u64 intermediate to preserve wrapping semantics for streams
-        // exceeding ~13.25 hours (where f64 -> u32 would saturate at u32::MAX).
-        let rtp_delta = (raw + 0.5) as u64 as u32;
-        self.base_timestamp.wrapping_add(rtp_delta)
+    /// `elapsed` is the time since the first stream packet arrived. The tick count is rounded
+    /// to the nearest 90 kHz tick and wraps modulo 2^32 like any RTP timestamp, so a stream
+    /// longer than ~13.25 hours keeps advancing instead of saturating.
+    pub fn correct(&self, elapsed: Duration) -> u32 {
+        const NANOS_PER_SEC: u128 = 1_000_000_000;
+        let ticks = (elapsed.as_nanos() * u128::from(RTP_CLOCK_FREQUENCY_HZ) + NANOS_PER_SEC / 2)
+            / NANOS_PER_SEC;
+        // Truncation is the RTP wraparound.
+        self.base_timestamp.wrapping_add(ticks as u32)
     }
 }
 
@@ -235,13 +229,13 @@ mod tests {
         let corrector = RtpTimestampCorrector::new(54000);
 
         // Frame at t=0: base timestamp returned via wrapping_add(0)
-        assert_eq!(corrector.correct(0.0), 54000);
+        assert_eq!(corrector.correct(Duration::ZERO), 54000);
 
         // Frame at t=1.5s: delta = 1.5 * 90000 = 135000
-        assert_eq!(corrector.correct(1.5), 189000);
+        assert_eq!(corrector.correct(Duration::from_millis(1500)), 189000);
 
         // Frame at t=2.0s: delta = 2.0 * 90000 = 180000
-        assert_eq!(corrector.correct(2.0), 234000);
+        assert_eq!(corrector.correct(Duration::from_secs(2)), 234000);
     }
 
     #[test]
@@ -252,7 +246,7 @@ mod tests {
         // (4,294,967,296) and must wrap modulo 2^32, not saturate at u32::MAX.
         // Independently hand-computed (not via the implementation's own formula):
         // 4,500,000,000 - 4,294,967,296 = 205,032,704.
-        let ts = corrector.correct(50000.0);
+        let ts = corrector.correct(Duration::from_secs(50000));
         assert_eq!(ts, 205_032_704u32);
         assert_ne!(ts, u32::MAX, "must wrap, not saturate");
     }

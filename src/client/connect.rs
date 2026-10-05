@@ -575,7 +575,7 @@ where
                 if let Some(max) = max_frame_size {
                     cam = cam.with_max_frame_size(max);
                 }
-                cam.authenticate(identity).await?;
+                cam.authenticate(&identity.access_code).await?;
                 Ok::<_, Error>(cam)
             })
             .await?;
@@ -730,7 +730,7 @@ where
                     if let Some(max) = max_frame_size {
                         cam = cam.with_max_frame_size(max);
                     }
-                    cam.authenticate(identity).await?;
+                    cam.authenticate(&identity.access_code).await?;
                     Ok::<_, Error>(cam)
                 })
                 .await,

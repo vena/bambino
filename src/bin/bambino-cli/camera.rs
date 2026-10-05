@@ -57,8 +57,7 @@ async fn run_snapshot(target: &Target, output_path: &str) -> Result<(), CliError
     );
 
     println!("Capturing frame ...");
-    let mut frame = Vec::new();
-    printer.read_camera_frame(&mut frame).await?;
+    let frame = printer.read_camera_frame().await?;
 
     let path = Path::new(output_path);
     fs::write(path, &frame)?;

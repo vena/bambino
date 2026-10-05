@@ -41,19 +41,12 @@ async fn test_binary_camera_handshake_and_streaming() {
     // This transmits the 80-byte block. The mock server will panic and fail the test
     // if the magic identifiers or access code do not match expectations.
     camera_client
-        .authenticate(&PrinterIdentity {
-            ip: String::new(),
-            serial: String::new(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        })
+        .authenticate(access_code)
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
-    let mut frame_buf = Vec::new();
-
-    camera_client
-        .read_next_frame(&mut frame_buf)
+    let frame_buf = camera_client
+        .read_next_frame()
         .await
         .expect("Failed to read first camera frame");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8], "Missing JPEG start marker");
@@ -66,8 +59,8 @@ async fn test_binary_camera_handshake_and_streaming() {
         .expect("Camera frame inner payload is not valid UTF-8");
     assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_0");
 
-    camera_client
-        .read_next_frame(&mut frame_buf)
+    let frame_buf = camera_client
+        .read_next_frame()
         .await
         .expect("Failed to read second camera frame");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
@@ -75,8 +68,8 @@ async fn test_binary_camera_handshake_and_streaming() {
         .expect("Camera frame inner payload is not valid UTF-8");
     assert_eq!(inner_str, "MOCK_JPEG_PAYLOAD_1");
 
-    camera_client
-        .read_next_frame(&mut frame_buf)
+    let frame_buf = camera_client
+        .read_next_frame()
         .await
         .expect("Failed to read third camera frame");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
@@ -86,7 +79,7 @@ async fn test_binary_camera_handshake_and_streaming() {
 
     // The server was instructed to send exactly 3 frames, then cleanly drop the socket.
     // Reading a 4th frame should result in a connection error, not a parse panic.
-    let eof_result = camera_client.read_next_frame(&mut frame_buf).await;
+    let eof_result = camera_client.read_next_frame().await;
     assert!(
         eof_result.is_err(),
         "Expected network termination error upon stream exhaustion"
@@ -126,10 +119,8 @@ async fn test_printer_client_camera_end_to_end() {
     .with_camera(DummyTlsConnector, factory);
 
     assert!(!printer.is_camera_connected());
-
-    let mut frame_buf = Vec::new();
-    printer
-        .read_camera_frame(&mut frame_buf)
+    let frame_buf = printer
+        .read_camera_frame()
         .await
         .expect("read_camera_frame should connect, authenticate, and read the mock frame");
 
@@ -160,9 +151,7 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
             model: PrinterModel::X1C,
         },
     );
-
-    let mut frame_buf = Vec::new();
-    let result = printer.read_camera_frame(&mut frame_buf).await;
+    let result = printer.read_camera_frame().await;
 
     assert!(
         matches!(result, Err(Error::ProtocolViolation(_))),
@@ -195,10 +184,8 @@ async fn test_ensure_camera_retries_after_failed_dial() {
         },
     )
     .with_camera(DummyTlsConnector, factory);
-
-    let mut frame_buf = Vec::new();
     for attempt in 1..=2 {
-        let result = printer.read_camera_frame(&mut frame_buf).await;
+        let result = printer.read_camera_frame().await;
         assert!(
             matches!(result, Err(Error::Network(_))),
             "attempt {attempt}: expected the dial failure to surface as Network, not \
@@ -228,17 +215,10 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
         BinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
-        .authenticate(&PrinterIdentity {
-            ip: String::new(),
-            serial: String::new(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        })
+        .authenticate(access_code)
         .await
         .expect("authenticate() only confirms the handshake write, must still succeed here");
-
-    let mut frame_buf = Vec::new();
-    let result = camera_client.read_next_frame(&mut frame_buf).await;
+    let result = camera_client.read_next_frame().await;
     assert!(
         result.is_err(),
         "expected a connection error on the first read after a rejected handshake, got {:?}",
@@ -271,17 +251,10 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
         BinaryCameraStream::new(TokioIo(client_stream));
 
     camera_client
-        .authenticate(&PrinterIdentity {
-            ip: String::new(),
-            serial: String::new(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        })
+        .authenticate(access_code)
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
-
-    let mut frame_buf = Vec::new();
-    let result = camera_client.read_next_frame(&mut frame_buf).await;
+    let result = camera_client.read_next_frame().await;
     assert!(
         result.is_err(),
         "expected a connection error when the stream closes mid-payload, got {:?}",
@@ -304,12 +277,7 @@ async fn test_attach_and_disconnect_camera() {
     let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
         BinaryCameraStream::new(TokioIo(client_stream));
     camera_stream
-        .authenticate(&PrinterIdentity {
-            ip: String::new(),
-            serial: String::new(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        })
+        .authenticate(access_code)
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 
@@ -331,10 +299,8 @@ async fn test_attach_and_disconnect_camera() {
 
     client.attach_camera(camera_stream).await;
     assert!(client.is_camera_connected());
-
-    let mut frame_buf = Vec::new();
-    client
-        .read_camera_frame(&mut frame_buf)
+    let frame_buf = client
+        .read_camera_frame()
         .await
         .expect("attach_camera should leave an immediately-usable connected stream");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
@@ -374,12 +340,7 @@ async fn test_disconnect_camera_closes_the_tls_session() {
     let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
         BinaryCameraStream::new(TokioIo(client_stream));
     camera_stream
-        .authenticate(&PrinterIdentity {
-            ip: String::new(),
-            serial: String::new(),
-            access_code: access_code.to_string(),
-            model: PrinterModel::P1S,
-        })
+        .authenticate(access_code)
         .await
         .expect("Failed to negotiate binary stream authentication handshake");
 

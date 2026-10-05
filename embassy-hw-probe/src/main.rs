@@ -1068,7 +1068,7 @@ async fn camera_session<R: bambino::io::AsyncIo>(
             Ok(Ok(tls)) => tls,
         };
     if let Err(e) = BinaryCameraStream::new(&mut tls)
-        .authenticate(&identity())
+        .authenticate(&identity().access_code)
         .await
     {
         return Err(alloc::format!("authenticate failed {e:?}"));
@@ -1105,7 +1105,7 @@ async fn second_camera_client(ctx: &mut Ctx) -> Result<u64, String> {
             Ok(Ok(tls)) => tls,
         };
         if let Err(e) = BinaryCameraStream::new(&mut tls)
-            .authenticate(&identity())
+            .authenticate(&identity().access_code)
             .await
         {
             return Err(alloc::format!("authenticate failed {e:?}"));

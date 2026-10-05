@@ -419,9 +419,8 @@ Bambu printers use two different camera protocols depending on the model. Check 
 ```rust
 let mut printer = printer.with_camera(camera_tls, TokioRawStreamFactory);
 
-let mut frame = Vec::new();
 loop {
-    printer.read_camera_frame(&mut frame).await?; // frame is a complete JPEG image
+    let frame = printer.read_camera_frame().await?; // a complete JPEG image
 }
 ```
 
@@ -435,15 +434,12 @@ The stream type is also usable standalone:
 
 ```rust
 use bambino::camera::binary::BinaryCameraStream;
-use bambino::identity::PrinterIdentity;
 
 let mut cam = BinaryCameraStream::new(tls_stream);
-cam.authenticate(&PrinterIdentity::new(ip, serial, access_code)).await?;
+cam.authenticate(access_code).await?;
 
-let mut frame = Vec::new();
 loop {
-    cam.read_next_frame(&mut frame).await?;
-    // frame is a complete JPEG image
+    let frame = cam.read_next_frame().await?; // a complete JPEG image
 }
 ```
 

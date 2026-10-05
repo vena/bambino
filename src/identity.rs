@@ -7,7 +7,47 @@
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use crate::error::Error;
 use crate::models::{PrinterModel, resolve_model};
+
+/// Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field.
+pub const ACCESS_CODE_MAX_LEN: usize = 32;
+
+/// Longest serial number accepted. Current Bambu serials are 15 characters.
+pub const SERIAL_MAX_LEN: usize = 20;
+
+/// Checks that `access_code` is 1 to [`ACCESS_CODE_MAX_LEN`] ASCII letters or digits.
+///
+/// Printer-issued LAN access codes are 8 case-sensitive alphanumerics, so a rejection almost
+/// always means a copy-paste mistake (whitespace, a trailing newline). The alphanumeric rule
+/// is also what keeps the code safe to interpolate into an RTSPS URL's userinfo.
+pub fn validate_access_code(access_code: &str) -> Result<(), Error> {
+    if access_code.is_empty()
+        || access_code.len() > ACCESS_CODE_MAX_LEN
+        || !access_code.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Err(Error::InvalidArgument(
+            "access code must be 1-32 ASCII letters or digits".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that `serial` is 1 to [`SERIAL_MAX_LEN`] ASCII letters or digits.
+///
+/// The serial becomes an MQTT topic segment and the TLS SNI name, so anything else would
+/// reach the wire malformed.
+pub fn validate_serial(serial: &str) -> Result<(), Error> {
+    if serial.is_empty()
+        || serial.len() > SERIAL_MAX_LEN
+        || !serial.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Err(Error::InvalidArgument(
+            "serial must be 1-20 ASCII letters or digits".into(),
+        ));
+    }
+    Ok(())
+}
 
 /// Address, serial number, and access code identifying one printer on the LAN.
 ///
@@ -43,6 +83,25 @@ impl PrinterIdentity {
             access_code: access_code.into(),
             model,
         }
+    }
+
+    /// Like [`PrinterIdentity::new`], but rejects a malformed serial or access code up front.
+    pub fn try_new(
+        ip: impl Into<String>,
+        serial: impl Into<String>,
+        access_code: impl Into<String>,
+    ) -> Result<Self, Error> {
+        let identity = Self::new(ip, serial, access_code);
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    /// Checks the serial and access code with [`validate_serial`] and [`validate_access_code`].
+    ///
+    /// `ip` is not checked: it may be a hostname, which only the dial can resolve.
+    pub fn validate(&self) -> Result<(), Error> {
+        validate_serial(&self.serial)?;
+        validate_access_code(&self.access_code)
     }
 }
 

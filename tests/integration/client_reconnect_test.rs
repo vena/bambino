@@ -494,8 +494,7 @@ async fn test_camera_trio_unconfigured_error() {
     );
     assert!(!client.is_camera_connected());
 
-    let mut frame_buf = Vec::new();
-    let result = client.read_camera_frame(&mut frame_buf).await;
+    let result = client.read_camera_frame().await;
     assert!(
         matches!(result, Err(Error::ProtocolViolation(_))),
         "expected ProtocolViolation (\"Camera not configured\") on an unconfigured client, got {:?}",
