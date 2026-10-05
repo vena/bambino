@@ -180,8 +180,8 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
                         // Stamp discovery_port here, not just in the discover_devices()
                         // convenience wrapper, so callers driving DiscoveryEngine directly (the
                         // required pattern on Embassy, since discover_devices() is std-only) also
-                        // get a correctly populated field instead of the zero-value default.
-                        device.discovery_port = self.port;
+                        // get a populated field instead of `None`.
+                        device.discovery_port = Some(self.port);
                         log::debug!(
                             "Parsed Bambu Lab printer record: serial='{}', model={:?}, ip={}, name='{}', version='{}'",
                             device.serial,
@@ -212,26 +212,19 @@ impl<U: AsyncUdpSocket> DiscoveryEngine<U> {
 /// must drive `DiscoveryEngine` directly).
 ///
 /// See [`discover_devices_with()`] for a variant that reports each printer to a callback as
-/// it is found, instead of only returning the whole set once the window has elapsed.
+/// it is found, instead of only returning the whole set once the window has elapsed. On the
+/// `tokio` backend, `discover()` fixes the socket and timer types so callers need no turbofish.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use bambino::discovery::discover_devices;
-/// use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
+/// use bambino::io::esp_idf::{EspIdfTimer, EspIdfUdpSocket};
 ///
-/// let timer = TokioTimer::new();
-/// // Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
-/// // are found only through their ~10.1s NOTIFY advertisements, so a shorter window
-/// // intermittently returns nothing at all — see `reference/01_network_discovery.md`.
-/// let printers = discover_devices::<TokioUdpSocket, _>(
-///     std::time::Duration::from_secs(20),
-///     &timer,
+/// let printers = discover_devices::<EspIdfUdpSocket, _>(
+///     core::time::Duration::from_secs(20),
+///     &EspIdfTimer::new()?,
 /// ).await?;
-///
-/// for printer in &printers {
-///     println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
-/// }
 /// ```
 #[cfg(feature = "std")]
 pub async fn discover_devices<U, T>(
@@ -262,19 +255,8 @@ where
 /// that wants to stop early, because someone picked a printer at the three-second mark, just
 /// stops polling. There is no separate cancellation handle to plumb through.
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// use bambino::discovery::discover_devices_with;
-/// use bambino::io::tokio::{TokioUdpSocket, TokioTimer};
-///
-/// let timer = TokioTimer::new();
-/// let printers = discover_devices_with::<TokioUdpSocket, _, _>(
-///     std::time::Duration::from_secs(20),
-///     &timer,
-///     |printer| println!("found {} at {}", printer.name, printer.ip),
-/// ).await?;
-/// ```
+/// On the `tokio` backend, `discover_with()` is the same call with the socket and timer
+/// types fixed.
 #[cfg(feature = "std")]
 pub async fn discover_devices_with<U, T, F>(
     timeout: core::time::Duration,
@@ -398,6 +380,44 @@ where
     Ok(devices)
 }
 
+/// Runs [`discover_devices()`] on the tokio backend.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Allow at least 20s. Models that never answer M-SEARCH on port 2021 (notably the P1S)
+/// // are found only through their ~10.1s NOTIFY advertisements, so a shorter window
+/// // intermittently returns nothing at all — see `reference/01_network_discovery.md`.
+/// let printers = bambino::discovery::discover(std::time::Duration::from_secs(20)).await?;
+///
+/// for printer in &printers {
+///     println!("{} ({:?}) at {}", printer.name, printer.model, printer.ip);
+/// }
+/// ```
+#[cfg(feature = "tokio")]
+pub async fn discover(timeout: core::time::Duration) -> Result<Vec<SsdpDevice>, Error> {
+    discover_with(timeout, |_| {}).await
+}
+
+/// Runs [`discover_devices_with()`] on the tokio backend.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let printers = bambino::discovery::discover_with(
+///     std::time::Duration::from_secs(20),
+///     |printer| println!("found {} at {}", printer.name, printer.ip),
+/// ).await?;
+/// ```
+#[cfg(feature = "tokio")]
+pub async fn discover_with<F: FnMut(&SsdpDevice)>(
+    timeout: core::time::Duration,
+    on_device: F,
+) -> Result<Vec<SsdpDevice>, Error> {
+    use crate::io::tokio::{TokioTimer, TokioUdpSocket};
+    discover_devices_with::<TokioUdpSocket, _, _>(timeout, &TokioTimer::new(), on_device).await
+}
+
 /// Sends one M-SEARCH round from every engine, tolerating per-engine failures.
 ///
 /// A failed engine doesn't abort the sweep, since a healthy port can still find printers.
@@ -499,7 +519,7 @@ mod tests {
         assert_eq!(device.model, PrinterModel::P1S);
         // poll_next_device must stamp discovery_port itself, not rely on the
         // discover_devices() wrapper — Embassy callers use DiscoveryEngine directly.
-        assert_eq!(device.discovery_port, SSDP_PORT);
+        assert_eq!(device.discovery_port, Some(SSDP_PORT));
 
         let empty_device = engine.poll_next_device(&mut buf).await.unwrap();
         assert!(empty_device.is_none());

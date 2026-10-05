@@ -38,34 +38,32 @@ bambino = { git = "https://github.com/vena/bambino" }
 ### Discover printers
 
 ```rust
-use bambino::discovery::discover_devices;
-use bambino::io::tokio::{TokioTimer, TokioUdpSocket};
+use bambino::discovery::discover;
 use std::time::Duration;
 
-let timer = TokioTimer::new();
 // Allow at least 20s: the P1S ignores M-SEARCH on port 2021 and is found only via its
 // ~10.1s NOTIFY advertisements, so a shorter window returns empty results intermittently.
-let printers = discover_devices::<TokioUdpSocket, _>(
-    Duration::from_secs(20),
-    &timer,
-).await?;
+let printers = discover(Duration::from_secs(20)).await?;
 
 for p in &printers {
     println!("{} ({:?}) at {}", p.name, p.model, p.ip);
 }
 ```
 
-Use `discover_devices_with` instead when printers should appear as they answer — it runs the
+Use `discover_with` instead when printers should appear as they answer — it runs the
 same sweep and returns the same `Vec`, but also hands each unique printer to a callback the
 moment it is found, so a picker need not wait out the full window:
 
 ```rust
-let printers = discover_devices_with::<TokioUdpSocket, _, _>(
+let printers = discover_with(
     Duration::from_secs(20),
-    &timer,
     |p| println!("found {} at {}", p.name, p.ip),
 ).await?;
 ```
+
+`discover` and `discover_with` are the tokio shorthands for the generic `discover_devices` and
+`discover_devices_with`, which take the UDP socket and timer types for other backends.
+`SsdpDevice::ip` is an `IpAddr`: a LOCATION header whose host isn't an IP literal is dropped.
 
 ### Connect
 
@@ -465,13 +463,14 @@ buffer budget as the 10MB default can exceed an embedded target's entire SRAM.
 ```rust
 use bambino::camera::rtsps::build_rtsps_url;
 
-let url = build_rtsps_url(ip, access_code)?;
+let url = build_rtsps_url(printer.ip, access_code)?; // ip: IpAddr
 // → rtsps://bblp:<code>@<ip>:322/streaming/live/1
 ```
 
 `build_rtsps_url` validates that `access_code` is a non-empty ASCII alphanumeric string
 (matching the documented 8-character LAN access code format) and returns
-`Result<String, Error>`.
+`Result<String, Error>`. It takes the IP as an `IpAddr`, so a spoofed host string can't
+inject URL userinfo; parse a configured `&str` with `.parse()?` first.
 
 Since the printer's TLS leaf is issued by Bambu's private `BBL CA` rather than a publicly-trusted root, most players can't connect directly. The typical setup is a local proxy that accepts plain `rtsp://`, wraps it in TLS, and forwards to the printer. Use `rewrite_rtsp_request_uri` to rewrite the request-line URI in transit:
 
@@ -480,7 +479,7 @@ use bambino::camera::rtsps::rewrite_rtsp_request_uri;
 
 // Player sends:  rtsp://127.0.0.1:8554/streaming/live/1
 // Printer needs: rtsps://192.168.1.150:322/streaming/live/1
-let rewritten = rewrite_rtsp_request_uri(player_uri, printer_ip)?;
+let rewritten = rewrite_rtsp_request_uri(player_uri, printer_ip); // printer_ip: IpAddr
 ```
 
 `rewrite_rtsp_request_uri` only rewrites the URI text in the request line. It does **not**

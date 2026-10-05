@@ -203,6 +203,19 @@ impl PrinterModel {
     pub fn serial_prefix(self) -> Option<&'static str> {
         self.spec().map(|spec| spec.serial_prefix)
     }
+
+    /// Returns the model whose serial prefix `serial` starts with, case-insensitively.
+    ///
+    /// `None` when no row matches, so a caller can validate a serial without comparing
+    /// against [`PrinterModel::Unknown`]. [`resolve_model`] is the lenient form that also
+    /// consults an SSDP `DevModel` token and falls back to `Unknown`.
+    pub fn from_serial(serial: &str) -> Option<Self> {
+        let prefix = serial.get(0..3)?;
+        MODELS
+            .iter()
+            .find(|spec| prefix.eq_ignore_ascii_case(spec.serial_prefix))
+            .map(|spec| spec.model)
+    }
 }
 
 impl fmt::Display for PrinterModel {
@@ -229,13 +242,8 @@ impl fmt::Display for PrinterModel {
 ///
 /// [`PrinterIdentity::new`]: crate::identity::PrinterIdentity::new
 pub fn resolve_model(serial: &str, dev_model: Option<&str>) -> PrinterModel {
-    let prefix = serial.get(0..3).unwrap_or("");
-
-    if let Some(spec) = MODELS
-        .iter()
-        .find(|spec| prefix.eq_ignore_ascii_case(spec.serial_prefix))
-    {
-        return spec.model;
+    if let Some(model) = PrinterModel::from_serial(serial) {
+        return model;
     }
 
     if let Some(m) = dev_model
@@ -259,6 +267,16 @@ mod tests {
         assert_eq!(resolve_model("09306A521703533", None), PrinterModel::H2S);
         assert_eq!(resolve_model("23906A521703533", None), PrinterModel::H2DPro);
         assert_eq!(resolve_model("31B06A521703533", None), PrinterModel::H2C);
+    }
+
+    #[test]
+    fn test_from_serial_is_none_without_a_matching_prefix() {
+        assert_eq!(
+            PrinterModel::from_serial("01p06A521703222"),
+            Some(PrinterModel::P1S)
+        );
+        assert_eq!(PrinterModel::from_serial("999000000"), None);
+        assert_eq!(PrinterModel::from_serial("01"), None);
     }
 
     #[test]

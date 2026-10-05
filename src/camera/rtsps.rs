@@ -44,6 +44,7 @@
 use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
+use core::net::{IpAddr, SocketAddr};
 
 use crate::camera::CAMERA_PORT_RTSPS;
 use crate::error::Error;
@@ -65,32 +66,19 @@ pub(crate) const RTP_CLOCK_FREQUENCY_HZ: u32 = 90000;
 /// valid-but-unusual code — surfacing it as an error catches that mistake instead of
 /// silently building a malformed URL.
 ///
-/// Also returns [`Error::ProtocolViolation`] if `ip` does not parse as a valid IPv4 or
-/// IPv6 address. Without this check, an `ip` containing an embedded `@` (e.g.
-/// `"1.2.3.4@attacker.example.com"`, spoofable by any device on the LAN via SSDP/mDNS
-/// discovery) would place everything up to the last `@` into the URL's userinfo component,
-/// redirecting the connection — and the LAN access code — to an attacker-controlled host.
-pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, Error> {
+/// `ip` is an [`IpAddr`] rather than a string so a spoofed host such as
+/// `"1.2.3.4@attacker.example.com"` can't reach the URL's userinfo component and redirect
+/// the connection, with the LAN access code, elsewhere. An IPv6 address is bracketed.
+pub fn build_rtsps_url(ip: IpAddr, access_code: &str) -> Result<String, Error> {
     if access_code.is_empty() || !access_code.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err(Error::ProtocolViolation(
             "access_code must be a non-empty ASCII alphanumeric string".into(),
         ));
     }
-    let Ok(ip_addr) = ip.parse::<core::net::IpAddr>() else {
-        return Err(Error::ProtocolViolation(
-            "ip must be a valid IPv4 or IPv6 address".into(),
-        ));
-    };
-    // RFC 3986 §3.2.2: an IPv6 literal used as a URI host must be bracketed, or its colons
-    // are indistinguishable from the port separator to a conforming URI parser.
-    let host = if ip_addr.is_ipv6() {
-        format!("[{}]", ip)
-    } else {
-        String::from(ip)
-    };
     Ok(format!(
-        "rtsps://bblp:{}@{}:{}/streaming/live/1",
-        access_code, host, CAMERA_PORT_RTSPS
+        "rtsps://bblp:{}@{}/streaming/live/1",
+        access_code,
+        rtsps_authority(ip)
     ))
 }
 
@@ -117,28 +105,8 @@ pub fn build_rtsps_url(ip: &str, access_code: &str) -> Result<String, Error> {
 /// This function expects proxy-generated URIs with a simple `rtsp://host:port/path` structure.
 /// It is not a general-purpose URI parser.
 ///
-/// # Errors
-///
-/// Returns [`Error::ProtocolViolation`] if `printer_ip` does not parse as a valid IPv4 or
-/// IPv6 address — the same check [`build_rtsps_url`] applies to its own `ip` parameter, and
-/// for the same reason: a `printer_ip` containing `@` or `/` (e.g. sourced from a
-/// spoofable SSDP/mDNS discovery response, same as [`build_rtsps_url`]'s hazard) could
-/// otherwise redirect the proxy's outbound connection or produce a malformed URI. This
-/// function has no other caller in this crate to rely on for pre-validation — it's called
-/// once per incoming request in a proxy's hot path, but IP-string parsing is cheap enough
-/// that re-validating here is not a meaningful cost.
-pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<String, Error> {
-    let Ok(printer_ip_addr) = printer_ip.parse::<core::net::IpAddr>() else {
-        return Err(Error::ProtocolViolation(
-            "printer_ip must be a valid IPv4 or IPv6 address".into(),
-        ));
-    };
-    // RFC 3986 §3.2.2: bracket IPv6 literals, matching build_rtsps_url.
-    let host = if printer_ip_addr.is_ipv6() {
-        format!("[{}]", printer_ip)
-    } else {
-        String::from(printer_ip)
-    };
+/// `printer_ip` is an [`IpAddr`] for the same reason as [`build_rtsps_url`]'s `ip`.
+pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: IpAddr) -> String {
     // Case-insensitive scheme match — RFC 3986 §3.1 treats the scheme as case-insensitive,
     // and a non-compliant client emitting "RTSP://" must still get the printer-targeted rewrite
     // rather than silently falling through unrewritten.
@@ -147,10 +115,15 @@ pub fn rewrite_rtsp_request_uri(request_uri: &str, printer_ip: &str) -> Result<S
         let mut split = remainder.splitn(2, '/');
         if let Some(_host) = split.next() {
             let path = split.next().unwrap_or("");
-            return Ok(format!("rtsps://{}:{}/{}", host, CAMERA_PORT_RTSPS, path));
+            return format!("rtsps://{}/{}", rtsps_authority(printer_ip), path);
         }
     }
-    Ok(String::from(request_uri))
+    String::from(request_uri)
+}
+
+/// `ip:322`, with an IPv6 address bracketed per RFC 3986 §3.2.2 by `SocketAddr`'s `Display`.
+fn rtsps_authority(ip: IpAddr) -> SocketAddr {
+    SocketAddr::new(ip, CAMERA_PORT_RTSPS)
 }
 
 /// Corrects frozen stream-embedded timestamps to prevent duplicate frame drop freezes.
@@ -185,9 +158,13 @@ impl RtpTimestampCorrector {
 mod tests {
     use super::*;
 
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
     #[test]
     fn test_build_rtsps_url() {
-        let url = build_rtsps_url("192.168.1.150", "12345678").unwrap();
+        let url = build_rtsps_url(ip("192.168.1.150"), "12345678").unwrap();
         assert_eq!(
             url,
             "rtsps://bblp:12345678@192.168.1.150:322/streaming/live/1"
@@ -196,45 +173,35 @@ mod tests {
 
     #[test]
     fn test_build_rtsps_url_rejects_empty_access_code() {
-        assert!(build_rtsps_url("192.168.1.150", "").is_err());
+        assert!(build_rtsps_url(ip("192.168.1.150"), "").is_err());
     }
 
     #[test]
     fn test_build_rtsps_url_rejects_non_alphanumeric_access_code() {
-        assert!(build_rtsps_url("192.168.1.150", "1234@678").is_err());
-        assert!(build_rtsps_url("192.168.1.150", "1234 678").is_err());
-        assert!(build_rtsps_url("192.168.1.150", "1234\n678").is_err());
-    }
-
-    #[test]
-    fn test_build_rtsps_url_rejects_ip_with_embedded_at() {
-        assert!(build_rtsps_url("1.2.3.4@attacker.example.com", "12345678").is_err());
-    }
-
-    #[test]
-    fn test_build_rtsps_url_rejects_non_ip_hostname() {
-        assert!(build_rtsps_url("attacker.example.com", "12345678").is_err());
+        assert!(build_rtsps_url(ip("192.168.1.150"), "1234@678").is_err());
+        assert!(build_rtsps_url(ip("192.168.1.150"), "1234 678").is_err());
+        assert!(build_rtsps_url(ip("192.168.1.150"), "1234\n678").is_err());
     }
 
     #[test]
     fn test_build_rtsps_url_accepts_ipv6() {
         // An unbracketed IPv6 literal is malformed per RFC 3986 §3.2.2 — its colons
         // are indistinguishable from the port separator to a conforming URI parser.
-        let url = build_rtsps_url("fe80::1", "12345678").unwrap();
+        let url = build_rtsps_url(ip("fe80::1"), "12345678").unwrap();
         assert_eq!(url, "rtsps://bblp:12345678@[fe80::1]:322/streaming/live/1");
     }
 
     #[test]
     fn test_rtsp_proxy_uri_rewrite() {
         let incoming_uri = "rtsp://127.0.0.1:8554/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(incoming_uri, "192.168.1.150").unwrap();
+        let rewritten = rewrite_rtsp_request_uri(incoming_uri, ip("192.168.1.150"));
         assert_eq!(rewritten, "rtsps://192.168.1.150:322/streaming/live/1");
     }
 
     #[test]
     fn test_rewrite_uri_with_query_string() {
         let uri = "rtsp://127.0.0.1:8554/streaming/live/1?token=abc&quality=high";
-        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5").unwrap();
+        let rewritten = rewrite_rtsp_request_uri(uri, ip("10.0.0.5"));
         assert_eq!(
             rewritten,
             "rtsps://10.0.0.5:322/streaming/live/1?token=abc&quality=high"
@@ -244,28 +211,22 @@ mod tests {
     #[test]
     fn test_rewrite_uri_already_rtsps_returns_unchanged() {
         let uri = "rtsps://192.168.1.150:322/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(uri, "10.0.0.5").unwrap();
+        let rewritten = rewrite_rtsp_request_uri(uri, ip("10.0.0.5"));
         assert_eq!(rewritten, uri);
     }
 
     #[test]
     fn test_rewrite_uri_no_path() {
         let uri = "rtsp://127.0.0.1:8554";
-        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150").unwrap();
+        let rewritten = rewrite_rtsp_request_uri(uri, ip("192.168.1.150"));
         assert_eq!(rewritten, "rtsps://192.168.1.150:322/");
-    }
-
-    #[test]
-    fn test_rewrite_uri_rejects_ip_with_embedded_at() {
-        let uri = "rtsp://127.0.0.1:8554/streaming/live/1";
-        assert!(rewrite_rtsp_request_uri(uri, "1.2.3.4@attacker.example.com").is_err());
     }
 
     #[test]
     fn test_rewrite_uri_brackets_ipv6_printer_ip() {
         // Same RFC 3986 §3.2.2 bracketing requirement as build_rtsps_url.
         let uri = "rtsp://127.0.0.1:8554/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(uri, "fe80::1").unwrap();
+        let rewritten = rewrite_rtsp_request_uri(uri, ip("fe80::1"));
         assert_eq!(rewritten, "rtsps://[fe80::1]:322/streaming/live/1");
     }
 
@@ -303,7 +264,7 @@ mod tests {
         // matches at position 0, so a redirect-style URL that merely contains the
         // substring later on must be returned unchanged.
         let uri = "https://example.com/redirect?to=rtsp://192.168.1.150/streaming/live/1";
-        let rewritten = rewrite_rtsp_request_uri(uri, "192.168.1.150").unwrap();
+        let rewritten = rewrite_rtsp_request_uri(uri, ip("192.168.1.150"));
         assert_eq!(rewritten, uri);
     }
 }

@@ -12,6 +12,8 @@ use alloc::borrow::ToOwned;
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use core::net::{IpAddr, SocketAddr};
+
 use crate::models::{PrinterModel, resolve_model};
 
 /// Header slots `httparse` gets per SSDP packet. A packet with more headers than this fails to
@@ -27,19 +29,19 @@ pub struct SsdpDevice {
     pub model: PrinterModel,
     /// Human-friendly printer name defined by the user.
     pub name: String,
-    /// Direct network target IP address extracted from the LOCATION header.
-    pub ip: String,
-    /// Discovery communications port parsed from the LOCATION header.
-    pub port: u16,
-    /// SSDP port on which the device was discovered (2021 or 1990), or `0` if the record has
-    /// not been stamped with one.
+    /// Printer IP address from the LOCATION header. A packet whose LOCATION host isn't an IP
+    /// literal is rejected, so this is always safe to dial or interpolate into a URL.
+    pub ip: IpAddr,
+    /// Port of the LOCATION URI (80 when absent). This is an inert HTTP endpoint, **not** the
+    /// MQTT, FTPS or camera port — see [REF-NET-DISC] Protocol Violation #2.
+    pub location_port: u16,
+    /// SSDP port on which the device was discovered (2021 or 1990), or `None` if unknown.
     ///
     /// The port is not carried in the payload, so [`parse_ssdp_payload`] — which sees only the
-    /// datagram bytes — always leaves this `0`. It is filled in by
+    /// datagram bytes — always leaves this `None`. It is filled in by
     /// [`DiscoveryEngine::poll_next_device`](crate::discovery::DiscoveryEngine::poll_next_device),
-    /// which knows which socket the datagram arrived on. Callers parsing captured datagrams
-    /// directly must treat `0` as "unknown", not as a real port.
-    pub discovery_port: u16,
+    /// which knows which socket the datagram arrived on.
+    pub discovery_port: Option<u16>,
     /// Device firmware target version.
     pub version: String,
     /// Network connection medium (e.g. "lan", "wlan").
@@ -66,11 +68,13 @@ fn strip_bambu_suffix(name: &str) -> &str {
         .map_or(name, |(short, _)| short)
 }
 
-/// Parses the host IP address and communication port from a LOCATION URI.
+/// Parses the host IP address and port from a LOCATION URI.
 ///
 /// Handles both full URIs (`http://192.168.1.150:80/`) and bare IPs (`192.168.1.158`)
-/// as documented in [REF-NET-DISC] Protocol Violation #3.
-fn parse_location(loc: &str) -> Option<(&str, u16)> {
+/// as documented in [REF-NET-DISC] Protocol Violation #3. A host that isn't an IP literal
+/// rejects the packet: no firmware is documented sending a hostname, and a spoofed one
+/// would otherwise flow unvalidated into every dial and URL built from it.
+fn parse_location(loc: &str) -> Option<(IpAddr, u16)> {
     // Case-insensitive scheme, like every other comparison in this file (firmware casing drift,
     // [REF-NET-DISC] Violation #5): an `HTTP://` location used to drop the printer (#328).
     let strip_scheme = |scheme: &str| {
@@ -83,20 +87,18 @@ fn parse_location(loc: &str) -> Option<(&str, u16)> {
 
     let host_port = without_proto.split('/').next()?;
 
-    let mut parts = host_port.split(':');
-    let host = parts.next()?;
-    if host.is_empty() {
-        return None;
-    }
     // A present-but-unparseable port string (e.g. a corrupt/truncated LOCATION
     // header) must reject the packet, not silently coerce to 80 — that's indistinguishable
-    // from "no port specified" and would route to the wrong port on a real device.
-    let port = match parts.next() {
-        Some(port_str) => port_str.parse::<u16>().ok()?,
-        None => 80,
-    };
-
-    Some((host, port))
+    // from "no port specified" and would route to the wrong port on a real device. Both
+    // parses fail on `host:garbage`, so it falls through to `None`.
+    if let Ok(addr) = host_port.parse::<SocketAddr>() {
+        return Some((addr.ip(), addr.port()));
+    }
+    let bare = host_port
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host_port);
+    Some((bare.parse().ok()?, 80))
 }
 
 /// Raw header values extracted from an SSDP packet before post-processing.
@@ -253,7 +255,7 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
     let mut effective_dev_model = raw.dev_model.filter(|s| !s.is_empty());
     let nt_st_model = raw.nt_or_st.and_then(extract_model_from_nt_st);
 
-    let (ip, port) = raw.location.and_then(parse_location)?;
+    let (ip, location_port) = raw.location.and_then(parse_location)?;
     let mut model = resolve_model(&serial, effective_dev_model);
 
     // Protocol Violation #7 requires the NT/ST fallback when `DevModel` is missing *or
@@ -300,9 +302,9 @@ pub fn parse_ssdp_payload(buf: &[u8]) -> Option<SsdpDevice> {
         serial,
         model,
         name: raw.dev_name.unwrap_or("").to_owned(),
-        ip: ip.to_owned(),
-        port,
-        discovery_port: 0,
+        ip,
+        location_port,
+        discovery_port: None,
         version: raw.dev_version.unwrap_or("").to_owned(),
         connect_type: raw.dev_connect.unwrap_or("").to_owned(),
         raw_model_str: effective_dev_model.unwrap_or("").to_owned(),
@@ -318,30 +320,48 @@ mod tests {
 
     #[test]
     fn test_parse_location_uri() {
-        let (ip, port) = parse_location("http://192.168.1.150:80/").unwrap();
-        assert_eq!(ip, "192.168.1.150");
-        assert_eq!(port, 80);
-
-        let (ip2, port2) = parse_location("https://10.0.0.42:8080/path").unwrap();
-        assert_eq!(ip2, "10.0.0.42");
-        assert_eq!(port2, 8080);
+        assert_eq!(
+            parse_location("http://192.168.1.150:80/"),
+            Some((ip("192.168.1.150"), 80))
+        );
+        assert_eq!(
+            parse_location("https://10.0.0.42:8080/path"),
+            Some((ip("10.0.0.42"), 8080))
+        );
 
         // Regression (#328): the scheme is case-insensitive like the rest of this parser.
         assert_eq!(
             parse_location("HTTP://192.168.1.150:80/"),
-            Some(("192.168.1.150", 80))
+            Some((ip("192.168.1.150"), 80))
         );
         assert_eq!(
             parse_location("Https://10.0.0.42:8080/"),
-            Some(("10.0.0.42", 8080))
+            Some((ip("10.0.0.42"), 8080))
+        );
+        assert_eq!(
+            parse_location("http://[fe80::1]:80/"),
+            Some((ip("fe80::1"), 80))
         );
     }
 
     #[test]
     fn test_parse_location_bare_ip() {
-        let (ip, port) = parse_location("192.168.1.158").unwrap();
-        assert_eq!(ip, "192.168.1.158");
-        assert_eq!(port, 80);
+        assert_eq!(
+            parse_location("192.168.1.158"),
+            Some((ip("192.168.1.158"), 80))
+        );
+        assert_eq!(parse_location("[fe80::1]"), Some((ip("fe80::1"), 80)));
+    }
+
+    #[test]
+    fn test_parse_location_rejects_non_ip_hosts() {
+        assert_eq!(parse_location("http://printer.local:80/"), None);
+        assert_eq!(parse_location("1.2.3.4@attacker.example.com"), None);
+        assert_eq!(parse_location(""), None);
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
     }
 
     #[test]
@@ -379,8 +399,8 @@ mod tests {
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "09306A521703533");
         assert_eq!(device.model, PrinterModel::H2S);
-        assert_eq!(device.ip, "192.168.1.150");
-        assert_eq!(device.port, 80);
+        assert_eq!(device.ip.to_string(), "192.168.1.150");
+        assert_eq!(device.location_port, 80);
         assert_eq!(device.name, "MyPrinterName");
         assert_eq!(device.version, "01.02.00.00");
     }
@@ -395,8 +415,8 @@ mod tests {
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "01P06A521703222");
         assert_eq!(device.model, PrinterModel::P1S);
-        assert_eq!(device.ip, "10.0.0.5");
-        assert_eq!(device.port, 80);
+        assert_eq!(device.ip.to_string(), "10.0.0.5");
+        assert_eq!(device.location_port, 80);
     }
 
     #[test]
@@ -433,14 +453,14 @@ mod tests {
     #[test]
     fn test_parse_ssdp_payload_leaves_discovery_port_unstamped() {
         // parse_ssdp_payload sees only datagram bytes, so it cannot know which socket the
-        // packet arrived on; `0` means "unknown", per the SsdpDevice::discovery_port doc.
+        // packet arrived on, so it leaves SsdpDevice::discovery_port unknown.
         // DiscoveryEngine::poll_next_device is what stamps the real 2021/1990 value.
         let payload = b"HTTP/1.1 200 OK\r\n\
                         LOCATION: http://10.0.0.5:80/\r\n\
                         USN: 01P06A521703222\r\n\
                         DevModel.bambu.com: C12\r\n\r\n";
 
-        assert_eq!(parse_ssdp_payload(payload).unwrap().discovery_port, 0);
+        assert_eq!(parse_ssdp_payload(payload).unwrap().discovery_port, None);
     }
 
     #[test]
@@ -614,8 +634,8 @@ mod tests {
         let device = parse_ssdp_payload(payload).unwrap();
         assert_eq!(device.serial, "01P00A4C2009981");
         assert_eq!(device.model, PrinterModel::P1S);
-        assert_eq!(device.ip, "192.168.1.158");
-        assert_eq!(device.port, 80);
+        assert_eq!(device.ip.to_string(), "192.168.1.158");
+        assert_eq!(device.location_port, 80);
         assert_eq!(device.name, "3DP-01P-981");
         assert_eq!(device.signal_dbm, Some(-43));
         assert_eq!(device.bind_state, "free");
@@ -675,6 +695,9 @@ mod tests {
         // silently coerce to 80 — that's indistinguishable from "no port specified."
         assert_eq!(parse_location("192.168.1.158:notaport"), None);
         // Absent port still defaults to 80.
-        assert_eq!(parse_location("192.168.1.158"), Some(("192.168.1.158", 80)));
+        assert_eq!(
+            parse_location("192.168.1.158"),
+            Some((ip("192.168.1.158"), 80))
+        );
     }
 }

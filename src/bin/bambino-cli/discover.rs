@@ -8,8 +8,7 @@
 
 use std::time::Duration;
 
-use bambino::discovery::discover_devices;
-use bambino::io::tokio::{TokioTimer, TokioUdpSocket};
+use bambino::discovery::discover;
 
 use crate::error::CliError;
 
@@ -22,9 +21,7 @@ pub async fn run() -> Result<(), CliError> {
     // Port behavior varies by model: the P1S (firmware 01.10.00.00) responds to M-SEARCH
     // on port 1990 within ~5s but only sends passive NOTIFY on port 2021 at ~10.1s intervals.
     // A 20-second window covers both discovery paths across model generations.
-    let devices =
-        discover_devices::<TokioUdpSocket, TokioTimer>(Duration::from_secs(20), &TokioTimer::new())
-            .await?;
+    let devices = discover(Duration::from_secs(20)).await?;
 
     if devices.is_empty() {
         println!("\nNo Bambu Lab printers detected. Ensure LAN Mode is active on the printer.");
@@ -63,10 +60,12 @@ pub async fn run() -> Result<(), CliError> {
             table.add_row(vec![
                 &format!("{:?}", device.model),
                 &device.serial,
-                &device.ip,
+                &device.ip.to_string(),
                 &device.name,
                 &device.version,
-                &device.discovery_port.to_string(),
+                &device
+                    .discovery_port
+                    .map_or_else(|| "?".to_owned(), |p| p.to_string()),
             ]);
         }
         table.print();
@@ -77,7 +76,7 @@ pub async fn run() -> Result<(), CliError> {
             table.add_row(vec![
                 &format!("{:?}", device.model),
                 &device.serial,
-                &device.ip,
+                &device.ip.to_string(),
                 &device.name,
                 &device.version,
             ]);
