@@ -76,10 +76,12 @@ pub struct IpcamTelemetry {
     /// Internal identifier or state of the hardware camera module.
     pub ipcam_dev: Option<String>,
 
-    /// Camera live feed recording status (`"enable"` or `"disable"`).
+    /// Camera live feed recording status (`"enable"` or `"disable"`); see
+    /// [`recording`](Self::recording).
     pub ipcam_record: Option<String>,
 
-    /// Frame-by-layer timelapse recording status (`"enable"` or `"disable"`).
+    /// Frame-by-layer timelapse recording status (`"enable"` or `"disable"`); see
+    /// [`timelapse_enabled`](Self::timelapse_enabled).
     pub timelapse: Option<String>,
 
     /// Camera mode bitmask.
@@ -96,7 +98,34 @@ pub struct IpcamTelemetry {
     pub rtsp_url: Option<String>,
 }
 
+/// Decodes a wire `"enable"`/`"disable"` toggle; `None` for absent or any other value.
+fn enable_flag(value: Option<&str>) -> Option<bool> {
+    match value? {
+        "enable" => Some(true),
+        "disable" => Some(false),
+        _ => None,
+    }
+}
+
 impl IpcamTelemetry {
+    /// Whether live-feed recording is on, from `ipcam_record`.
+    #[must_use]
+    pub fn recording(&self) -> Option<bool> {
+        enable_flag(self.ipcam_record.as_deref())
+    }
+
+    /// Whether timelapse recording is on, from `timelapse`.
+    #[must_use]
+    pub fn timelapse_enabled(&self) -> Option<bool> {
+        enable_flag(self.timelapse.as_deref())
+    }
+
+    /// Whether the TUTK cloud-relay server is on, from `tutk_server`.
+    #[must_use]
+    pub fn tutk_server_enabled(&self) -> Option<bool> {
+        enable_flag(self.tutk_server.as_deref())
+    }
+
     /// Merges a freshly-parsed `IpcamTelemetry` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
@@ -143,9 +172,13 @@ pub struct HmsEntry {
     /// Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
     #[serde(default)]
     pub ts_boot: Option<u64>,
-    /// UTC timestamp string when the alert was raised (e.g. `"20260426002648"`).
-    #[serde(default)]
-    pub ts_unix: Option<String>,
+    /// When the alert was raised, as the calendar string `YYYYMMDDHHmmss` (e.g.
+    /// `"20260426002648"`) — **not** Unix epoch seconds, despite the wire key `ts_unix`.
+    ///
+    /// Read from the printer's own clock, which LAN-mode printers don't keep synced, so it is
+    /// neither guaranteed UTC nor comparable with host time.
+    #[serde(default, rename = "ts_unix")]
+    pub ts_local: Option<String>,
 }
 
 /// Permissively decodes an `HmsEntry.attr`/`.code` wire value.

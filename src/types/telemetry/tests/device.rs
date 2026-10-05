@@ -357,10 +357,12 @@ fn test_lights_report_deserialization() {
         .unwrap();
     let lights = print.lights_report.unwrap();
     assert_eq!(lights.len(), 3);
-    assert_eq!(lights[0].node, "chamber_light");
-    assert_eq!(lights[0].mode, "on");
-    assert_eq!(lights[1].node, "work_light");
-    assert_eq!(lights[1].mode, "flashing");
+    assert_eq!(lights[0].node.as_deref(), Some("chamber_light"));
+    assert_eq!(lights[0].mode.as_deref(), Some("on"));
+    assert_eq!(lights[1].node.as_deref(), Some("work_light"));
+    assert_eq!(lights[1].mode.as_deref(), Some("flashing"));
+    assert_eq!(lights[1].is_on(), Some(true));
+    assert_eq!(lights[2].is_on(), Some(false));
 }
 
 #[test]

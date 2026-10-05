@@ -54,22 +54,27 @@ pub struct TelemetryReport {
     #[serde(default)]
     pub print: Option<PrinterTelemetry>,
 
-    /// Network and hardware board capability descriptors.
+    /// Network and hardware board capability descriptors, when sent at the top level.
+    ///
+    /// Crate-private: pushall frames on H2/P2/X2 nest it inside `print` instead, so reading this
+    /// field misses exactly the frames carrying the most data. Use [`device()`](Self::device).
     #[serde(default)]
-    pub device: Option<DeviceTelemetry>,
+    pub(crate) device: Option<DeviceTelemetry>,
 
-    /// Developer LAN Mode bitmask field (hex string).
-    /// Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1].
-    pub fun: Option<String>,
+    /// Developer LAN Mode bitmask field (hex string), when sent at the top level.
+    /// Drifts between top-level and `print.fun` depending on firmware version [REF-MQTT-ENV §3.2.1];
+    /// use [`fun()`](Self::fun).
+    pub(crate) fun: Option<String>,
 
-    /// Second capability bitfield (hex string) — see [`PrinterTelemetry::fun2`].
+    /// Second capability bitfield (hex string) — see [`PrinterTelemetry::fun2`]; use
+    /// [`fun2()`](Self::fun2).
     ///
     /// Accepted at the top level as well as inside `print` on the same first-found-wins terms as
-    /// [`fun`](Self::fun). BambuStudio itself reads only `print.fun2`
+    /// `fun`. BambuStudio itself reads only `print.fun2`
     /// (`DeviceManager.cpp:4459`); the top-level slot mirrors `fun`'s documented drift rather
     /// than a location observed carrying `fun2`.
     #[serde(default)]
-    pub fun2: Option<String>,
+    pub(crate) fun2: Option<String>,
 }
 
 impl TelemetryReport {
@@ -110,8 +115,7 @@ impl TelemetryReport {
     /// arrive at.
     ///
     /// Mirrors `device()`'s fallback order — top-level `fun` is checked first,
-    /// falling back to `print.fun` [REF-MQTT-ENV §3.2.1]. Prefer this over reading `self.fun`
-    /// directly, the same way `device()` is preferred over `self.device`.
+    /// falling back to `print.fun` [REF-MQTT-ENV §3.2.1].
     pub fn fun(&self) -> Option<&str> {
         self.fun
             .as_deref()

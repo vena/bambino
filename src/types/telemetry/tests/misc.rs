@@ -997,3 +997,32 @@ fn test_p_list_absent_is_not_an_error() {
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     assert!(report.print.as_ref().unwrap().p_list.is_none());
 }
+
+#[test]
+fn test_batch_accessors_decode_wire_spellings() {
+    use crate::types::telemetry::{IpcamTelemetry, XcamSensitivity, XcamTelemetry};
+
+    let ipcam: IpcamTelemetry =
+        serde_json::from_str(r#"{"ipcam_record":"enable","timelapse":"disable"}"#).unwrap();
+    assert_eq!(ipcam.recording(), Some(true));
+    assert_eq!(ipcam.timelapse_enabled(), Some(false));
+    assert_eq!(ipcam.tutk_server_enabled(), None);
+
+    // Serde uses the printer's lowercase spelling, as as_str() always did.
+    assert_eq!(
+        serde_json::to_string(&XcamSensitivity::Medium).unwrap(),
+        r#""medium""#
+    );
+    let xcam = XcamTelemetry {
+        halt_print_sensitivity: Some("High".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        xcam.halt_print_sensitivity_level(),
+        Some(XcamSensitivity::High)
+    );
+
+    let print: PrinterTelemetry =
+        serde_json::from_str(r#"{"gcode_start_time":"1681479206"}"#).unwrap();
+    assert_eq!(print.gcode_start_time_secs(), Some(1_681_479_206));
+}

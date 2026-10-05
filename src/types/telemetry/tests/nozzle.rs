@@ -371,3 +371,21 @@ fn test_decode_nozzle_temperatures_h2c_rack_nozzle_not_misclassified_as_idex() {
         "must resolve as single-nozzle, not IDEX"
     );
 }
+
+#[test]
+fn test_nozzle_info_accessors_fall_back_across_wire_spellings() {
+    let idex: NozzleInfo = serde_json::from_str(
+        r#"{"id":0,"max_temp":300,"serial_number":"SN1","filament_colour":"FF0000FF","filament_id":"GFA00"}"#,
+    )
+    .unwrap();
+    let standard: NozzleInfo = serde_json::from_str(
+        r#"{"id":0,"tm":300,"sn":"SN1","color_m":"FF0000FF","fila_id":"GFA00"}"#,
+    )
+    .unwrap();
+    for nozzle in [&idex, &standard] {
+        assert_eq!(nozzle.max_temp_c(), Some(300));
+        assert_eq!(nozzle.serial(), Some("SN1"));
+        assert_eq!(NozzleInfo::filament_colour(nozzle), Some("FF0000FF"));
+        assert_eq!(NozzleInfo::filament_id(nozzle), Some("GFA00"));
+    }
+}

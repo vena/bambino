@@ -16,7 +16,7 @@ The `"print_error"` field contains a single 32-bit packed integer representing t
 #### 2. The `"hms"` Telemetry Array
 The `"hms"` array contains active system faults represented as objects with `"attr"` and `"code"` keys. On X2, H2, and P2 series models, each entry may also include optional timestamp fields:
 *   `ts_boot`: Seconds since boot when the alert was raised (`u64`).
-*   `ts_unix`: UTC timestamp string when the alert was raised (e.g. `"20260426002648"`, format `YYYYMMDDHHmmss`).
+*   `ts_unix`: calendar timestamp string when the alert was raised (e.g. `"20260426002648"`, format `YYYYMMDDHHmmss`) — despite the name, **not** Unix epoch seconds. It comes from the printer's own clock, which LAN-mode printers don't keep synced, so it is not guaranteed UTC. Exposed as `HmsEntry::ts_local`.
 
 To convert the `attr` and `code` fields into a standard 16-character wiki troubleshooting key (`MMMM_MMMM_CCCC_CCCC`), apply the following binary unpacking steps:
 

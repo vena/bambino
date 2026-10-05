@@ -301,7 +301,10 @@ pub struct NozzleInfo {
     /// presence with [`NozzleInfo::is_installed()`] before trusting this.
     pub diameter: Option<f32>,
 
-    /// Target maximum temperature (Standard Platform abbreviated representation).
+    /// Target maximum temperature (Standard Platform abbreviated representation). Each of the
+    /// four values below has two wire spellings; read them through [`max_temp_c`](Self::max_temp_c),
+    /// [`serial`](Self::serial), [`filament_colour`](Self::filament_colour) and
+    /// [`filament_id`](Self::filament_id), which fall back from one to the other.
     pub tm: Option<u32>,
 
     /// Target maximum temperature (IDEX Platform verbose representation).
@@ -368,6 +371,30 @@ pub struct NozzleInfo {
 }
 
 impl NozzleInfo {
+    /// Maximum rated temperature in °C, from `max_temp` (IDEX spelling) or else `tm`.
+    #[must_use]
+    pub fn max_temp_c(&self) -> Option<u32> {
+        self.max_temp.or(self.tm)
+    }
+
+    /// Hotend serial number, from `serial_number` (IDEX spelling) or else `sn`.
+    #[must_use]
+    pub fn serial(&self) -> Option<&str> {
+        self.serial_number.as_deref().or(self.sn.as_deref())
+    }
+
+    /// Loaded filament colour hex code, from `filament_colour` or else `color_m`.
+    #[must_use]
+    pub fn filament_colour(&self) -> Option<&str> {
+        self.filament_colour.as_deref().or(self.color_m.as_deref())
+    }
+
+    /// Filament preset id, from `filament_id` or else `fila_id`.
+    #[must_use]
+    pub fn filament_id(&self) -> Option<&str> {
+        self.filament_id.as_deref().or(self.fila_id.as_deref())
+    }
+
     /// Returns whether this entry is a rack-stored spare nozzle rather than an installed one.
     ///
     /// Confirmed directly against BambuStudio's source
@@ -406,12 +433,8 @@ impl NozzleInfo {
     /// entirely, so an id in `16..=21` already implies a nozzle is in it (see
     /// [`is_rack_stored()`](Self::is_rack_stored)).
     pub fn is_installed(&self) -> bool {
-        let serial_says_empty = self
-            .serial_number
-            .as_deref()
-            .or(self.sn.as_deref())
-            .is_some_and(|s| s.eq_ignore_ascii_case("N/A"));
-        let rating_says_empty = self.max_temp.or(self.tm).unwrap_or(0) == 0;
+        let serial_says_empty = self.serial().is_some_and(|s| s.eq_ignore_ascii_case("N/A"));
+        let rating_says_empty = self.max_temp_c().unwrap_or(0) == 0;
 
         !(serial_says_empty && rating_says_empty)
     }

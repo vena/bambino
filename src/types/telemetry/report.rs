@@ -17,11 +17,22 @@ use super::xcam::XcamTelemetry;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightReport {
     /// Light identifier (e.g. "chamber_light", "work_light").
-    #[serde(default)]
-    pub node: String,
-    /// Current state (e.g. "on", "off", "flashing").
-    #[serde(default)]
-    pub mode: String,
+    pub node: Option<String>,
+    /// Current state (e.g. "on", "off", "flashing"); see [`is_on`](Self::is_on).
+    pub mode: Option<String>,
+}
+
+impl LightReport {
+    /// Whether the light is lit: `true` for `"on"` and `"flashing"`, `false` for `"off"`,
+    /// `None` when the mode is absent or unrecognized.
+    #[must_use]
+    pub fn is_on(&self) -> Option<bool> {
+        match self.mode.as_deref()? {
+            "on" | "flashing" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        }
+    }
 }
 
 /// One scheduled pause in a running job's pause list.
@@ -399,7 +410,11 @@ pub struct PrinterTelemetry {
     #[serde(default)]
     pub mapping: Option<Vec<i32>>,
 
-    /// Print start timestamp string.
+    /// Print start time as Unix epoch seconds in a decimal string (e.g. `"1681479206"`); see
+    /// [`gcode_start_time_secs`](Self::gcode_start_time_secs).
+    ///
+    /// Read from the printer's own clock, which LAN-mode printers don't keep synced. Not seen in
+    /// local-print captures; see `reference/03_mqtt_telemetry.md`.
     #[serde(default)]
     pub gcode_start_time: Option<String>,
 
@@ -514,6 +529,12 @@ impl SdcardState {
 }
 
 impl PrinterTelemetry {
+    /// [`gcode_start_time`](Self::gcode_start_time) parsed to epoch seconds.
+    #[must_use]
+    pub fn gcode_start_time_secs(&self) -> Option<u64> {
+        self.gcode_start_time.as_deref()?.trim().parse().ok()
+    }
+
     /// Returns true if this frame shows the firmware uses BambuStudio's "np" payload format.
     ///
     /// This is not the MQTT version — the transport is MQTT 3.1.1 on every printer. It is a

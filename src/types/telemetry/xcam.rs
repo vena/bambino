@@ -51,6 +51,7 @@ pub(crate) mod cfg_bits {
 /// Applies only to the four camera-based failure detectors (spaghetti, purge-chute pileup,
 /// nozzle clumping, air printing). Unrelated to skip-objects or to `allow_skip_parts`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum XcamSensitivity {
     /// Least eager to halt the print.
     Low,
@@ -74,7 +75,16 @@ impl XcamSensitivity {
         }
     }
 
-    /// Returns the wire spelling BambuStudio uses for this level (`"low"`/`"medium"`/`"high"`).
+    /// Parses the wire spelling (`"low"`/`"medium"`/`"high"`), case-insensitively.
+    #[must_use]
+    pub fn from_wire(level: &str) -> Option<Self> {
+        [Self::Low, Self::Medium, Self::High]
+            .into_iter()
+            .find(|l| level.trim().eq_ignore_ascii_case(l.as_str()))
+    }
+
+    /// Returns the wire spelling BambuStudio uses for this level (`"low"`/`"medium"`/`"high"`),
+    /// which is also its serde form.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -152,6 +162,13 @@ pub struct XcamTelemetry {
 }
 
 impl XcamTelemetry {
+    /// The old-gen [`halt_print_sensitivity`](Self::halt_print_sensitivity) string as a typed
+    /// level, comparable with the per-detector sensitivities. `None` if absent or unrecognized.
+    #[must_use]
+    pub fn halt_print_sensitivity_level(&self) -> Option<XcamSensitivity> {
+        XcamSensitivity::from_wire(self.halt_print_sensitivity.as_deref()?)
+    }
+
     /// Returns whether this printer supports on-device AI failure monitoring.
     ///
     /// Presence of `cfg` is the signal, matching BambuStudio's `is_support_detect` assignment.
