@@ -91,23 +91,24 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
         &self,
         buf: &mut [u8],
     ) -> Result<(usize, core::net::SocketAddr), SocketError> {
-        let (len, from_endpoint) = self
-            .inner
-            .recv_from(buf)
-            .await
-            // `RecvError` currently has one variant (`Truncated` — buffer too small
-            // for the received datagram), no matching `SocketError` variant exists, so this
-            // stays `Other` rather than the misleading `ConnectionReset` it was before.
-            .map_err(|_| {
-                SocketError::Other(
-                    "embassy UDP recv: buffer too small for received datagram".into(),
-                )
-            })?;
-
-        // Under embassy-net 0.9.1, UdpMetadata wraps its IpEndpoint target inside the
-        // `endpoint` field. `smoltcp::wire::IpEndpoint` converts directly to
-        // `core::net::SocketAddr` — no string round-trip needed.
-        Ok((len, from_endpoint.endpoint.into()))
+        loop {
+            match self.inner.recv_from(buf).await {
+                // Under embassy-net 0.9.1, UdpMetadata wraps its IpEndpoint target inside the
+                // `endpoint` field. `smoltcp::wire::IpEndpoint` converts directly to
+                // `core::net::SocketAddr` — no string round-trip needed.
+                Ok((len, from_endpoint)) => return Ok((len, from_endpoint.endpoint.into())),
+                // smoltcp has already dropped the oversized datagram, so nothing is lost by
+                // waiting for the next one. Returning an error here ended a whole discovery
+                // pass over one stray packet from any device on the LAN; tokio truncates
+                // such a datagram and carries on.
+                Err(::embassy_net::udp::RecvError::Truncated) => {
+                    log::debug!(
+                        "embassy UDP recv: dropped a datagram larger than the {}-byte buffer",
+                        buf.len()
+                    );
+                }
+            }
+        }
     }
 }
 
