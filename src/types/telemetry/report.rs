@@ -95,6 +95,24 @@ impl PrintPauseList {
 }
 
 /// Core printer state machine telemetry, containing kinematics, thermal targets, auxiliary fan configurations, and connected AMS arrays.
+///
+/// Most fields mirror the wire as-is. Where a decoded accessor exists, prefer it over reading the
+/// raw field and re-implementing the decode:
+///
+/// | Instead of the raw field | Use |
+/// | :--- | :--- |
+/// | `stg_cur`, `stg` | [`current_stage`](Self::current_stage) (gated on `gcode_state` [REF-MQTT-IDLEBUG]), [`stage_queue`](Self::stage_queue) |
+/// | `home_flag` bits 8–9, `sdcard` | [`sdcard_state`](Self::sdcard_state) |
+/// | `home_flag` bit 23, `stat` | [`is_door_open_from_home_flag`](Self::is_door_open_from_home_flag), [`is_door_open_from_stat`](Self::is_door_open_from_stat) |
+/// | `home_flag` bit 3 | [`is_220v_power`](Self::is_220v_power) |
+/// | `net.conf`, `wifi_signal` | [`is_ethernet_active`](Self::is_ethernet_active), with [`is_ethernet_active_via_wifi_signal`](Self::is_ethernet_active_via_wifi_signal) as the fallback |
+/// | `gcode_start_time` | [`gcode_start_time_secs`](Self::gcode_start_time_secs) |
+/// | `chamber_temper` (packed) | [`unpack_temperature`](Self::unpack_temperature) |
+/// | `bed_temper` / `device.bed` | [`TelemetryReport::bed_temperatures`](super::TelemetryReport::bed_temperatures) |
+/// | `device`, `fun`, `fun2` | [`TelemetryReport::device`](super::TelemetryReport::device), [`fun`](super::TelemetryReport::fun), [`fun2_bit`](super::TelemetryReport::fun2_bit) (both wire locations) |
+/// | `ipcam.*` toggles | [`IpcamTelemetry::recording`](super::IpcamTelemetry::recording), [`timelapse_enabled`](super::IpcamTelemetry::timelapse_enabled) |
+/// | `lights_report[].mode` | [`LightReport::is_on`] |
+/// | `xcam.cfg`, `xcam.halt_print_sensitivity` | the `XcamTelemetry` detector accessors, [`halt_print_sensitivity_level`](super::XcamTelemetry::halt_print_sensitivity_level) |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterTelemetry {
     /// High-level execution status of the G-code processor (e.g., "IDLE", "RUNNING", "PAUSE").
