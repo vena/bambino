@@ -177,6 +177,22 @@ pub struct AmsStatusReport {
 }
 
 impl AmsStatusReport {
+    /// The unit at bus id `ams_id`, as normalized on ingest (an A2L's AMS Lite is `6`).
+    #[must_use]
+    pub fn unit(&self, ams_id: u8) -> Option<&AmsUnit> {
+        self.ams.iter().find(|unit| unit.ams_id() == Some(ams_id))
+    }
+
+    /// Slot `slot` of the unit at `ams_id`, if both were reported.
+    #[must_use]
+    pub fn tray(&self, ams_id: u8, slot: u8) -> Option<&AmsTray> {
+        self.unit(ams_id)?
+            .tray
+            .as_deref()?
+            .iter()
+            .find(|tray| tray.slot() == Some(slot))
+    }
+
     /// Merges a freshly-parsed `AmsStatusReport` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
@@ -400,149 +416,11 @@ impl AmsDrySetting {
     }
 }
 
-/// Virtual/external spool holder telemetry.
-/// Represents the filament loaded directly into the extruder without going through an AMS unit.
+/// External spool holder: `vt_tray` on single-nozzle models, each `vir_slot` entry on IDEX.
 ///
-/// On the wire, this shares the same schema as `AmsTray` — both physical AMS trays
-/// and virtual/external spool holders use the same field set.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VirtualTray {
-    /// Virtual tray ID (typically `"254"`).
-    pub id: Option<String>,
-
-    /// Material class abbreviation (e.g. "PLA", "PETG"). Empty when no filament loaded.
-    pub tray_type: Option<String>,
-
-    /// RRGGBBAA hexadecimal color string.
-    pub tray_color: Option<String>,
-
-    /// Slicer filament preset index.
-    pub tray_info_idx: Option<String>,
-
-    /// Sub-brand or variant string.
-    pub tray_sub_brands: Option<String>,
-
-    /// Maximum nozzle temperature for the loaded filament (sent as string).
-    pub nozzle_temp_max: Option<String>,
-
-    /// Minimum nozzle temperature for the loaded filament (sent as string).
-    pub nozzle_temp_min: Option<String>,
-
-    /// Filament diameter in mm (sent as string, e.g. `"1.75"`).
-    pub tray_diameter: Option<String>,
-
-    /// Spool net weight in grams (sent as string).
-    pub tray_weight: Option<String>,
-
-    /// Filament temperature setting (sent as string).
-    pub tray_temp: Option<String>,
-
-    /// Filament print time accumulator (sent as string).
-    pub tray_time: Option<String>,
-
-    /// Bed temperature setting (sent as string).
-    pub bed_temp: Option<String>,
-
-    /// Bed temperature type/profile (sent as string).
-    pub bed_temp_type: Option<String>,
-
-    /// 16-character hexadecimal RFID tag UID.
-    pub tag_uid: Option<String>,
-
-    /// 32-character globally unique filament spool ID.
-    pub tray_uuid: Option<String>,
-
-    /// Filament preset display name.
-    pub tray_id_name: Option<String>,
-
-    /// XCam inspection info hex string.
-    pub xcam_info: Option<String>,
-
-    /// Remaining filament percentage (0–100, or 0 if unknown).
-    pub remain: Option<i32>,
-
-    /// Flow rate calibration K factor.
-    pub k: Option<f64>,
-
-    /// Flow rate calibration N factor.
-    pub n: Option<i32>,
-
-    /// Calibration index (-1 if uncalibrated).
-    pub cali_idx: Option<i32>,
-}
-
-impl VirtualTray {
-    /// Merges a freshly-parsed `VirtualTray` into `self` field-by-field, mirroring
-    /// `AmsTray::merge_from` -- `VirtualTray` shares `AmsTray`'s wire schema, and BambuStudio's
-    /// preserve-on-absence `ParseVal` behavior applies here too. A partial id-only push (the
-    /// same shape routine `vt_tray` deltas use) must not wipe cached `tray_type`/`tray_color`/
-    /// etc. that the printer never actually cleared (issue #43).
-    pub(crate) fn merge_from(&mut self, incoming: &VirtualTray) {
-        if incoming.id.is_some() {
-            self.id = incoming.id.clone();
-        }
-        if incoming.tray_type.is_some() {
-            self.tray_type = incoming.tray_type.clone();
-        }
-        if incoming.tray_color.is_some() {
-            self.tray_color = incoming.tray_color.clone();
-        }
-        if incoming.tray_info_idx.is_some() {
-            self.tray_info_idx = incoming.tray_info_idx.clone();
-        }
-        if incoming.tray_sub_brands.is_some() {
-            self.tray_sub_brands = incoming.tray_sub_brands.clone();
-        }
-        if incoming.nozzle_temp_max.is_some() {
-            self.nozzle_temp_max = incoming.nozzle_temp_max.clone();
-        }
-        if incoming.nozzle_temp_min.is_some() {
-            self.nozzle_temp_min = incoming.nozzle_temp_min.clone();
-        }
-        if incoming.tray_diameter.is_some() {
-            self.tray_diameter = incoming.tray_diameter.clone();
-        }
-        if incoming.tray_weight.is_some() {
-            self.tray_weight = incoming.tray_weight.clone();
-        }
-        if incoming.tray_temp.is_some() {
-            self.tray_temp = incoming.tray_temp.clone();
-        }
-        if incoming.tray_time.is_some() {
-            self.tray_time = incoming.tray_time.clone();
-        }
-        if incoming.bed_temp.is_some() {
-            self.bed_temp = incoming.bed_temp.clone();
-        }
-        if incoming.bed_temp_type.is_some() {
-            self.bed_temp_type = incoming.bed_temp_type.clone();
-        }
-        if incoming.tag_uid.is_some() {
-            self.tag_uid = incoming.tag_uid.clone();
-        }
-        if incoming.tray_uuid.is_some() {
-            self.tray_uuid = incoming.tray_uuid.clone();
-        }
-        if incoming.tray_id_name.is_some() {
-            self.tray_id_name = incoming.tray_id_name.clone();
-        }
-        if incoming.xcam_info.is_some() {
-            self.xcam_info = incoming.xcam_info.clone();
-        }
-        if incoming.remain.is_some() {
-            self.remain = incoming.remain;
-        }
-        if incoming.k.is_some() {
-            self.k = incoming.k;
-        }
-        if incoming.n.is_some() {
-            self.n = incoming.n;
-        }
-        if incoming.cali_idx.is_some() {
-            self.cali_idx = incoming.cali_idx;
-        }
-    }
-}
+/// Its wire schema is an AMS tray's, so it is the same type, with the same fields, accessors and
+/// merge. `id` is the holder's address (`"254"`/`"255"`), or empty if a push omitted it.
+pub type VirtualTray = AmsTray;
 
 /// Native state code meaning "slot empty" [REF-AMS-DECODE].
 /// Lives here (not in `ams::parser`) since `AmsTray::state()` is a pure data accessor and
@@ -569,7 +447,9 @@ pub(crate) const AMS_TRAY_STATE_SPOOL_NOT_FED: u8 = 10;
 /// standard P1/A1 firmware, removing a spool truncates the JSON to only the ID key.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AmsTray {
-    /// The physical index representing the slot (0 to 3). Sent as a string on the wire.
+    /// The physical index representing the slot (0 to 3), or an external holder's address
+    /// (`"254"`/`"255"`) for a [`VirtualTray`]. Sent as a string on the wire; empty if omitted.
+    #[serde(default)]
     pub id: String,
 
     /// The native state code representing filament routing status [REF-AMS-DECODE].
@@ -914,6 +794,31 @@ impl AmsDryFanStatus {
 }
 
 impl AmsUnit {
+    /// The unit's bus id parsed from [`id`](Self::id), or `None` if it isn't a number.
+    #[must_use]
+    pub fn ams_id(&self) -> Option<u8> {
+        self.id.trim().parse().ok()
+    }
+
+    /// Enclosure temperature in °C, from the `temp` string.
+    #[must_use]
+    pub fn temperature_c(&self) -> Option<f32> {
+        self.temp.as_deref()?.trim().parse().ok()
+    }
+
+    /// Relative humidity in percent, from `humidity_raw`.
+    #[must_use]
+    pub fn humidity_percent(&self) -> Option<u8> {
+        self.humidity_raw.as_deref()?.trim().parse().ok()
+    }
+
+    /// Coarse humidity level `1..=5` from `humidity`, where **`1` is wettest and `5` driest**
+    /// (`reference/05_materials_ams.md`, "Per-Unit Humidity").
+    #[must_use]
+    pub fn humidity_level(&self) -> Option<u8> {
+        self.humidity.as_deref()?.trim().parse().ok()
+    }
+
     /// Parses the hex-encoded `info` bitmask string into an integer.
     #[must_use]
     pub fn parse_info(&self) -> Option<u64> {
@@ -1201,6 +1106,47 @@ impl DryBlockReason {
 }
 
 impl AmsTray {
+    /// The slot index parsed from [`id`](Self::id), or `None` if it isn't a number.
+    #[must_use]
+    pub fn slot(&self) -> Option<u8> {
+        self.id.trim().parse().ok()
+    }
+
+    /// The material abbreviation (`"PLA"`, `"PETG"`, ...), or `None` when `tray_type` is
+    /// absent or explicitly blank (empty or `"Empty"`).
+    #[must_use]
+    pub fn material(&self) -> Option<&str> {
+        self.tray_type
+            .as_deref()
+            .filter(|t| !crate::ams::parser::is_blank_type(t))
+    }
+
+    /// The `RRGGBBAA` `tray_color` decoded to `[r, g, b, a]`, or `None` if absent or malformed.
+    #[must_use]
+    pub fn color_rgba(&self) -> Option<[u8; 4]> {
+        let hex = self.tray_color.as_deref()?;
+        if hex.len() != 8 {
+            return None;
+        }
+        u32::from_str_radix(hex, 16).ok().map(u32::to_be_bytes)
+    }
+
+    /// `(min, max)` nozzle temperature in °C for the loaded filament, if both were reported.
+    #[must_use]
+    pub fn nozzle_temp_range(&self) -> Option<(u16, u16)> {
+        let parse = |v: &Option<String>| v.as_deref()?.trim().parse().ok();
+        Some((parse(&self.nozzle_temp_min)?, parse(&self.nozzle_temp_max)?))
+    }
+
+    /// Remaining filament in percent, or `None` for the firmware's `-1` "not calculated"
+    /// sentinel or any other out-of-range value.
+    #[must_use]
+    pub fn remain_percent(&self) -> Option<u8> {
+        self.remain
+            .and_then(|r| u8::try_from(r).ok())
+            .filter(|&r| r <= 100)
+    }
+
     /// Retrieves the raw status code of the spool, defaulting to `9` (Empty) if omitted.
     ///
     /// **Not a loaded/empty answer on its own:** some firmware sends a fully populated tray
@@ -1259,6 +1205,11 @@ impl AmsTray {
     /// `filament_setting_id` preserve-on-absence like every other field with a
     /// confirmed 3-arg `ParseVal` counterpart (`DevFilaSystem.cpp:800-801`).
     pub(crate) fn merge_from(&mut self, incoming: &AmsTray) {
+        // A no-op for an AMS tray, which is matched by id before merging; an external holder's
+        // cached copy may have been created from a push that omitted it.
+        if !incoming.id.is_empty() {
+            self.id = incoming.id.clone();
+        }
         if incoming.state.is_some() {
             self.state = incoming.state;
         }

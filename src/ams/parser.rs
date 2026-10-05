@@ -194,7 +194,7 @@ pub fn clean_stale_tray_data(tray: &mut AmsTray, ams_id: u8) {
 }
 
 /// True for a `tray_type` that explicitly reports no material: empty, or the literal `"Empty"`.
-fn is_blank_type(tray_type: &str) -> bool {
+pub(crate) fn is_blank_type(tray_type: &str) -> bool {
     tray_type.is_empty() || tray_type == "Empty"
 }
 

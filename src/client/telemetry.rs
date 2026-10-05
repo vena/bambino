@@ -610,7 +610,11 @@ where
     pub fn sanitized_ams(&self) -> Option<AmsStatusReport> {
         let mut sanitized = self.cache.last_ams.clone()?;
         for unit in &mut sanitized.ams {
-            let ams_id: u8 = unit.id.parse().unwrap_or(0);
+            // A non-numeric id can't be placed on the bus, so there is no rule to clean it by;
+            // treating it as unit 0 used to apply standard-AMS rules to whatever it was.
+            let Some(ams_id) = unit.ams_id() else {
+                continue;
+            };
             if let Some(trays) = &mut unit.tray {
                 for tray in trays {
                     clean_stale_tray_data(tray, ams_id);

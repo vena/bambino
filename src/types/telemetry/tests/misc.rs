@@ -469,7 +469,7 @@ fn test_p1s_wire_capture_end_to_end() {
 
     // Fix D: vt_tray
     let vt = print.vt_tray.expect("vt_tray present");
-    assert_eq!(vt.id.as_deref(), Some("254"));
+    assert_eq!(vt.id, "254");
     assert_eq!(vt.tray_color.as_deref(), Some("FFFFFF00"));
     assert_eq!(vt.remain, Some(0));
     assert!((vt.k.unwrap() - 0.02).abs() < 0.001);

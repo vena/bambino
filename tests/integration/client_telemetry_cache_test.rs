@@ -500,12 +500,12 @@ async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse vt_tray/vir_slot report");
-    assert_eq!(client.vt_tray().and_then(|t| t.id.as_deref()), Some("254"));
+    assert_eq!(client.vt_tray().map(|t| t.id.as_str()), Some("254"));
     assert_eq!(
         client
             .vir_slot()
-            .map(|slots| slots.iter().map(|s| s.id.as_deref()).collect::<Vec<_>>()),
-        Some(vec![Some("0"), Some("1")])
+            .map(|slots| slots.iter().map(|s| s.id.as_str()).collect::<Vec<_>>()),
+        Some(vec!["0", "1"])
     );
 
     broker_task.await.expect("Broker task panicked");
@@ -577,10 +577,7 @@ async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
         2,
         "partial push must not drop the other extruder's cached tray"
     );
-    let slot0 = vir_slot
-        .iter()
-        .find(|s| s.id.as_deref() == Some("0"))
-        .unwrap();
+    let slot0 = vir_slot.iter().find(|s| s.id == "0").unwrap();
     assert_eq!(
         slot0.remain,
         Some(70),
@@ -591,10 +588,7 @@ async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
         Some("PLA"),
         "matched entry must preserve tray_type"
     );
-    let slot1 = vir_slot
-        .iter()
-        .find(|s| s.id.as_deref() == Some("1"))
-        .unwrap();
+    let slot1 = vir_slot.iter().find(|s| s.id == "1").unwrap();
     assert_eq!(
         slot1.tray_type.as_deref(),
         Some("PETG"),

@@ -156,7 +156,7 @@ fn test_virtual_tray_deserialization() {
         .print
         .unwrap();
     let vt = print.vt_tray.unwrap();
-    assert_eq!(vt.id.as_deref(), Some("254"));
+    assert_eq!(vt.id, "254");
     assert_eq!(vt.tray_type.as_deref(), Some("PLA"));
     assert_eq!(vt.tray_color.as_deref(), Some("FF0000FF"));
     assert_eq!(vt.nozzle_temp_max.as_deref(), Some("220"));
@@ -232,9 +232,9 @@ fn test_vir_slot_deserialization() {
         .unwrap();
     let slots = print.vir_slot.unwrap();
     assert_eq!(slots.len(), 2);
-    assert_eq!(slots[0].id.as_deref(), Some("254"));
+    assert_eq!(slots[0].id, "254");
     assert_eq!(slots[0].tray_type.as_deref(), Some("PLA"));
-    assert_eq!(slots[1].id.as_deref(), Some("255"));
+    assert_eq!(slots[1].id, "255");
     assert_eq!(slots[1].tray_type.as_deref(), Some("PETG"));
     assert_eq!(slots[1].remain, Some(50));
 }
@@ -1163,4 +1163,57 @@ fn test_ams_unit_drying_accessors_separate_unknown_from_unable() {
     };
     assert_eq!(unknown.supports_drying(), None);
     assert_eq!(unknown.dry_temp_range(), None);
+}
+
+#[test]
+fn test_ams_typed_accessors() {
+    let tray = AmsTray {
+        id: "2".into(),
+        tray_type: Some("PETG".into()),
+        tray_color: Some("FF8000CC".into()),
+        nozzle_temp_min: Some("230".into()),
+        nozzle_temp_max: Some("260".into()),
+        remain: Some(42),
+        ..Default::default()
+    };
+    assert_eq!(tray.slot(), Some(2));
+    assert_eq!(tray.material(), Some("PETG"));
+    assert_eq!(tray.color_rgba(), Some([0xFF, 0x80, 0x00, 0xCC]));
+    assert_eq!(tray.nozzle_temp_range(), Some((230, 260)));
+    assert_eq!(tray.remain_percent(), Some(42));
+
+    let blank = AmsTray {
+        id: "x".into(),
+        tray_type: Some("Empty".into()),
+        tray_color: Some("FF8000".into()),
+        remain: Some(-1),
+        ..Default::default()
+    };
+    assert_eq!(blank.slot(), None);
+    assert_eq!(blank.material(), None);
+    assert_eq!(blank.color_rgba(), None);
+    assert_eq!(blank.nozzle_temp_range(), None);
+    assert_eq!(blank.remain_percent(), None);
+
+    let unit = AmsUnit {
+        id: "1".into(),
+        temp: Some("26.5".into()),
+        humidity: Some("4".into()),
+        humidity_raw: Some("17".into()),
+        tray: Some(vec![tray]),
+        ..Default::default()
+    };
+    assert_eq!(unit.ams_id(), Some(1));
+    assert_eq!(unit.temperature_c(), Some(26.5));
+    assert_eq!(unit.humidity_level(), Some(4));
+    assert_eq!(unit.humidity_percent(), Some(17));
+
+    let report = AmsStatusReport {
+        ams: vec![unit],
+        ..Default::default()
+    };
+    assert_eq!(report.unit(1).and_then(AmsUnit::ams_id), Some(1));
+    assert!(report.unit(0).is_none());
+    assert_eq!(report.tray(1, 2).and_then(AmsTray::material), Some("PETG"));
+    assert!(report.tray(1, 3).is_none());
 }
