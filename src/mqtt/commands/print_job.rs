@@ -12,6 +12,7 @@ use serde::Serialize;
 use crate::ams::ids::{AMS_EXTERNAL_SPOOL_DEPUTY_ID, AMS_EXTERNAL_SPOOL_MAIN_ID};
 use crate::ams::mapping::{AmsMapping2Entry, flat_channel_id_for_entry};
 use crate::ams::{is_external_spool_safety_valid, is_external_spool_safety_valid_flat};
+use crate::error::Error;
 use crate::models::PrinterModel;
 
 use super::ClampedTaskId;
@@ -158,10 +159,33 @@ pub fn resolve_rack_nozzle_mapping(
     Some(wire)
 }
 
+/// Where a print job's AMS routing comes from: one mapping form or the other, never both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AmsSource {
+    /// A flat `ams_mapping` channel array (one entry per project filament, `-1` = unmapped).
+    /// No `ams_mapping2` is sent.
+    Flat(Vec<i32>),
+    /// Structured `ams_mapping2` entries. The flat array is derived from them, so the two
+    /// wire arrays always agree index for index [REF-AMS-MAP].
+    Structured(Vec<AmsMapping2Entry>),
+}
+
+/// Tool-changer rack routing for a print job: both inputs [`resolve_rack_nozzle_mapping`] needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NozzleRack {
+    /// Extruder index per filament slot, negative for unprinted slots.
+    pub slot_extruders: Vec<i32>,
+    /// Physical nozzle ID of the rack position the printer currently reports as live, in
+    /// `RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX` (16..=21). The caller must supply this because
+    /// the mounted hotend can change between slicing and dispatch, and bambino does not model
+    /// rack telemetry.
+    pub rack_nozzle_id: i32,
+}
+
 /// Structured configuration for submitting a print job [REF-MQTT-LIFECYCLE].
 ///
-/// Replaces the positional parameter list on `start_print()` and `ProjectFileRequest::new()`
-/// with named fields and sensible defaults for calibration flags.
+/// Replaces the positional parameter list on `start_print()` with named fields and sensible
+/// defaults for calibration flags.
 #[derive(Debug, Clone)]
 pub struct PrintJobConfig {
     /// Filename of the `.3mf` file on SD card storage (e.g. "job.3mf").
@@ -190,29 +214,20 @@ pub struct PrintJobConfig {
     pub layer_inspect: bool,
     /// `None` defers to the quirks engine default in `PrinterClient::start_print()`.
     pub nozzle_offset_cali: Option<CalibrationMode>,
-    /// Whether to route filament through the AMS rather than an external spool.
-    pub use_ams: bool,
-    /// Flat AMS slot mapping (one entry per plate object, -1 = no AMS slot).
-    pub ams_mapping: Vec<i32>,
-    /// Structured per-nozzle AMS mapping; takes precedence over `ams_mapping` when set.
-    pub ams_mapping2: Option<Vec<AmsMapping2Entry>>,
-    /// Extruder index per filament slot for tool-changer models, negative for unprinted slots.
+    /// AMS routing; `None` prints from the external spool (`use_ams: false`).
+    pub ams: Option<AmsSource>,
+    /// Tool-changer rack routing, set via [`PrintJobConfig::with_nozzle_rack`].
     ///
-    /// Only consulted on a model whose quirks report [`uses_nozzle_rack`]. Set together with
-    /// `rack_nozzle_id` via [`PrintJobConfig::with_nozzle_rack`]; either one alone resolves to no
-    /// `nozzle_mapping` on the wire, which is the safe outcome.
+    /// Only consulted on a model whose quirks report [`uses_nozzle_rack`].
     ///
     /// [`uses_nozzle_rack`]: crate::quirks::ModelQuirks::uses_nozzle_rack
-    pub nozzle_slot_extruders: Option<Vec<i32>>,
-    /// Physical nozzle ID of the rack position the printer currently reports as live (`16..=21`).
-    ///
-    /// The caller must supply this because the mounted hotend can change between slicing and
-    /// dispatch, and bambino does not model rack telemetry.
-    pub rack_nozzle_id: Option<i32>,
+    pub nozzle_rack: Option<NozzleRack>,
 }
 
 impl PrintJobConfig {
-    /// Builds a job config with bed leveling and flow calibration on, vibration compensation off, and AMS disabled.
+    /// Builds a job config with these defaults: bed leveling and flow calibration on,
+    /// **timelapse recording and first-layer inspection on**, vibration compensation off, AMS
+    /// disabled, and the model's own nozzle-offset-calibration default.
     pub fn new(
         job_filename: &str,
         plate_gcode_path: &str,
@@ -232,11 +247,8 @@ impl PrintJobConfig {
             timelapse: true,
             layer_inspect: true,
             nozzle_offset_cali: None,
-            use_ams: false,
-            ams_mapping: Vec::new(),
-            ams_mapping2: None,
-            nozzle_slot_extruders: None,
-            rack_nozzle_id: None,
+            ams: None,
+            nozzle_rack: None,
         }
     }
 
@@ -249,32 +261,37 @@ impl PrintJobConfig {
     /// already sanitizes via `flat_channel_id_for_entry`; this mirrors it for the raw path
     /// (issue #56).
     ///
-    /// This is a convenience, not the enforcement point: `ams_mapping` is a public field, so
+    /// This is a convenience, not the enforcement point: `ams` is a public field, so
     /// `ProjectFileRequest::from_config` re-runs the same sanitization at serialization time
     /// (issue #120). Bypassing this builder cannot produce an out-of-range flat channel on the
     /// wire.
+    ///
+    /// Replaces any mapping set by [`with_ams_mapping2`](Self::with_ams_mapping2).
     #[must_use]
     pub fn with_ams(mut self, mapping: Vec<i32>) -> Self {
-        self.use_ams = true;
-        self.ams_mapping = sanitize_flat_mapping(mapping, "with_ams");
+        self.ams = Some(AmsSource::Flat(sanitize_flat_mapping(mapping, "with_ams")));
         self
     }
 
-    /// Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`).
+    /// Enables AMS with structured per-nozzle sub-mappings (`ams_mapping2`); the flat array is
+    /// derived from them.
+    ///
+    /// Replaces any mapping set by [`with_ams`](Self::with_ams).
     #[must_use]
     pub fn with_ams_mapping2(mut self, mapping2: Vec<AmsMapping2Entry>) -> Self {
-        self.use_ams = true;
-        self.ams_mapping2 = Some(mapping2);
+        self.ams = Some(AmsSource::Structured(mapping2));
         self
     }
 
     /// Enables or disables automatic bed leveling for this job.
+    #[must_use]
     pub fn bed_leveling(mut self, mode: impl Into<CalibrationMode>) -> Self {
         self.bed_leveling = mode.into();
         self
     }
 
     /// Enables or disables flow calibration for this job.
+    #[must_use]
     pub fn flow_calibration(mut self, mode: impl Into<CalibrationMode>) -> Self {
         self.run_flow_calibration = mode.into();
         self
@@ -283,18 +300,21 @@ impl PrintJobConfig {
     /// Enables or disables vibration compensation calibration for this job. No tri-state
     /// companion field exists on the wire for this one, so `CalibrationMode::Auto` serializes
     /// identically to `Off`.
+    #[must_use]
     pub fn vibration_compensation(mut self, mode: impl Into<CalibrationMode>) -> Self {
         self.run_vibration_compensation = mode.into();
         self
     }
 
     /// Enables or disables timelapse capture for this job.
+    #[must_use]
     pub fn timelapse(mut self, enabled: bool) -> Self {
         self.timelapse = enabled;
         self
     }
 
     /// Enables or disables first-layer inspection for this job.
+    #[must_use]
     pub fn layer_inspect(mut self, enabled: bool) -> Self {
         self.layer_inspect = enabled;
         self
@@ -303,16 +323,37 @@ impl PrintJobConfig {
     /// Supplies the tool-changer rack routing for this job (H2C only).
     ///
     /// `slot_extruders` is one extruder index per filament slot (negative = slot not printed);
-    /// `rack_nozzle_id` is the physical ID of the live rack position (`16..=21`). Both are needed
-    /// — see [`resolve_rack_nozzle_mapping`] for how they combine and when the resulting
+    /// `rack_nozzle_id` is the physical ID of the live rack position. See
+    /// [`resolve_rack_nozzle_mapping`] for how they combine and when the resulting
     /// `nozzle_mapping` is deliberately omitted. Ignored entirely on non-rack models.
-    pub fn with_nozzle_rack(mut self, slot_extruders: Vec<i32>, rack_nozzle_id: i32) -> Self {
-        self.nozzle_slot_extruders = Some(slot_extruders);
-        self.rack_nozzle_id = Some(rack_nozzle_id);
-        self
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when `rack_nozzle_id` is outside the rack's physical IDs
+    /// (`RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX`), rather than silently sending no mapping.
+    pub fn with_nozzle_rack(
+        mut self,
+        slot_extruders: Vec<i32>,
+        rack_nozzle_id: i32,
+    ) -> Result<Self, Error> {
+        if !(RACK_NOZZLE_ID_MIN..=RACK_NOZZLE_ID_MAX).contains(&rack_nozzle_id) {
+            return Err(Error::InvalidArgument(
+                format!(
+                    "rack_nozzle_id {rack_nozzle_id} is not a rack position \
+                     ({RACK_NOZZLE_ID_MIN}..={RACK_NOZZLE_ID_MAX})"
+                )
+                .into(),
+            ));
+        }
+        self.nozzle_rack = Some(NozzleRack {
+            slot_extruders,
+            rack_nozzle_id,
+        });
+        Ok(self)
     }
 
     /// Overrides the model's default nozzle-offset-calibration behavior for this job.
+    #[must_use]
     pub fn nozzle_offset_calibration(mut self, mode: impl Into<CalibrationMode>) -> Self {
         self.nozzle_offset_cali = Some(mode.into());
         self
@@ -325,14 +366,21 @@ impl PrintJobConfig {
 /// * When `use_ams` is `false` (external spool mode), the key must serialize to an empty string `""`.
 /// * When `use_ams` is `true` (AMS active mode), the key must serialize as an integer array (e.g. `[0, -1, 1]`).
 ///
-/// Utilizing an untagged enum ensures standard JSON compliance across all execution profiles.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AmsMappingTable {
     /// External-spool mode: serializes to an empty string.
-    Inactive(String),
+    Inactive,
     /// AMS active mode: serializes to an integer slot-mapping array.
     Active(Vec<i32>),
+}
+
+impl Serialize for AmsMappingTable {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Inactive => serializer.serialize_str(""),
+            Self::Active(mapping) => mapping.serialize(serializer),
+        }
+    }
 }
 
 /// Payload layout to submit and execute a physical `.3mf` print from MicroSD card storage.
@@ -355,7 +403,7 @@ pub struct ProjectFilePayload {
     pub flow_cali: bool,
     /// Slicer preset profile ID. Always `"0"` — confirmed against bambuddy and pybambu, both
     /// of which hardcode this value; no observed non-zero case.
-    pub profile_id: String,
+    pub profile_id: &'static str,
     /// Per-submission project tracking ID. Set equal to `subtask_id` — bambuddy's
     /// `send_start_print_command` (`bambu_mqtt.py:3721-3781`) mints one fresh ID per
     /// submission and reuses it for `subtask_id`/`project_id`/`task_id` alike; bambino's
@@ -437,59 +485,56 @@ impl ProjectFileRequest {
     ) -> Self {
         let url = format!("ftp://{}", config.job_filename);
 
-        let is_single_nozzle = model.quirks().physical_nozzle_count() == 1;
+        let quirks = model.quirks();
+        let is_single_nozzle = quirks.physical_nozzle_count() == 1;
 
-        // Normalize before anything reads it. `ams_mapping2` is a public field, so a caller can
-        // set `MaterialSource::ExternalSpoolLeft`'s `{254, 0}` — documented IDEX-only — on a
+        // Normalize before anything reads it. `ams` is a public field, so a caller can set
+        // `MaterialSource::ExternalSpoolLeft`'s `{254, 0}` — documented IDEX-only — on a
         // single-nozzle printer, where `reference/05_materials_ams.md:200` says the payload must
         // always carry `255`: transmitting `254` targets physical AMS tray 0 instead of the
         // external spool and yields firmware error `0700_8012` (issue #119).
-        let normalized_mapping2 = config.ams_mapping2.as_ref().map(|mapping2| {
-            if !is_single_nozzle {
-                return mapping2.clone();
-            }
-            mapping2
-                .iter()
-                .map(|entry| {
-                    if entry.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID {
+        let mapping2 = match &config.ams {
+            Some(AmsSource::Structured(mapping2)) => {
+                let mut mapping2 = mapping2.clone();
+                if is_single_nozzle {
+                    for entry in mapping2
+                        .iter_mut()
+                        .filter(|e| e.ams_id == AMS_EXTERNAL_SPOOL_DEPUTY_ID)
+                    {
                         log::warn!(
                             "from_config: ams_mapping2 entry uses the IDEX deputy external-spool id {} on a single-nozzle model; normalizing to {}",
                             AMS_EXTERNAL_SPOOL_DEPUTY_ID,
                             AMS_EXTERNAL_SPOOL_MAIN_ID
                         );
-                        AmsMapping2Entry {
-                            ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                            slot_id: entry.slot_id,
-                        }
-                    } else {
-                        entry.clone()
+                        entry.ams_id = AMS_EXTERNAL_SPOOL_MAIN_ID;
                     }
-                })
-                .collect()
-        });
-
-        let use_ams = config.use_ams
-            && match &normalized_mapping2 {
-                Some(mapping2) => is_external_spool_safety_valid(is_single_nozzle, mapping2),
-                None => is_external_spool_safety_valid_flat(is_single_nozzle, &config.ams_mapping),
-            };
-        // Derive the flat array from ams_mapping2 whenever it's the active source,
-        // instead of trusting config.ams_mapping — with_ams_mapping2() alone never touches
-        // ams_mapping, so a caller who only calls that builder previously got a populated
-        // ams_mapping2 paired with an empty ams_mapping, breaking the documented 1:1 index
-        // pairing the firmware relies on [REF-AMS-MAP].
-        // Sanitize the raw path here rather than trusting `with_ams` to have done it: every
-        // `PrintJobConfig` field is public and the struct is not `#[non_exhaustive]`, so
-        // `config.ams_mapping = vec![255]` bypasses the builder entirely (issue #120). The
-        // mapping2-derived branch is already sanitized by `flat_channel_id_for_entry`.
-        let flat_mapping: Vec<i32> = match &normalized_mapping2 {
-            Some(mapping2) => mapping2.iter().map(flat_channel_id_for_entry).collect(),
-            None => sanitize_flat_mapping(config.ams_mapping.clone(), "from_config"),
+                }
+                Some(mapping2)
+            }
+            _ => None,
         };
-        let mapping = if use_ams {
-            AmsMappingTable::Active(flat_mapping)
-        } else {
-            AmsMappingTable::Inactive(String::new())
+
+        // The flat array is derived from `ams_mapping2` whenever that is the source, so the two
+        // keep the 1:1 index pairing the firmware relies on [REF-AMS-MAP]. The raw path is
+        // sanitized here rather than trusting `with_ams` to have done it: `ams` is public, so
+        // `AmsSource::Flat(vec![255])` bypasses the builder entirely (issue #120). The
+        // mapping2-derived branch is already sanitized by `flat_channel_id_for_entry`.
+        let use_ams = match (&config.ams, &mapping2) {
+            (Some(_), Some(mapping2)) => is_external_spool_safety_valid(is_single_nozzle, mapping2),
+            (Some(AmsSource::Flat(flat)), None) => {
+                is_external_spool_safety_valid_flat(is_single_nozzle, flat)
+            }
+            _ => false,
+        };
+        let mapping = match (&config.ams, &mapping2) {
+            _ if !use_ams => AmsMappingTable::Inactive,
+            (_, Some(mapping2)) => {
+                AmsMappingTable::Active(mapping2.iter().map(flat_channel_id_for_entry).collect())
+            }
+            (Some(AmsSource::Flat(flat)), _) => {
+                AmsMappingTable::Active(sanitize_flat_mapping(flat.clone(), "from_config"))
+            }
+            _ => AmsMappingTable::Inactive,
         };
 
         // Hard gate, not a default: `reference/03_mqtt_telemetry.md` restricts
@@ -497,7 +542,7 @@ impl ProjectFileRequest {
         // same way. Consulting the quirk only inside `unwrap_or_else` meant an explicit
         // `.nozzle_offset_calibration(true)` serialized `nozzle_offset_cali: 1` to a P1S/A1/X1
         // that has no second carriage to calibrate.
-        let nozzle_offset = if model.quirks().supports_nozzle_offset_calibration() {
+        let nozzle_offset = if quirks.supports_nozzle_offset_calibration() {
             config.nozzle_offset_cali.unwrap_or(CalibrationMode::On)
         } else {
             CalibrationMode::Off
@@ -507,17 +552,13 @@ impl ProjectFileRequest {
         // Both inputs are required and the resolver declines rather than guesses — every path
         // that cannot name the right physical nozzle with confidence lands on `None`, which omits
         // the field and returns firmware to its own pick.
-        let nozzle_mapping = if model.quirks().uses_nozzle_rack() {
-            match (
-                config.nozzle_slot_extruders.as_deref(),
-                config.rack_nozzle_id,
-            ) {
-                (Some(slots), Some(rack_id)) => resolve_rack_nozzle_mapping(slots, rack_id),
-                _ => None,
-            }
-        } else {
-            None
-        };
+        let nozzle_mapping = config
+            .nozzle_rack
+            .as_ref()
+            .filter(|_| quirks.uses_nozzle_rack())
+            .and_then(|rack| {
+                resolve_rack_nozzle_mapping(&rack.slot_extruders, rack.rack_nozzle_id)
+            });
 
         // subtask_id/project_id/task_id all share one value — bambuddy mints a
         // single fresh ID per submission and reuses it for all three; see ProjectFilePayload's
@@ -532,7 +573,7 @@ impl ProjectFileRequest {
                 subtask_name: config.subtask_name.clone(),
                 subtask_id: submission_id.clone(),
                 flow_cali: config.run_flow_calibration.as_wire_bool(),
-                profile_id: String::from("0"),
+                profile_id: "0",
                 project_id: submission_id.clone(),
                 task_id: submission_id,
                 file: config.job_filename.clone(),
@@ -553,11 +594,7 @@ impl ProjectFileRequest {
                 // internally contradictory (`use_ams: false` alongside a populated
                 // `ams_mapping2` array) — see [REF-MQTT-LIFECYCLE] for the firmware error
                 // (`0700_8012`) this shape causes.
-                ams_mapping2: if use_ams {
-                    normalized_mapping2.clone()
-                } else {
-                    None
-                },
+                ams_mapping2: mapping2.filter(|_| use_ams),
             },
         }
     }

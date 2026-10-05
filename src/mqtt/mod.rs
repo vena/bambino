@@ -23,9 +23,9 @@ pub use client::{MqttClient, MqttMessage};
 pub use commands::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest,
     AmsFilamentDryingRequest, AmsFilamentSettingRequest, AmsGetRfidRequest, AmsMappingTable,
-    BuzzerRequest, CalibrationMode, CalibrationRequest, CleanPrintErrorRequest, DryingParams,
-    GCodeRequest, GetAccessCodeRequest, GetVersionRequest, HmsActionRequest, IdleIgnoreRequest,
-    LedCtrlRequest, PrintJobConfig, PrintSpeedRequest, ProjectFileRequest, PromptSoundRequest,
-    PushAllRequest, SkipObjectsRequest, StandardControlRequest, UiopRequest, clamp_task_id,
-    resolve_rack_nozzle_mapping,
+    AmsSource, BuzzerRequest, CalibrationMode, CalibrationRequest, CleanPrintErrorRequest,
+    DryingParams, GCodeRequest, GetAccessCodeRequest, GetVersionRequest, HmsActionRequest,
+    IdleIgnoreRequest, LedCtrlRequest, NozzleRack, PrintJobConfig, PrintSpeedRequest,
+    ProjectFileRequest, PromptSoundRequest, PushAllRequest, SkipObjectsRequest,
+    StandardControlRequest, UiopRequest, clamp_task_id, resolve_rack_nozzle_mapping,
 };

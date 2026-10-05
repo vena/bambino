@@ -33,7 +33,7 @@ pub use hardware::{
     AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
 };
 pub use print_job::{
-    AmsMappingTable, CalibrationMode, PrintJobConfig, ProjectFileRequest,
+    AmsMappingTable, AmsSource, CalibrationMode, NozzleRack, PrintJobConfig, ProjectFileRequest,
     resolve_rack_nozzle_mapping,
 };
 pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
@@ -208,8 +208,8 @@ mod tests {
         .with_ams(vec![0, 15, 128, 135, 254, 255, 16, -5, -1]);
 
         assert_eq!(
-            config.ams_mapping,
-            vec![0, 15, 128, 135, -1, -1, -1, -1, -1]
+            config.ams,
+            Some(AmsSource::Flat(vec![0, 15, 128, 135, -1, -1, -1, -1, -1]))
         );
     }
 
@@ -535,10 +535,36 @@ mod tests {
     }
 
     #[test]
+    fn test_with_nozzle_rack_rejects_a_non_rack_id_and_ams_builders_replace_each_other() {
+        let config = PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured");
+        assert!(matches!(
+            config.clone().with_nozzle_rack(vec![0, 1], 1),
+            Err(crate::error::Error::InvalidArgument(_))
+        ));
+
+        // #500: the second builder wins outright instead of one silently shadowing the other.
+        let entry = crate::ams::AmsMapping2Entry {
+            ams_id: 0,
+            slot_id: 2,
+        };
+        let structured_last = config
+            .clone()
+            .with_ams(vec![1])
+            .with_ams_mapping2(vec![entry.clone()]);
+        assert_eq!(
+            structured_last.ams,
+            Some(AmsSource::Structured(vec![entry]))
+        );
+        let flat_last = structured_last.with_ams(vec![1]);
+        assert_eq!(flat_last.ams, Some(AmsSource::Flat(vec![1])));
+    }
+
+    #[test]
     fn test_nozzle_mapping_omitted_on_non_rack_models_and_present_on_h2c() {
         let with_rack =
             PrintJobConfig::new("j.3mf", "Metadata/plate_1.gcode", "job", 1, "textured")
-                .with_nozzle_rack(vec![0, 1], 17);
+                .with_nozzle_rack(vec![0, 1], 17)
+                .expect("17 is a rack position");
 
         let h2c = ProjectFileRequest::from_config(&with_rack, 1, PrinterModel::H2C);
         assert_eq!(h2c.print.nozzle_mapping.as_ref().map(|m| m.len()), Some(32));

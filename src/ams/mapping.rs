@@ -65,29 +65,12 @@ impl MaterialSource {
     /// "Failed to get AMS mapping table" error. Virtual external spools and unused slots
     /// must strictly be mapped to the `-1` (unmapped) sentinel in the flat array.
     ///
-    /// `StandardAms`/`AmsHt` fields are public `u8`s a caller can hand-build with an
-    /// out-of-range `ams_id`/`slot_id` (unlike `parser.rs`'s inbound-side bounds-checking on
-    /// wire data) — validated here the same way, falling back to the `-1` sentinel rather than
-    /// producing a bogus flat channel value.
+    /// Derived from [`to_mapping2_entry`](Self::to_mapping2_entry) through
+    /// [`flat_channel_id_for_entry`], so the two encodings can't disagree. An out-of-range
+    /// hand-built `StandardAms`/`AmsHt`/`AmsLite` becomes the unmapped entry there and `-1` here.
     #[must_use]
     pub fn flat_channel_id(&self) -> i32 {
-        match self {
-            MaterialSource::StandardAms { ams_id, slot_id }
-                if *ams_id <= super::ids::AMS_MAX_STANDARD_ID
-                    && *slot_id < super::ids::AMS_SLOTS_PER_UNIT =>
-            {
-                ((*ams_id as i32) * super::ids::AMS_SLOTS_PER_UNIT as i32) + (*slot_id as i32)
-            }
-            MaterialSource::AmsHt { ams_id } if super::ids::is_ams_ht_id(*ams_id) => *ams_id as i32,
-            // The flat array's encoding is per-unit-type, not uniformly "global channel id":
-            // AMS Lite puts a bare local slot 0-3 here. CONFIRMED by bambuddy against the
-            // firmware's own mapping — a captured flat `[1]` paired with an `ams_mapping2`
-            // entry of `{"ams_id": 16, "slot_id": 1}`.
-            MaterialSource::AmsLite { slot_id } if *slot_id < super::ids::AMS_SLOTS_PER_UNIT => {
-                *slot_id as i32
-            }
-            _ => -1, // External and unmapped slots are strictly mapped to -1
-        }
+        flat_channel_id_for_entry(&self.to_mapping2_entry())
     }
 
     /// Converts this source location into a structured `ams_mapping2` JSON entry.
@@ -106,10 +89,7 @@ impl MaterialSource {
                         slot_id: *slot_id,
                     }
                 } else {
-                    AmsMapping2Entry {
-                        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                    }
+                    AmsMapping2Entry::UNMAPPED
                 }
             }
             MaterialSource::AmsHt { ams_id } => {
@@ -119,10 +99,7 @@ impl MaterialSource {
                         slot_id: 0,
                     }
                 } else {
-                    AmsMapping2Entry {
-                        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                    }
+                    AmsMapping2Entry::UNMAPPED
                 }
             }
             // `ams_mapping2` is the one place an A2L-attached AMS Lite's *physical* id 16 goes back on
@@ -136,10 +113,7 @@ impl MaterialSource {
                         slot_id: *slot_id,
                     }
                 } else {
-                    AmsMapping2Entry {
-                        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                    }
+                    AmsMapping2Entry::UNMAPPED
                 }
             }
             MaterialSource::ExternalSpool => AmsMapping2Entry {
@@ -154,10 +128,7 @@ impl MaterialSource {
                 ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
                 slot_id: 0,
             },
-            MaterialSource::Unmapped => AmsMapping2Entry {
-                ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-                slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-            },
+            MaterialSource::Unmapped => AmsMapping2Entry::UNMAPPED,
         }
     }
 }
@@ -175,6 +146,14 @@ pub struct AmsMapping2Entry {
     pub ams_id: u8,
     /// Tray slot index within the unit (0-3 for standard AMS, 0 for single-slot units).
     pub slot_id: u8,
+}
+
+impl AmsMapping2Entry {
+    /// The `{255, 255}` entry for a project filament mapped to no feed location.
+    pub const UNMAPPED: Self = Self {
+        ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+        slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
+    };
 }
 
 /// What kind of feed location a raw [`AmsMapping2Entry`]'s `ams_id`/`slot_id` pair names.
@@ -285,30 +264,12 @@ pub(crate) const AMS_MAX_PROJECT_FILAMENTS: usize = 32;
 /// intermediate unused filament indexes.
 #[must_use]
 pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
-    if allocations.is_empty() {
-        return Vec::new();
-    }
-    let max_id = allocations
-        .iter()
-        .map(|(id, _)| *id)
-        .max()
-        .unwrap_or(1)
-        .min(AMS_MAX_PROJECT_FILAMENTS);
-    let mut mapping = vec![-1; max_id];
-
-    for (id, source) in allocations {
-        if *id > 0 && *id <= max_id {
-            mapping[*id - 1] = source.flat_channel_id();
-        } else {
-            // filament_id is documented as 1-based (1 to N), so id == 0 is a caller bug. The
-            // `> max_id` half is live now that max_id is capped at AMS_MAX_PROJECT_FILAMENTS:
-            // it is what keeps an absurd caller-supplied id from sizing the allocation.
-            log::warn!(
-                "build_ams_mapping: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
-            );
-        }
-    }
-    mapping
+    build_by_filament(
+        allocations,
+        -1,
+        MaterialSource::flat_channel_id,
+        "build_ams_mapping",
+    )
 }
 
 /// Builds the structured `ams_mapping2` object array from raw project allocations.
@@ -317,34 +278,41 @@ pub fn build_ams_mapping(allocations: &[(usize, MaterialSource)]) -> Vec<i32> {
 /// parameters to ensure correct material transitions on multi-AMS and IDEX platforms.
 #[must_use]
 pub fn build_ams_mapping2(allocations: &[(usize, MaterialSource)]) -> Vec<AmsMapping2Entry> {
-    if allocations.is_empty() {
+    build_by_filament(
+        allocations,
+        AmsMapping2Entry::UNMAPPED,
+        MaterialSource::to_mapping2_entry,
+        "build_ams_mapping2",
+    )
+}
+
+/// The array both mapping builders share: indexed by 1-based `filament_id`, sized by the highest
+/// id up to [`AMS_MAX_PROJECT_FILAMENTS`], gaps filled with `fill`.
+fn build_by_filament<T: Clone>(
+    allocations: &[(usize, MaterialSource)],
+    fill: T,
+    convert: impl Fn(&MaterialSource) -> T,
+    builder: &str,
+) -> Vec<T> {
+    let Some(highest) = allocations.iter().map(|(id, _)| *id).max() else {
         return Vec::new();
-    }
-    let max_id = allocations
-        .iter()
-        .map(|(id, _)| *id)
-        .max()
-        .unwrap_or(1)
-        .min(AMS_MAX_PROJECT_FILAMENTS);
-    let mut mapping2 = vec![
-        AmsMapping2Entry {
-            ams_id: AMS_EXTERNAL_SPOOL_MAIN_ID,
-            slot_id: AMS_EXTERNAL_SPOOL_MAIN_ID
-        };
-        max_id
-    ];
+    };
+    let max_id = highest.min(AMS_MAX_PROJECT_FILAMENTS);
+    let mut mapping = vec![fill; max_id];
 
     for (id, source) in allocations {
         if *id > 0 && *id <= max_id {
-            mapping2[*id - 1] = source.to_mapping2_entry();
+            mapping[*id - 1] = convert(source);
         } else {
-            // Same reasoning as build_ams_mapping's else arm.
+            // filament_id is documented as 1-based (1 to N), so id == 0 is a caller bug. The
+            // `> max_id` half is what keeps an absurd caller-supplied id from sizing the
+            // allocation, now that max_id is capped at AMS_MAX_PROJECT_FILAMENTS.
             log::warn!(
-                "build_ams_mapping2: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
+                "{builder}: dropping allocation with out-of-range filament_id {id} (valid range is 1..={max_id})"
             );
         }
     }
-    mapping2
+    mapping
 }
 
 /// Verifies whether standard expansion systems are active, returning the safe `use_ams` toggle.
