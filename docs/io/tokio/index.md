@@ -10,6 +10,19 @@ Provides the concrete bindings of the abstract IO, Secure TLS transport,
 and Timer interfaces for standard operating systems using the Tokio runtime
 and the Rustls TLS stack.
 
+## Contents
+
+- [Types](#types)
+  - [`TokioIo`](#tokioio)
+  - [`TokioRawStreamFactory`](#tokiorawstreamfactory)
+  - [`TokioTimer`](#tokiotimer)
+  - [`TokioTlsConnector`](#tokiotlsconnector)
+  - [`TokioUdpSocket`](#tokioudpsocket)
+  - [`TokioFtpsClient`](#tokioftpsclient)
+- [Functions](#functions)
+  - [`build_unsafe_client_config`](#build-unsafe-client-config)
+  - [`build_verified_client_config`](#build-verified-client-config)
+
 ## Quick Reference
 
 | Item | Kind | Description |
@@ -21,6 +34,7 @@ and the Rustls TLS stack.
 | [`TokioUdpSocket`](#tokioudpsocket) | struct | UDP socket interface wrapping a native Tokio UdpSocket. |
 | [`build_unsafe_client_config`](#build-unsafe-client-config) | fn | Builds a `ClientConfig` that accepts any certificate — see [`NoCertificateVerification`](cert_verify/index.md#nocertificateverification). |
 | [`build_verified_client_config`](#build-verified-client-config) | fn | Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs. |
+| [`TokioFtpsClient`](#tokioftpsclient) | type | An [`FtpsClient`](../../ftps/index.md) on the tokio backend, as `PrinterClient::ftps()` hands it out with `TokioTimer`. |
 
 ## Types
 
@@ -347,6 +361,14 @@ UDP socket interface wrapping a native Tokio UdpSocket.
 ##### `impl BindableUdpSocket for TokioUdpSocket`
 
 - <span id="tokioudpsocket-bindableudpsocket-bind"></span>`async fn bind(addr: SocketAddr) -> Result<Self, SocketError>` — [`SocketError`](../index.md#socketerror)
+
+### `TokioFtpsClient`
+
+```rust
+type TokioFtpsClient = crate::ftps::FtpsClient<TokioIo<::tokio::net::TcpStream>, TokioTlsConnector, TokioRawStreamFactory, TokioTimer>;
+```
+
+An [`FtpsClient`](../../ftps/index.md) on the tokio backend, as `PrinterClient::ftps()` hands it out with `TokioTimer`.
 
 
 ---

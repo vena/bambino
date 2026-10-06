@@ -33,6 +33,11 @@ enum Error {
     AccessDenied,
     Timeout,
     DiskWriteFailure,
+    FtpReply {
+        command: &'static str,
+        code: u16,
+        text: std::borrow::Cow<'static, str>,
+    },
     ModelMismatch(std::borrow::Cow<'static, str>),
     Backpressure,
     InvalidArgument(std::borrow::Cow<'static, str>),
@@ -90,6 +95,14 @@ This enum wraps all protocol, serialization, and transport-level failures. `Netw
 - **`DiskWriteFailure`**
 
   Upload verification failed — printer reported unexpected file size after transfer.
+
+- **`FtpReply`**
+
+  The printer's FTP server answered a command with a reply code other than the one it needed.
+  
+  Carries the server's own code and text, so a `550 No such file` and a `553 Permission
+  denied` stay distinguishable. The control channel is still in sync after this error (the
+  reply was read in full), so the client remains usable.
 
 - **`ModelMismatch`**
 

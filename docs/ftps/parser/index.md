@@ -86,6 +86,19 @@ likely to be right, never authoritative.
 
   The printer's minute (0-59).
 
+#### Implementations
+
+- <span id="currentdatetime-new"></span>`const fn new(year: i32, month: u8, day: u8, hour: u8, minute: u8) -> Self`
+
+  A reference clock at the given calendar time.
+
+- <span id="currentdatetime-now-utc"></span>`fn now_utc() -> Self`
+
+  The host's current UTC time — a fallback reference when the printer's clock is unknown.
+
+  Prefer the printer's own clock (see the type's doc comment); entries whose year came from
+  this reference are flagged with [`FtpFile::year_is_inferred`](#ftpfile).
+
 #### Trait Implementations
 
 ##### `impl Clone for CurrentDateTime`
@@ -98,6 +111,12 @@ likely to be right, never authoritative.
 
 - <span id="currentdatetime-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Eq for CurrentDateTime`
+
+##### `impl PartialEq for CurrentDateTime`
+
+- <span id="currentdatetime-partialeq-eq"></span>`fn eq(&self, other: &CurrentDateTime) -> bool` — [`CurrentDateTime`](#currentdatetime)
+
 ### `FtpFile`
 
 ```rust
@@ -105,11 +124,7 @@ struct FtpFile {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
-    pub year: i32,
-    pub month: u8,
-    pub day: u8,
-    pub hour: u8,
-    pub minute: u8,
+    pub modified: FtpTimestamp,
     pub year_is_inferred: bool,
 }
 ```
@@ -134,30 +149,16 @@ Standardized representation of an entry retrieved from physical printer storage.
 
   Absolute size of the file, in bytes.
 
-- **`year`**: `i32`
+- **`modified`**: `FtpTimestamp`
 
-  Reconstructed modification year: taken verbatim from the wire when the listing carried one,
-  otherwise inferred against the [`CurrentDateTime`](#currentdatetime) reference (see `year_is_inferred`).
-
-- **`month`**: `u8`
-
-  Numeric calendar month (1 to 12).
-
-- **`day`**: `u8`
-
-  Numeric day of the month (1 to 31).
-
-- **`hour`**: `u8`
-
-  Clock hour (0 to 23). Default is 0 if listing only provides a calendar year.
-
-- **`minute`**: `u8`
-
-  Clock minute (0 to 59). Default is 0 if listing only provides a calendar year.
+  Modification time. `second` is always 0 (`LIST` has no seconds), and so are `hour` and
+  `minute` when the line gave a year instead of a time. The year is taken verbatim from the
+  wire when the listing carried one, otherwise inferred against the [`CurrentDateTime`](#currentdatetime)
+  reference (see `year_is_inferred`). Comparable with a `modification_time` result.
 
 - **`year_is_inferred`**: `bool`
 
-  `true` when `year` was inferred from the [`CurrentDateTime`](#currentdatetime) reference (the wire's
+  `true` when `modified.year` was inferred from the [`CurrentDateTime`](#currentdatetime) reference (the wire's
   HH:MM-recent-file format, ambiguous by design; see `parse_unix_listing`'s doc comment),
   `false` when the wire reported an explicit `YYYY` directly. `year`'s rollover math always
   lands in `{reference_year, reference_year - 1}` for an inferred entry by construction, so it
@@ -204,6 +205,8 @@ rather than an ambiguous one; `MDTM` removes the reconstruction, not the clock s
 See [`FtpsClient::modification_time`](../index.md), which returns
 `None` when the printer's firmware doesn't implement the command.
 
+Ordered chronologically (fields compare year first, second last).
+
 #### Fields
 
 - **`year`**: `i32`
@@ -244,9 +247,21 @@ See [`FtpsClient::modification_time`](../index.md), which returns
 
 ##### `impl Eq for FtpTimestamp`
 
+##### `impl Hash for FtpTimestamp`
+
+- <span id="ftptimestamp-hash"></span>`fn hash<__H: hash::Hasher>(&self, state: &mut __H)`
+
+##### `impl Ord for FtpTimestamp`
+
+- <span id="ftptimestamp-ord-cmp"></span>`fn cmp(&self, other: &FtpTimestamp) -> cmp::Ordering` — [`FtpTimestamp`](#ftptimestamp)
+
 ##### `impl PartialEq for FtpTimestamp`
 
 - <span id="ftptimestamp-partialeq-eq"></span>`fn eq(&self, other: &FtpTimestamp) -> bool` — [`FtpTimestamp`](#ftptimestamp)
+
+##### `impl PartialOrd for FtpTimestamp`
+
+- <span id="ftptimestamp-partialord-partial-cmp"></span>`fn partial_cmp(&self, other: &FtpTimestamp) -> option::Option<cmp::Ordering>` — [`FtpTimestamp`](#ftptimestamp)
 
 
 ---

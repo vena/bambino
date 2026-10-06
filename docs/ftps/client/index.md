@@ -16,6 +16,7 @@ whitespace-insensitive UNIX listings parsing, and robust chunked uploads [REF-FT
 | Item | Kind | Description |
 |------|------|-------------|
 | [`FtpsClient`](#ftpsclient) | struct | Lightweight, high-reliability implicit FTPS client running on top of abstract I/O traits. |
+| [`TlsVersionCheck`](#tlsversioncheck) | enum | Whether [`FtpsClient`](#ftpsclient) checks the negotiated TLS version on models that need TLS 1.2 for FTPS. |
 
 ## Types
 
@@ -42,22 +43,22 @@ To make this safe, the client sets `poisoned = true` (originally only on the
 `list_directory`/`upload_file`/`download_file` data-transfer window between the server's
 `150`/`125` "opening data connection" reply and the matching final reply, since that's the
 widest such window; now on every `write_command`/`read_response` failure in every method,
-including the single-reply metadata/filesystem commands, and unconditionally in
-`disconnect()`); every public method checks the flag first and returns
-[`Error::ProtocolViolation`](../../error/index.md#error) immediately if set. A poisoned client must be discarded —
-reconnect via a fresh [`FtpsClient::connect`](#ftpsclient) call instead of reusing the instance.
+including the single-reply metadata/filesystem commands); every public method checks the
+flag first and returns [`Error::ProtocolViolation`](../../error/index.md#error) immediately if set. A poisoned client
+must be replaced: [`disconnect`](#ftpsclient) returns its parts for a fresh
+[`FtpsClient::connect`](#ftpsclient), and `PrinterClient::ftps()` does that by itself.
 
 **`FtpsTimer`** bounds every read against a per-call wall-clock deadline (see
 `FTPS_READ_TIMEOUT_SECS`/`FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS` in `protocol.rs`) — owned
 independently of whatever `Timer` a `PrinterClient` that hands out this client is using,
-since `PrinterClient::storage()` hands out direct `&mut FtpsClient` access rather than
+since `PrinterClient::ftps()` hands out direct `&mut FtpsClient` access rather than
 mediating every method call the way it does for MQTT/camera (no call site to thread
 `&self.timer` through). Defaults to `DummyTimer` (unbounded, matching this crate's existing
 `DummyTimer` convention) for direct (non-`PrinterClient`) callers that don't supply one.
 
 #### Implementations
 
-- <span id="ftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, identity: PrinterIdentity, timer: FtpsTimer, allow_unverified_tls_1_2: bool) -> Result<Self, Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`Error`](../../error/index.md#error)
+- <span id="ftpsclient-connect"></span>`async fn connect(raw_control: RawIO, tls_connector: Tls, data_factory: Factory, identity: PrinterIdentity, timer: FtpsTimer, tls_version_check: TlsVersionCheck) -> Result<Self, Error>` — [`PrinterIdentity`](../../identity/index.md#printeridentity), [`TlsVersionCheck`](#tlsversioncheck), [`Error`](../../error/index.md#error)
 
   Establishes the secure control channel, performs login handshakes, and configures security properties.
 
@@ -66,7 +67,11 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   wrapped in a secure TLS session immediately upon establishment. Explicit handshakes (such as `AUTH TLS`)
   are not utilized.
 
-- <span id="ftpsclient-list-directory"></span>`async fn list_directory(&mut self, remote_path: &str, now: CurrentDateTime) -> Result<Vec<FtpFile>, Error>` — [`CurrentDateTime`](../parser/index.md#currentdatetime), [`FtpFile`](../parser/index.md#ftpfile), [`Error`](../../error/index.md#error)
+  `raw_control` must already be dialed to the printer's [`FTPS_PORT`](../index.md#ftps-port).
+  `tls_version_check` is normally [`TlsVersionCheck::Enforce`](#tlsversioncheck); see that type before
+  choosing `Bypass`.
+
+- <span id="ftpsclient-list-directory"></span>`async fn list_directory(&mut self, remote_path: &str, now: impl Into<CurrentDateTime>) -> Result<Vec<FtpFile>, Error>` — [`CurrentDateTime`](../parser/index.md#currentdatetime), [`FtpFile`](../parser/index.md#ftpfile), [`Error`](../../error/index.md#error)
 
   Queries the storage server for raw directory listings and parses their structures.
 
@@ -107,6 +112,10 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Removes a targeted file from non-volatile storage.
 
+  A `550` reply is treated as "already absent" and returns `Ok`, with its text logged. FTP
+  also uses `550` for "permission denied" and "file in use", which this cannot yet tell
+  apart from absence (GitHub issue #392).
+
 - <span id="ftpsclient-upload-file"></span>`async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
   Uploads a binary payload directly to MicroSD card storage.
@@ -120,7 +129,8 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
      print commands prior to this confirmation halts the printer due to microSD write latency exceptions [REF-FTPS-FLUSH].
   3. Unconditionally verify the uploaded size via the `SIZE` command on both a `226` and a
      transient `426` reply — this guards against silent SD card write truncation on every
-     model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN].
+     model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
+     [`Error::DiskWriteFailure`](../../error/index.md#error); a final reply other than `226`/`426` is [`Error::FtpReply`](../../error/index.md#error).
 
 - <span id="ftpsclient-download-file"></span>`async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error>` — [`Error`](../../error/index.md#error)
 
@@ -139,8 +149,9 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Removes a directory from the printer's MicroSD storage.
 
-  Returns success for both `250` (deleted) and `550` (already absent),
-  matching the idempotent cleanup semantics of `delete_file`.
+  Returns success for both `250` (deleted) and `550` (treated as already absent, text
+  logged), matching `delete_file`. On common servers `550` also answers `RMD` of a non-empty
+  directory, which this cannot yet tell apart (GitHub issue #392).
 
 - <span id="ftpsclient-rename-file"></span>`async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), Error>` — [`Error`](../../error/index.md#error)
 
@@ -153,20 +164,19 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
 
   Queries the available capacity of the MicroSD card, in bytes.
 
-- <span id="ftpsclient-disconnect"></span>`async fn disconnect(&mut self)`
+- <span id="ftpsclient-is-poisoned"></span>`fn is_poisoned(&self) -> bool`
 
-  Sends a QUIT command and cleanly terminates the FTP session.
+  Returns true once a control-channel desync is possible; every further call on this client fails.
+
+  `PrinterClient::ftps()` checks this and redials instead of handing a poisoned client back.
+
+- <span id="ftpsclient-disconnect"></span>`async fn disconnect(self) -> (Tls, Factory, FtpsTimer)`
+
+  Sends a QUIT command, terminates the FTP session, and returns the connector, factory and timer for a reconnect.
 
   Best-effort: errors during QUIT are silently ignored since the connection is being torn
-  down regardless. Non-consuming (`&mut self`, not `self`) by design:
-  `PrinterClient::storage()` only exposes `&mut FtpsClient`, and direct-module
-  consumers may want to disconnect and reconnect the same variable via a fresh `connect()`
-  call without re-declaring it.
-
-  Always poisons the client on the way out (extends the poisoning mechanism — see the
-  struct doc comment) so every subsequent method call on this instance fails cleanly with
-  the same "must reconnect" error, instead of a caller mistaking a disconnected client for
-  a live one. Idempotent: calling this more than once is a no-op after the first call.
+  down regardless. Consuming, so a disconnected client can't be used by mistake; pass the
+  returned parts to [`connect()`](#ftpsclient) to start a new session.
 
   After `QUIT` the TLS session is shut down properly and then dropped, in that order:
   [`TlsConnector::close`](../../io/index.md#tlsconnector) sends `close_notify` so the peer
@@ -175,9 +185,60 @@ mediating every method call the way it does for MQTT/camera (no call site to thr
   `close()`. On an ESP32-C6 that is ~48 KB recovered here instead of whenever the client
   itself goes out of scope (GitHub issue #293).
 
-  A poisoned client skips `QUIT` and the close — its stream may be desynced or dead — but
-  still drops the control session here, so its memory is returned now rather than when the
-  client goes out of scope (#320).
+  A poisoned client skips `QUIT` and the close — its stream may be desynced or dead — and
+  only drops the control session (#320).
 
 #### Trait Implementations
+
+### `TlsVersionCheck`
+
+```rust
+enum TlsVersionCheck {
+    Enforce,
+    Bypass,
+}
+```
+
+Whether [`FtpsClient`](#ftpsclient) checks the negotiated TLS version on models that need TLS 1.2 for FTPS.
+
+On P2S and X2D ([`ModelQuirks::requires_ftps_tls_1_2`](../../quirks/index.md#modelquirks))
+the client fails closed unless exactly TLS 1.2 was negotiated, on the control channel and on
+every data channel.
+
+#### Variants
+
+- **`Enforce`**
+
+  Fail closed unless TLS 1.2 was negotiated, on models that require it. The default.
+
+- **`Bypass`**
+
+  Skip the check and log a warning.
+  
+  For a backend that cannot cap the peer at TLS 1.2 (`esp-idf`, `embassy`) talking to a
+  printer that offers 1.3. Safe despite failing open: `upload_file`'s and
+  `download_file`'s `SIZE` rechecks catch a truncated transfer regardless; `list_directory`
+  has only its line-framing check (see `src/ftps/CLAUDE.md`).
+
+#### Trait Implementations
+
+##### `impl Clone for TlsVersionCheck`
+
+- <span id="tlsversioncheck-clone"></span>`fn clone(&self) -> TlsVersionCheck` — [`TlsVersionCheck`](#tlsversioncheck)
+
+##### `impl Copy for TlsVersionCheck`
+
+##### `impl Debug for TlsVersionCheck`
+
+- <span id="tlsversioncheck-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for TlsVersionCheck`
+
+- <span id="tlsversioncheck-default"></span>`fn default() -> TlsVersionCheck` — [`TlsVersionCheck`](#tlsversioncheck)
+
+##### `impl Eq for TlsVersionCheck`
+
+##### `impl PartialEq for TlsVersionCheck`
+
+- <span id="tlsversioncheck-partialeq-eq"></span>`fn eq(&self, other: &TlsVersionCheck) -> bool` — [`TlsVersionCheck`](#tlsversioncheck)
 

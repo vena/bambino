@@ -834,9 +834,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
   Failure there is logged and ignored: the connection is going away either way.
 
-  Idempotent, and unlike [`disconnect_storage()`](#printerclient) this *can* be
-  reconnected — `ensure_camera()` never consumes `camera_config` (nothing is moved out of
-  it), so the next camera call redials.
+  Idempotent, and reconnectable like [`disconnect_ftps()`](#printerclient):
+  `ensure_camera()` never consumes `camera_config` (nothing is moved out of it), so the
+  next camera call redials.
 
 - <span id="superprinterclient-connect-mqtt"></span>`async fn connect_mqtt(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -854,7 +854,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Use this for test mocks or Embassy where the caller manages the MQTT connection,
   mirroring [`attach_camera()`](#printerclient)/
-  [`attach_storage()`](#printerclient).
+  [`attach_ftps()`](#printerclient).
 
   A session already in the slot is closed first, as
   [`disconnect_mqtt()`](#printerclient) does. The new one then gets every step a
@@ -914,11 +914,11 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   type parameters. The FTPS [`TlsConnector`](../io/index.md#tlsconnector) is independent from MQTT's (some models
   require different TLS settings for FTPS, e.g. `TlsVersions::Tls12Only`). `timer` is
   constructed fresh by the caller (e.g. `TokioTimer::new()`) — `FtpsClient` owns it
-  independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
+  independently of `PrinterClient`'s own `Timer`, since `PrinterClient::ftps()` hands
   out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
   so there's no call site to thread `self.timer` through the way MQTT/camera do.
 
-  Call [`disconnect_storage()`](#printerclient) first on a client with a
+  Call [`disconnect_ftps()`](#printerclient) first on a client with a
   connected FTPS session: this builder is synchronous and cannot close it, so the session is
   dropped without `close_notify` (see `.claude/rules/tls-session-teardown.md`).
 
@@ -950,7 +950,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
 - <span id="superprinterclient-is-ftps-connected"></span>`fn is_ftps_connected(&self) -> bool`
 
-  Returns whether the FTPS session is currently established.
+  Returns whether a usable FTPS session is established (one that a transport failure poisoned is not).
 
 - <span id="superprinterclient-connect-camera"></span>`async fn connect_camera(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
@@ -1052,18 +1052,18 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Call [`disconnect_camera()`](#printerclient) first on a client with a connected
   camera session, for the same reason as `.with_ftps()`.
 
-- <span id="superprinterclient-with-attached-storage"></span>`fn with_attached_storage<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(self, ftps_client: FtpsClient<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`PrinterClient`](#printerclient)
+- <span id="superprinterclient-with-attached-ftps"></span>`fn with_attached_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(self, ftps_client: FtpsClient<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`PrinterClient`](#printerclient)
 
   Installs an FTPS client the caller connected, changing the FTPS type parameters to match it.
 
   The FTPS counterpart of [`with_attached_camera()`](#printerclient), for a
   [`from_mqtt()`](#printerclient) client whose FTPS slots are placeholders.
   [`FtpsClient`](../ftps/client/index.md#ftpsclient) carries its own connector, so
-  [`disconnect_storage()`](#printerclient) closes it as usual. No FTPS
-  configuration is kept, so after a disconnect [`storage()`](#printerclient) reports FTPS
+  [`disconnect_ftps()`](#printerclient) closes it as usual. No FTPS
+  configuration is kept, so after a disconnect [`ftps()`](#printerclient) reports FTPS
   as not configured until a client is attached again.
 
-  Call [`disconnect_storage()`](#printerclient) first on a client with a
+  Call [`disconnect_ftps()`](#printerclient) first on a client with a
   connected FTPS session, for the same reason as `.with_ftps()`.
 
 - <span id="superprinterclient-with-camera-port"></span>`fn with_camera_port(self, port: u16) -> Self`
@@ -1421,44 +1421,34 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   config left it `None`, and forces it off on a single-nozzle model even if the caller set
   it explicitly.
 
-- <span id="superprinterclient-attach-storage"></span>`async fn attach_storage(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
+- <span id="superprinterclient-attach-ftps"></span>`async fn attach_ftps(&mut self, ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>)` — [`FtpsClient`](../ftps/client/index.md#ftpsclient)
 
   Injects a pre-connected [`FtpsClient`](../ftps/client/index.md#ftpsclient) directly.
 
   Use this for test mocks or Embassy where the caller manages the FTPS
   connection. For lazy connection, use [`.with_ftps()`](#printerclient). On a
   [`from_mqtt()`](#printerclient) client, whose FTPS type parameters are placeholders,
-  use [`.with_attached_storage()`](#printerclient) instead.
+  use [`.with_attached_ftps()`](#printerclient) instead.
 
   A session already in the slot is disconnected first, as
-  [`disconnect_storage()`](#printerclient) does, so its TLS session is closed
+  [`disconnect_ftps()`](#printerclient) does, so its TLS session is closed
   rather than dropped mid-stream.
 
-- <span id="superprinterclient-storage"></span>`async fn storage(&mut self) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`Error`](../error/index.md#error)
+- <span id="superprinterclient-ftps"></span>`async fn ftps(&mut self) -> Result<&mut FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>, Error>` — [`FtpsClient`](../ftps/client/index.md#ftpsclient), [`Error`](../error/index.md#error)
 
   Returns direct access to the underlying [`FtpsClient`](../ftps/client/index.md#ftpsclient), auto-connecting if needed.
 
   Requires prior FTPS configuration via [`.with_ftps()`](#printerclient) or
-  [`.attach_storage()`](#printerclient).
+  [`.attach_ftps()`](#printerclient). A session that a transport failure poisoned is
+  disconnected and redialed here rather than handed back.
 
-- <span id="superprinterclient-disconnect-storage"></span>`async fn disconnect_storage(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
+- <span id="superprinterclient-disconnect-ftps"></span>`async fn disconnect_ftps(&mut self) -> Result<(), Error>` — [`Error`](../error/index.md#error)
 
-  Disconnects the FTPS session, if one exists, and clears it from the client.
+  Disconnects the FTPS session, if one exists, keeping its configuration for a reconnect.
 
-  `FtpsClient::disconnect()` is `&mut self` (non-consuming) and always poisons
-  itself on the way out (see its doc comment) — every subsequent call on that instance
-  would fail with `ProtocolViolation`. Without this method, nothing ever resets
-  `self.ftps` back to `None`, so a later [`storage()`](#printerclient) call would
-  short-circuit `ensure_ftps()`'s `is_some()` check and hand back the now-poisoned
-  client, surfacing a confusing low-level error instead of a clear one.
-
-  `disconnect_storage()` takes `self.ftps`, disconnects it, and leaves the slot `None`.
-  The next `storage()` call then falls through to `ensure_ftps()`'s existing "FTPS not
-  configured" error (if `ftps_config` was already consumed by an earlier connect) rather
-  than ever returning a poisoned client. Reconnecting still requires fresh FTPS
-  configuration — [`.with_ftps()`](#printerclient) on a new `PrinterClient`, or
-  [`.attach_storage()`](#printerclient) — since `ftps_config` is consumed on first
-  connection.
+  `FtpsClient::disconnect()` hands back the TLS connector, factory and timer; they go back
+  into this client's FTPS configuration, so the next [`ftps()`](#printerclient) or
+  [`connect_ftps()`](#printerclient) dials a fresh session, as the camera channel does.
 
   Idempotent — a no-op if no FTPS session is active. Always returns `Ok(())`; kept
   fallible for API symmetry with [`connect_ftps()`](#printerclient) and to leave room
