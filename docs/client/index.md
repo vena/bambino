@@ -902,13 +902,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
   convention. Non-consuming — chain onto any construction path.
 
-  On ESP-IDF, this budget is structurally independent from `EspIdfTlsConnector`'s own
-  internal handshake timeout (default 10s) — the connector is an opaque generic by the
-  time it reaches `PrinterClient::new()`, so this outer setting can't see or influence it.
-  Set `EspIdfTlsConnector::with_connect_timeout` directly and keep the two in sync,
-  including the `0` case (both treat `0` as "disabled", but neither number implies the
-  other). Not an issue on `tokio`/`embassy`, where the handshake is bounded solely by
-  this outer race.
+  This is the only connect budget on every backend. `EspIdfTlsConnector` has its own
+  handshake deadline for direct use, but it is disabled unless set, so it doesn't cap this
+  one; leave it unset under `PrinterClient`.
 
 - <span id="superprinterclient-with-ftps"></span>`fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(self, tls: NewFtpsTls, factory: NewFtpsFactory, timer: NewFtpsTimer) -> PrinterClient<MqttRawIO, MqttTls, MqttFactory, Timer, NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer, CameraRawIO, CameraTls, CameraFactory>` — [`PrinterClient`](#printerclient)
 
@@ -916,7 +912,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Consuming builder — changes the `FtpsRawIO`, `FtpsTls`, `FtpsFactory`, and `FtpsTimer`
   type parameters. The FTPS [`TlsConnector`](../io/index.md#tlsconnector) is independent from MQTT's (some models
-  require different TLS settings for FTPS, e.g. `force_tls_1_2`). `timer` is
+  require different TLS settings for FTPS, e.g. `TlsVersions::Tls12Only`). `timer` is
   constructed fresh by the caller (e.g. `TokioTimer::new()`) — `FtpsClient` owns it
   independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
   out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
@@ -938,8 +934,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   `require_tls_1_2_if_enforced` passes on its own whenever a P2S/X2D actually negotiates
   TLS 1.2 — see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. What differs between
   backends is the ability to *cap* the peer at 1.2: only `tokio` has that knob
-  (`force_tls_1_2` on `build_verified_client_config_with_options` /
-  `build_unsafe_client_config_with_options`). `esp-idf` and `embassy` set no maximum
+  (`TlsVersions::Tls12Only` on `TokioTlsConnector::verified`/`unverified`). `esp-idf` and
+  `embassy` set no maximum
   version — upstream exposes none on ESP-IDF, and this crate sets only `min_version` on
   embassy — so against a printer that insisted on TLS 1.3 they fail closed, and this
   bypass is the only way through. It skips the version check only; certificate

@@ -18,8 +18,19 @@ which runtime it's running on. The key traits:
 - [`TimerProvider`](#timerprovider) — Async sleep and monotonic clock for platform-agnostic timeouts.
 
 Platform implementations live in the `tokio`, `esp_idf`, and `embassy` submodules
-(each gated behind its respective feature flag).
-The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
+(each gated behind its respective feature flag):
+
+| Trait | `tokio` | `esp-idf` | `embassy` |
+|---|---|---|---|
+| [`AsyncIo`](#asyncio) (raw stream) | `TokioIo<TcpStream>` | `EspIdfTcpStream` | `EmbassyTcpStream` |
+| [`AsyncIo`](#asyncio) (TLS stream) | `TokioIo<TlsStream<TcpStream>>` | `EspIdfTlsStream` | `EmbassyTlsStream` |
+| [`TlsConnector`](#tlsconnector) | `TokioTlsConnector` | `EspIdfTlsConnector` | `EmbassyTlsConnector` |
+| [`RawStreamFactory`](#rawstreamfactory) | `TokioRawStreamFactory` | `EspIdfRawStreamFactory` | `EmbassyRawStreamFactory` (over an `EmbassySocketPool`) |
+| [`AsyncUdpSocket`](#asyncudpsocket) | `TokioUdpSocket` | `EspIdfUdpSocket` | `EmbassyUdpSocket` |
+| [`BindableUdpSocket`](#bindableudpsocket) | `TokioUdpSocket` | `EspIdfUdpSocket` | n/a (see [`BindableUdpSocket`](#bindableudpsocket)) |
+| [`TimerProvider`](#timerprovider) | `TokioTimer` | `EspIdfTimer` | `EmbassyTimer` |
+
+`TokioIo` bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
 
 ## Contents
 
@@ -27,10 +38,12 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
   - [`embassy`](embassy/index.md)
   - [`tokio`](tokio/index.md)
 - [Types](#types)
+  - [`StdIoError`](#stdioerror)
   - [`CertificateFailure`](#certificatefailure)
   - [`SocketError`](#socketerror)
   - [`TimerError`](#timererror)
   - [`TlsVersion`](#tlsversion)
+  - [`TlsVersions`](#tlsversions)
 - [Traits](#traits)
   - [`AsyncIo`](#asyncio)
   - [`AsyncUdpSocket`](#asyncudpsocket)
@@ -45,10 +58,12 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
 |------|------|-------------|
 | [`embassy`](embassy/index.md) | mod | # Bare-Metal Embassy Runtime Integration |
 | [`tokio`](tokio/index.md) | mod | # Tokio Host Runtime Implementation |
+| [`StdIoError`](#stdioerror) | struct | A `std::io::Error` as an `embedded_io_async::Error`, for the std backends' streams (`TokioIo`, `EspIdfTcpStream`). |
 | [`CertificateFailure`](#certificatefailure) | enum | Why a peer's certificate was rejected, in terms every backend can express. |
 | [`SocketError`](#socketerror) | enum | Unified transport-level Socket Errors, agnostic of runtime implementations. |
 | [`TimerError`](#timererror) | enum | Unified timer/sleep errors, agnostic of runtime implementations. |
 | [`TlsVersion`](#tlsversion) | enum | TLS protocol version negotiated during a handshake. |
+| [`TlsVersions`](#tlsversions) | enum | Which TLS versions a connector may offer the printer. |
 | [`AsyncIo`](#asyncio) | trait | Consolidated Async Read + Write trait boundary. |
 | [`AsyncUdpSocket`](#asyncudpsocket) | trait | Asynchronous UDP Socket trait for unicast and multicast printer discovery. |
 | [`BindableUdpSocket`](#bindableudpsocket) | trait | Dynamically constructs a new UDP socket bound to a local address. |
@@ -69,10 +84,28 @@ The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges
 ### `TokioIo<T>`
 
 ```rust
-struct TokioIo<T>(T);
+struct TokioIo<T>();
 ```
 
 Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
+
+#### Implementations
+
+- <span id="tokioio-new"></span>`fn new(inner: T) -> Self`
+
+  Wraps a Tokio stream.
+
+- <span id="tokioio-into-inner"></span>`fn into_inner(self) -> T`
+
+  Returns the wrapped stream.
+
+- <span id="tokioio-get-ref"></span>`fn get_ref(&self) -> &T`
+
+  Borrows the wrapped stream.
+
+- <span id="tokioio-get-mut"></span>`fn get_mut(&mut self) -> &mut T`
+
+  Mutably borrows the wrapped stream.
 
 #### Trait Implementations
 
@@ -80,7 +113,7 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 ##### `impl<T> ErrorType for TokioIo<T>`
 
-- <span id="tokioio-errortype-type-error"></span>`type Error = TokioIoError`
+- <span id="tokioio-errortype-type-error"></span>`type Error = StdIoError`
 
 ##### `impl RawStreamFactory<TokioIo<TcpStream>> for TokioRawStreamFactory`
 
@@ -117,31 +150,43 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 - <span id="tokioio-write-flush"></span>`async fn flush(&mut self) -> Result<(), <Self as >::Error>`
 
-### `TokioIoError`
+### `StdIoError`
 
 ```rust
-struct TokioIoError(std::io::Error);
+struct StdIoError();
 ```
 
-Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
+A `std::io::Error` as an `embedded_io_async::Error`, for the std backends' streams (`TokioIo`, `EspIdfTcpStream`).
+
+`embedded-io-async` has no impl for `std::io::Error` itself, only for types that opt in.
+
+#### Implementations
+
+- <span id="stdioerror-into-inner"></span>`fn into_inner(self) -> std::io::Error`
+
+  Returns the wrapped error.
+
+- <span id="stdioerror-get-ref"></span>`fn get_ref(&self) -> &std::io::Error`
+
+  Borrows the wrapped error.
 
 #### Trait Implementations
 
-##### `impl Debug for TokioIoError`
+##### `impl Debug for StdIoError`
 
-- <span id="tokioioerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+- <span id="stdioerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
-##### `impl Display for TokioIoError`
+##### `impl Display for StdIoError`
 
-- <span id="tokioioerror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+- <span id="stdioerror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
-##### `impl Error for TokioIoError`
+##### `impl Error for StdIoError`
 
-- <span id="tokioioerror-error-source"></span>`fn source(&self) -> Option<&dyn std::error::Error>`
+- <span id="stdioerror-error-source"></span>`fn source(&self) -> Option<&dyn core::error::Error>`
 
-##### `impl ToString for TokioIoError`
+##### `impl ToString for StdIoError`
 
-- <span id="tokioioerror-tostring-to-string"></span>`fn to_string(&self) -> String`
+- <span id="stdioerror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `CertificateFailure`
 
@@ -264,11 +309,21 @@ backend that can actually reach that state.
 
 - <span id="certificatefailure-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Display for CertificateFailure`
+
+- <span id="certificatefailure-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
 ##### `impl Eq for CertificateFailure`
+
+##### `impl Error for CertificateFailure`
 
 ##### `impl PartialEq for CertificateFailure`
 
 - <span id="certificatefailure-partialeq-eq"></span>`fn eq(&self, other: &CertificateFailure) -> bool` — [`CertificateFailure`](#certificatefailure)
+
+##### `impl ToString for CertificateFailure`
+
+- <span id="certificatefailure-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `SocketError`
 
@@ -379,18 +434,30 @@ same reason (dynamic message content in a `no_std`+`alloc`-compatible way).
 
 - <span id="socketerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Display for SocketError`
+
+- <span id="socketerror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
 ##### `impl Eq for SocketError`
+
+##### `impl Error for SocketError`
+
+- <span id="socketerror-error-source"></span>`fn source(&self) -> Option<&dyn core::error::Error>`
 
 ##### `impl PartialEq for SocketError`
 
 - <span id="socketerror-partialeq-eq"></span>`fn eq(&self, other: &SocketError) -> bool` — [`SocketError`](#socketerror)
+
+##### `impl ToString for SocketError`
+
+- <span id="socketerror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `TimerError`
 
 ```rust
 enum TimerError {
     ResourceExhausted,
-    Other(&'static str),
+    Other(std::borrow::Cow<'static, str>),
 }
 ```
 
@@ -411,7 +478,7 @@ resource exhaustion) ever constructs this.
 
 - **`Other`**
 
-  Catch-all for platform-specific timer scheduling failures.
+  Catch-all for platform-specific timer scheduling failures, carrying the platform's error code where it has one.
 
 #### Trait Implementations
 
@@ -419,17 +486,25 @@ resource exhaustion) ever constructs this.
 
 - <span id="timererror-clone"></span>`fn clone(&self) -> TimerError` — [`TimerError`](#timererror)
 
-##### `impl Copy for TimerError`
-
 ##### `impl Debug for TimerError`
 
 - <span id="timererror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
 
+##### `impl Display for TimerError`
+
+- <span id="timererror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
+
 ##### `impl Eq for TimerError`
+
+##### `impl Error for TimerError`
 
 ##### `impl PartialEq for TimerError`
 
 - <span id="timererror-partialeq-eq"></span>`fn eq(&self, other: &TimerError) -> bool` — [`TimerError`](#timererror)
+
+##### `impl ToString for TimerError`
+
+- <span id="timererror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `TlsVersion`
 
@@ -469,6 +544,51 @@ TLS protocol version negotiated during a handshake.
 ##### `impl PartialEq for TlsVersion`
 
 - <span id="tlsversion-partialeq-eq"></span>`fn eq(&self, other: &TlsVersion) -> bool` — [`TlsVersion`](#tlsversion)
+
+### `TlsVersions`
+
+```rust
+enum TlsVersions {
+    Default,
+    Tls12Only,
+}
+```
+
+Which TLS versions a connector may offer the printer.
+
+#### Variants
+
+- **`Default`**
+
+  Every version the backend supports (TLS 1.2 and 1.3).
+
+- **`Tls12Only`**
+
+  TLS 1.2 only — what
+  [`ModelQuirks::ftps_tls_versions`](../quirks/index.md#modelquirks) returns
+  for P2S and X2D [REF-FTPS-CONN].
+
+#### Trait Implementations
+
+##### `impl Clone for TlsVersions`
+
+- <span id="tlsversions-clone"></span>`fn clone(&self) -> TlsVersions` — [`TlsVersions`](#tlsversions)
+
+##### `impl Copy for TlsVersions`
+
+##### `impl Debug for TlsVersions`
+
+- <span id="tlsversions-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
+
+##### `impl Default for TlsVersions`
+
+- <span id="tlsversions-default"></span>`fn default() -> TlsVersions` — [`TlsVersions`](#tlsversions)
+
+##### `impl Eq for TlsVersions`
+
+##### `impl PartialEq for TlsVersions`
+
+- <span id="tlsversions-partialeq-eq"></span>`fn eq(&self, other: &TlsVersions) -> bool` — [`TlsVersions`](#tlsversions)
 
 
 ---
@@ -583,6 +703,9 @@ persistently and call it on every lazy (re)connect, mirroring `TlsConnector::con
 - `fn dial(&self, host: &str, port: u16) -> Result<RawIO, SocketError>`
 
   Connects a raw, un-encrypted socket to the designated host and port.
+
+  A backend may accept only some address forms and reject the rest with
+  [`SocketError::InvalidInput`]: embassy takes IPv4 literals only.
 
 #### Implementors
 

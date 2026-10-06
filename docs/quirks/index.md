@@ -245,6 +245,10 @@ must adapt to.
   never offers TLS 1.3, so both are kept. See the `P2S` and `X2D` rows in
   `src/quirks/models/` for per-model evidence.
 
+- <span id="modelquirks-ftps-tls-versions"></span>`fn ftps_tls_versions(&self) -> crate::io::TlsVersions` — [`TlsVersions`](../io/index.md#tlsversions)
+
+  Returns the TLS versions an FTPS connector for this model may offer — see [`Self::requires_ftps_tls_1_2`](#modelquirks).
+
 - <span id="modelquirks-door-sensor"></span>`fn door_sensor(&self) -> DoorSensor` — [`DoorSensor`](#doorsensor)
 
   Returns where this model reports its door state, or [`DoorSensor::None`](#doorsensor) without a door sensor.

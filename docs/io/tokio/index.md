@@ -10,35 +10,17 @@ Provides the concrete bindings of the abstract IO, Secure TLS transport,
 and Timer interfaces for standard operating systems using the Tokio runtime
 and the Rustls TLS stack.
 
-## Contents
-
-- [Types](#types)
-  - [`TokioIo`](#tokioio)
-  - [`TokioIoError`](#tokioioerror)
-  - [`TokioRawStreamFactory`](#tokiorawstreamfactory)
-  - [`TokioTimer`](#tokiotimer)
-  - [`TokioTlsConnector`](#tokiotlsconnector)
-  - [`TokioUdpSocket`](#tokioudpsocket)
-- [Functions](#functions)
-  - [`build_unsafe_client_config`](#build-unsafe-client-config)
-  - [`build_unsafe_client_config_with_options`](#build-unsafe-client-config-with-options)
-  - [`build_verified_client_config`](#build-verified-client-config)
-  - [`build_verified_client_config_with_options`](#build-verified-client-config-with-options)
-
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
 | [`TokioIo`](#tokioio) | struct | Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds. |
-| [`TokioIoError`](#tokioioerror) | struct | Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait. |
 | [`TokioRawStreamFactory`](#tokiorawstreamfactory) | struct | Raw (pre-TLS) connection factory for the Tokio runtime. |
 | [`TokioTimer`](#tokiotimer) | struct | Timer implementation utilizing Tokio's non-blocking system clock registry. |
 | [`TokioTlsConnector`](#tokiotlsconnector) | struct | TLS Secure connector wrapping Tokio-Rustls. |
 | [`TokioUdpSocket`](#tokioudpsocket) | struct | UDP socket interface wrapping a native Tokio UdpSocket. |
-| [`build_unsafe_client_config`](#build-unsafe-client-config) | fn | Builds an unsafe `ClientConfig` with default TLS version negotiation (TLS 1.2 + 1.3). |
-| [`build_unsafe_client_config_with_options`](#build-unsafe-client-config-with-options) | fn | Builds an unsafe `ClientConfig` with configurable TLS version constraints. |
+| [`build_unsafe_client_config`](#build-unsafe-client-config) | fn | Builds a `ClientConfig` that accepts any certificate — see [`NoCertificateVerification`](cert_verify/index.md#nocertificateverification). |
 | [`build_verified_client_config`](#build-verified-client-config) | fn | Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs. |
-| [`build_verified_client_config_with_options`](#build-verified-client-config-with-options) | fn | Builds a verified `ClientConfig` with configurable TLS version constraints. |
 
 ## Types
 
@@ -162,13 +144,34 @@ anchors, so the leaf is CA-issued and a genuine chain of trust is available.
 
 - <span id="nocertificateverification-servercertverifier-supported-verify-schemes"></span>`fn supported_verify_schemes(&self) -> Vec<SignatureScheme>`
 
+  The provider's schemes, the same list [`CnFallbackServerVerifier`](#cnfallbackserververifier) offers, so a printer that
+  completes a verified handshake also completes an unverified one.
+
 ### `TokioIo<T>`
 
 ```rust
-struct TokioIo<T>(T);
+struct TokioIo<T>();
 ```
 
 Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
+
+#### Implementations
+
+- <span id="tokioio-new"></span>`fn new(inner: T) -> Self`
+
+  Wraps a Tokio stream.
+
+- <span id="tokioio-into-inner"></span>`fn into_inner(self) -> T`
+
+  Returns the wrapped stream.
+
+- <span id="tokioio-get-ref"></span>`fn get_ref(&self) -> &T`
+
+  Borrows the wrapped stream.
+
+- <span id="tokioio-get-mut"></span>`fn get_mut(&mut self) -> &mut T`
+
+  Mutably borrows the wrapped stream.
 
 #### Trait Implementations
 
@@ -176,7 +179,7 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 
 ##### `impl<T> ErrorType for TokioIo<T>`
 
-- <span id="tokioio-errortype-type-error"></span>`type Error = TokioIoError`
+- <span id="tokioio-errortype-type-error"></span>`type Error = StdIoError`
 
 ##### `impl RawStreamFactory<TokioIo<TcpStream>> for TokioRawStreamFactory`
 
@@ -212,32 +215,6 @@ Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisf
 - <span id="tokioio-write"></span>`async fn write(&mut self, buf: &[u8]) -> Result<usize, <Self as >::Error>`
 
 - <span id="tokioio-write-flush"></span>`async fn flush(&mut self) -> Result<(), <Self as >::Error>`
-
-### `TokioIoError`
-
-```rust
-struct TokioIoError(std::io::Error);
-```
-
-Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
-
-#### Trait Implementations
-
-##### `impl Debug for TokioIoError`
-
-- <span id="tokioioerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Display for TokioIoError`
-
-- <span id="tokioioerror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
-
-##### `impl Error for TokioIoError`
-
-- <span id="tokioioerror-error-source"></span>`fn source(&self) -> Option<&dyn std::error::Error>`
-
-##### `impl ToString for TokioIoError`
-
-- <span id="tokioioerror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `TokioRawStreamFactory`
 
@@ -297,13 +274,28 @@ struct TokioTlsConnector {
 
 TLS Secure connector wrapping Tokio-Rustls.
 
+`Clone` shares the underlying `ClientConfig`, so one connector can serve every
+`PrinterClient` channel that needs the same settings.
+
 #### Implementations
 
 - <span id="tokiotlsconnector-new"></span>`fn new(connector: tokio_rustls::TlsConnector) -> Self`
 
   Creates a connector given a pre-configured tokio-rustls connector instance.
 
+- <span id="tokiotlsconnector-unverified"></span>`fn unverified(versions: TlsVersions) -> Self` — [`TlsVersions`](../index.md#tlsversions)
+
+  A connector that accepts any certificate — see [`build_unsafe_client_config`](#build-unsafe-client-config).
+
+- <span id="tokiotlsconnector-verified"></span>`fn verified(ca_certs: impl IntoIterator<Item = CertificateDer<'static>>, client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>, versions: TlsVersions) -> Result<Self, rustls::Error>` — [`TlsVersions`](../index.md#tlsversions)
+
+  A connector that verifies the printer against `ca_certs` — see [`build_verified_client_config`](#build-verified-client-config).
+
 #### Trait Implementations
+
+##### `impl Clone for TokioTlsConnector`
+
+- <span id="tokiotlsconnector-clone"></span>`fn clone(&self) -> TokioTlsConnector` — [`TokioTlsConnector`](#tokiotlsconnector)
 
 ##### `impl TlsConnector<TokioIo<TcpStream>> for TokioTlsConnector`
 
@@ -364,28 +356,24 @@ UDP socket interface wrapping a native Tokio UdpSocket.
 ### `build_unsafe_client_config`
 
 ```rust
-fn build_unsafe_client_config() -> std::sync::Arc<rustls::ClientConfig>
+fn build_unsafe_client_config(versions: crate::io::TlsVersions) -> std::sync::Arc<rustls::ClientConfig>
 ```
 
-Builds an unsafe `ClientConfig` with default TLS version negotiation (TLS 1.2 + 1.3).
+**Types:** [`TlsVersions`](../index.md#tlsversions)
 
-### `build_unsafe_client_config_with_options`
+Builds a `ClientConfig` that accepts any certificate — see [`NoCertificateVerification`](#nocertificateverification).
 
-```rust
-fn build_unsafe_client_config_with_options(force_tls_1_2: bool) -> std::sync::Arc<rustls::ClientConfig>
-```
-
-Builds an unsafe `ClientConfig` with configurable TLS version constraints.
-
-When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only. This is
-required for P2S and X2D models whose embedded vsFTPd servers fail on TLS 1.3
-session tickets [REF-FTPS-CONN].
+[`TlsVersions::Tls12Only`](../index.md#tlsversions) is required for FTPS on P2S and X2D
+([`ModelQuirks::requires_ftps_tls_1_2`](../../quirks/index.md#modelquirks))
+[REF-FTPS-CONN].
 
 ### `build_verified_client_config`
 
 ```rust
-fn build_verified_client_config(ca_certs: impl IntoIterator<Item = rustls_pki_types::CertificateDer<'static>>, client_auth: Option<(Vec<rustls_pki_types::CertificateDer<'static>>, rustls_pki_types::PrivateKeyDer<'static>)>) -> Result<std::sync::Arc<rustls::ClientConfig>, rustls::Error>
+fn build_verified_client_config(ca_certs: impl IntoIterator<Item = rustls_pki_types::CertificateDer<'static>>, client_auth: Option<(Vec<rustls_pki_types::CertificateDer<'static>>, rustls_pki_types::PrivateKeyDer<'static>)>, versions: crate::io::TlsVersions) -> Result<std::sync::Arc<rustls::ClientConfig>, rustls::Error>
 ```
+
+**Types:** [`TlsVersions`](../index.md#tlsversions)
 
 Builds a `ClientConfig` that verifies the printer's certificate against provided CA certs.
 
@@ -396,15 +384,5 @@ let ca = CertificateDer::from_pem_file("ca.pem")?;
 ```
 
 `client_auth`: pass `Some((cert_chain, key))` for mutual TLS, `None` for server-only verification.
-
-### `build_verified_client_config_with_options`
-
-```rust
-fn build_verified_client_config_with_options(ca_certs: impl IntoIterator<Item = rustls_pki_types::CertificateDer<'static>>, client_auth: Option<(Vec<rustls_pki_types::CertificateDer<'static>>, rustls_pki_types::PrivateKeyDer<'static>)>, force_tls_1_2: bool) -> Result<std::sync::Arc<rustls::ClientConfig>, rustls::Error>
-```
-
-Builds a verified `ClientConfig` with configurable TLS version constraints.
-
-When `force_tls_1_2` is true, negotiation is restricted to TLS 1.2 only (required
-for FTPS data channels on P2S/X2D models [REF-FTPS-CONN]).
+See [`build_unsafe_client_config`](#build-unsafe-client-config) for when `versions` must be [`TlsVersions::Tls12Only`](../index.md#tlsversions).
 

@@ -10,11 +10,8 @@
 crate. It covers network failures, TLS handshake issues, protocol violations,
 authentication rejections, timeouts, and model capability mismatches.
 
-Under `std`, variants get `Display`/`Error` impls via `thiserror`. Under `no_std`,
-a manual `Display` impl delegates to `format_error_no_std`. `test_display_consistency`
-(below) runs under the default `std` feature set and verifies the `thiserror`-generated
-`std` impl agrees with `format_error_no_std` for every variant — the only piece left
-uncovered is the trivial `#[cfg(not(feature = "std"))] impl Display` wiring itself.
+One `core::fmt::Display` and one `core::error::Error` impl serve every target: `std`,
+`alloc`-only and embassy alike.
 
 ## Quick Reference
 
@@ -45,9 +42,8 @@ enum Error {
 
 Unified error type for the `bambino` crate.
 
-This enum wraps all protocol, serialization, and transport-level failures
-with localized error contexts. Under `std` environments, standard formatting
-and source error tracing are derived automatically via `thiserror`.
+This enum wraps all protocol, serialization, and transport-level failures. `Network` and
+`TimerFailure` return the wrapped I/O error from `source()`.
 
 #### Variants
 
@@ -139,9 +135,11 @@ and source error tracing are derived automatically via `thiserror`.
 
 ##### `impl Display for Error`
 
-- <span id="error-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
+- <span id="error-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
 ##### `impl Error for Error`
+
+- <span id="error-error-source"></span>`fn source(&self) -> Option<&dyn core::error::Error>`
 
 ##### `impl ToString for Error`
 

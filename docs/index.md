@@ -22,16 +22,13 @@ code never touches `tokio::` or `std::net::` directly.
 ```rust,ignore
 use bambino::client::{PrinterClient, TelemetryEvent};
 use bambino::identity::PrinterIdentity;
-use bambino::io::tokio::{
-    TokioRawStreamFactory, TokioTlsConnector, TokioTimer,
-    build_unsafe_client_config,
-};
+use bambino::io::TlsVersions;
+use bambino::io::tokio::{TokioRawStreamFactory, TokioTlsConnector, TokioTimer};
 
 async fn example() -> Result<(), bambino::Error> {
     // Printer certs chain to BBL's private CA, absent from OS trust stores;
     // skip verification unless you can supply that CA
-    let tls_config = build_unsafe_client_config();
-    let tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(tls_config));
+    let tls = TokioTlsConnector::unverified(TlsVersions::Default);
 
     // Create a lazy client — MQTT connects automatically on first use
     let mut printer = PrinterClient::new(
@@ -63,10 +60,10 @@ async fn example() -> Result<(), bambino::Error> {
 
 | Flag | What it enables |
 |------|-----------------|
-| `std` | Standard library, `thiserror`, `serde`/`serde_json` std features |
+| `std` | Standard library, `serde`/`serde_json` std features |
 | `tokio` | Tokio runtime, rustls TLS (implies `std`) |
 | `cli` | The `bambino-cli` binary (implies `tokio`) |
-| `esp-idf` | ESP-IDF system services for embedded Linux-like targets (implies `std`) |
+| `esp-idf` | ESP-IDF (`esp-idf-svc`) on ESP32 FreeRTOS targets (implies `std`) |
 | `embassy` | Embassy async runtime, mbedtls-rs TLS, embassy-net (implies `alloc`; pair with `default-features = false` / `--no-default-features` for a no_std build, since features only add) |
 | `alloc` | Heap allocation for `no_std` environments (String, Vec, format!) |
 
@@ -236,9 +233,8 @@ enum Error {
 
 Unified error type for the `bambino` crate.
 
-This enum wraps all protocol, serialization, and transport-level failures
-with localized error contexts. Under `std` environments, standard formatting
-and source error tracing are derived automatically via `thiserror`.
+This enum wraps all protocol, serialization, and transport-level failures. `Network` and
+`TimerFailure` return the wrapped I/O error from `source()`.
 
 #### Variants
 
@@ -330,9 +326,11 @@ and source error tracing are derived automatically via `thiserror`.
 
 ##### `impl Display for Error`
 
-- <span id="error-display-fmt"></span>`fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result`
+- <span id="error-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
 
 ##### `impl Error for Error`
+
+- <span id="error-error-source"></span>`fn source(&self) -> Option<&dyn core::error::Error>`
 
 ##### `impl ToString for Error`
 

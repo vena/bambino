@@ -38,6 +38,10 @@ Raw (pre-TLS) connection factory for the Embassy network stack, dialing on an [`
 `Copy`, so one pool can back the factories for every channel. See [`EmbassySocketPool`](#embassysocketpool) for
 setup, sizing, and how a dropped connection is ended.
 
+**IPv4 literals only.** `dial` rejects a hostname or an IPv6 address with
+[`SocketError::InvalidInput`]: this crate doesn't enable embassy-net's IPv6 stack or a DNS
+resolver, and Bambu printers are addressed by IPv4 in practice.
+
 #### Implementations
 
 - <span id="embassyrawstreamfactory-new"></span>`fn new(pool: &'static EmbassySocketPool) -> Self` — [`EmbassySocketPool`](#embassysocketpool)
@@ -230,7 +234,7 @@ is already live). The caller constructs that single `::mbedtls_rs::Tls` once at 
 (e.g. behind a `static_cell::StaticCell`, like [`EmbassySocketBuffers`](#embassysocketbuffers) below — see the
 README's Embassy setup example) and passes a
 `TlsReference` — a cheap `Copy` handle, not the `Tls` itself —
-into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
+into each `EmbassyTlsConnector::unverified()`/`verified()` call. This lets MQTT's connector and FTPS's
 control/data connectors all share the one instance concurrently.
 
 **No caller-supplied buffers.** `mbedtls-rs`
@@ -253,26 +257,33 @@ own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Call
 a bounded connect must race `EmbassyTlsConnector::connect` against
 `embassy_time::with_timeout` themselves.
 
+`Clone` is cheap (`mbedtls-rs` reference-counts a parsed `Certificate`), so one connector can
+serve every `PrinterClient` channel.
+
 #### Implementations
 
-- <span id="embassytlsconnector-new"></span>`fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self`
+- <span id="embassytlsconnector-unverified"></span>`fn unverified(tls: ::mbedtls_rs::TlsReference<'a>) -> Self`
 
-  Creates a new connector against the single active `Tls` instance
-  (via its `TlsReference`), defaulting to no certificate
-  verification — matching this crate's existing unsafe-by-default convention on other
-  platforms (`build_unsafe_client_config`), since Bambu printer certs chain to a private
-  BBL CA that no OS trust store carries.
+  A connector against the single active `Tls` instance that never checks the printer's certificate.
 
-- <span id="embassytlsconnector-with-ca-chain"></span>`fn with_ca_chain(self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self`
+  The name matches `TokioTlsConnector::unverified` and `EspIdfTlsConnector::unverified`, so
+  skipping verification is always spelled out. Bambu printer certs chain to a private BBL CA
+  that no OS trust store carries, which is why this exists; prefer [`Self::verified`](#embassytlsconnector) when
+  you hold that CA.
 
-  Enables server certificate verification against the given CA chain. Without this,
-  the connector never checks the printer's certificate.
+- <span id="embassytlsconnector-verified"></span>`fn verified(tls: ::mbedtls_rs::TlsReference<'a>, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self`
+
+  A connector that verifies the printer's certificate against `ca_chain`.
 
 - <span id="embassytlsconnector-with-client-credentials"></span>`fn with_client_credentials(self, creds: ::mbedtls_rs::Credentials<'a>) -> Self`
 
   Supplies client credentials for mutual TLS (mTLS).
 
 #### Trait Implementations
+
+##### `impl Clone for EmbassyTlsConnector<'a>`
+
+- <span id="embassytlsconnector-clone"></span>`fn clone(&self) -> EmbassyTlsConnector<'a>` — [`EmbassyTlsConnector`](#embassytlsconnector)
 
 ##### `impl<RawStream> TlsConnector<RawStream> for EmbassyTlsConnector<'a>`
 

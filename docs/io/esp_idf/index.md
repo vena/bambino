@@ -13,7 +13,6 @@ our transport-agnostic client traits under Espressif's Rust standard library.
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`EspIdfIoError`](#espidfioerror) | struct | Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly. |
 | [`EspIdfRawStreamFactory`](#espidfrawstreamfactory) | struct | Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's lazy connect and FTPS's passive data channel. |
 | [`EspIdfTcpStream`](#espidftcpstream) | struct | Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound). |
 | [`EspIdfTimer`](#espidftimer) | struct | Async timer utilizing the ESP-IDF high-resolution timer service. |
@@ -22,32 +21,6 @@ our transport-agnostic client traits under Espressif's Rust standard library.
 | [`EspIdfUdpSocket`](#espidfudpsocket) | struct | UDP Socket implementation designed for ESP-IDF's BSD Socket integration. |
 
 ## Types
-
-### `EspIdfIoError`
-
-```rust
-struct EspIdfIoError();
-```
-
-Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
-
-#### Trait Implementations
-
-##### `impl Debug for EspIdfIoError`
-
-- <span id="espidfioerror-debug-fmt"></span>`fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result`
-
-##### `impl Display for EspIdfIoError`
-
-- <span id="espidfioerror-display-fmt"></span>`fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result`
-
-##### `impl Error for EspIdfIoError`
-
-- <span id="espidfioerror-error-source"></span>`fn source(&self) -> Option<&dyn std::error::Error>`
-
-##### `impl ToString for EspIdfIoError`
-
-- <span id="espidfioerror-tostring-to-string"></span>`fn to_string(&self) -> String`
 
 ### `EspIdfRawStreamFactory`
 
@@ -121,13 +94,19 @@ give up ownership of the fd first or the fd would be double-closed.
   (mDNS `.local`, A + AAAA) whose first entry is unreachable falls through to the next
   instead of failing the dial.
 
+  **A hostname blocks the calling task while it resolves.** `to_socket_addrs` calls lwIP's
+  synchronous `getaddrinfo`, which has no `.await` point, so the executor task — and every
+  future on it, including the outer connect-timeout race — stalls until DNS answers or gives
+  up. How long that can take on hardware hasn't been measured. An IP literal is only parsed
+  and never blocks; resolve a hostname yourself beforehand if the task must stay responsive.
+
 #### Trait Implementations
 
 ##### `impl AsyncIo for EspIdfTcpStream`
 
 ##### `impl ErrorType for EspIdfTcpStream`
 
-- <span id="espidftcpstream-errortype-type-error"></span>`type Error = EspIdfIoError`
+- <span id="espidftcpstream-errortype-type-error"></span>`type Error = StdIoError`
 
 ##### `impl RawStreamFactory<EspIdfTcpStream> for EspIdfRawStreamFactory`
 
@@ -213,10 +192,8 @@ Built on `esp_idf_svc::tls::EspTls` via `EspTls::adopt()` (a spike when this bac
 written confirmed it needs no raw mbedTLS FFI to wrap an existing fd) instead of
 `EspTls::new()` + `connect()`.
 
-**No way to force TLS 1.2.** Unlike `io/tokio.rs`'s
-`build_verified_client_config_with_options(..., force_tls_1_2: bool)` /
-`build_unsafe_client_config_with_options(force_tls_1_2: bool)`, this connector has no
-equivalent knob: `esp_idf_svc::tls::Config` (0.53.0, as vendored) exposes no min/max TLS
+**No way to force TLS 1.2.** Unlike `io/tokio.rs`'s `TlsVersions::Tls12Only`, this connector
+has no equivalent knob: `esp_idf_svc::tls::Config` (0.53.0, as vendored) exposes no min/max TLS
 version field, and the mbedTLS accessor functions that would set it
 (`mbedtls_ssl_conf_min_tls_version`/`mbedtls_ssl_conf_max_tls_version`) are absent from
 this ESP-IDF build's actual bindgen output (confirmed by inspecting the generated
@@ -242,9 +219,12 @@ separate matter and both embedded backends can do it — embassy via
 negotiates 1.2 of its own accord, and `with_ftps_allow_unverified_tls_1_2(true)` is needed
 only against a peer that insists on 1.3.
 
+`Clone` shares one copy of the certificates, so `PrinterClient`'s MQTT, FTPS and camera
+channels can take clones of one connector instead of each holding its own PEM bundle.
+
 #### Implementations
 
-- <span id="espidftlsconnector-new"></span>`fn new() -> Self`
+- <span id="espidftlsconnector-unverified"></span>`fn unverified() -> Self`
 
   Creates a connector that skips server certificate verification.
 
@@ -268,11 +248,10 @@ only against a peer that insists on 1.3.
 
   Prefer [`Self::with_certs`](#espidftlsconnector) wherever the caller can supply the
   printer's CA — it needs no sdkconfig change and actually verifies the peer.
-  The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
-  bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
-  `.with_connect_timeout(d)`.
+  The handshake has no deadline of its own unless `.with_connect_timeout(d)` sets one;
+  `PrinterClient::with_connect_timeout` bounds it from outside.
 
-- <span id="espidftlsconnector-with-certs"></span>`fn with_certs(ca_certs: impl IntoIterator<Item = Vec<u8>>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Self`
+- <span id="espidftlsconnector-with-certs"></span>`fn with_certs(ca_certs: impl IntoIterator<Item = Vec<u8>>, client_auth: Option<(Vec<u8>, Vec<u8>)>) -> Result<Self, crate::Error>` — [`Error`](../../error/index.md#error)
 
   Creates a connector that verifies the server certificate against one or more CA certs.
   The supplied CAs are the sole trust anchors: ESP-IDF's bundled public root CAs are
@@ -292,18 +271,23 @@ only against a peer that insists on 1.3.
   `crate::io::der_certs_to_pem_bundle`. Passing PEM bytes in is still wrong and will
   fail the handshake, now with the extra confusion of being base64'd a second time.
 
-  An empty `ca_certs` yields an anchor-less connector, behaving exactly like
-  [`Self::new`](#espidftlsconnector) -- verification is disabled outright via a `crt_bundle_attach` hook rather
-  than failing later inside the handshake; see that constructor's doc comment (GitHub
-  issue #168).
+  **Fails with [`Error::InvalidArgument`](../../error/index.md#error)** on an empty
+  `ca_certs` or one where no anchor parses, rather than quietly falling back to an
+  unverified connector: an anchor load that came back empty (missing file, wrong partition)
+  must not turn verification off. Use [`Self::unverified`](#espidftlsconnector) to skip verification on purpose.
+  A store where only some anchors parse is accepted and logged at error level.
 
   `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
   `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
 
 - <span id="espidftlsconnector-with-connect-timeout"></span>`fn with_connect_timeout(self, connect_timeout: core::time::Duration) -> Self`
 
-  Overrides the default handshake deadline, which bounds how long the poll loop keeps
-  retrying rather than how long any single attempt may take.
+  Sets a handshake deadline for direct use of this connector; disabled by default.
+
+  Under `PrinterClient`, leave it unset: `PrinterClient::with_connect_timeout` already bounds
+  the dial and handshake together, and a shorter inner deadline would silently cap it. The
+  deadline bounds how long the poll loop keeps retrying rather than how long any single
+  attempt may take.
   The deadline is checked *between* iterations, so it cannot preempt a stall *inside*
   one: the `EspTls::negotiate` FFI call is not interruptible from this task once entered.
   `connect` pins `Config::timeout_ms = 1` so each call advances the handshake for at most
@@ -318,13 +302,13 @@ only against a peer that insists on 1.3.
   deadline entirely, matching `set_command_timeout`'s "0 disables" convention
   and `client::connect::with_connect_timeout`'s precedent — otherwise the very
   first would-block poll would immediately exceed a zero-length budget.
-  Non-consuming — chain onto `new()`/`with_certs()`.
+  Chain onto `unverified()`/`with_certs()`.
 
 #### Trait Implementations
 
-##### `impl Default for EspIdfTlsConnector`
+##### `impl Clone for EspIdfTlsConnector`
 
-- <span id="espidftlsconnector-default"></span>`fn default() -> Self`
+- <span id="espidftlsconnector-clone"></span>`fn clone(&self) -> EspIdfTlsConnector` — [`EspIdfTlsConnector`](#espidftlsconnector)
 
 ##### `impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector`
 
@@ -398,7 +382,7 @@ UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
   have no pbuf to hand this datagram. That surfaces as `ERR_MEM`/`ERR_BUF`, which lwIP's
   `err_to_errno` table maps to `ENOMEM`/`ENOBUFS` (`lwip/src/api/err.c`) — *not* to
   `EWOULDBLOCK`, which that table reserves for `ERR_TIMEOUT`/`ERR_WOULDBLOCK`. Both land in
-  `map_std_io_error`'s `_` arm as `SocketError::Other`, and `DiscoveryEngine::broadcast_search`
+  `map_std_io_error` as `SocketError::ResourceExhausted` and `SocketError::Other`, and `DiscoveryEngine::broadcast_search`
   errors out when its multicast and broadcast sends both fail — which a single pbuf shortage
   makes likely, since they go back to back. Discovery then aborted on a condition that would
   have cleared on its own milliseconds later.
@@ -411,10 +395,13 @@ UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
 - <span id="espidfudpsocket-asyncudpsocket-recv-from"></span>`async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError>` — [`SocketError`](../index.md#socketerror)
 
   Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.
-  `TokioUdpSocket::recv_from` achieves the same pacing via a 100ms timeout wrapping a
-  genuinely-blocking OS call; this platform has no async socket-readiness primitive for an
-  arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment for why), so pacing is applied explicitly
-  here instead.
+
+  Not the same mechanism as `TokioUdpSocket::recv_from`, and the numbers differ on purpose:
+  tokio *waits* up to `UDP_RECV_TIMEOUT_MS` (100 ms) for a datagram and returns as soon as one
+  arrives, while this returns `TimedOut` after one empty read plus a 15 ms sleep. This platform
+  has no async socket-readiness primitive for an arbitrary fd (see `TLS_POLL_INTERVAL`'s doc
+  comment), so it cannot wait the way tokio does. Discovery depends on neither value: it
+  treats `TimedOut` as "nothing yet" and keeps polling until its own window closes.
 
 ##### `impl BindableUdpSocket for EspIdfUdpSocket`
 
