@@ -710,11 +710,11 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
     let mut entries = 0;
     for n in 1..=H_FTPS_CONNECTS {
         ctx.wdt.feed();
-        // A fresh client each time: `disconnect_storage` consumes the FTPS configuration, so a
-        // client connects storage once.
+        // A fresh client each time. This predates `disconnect_ftps` keeping the FTPS
+        // configuration for a redial (#448); one client would now work too.
         let mut p = printer!(ctx);
         {
-            let storage = call(&alloc::format!("FTPS connect {n}"), p.storage()).await?;
+            let storage = call(&alloc::format!("FTPS connect {n}"), p.ftps()).await?;
             entries = call(
                 &alloc::format!("list / {n}"),
                 storage.list_directory("/", listing_time()),
@@ -723,8 +723,8 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
             .len();
         }
         call(
-            &alloc::format!("disconnect_storage {n}"),
-            p.disconnect_storage(),
+            &alloc::format!("disconnect_ftps {n}"),
+            p.disconnect_ftps(),
         )
         .await?;
     }
@@ -743,7 +743,7 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
         outcome.camera
     );
     let all_ok = matches!(outcome.mqtt, Some(Ok(()))) && matches!(outcome.ftps, Some(Ok(())));
-    let _ = call("disconnect_storage", p.disconnect_storage()).await;
+    let _ = call("disconnect_ftps", p.disconnect_ftps()).await;
     let _ = call("disconnect_mqtt", p.disconnect_mqtt()).await;
     drop(p);
 
@@ -886,7 +886,7 @@ async fn connect_ftps(ctx: &mut Ctx) -> Result<Ftps, String> {
 }
 
 #[cfg(not(feature = "control"))]
-async fn disconnect_ftps(mut ftps: Ftps) {
+async fn disconnect_ftps(ftps: Ftps) {
     let _ = embassy_time::with_timeout(CALL_BOUND, ftps.disconnect()).await;
 }
 

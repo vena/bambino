@@ -105,9 +105,9 @@ where
     /// printer sees an orderly teardown rather than a truncated stream (GitHub issue #293).
     /// Failure there is logged and ignored: the connection is going away either way.
     ///
-    /// Idempotent, and unlike [`disconnect_storage()`](Self::disconnect_storage) this *can* be
-    /// reconnected — `ensure_camera()` never consumes `camera_config` (nothing is moved out of
-    /// it), so the next camera call redials.
+    /// Idempotent, and reconnectable like [`disconnect_ftps()`](Self::disconnect_ftps):
+    /// `ensure_camera()` never consumes `camera_config` (nothing is moved out of it), so the
+    /// next camera call redials.
     pub async fn disconnect_camera(&mut self) -> Result<(), Error> {
         if let Some((tls, _)) = self.camera_config.as_ref()
             && let Some(mut camera) = self.camera.take()

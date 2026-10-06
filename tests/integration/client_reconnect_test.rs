@@ -264,7 +264,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     // tick_zombie_check()-detected zombie, a transport error) had no supported recovery
     // path — ensure_mqtt()'s is_some() short-circuit kept handing back the same broken
     // stream forever, unlike disconnect_camera()/attach_camera() and
-    // disconnect_storage()/attach_storage(). Verify disconnect clears the slot and attach
+    // disconnect_ftps()/attach_ftps(). Verify disconnect clears the slot and attach
     // reinstalls a fresh connected client that telemetry keeps working through.
     let (client_stream_a, mut server_stream_a) = tokio::io::duplex(8192);
     let broker_task_a = tokio::spawn(async move {
@@ -352,7 +352,7 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
 
     for attempt in 1..=2 {
-        let result = client.storage().await;
+        let result = client.ftps().await;
         assert!(
             matches!(result, Err(Error::Network(_))),
             "attempt {attempt}: expected the dial failure to surface as Network, not \
@@ -364,11 +364,9 @@ async fn test_ensure_ftps_retries_after_failed_dial() {
 }
 
 #[tokio::test]
-async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
-    // `disconnect_storage()` exists to clear a poisoned FTPS client: it must leave
-    // `self.ftps` as `None` afterward, so a later `storage()` call falls through to
-    // `ensure_ftps()`'s existing "FTPS not configured" error instead of ever handing back the
-    // poisoned client that `FtpsClient::disconnect()` leaves behind.
+async fn test_disconnect_ftps_clears_ftps_for_clean_reconnect() {
+    // A poisoned FTPS session must not be handed back: `ftps()` disconnects it, its parts go
+    // back into the FTPS config, and the next call redials (#448).
     //
     // The FTPS client is genuinely poisoned first, via a control-channel transport failure
     // (`.claude/rules/ftps-poisoning.md`) — without that this test only reproved that
@@ -401,88 +399,82 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     .with_ftps(DummyTlsConnector, factory, DummyTimer);
 
     let ftps = client
-        .storage()
+        .ftps()
         .await
-        .expect("first storage() call should connect via the mock FTPS handshake");
+        .expect("first ftps() call should connect via the mock FTPS handshake");
     assert!(matches!(
         ftps.delete_file("/model/job.3mf").await,
         Err(Error::Network(_))
     ));
-    // Poisoned now: `storage()` still hands back this same instance (`ensure_ftps()`'s
-    // `is_some()` short-circuit), and every operation through it fails.
-    let through_poisoned = client
-        .storage()
+    // Poisoned now: it no longer counts as connected.
+    assert!(!client.is_ftps_connected());
+    server_handle.await.expect("Mock server panicked");
+
+    // The next `ftps()` replaces the poisoned session: `disconnect_ftps()` returns its parts to
+    // the FTPS config, and the same factory dials a fresh control stream.
+    let (fresh_control, fresh_server_control) = tokio::io::duplex(8192);
+    *data_container.lock().await = Some(TokioIo::new(fresh_control));
+    let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
+        fresh_server_control,
+        data_container.clone(),
+    ));
+    client
+        .ftps()
         .await
-        .expect("storage() short-circuits to the existing, now-poisoned client")
-        .get_file_size("/model/job.3mf")
-        .await;
-    assert!(
-        matches!(through_poisoned, Err(Error::ProtocolViolation(_))),
-        "a poisoned FTPS client must keep failing until it is replaced, got {:?}",
-        through_poisoned
-    );
+        .expect("ftps() should redial over the poisoned session");
     assert!(client.is_ftps_connected());
 
     client
-        .disconnect_storage()
+        .disconnect_ftps()
         .await
-        .expect("disconnect_storage should succeed");
-    assert!(
-        !client.is_ftps_connected(),
-        "disconnect_storage must clear self.ftps"
-    );
+        .expect("disconnect_ftps should succeed");
+    assert!(!client.is_ftps_connected());
+    fresh_handle.await.expect("Fresh mock server panicked");
+}
 
-    // ftps_config was already consumed by the first storage() call, so this must surface
-    // the clear "not configured" error, not a stale/poisoned reconnect.
-    let result = client.storage().await;
-    assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
-        "expected ProtocolViolation (\"FTPS not configured\") after disconnect_storage, got {:?}",
-        result.map(|_| ())
-    );
-
-    server_handle.await.expect("Mock server panicked");
-
-    // The documented recovery path: a freshly connected client installed via attach_storage()
-    // works, proving disconnect_storage() left the slot genuinely reusable rather than just
-    // having consumed a one-shot config.
+#[tokio::test]
+async fn test_attach_ftps_installs_a_connected_session() {
     let (fresh_control, fresh_server_control) = tokio::io::duplex(8192);
     let fresh_container = Arc::new(Mutex::new(None));
     let fresh_handle = tokio::spawn(mock_ftps::run_mock_server_disconnect(
         fresh_server_control,
         fresh_container.clone(),
     ));
-
+    let identity = PrinterIdentity {
+        ip: "127.0.0.1".into(),
+        serial: SERIAL.into(),
+        access_code: "12345678".into(),
+        model: PrinterModel::P1S,
+    };
     let fresh_ftps = FtpsClient::connect(
         TokioIo::new(fresh_control),
         DummyTlsConnector,
         MockDataStreamFactory::new(fresh_container),
-        PrinterIdentity {
-            ip: "127.0.0.1".into(),
-            serial: SERIAL.into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
+        identity.clone(),
         DummyTimer,
         bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("fresh FTPS handshake failed");
 
-    client.attach_storage(fresh_ftps).await;
+    let mut client = PrinterClient::new(DummyTls, DummyFactory, identity).with_ftps(
+        DummyTlsConnector,
+        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
+        DummyTimer,
+    );
+    client.attach_ftps(fresh_ftps).await;
     assert!(client.is_ftps_connected());
     client
-        .disconnect_storage()
+        .disconnect_ftps()
         .await
-        .expect("disconnect_storage on the reattached session should succeed");
-
+        .expect("disconnect_ftps on the attached session should succeed");
     fresh_handle.await.expect("Fresh mock server panicked");
 }
 
 #[tokio::test]
 async fn test_camera_trio_unconfigured_error() {
     // No test exercised the camera trio's "not configured" branch — the same case
-    // FTPS's disconnect_storage/re-storage() test above covers for the FTPS trio
+    // FTPS's disconnect_ftps/re-ftps() test above covers for the FTPS trio
     // (see "FTPS not configured" a few tests up). A PrinterClient that never called
     // .with_camera()/.attach_camera() must fail read_camera_frame()/camera() with a clear
     // ProtocolViolation, not a panic or a misleading dial-level error.

@@ -316,7 +316,7 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
     }
 }
 
-/// An [`FtpsClient`](crate::ftps::FtpsClient) on the tokio backend, as `PrinterClient::storage()` hands it out with `TokioTimer`.
+/// An [`FtpsClient`](crate::ftps::FtpsClient) on the tokio backend, as `PrinterClient::ftps()` hands it out with `TokioTimer`.
 pub type TokioFtpsClient = crate::ftps::FtpsClient<
     TokioIo<::tokio::net::TcpStream>,
     TokioTlsConnector,

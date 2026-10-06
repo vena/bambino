@@ -758,7 +758,7 @@ pub trait TlsConnector<RawStream: AsyncIo> {
     /// Sends the TLS `close_notify` alert, shutting the session down in an orderly way.
     ///
     /// Called by every teardown path in this crate (`PrinterClient::disconnect_mqtt`/
-    /// `disconnect_storage`/`disconnect_camera`, `FtpsClient::disconnect`, and the end of each
+    /// `disconnect_ftps`/`disconnect_camera`, `FtpsClient::disconnect`, and the end of each
     /// FTPS data transfer) immediately before the stream is dropped. Without it the peer sees a
     /// truncated connection rather than a clean shutdown, which makes a real truncation attack
     /// indistinguishable from a normal teardown for anyone inspecting the wire.

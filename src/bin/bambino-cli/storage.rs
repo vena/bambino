@@ -100,14 +100,14 @@ pub async fn run(
         bambino::ftps::FTPS_PORT
     );
 
-    let client = printer.storage().await?;
+    let client = printer.ftps().await?;
 
     println!("FTPS connection authenticated. Executing operational action...\n");
 
     // Every arm below used to propagate via `?` directly out of `run()`, bypassing
-    // the `client.disconnect()` at the bottom on any error — skipping FTPS's graceful `QUIT`
+    // the `disconnect_ftps()` at the bottom on any error — skipping FTPS's graceful `QUIT`
     // on every failure path except the empty-listing early return. Capturing the dispatch
-    // result in a variable instead lets `disconnect()` run unconditionally before the error
+    // result in a variable instead lets `disconnect_ftps()` run unconditionally before the error
     // (if any) is propagated.
     let result: Result<(), CliError> = async {
         match action {
@@ -201,7 +201,7 @@ pub async fn run(
     }
     .await;
 
-    client.disconnect().await;
+    let _ = printer.disconnect_ftps().await;
     result
 }
 

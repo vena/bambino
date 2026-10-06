@@ -86,7 +86,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
     ));
 
     let (connector, captured_host) = HostCapturingTlsConnector::new();
-    let mut client = FtpsClient::connect(
+    let client = FtpsClient::connect(
         TokioIo::new(client_control),
         connector,
         factory,
@@ -289,7 +289,7 @@ async fn test_ftps_connect_accepts_multiline_greeting() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+    let client = connect_client(client_control, factory, PrinterModel::P1S).await;
     client.disconnect().await;
 
     server_handle.await.expect("Mock server panicked");
@@ -939,7 +939,7 @@ async fn test_ftps_disconnect() {
         data_container.clone(),
     ));
 
-    let mut client = connect_client(client_control, factory, PrinterModel::P1S).await;
+    let client = connect_client(client_control, factory, PrinterModel::P1S).await;
 
     client.disconnect().await;
 
@@ -1061,7 +1061,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = FtpsClient::connect(
+    let client = FtpsClient::connect(
         TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
@@ -1141,7 +1141,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = FtpsClient::connect(
+    let client = FtpsClient::connect(
         TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
@@ -1206,7 +1206,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = FtpsClient::connect(
+    let client = FtpsClient::connect(
         TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
@@ -1237,7 +1237,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
         Arc::new(Mutex::new(None)),
     ));
 
-    let mut client = FtpsClient::connect(
+    let client = FtpsClient::connect(
         TokioIo::new(client_control),
         VersionReportingTlsConnector(None),
         factory,

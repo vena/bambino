@@ -94,7 +94,7 @@ async fn test_binary_camera_handshake_and_streaming() {
 /// `.with_camera()` lazy-connects on first `read_camera_frame()` call, dialing via the mock
 /// factory, passing through the (pass-through) mock TLS connector, authenticating, and
 /// reading a frame — analogous to
-/// `tests/client_test.rs::test_disconnect_storage_clears_ftps_for_clean_reconnect`'s
+/// `tests/client_test.rs::test_disconnect_ftps_clears_ftps_for_clean_reconnect`'s
 /// FTPS-through-`PrinterClient` pattern.
 #[tokio::test]
 async fn test_printer_client_camera_end_to_end() {

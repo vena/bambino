@@ -255,7 +255,7 @@ where
     ///
     /// Use this for test mocks or Embassy where the caller manages the MQTT connection,
     /// mirroring [`attach_camera()`](super::PrinterClient::attach_camera)/
-    /// [`attach_storage()`](super::PrinterClient::attach_storage).
+    /// [`attach_ftps()`](super::PrinterClient::attach_ftps).
     ///
     /// A session already in the slot is closed first, as
     /// [`disconnect_mqtt()`](Self::disconnect_mqtt) does. The new one then gets every step a
@@ -382,11 +382,11 @@ where
     /// type parameters. The FTPS [`TlsConnector`] is independent from MQTT's (some models
     /// require different TLS settings for FTPS, e.g. `TlsVersions::Tls12Only`). `timer` is
     /// constructed fresh by the caller (e.g. `TokioTimer::new()`) — `FtpsClient` owns it
-    /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::storage()` hands
+    /// independently of `PrinterClient`'s own `Timer`, since `PrinterClient::ftps()` hands
     /// out direct `&mut FtpsClient` access rather than mediating every FTPS call itself,
     /// so there's no call site to thread `self.timer` through the way MQTT/camera do.
     ///
-    /// Call [`disconnect_storage()`](Self::disconnect_storage) first on a client with a
+    /// Call [`disconnect_ftps()`](Self::disconnect_ftps) first on a client with a
     /// connected FTPS session: this builder is synchronous and cannot close it, so the session is
     /// dropped without `close_notify` (see `.claude/rules/tls-session-teardown.md`).
     #[must_use]
@@ -421,7 +421,7 @@ where
         assert!(
             !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
             "with_ftps() requires a real ip/access_code — this PrinterClient was built via \
-             from_mqtt(), which leaves both empty; use .with_attached_storage() instead"
+             from_mqtt(), which leaves both empty; use .with_attached_ftps() instead"
         );
         PrinterClient {
             mqtt: self.mqtt,
@@ -488,15 +488,18 @@ where
     /// raced against `self.connect_timeout_secs`. `ftps_config` is only consumed
     /// (`.take()`n) once that attempt has actually succeeded — a failed attempt,
     /// including a `connect_timeout_secs` timeout on a slow LAN, leaves it intact so the
-    /// next call retries instead of permanently reporting "not configured". Reconnecting
-    /// after a *successful* connect still requires a new `PrinterClient`.
+    /// next call retries instead of permanently reporting "not configured". A poisoned session
+    /// is disconnected first (its parts return to `ftps_config`) and redialed.
     pub(super) async fn ensure_ftps(&mut self) -> Result<(), Error> {
-        if self.ftps.is_some() {
-            return Ok(());
+        match &self.ftps {
+            Some(client) if client.is_poisoned() => self.disconnect_ftps().await?,
+            Some(_) => return Ok(()),
+            None => {}
         }
         let (tls, factory, timer) = self.ftps_config.as_ref().ok_or_else(|| {
             Error::ProtocolViolation(
-                "FTPS not configured — call .with_ftps(), .attach_storage() or .with_attached_storage()".into(),
+                "FTPS not configured — call .with_ftps(), .attach_ftps() or .with_attached_ftps()"
+                    .into(),
             )
         })?;
         let identity = &self.identity;
@@ -536,9 +539,11 @@ where
         self.ensure_ftps().await
     }
 
-    /// Returns whether the FTPS session is currently established.
+    /// Returns whether a usable FTPS session is established (one that a transport failure poisoned is not).
     pub fn is_ftps_connected(&self) -> bool {
-        self.ftps.is_some()
+        self.ftps
+            .as_ref()
+            .is_some_and(|client| !client.is_poisoned())
     }
 
     /// Establishes the camera connection if not already connected.
@@ -925,14 +930,14 @@ where
     /// The FTPS counterpart of [`with_attached_camera()`](Self::with_attached_camera), for a
     /// [`from_mqtt()`](PrinterClient::from_mqtt) client whose FTPS slots are placeholders.
     /// [`FtpsClient`] carries its own connector, so
-    /// [`disconnect_storage()`](Self::disconnect_storage) closes it as usual. No FTPS
-    /// configuration is kept, so after a disconnect [`storage()`](Self::storage) reports FTPS
+    /// [`disconnect_ftps()`](Self::disconnect_ftps) closes it as usual. No FTPS
+    /// configuration is kept, so after a disconnect [`ftps()`](Self::ftps) reports FTPS
     /// as not configured until a client is attached again.
     ///
-    /// Call [`disconnect_storage()`](Self::disconnect_storage) first on a client with a
+    /// Call [`disconnect_ftps()`](Self::disconnect_ftps) first on a client with a
     /// connected FTPS session, for the same reason as `.with_ftps()`.
     #[must_use]
-    pub fn with_attached_storage<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
+    pub fn with_attached_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
         self,
         ftps_client: FtpsClient<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>,
     ) -> PrinterClient<

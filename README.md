@@ -22,7 +22,7 @@ Huge shout-out to the projects in [Acknowledgements](#acknowledgements), without
 
 `PrinterClient` is the high-level interface; it wraps MQTT (and optionally FTPS) with model-aware safety checks: temperature clamping to hardware limits in the typed setters, raw G-code rejected when it homes unsafely or targets a heater past its limit, chamber heater capability guards, fan routing to the right controller, and automatic K-profile priming. Most users should start here.
 
-For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::storage().await?` provide direct access to the underlying `MqttClient` and `FtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
+For advanced use cases, `PrinterClient::mqtt().await?` and `PrinterClient::ftps().await?` provide direct access to the underlying `MqttClient` and `FtpsClient` respectively, auto-connecting if needed. Use `mqtt()` to send custom MQTT payloads, manage zombie detection, or inspect in-flight state. Note that raw payloads bypass `PrinterClient`'s model-aware safety checks.
 
 The underlying modules (`mqtt`, `ftps`, `discovery`, `camera`) are also public if you need direct protocol access; useful for custom integrations, firmware exploration, or when `PrinterClient` doesn't cover your use case.
 
@@ -113,7 +113,7 @@ let mut printer = PrinterClient::from_mqtt(mqtt_client, model)
 printer.request_pushall().await?;             // from_mqtt skips the connect-time pushall
 ```
 
-A `from_mqtt()` client's FTPS and camera slots are placeholders, so attach connections you made yourself with `.with_attached_storage(ftps_client)` and `.with_attached_camera(tls, stream)`. To replace a dead MQTT session later, use `printer.attach_mqtt(new_client).await`: it closes the old session and runs the same pushall and reseed a dialled connection gets.
+A `from_mqtt()` client's FTPS and camera slots are placeholders, so attach connections you made yourself with `.with_attached_ftps(ftps_client)` and `.with_attached_camera(tls, stream)`. To replace a dead MQTT session later, use `printer.attach_mqtt(new_client).await`: it closes the old session and runs the same pushall and reseed a dialled connection gets.
 
 ### Send commands
 
@@ -311,8 +311,8 @@ let ftps_tls = TokioTlsConnector::unverified(model.quirks().ftps_tls_versions())
 
 let mut printer = printer.with_ftps(ftps_tls, TokioRawStreamFactory, TokioTimer::new());
 
-// storage() auto-connects on first call
-let ftp = printer.storage().await?;
+// ftps() auto-connects on first call
+let ftp = printer.ftps().await?;
 let files = ftp.list_directory("/", printer_now).await?; // printer_now: ftps::CurrentDateTime
 ftp.upload_file("/model/print.3mf", &file_bytes).await?;
 let data = ftp.download_file("/timelapse/video.mp4").await?;
@@ -531,7 +531,7 @@ Note the `default-features = false`. The platform features are additive rather t
 
 All network I/O goes through abstract traits (`AsyncIo`, `TlsConnector`, `TimerProvider`, etc.) so library code is platform-agnostic. Platform-specific implementations live in `io::tokio`, `io::esp_idf`, and `io::embassy`.
 
-Every teardown path (`disconnect_mqtt`, `disconnect_storage`, `disconnect_camera`, `FtpsClient::disconnect`, and the end of each FTPS transfer) calls `TlsConnector::close`, which sends `close_notify` so the printer sees an orderly shutdown instead of a truncated connection. It defaults to a no-op, so a custom connector need not implement it; the tokio and Embassy backends do, and ESP-IDF keeps the default because `esp_idf_svc`'s `EspTls` exposes no shutdown seam. Closing is not the same as freeing: on Embassy, MbedTLS releases a session's memory when the stream is *dropped*, not when it is closed — ~48 KB per session on an ESP32-C6. Each of those teardown paths therefore drops the stream as well, so a disconnected client no longer holds a session's worth of heap.
+Every teardown path (`disconnect_mqtt`, `disconnect_ftps`, `disconnect_camera`, `FtpsClient::disconnect`, and the end of each FTPS transfer) calls `TlsConnector::close`, which sends `close_notify` so the printer sees an orderly shutdown instead of a truncated connection. It defaults to a no-op, so a custom connector need not implement it; the tokio and Embassy backends do, and ESP-IDF keeps the default because `esp_idf_svc`'s `EspTls` exposes no shutdown seam. Closing is not the same as freeing: on Embassy, MbedTLS releases a session's memory when the stream is *dropped*, not when it is closed — ~48 KB per session on an ESP32-C6. Each of those teardown paths therefore drops the stream as well, so a disconnected client no longer holds a session's worth of heap.
 
 **Embassy note:** `discover_devices()` is not available on Embassy. The convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
