@@ -166,7 +166,7 @@ pub struct PrinterClient<
     /// see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. Only meaningful for the `embassy`
     /// feature; on `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead.
     /// Default `false`.
-    pub(crate) ftps_allow_unverified_tls_1_2: bool,
+    pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
     pub(crate) camera_port: u16,
     pub(crate) camera_max_frame_size: Option<usize>,
     pub(crate) _mqtt_raw_io: PhantomData<MqttRawIO>,
@@ -226,7 +226,7 @@ where
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
-            ftps_allow_unverified_tls_1_2: false,
+            ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             _mqtt_raw_io: PhantomData,
@@ -293,7 +293,7 @@ where
             connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
             mqtt_port: crate::mqtt::MQTTS_PORT,
             ftps_port: crate::ftps::FTPS_PORT,
-            ftps_allow_unverified_tls_1_2: false,
+            ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
             camera_port: CameraProtocol::BinaryJpeg.default_port(),
             camera_max_frame_size: None,
             _mqtt_raw_io: PhantomData,

@@ -50,8 +50,8 @@ const WIFI_PASS: &str = env!("PROBE_WIFI_PASS");
 const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
 
-const MQTT_PORT: u16 = 8883;
-const FTPS_PORT: u16 = 990;
+use bambino::ftps::FTPS_PORT;
+use bambino::mqtt::MQTTS_PORT as MQTT_PORT;
 const CAMERA_PORT: u16 = 6000;
 
 const CYCLES: usize = 6;

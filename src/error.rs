@@ -55,6 +55,20 @@ pub enum Error {
     /// Upload verification failed — printer reported unexpected file size after transfer.
     DiskWriteFailure,
 
+    /// The printer's FTP server answered a command with a reply code other than the one it needed.
+    ///
+    /// Carries the server's own code and text, so a `550 No such file` and a `553 Permission
+    /// denied` stay distinguishable. The control channel is still in sync after this error (the
+    /// reply was read in full), so the client remains usable.
+    FtpReply {
+        /// The FTP command that was rejected (`"STOR"`, `"MKD"`, ...).
+        command: &'static str,
+        /// The server's three-digit reply code.
+        code: u16,
+        /// The server's reply text, after the code.
+        text: Cow<'static, str>,
+    },
+
     /// Emitted when requesting capabilities (e.g. door sensor checking on an open-frame printer) not present on the active model target.
     ModelMismatch(Cow<'static, str>),
 
@@ -113,6 +127,11 @@ impl core::fmt::Display for Error {
             Error::DiskWriteFailure => {
                 f.write_str("File upload verification failed (possible SD card write error)")
             }
+            Error::FtpReply {
+                command,
+                code,
+                text,
+            } => write!(f, "FTP {command} rejected: {code} {text}"),
             Error::ModelMismatch(s) => write!(f, "Model capability mismatch: {s}"),
             Error::Backpressure => {
                 f.write_str("Command queue saturated with unacknowledged commands")

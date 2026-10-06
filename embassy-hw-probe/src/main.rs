@@ -92,8 +92,8 @@ const PRINTER_IP: &str = env!("PROBE_PRINTER_IP");
 const PRINTER_SERIAL: &str = env!("PROBE_SERIAL");
 const ACCESS_CODE: &str = env!("PROBE_ACCESS_CODE");
 
-const MQTT_PORT: u16 = 8883;
-const FTPS_PORT: u16 = 990;
+use bambino::ftps::FTPS_PORT;
+use bambino::mqtt::MQTTS_PORT as MQTT_PORT;
 const CAMERA_PORT: u16 = 6000;
 
 const TX_SZ: usize = 2048;
@@ -885,7 +885,7 @@ async fn connect_ftps(ctx: &mut Ctx) -> Result<Ftps, String> {
             factory,
             identity(),
             EmbassyTimer,
-            false,
+            bambino::ftps::TlsVersionCheck::Enforce,
         ),
     )
     .await

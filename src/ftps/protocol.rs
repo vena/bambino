@@ -53,6 +53,13 @@ pub(crate) const FTP_PATH_DEL_CHAR: u8 = 0x7F;
 /// staying well under `FTP_MAX_RESPONSE_LINE_BYTES`.
 pub(crate) const FTP_LINE_READ_CHUNK_SIZE: usize = 512;
 
+/// Login step: no protection buffer (RFC 4217; TLS has no buffer size).
+pub(crate) const FTP_CMD_PBSZ: &str = "PBSZ 0";
+/// Login step: protect the data channel with TLS (skipped on plaintext-data-channel models).
+pub(crate) const FTP_CMD_PROT_PRIVATE: &str = "PROT P";
+/// Login step: binary transfers — RFC 959's ASCII default corrupts binary payloads.
+pub(crate) const FTP_CMD_TYPE_BINARY: &str = "TYPE I";
+
 /// Maximum bytes accepted from a single FTPS data-channel transfer (`list_directory`'s listing payload, `download_file`'s file payload) before `read_to_eof` aborts with `ProtocolViolation` rather than growing `out` without bound.
 /// Mirrors `CAMERA_FRAME_MAX_SIZE`'s rationale (`src/camera/binary.rs`) — unbounded allocation on a
 /// no_std/Embassy target hits the uncatchable `alloc_error_handler` abort, not a recoverable
@@ -162,7 +169,7 @@ pub(crate) async fn write_command<IO: AsyncIo, T: TimerProvider>(
 
 /// Races one control-channel write future against `deadline_ms`, mapping the timeout branch to
 /// `SocketError::TimedOut` and a write failure through [`map_embedded_io_error_kind`].
-async fn write_bounded<T: TimerProvider, E: embedded_io_async::Error>(
+pub(crate) async fn write_bounded<T: TimerProvider, E: embedded_io_async::Error>(
     write_fut: impl core::future::Future<Output = Result<(), E>>,
     timer: &T,
     deadline_ms: Option<u64>,

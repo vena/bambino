@@ -67,7 +67,7 @@ pub fn build_handshake_packet(access_code: &str) -> Result<[u8; CAMERA_HANDSHAKE
     packet[0..4].copy_from_slice(&CAMERA_HANDSHAKE_MAGIC.to_le_bytes());
     packet[4..8].copy_from_slice(&CAMERA_HANDSHAKE_COMMAND_ID.to_le_bytes());
 
-    let username = b"bblp";
+    let username = crate::identity::LAN_USERNAME.as_bytes();
     packet[CAMERA_USERNAME_OFFSET..CAMERA_USERNAME_OFFSET + username.len()]
         .copy_from_slice(username);
 

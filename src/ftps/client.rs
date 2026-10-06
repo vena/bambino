@@ -126,12 +126,8 @@ where
     /// Set once a control-channel desync is possible (see struct doc comment).
     /// Checked by every public method; once `true` the client must be discarded and reconnected.
     poisoned: bool,
-    /// Bypasses `require_tls_1_2_if_enforced`'s rejection when set — safe despite being
-    /// fail-open (see `src/ftps/CLAUDE.md`): `upload_file`'s and `download_file`'s symmetric
-    /// `SIZE` rechecks already catch a truncated/corrupted transfer regardless of this flag.
-    /// Only meaningful today for the `embassy` feature talking to P2S/X2D, where no available
-    /// TLS backend can honestly satisfy the exact-version check.
-    allow_unverified_tls_1_2: bool,
+    /// Re-applied to every data channel, not just the control channel — see [`TlsVersionCheck`].
+    tls_version_check: TlsVersionCheck,
     /// `read_line_raw`'s leftover-byte carry buffer, threaded through every `read_response` call made against `control_stream` for the life of this client — not reset per method call.
     /// This must live at least as long as `control_stream` itself: FTP servers may write two logically
     /// separate replies to one command (e.g. `150` immediately followed by `226`) without waiting for
@@ -157,6 +153,57 @@ fn control_stream_gone() -> Error {
     )
 }
 
+/// Whether [`FtpsClient`] checks the negotiated TLS version on models that need TLS 1.2 for FTPS.
+///
+/// On P2S and X2D ([`ModelQuirks::requires_ftps_tls_1_2`](crate::quirks::ModelQuirks::requires_ftps_tls_1_2))
+/// the client fails closed unless exactly TLS 1.2 was negotiated, on the control channel and on
+/// every data channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TlsVersionCheck {
+    /// Fail closed unless TLS 1.2 was negotiated, on models that require it. The default.
+    #[default]
+    Enforce,
+    /// Skip the check and log a warning.
+    ///
+    /// For a backend that cannot cap the peer at TLS 1.2 (`esp-idf`, `embassy`) talking to a
+    /// printer that offers 1.3. Safe despite failing open: `upload_file`'s and
+    /// `download_file`'s `SIZE` rechecks catch a truncated transfer regardless; `list_directory`
+    /// has only its line-framing check (see `src/ftps/CLAUDE.md`).
+    Bypass,
+}
+
+/// Returns the reply text when `reply`'s code is one of `ok`, else [`Error::FtpReply`] carrying the code and text.
+///
+/// The reply was read in full either way, so the client is not poisoned.
+fn expect_reply(verb: &'static str, reply: (u16, String), ok: &[u16]) -> Result<String, Error> {
+    let (code, text) = reply;
+    if ok.contains(&code) {
+        Ok(text)
+    } else {
+        Err(Error::FtpReply {
+            command: verb,
+            code,
+            text: text.into(),
+        })
+    }
+}
+
+/// Like [`expect_reply`] for `DELE`/`RMD`, but also accepts `550` as "already absent" and logs its text.
+///
+/// `550` is ambiguous in FTP (absent, denied, in use, non-empty directory); which of these the
+/// printer's server sends for each case is unverified, so the text is logged for diagnosis
+/// (GitHub issue #392).
+fn expect_reply_or_absent(verb: &'static str, reply: (u16, String), ok: u16) -> Result<(), Error> {
+    if reply.0 == FTP_FILE_NOT_FOUND {
+        log::debug!(
+            "FTPS {verb} got 550, treated as already absent: {:?}",
+            reply.1
+        );
+        return Ok(());
+    }
+    expect_reply(verb, reply, &[ok]).map(drop)
+}
+
 /// Bundles the args a login-step command shares across calls, so each call site only spells
 /// out what varies: the command, its log label, the expected reply code, and the rejection.
 struct LoginCtx<'a, IO, T> {
@@ -167,18 +214,17 @@ struct LoginCtx<'a, IO, T> {
     deadline_ms: Option<u64>,
 }
 
-/// Sends `cmd`, reads the reply, and maps a non-matching code via `on_reject()`. `on_reject` is
-/// a closure, not a fixed `ProtocolViolation` message, because a rejected PASS must return
-/// `Error::AccessDenied` instead.
-async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
+/// Sends `cmd`, reads the reply, and returns [`Error::FtpReply`] (labelled `verb`) unless its code is `expected_code`.
+///
+/// The caller maps a rejected `PASS` to [`Error::AccessDenied`] instead.
+async fn send_and_expect<IO: AsyncIo, T: TimerProvider>(
     ctx: &mut LoginCtx<'_, IO, T>,
     cmd: &str,
-    log_label: &str,
+    verb: &'static str,
     expected_code: u16,
-    on_reject: F,
 ) -> Result<(), Error> {
     write_command(ctx.stream, cmd, ctx.timer, ctx.deadline_ms).await?;
-    let (code, text) = read_response(
+    let reply = read_response(
         ctx.stream,
         ctx.buf,
         ctx.fill_buf,
@@ -186,11 +232,8 @@ async fn send_and_expect<IO: AsyncIo, T: TimerProvider, F: FnOnce() -> Error>(
         ctx.deadline_ms,
     )
     .await?;
-    log::debug!("FTPS {log_label} response: code={code} text={text:?}");
-    if code != expected_code {
-        return Err(on_reject());
-    }
-    Ok(())
+    log::debug!("FTPS {verb} response: code={} text={:?}", reply.0, reply.1);
+    expect_reply(verb, reply, &[expected_code]).map(drop)
 }
 
 impl<RawIO, Tls, Factory, FtpsTimer> FtpsClient<RawIO, Tls, Factory, FtpsTimer>
@@ -206,34 +249,35 @@ where
     /// Prior to issuing or evaluating any standard text commands, the raw connection socket must be
     /// wrapped in a secure TLS session immediately upon establishment. Explicit handshakes (such as `AUTH TLS`)
     /// are not utilized.
+    ///
+    /// `raw_control` must already be dialed to the printer's [`FTPS_PORT`](crate::ftps::FTPS_PORT).
+    /// `tls_version_check` is normally [`TlsVersionCheck::Enforce`]; see that type before
+    /// choosing `Bypass`.
     pub async fn connect(
         raw_control: RawIO,
         tls_connector: Tls,
         data_factory: Factory,
         identity: PrinterIdentity,
         timer: FtpsTimer,
-        allow_unverified_tls_1_2: bool,
+        tls_version_check: TlsVersionCheck,
     ) -> Result<Self, Error> {
         let (control_stream, fill_buf) = Self::connect_control_stream(
             raw_control,
             &tls_connector,
             &identity,
             &timer,
-            allow_unverified_tls_1_2,
+            tls_version_check,
         )
         .await?;
-        Ok(Self {
-            control_stream: Some(control_stream),
+        Ok(Self::from_control_stream(
+            control_stream,
             tls_connector,
             data_factory,
-            model: identity.model,
-            ip: identity.ip,
-            serial: identity.serial,
+            &identity,
             timer,
-            poisoned: false,
-            allow_unverified_tls_1_2,
-            control_fill_buf: fill_buf,
-        })
+            tls_version_check,
+            fill_buf,
+        ))
     }
 
     /// Performs the TLS-wrap + login handshake using only borrowed `tls_connector`/`timer`,
@@ -252,7 +296,7 @@ where
         tls_connector: &Tls,
         identity: &PrinterIdentity,
         timer: &FtpsTimer,
-        allow_unverified_tls_1_2: bool,
+        tls_version_check: TlsVersionCheck,
     ) -> Result<(Tls::Stream, Vec<u8>), Error> {
         let serial = identity.serial.as_str();
         let access_code = identity.access_code.as_str();
@@ -262,7 +306,7 @@ where
             tls_connector,
             &control_stream,
             identity.model,
-            allow_unverified_tls_1_2,
+            tls_version_check,
         )?;
 
         let mut buf = Vec::new();
@@ -279,7 +323,7 @@ where
             deadline_ms,
         };
 
-        let (code, _) = read_response(
+        let greeting = read_response(
             ctx.stream,
             ctx.buf,
             ctx.fill_buf,
@@ -287,41 +331,27 @@ where
             ctx.deadline_ms,
         )
         .await?;
-        if code != FTP_GREETING {
-            return Err(Error::ProtocolViolation(
-                "Unexpected greeting from FTP server".into(),
-            ));
-        }
+        expect_reply("greeting", greeting, &[FTP_GREETING])?;
 
-        send_and_expect(&mut ctx, "USER bblp", "USER", FTP_PASSWORD_NEEDED, || {
-            Error::ProtocolViolation("USER authentication phase rejected".into())
-        })
-        .await?;
+        let user_cmd = format!("USER {}", crate::identity::LAN_USERNAME);
+        send_and_expect(&mut ctx, &user_cmd, "USER", FTP_PASSWORD_NEEDED).await?;
 
         let pass_cmd = format!("PASS {}", access_code);
-        send_and_expect(&mut ctx, &pass_cmd, "PASS", FTP_LOGIN_OK, || {
-            Error::AccessDenied
-        })
-        .await?;
+        send_and_expect(&mut ctx, &pass_cmd, "PASS", FTP_LOGIN_OK)
+            .await
+            .map_err(|e| match e {
+                Error::FtpReply { .. } => Error::AccessDenied,
+                other => other,
+            })?;
 
-        send_and_expect(&mut ctx, "PBSZ 0", "PBSZ", FTP_COMMAND_OK, || {
-            Error::ProtocolViolation("PBSZ protection sizing configuration failed".into())
-        })
-        .await?;
+        send_and_expect(&mut ctx, FTP_CMD_PBSZ, "PBSZ", FTP_COMMAND_OK).await?;
 
         // Handle model-specific TLS Protection constraints [REF-FTPS-CONN]
         if !identity.model.quirks().uses_plaintext_ftps_data_channel() {
-            send_and_expect(&mut ctx, "PROT P", "PROT P", FTP_COMMAND_OK, || {
-                Error::ProtocolViolation("Failed to enable TLS data channel protection".into())
-            })
-            .await?;
+            send_and_expect(&mut ctx, FTP_CMD_PROT_PRIVATE, "PROT", FTP_COMMAND_OK).await?;
         }
 
-        // Set binary transfer mode — RFC 959 defaults to ASCII which corrupts binary payloads.
-        send_and_expect(&mut ctx, "TYPE I", "TYPE I", FTP_COMMAND_OK, || {
-            Error::ProtocolViolation("TYPE I binary mode configuration failed".into())
-        })
-        .await?;
+        send_and_expect(&mut ctx, FTP_CMD_TYPE_BINARY, "TYPE", FTP_COMMAND_OK).await?;
 
         Ok((control_stream, fill_buf))
     }
@@ -336,7 +366,7 @@ where
         data_factory: Factory,
         identity: &PrinterIdentity,
         timer: FtpsTimer,
-        allow_unverified_tls_1_2: bool,
+        tls_version_check: TlsVersionCheck,
         control_fill_buf: Vec<u8>,
     ) -> Self {
         Self {
@@ -348,7 +378,7 @@ where
             serial: identity.serial.clone(),
             timer,
             poisoned: false,
-            allow_unverified_tls_1_2,
+            tls_version_check,
             control_fill_buf,
         }
     }
@@ -433,12 +463,12 @@ where
         tls_connector: &Tls,
         stream: &Tls::Stream,
         model: PrinterModel,
-        allow_unverified: bool,
+        check: TlsVersionCheck,
     ) -> Result<(), Error> {
-        if allow_unverified {
+        if check == TlsVersionCheck::Bypass {
             log::warn!(
                 "FTPS TLS 1.2 enforcement bypassed by caller configuration \
-                 (allow_unverified_tls_1_2) — see src/ftps/CLAUDE.md"
+                 (TlsVersionCheck::Bypass) — see src/ftps/CLAUDE.md"
             );
             return Ok(());
         }
@@ -482,7 +512,7 @@ where
             &self.tls_connector,
             &secure,
             self.model,
-            self.allow_unverified_tls_1_2,
+            self.tls_version_check,
         ) {
             self.poisoned = true;
             return Err(e);
@@ -534,6 +564,96 @@ where
         }
     }
 
+    /// Sends one control-channel command and reads its reply, validating `arg` as a path first.
+    ///
+    /// Every command goes through here, so no path can reach a command line without
+    /// `validate_ftp_path` (CR/LF injection, `src/ftps/CLAUDE.md`). Write and read failures
+    /// poison the client; a reply with an unexpected code does not (`.claude/rules/ftps-poisoning.md`)
+    /// — that is the caller's [`expect_reply`] check.
+    async fn command(
+        &mut self,
+        verb: &'static str,
+        arg: Option<&str>,
+    ) -> Result<(u16, String), Error> {
+        self.check_poisoned()?;
+        let line = match arg {
+            Some(arg) => {
+                validate_ftp_path(arg)?;
+                format!("{verb} {arg}")
+            }
+            None => String::from(verb),
+        };
+        self.write_command_poisoning(&line).await?;
+        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
+        self.read_response_poisoning(deadline_ms).await
+    }
+
+    /// Opens a data transfer: `PASV`, dial, `verb path`, expect `150`/`125`, then wrap the data channel.
+    ///
+    /// The order on the wire is fixed and shared by `list_directory`, `upload_file` and
+    /// `download_file` (`.claude/rules/wire-framing-hardware-verification.md`: changing it needs
+    /// hardware verification).
+    async fn open_transfer(
+        &mut self,
+        verb: &'static str,
+        path: &str,
+    ) -> Result<DataChannel<RawIO, Tls::Stream>, Error> {
+        self.check_poisoned()?;
+        // Validated before PASV as well as inside `command`, so a bad path never opens a data
+        // connection.
+        validate_ftp_path(path)?;
+
+        let port = self.negotiate_passive_port().await?;
+        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
+        let reply = self.command(verb, Some(path)).await?;
+        expect_reply(verb, reply, &[FTP_TRANSFER_OPENING, FTP_TRANSFER_STARTING])?;
+
+        // From here on, the server has committed to sending a final reply once the data
+        // transfer concludes. Any error before that reply is read off the control channel
+        // leaves it desynced for the next command — poison the client on every such path
+        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
+        // instead of a later command silently misreading this stale reply.
+        self.open_data_channel(raw_data_socket).await
+    }
+
+    /// Reads the data channel to EOF, poisoning the client on failure (the final reply is still owed).
+    async fn read_transfer(
+        &mut self,
+        channel: &mut DataChannel<RawIO, Tls::Stream>,
+    ) -> Result<Vec<u8>, Error> {
+        let mut payload = Vec::new();
+        if let Err(e) = read_to_eof(
+            channel,
+            &mut payload,
+            &self.timer,
+            FTPS_READ_TIMEOUT_SECS * 1000,
+        )
+        .await
+        {
+            self.poisoned = true;
+            return Err(e);
+        }
+        Ok(payload)
+    }
+
+    /// Closes the data channel and reads the transfer's final reply, accepting `226` or `426`.
+    ///
+    /// `426` is accepted because of the documented P2S/X2D close race [REF-FTPS-CONN]; each
+    /// caller pairs it with its own integrity check (a `SIZE` recheck, or `list_directory`'s
+    /// line framing). Returns the code so the caller can tell the two apart.
+    async fn finish_transfer(
+        &mut self,
+        verb: &'static str,
+        channel: DataChannel<RawIO, Tls::Stream>,
+    ) -> Result<u16, Error> {
+        self.close_data_channel(channel).await;
+        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
+        let reply = self.read_response_poisoning(deadline_ms).await?;
+        let code = reply.0;
+        expect_reply(verb, reply, &[FTP_TRANSFER_COMPLETE, FTP_TRANSFER_ABORTED])?;
+        Ok(code)
+    }
+
     /// Queries the storage server for raw directory listings and parses their structures.
     ///
     /// `now` must carry the **printer's** wall-clock time, not the host's. A `LIST` line omits
@@ -545,63 +665,15 @@ where
     pub async fn list_directory(
         &mut self,
         remote_path: &str,
-        now: CurrentDateTime,
+        now: impl Into<CurrentDateTime>,
     ) -> Result<Vec<FtpFile>, Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(remote_path)?;
-
-        let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
-
-        let list_cmd = format!("LIST {}", remote_path);
-        // Poison on the initial write/read too, matching every other control-channel
-        // operation in this file (per .claude/rules/ftps-poisoning.md) — an unpoisoned failure
-        // here leaves the control channel in the same desynced state the poisoning mechanism
-        // exists to prevent.
-        self.write_command_poisoning(&list_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
-            return Err(Error::ProtocolViolation(
-                "LIST transfer initialization failed".into(),
-            ));
-        }
-
-        // From here on, the server has committed to sending a final reply once the data
-        // transfer concludes. Any error before that reply is read off the control channel
-        // leaves it desynced for the next command — poison the client on every such path
-        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
-        // instead of a later command silently misreading this stale reply.
-        let mut listing_payload = Vec::new();
-        let mut data_channel = self.open_data_channel(raw_data_socket).await?;
-        if let Err(e) = read_to_eof(
-            &mut data_channel,
-            &mut listing_payload,
-            &self.timer,
-            FTPS_READ_TIMEOUT_SECS * 1000,
-        )
-        .await
-        {
-            self.poisoned = true;
-            return Err(e);
-        }
-        self.close_data_channel(data_channel).await;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        // Sibling gap to upload_file/download_file's handling — the same
-        // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN] can arrive after read_to_eof has already
-        // drained the listing to EOF, so 426 must be accepted alongside 226 here too.
-        if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
-            return Err(Error::ProtocolViolation(
-                "LIST transfer confirmation aborted".into(),
-            ));
-        }
+        let mut data_channel = self.open_transfer("LIST", remote_path).await?;
+        let listing_payload = self.read_transfer(&mut data_channel).await?;
+        let code = self.finish_transfer("LIST", data_channel).await?;
 
         // `upload_file`/`download_file` each pair their 426 tolerance with an independent SIZE
         // recheck — the compensating integrity check `src/ftps/CLAUDE.md` cites to justify the
-        // fail-open `allow_unverified_tls_1_2` opt-out. A listing has no SIZE to compare
+        // fail-open `TlsVersionCheck::Bypass` opt-out. A listing has no SIZE to compare
         // against, so a 426 here was tolerated with nothing backing it: a data channel closing
         // early yields a listing truncated mid-line, `parse_unix_listing` drops the truncated
         // tail as just another malformed line, and the caller silently gets a short file list.
@@ -622,35 +694,29 @@ where
             ));
         }
 
+        let now = now.into();
+        // The common case: the whole listing is valid UTF-8 and is parsed in place.
+        if let Ok(listing) = core::str::from_utf8(&listing_payload) {
+            return Ok(parse_unix_listing(listing, now));
+        }
         // One undecodable filename (e.g. a Latin-1 name on a FAT microSD) must skip just that
         // entry, not fail the whole directory — the same per-line leniency as the parser's
         // drop-malformed-lines contract. Filtered here rather than loosening the parser to
         // lossy `&str` conversion, which would surface U+FFFD mojibake as a real name.
-        let payload_str: String = listing_payload
-            .split(|&b| b == b'\n')
-            .filter_map(|line| core::str::from_utf8(line).ok())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        Ok(parse_unix_listing(&payload_str, now))
+        let mut listing = String::with_capacity(listing_payload.len());
+        for line in listing_payload.split(|&b| b == b'\n') {
+            if let Ok(line) = core::str::from_utf8(line) {
+                listing.push_str(line);
+                listing.push('\n');
+            }
+        }
+        Ok(parse_unix_listing(&listing, now))
     }
 
     /// Queries the exact size of a file stored on the printer's MicroSD card.
     pub async fn get_file_size(&mut self, remote_path: &str) -> Result<u64, Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(remote_path)?;
-
-        let size_cmd = format!("SIZE {}", remote_path);
-        self.write_command_poisoning(&size_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_SIZE_OK {
-            return Err(Error::ProtocolViolation(
-                "SIZE query rejected by storage server".into(),
-            ));
-        }
-
+        let reply = self.command("SIZE", Some(remote_path)).await?;
+        let text = expect_reply("SIZE", reply, &[FTP_SIZE_OK])?;
         text.parse::<u64>()
             .map_err(|_| Error::ProtocolViolation("Invalid file size parameter returned".into()))
     }
@@ -678,14 +744,7 @@ where
         &mut self,
         remote_path: &str,
     ) -> Result<Option<FtpTimestamp>, Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(remote_path)?;
-
-        let mdtm_cmd = format!("MDTM {}", remote_path);
-        self.write_command_poisoning(&mdtm_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
+        let (code, text) = self.command("MDTM", Some(remote_path)).await?;
 
         // An unsupported-command reply is an ordinary, fully-read control-channel response. The
         // channel is still in sync, so this reports "unsupported" without poisoning the client.
@@ -693,35 +752,20 @@ where
             log::debug!("MDTM not implemented by this firmware (reply {code})");
             return Ok(None);
         }
-        if code != FTP_SIZE_OK {
-            return Err(Error::ProtocolViolation(
-                "MDTM query rejected by storage server".into(),
-            ));
-        }
-
+        let text = expect_reply("MDTM", (code, text), &[FTP_SIZE_OK])?;
         parse_mdtm_timestamp(&text)
             .map(Some)
             .ok_or_else(|| Error::ProtocolViolation("Malformed MDTM timestamp returned".into()))
     }
 
     /// Removes a targeted file from non-volatile storage.
+    ///
+    /// A `550` reply is treated as "already absent" and returns `Ok`, with its text logged. FTP
+    /// also uses `550` for "permission denied" and "file in use", which this cannot yet tell
+    /// apart from absence (GitHub issue #392).
     pub async fn delete_file(&mut self, remote_path: &str) -> Result<(), Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(remote_path)?;
-
-        let dele_cmd = format!("DELE {}", remote_path);
-        self.write_command_poisoning(&dele_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-
-        if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
-            Ok(())
-        } else {
-            Err(Error::ProtocolViolation(
-                "DELE file removal request failed".into(),
-            ))
-        }
+        let reply = self.command("DELE", Some(remote_path)).await?;
+        expect_reply_or_absent("DELE", reply, FTP_FILE_ACTION_OK)
     }
 
     /// Uploads a binary payload directly to MicroSD card storage.
@@ -735,107 +779,33 @@ where
     ///    print commands prior to this confirmation halts the printer due to microSD write latency exceptions [REF-FTPS-FLUSH].
     /// 3. Unconditionally verify the uploaded size via the `SIZE` command on both a `226` and a
     ///    transient `426` reply — this guards against silent SD card write truncation on every
-    ///    model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN].
+    ///    model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
+    ///    [`Error::DiskWriteFailure`]; a final reply other than `226`/`426` is [`Error::FtpReply`].
     pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(remote_path)?;
+        let mut data_channel = self.open_transfer("STOR", remote_path).await?;
 
-        let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
-
-        let stor_cmd = format!("STOR {}", remote_path);
-        // Poison on the initial write/read too — see the matching comment in
-        // list_directory() above.
-        self.write_command_poisoning(&stor_cmd).await?;
-
-        let mut ctrl_buf = Vec::new();
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
-            return Err(Error::ProtocolViolation(
-                "STOR upload negotiation rejected".into(),
-            ));
-        }
-
-        // From here on, the server has committed to sending a final reply once the data
-        // transfer concludes. Any error before that reply is read off the control channel
-        // leaves it desynced for the next command — poison the client on every such path
-        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
-        // instead of a later command silently misreading this stale reply.
-        let mut data_channel = self.open_data_channel(raw_data_socket).await?;
-
+        // One `write_all` per chunk, each with its own fresh write deadline.
         for chunk in data.chunks(FTPS_UPLOAD_CHUNK_SIZE) {
-            let write_result = if self.timer.has_real_clock() {
-                let write_fut = data_channel.write_all(chunk);
-                let sleep_fut = self
-                    .timer
-                    .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
-                match crate::io::race(write_fut, sleep_fut).await {
-                    crate::io::Raced::Left(r) => r,
-                    crate::io::Raced::Right(r) => {
-                        self.poisoned = true;
-                        return Err(Error::Network(crate::io::deadline_error(r)));
-                    }
-                }
-            } else {
-                data_channel.write_all(chunk).await
-            };
-            if let Err(e) = write_result {
+            let deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
+            if let Err(e) =
+                write_bounded(data_channel.write_all(chunk), &self.timer, deadline_ms).await
+            {
                 self.poisoned = true;
-                return Err(Error::Network(crate::io::map_embedded_io_error_kind(
-                    e.kind(),
-                )));
+                return Err(e);
             }
         }
-        let flush_result = if self.timer.has_real_clock() {
-            let flush_fut = data_channel.flush();
-            let sleep_fut = self
-                .timer
-                .sleep(core::time::Duration::from_secs(FTPS_WRITE_TIMEOUT_SECS));
-            match crate::io::race(flush_fut, sleep_fut).await {
-                crate::io::Raced::Left(r) => r,
-                crate::io::Raced::Right(r) => {
-                    self.poisoned = true;
-                    return Err(Error::Network(crate::io::deadline_error(r)));
-                }
-            }
-        } else {
-            data_channel.flush().await
-        };
-        if let Err(e) = flush_result {
+        let deadline_ms = ftps_deadline_ms(&self.timer, FTPS_WRITE_TIMEOUT_SECS);
+        if let Err(e) = write_bounded(data_channel.flush(), &self.timer, deadline_ms).await {
             self.poisoned = true;
-            return Err(Error::Network(crate::io::map_embedded_io_error_kind(
-                e.kind(),
-            )));
+            return Err(e);
         }
-        self.close_data_channel(data_channel).await;
 
-        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
-        let Some(stream) = self.control_stream.as_mut() else {
-            return Err(control_stream_gone());
-        };
-        let res = read_response(
-            stream,
-            &mut ctrl_buf,
-            &mut self.control_fill_buf,
-            &self.timer,
-            deadline_ms,
-        )
-        .await;
-        match res {
-            Ok((FTP_TRANSFER_COMPLETE, _)) | Ok((FTP_TRANSFER_ABORTED, _)) => {
-                let remote_size = self.get_file_size(remote_path).await?;
-                if remote_size == data.len() as u64 {
-                    Ok(())
-                } else {
-                    Err(Error::DiskWriteFailure)
-                }
-            }
-            Ok((_, _)) => Err(Error::DiskWriteFailure),
-            Err(e) => {
-                self.poisoned = true;
-                Err(e)
-            }
+        self.finish_transfer("STOR", data_channel).await?;
+        let remote_size = self.get_file_size(remote_path).await?;
+        if remote_size == data.len() as u64 {
+            Ok(())
+        } else {
+            Err(Error::DiskWriteFailure)
         }
     }
 
@@ -846,57 +816,11 @@ where
     /// transfer completes — a clean `226` reply alone doesn't prove the data channel didn't
     /// close early [REF-FTPS-CONN].
     pub async fn download_file(&mut self, remote_path: &str) -> Result<Vec<u8>, Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(remote_path)?;
-
-        let port = self.negotiate_passive_port().await?;
-        let raw_data_socket = self.data_factory.dial(&self.ip, port).await?;
-
-        let retr_cmd = format!("RETR {}", remote_path);
-        // Poison on the initial write/read too — see the matching comment in
-        // list_directory() above.
-        self.write_command_poisoning(&retr_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_TRANSFER_OPENING && code != FTP_TRANSFER_STARTING {
-            return Err(Error::ProtocolViolation(
-                "RETR transfer initialization failed".into(),
-            ));
-        }
-
-        // From here on, the server has committed to sending a final reply once the data
-        // transfer concludes. Any error before that reply is read off the control channel
-        // leaves it desynced for the next command — poison the client on every such path
-        // (`.claude/rules/ftps-poisoning.md`) so a caller gets an immediate, clear error
-        // instead of a later command silently misreading this stale reply.
-        let mut file_payload = Vec::new();
-        let mut data_channel = self.open_data_channel(raw_data_socket).await?;
-        if let Err(e) = read_to_eof(
-            &mut data_channel,
-            &mut file_payload,
-            &self.timer,
-            FTPS_READ_TIMEOUT_SECS * 1000,
-        )
-        .await
-        {
-            self.poisoned = true;
-            return Err(e);
-        }
-        self.close_data_channel(data_channel).await;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_TRANSFER_CONFIRM_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        // Also attempt the SIZE recheck on 426 (transient close, e.g. the documented
-        // P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]), matching upload_file's symmetric
-        // handling — previously this branch treated 426 as an unconditional hard failure,
-        // discarding an already-fully-received payload on exactly the race this recheck
-        // exists to catch.
-        if code != FTP_TRANSFER_COMPLETE && code != FTP_TRANSFER_ABORTED {
-            return Err(Error::ProtocolViolation(
-                "RETR transfer confirmation aborted".into(),
-            ));
-        }
+        let mut data_channel = self.open_transfer("RETR", remote_path).await?;
+        let file_payload = self.read_transfer(&mut data_channel).await?;
+        // `426` (the documented P2S/X2D close race) is accepted alongside `226` and both go
+        // through the SIZE recheck below, rather than discarding a fully received payload.
+        self.finish_transfer("RETR", data_channel).await?;
 
         // Unconditionally verify the downloaded size via SIZE, mirroring upload_file's
         // symmetric recheck — a clean 226 alone doesn't prove the data channel didn't close
@@ -916,42 +840,18 @@ where
 
     /// Creates a directory on the printer's MicroSD storage.
     pub async fn create_directory(&mut self, path: &str) -> Result<(), Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(path)?;
-
-        let mkd_cmd = format!("MKD {}", path);
-        self.write_command_poisoning(&mkd_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_PATHNAME_CREATED {
-            return Err(Error::ProtocolViolation(
-                "MKD directory creation failed".into(),
-            ));
-        }
-        Ok(())
+        let reply = self.command("MKD", Some(path)).await?;
+        expect_reply("MKD", reply, &[FTP_PATHNAME_CREATED]).map(drop)
     }
 
     /// Removes a directory from the printer's MicroSD storage.
     ///
-    /// Returns success for both `250` (deleted) and `550` (already absent),
-    /// matching the idempotent cleanup semantics of `delete_file`.
+    /// Returns success for both `250` (deleted) and `550` (treated as already absent, text
+    /// logged), matching `delete_file`. On common servers `550` also answers `RMD` of a non-empty
+    /// directory, which this cannot yet tell apart (GitHub issue #392).
     pub async fn remove_directory(&mut self, path: &str) -> Result<(), Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(path)?;
-
-        let rmd_cmd = format!("RMD {}", path);
-        self.write_command_poisoning(&rmd_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code == FTP_FILE_ACTION_OK || code == FTP_FILE_NOT_FOUND {
-            Ok(())
-        } else {
-            Err(Error::ProtocolViolation(
-                "RMD directory removal request failed".into(),
-            ))
-        }
+        let reply = self.command("RMD", Some(path)).await?;
+        expect_reply_or_absent("RMD", reply, FTP_FILE_ACTION_OK)
     }
 
     /// Renames a file or directory on the printer's MicroSD storage.
@@ -959,65 +859,27 @@ where
     /// Executes the standard FTP two-step rename sequence: `RNFR` (rename from)
     /// followed by `RNTO` (rename to).
     pub async fn rename_file(&mut self, from: &str, to: &str) -> Result<(), Error> {
-        self.check_poisoned()?;
-        validate_ftp_path(from)?;
+        // Both paths validated before anything is sent, so an invalid `to` can't strand a
+        // pending RNFR.
         validate_ftp_path(to)?;
-
-        let rnfr_cmd = format!("RNFR {}", from);
-        self.write_command_poisoning(&rnfr_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_RENAME_PENDING {
-            return Err(Error::ProtocolViolation(
-                "RNFR rename source path rejected".into(),
-            ));
-        }
-
-        let rnto_cmd = format!("RNTO {}", to);
-        self.write_command_poisoning(&rnto_cmd).await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, _) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_FILE_ACTION_OK {
-            return Err(Error::ProtocolViolation(
-                "RNTO rename destination path rejected".into(),
-            ));
-        }
-        Ok(())
+        let reply = self.command("RNFR", Some(from)).await?;
+        expect_reply("RNFR", reply, &[FTP_RENAME_PENDING])?;
+        let reply = self.command("RNTO", Some(to)).await?;
+        expect_reply("RNTO", reply, &[FTP_FILE_ACTION_OK]).map(drop)
     }
 
     /// Queries the available capacity of the MicroSD card, in bytes.
     pub async fn get_available_space(&mut self) -> Result<u64, Error> {
-        self.check_poisoned()?;
-
-        self.write_command_poisoning("AVBL").await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
-
-        if code == FTP_SIZE_OK {
-            text.parse::<u64>()
-                .map_err(|_| Error::ProtocolViolation("Malformed AVBL numeric response".into()))
-        } else {
-            Err(Error::ProtocolViolation(
-                "Hardware capacity queries rejected".into(),
-            ))
-        }
+        let reply = self.command("AVBL", None).await?;
+        let text = expect_reply("AVBL", reply, &[FTP_SIZE_OK])?;
+        text.parse::<u64>()
+            .map_err(|_| Error::ProtocolViolation("Malformed AVBL numeric response".into()))
     }
 
     /// Issues `PASV` over control channel and extracts passive connection port details.
     async fn negotiate_passive_port(&mut self) -> Result<u16, Error> {
-        self.write_command_poisoning("PASV").await?;
-
-        let deadline_ms = self.read_deadline_ms(FTPS_READ_TIMEOUT_SECS);
-        let (code, text) = self.read_response_poisoning(deadline_ms).await?;
-        if code != FTP_PASSIVE_MODE {
-            return Err(Error::ProtocolViolation(
-                "PASV port negotiation rejected".into(),
-            ));
-        }
-
+        let reply = self.command("PASV", None).await?;
+        let text = expect_reply("PASV", reply, &[FTP_PASSIVE_MODE])?;
         parse_pasv_port(&text)
     }
 

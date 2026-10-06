@@ -64,7 +64,7 @@ async fn connect_client(
             model,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("FTPS handshake failed")
@@ -94,7 +94,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
             model: PrinterModel::P1S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("FTPS handshake failed");
@@ -386,8 +386,14 @@ async fn test_ftps_avbl_failure_returns_error_without_stat_fallback() {
 
     let result = client.get_available_space().await;
     assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
-        "expected ProtocolViolation on a non-success AVBL reply, got {:?}",
+        matches!(
+            result,
+            Err(Error::FtpReply {
+                command: "AVBL",
+                ..
+            })
+        ),
+        "expected FtpReply on a non-success AVBL reply, got {:?}",
         result.map(|_| ())
     );
 
@@ -457,8 +463,15 @@ async fn test_ftps_mdtm_not_found_returns_error() {
 
     let result = client.modification_time("/model/gone.3mf").await;
     assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
-        "expected ProtocolViolation on a 550 MDTM reply, got {:?}",
+        matches!(
+            result,
+            Err(Error::FtpReply {
+                command: "MDTM",
+                code: 550,
+                ..
+            })
+        ),
+        "expected FtpReply on a 550 MDTM reply, got {:?}",
         result
     );
 
@@ -511,7 +524,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
             model: PrinterModel::P1S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("FTPS handshake failed");
@@ -836,7 +849,7 @@ async fn test_ftps_upload_data_failure_keeps_its_error_kind() {
                 model: PrinterModel::P1S,
             },
             DummyTimer,
-            false,
+            bambino::ftps::TlsVersionCheck::Enforce,
         )
         .await
         .expect("FTPS handshake failed");
@@ -971,8 +984,14 @@ async fn test_ftps_pasv_rejection_reply_does_not_poison_client() {
         )
         .await;
     assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
-        "Expected a non-227 PASV reply to surface as ProtocolViolation, got {:?}",
+        matches!(
+            result,
+            Err(Error::FtpReply {
+                command: "PASV",
+                ..
+            })
+        ),
+        "Expected a non-227 PASV reply to surface as FtpReply, got {:?}",
         result
     );
 
@@ -1055,7 +1074,7 @@ async fn test_ftps_closes_tls_sessions_on_teardown() {
             model: PrinterModel::P1S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("FTPS handshake failed");
@@ -1104,7 +1123,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
             model: PrinterModel::P2S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await;
 
@@ -1130,7 +1149,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
             model: PrinterModel::X2D,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await;
 
@@ -1161,7 +1180,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
             model: PrinterModel::P2S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("TLS 1.2 should be accepted for P2S");
@@ -1196,7 +1215,7 @@ async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
             model: PrinterModel::P2S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("Control channel at TLS 1.2 should be accepted for P2S");
@@ -1252,7 +1271,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
             model: PrinterModel::P1S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("TLS 1.3 should be accepted for P1S");
@@ -1276,7 +1295,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
             model: PrinterModel::P2S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await;
 
@@ -1317,7 +1336,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
             model: PrinterModel::P2S,
         },
         DummyTimer,
-        true,
+        bambino::ftps::TlsVersionCheck::Bypass,
     )
     .await
     .expect("allow_unverified_tls_1_2 should bypass the TLS 1.3 rejection for P2S");
@@ -1348,7 +1367,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
             model: PrinterModel::P2S,
         },
         DummyTimer,
-        true,
+        bambino::ftps::TlsVersionCheck::Bypass,
     )
     .await
     .expect("allow_unverified_tls_1_2 should bypass the undetermined-version rejection for P2S");

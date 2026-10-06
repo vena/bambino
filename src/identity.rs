@@ -13,6 +13,9 @@ use crate::models::{PrinterModel, resolve_model};
 /// Longest LAN access code any protocol accepts: the camera handshake's 32-byte password field.
 pub const ACCESS_CODE_MAX_LEN: usize = 32;
 
+/// The fixed username every Bambu LAN protocol logs in with (MQTT, FTPS, the binary camera); the access code is the password.
+pub(crate) const LAN_USERNAME: &str = "bblp";
+
 /// Longest serial number accepted. Current Bambu serials are 15 characters.
 pub const SERIAL_MAX_LEN: usize = 20;
 

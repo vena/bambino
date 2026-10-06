@@ -363,7 +363,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
         let access_code = identity.access_code.as_str();
         let conn_id = CONNECTION_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let client_id = format!("bambino_{}_{}", serial, conn_id);
-        let connect_pkt = encode_connect(&client_id, "bblp", access_code);
+        let connect_pkt = encode_connect(&client_id, crate::identity::LAN_USERNAME, access_code);
 
         log::debug!(
             "Transmitting CONNECT payload (client_id: '{}', user: 'bblp')",

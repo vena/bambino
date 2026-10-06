@@ -464,7 +464,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
             model: PrinterModel::P1S,
         },
         DummyTimer,
-        false,
+        bambino::ftps::TlsVersionCheck::Enforce,
     )
     .await
     .expect("fresh FTPS handshake failed");

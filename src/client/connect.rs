@@ -342,7 +342,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
-            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            ftps_tls_version_check: self.ftps_tls_version_check,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
@@ -442,7 +442,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
-            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            ftps_tls_version_check: self.ftps_tls_version_check,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
@@ -472,7 +472,11 @@ where
     /// Non-consuming — chain onto any construction path.
     #[must_use]
     pub fn with_ftps_allow_unverified_tls_1_2(mut self, allow: bool) -> Self {
-        self.ftps_allow_unverified_tls_1_2 = allow;
+        self.ftps_tls_version_check = if allow {
+            crate::ftps::TlsVersionCheck::Bypass
+        } else {
+            crate::ftps::TlsVersionCheck::Enforce
+        };
         self
     }
 
@@ -497,7 +501,7 @@ where
         })?;
         let identity = &self.identity;
         let ftps_port = self.ftps_port;
-        let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
+        let tls_version_check = self.ftps_tls_version_check;
         let (control_stream, fill_buf) =
             race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
                 let raw_stream = factory.dial(&identity.ip, ftps_port).await?;
@@ -506,7 +510,7 @@ where
                     tls,
                     identity,
                     timer,
-                    allow_unverified_tls_1_2,
+                    tls_version_check,
                 )
                 .await
             })
@@ -519,7 +523,7 @@ where
             factory,
             &self.identity,
             timer,
-            allow_unverified_tls_1_2,
+            tls_version_check,
             fill_buf,
         ));
         Ok(())
@@ -689,7 +693,7 @@ where
             None
         };
         let ftps_port = self.ftps_port;
-        let allow_unverified_tls_1_2 = self.ftps_allow_unverified_tls_1_2;
+        let tls_version_check = self.ftps_tls_version_check;
         let ftps_fut = async move {
             let (tls, factory, ftps_timer) = ftps_slot?;
             Some(
@@ -700,7 +704,7 @@ where
                         tls,
                         identity,
                         ftps_timer,
-                        allow_unverified_tls_1_2,
+                        tls_version_check,
                     )
                     .await
                 })
@@ -761,7 +765,7 @@ where
                     factory,
                     &self.identity,
                     ftps_timer,
-                    allow_unverified_tls_1_2,
+                    tls_version_check,
                     fill_buf,
                 ));
                 Some(Ok(()))
@@ -843,7 +847,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
-            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            ftps_tls_version_check: self.ftps_tls_version_check,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
@@ -908,7 +912,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
-            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            ftps_tls_version_check: self.ftps_tls_version_check,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,
@@ -969,7 +973,7 @@ where
             connect_timeout_secs: self.connect_timeout_secs,
             mqtt_port: self.mqtt_port,
             ftps_port: self.ftps_port,
-            ftps_allow_unverified_tls_1_2: self.ftps_allow_unverified_tls_1_2,
+            ftps_tls_version_check: self.ftps_tls_version_check,
             camera_port: self.camera_port,
             camera_max_frame_size: self.camera_max_frame_size,
             _mqtt_raw_io: PhantomData,

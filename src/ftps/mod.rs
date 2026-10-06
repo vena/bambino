@@ -14,7 +14,7 @@ pub(crate) mod protocol;
 /// Implicit-TLS FTPS port every Bambu printer serves its storage on.
 pub const FTPS_PORT: u16 = 990;
 
-pub use client::FtpsClient;
+pub use client::{FtpsClient, TlsVersionCheck};
 pub use parser::{
     CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
 };
