@@ -39,5 +39,6 @@ mod client_telemetry_cache_test;
 mod client_version_test;
 mod drying_capability_matrix_test;
 mod ftps_test;
+mod model_matrix_test;
 mod mqtt_test;
 mod telemetry_replay_test;
