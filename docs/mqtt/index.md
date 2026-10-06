@@ -1039,7 +1039,7 @@ defaults for calibration flags.
 
   Tool-changer rack routing, set via [`PrintJobConfig::with_nozzle_rack`](commands/print_job/index.md#printjobconfig).
   
-  Only consulted on a model whose quirks report `uses_nozzle_rack`.
+  Only consulted on a model whose quirks report `has_nozzle_rack`.
 
 #### Implementations
 

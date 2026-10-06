@@ -448,12 +448,12 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
   against [`PrinterModel::Unknown`](models/index.md#printermodel). [`resolve_model`](models/index.md#resolve-model) is the lenient form that also
   consults an SSDP `DevModel` token and falls back to `Unknown`.
 
-- <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
+- <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static ModelQuirks` — [`ModelQuirks`](quirks/index.md#modelquirks)
 
-  Returns the [`ModelQuirks`](quirks/index.md#modelquirks) strategy for this model variant.
+  Returns the [`ModelQuirks`](quirks/index.md#modelquirks) for this model variant.
 
-  This is the single dispatch point — all model-specific behavior goes through
-  the trait object returned here, rather than match-blocks scattered across the crate.
+  This is the single dispatch point — all model-specific behavior goes through the row
+  returned here, rather than match-blocks scattered across the crate.
 
 #### Trait Implementations
 

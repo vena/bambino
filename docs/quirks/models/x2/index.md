@@ -11,24 +11,10 @@ Handles parameters unique to the X2D dual-carriage auxiliary-cooling model.
 Build volumes: Main Nozzle 256×256×260mm, Aux/Dual 235.5×256×256mm.
 Z-max uses the conservative aux/dual value (256mm).
 
-## Contents
-
-- [Types](#types)
-  - [`X2Quirks`](#x2quirks)
-- [Constants](#constants)
-  - [`X2D_BED_TEMP_MAX`](#x2d-bed-temp-max)
-  - [`X2D_CHAMBER_TEMP_MAX`](#x2d-chamber-temp-max)
-  - [`X2D_MIN_REMOTE_DRY_FIRMWARE`](#x2d-min-remote-dry-firmware)
-  - [`X2D_NOZZLE_TEMP_MAX`](#x2d-nozzle-temp-max)
-  - [`X2D_X_MAX`](#x2d-x-max)
-  - [`X2D_Y_MAX`](#x2d-y-max)
-  - [`X2D_Z_MAX`](#x2d-z-max)
-
 ## Quick Reference
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`X2Quirks`](#x2quirks) | struct | Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform. |
 | [`X2D_BED_TEMP_MAX`](#x2d-bed-temp-max) | const | Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row. |
 | [`X2D_CHAMBER_TEMP_MAX`](#x2d-chamber-temp-max) | const | Chamber temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Chamber Temperature row. |
 | [`X2D_MIN_REMOTE_DRY_FIRMWARE`](#x2d-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying, and drying while printing, on the X2D. |
@@ -36,105 +22,6 @@ Z-max uses the conservative aux/dual value (256mm).
 | [`X2D_X_MAX`](#x2d-x-max) | const | Build volume X width (mm) — conservative aux/dual-nozzle value (235.5mm, smaller than the main-nozzle profile's 256mm); see module docs. |
 | [`X2D_Y_MAX`](#x2d-y-max) | const | Build volume Y depth (mm) — 256mm across all nozzle profiles. |
 | [`X2D_Z_MAX`](#x2d-z-max) | const | Build volume Z depth (mm) — uses the conservative aux/dual-nozzle value, not the main-nozzle value; see module docs. |
-
-## Types
-
-### `X2Quirks`
-
-```rust
-struct X2Quirks;
-```
-
-Quirks for the X2D dual-carriage, dual-nozzle CoreXY platform.
-
-#### Trait Implementations
-
-##### `impl ModelQuirks for X2Quirks`
-
-- <span id="x2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
-
-  X2D firmware `01.01.00.00` fails the implicit-FTPS handshake on port 990 with `[SSL: WRONG_VERSION_NUMBER]`.
-
-  **Confirmed by symptom; the mechanism this cap was originally justified by has since been
-  falsified.** The earlier reading — that the error came from the client offering a TLS 1.3
-  `ClientHello` — does not survive measurement. `bambuddy`'s nine-printer farm probe
-  (issue #2780) pinned three results: a cleartext `421` banner on the TLS port produces
-  `[SSL: WRONG_VERSION_NUMBER]`, byte for byte what the field reports; a TLS-1.2-only server
-  answering a client forced to 1.3 produces `TLSV1_ALERT_PROTOCOL_VERSION` instead; and an
-  uncapped client reaches a 1.2-only peer unaided. So `WRONG_VERSION_NUMBER` means the
-  peer's first bytes were **not a TLS record at all**, a version mismatch cannot produce it,
-  and reaching a TLS-1.2-only peer needs no cap. The leading hypothesis is now an FTP-level
-  refusal sent in the clear (such as `421 Too many connections`) from a printer out of
-  connection slots.
-
-  The cap is kept anyway: the original reporter (`@vasmarfas`, bambuddy issue #1638) saw the
-  symptom clear, and a cap costs nothing on a printer that never offers TLS 1.3. What is
-  wrong is the recorded reasoning and the confidence it implied, not the setting. bambuddy
-  marked their own X2D entry RE-TEST WANTED for the same reason. **Re-test on X2D hardware**
-  — a packet capture of a port-990 connect showing whether the printer's first bytes are a
-  TLS record or a cleartext FTP reply would settle it, and if it is a cleartext `421` this
-  cap is unrelated to the fix and should be reconsidered.
-
-  **Unverified on X2D, and no upstream can settle it — don't re-check them expecting an
-  answer.** All three were searched (2026-09-17): bambuddy still says outright that nobody
-  there has an X2D, so their entry stays RE-TEST WANTED; ha-bambulab caps
-  `maximum_version` to TLS 1.2 unconditionally for every model, so it never reaches the
-  question and its silence is not evidence; and BambuStudio has no implicit-FTPS client in
-  its open tree at all (its LAN file transfer is in the closed BambuNetworking library),
-  so the vendor source cannot speak to this either. What bambuddy *did* add is the
-  instrument rather than the answer: on `WRONG_VERSION_NUMBER` their client now opens one
-  plain connection to :990 and logs the printer's own reply, because the TLS layer eats
-  those bytes before the error surfaces. This needs *an* X2D, not a re-reading of upstream
-  — one owner running `openssl s_client -connect <ip>:990` against it is enough.
-
-  See [REF-FTPS-CONN] in `reference/02_ftps.md` §2.1.
-
-- <span id="x2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
-
-- <span id="x2quirks-modelquirks-has-door-sensor-field"></span>`fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
-
-- <span id="x2quirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../../../camera/index.md#cameraprotocol)
-
-- <span id="x2quirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
-
-- <span id="x2quirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
-
-- <span id="x2quirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
-
-  Firmware-gated from [`X2D_MIN_REMOTE_DRY_FIRMWARE`](#x2d-min-remote-dry-firmware); a reported `fun2` bit 5 still wins.
-
-- <span id="x2quirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
-
-- <span id="x2quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-supports-auxiliary-left2-fan"></span>`fn supports_auxiliary_left2_fan(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
-
-- <span id="x2quirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
-
-- <span id="x2quirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
-
-- <span id="x2quirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
-
-- <span id="x2quirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
-
-- <span id="x2quirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
-
-- <span id="x2quirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
-
-- <span id="x2quirks-modelquirks-has-chamber-exhaust-fan"></span>`fn has_chamber_exhaust_fan(&self) -> bool`
-
-
----
 
 ## Constants
 

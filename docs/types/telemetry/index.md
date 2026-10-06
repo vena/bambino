@@ -2561,6 +2561,14 @@ raw field and re-implementing the decode:
 
   Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
 
+- <span id="printertelemetry-door-state"></span>`fn door_state(&self, sensor: crate::quirks::DoorSensor) -> Option<bool>` — [`DoorSensor`](../../quirks/index.md#doorsensor)
+
+  Reads the door state from wherever `sensor` says this model reports it [REF-NET-DOOR].
+
+  `Some(true)` open, `Some(false)` closed, `None` when the model has no sensor or this frame
+  doesn't carry a readable field — never a guess of "closed". Get `sensor` from
+  [`ModelQuirks::door_sensor`](../../quirks/index.md#modelquirks).
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterTelemetry`
@@ -3208,7 +3216,7 @@ Which physical AMS accessory is attached, decoded from `info` bits 0–3.
 about the printer; this answers questions about the box plugged into it, and the two are
 orthogonal. Remote drying in particular needs *both* gates to pass: an AMS that physically has
 a heater (here) and a printer whose firmware acts on the command rather than acking and
-discarding it (`ModelQuirks::supports_ams_remote_drying`). BambuStudio writes the same pair out
+discarding it (`ModelQuirks::ams_remote_drying_support`). BambuStudio writes the same pair out
 longhand at `Widgets/AMSControl.cpp:348`.
 
 Do not infer any of this from `ams_id`: `0..=3` is shared by the original AMS, the AMS Lite and

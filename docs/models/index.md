@@ -12,9 +12,11 @@ maps serial prefixes (with an SSDP `DevModel` fallback) to the right variant.
 The resolved model drives behavioral dispatch through the [`quirks`](../quirks/index.md) engine.
 
 `MODELS` is the single source of truth: one row per supported model, carrying its
-serial prefix, its wire-protocol tokens, and its human-readable name.
-[`resolve_model()`](#resolve-model), [`supported_models()`](#supported-models), and [`PrinterModel::display_name()`](#printermodel) are
-all views over that table, so adding a model means adding one enum variant and one row.
+serial prefix, its wire-protocol tokens, its human-readable name and its quirks row.
+[`resolve_model()`](#resolve-model), [`supported_models()`](#supported-models), [`PrinterModel::display_name()`](#printermodel) and
+[`PrinterModel::quirks()`](#printermodel) are all views over that table, so adding a model means adding one
+enum variant, one row here, its quirks `const` in `src/quirks/models/`, and its
+`MODEL_MATRIX.csv` row.
 
 ## Quick Reference
 
@@ -136,12 +138,12 @@ Enumeration of physical Bambu Lab printer models supported on the local interfac
   against [`PrinterModel::Unknown`](#printermodel). [`resolve_model`](#resolve-model) is the lenient form that also
   consults an SSDP `DevModel` token and falls back to `Unknown`.
 
-- <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+- <span id="cratemodelsprintermodel-quirks"></span>`fn quirks(&self) -> &'static ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
 
-  Returns the [`ModelQuirks`](../quirks/index.md#modelquirks) strategy for this model variant.
+  Returns the [`ModelQuirks`](../quirks/index.md#modelquirks) for this model variant.
 
-  This is the single dispatch point — all model-specific behavior goes through
-  the trait object returned here, rather than match-blocks scattered across the crate.
+  This is the single dispatch point — all model-specific behavior goes through the row
+  returned here, rather than match-blocks scattered across the crate.
 
 #### Trait Implementations
 

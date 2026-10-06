@@ -17,12 +17,12 @@ machine in front of you speaking.
 Quirks in the second category take a `QuirkContext` rather than composing the report at the
 call site. That is deliberate and load-bearing: when the composition lives outside the quirk,
 two callers can reach different answers to the same question, which is exactly what happened
-between `ModelQuirks::supports_ams_remote_drying` and
+between `ModelQuirks::ams_remote_drying_support` and
 `PrinterClient::supports_ams_remote_drying` before #240. Requiring the context makes the
 stale-answer call impossible to write rather than merely discouraged.
 
 Every field is `Option` because every one of them can be genuinely absent, and absent is not
-the same as `false`. The P1 and A1 families send no `fun`/`fun2` at all
+the same as `false`. The P1 and A1 families send no `fun2` at all
 (`reference/03_mqtt_telemetry.md`), and firmware version needs a `get_version` round trip
 that a caller may never have made. A quirk reading `None` should fall back to its model
 default, not treat it as a denial.
@@ -30,6 +30,8 @@ default, not treat it as a denial.
 Build one from a client with [`PrinterClient::quirk_context`](../../client/index.md#printerclient),
 or reach for [`PrinterClient::capabilities`](../../client/index.md#printerclient), which
 supplies it for you.
+
+A field is added when a quirk reads it, not ahead of need.
 
 ## Quick Reference
 
@@ -44,10 +46,8 @@ supplies it for you.
 
 ```rust
 struct QuirkContext<'a> {
-    pub fun: Option<&'a str>,
     pub fun2: Option<&'a str>,
     pub firmware: Option<&'a str>,
-    pub telemetry: Option<&'a crate::types::PrinterTelemetry>,
 }
 ```
 
@@ -57,13 +57,6 @@ See the [module docs](self) for why these are passed in rather than composed at 
 site.
 
 #### Fields
-
-- **`fun`**: `Option<&'a str>`
-
-  The `fun` capability bitfield, if the printer reported one.
-  
-  Absent on the P1 and A1 families entirely. Bit 29 is Developer LAN Mode; BambuStudio
-  reads a dozen more (`DeviceManager.cpp:4433-4455`) that this crate does not yet.
 
 - **`fun2`**: `Option<&'a str>`
 
@@ -82,14 +75,6 @@ site.
   the model — remote AMS drying is version-gated on H2D, H2D Pro, H2S, H2C, P2S and X2D for
   exactly this reason.
 
-- **`telemetry`**: `Option<&'a crate::types::PrinterTelemetry>`
-
-  The most recent `print` telemetry object, for quirks that read a live state field.
-  
-  Distinct from the capability fields above: this is machine *state*
-  ([`is_door_open`](../index.md#modelquirks) reads a door bit that flips as
-  someone opens the door), not a capability claim.
-
 #### Implementations
 
 - <span id="quirkcontext-empty"></span>`fn empty() -> Self`
@@ -99,10 +84,6 @@ site.
   Use when no telemetry has been seen, or to ask what a model claims about itself before
   any report has arrived.
 
-- <span id="quirkcontext-with-fun"></span>`fn with_fun(self, fun: Option<&'a str>) -> Self`
-
-  Sets the `fun` capability bitfield.
-
 - <span id="quirkcontext-with-fun2"></span>`fn with_fun2(self, fun2: Option<&'a str>) -> Self`
 
   Sets the `fun2` capability bitfield.
@@ -110,10 +91,6 @@ site.
 - <span id="quirkcontext-with-firmware"></span>`fn with_firmware(self, firmware: Option<&'a str>) -> Self`
 
   Sets the OTA firmware version.
-
-- <span id="quirkcontext-with-telemetry"></span>`fn with_telemetry(self, telemetry: Option<&'a PrinterTelemetry>) -> Self` — [`PrinterTelemetry`](../../types/telemetry/report/index.md#printertelemetry)
-
-  Sets the live `print` telemetry object.
 
 #### Trait Implementations
 

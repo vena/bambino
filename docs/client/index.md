@@ -82,7 +82,7 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   actually available — an answer resolved with `firmware: None` rests on a model rule
   rather than on anything the printer said.
 
-- <span id="capabilities-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+- <span id="capabilities-quirks"></span>`fn quirks(&self) -> &'static ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
 
   The underlying model quirks, for the capabilities that take no context.
 
@@ -93,7 +93,7 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
   supported on A1/A1 Mini, P1P/P1S and X1/X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
   always on A2L, assumed allowed elsewhere. See
-  [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks)
+  [`ModelQuirks::ams_remote_drying_support`](../quirks/index.md#modelquirks)
   for the sourcing.
 
   **Gate UI on this rather than on a model check.** It is the same value
@@ -125,7 +125,7 @@ Created by [`PrinterClient::capabilities()`](#printerclient). See the
   and defaults to `false` when the firmware version is unknown — except on X2D and A2L,
   whose earliest firmware already has the feature, so they report `true` before
   `get_version()` completes. See
-  [`ModelQuirks::supports_ams_drying_while_printing`](../quirks/index.md#modelquirks) for the sourcing.
+  [`ModelQuirks::ams_drying_while_printing_support`](../quirks/index.md#modelquirks) for the sourcing.
 
 - <span id="capabilities-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self) -> Support` — [`Support`](../quirks/index.md#support)
 
@@ -677,7 +677,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Whether this printer supports remote AMS drying — the printer-side half of the gate.
 
   Supplies this client's [`quirk_context()`](#printerclient) to
-  [`ModelQuirks::supports_ams_remote_drying`](../quirks/index.md#modelquirks),
+  [`ModelQuirks::ams_remote_drying_support`](../quirks/index.md#modelquirks),
   which resolves the printer's own reported answer against the model's rules. This is the
   call to gate a UI on: it is the identical value a drying cycle's
   `send()` checks, so a control offered on the strength
@@ -1551,10 +1551,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
-  Returns `None` on models without a door sensor (`ModelQuirks::has_door_sensor()`
-  returns `false`, e.g. A1/A2), regardless of telemetry observed — distinct from
-  `Some(false)`, which means a sensor-equipped model's telemetry confirms the door is
-  closed. Also `None` before any telemetry carrying `print` has been observed.
+  Returns `None` on models without a door sensor (`ModelQuirks::door_sensor()` is
+  `DoorSensor::None`, e.g. A1/A2) — distinct from `Some(false)`, which means a
+  sensor-equipped model's telemetry confirms the door is closed. Also `None` before any
+  telemetry carrying the model's door field has been observed.
 
 - <span id="superprinterclient-is-220v-power"></span>`fn is_220v_power(&self) -> Option<bool>`
 
@@ -1660,9 +1660,9 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](#printerclient)).
 
   Returns `None` on models without an active chamber temperature sensor/heater
-  (`ModelQuirks::ignores_chamber_temperature()` returns `true`, e.g. A1/A1 Mini/A2L/P1P/
-  P1S) — mirrors `is_door_open()`'s sensor-capability gate. `Some((0, 0))` before any
-  telemetry carrying `chamber_temper` has been observed on a chamber-equipped model.
+  (`ModelQuirks::has_chamber_temperature_sensor()` returns `false`, e.g. A1/A1 Mini/A2L/P1P/
+  P1S). `Some((0, 0))` before any telemetry carrying `chamber_temper` has been observed on a
+  chamber-equipped model.
 
 - <span id="superprinterclient-hms"></span>`fn hms(&self) -> Option<&[HmsEntry]>` — [`HmsEntry`](../types/telemetry/diagnostics/index.md#hmsentry)
 
@@ -1908,7 +1908,7 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Returns the resolved printer hardware model.
 
-- <span id="printerclient-quirks"></span>`fn quirks(&self) -> &'static dyn crate::quirks::ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
+- <span id="printerclient-quirks"></span>`fn quirks(&self) -> &'static crate::quirks::ModelQuirks` — [`ModelQuirks`](../quirks/index.md#modelquirks)
 
   Returns the model quirks for this printer's resolved model.
 
@@ -1918,8 +1918,8 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
   mains region, which lives on the client, not the model — see
   [`is_220v_power()`](#printerclient).
 
-  This is the static strategy object: it knows the model and nothing about what this
-  printer has reported. Quirks whose answer depends on the machine's own report take a
+  This is the model's static row: it knows the model and nothing about what this printer
+  has reported. Quirks whose answer depends on the machine's own report take a
   [`QuirkContext`](../quirks/index.md) and cannot be called from here without one
   — use [`capabilities()`](#printerclient) for those, which supplies it from the cache.
 
@@ -1927,17 +1927,10 @@ platform's `TlsConnector`+`RawStreamFactory` pair (e.g. `TokioTlsConnector`+
 
   Builds a [`QuirkContext`](../quirks/index.md) from this client's cached state.
 
-  A snapshot of whatever has been observed so far: `fun`/`fun2` from the last telemetry
-  carrying them, and firmware from the last [`get_version()`](#printerclient). Fields
-  never observed stay `None`, which quirks read as "the printer didn't say" rather than as
-  a denial.
-
-  [`QuirkContext::telemetry`](../quirks/index.md) is left `None` here.
-  The client's cache stores extracted scalars rather than a whole `PrinterTelemetry`, so
-  there is no live report to hand over; the state-reading quirks are fed the `print` object
-  directly as it arrives, and their results are cached (see
-  [`is_door_open()`](#printerclient)). Set it yourself when calling such a quirk against
-  a report you hold.
+  A snapshot of whatever has been observed so far: `fun2` from the last telemetry carrying
+  it, and firmware from the last [`get_version()`](#printerclient). Fields never
+  observed stay `None`, which quirks read as "the printer didn't say" rather than as a
+  denial.
 
   Prefer [`capabilities()`](#printerclient) unless you need to hand the context to a
   quirk directly — for instance to ask what a *different* model would answer given this

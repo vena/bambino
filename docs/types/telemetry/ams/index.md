@@ -1019,7 +1019,7 @@ Which physical AMS accessory is attached, decoded from `info` bits 0–3.
 about the printer; this answers questions about the box plugged into it, and the two are
 orthogonal. Remote drying in particular needs *both* gates to pass: an AMS that physically has
 a heater (here) and a printer whose firmware acts on the command rather than acking and
-discarding it (`ModelQuirks::supports_ams_remote_drying`). BambuStudio writes the same pair out
+discarding it (`ModelQuirks::ams_remote_drying_support`). BambuStudio writes the same pair out
 longhand at `Widgets/AMSControl.cpp:348`.
 
 Do not infer any of this from `ams_id`: `0..=3` is shared by the original AMS, the AMS Lite and

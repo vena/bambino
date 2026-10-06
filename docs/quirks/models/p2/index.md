@@ -12,101 +12,10 @@ Configures transport parameters, thermal layouts, and camera corrections for the
 
 | Item | Kind | Description |
 |------|------|-------------|
-| [`P2Quirks`](#p2quirks) | struct | Quirks for the P2S CoreXY platform. |
 | [`P2S_BED_TEMP_MAX`](#p2s-bed-temp-max) | const | Bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row. |
 | [`P2S_MIN_REMOTE_DRY_FIRMWARE`](#p2s-min-remote-dry-firmware) | const | Firmware release that introduced remote AMS drying, and drying while printing, on the P2S. |
 | [`P2S_NOZZLE_TEMP_MAX`](#p2s-nozzle-temp-max) | const | Nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row. |
 | [`P2S_Z_MAX`](#p2s-z-max) | const | Build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row. |
-
-## Types
-
-### `P2Quirks`
-
-```rust
-struct P2Quirks;
-```
-
-Quirks for the P2S CoreXY platform.
-
-#### Trait Implementations
-
-##### `impl ModelQuirks for P2Quirks`
-
-- <span id="p2quirks-modelquirks-uses-plaintext-ftps-data-channel"></span>`fn uses_plaintext_ftps_data_channel(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-enforces-ftps-tls-1-2"></span>`fn enforces_ftps_tls_1_2(&self) -> bool`
-
-  P2S firmware `01.02.00.00`'s embedded vsFTPd can't process TLS 1.3's asynchronous session-ticket model on the FTPS data channel — transfers truncate mid-stream with `426 "Failure reading network stream"`.
-  This is a firmware bug, not a real TLS-1.3 incompatibility: independently confirmed by the
-  `bambuddy` project (reporter `@iitazz`, upstream issue #1401), which hit the identical symptom
-  only after its own client started defaulting to TLS 1.3. See [REF-FTPS-CONN] in
-  `reference/02_ftps.md` §2.1.
-
-  The cap narrows the race, it doesn't close it: `bambuddy`'s own
-  follow-up (issue #1417) found P2S can still return a transient `426` on
-  the final post-upload response even under TLS 1.2 — the data-channel
-  close still occasionally races the `226` confirmation, just later and
-  less often than the pre-cap mid-stream truncation. What actually closes
-  it is verifying the transfer via `SIZE` regardless of which reply code
-  came back, which `FtpsClient::upload_file` already does
-  unconditionally (see its doc comment in `src/ftps/client.rs`) — this
-  quirk alone would not have been a complete fix.
-
-  **The session-ticket mechanism is firmware-version-scoped at best.** It presupposes the
-  printer negotiates TLS 1.3 in the first place, and `bambuddy`'s later nine-printer probe
-  (issue #2780) found six P2S units refusing 1.3 outright — correcting their own earlier
-  claim that "the P2S evidently does offer 1.3". On that firmware the negotiated version
-  was already 1.2 and this cap changes nothing. Either the firmware moved between the two
-  reports, or #1401 was fixed by something else in the same change. Kept because a reporter
-  confirmed the symptom cleared and nobody has hardware to re-test it on; treat it as
-  confirmed-by-symptom, not confirmed-by-mechanism. This remains the only one of bambino's
-  two TLS 1.2 caps whose symptom a session-ticket problem could explain at all — see
-  `X2Quirks::enforces_ftps_tls_1_2`, whose mechanism has been falsified outright.
-
-- <span id="p2quirks-modelquirks-is-door-open"></span>`fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
-
-- <span id="p2quirks-modelquirks-has-door-sensor-field"></span>`fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool` — [`PrinterTelemetry`](../../../types/telemetry/report/index.md#printertelemetry)
-
-- <span id="p2quirks-modelquirks-has-door-sensor"></span>`fn has_door_sensor(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-camera-protocol"></span>`fn camera_protocol(&self) -> CameraProtocol` — [`CameraProtocol`](../../../camera/index.md#cameraprotocol)
-
-- <span id="p2quirks-modelquirks-ignores-chamber-temperature"></span>`fn ignores_chamber_temperature(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-active-chamber-heater-max-temp-c"></span>`fn active_chamber_heater_max_temp_c(&self) -> Option<u16>`
-
-- <span id="p2quirks-modelquirks-physical-nozzle-count"></span>`fn physical_nozzle_count(&self) -> u8`
-
-- <span id="p2quirks-modelquirks-ams-pool-composition"></span>`fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition` — [`AmsPoolComposition`](../../../ams/mapping/index.md#amspoolcomposition)
-
-- <span id="p2quirks-modelquirks-supports-nozzle-offset-calibration"></span>`fn supports_nozzle_offset_calibration(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-ams-remote-drying-support"></span>`fn ams_remote_drying_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
-
-  Firmware-gated from [`P2S_MIN_REMOTE_DRY_FIRMWARE`](#p2s-min-remote-dry-firmware); a reported `fun2` bit 5 still wins.
-
-- <span id="p2quirks-modelquirks-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self, ctx: &crate::quirks::QuirkContext<'_>) -> crate::quirks::Support` — [`QuirkContext`](../../context/index.md#quirkcontext), [`Support`](../../index.md#support)
-
-- <span id="p2quirks-modelquirks-is-bed-on-z"></span>`fn is_bed_on_z(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-requires-wallclock-rtsp-timestamps"></span>`fn requires_wallclock_rtsp_timestamps(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-supports-auxiliary-left2-fan"></span>`fn supports_auxiliary_left2_fan(&self) -> bool`
-
-- <span id="p2quirks-modelquirks-z-max"></span>`fn z_max(&self) -> f32`
-
-- <span id="p2quirks-modelquirks-x-max"></span>`fn x_max(&self) -> f32`
-
-- <span id="p2quirks-modelquirks-y-max"></span>`fn y_max(&self) -> f32`
-
-- <span id="p2quirks-modelquirks-nozzle-temp-max"></span>`fn nozzle_temp_max(&self) -> u16`
-
-- <span id="p2quirks-modelquirks-bed-temp-max"></span>`fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16`
-
-- <span id="p2quirks-modelquirks-supports-airduct-mode"></span>`fn supports_airduct_mode(&self) -> bool`
-
-
----
 
 ## Constants
 

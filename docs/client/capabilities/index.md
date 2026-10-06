@@ -22,7 +22,7 @@ and cannot be given the wrong ones.
 **Only context-taking quirks are forwarded here.** Everything a model answers on its own —
 build volume, fan layout, camera protocol — stays on
 [`PrinterClient::quirks()`](../index.md#printerclient), where no telemetry could change
-the answer and a bare `&'static dyn ModelQuirks` is the honest shape.
+the answer and a bare `&'static ModelQuirks` is the honest shape.
 
 The context is a snapshot taken when the view is created. It reflects what the client had
 cached at that moment, so a `Capabilities` held across a
@@ -60,7 +60,7 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   actually available — an answer resolved with `firmware: None` rests on a model rule
   rather than on anything the printer said.
 
-- <span id="capabilities-quirks"></span>`fn quirks(&self) -> &'static dyn ModelQuirks` — [`ModelQuirks`](../../quirks/index.md#modelquirks)
+- <span id="capabilities-quirks"></span>`fn quirks(&self) -> &'static ModelQuirks` — [`ModelQuirks`](../../quirks/index.md#modelquirks)
 
   The underlying model quirks, for the capabilities that take no context.
 
@@ -71,7 +71,7 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
   supported on A1/A1 Mini, P1P/P1S and X1/X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
   always on A2L, assumed allowed elsewhere. See
-  [`ModelQuirks::supports_ams_remote_drying`](../../quirks/index.md#modelquirks)
+  [`ModelQuirks::ams_remote_drying_support`](../../quirks/index.md#modelquirks)
   for the sourcing.
 
   **Gate UI on this rather than on a model check.** It is the same value
@@ -103,7 +103,7 @@ Created by [`PrinterClient::capabilities()`](../index.md#printerclient). See the
   and defaults to `false` when the firmware version is unknown — except on X2D and A2L,
   whose earliest firmware already has the feature, so they report `true` before
   `get_version()` completes. See
-  [`ModelQuirks::supports_ams_drying_while_printing`](../../quirks/index.md#modelquirks) for the sourcing.
+  [`ModelQuirks::ams_drying_while_printing_support`](../../quirks/index.md#modelquirks) for the sourcing.
 
 - <span id="capabilities-ams-drying-while-printing-support"></span>`fn ams_drying_while_printing_support(&self) -> Support` — [`Support`](../../quirks/index.md#support)
 

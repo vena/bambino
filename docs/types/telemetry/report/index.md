@@ -827,6 +827,14 @@ raw field and re-implementing the decode:
 
   Used by H2, P2, and X2 series models where the door sensor state is encoded in the `stat` string.
 
+- <span id="printertelemetry-door-state"></span>`fn door_state(&self, sensor: crate::quirks::DoorSensor) -> Option<bool>` — [`DoorSensor`](../../../quirks/index.md#doorsensor)
+
+  Reads the door state from wherever `sensor` says this model reports it [REF-NET-DOOR].
+
+  `Some(true)` open, `Some(false)` closed, `None` when the model has no sensor or this frame
+  doesn't carry a readable field — never a guess of "closed". Get `sensor` from
+  [`ModelQuirks::door_sensor`](../../../quirks/index.md#modelquirks).
+
 #### Trait Implementations
 
 ##### `impl Clone for PrinterTelemetry`
