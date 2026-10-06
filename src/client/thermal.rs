@@ -88,11 +88,11 @@ where
         target_temp: u16,
     ) -> Result<CommandHandle, Error> {
         // Rack-slot addressing is a quirks *predicate*, not something to infer from the
-        // nozzle count — `uses_nozzle_rack()` is passed explicitly by the H2 macro precisely
+        // nozzle count — `has_nozzle_rack()` is passed explicitly by the H2 macro precisely
         // so a future variant has to state whether it racks its hotends (see
         // `quirks/models/h2.rs`), and `mqtt/commands/print_job.rs` already dispatches on it.
         let quirks = self.identity.model.quirks();
-        if quirks.uses_nozzle_rack() {
+        if quirks.has_nozzle_rack() {
             // Tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
             if nozzle_id != 0 && !(16..=21).contains(&nozzle_id) {
                 return Err(Error::ModelMismatch(
@@ -130,12 +130,7 @@ where
         &mut self,
         target_temp: u16,
     ) -> Result<CommandHandle, Error> {
-        let Some(max) = self
-            .identity
-            .model
-            .quirks()
-            .active_chamber_heater_max_temp_c()
-        else {
+        let Some(max) = self.identity.model.quirks().chamber_heater_temp_max() else {
             return Err(Error::ModelMismatch(
                 "active chamber heater not available on this model".into(),
             ));
@@ -176,7 +171,7 @@ where
 
         let quirks = self.identity.model.quirks();
         let has_flap = quirks.supports_airduct_mode();
-        let has_heater = quirks.active_chamber_heater_max_temp_c().is_some();
+        let has_heater = quirks.chamber_heater_temp_max().is_some();
 
         // A model with a flap but no heater can still be asked to stop venting-for-cooling.
         // A model with neither is nothing but the primitive.

@@ -68,7 +68,7 @@ where
         let port_id = match fan_type {
             FanTarget::PartCooling => super::types::FAN_WRITE_PORT_PART_COOLING,
             FanTarget::AuxiliaryLeft => {
-                if !self.identity.model.quirks().supports_auxiliary_left_fan() {
+                if !self.identity.model.quirks().has_auxiliary_left_fan() {
                     return Err(Error::ModelMismatch(
                         "auxiliary left fan not available on this model".into(),
                     ));
@@ -84,7 +84,7 @@ where
                 super::types::FAN_WRITE_PORT_CHAMBER_EXHAUST
             }
             FanTarget::AuxiliaryLeft2 => {
-                if !self.identity.model.quirks().supports_auxiliary_left2_fan() {
+                if !self.identity.model.quirks().has_auxiliary_left2_fan() {
                     return Err(Error::ModelMismatch(
                         "second auxiliary left fan not available on this model".into(),
                     ));
@@ -136,7 +136,7 @@ where
     ///
     /// Supported on models with a physical fire alarm buzzer (H2 series).
     pub async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error> {
-        if !self.identity.model.quirks().supports_buzzer() {
+        if !self.identity.model.quirks().has_buzzer() {
             return Err(Error::ModelMismatch(
                 "buzzer control not available on this model".into(),
             ));

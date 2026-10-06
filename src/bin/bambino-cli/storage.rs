@@ -100,7 +100,7 @@ pub async fn run(
     let printer = target.printer()?;
     let model = printer.model();
 
-    let ftps_config = build_cli_tls_config(model.quirks().enforces_ftps_tls_1_2())?;
+    let ftps_config = build_cli_tls_config(model.quirks().requires_ftps_tls_1_2())?;
     let ftps_tls = TokioTlsConnector::new(tokio_rustls::TlsConnector::from(ftps_config));
 
     let mut printer = printer

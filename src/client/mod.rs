@@ -559,27 +559,20 @@ where
     /// mains region, which lives on the client, not the model — see
     /// [`is_220v_power()`](Self::is_220v_power).
     ///
-    /// This is the static strategy object: it knows the model and nothing about what this
-    /// printer has reported. Quirks whose answer depends on the machine's own report take a
+    /// This is the model's static row: it knows the model and nothing about what this printer
+    /// has reported. Quirks whose answer depends on the machine's own report take a
     /// [`QuirkContext`](crate::quirks::QuirkContext) and cannot be called from here without one
     /// — use [`capabilities()`](Self::capabilities) for those, which supplies it from the cache.
-    pub fn quirks(&self) -> &'static dyn crate::quirks::ModelQuirks {
+    pub fn quirks(&self) -> &'static crate::quirks::ModelQuirks {
         self.identity.model.quirks()
     }
 
     /// Builds a [`QuirkContext`](crate::quirks::QuirkContext) from this client's cached state.
     ///
-    /// A snapshot of whatever has been observed so far: `fun`/`fun2` from the last telemetry
-    /// carrying them, and firmware from the last [`get_version()`](Self::get_version). Fields
-    /// never observed stay `None`, which quirks read as "the printer didn't say" rather than as
-    /// a denial.
-    ///
-    /// [`QuirkContext::telemetry`](crate::quirks::QuirkContext::telemetry) is left `None` here.
-    /// The client's cache stores extracted scalars rather than a whole `PrinterTelemetry`, so
-    /// there is no live report to hand over; the state-reading quirks are fed the `print` object
-    /// directly as it arrives, and their results are cached (see
-    /// [`is_door_open()`](Self::is_door_open)). Set it yourself when calling such a quirk against
-    /// a report you hold.
+    /// A snapshot of whatever has been observed so far: `fun2` from the last telemetry carrying
+    /// it, and firmware from the last [`get_version()`](Self::get_version). Fields never
+    /// observed stay `None`, which quirks read as "the printer didn't say" rather than as a
+    /// denial.
     ///
     /// Prefer [`capabilities()`](Self::capabilities) unless you need to hand the context to a
     /// quirk directly — for instance to ask what a *different* model would answer given this

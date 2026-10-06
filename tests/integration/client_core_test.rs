@@ -309,7 +309,7 @@ async fn test_thermal_guards_and_temperatures() {
 }
 
 // X1C's bed_temp_max ceiling is voltage-dependent (110°C @220V, 120°C @110V, per
-// src/quirks/models/x1.rs's x1c_bed_temp_max), derived from cached home_flag telemetry — but
+// src/quirks/models/x1.rs's X1C_BED_TEMP_MAX), derived from cached home_flag telemetry — but
 // every existing bed-clamping test above only exercises X1E, whose ceiling ignores the
 // parameter entirely. A regression that swapped the two constants or flipped the None-case
 // fallback direction would pass every existing test untouched.

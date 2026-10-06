@@ -697,6 +697,26 @@ impl PrinterTelemetry {
             .unwrap_or(false)
     }
 
+    /// Reads the door state from wherever `sensor` says this model reports it [REF-NET-DOOR].
+    ///
+    /// `Some(true)` open, `Some(false)` closed, `None` when the model has no sensor or this frame
+    /// doesn't carry a readable field — never a guess of "closed". Get `sensor` from
+    /// [`ModelQuirks::door_sensor`](crate::quirks::ModelQuirks::door_sensor).
+    pub fn door_state(&self, sensor: crate::quirks::DoorSensor) -> Option<bool> {
+        let bit = u64::from(DOOR_SENSOR_BITMASK);
+        match sensor {
+            crate::quirks::DoorSensor::None => None,
+            crate::quirks::DoorSensor::HomeFlag => {
+                self.home_flag.map(|flag| u64::from(flag) & bit != 0)
+            }
+            crate::quirks::DoorSensor::Stat => self
+                .stat
+                .as_deref()
+                .and_then(Self::parse_hex_string)
+                .map(|val| val & bit != 0),
+        }
+    }
+
     /// Helper converting raw hexadecimal state strings cleanly into standard numeric values.
     ///
     /// `u64`, not `u32`: new-generation `stat` values run 9-13 hex digits (X2D

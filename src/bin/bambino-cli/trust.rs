@@ -46,7 +46,7 @@ pub(crate) fn trusted_roots() -> Option<&'static [CertificateDer<'static>]> {
 /// `--with-certs` supplied anchors, otherwise the unverified default.
 ///
 /// `force_tls_1_2` is passed through unchanged so the P2S/X2D FTPS quirk
-/// (`enforces_ftps_tls_1_2`) applies identically on both paths.
+/// (`requires_ftps_tls_1_2`) applies identically on both paths.
 pub(crate) fn build_cli_tls_config(
     force_tls_1_2: bool,
 ) -> Result<std::sync::Arc<rustls::ClientConfig>, CliError> {

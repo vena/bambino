@@ -140,7 +140,7 @@ where
     /// Whether this printer supports remote AMS drying — the printer-side half of the gate.
     ///
     /// Supplies this client's [`quirk_context()`](Self::quirk_context) to
-    /// [`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying),
+    /// [`ModelQuirks::ams_remote_drying_support`](crate::quirks::ModelQuirks::ams_remote_drying_support),
     /// which resolves the printer's own reported answer against the model's rules. This is the
     /// call to gate a UI on: it is the identical value a drying cycle's
     /// [`send()`](crate::client::DryingCycle::send) checks, so a control offered on the strength

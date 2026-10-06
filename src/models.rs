@@ -6,9 +6,11 @@
 //! The resolved model drives behavioral dispatch through the [`crate::quirks`] engine.
 //!
 //! `MODELS` is the single source of truth: one row per supported model, carrying its
-//! serial prefix, its wire-protocol tokens, and its human-readable name.
-//! [`resolve_model()`], [`supported_models()`], and [`PrinterModel::display_name()`] are
-//! all views over that table, so adding a model means adding one enum variant and one row.
+//! serial prefix, its wire-protocol tokens, its human-readable name and its quirks row.
+//! [`resolve_model()`], [`supported_models()`], [`PrinterModel::display_name()`] and
+//! [`PrinterModel::quirks()`] are all views over that table, so adding a model means adding one
+//! enum variant, one row here, its quirks `const` in `src/quirks/models/`, and its
+//! `MODEL_MATRIX.csv` row.
 
 use core::fmt;
 
@@ -74,96 +76,115 @@ struct ModelSpec {
     /// Matching is case-insensitive, so a spelling differing from another token only by
     /// case does not need its own entry.
     dev_tokens: &'static [&'static str],
+    /// The model's hardware variations and transport exceptions.
+    quirks: &'static crate::quirks::ModelQuirks,
 }
 
 /// The supported-model table — one row per [`PrinterModel`] variant except
 /// [`PrinterModel::Unknown`], which is the unrecognized-target fallback, not a model.
-const MODELS: &[ModelSpec] = &[
-    ModelSpec {
-        model: PrinterModel::X1C,
-        display_name: "X1C",
-        serial_prefix: "00M",
-        dev_tokens: &["BL-P001", "X1C"],
-    },
-    ModelSpec {
-        model: PrinterModel::X1E,
-        display_name: "X1E",
-        serial_prefix: "03W",
-        dev_tokens: &["C13", "X1E"],
-    },
-    ModelSpec {
-        model: PrinterModel::X2D,
-        display_name: "X2D",
-        serial_prefix: "20P",
-        dev_tokens: &["N6", "X2D"],
-    },
-    ModelSpec {
-        model: PrinterModel::A1Mini,
-        display_name: "A1 mini",
-        serial_prefix: "030",
-        dev_tokens: &["N1", "A1 Mini", "A1Mini"],
-    },
-    ModelSpec {
-        model: PrinterModel::A1,
-        display_name: "A1",
-        serial_prefix: "039",
-        dev_tokens: &["N2S", "A1"],
-    },
-    ModelSpec {
-        model: PrinterModel::A2L,
-        display_name: "A2L",
-        serial_prefix: "26A",
-        dev_tokens: &["N9", "A2L"],
-    },
-    ModelSpec {
-        model: PrinterModel::P1P,
-        display_name: "P1P",
-        serial_prefix: "01S",
-        dev_tokens: &["C11", "P1P"],
-    },
-    ModelSpec {
-        model: PrinterModel::P1S,
-        display_name: "P1S",
-        serial_prefix: "01P",
-        dev_tokens: &["C12", "P1S"],
-    },
-    ModelSpec {
-        model: PrinterModel::P2S,
-        display_name: "P2S",
-        serial_prefix: "22E",
-        dev_tokens: &["N7", "P2S"],
-    },
-    ModelSpec {
-        model: PrinterModel::H2D,
-        display_name: "H2D",
-        serial_prefix: "094",
-        dev_tokens: &["O1D", "H2D"],
-    },
-    ModelSpec {
-        model: PrinterModel::H2DPro,
-        display_name: "H2D Pro",
-        serial_prefix: "239",
-        dev_tokens: &["O1E", "O2D", "H2D Pro", "H2DPro"],
-    },
-    ModelSpec {
-        model: PrinterModel::H2C,
-        display_name: "H2C",
-        serial_prefix: "31B",
-        dev_tokens: &["O1C", "O1C2", "H2C"],
-    },
-    ModelSpec {
-        model: PrinterModel::H2S,
-        display_name: "H2S",
-        serial_prefix: "093",
-        dev_tokens: &["O1S", "H2S"],
-    },
-    ModelSpec {
-        model: PrinterModel::X1,
-        display_name: "X1",
-        serial_prefix: "00W",
-        dev_tokens: &["BL-P002", "X1"],
-    },
-];
+const MODELS: &[ModelSpec] = {
+    use crate::quirks::models::{a1, a2, h2, p1, p2, x1, x2};
+    &[
+        ModelSpec {
+            model: PrinterModel::X1C,
+            display_name: "X1C",
+            serial_prefix: "00M",
+            dev_tokens: &["BL-P001", "X1C"],
+            quirks: &x1::X1C,
+        },
+        ModelSpec {
+            model: PrinterModel::X1E,
+            display_name: "X1E",
+            serial_prefix: "03W",
+            dev_tokens: &["C13", "X1E"],
+            quirks: &x1::X1E,
+        },
+        ModelSpec {
+            model: PrinterModel::X2D,
+            display_name: "X2D",
+            serial_prefix: "20P",
+            dev_tokens: &["N6", "X2D"],
+            quirks: &x2::X2D,
+        },
+        ModelSpec {
+            model: PrinterModel::A1Mini,
+            display_name: "A1 mini",
+            serial_prefix: "030",
+            dev_tokens: &["N1", "A1 Mini", "A1Mini"],
+            quirks: &a1::A1_MINI,
+        },
+        ModelSpec {
+            model: PrinterModel::A1,
+            display_name: "A1",
+            serial_prefix: "039",
+            dev_tokens: &["N2S", "A1"],
+            quirks: &a1::A1,
+        },
+        ModelSpec {
+            model: PrinterModel::A2L,
+            display_name: "A2L",
+            serial_prefix: "26A",
+            dev_tokens: &["N9", "A2L"],
+            quirks: &a2::A2L,
+        },
+        ModelSpec {
+            model: PrinterModel::P1P,
+            display_name: "P1P",
+            serial_prefix: "01S",
+            dev_tokens: &["C11", "P1P"],
+            quirks: &p1::P1P,
+        },
+        ModelSpec {
+            model: PrinterModel::P1S,
+            display_name: "P1S",
+            serial_prefix: "01P",
+            dev_tokens: &["C12", "P1S"],
+            quirks: &p1::P1S,
+        },
+        ModelSpec {
+            model: PrinterModel::P2S,
+            display_name: "P2S",
+            serial_prefix: "22E",
+            dev_tokens: &["N7", "P2S"],
+            quirks: &p2::P2S,
+        },
+        ModelSpec {
+            model: PrinterModel::H2D,
+            display_name: "H2D",
+            serial_prefix: "094",
+            dev_tokens: &["O1D", "H2D"],
+            quirks: &h2::H2D,
+        },
+        ModelSpec {
+            model: PrinterModel::H2DPro,
+            display_name: "H2D Pro",
+            serial_prefix: "239",
+            dev_tokens: &["O1E", "O2D", "H2D Pro", "H2DPro"],
+            quirks: &h2::H2D_PRO,
+        },
+        ModelSpec {
+            model: PrinterModel::H2C,
+            display_name: "H2C",
+            serial_prefix: "31B",
+            dev_tokens: &["O1C", "O1C2", "H2C"],
+            quirks: &h2::H2C,
+        },
+        ModelSpec {
+            model: PrinterModel::H2S,
+            display_name: "H2S",
+            serial_prefix: "093",
+            dev_tokens: &["O1S", "H2S"],
+            quirks: &h2::H2S,
+        },
+        ModelSpec {
+            model: PrinterModel::X1,
+            display_name: "X1",
+            serial_prefix: "00W",
+            dev_tokens: &["BL-P002", "X1"],
+            quirks: &x1::X1,
+        },
+    ]
+};
 
 /// Display name for [`PrinterModel::Unknown`], which has no `MODELS` row.
 const UNKNOWN_DISPLAY_NAME: &str = "Unknown";
@@ -202,6 +223,11 @@ impl PrinterModel {
     /// attempting a connection.
     pub fn serial_prefix(self) -> Option<&'static str> {
         self.spec().map(|spec| spec.serial_prefix)
+    }
+
+    /// Returns this model's quirks row, or `None` for [`PrinterModel::Unknown`].
+    pub(crate) fn spec_quirks(self) -> Option<&'static crate::quirks::ModelQuirks> {
+        self.spec().map(|spec| spec.quirks)
     }
 
     /// Returns the model whose serial prefix `serial` starts with, case-insensitively.

@@ -196,7 +196,7 @@ fn negotiated_version_reports_the_version_actually_negotiated() {
 
     // The other arm. Also pins the distinction the connector depends on: it sets only
     // `min_version`, so against a 1.3-capable peer it reports 1.3 rather than silently capping —
-    // which is why `enforces_ftps_tls_1_2` models still fail closed there.
+    // which is why `requires_ftps_tls_1_2` models still fail closed there.
     assert_eq!(
         negotiated_against(tls.reference(), &rustls::version::TLS13),
         Some(TlsVersion::Tls13),

@@ -910,7 +910,8 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
     assert!(
         !client
             .quirks()
-            .supports_ams_remote_drying(&client.quirk_context())
+            .ams_remote_drying_support(&client.quirk_context())
+            .is_supported()
     );
     assert!(!client.supports_ams_remote_drying());
     assert!(!client.capabilities().supports_ams_remote_drying());

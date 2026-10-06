@@ -16,7 +16,7 @@
 //! **Only context-taking quirks are forwarded here.** Everything a model answers on its own —
 //! build volume, fan layout, camera protocol — stays on
 //! [`PrinterClient::quirks()`](crate::client::PrinterClient::quirks), where no telemetry could change
-//! the answer and a bare `&'static dyn ModelQuirks` is the honest shape.
+//! the answer and a bare `&'static ModelQuirks` is the honest shape.
 //!
 //! The context is a snapshot taken when the view is created. It reflects what the client had
 //! cached at that moment, so a `Capabilities` held across a
@@ -31,13 +31,13 @@ use crate::quirks::{ModelQuirks, QuirkContext, Support};
 /// [module docs](self) for what is and isn't forwarded here.
 #[derive(Clone, Copy)]
 pub struct Capabilities<'a> {
-    quirks: &'static dyn ModelQuirks,
+    quirks: &'static ModelQuirks,
     context: QuirkContext<'a>,
 }
 
 impl<'a> Capabilities<'a> {
     /// Builds a view over a model's quirks and a context.
-    pub(crate) fn new(quirks: &'static dyn ModelQuirks, context: QuirkContext<'a>) -> Self {
+    pub(crate) fn new(quirks: &'static ModelQuirks, context: QuirkContext<'a>) -> Self {
         Self { quirks, context }
     }
 
@@ -53,7 +53,7 @@ impl<'a> Capabilities<'a> {
 
     /// The underlying model quirks, for the capabilities that take no context.
     #[must_use]
-    pub fn quirks(&self) -> &'static dyn ModelQuirks {
+    pub fn quirks(&self) -> &'static ModelQuirks {
         self.quirks
     }
 
@@ -62,7 +62,7 @@ impl<'a> Capabilities<'a> {
     /// Resolves the printer's reported `fun2` bit 5 against the model's own rules — never
     /// supported on A1/A1 Mini, P1P/P1S and X1/X1C, firmware-gated on H2D/H2D Pro/H2S/H2C/P2S/X2D,
     /// always on A2L, assumed allowed elsewhere. See
-    /// [`ModelQuirks::supports_ams_remote_drying`]
+    /// [`ModelQuirks::ams_remote_drying_support`]
     /// for the sourcing.
     ///
     /// **Gate UI on this rather than on a model check.** It is the same value
@@ -77,7 +77,9 @@ impl<'a> Capabilities<'a> {
     /// model-rule answer instead.
     #[must_use]
     pub fn supports_ams_remote_drying(&self) -> bool {
-        self.quirks.supports_ams_remote_drying(&self.context)
+        self.quirks
+            .ams_remote_drying_support(&self.context)
+            .is_supported()
     }
 
     /// Remote-drying support with its provenance attached.
@@ -98,11 +100,12 @@ impl<'a> Capabilities<'a> {
     /// and defaults to `false` when the firmware version is unknown — except on X2D and A2L,
     /// whose earliest firmware already has the feature, so they report `true` before
     /// `get_version()` completes. See
-    /// [`ModelQuirks::supports_ams_drying_while_printing`] for the sourcing.
+    /// [`ModelQuirks::ams_drying_while_printing_support`] for the sourcing.
     #[must_use]
     pub fn supports_ams_drying_while_printing(&self) -> bool {
         self.quirks
-            .supports_ams_drying_while_printing(&self.context)
+            .ams_drying_while_printing_support(&self.context)
+            .is_supported()
     }
 
     /// Drying-while-printing support with its provenance attached.
@@ -117,7 +120,7 @@ impl<'a> Capabilities<'a> {
 
 impl core::fmt::Debug for Capabilities<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // `dyn ModelQuirks` is not Debug, and the useful content is the resolved answers plus
+        // `ModelQuirks` is not Debug, and the useful content is the resolved answers plus
         // the inputs they came from.
         f.debug_struct("Capabilities")
             .field("context", &self.context)

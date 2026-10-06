@@ -38,7 +38,10 @@ fn test_nothing_reported() {
     ];
     for (model, expected) in cases {
         assert_eq!(
-            model.quirks().supports_ams_remote_drying(&ctx),
+            model
+                .quirks()
+                .ams_remote_drying_support(&ctx)
+                .is_supported(),
             expected,
             "{model:?} with nothing reported"
         );
@@ -67,7 +70,10 @@ fn test_firmware_below_threshold_denies_only_gated_models() {
     for (model, firmware, expected) in cases {
         let ctx = QuirkContext::empty().with_firmware(Some(firmware));
         assert_eq!(
-            model.quirks().supports_ams_remote_drying(&ctx),
+            model
+                .quirks()
+                .ams_remote_drying_support(&ctx)
+                .is_supported(),
             expected,
             "{model:?} at firmware {firmware}"
         );
@@ -87,7 +93,10 @@ fn test_firmware_at_threshold_allows() {
     ] {
         let ctx = QuirkContext::empty().with_firmware(Some(min));
         assert!(
-            model.quirks().supports_ams_remote_drying(&ctx),
+            model
+                .quirks()
+                .ams_remote_drying_support(&ctx)
+                .is_supported(),
             "{model:?} at its minimum {min}"
         );
     }
@@ -117,17 +126,19 @@ fn test_reported_bit_outranks_every_model_rule() {
         PrinterModel::X2D,
         PrinterModel::A2L,
     ] {
-        // A1/A1 Mini are the deliberate exception. Not a hardware limit — the A1 takes an AMS 2
-        // Pro or AMS-HT — but no A1 firmware exposes remote drying, and the A1 family sends no
-        // `fun2` at all, so there is no reported bit for the rule to defer to.
-        let expected_when_set = !matches!(model, PrinterModel::A1 | PrinterModel::A1Mini);
-        assert_eq!(
-            model.quirks().supports_ams_remote_drying(&set),
-            expected_when_set,
+        // The A1 family sends no `fun2` today, but a reported bit would still win there too.
+        assert!(
+            model
+                .quirks()
+                .ams_remote_drying_support(&set)
+                .is_supported(),
             "{model:?} with fun2 bit 5 set"
         );
         assert!(
-            !model.quirks().supports_ams_remote_drying(&clear),
+            !model
+                .quirks()
+                .ams_remote_drying_support(&clear)
+                .is_supported(),
             "{model:?} with fun2 bit 5 clear must refuse"
         );
     }
@@ -142,13 +153,19 @@ fn test_reported_bit_beats_firmware() {
     let old_but_reported = QuirkContext::empty()
         .with_fun2(Some("20"))
         .with_firmware(Some("01.00.00.00"));
-    assert!(h2s.supports_ams_remote_drying(&old_but_reported));
+    assert!(
+        h2s.ams_remote_drying_support(&old_but_reported)
+            .is_supported()
+    );
 
     // Bit clear, firmware new enough: refused.
     let new_but_denied = QuirkContext::empty()
         .with_fun2(Some("00"))
         .with_firmware(Some("99.99.99.99"));
-    assert!(!h2s.supports_ams_remote_drying(&new_but_denied));
+    assert!(
+        !h2s.ams_remote_drying_support(&new_but_denied)
+            .is_supported()
+    );
 }
 
 /// A `fun2` string carrying no hex digits is "didn't say", not a reported zero, so the model
@@ -160,14 +177,21 @@ fn test_empty_fun2_is_not_a_reported_zero() {
     assert!(
         PrinterModel::H2S
             .quirks()
-            .supports_ams_remote_drying(&empty)
+            .ams_remote_drying_support(&empty)
+            .is_supported()
     );
     assert!(
         !PrinterModel::P1S
             .quirks()
-            .supports_ams_remote_drying(&empty)
+            .ams_remote_drying_support(&empty)
+            .is_supported()
     );
 
     let junk = QuirkContext::empty().with_fun2(Some("zz"));
-    assert!(PrinterModel::H2S.quirks().supports_ams_remote_drying(&junk));
+    assert!(
+        PrinterModel::H2S
+            .quirks()
+            .ams_remote_drying_support(&junk)
+            .is_supported()
+    );
 }

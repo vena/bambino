@@ -2,13 +2,13 @@
 //!
 //! Bambu Lab printers vary in hardware capabilities — door sensors, chamber heaters,
 //! fan step resolution, FTPS TLS requirements, camera protocols, and more. Rather than
-//! scattering `match model { ... }` blocks everywhere, the [`ModelQuirks`] trait captures
-//! all model-specific behavior in one place. Call [`PrinterModel::quirks()`] to get the
-//! strategy implementation for any model.
+//! scattering `match model { ... }` blocks everywhere, [`ModelQuirks`] captures all
+//! model-specific behavior in one place. Call [`PrinterModel::quirks()`] to get any model's row.
 //!
-//! Per-model strategy structs live in the [`models`] submodule. This module also provides
-//! shared helpers like [`fan_step_to_percentage()`] and [`FanSpeedDebouncer`] for dealing
-//! with the low-resolution PWM fan telemetry common across most models.
+//! The per-model rows live in the [`models`] submodule, as data: one `const` per model. This
+//! module also provides shared helpers like [`fan_step_to_percentage()`] and
+//! [`FanSpeedDebouncer`] for dealing with the low-resolution PWM fan telemetry common across most
+//! models.
 
 pub mod context;
 mod gcode;
@@ -24,19 +24,17 @@ use alloc::string::String;
 use crate::camera::CameraProtocol;
 use crate::error::Error;
 use crate::models::PrinterModel;
-use crate::types::PrinterTelemetry;
 
 /// Reads the printer's own remote-dry answer out of a [`QuirkContext`]'s `fun2` string.
 ///
 /// `None` means the printer never reported `fun2`, or reported one carrying no hex digits —
-/// "it didn't say", which is what leaves a
-/// [`supports_ams_remote_drying`](ModelQuirks::supports_ams_remote_drying) implementation free to
-/// fall back to its model rules. A `Some` is the printer's answer and every implementation must
-/// honor it; this helper exists so none of them can read the bit differently.
+/// "it didn't say", which leaves the model's [`DryRule`] to decide. A `Some` is the printer's
+/// answer and every rule must honor it; this helper exists so none of them can read the bit
+/// differently.
 ///
 /// **`None` is the normal case on P1 and A1**, which send no `fun2` at all
-/// (`reference/03_mqtt_telemetry.md`), so the model rules below are what actually govern on
-/// those families — not a rarely-taken fallback.
+/// (`reference/03_mqtt_telemetry.md`), so the model rules are what actually govern on those
+/// families — not a rarely-taken fallback.
 pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
     ctx.fun2.and_then(|hex| {
         crate::types::telemetry::fun2_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
@@ -51,7 +49,7 @@ pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
 /// collapses back to that `bool` for callers that don't need the distinction.
 ///
 /// Only capabilities that resolve a reported value against model rules against a default carry
-/// this type. Static model facts (`z_max`, camera protocol, …) have no provenance question.
+/// this type. Static model facts (build volume, camera protocol, …) have no provenance question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
     /// The printer said so itself, e.g. through a `fun2` capability bit.
@@ -73,152 +71,351 @@ impl Support {
     }
 }
 
-/// Returns the printer's reported remote-dry bit as [`Support::Reported`], or `fallback` when it
-/// said nothing.
-pub(crate) fn remote_dry_reported_or(ctx: &QuirkContext, fallback: Support) -> Support {
-    reported_remote_dry(ctx).map_or(fallback, Support::Reported)
-}
-
 /// Compares the context's firmware against `min_firmware`, or returns `unknown` when no version
 /// has been read.
-///
-/// `unknown` is the caller's to choose because the right default differs per capability: idle
-/// remote drying assumes yes (see [`remote_dry_from_firmware`]), drying while printing assumes no,
-/// and a model whose earliest published release already has the capability can infer yes.
 pub(crate) fn firmware_gate(ctx: &QuirkContext, min_firmware: &str, unknown: Support) -> Support {
     ctx.firmware.map_or(unknown, |have| {
         Support::Inferred(firmware_at_least(have, min_firmware))
     })
 }
 
-/// Resolves remote-dry support for a model that ships the capability in a specific firmware
-/// release, honoring a reported `fun2` bit first.
+/// A model's rule for AMS drying, when the printer doesn't report it itself.
 ///
-/// `min_firmware` is the release that introduced remote drying on this model.
+/// One rule answers both [`ModelQuirks::ams_remote_drying_support`] and
+/// [`ModelQuirks::ams_drying_while_printing_support`]: every model's vendor sources state the
+/// two together (same release, same "not supported yet" list), so a per-capability rule would
+/// only be a second place to get one model wrong.
 ///
-/// **An unknown firmware version does not deny the capability** — it falls through to the
-/// model's own answer, and only a version actually read and found older refuses. `None` here
-/// means "nobody has asked this printer yet", never "the printer refused to say": a
-/// non-answering printer makes [`get_version`](crate::client::PrinterClient::get_version) return
-/// `Err(Error::Timeout)`, so the failure surfaces as an error rather than as a silent `None`.
-/// Denying on `None` would make an H2S's drying support depend on whether the caller happened to
-/// call `get_version()` first — invisible, order-dependent, and wrong in the direction that
-/// hides a capability the printer has.
-///
-/// bambuddy's equivalent gate reads `bool(firmware and firmware >= ...)` and so denies on `None`,
-/// but that guard is required by Python — `None >= "01.09.00.00"` raises `TypeError` — and its
-/// call site is a background auto-drying scheduler where skipping a printer is free and retried
-/// on the next tick. Neither reason transfers to a library whose caller asked once and is
-/// waiting on the answer, so the thresholds are ported and the `None` handling is not.
-///
-/// Drying *while printing* deliberately resolves `None` the other way — see
-/// [`dry_while_printing_from_firmware`]. Don't align the two.
-pub(crate) fn remote_dry_from_firmware(ctx: &QuirkContext, min_firmware: &str) -> Support {
-    remote_dry_reported_or(
-        ctx,
-        firmware_gate(ctx, min_firmware, Support::Assumed(true)),
-    )
+/// Both resolvers honor a reported `fun2` bit 5 first — see
+/// [`ModelQuirks::ams_remote_drying_support`] for which direction counts for which capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DryRule {
+    /// No vendor source states either way (X1E, an unrecognized model): idle remote drying is
+    /// assumed allowed — the printer answers `result: "fail"` if it can't, matching bambuddy's
+    /// "all other models ... are allowed" — and drying while printing is assumed denied.
+    Unstated,
+    /// The vendor names the model unsupported: the drying guide's "not supported yet" lists,
+    /// or a release history that puts drying on the printer's screen only.
+    Never,
+    /// The model's earliest published release already has both capabilities.
+    Always,
+    /// Both capabilities shipped in release `min`.
+    ///
+    /// **An unread firmware version does not deny idle remote drying.** `None` means "nobody has
+    /// asked this printer yet", never "the printer refused to say": a non-answering printer makes
+    /// [`get_version`](crate::client::PrinterClient::get_version) return `Err(Error::Timeout)`.
+    /// Denying on `None` would make an H2S's drying support depend on whether the caller happened
+    /// to call `get_version()` first — invisible, order-dependent, and wrong in the direction
+    /// that hides a capability the printer has. bambuddy's equivalent gate reads
+    /// `bool(firmware and firmware >= ...)` and so denies on `None`, but that guard is required
+    /// by Python — `None >= "01.09.00.00"` raises `TypeError` — on a background scheduler where
+    /// skipping a printer is free and retried. Neither reason transfers to a library whose caller
+    /// asked once, so the thresholds are ported and the `None` handling is not.
+    ///
+    /// **Drying while printing resolves `None` the other way, to deny**, and deliberately: the
+    /// vendor's list for it is a closed allowlist, and an unsupported printer refuses mid-print
+    /// with `dry_sf_reason` `0` anyway, so assuming no hides nothing a caller could have used.
+    /// bambuddy's `supports_drying_while_printing` agrees. Don't align the two.
+    ///
+    /// `in_first_release` marks a `min` that is the model's earliest published release: then
+    /// every unit has it, and an unread version is inferred supported for both capabilities.
+    Firmware {
+        min: &'static str,
+        in_first_release: bool,
+    },
 }
 
-/// Resolves drying-while-printing support for a model that ships it in a specific firmware
-/// release.
-///
-/// **Default deny**, the opposite of [`remote_dry_from_firmware`], and deliberately: the vendor's
-/// list for this capability is a closed allowlist ("P1S/P1P/X1C/A1/A1mini are not supported yet"),
-/// and on an unsupported printer the firmware refuses mid-print with `dry_sf_reason` `0` anyway,
-/// so assuming no hides nothing a caller could have used. bambuddy's
-/// `supports_drying_while_printing` reaches the same conclusion.
-///
-/// No `fun2` bit reports this capability. A reported *clear* remote-dry bit still refuses it,
-/// because drying while printing is strictly narrower than idle remote drying; a *set* bit says
-/// nothing about the concurrent case and is not treated as evidence for it.
-pub(crate) fn dry_while_printing_from_firmware(ctx: &QuirkContext, min_firmware: &str) -> Support {
-    dry_while_printing_unless_reported_off(
-        ctx,
-        firmware_gate(ctx, min_firmware, Support::Assumed(false)),
-    )
-}
+impl DryRule {
+    fn remote(self, ctx: &QuirkContext) -> Support {
+        let rule = match self {
+            Self::Unstated => Support::Assumed(true),
+            Self::Never => Support::Inferred(false),
+            Self::Always => Support::Inferred(true),
+            Self::Firmware {
+                min,
+                in_first_release,
+            } => firmware_gate(ctx, min, first_release_or(in_first_release, true)),
+        };
+        reported_remote_dry(ctx).map_or(rule, Support::Reported)
+    }
 
-/// Returns [`Support::Reported`]`(false)` if the printer reports idle remote drying unsupported,
-/// else `answer` — see [`dry_while_printing_from_firmware`] for why only the clear bit counts.
-pub(crate) fn dry_while_printing_unless_reported_off(
-    ctx: &QuirkContext,
-    answer: Support,
-) -> Support {
-    if reported_remote_dry(ctx) == Some(false) {
-        Support::Reported(false)
-    } else {
-        answer
+    fn while_printing(self, ctx: &QuirkContext) -> Support {
+        // No `fun2` bit reports this capability. A reported *clear* remote-dry bit still refuses
+        // it, because drying while printing is strictly narrower than idle remote drying; a *set*
+        // bit says nothing about the concurrent case and is not evidence for it.
+        if reported_remote_dry(ctx) == Some(false) {
+            return Support::Reported(false);
+        }
+        match self {
+            Self::Unstated => Support::Assumed(false),
+            Self::Never => Support::Inferred(false),
+            Self::Always => Support::Inferred(true),
+            Self::Firmware {
+                min,
+                in_first_release,
+            } => firmware_gate(ctx, min, first_release_or(in_first_release, false)),
+        }
     }
 }
 
-/// Polymorphic interface tracking model-specific hardware variations and transport exceptions.
-pub trait ModelQuirks {
-    /// Returns true if this model series requires plaintext transmissions on the FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
-    fn uses_plaintext_ftps_data_channel(&self) -> bool;
+/// `Inferred(true)` when the gating release is the model's first, else `Assumed(default)`.
+fn first_release_or(in_first_release: bool, default: bool) -> Support {
+    if in_first_release {
+        Support::Inferred(true)
+    } else {
+        Support::Assumed(default)
+    }
+}
 
-    /// Returns true if this model series must restrict its TLS version strictly to TLS 1.2 [REF-FTPS-CONN].
+/// Where a model reports its front door state, if it has a door sensor at all [REF-NET-DOOR].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoorSensor {
+    /// No electronic door sensor, so no door state is ever reported.
+    None,
+    /// `home_flag` bit 23 (X1 series) — see
+    /// [`PrinterTelemetry::is_door_open_from_home_flag`](crate::types::PrinterTelemetry::is_door_open_from_home_flag).
+    HomeFlag,
+    /// `stat` (H2, P2S and X2D series) — see
+    /// [`PrinterTelemetry::is_door_open_from_stat`](crate::types::PrinterTelemetry::is_door_open_from_stat).
+    Stat,
+}
+
+/// How a model's hotends are arranged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NozzleLayout {
+    /// One hotend.
+    Single,
+    /// Two hotends on independent carriages (IDEX).
+    Dual,
+    /// Hotends mounted from a swappable tool-changer rack (H2C: 1 fixed + 6 rack hotends).
     ///
-    /// This is a firmware bug workaround, not a real protocol ceiling. Both caps are
+    /// A rack model addresses nozzles by *physical ID* rather than by extruder index, and the two
+    /// namespaces overlap in a way that makes an untranslated value silently wrong rather than
+    /// obviously wrong — see [`crate::mqtt::resolve_rack_nozzle_mapping`].
+    Rack {
+        /// Every hotend the machine can hold, the fixed one included.
+        nozzles: u8,
+    },
+}
+
+impl NozzleLayout {
+    /// Returns the number of physical hotends, rack slots included.
+    #[must_use]
+    pub fn nozzle_count(self) -> u8 {
+        match self {
+            Self::Single => 1,
+            Self::Dual => 2,
+            Self::Rack { nozzles } => nozzles,
+        }
+    }
+}
+
+/// A model's maximum safe travel per axis, in millimeters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BuildVolume {
+    /// X-axis travel ceiling.
+    pub x: f32,
+    /// Y-axis travel ceiling.
+    pub y: f32,
+    /// Z-axis travel ceiling.
+    pub z: f32,
+}
+
+impl BuildVolume {
+    /// A cube with every axis at `side`.
+    pub(crate) const fn cube(side: f32) -> Self {
+        Self {
+            x: side,
+            y: side,
+            z: side,
+        }
+    }
+}
+
+/// A model's heated-bed ceiling, flat or dependent on mains voltage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BedMax {
+    Flat(u16),
+    /// Different ceilings per mains region (X1, X1C). With the region unknown, the lower one.
+    Voltage {
+        v220: u16,
+        v110: u16,
+    },
+}
+
+/// The physical-safety facts every model row must state; `ModelQuirks::new` takes no defaults
+/// for these.
+pub(crate) struct SafetyLimits {
+    pub volume: BuildVolume,
+    pub nozzle_temp_max: u16,
+    pub bed_temp_max: BedMax,
+    /// `None` when the model has no active chamber heater.
+    pub chamber_heater_temp_max: Option<u16>,
+    /// Whether the build plate moves along Z (CoreXY) rather than Y (bed-slinger).
+    pub bed_on_z: bool,
+}
+
+/// One printer model's hardware variations and transport exceptions, as data.
+///
+/// Get one from [`PrinterModel::quirks()`]. Every model is one `const` row in
+/// [`models`], built from `ModelQuirks::new` (which demands the safety limits,
+/// camera protocol, AMS layout and drying rule) plus overrides of the defaulted fields. Fields
+/// are private: a row is a claim about real hardware, so only this crate writes one.
+///
+/// Method names follow one convention: `has_*` for physical hardware present on the machine,
+/// `supports_*` for a firmware feature, and `uses_*`/`requires_*` for protocol behavior the client
+/// must adapt to.
+#[derive(Debug, Clone, Copy)]
+pub struct ModelQuirks {
+    volume: BuildVolume,
+    nozzle_temp_max: u16,
+    bed_temp_max: BedMax,
+    chamber_heater_temp_max: Option<u16>,
+    bed_on_z: bool,
+    camera: CameraProtocol,
+    ams_pool: crate::ams::AmsPoolComposition,
+    dry: DryRule,
+    plaintext_ftps_data_channel: bool,
+    ftps_tls_1_2: bool,
+    door: DoorSensor,
+    chamber_temperature_sensor: bool,
+    nozzles: NozzleLayout,
+    heatbed_thermal_calibration: bool,
+    wallclock_rtsp_timestamps: bool,
+    auxiliary_left_fan: bool,
+    auxiliary_left2_fan: bool,
+    chamber_exhaust_fan: bool,
+    airduct_mode: bool,
+    prompt_sound: bool,
+    buzzer: bool,
+}
+
+impl ModelQuirks {
+    /// A row with the required facts set and every other field at its most common value.
+    ///
+    /// Defaults: encrypted FTPS data channel, no TLS 1.2 cap, no door sensor, no chamber
+    /// temperature sensor, one nozzle, no heatbed thermal calibration, RTP timestamps, a primary
+    /// left auxiliary fan and nothing else optional.
+    pub(crate) const fn new(
+        limits: SafetyLimits,
+        camera: CameraProtocol,
+        ams_pool: crate::ams::AmsPoolComposition,
+        dry: DryRule,
+    ) -> Self {
+        Self {
+            volume: limits.volume,
+            nozzle_temp_max: limits.nozzle_temp_max,
+            bed_temp_max: limits.bed_temp_max,
+            chamber_heater_temp_max: limits.chamber_heater_temp_max,
+            bed_on_z: limits.bed_on_z,
+            camera,
+            ams_pool,
+            dry,
+            plaintext_ftps_data_channel: false,
+            ftps_tls_1_2: false,
+            door: DoorSensor::None,
+            chamber_temperature_sensor: false,
+            nozzles: NozzleLayout::Single,
+            heatbed_thermal_calibration: false,
+            wallclock_rtsp_timestamps: false,
+            auxiliary_left_fan: true,
+            auxiliary_left2_fan: false,
+            chamber_exhaust_fan: false,
+            airduct_mode: false,
+            prompt_sound: false,
+            buzzer: false,
+        }
+    }
+
+    /// Returns true if this model requires a plaintext FTPS passive data channel (PROT C) due to board limitations [REF-FTPS-CONN].
+    #[must_use]
+    pub fn uses_plaintext_ftps_data_channel(&self) -> bool {
+        self.plaintext_ftps_data_channel
+    }
+
+    /// Returns true if this model's FTPS server must be reached over TLS 1.2 or lower [REF-FTPS-CONN].
+    ///
+    /// This is a firmware bug workaround, not a real protocol ceiling. Both caps (P2S and X2D) are
     /// **confirmed by symptom with no confirmed mechanism** — each reporter saw the failure
     /// clear when the cap was applied, but neither root cause has been traced, and the X2D's
     /// original explanation has since been measured wrong. A cap costs nothing on a printer that
-    /// never offers TLS 1.3, so both are kept. See the doc comments on `P2Quirks`/`X2Quirks`
-    /// (the only two implementers returning `true`) for per-model evidence.
-    fn enforces_ftps_tls_1_2(&self) -> bool;
-
-    /// Evaluates whether the physical front enclosure door is open based on model-specific sensor routing [REF-NET-DOOR].
-    ///
-    /// If the target model lacks an electronic door sensor switch, returns `false`.
-    fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool;
-
-    /// Returns true if `telemetry` carries the specific wire field this model's
-    /// [`is_door_open()`](Self::is_door_open) actually reads (`home_flag` for X1 series,
-    /// `stat` for H2/P2/X2 series) [REF-NET-DOOR].
-    ///
-    /// Used to gate telemetry-cache updates (`PrinterClient::update_state_cache`) so an
-    /// incremental message that omits this field doesn't overwrite a previously-observed
-    /// door state with `is_door_open()`'s absent-field default of `false`.
-    /// Defaults to `false`, correct for every model without a door sensor.
-    fn has_door_sensor_field(&self, _telemetry: &PrinterTelemetry) -> bool {
-        false
+    /// never offers TLS 1.3, so both are kept. See the `P2S` and `X2D` rows in
+    /// `src/quirks/models/` for per-model evidence.
+    #[must_use]
+    pub fn requires_ftps_tls_1_2(&self) -> bool {
+        self.ftps_tls_1_2
     }
 
-    /// Returns true if the physical machine chassis is equipped with an electronic front enclosure door open sensor switch.
-    fn has_door_sensor(&self) -> bool;
+    /// Returns where this model reports its door state, or [`DoorSensor::None`] without a door sensor.
+    ///
+    /// Read the state itself with
+    /// [`PrinterTelemetry::door_state`](crate::types::PrinterTelemetry::door_state).
+    #[must_use]
+    pub fn door_sensor(&self) -> DoorSensor {
+        self.door
+    }
 
     /// Returns the camera streaming protocol used by this model's hardware [REF-NET-PORTS].
-    fn camera_protocol(&self) -> CameraProtocol;
+    #[must_use]
+    pub fn camera_protocol(&self) -> CameraProtocol {
+        self.camera
+    }
 
-    /// Returns true if the model is an open-frame or entry-level machine lacking a physical chamber temperature sensor [REF-THER-DECODE].
-    fn ignores_chamber_temperature(&self) -> bool;
-
-    /// Returns the number of physical extruder carriages present on the machine carriage bus.
+    /// Returns true if the model has a physical chamber temperature sensor [REF-THER-DECODE].
     ///
-    /// * `1` for standard single-nozzle configurations.
-    /// * `2` for independent dual-extruder (IDEX) platforms.
-    /// * `7` for automatic tool changer storage racks (1 dedicated + 6 interchangeable).
-    fn physical_nozzle_count(&self) -> u8;
+    /// False on open-frame and entry-level machines (A1, A1 Mini, A2L, P1P, P1S), whose reported
+    /// chamber value is not a measurement.
+    #[must_use]
+    pub fn has_chamber_temperature_sensor(&self) -> bool {
+        self.chamber_temperature_sensor
+    }
 
-    /// Returns this model's physical AMS unit pool structure — whether standard AMS
-    /// and AMS-HT units share one combined pool or draw from independent pools, and each
-    /// pool's unit-count ceiling, and whether an AMS Lite attaches alongside or instead of the
-    /// shared pool. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row. Size a
-    /// per-unit UI from [`AmsPoolComposition::max_units`](crate::ams::AmsPoolComposition::max_units).
-    fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition;
+    /// Returns how this model's hotends are arranged.
+    #[must_use]
+    pub fn nozzle_layout(&self) -> NozzleLayout {
+        self.nozzles
+    }
 
-    /// Returns true if the model supports electronic alignment and nozzle offset calibration sweeps.
-    fn supports_nozzle_offset_calibration(&self) -> bool;
+    /// Returns the number of physical hotends: `1` single, `2` IDEX, `7` on the H2C's rack (1 fixed + 6 interchangeable).
+    #[must_use]
+    pub fn physical_nozzle_count(&self) -> u8 {
+        self.nozzles.nozzle_count()
+    }
+
+    /// Returns true if the model mounts its hotends from a swappable tool-changer rack (H2C) — see [`NozzleLayout::Rack`].
+    #[must_use]
+    pub fn has_nozzle_rack(&self) -> bool {
+        matches!(self.nozzles, NozzleLayout::Rack { .. })
+    }
+
+    /// Returns this model's physical AMS unit pool structure.
+    ///
+    /// Whether standard AMS and AMS-HT units share one combined pool or draw from independent
+    /// pools, each pool's unit-count ceiling, and whether an AMS Lite attaches alongside or
+    /// instead of the shared pool. Confirmed against `MODEL_MATRIX.csv`'s "AMS Unit Limits" row.
+    /// Size a per-unit UI from
+    /// [`AmsPoolComposition::max_units`](crate::ams::AmsPoolComposition::max_units).
+    #[must_use]
+    pub fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
+        self.ams_pool
+    }
+
+    /// Returns true if the model runs nozzle offset calibration — every model with more than one hotend.
+    #[must_use]
+    pub fn supports_nozzle_offset_calibration(&self) -> bool {
+        self.physical_nozzle_count() > 1
+    }
 
     /// Returns true if the model runs heatbed leveling and thermal profile calibration (`calibration` option bit 5).
     ///
-    /// Default `false`. Observed inert on a P1S: the firmware accepts the bit, acknowledges the
-    /// command `"result": "success"`, and queues no stage for it [REF-MQTT-LIFECYCLE]. Since the
-    /// wire reports success either way, a model is assumed not to support this until a capture
-    /// shows a stage queued for it: guessing wrong toward "unsupported" costs a rejected command
-    /// rather than a silently skipped calibration.
-    fn supports_heatbed_thermal_calibration(&self) -> bool {
-        false
+    /// False on every model so far. Observed inert on a P1S: the firmware accepts the bit,
+    /// acknowledges the command `"result": "success"`, and queues no stage for it
+    /// [REF-MQTT-LIFECYCLE]. Since the wire reports success either way, a model is assumed not to
+    /// support this until a capture shows a stage queued for it: guessing wrong toward
+    /// "unsupported" costs a rejected command rather than a silently skipped calibration.
+    #[must_use]
+    pub fn supports_heatbed_thermal_calibration(&self) -> bool {
+        self.heatbed_thermal_calibration
     }
 
     /// Returns the mask of `calibration` option bits this model actually executes [REF-MQTT-LIFECYCLE].
@@ -227,7 +424,8 @@ pub trait ModelQuirks {
     /// observed. Bit 4 follows [`Self::supports_nozzle_offset_calibration`] and bit 5 follows
     /// [`Self::supports_heatbed_thermal_calibration`]. Bits 0 and 6 are internal/undocumented
     /// and never included.
-    fn supported_calibration_mask(&self) -> u32 {
+    #[must_use]
+    pub fn supported_calibration_mask(&self) -> u32 {
         let mut mask = 0b0000_1110;
         if self.supports_nozzle_offset_calibration() {
             mask |= 0b0001_0000;
@@ -239,7 +437,10 @@ pub trait ModelQuirks {
     }
 
     /// Returns true if the build plate moves along the Z-axis (CoreXY bed-on-Z platforms) [REF-MOTO-GCODE].
-    fn is_bed_on_z(&self) -> bool;
+    #[must_use]
+    pub fn is_bed_on_z(&self) -> bool {
+        self.bed_on_z
+    }
 
     /// Checks raw G-code against this model's limits: what `PrinterClient::send_gcode` enforces.
     ///
@@ -250,7 +451,7 @@ pub trait ModelQuirks {
     /// - an `M104`/`M109` `S`/`R`/`B` above [`Self::nozzle_temp_max`];
     /// - an `M140`/`M190` `S`/`R` above [`Self::bed_temp_max`] for `mains_220v`;
     /// - any `M141`/`M191` on a model without an active chamber heater, and an `S`/`R` above
-    ///   [`Self::active_chamber_heater_max_temp_c`] on one with a heater.
+    ///   [`Self::chamber_heater_temp_max`] on one with a heater.
     ///
     /// A temperature argument that isn't a plain decimal (`S3e2`, `S0x1F`) is rejected with
     /// [`Error::InvalidArgument`] rather than interpreted. Unlike the typed setters, nothing is
@@ -264,250 +465,202 @@ pub trait ModelQuirks {
     ///
     /// Relative moves are **not** bounded — the printer reports no absolute position, so there is
     /// nothing to bound them against; `move_relative` caps a single move's distance instead.
-    fn validate_gcode(&self, gcode: &str, mains_220v: Option<bool>) -> Result<(), Error> {
+    pub fn validate_gcode(&self, gcode: &str, mains_220v: Option<bool>) -> Result<(), Error> {
         let temps = gcode::TempLimits {
             nozzle_max: self.nozzle_temp_max(),
             bed_max: self.bed_temp_max(mains_220v),
-            chamber_max: self.active_chamber_heater_max_temp_c(),
+            chamber_max: self.chamber_heater_temp_max(),
         };
         gcode::validate(gcode, self.is_bed_on_z(), Some(&temps))
     }
 
-    /// Returns the maximum safe Z-axis travel distance in millimeters for this model.
-    fn z_max(&self) -> f32;
-
-    /// Returns the maximum safe X-axis travel distance in millimeters for this model.
-    fn x_max(&self) -> f32;
-
-    /// Returns the maximum safe Y-axis travel distance in millimeters for this model.
-    fn y_max(&self) -> f32;
+    /// Returns this model's maximum safe travel per axis.
+    #[must_use]
+    pub fn build_volume(&self) -> BuildVolume {
+        self.volume
+    }
 
     /// Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
     ///
-    /// Evaluates travel limits specific to Bed-Slinger or CoreXY build envelopes. Returns an empty
-    /// string if commanded relative distances exceed mechanical bounds.
-    fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String {
-        format_z_move_gcode(distance, feedrate, self.z_max())
+    /// Returns an empty string if `distance` exceeds the model's Z travel.
+    #[must_use]
+    pub fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String {
+        format_z_move_gcode(distance, feedrate, self.volume.z)
     }
 
-    /// Generates a bounded relative X/Y-axis movement G-code command — the same
-    /// single-command distance-cap pattern `relative_z_move_gcode` uses for Z (see its doc
-    /// comment for why this isn't true position-aware crash prevention). Returns an empty
-    /// string if `distance` is zero, non-finite, exceeds the axis's `x_max()`/`y_max()` bound,
-    /// or `axis` is neither `'X'` nor `'Y'`.
-    fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String {
+    /// Generates a bounded relative X/Y-axis movement G-code command.
+    ///
+    /// The same single-command distance cap `relative_z_move_gcode` applies to Z (see
+    /// `format_z_move_gcode` for why this isn't true position-aware crash prevention). Returns an
+    /// empty string if `distance` is zero, non-finite, exceeds the axis's travel, or `axis` is
+    /// neither `'X'` nor `'Y'`.
+    #[must_use]
+    pub fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String {
         let axis_max = match axis {
-            'X' => self.x_max(),
-            'Y' => self.y_max(),
+            'X' => self.volume.x,
+            'Y' => self.volume.y,
             _ => return String::new(),
         };
         format_xy_move_gcode(axis, distance, feedrate, axis_max)
     }
 
     /// Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
-    fn requires_wallclock_rtsp_timestamps(&self) -> bool {
-        false
+    #[must_use]
+    pub fn requires_wallclock_rtsp_timestamps(&self) -> bool {
+        self.wallclock_rtsp_timestamps
     }
 
-    /// Returns true if the model has a second left-side auxiliary fan (port 10, wire-labeled
-    /// "right" but confirmed a left-side fan — see `FanTarget::AuxiliaryLeft2`'s doc comment,
-    /// issue #60) [REF-CLIM-FANS].
-    fn supports_auxiliary_left2_fan(&self) -> bool {
-        false
+    /// Returns true if the model has a second left-side auxiliary fan (port 10) [REF-CLIM-FANS].
+    ///
+    /// Wire-labeled "right" but confirmed a left-side fan — see `FanTarget::AuxiliaryLeft2`'s doc
+    /// comment, issue #60.
+    #[must_use]
+    pub fn has_auxiliary_left2_fan(&self) -> bool {
+        self.auxiliary_left2_fan
     }
 
     /// Returns true if the model has a primary left-side auxiliary fan (port 2) [REF-CLIM-FANS].
     ///
-    /// Universal default: only A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan),
-    /// P1P (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) and the plain X1
-    /// (BambuStudio's X1 profile sets `auxiliary_fan` to `0`) override this to `false`.
-    fn supports_auxiliary_left_fan(&self) -> bool {
-        true
+    /// Every model except A1, A1 Mini, A2L (open-frame bed-slingers lacking this fan), P1P
+    /// (`MODEL_MATRIX.csv` lists it `Optional`, not guaranteed present) and the plain X1
+    /// (BambuStudio's X1 profile sets `auxiliary_fan` to `0`).
+    #[must_use]
+    pub fn has_auxiliary_left_fan(&self) -> bool {
+        self.auxiliary_left_fan
     }
 
-    /// Returns true if the model has a chamber exhaust/filtration fan (port 3) [REF-CLIM-FANS].
+    /// Returns true if the model has a chamber exhaust/filtration fan (port 3): H2S, H2D, H2D Pro, H2C, X2D [REF-CLIM-FANS].
+    #[must_use]
+    pub fn has_chamber_exhaust_fan(&self) -> bool {
+        self.chamber_exhaust_fan
+    }
+
+    /// Returns true if the model switches climate modes with airduct dampers: H2S, H2D, H2D Pro, H2C, P2S, X2D [REF-CLIM-FANS].
+    #[must_use]
+    pub fn supports_airduct_mode(&self) -> bool {
+        self.airduct_mode
+    }
+
+    /// Returns true if the model plays prompt sound notifications: A1, A1 Mini, A2L (per Bambu Studio profiles).
+    #[must_use]
+    pub fn supports_prompt_sound(&self) -> bool {
+        self.prompt_sound
+    }
+
+    /// Returns true if the model has a fire alarm buzzer module: H2S, H2D, H2D Pro, H2C (per pybambu).
+    #[must_use]
+    pub fn has_buzzer(&self) -> bool {
+        self.buzzer
+    }
+
+    /// Returns whether `ams_filament_drying` sent over MQTT is honored by this printer, with its provenance.
     ///
-    /// Supported on: H2S, H2D, H2D Pro, H2C, X2D.
-    fn has_chamber_exhaust_fan(&self) -> bool {
-        false
-    }
-
-    /// Returns true if the model has controllable airduct dampers for climate mode switching (cooling vs heating recirculation) [REF-CLIM-FANS].
-    ///
-    /// Supported on: H2S, H2D, H2D Pro, H2C, P2S, X2D.
-    fn supports_airduct_mode(&self) -> bool {
-        false
-    }
-
-    /// Returns true if the model has onboard speakers for prompt sound notifications.
-    ///
-    /// Supported on: A1, A1 Mini, A2L (confirmed by Bambu Studio profiles).
-    fn supports_prompt_sound(&self) -> bool {
-        false
-    }
-
-    /// Returns true if the model has a physical fire alarm buzzer module.
-    ///
-    /// Supported on: H2S, H2D, H2D Pro, H2C (confirmed by pybambu).
-    fn supports_buzzer(&self) -> bool {
-        false
-    }
-
-    /// Returns true if `ams_filament_drying` sent over MQTT is actually honored by the host
-    /// printer's firmware, rather than acked `result: success` and silently discarded.
+    /// "Honored" rather than "accepted": an unsupported printer acks `result: success` and
+    /// silently discards the command.
     ///
     /// Resolved in two stages. First, `ctx.fun2` bit 5 — the printer's own answer
-    /// (`DeviceManager.cpp:4469`) — wins where it is present, since a per-model rule is a claim
-    /// about every unit of that model while `fun2` is the machine in front of you speaking.
-    /// Second, when `fun2` is absent, the model's own rule decides.
-    ///
-    /// **A1 and A1 Mini are the exception: they ignore the bit entirely.** Not because the
-    /// hardware cannot be attached — both draw from the shared AMS pool alongside AMS 2 Pro and
-    /// AMS-HT units (`reference/05_materials_ams.md`, `MODEL_MATRIX.csv`, and
-    /// `A1Quirks::ams_pool_composition()` all agree) — but because no known firmware path on
-    /// these models exposes a remote-dry command at all, and bambuddy lists them in
-    /// `_DRYING_UNSUPPORTED_MODELS`. They are hard-coded rather than bit-driven because the
-    /// families send neither `fun` nor `fun2`, so there is no bit to defer to in the first
-    /// place. Every other model defers to a reported bit in both directions.
-    ///
-    /// Do not loosen this branch on the strength of "but the A1 takes an AMS-HT" — it does; the
-    /// gate is about the command channel, not the attachable hardware.
+    /// (`DeviceManager.cpp:4469`) — wins where it is present, in both directions, since a
+    /// per-model rule is a claim about every unit of that model while `fun2` is the machine in
+    /// front of you speaking. Second, when `fun2` is absent, the model's rule decides.
     ///
     /// **The second stage is the one that usually runs.** Only BambuStudio reads `fun2` at all,
-    /// and the P1 and A1 families send neither `fun` nor `fun2`
-    /// (`reference/03_mqtt_telemetry.md`), so on a large share of real hardware the reported bit
-    /// never appears. Treat the model rules as the primary mechanism, not a fallback.
+    /// and the P1 and A1 families send no `fun2` (`reference/03_mqtt_telemetry.md`), so on a
+    /// large share of real hardware the reported bit never appears.
     ///
-    /// Model rules, sourced from Bambu Lab's per-model firmware release histories and its *Filament
-    /// drying guide for AMS 2 Pro and AMS HT* wiki page (thresholds and rejected values tabulated
-    /// in `reference/05_materials_ams.md` §5.4). BambuStudio has no model rule of its own — its
-    /// `is_support_remote_dry` is a bare `false` initializer that only `fun2` ever sets:
+    /// Model rules, sourced from Bambu Lab's per-model firmware release histories and its
+    /// *Filament drying guide for AMS 2 Pro and AMS HT* wiki page (thresholds and rejected values
+    /// tabulated in `reference/05_materials_ams.md` §5.4). BambuStudio has no model rule of its
+    /// own — its `is_support_remote_dry` is a bare `false` initializer that only `fun2` ever sets:
     ///
-    /// * **A1 / A1 Mini — never.** Not a hardware limit: these models do take AMS 2 Pro and
-    ///   AMS-HT units from the shared pool. The drying guide lists them as "not supported yet",
-    ///   and bambuddy lists them in `_DRYING_UNSUPPORTED_MODELS`.
+    /// * **A1 / A1 Mini — never.** Not a hardware limit: these models take AMS 2 Pro and AMS-HT
+    ///   units from the shared pool. No known firmware path exposes a remote-dry command; the
+    ///   drying guide lists them as "not supported yet", and bambuddy lists them in
+    ///   `_DRYING_UNSUPPORTED_MODELS`. The gate is about the command channel, not the attachable
+    ///   hardware.
     /// * **P1P / P1S — never.** The AMS can dry, but only from the printer's own screen: P1
     ///   `01.08.00.00` (2025-04-29) says drying starts "from the printer's screen", no later P1
     ///   release adds remote drying, and the drying guide names both as unsupported. Bambu's P1
     ///   manual agrees ("P1S connected AMS drying functions may only be controlled from the P1S
     ///   screen"), bambuddy lists them in `_DRYING_SCREEN_ONLY_MODELS` citing its #2533, and this
     ///   crate's own drying command was tested against a P1S directly.
-    /// * **X1, X1C — never.** The drying guide names the X1C alongside P1 and A1 as "not supported yet";
-    ///   X1 `01.09.00.00` (2025-04-29) carries the same screen-only sentence as P1 `01.08.00.00`,
-    ///   and no X1/X1C release through `01.12.00.00` mentions remote drying. Bambu Lab has stated
-    ///   the related dry-while-printing feature needs hardware the X1 Carbon lacks.
+    /// * **X1, X1C — never.** The drying guide names the X1C alongside P1 and A1 as "not supported
+    ///   yet"; X1 `01.09.00.00` (2025-04-29) carries the same screen-only sentence as P1
+    ///   `01.08.00.00`, and no X1/X1C release through `01.12.00.00` mentions remote drying.
     /// * **H2D, H2D Pro, H2S, H2C, P2S, X2D — firmware-gated.** The capability shipped in a
     ///   specific release; see each model's constant for the version and its release history.
     /// * **A2L — always.** Its earliest published release, `01.01.00.00`, already has it.
-    /// * **Everything else (X1E, future models) — assumed allowed.** No vendor source states
-    ///   either way; the printer answers `result: "fail"` if it can't. Matches bambuddy's "all
-    ///   other models ... are allowed".
+    /// * **Everything else (X1E, unrecognized models) — assumed allowed.** No vendor source states
+    ///   either way; the printer answers `result: "fail"` if it can't.
     ///
-    /// Takes a [`QuirkContext`] rather than letting callers compose the answer, so there is one
-    /// answer to this question and not two that can disagree — the failure #240 fixed. Prefer
-    /// [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which builds the
-    /// context from cached telemetry for you.
-    ///
-    /// Implementors override [`ams_remote_drying_support`](Self::ams_remote_drying_support), not
-    /// this method, so the two cannot disagree.
-    fn supports_ams_remote_drying(&self, ctx: &QuirkContext) -> bool {
-        self.ams_remote_drying_support(ctx).is_supported()
+    /// Takes a [`QuirkContext`] so there is one answer to this question and not two that can
+    /// disagree — the failure #240 fixed. Prefer
+    /// [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which builds
+    /// the context from cached telemetry for you.
+    #[must_use]
+    pub fn ams_remote_drying_support(&self, ctx: &QuirkContext) -> Support {
+        self.dry.remote(ctx)
     }
 
-    /// Remote-drying support with its provenance attached.
-    ///
-    /// The same answer as [`supports_ams_remote_drying`](Self::supports_ams_remote_drying), plus
-    /// whether the printer reported it, it was inferred from firmware or a model rule, or it is the
-    /// default because nothing was known.
-    fn ams_remote_drying_support(&self, ctx: &QuirkContext) -> Support {
-        remote_dry_reported_or(ctx, Support::Assumed(true))
-    }
-
-    /// Returns true if an AMS drying cycle can run while a print is in progress.
+    /// Returns whether an AMS drying cycle can run while a print is in progress, with its provenance.
     ///
     /// A separate, strictly narrower capability than
-    /// [`supports_ams_remote_drying`](Self::supports_ams_remote_drying). During a print the
-    /// firmware lowers the drying temperature below the printed filament's softening point; this
-    /// crate does not reimplement that clamp. On an unsupported printer the firmware refuses
-    /// mid-print with `dry_sf_reason` `0`.
+    /// [`ams_remote_drying_support`](Self::ams_remote_drying_support). During a print the firmware
+    /// lowers the drying temperature below the printed filament's softening point; this crate does
+    /// not reimplement that clamp. On an unsupported printer the firmware refuses mid-print with
+    /// `dry_sf_reason` `0`.
     ///
-    /// Sourced from the drying guide's "Introduction to Simultaneous Drying and Printing
-    /// Function" list plus each model's release history ("Added support for printing while
-    /// filament is drying" / "Print While Drying"). **Defaults to deny**, unlike idle remote
-    /// drying — see `dry_while_printing_from_firmware` for why the asymmetry is deliberate.
-    ///
-    /// Implementors override
-    /// [`ams_drying_while_printing_support`](Self::ams_drying_while_printing_support).
-    fn supports_ams_drying_while_printing(&self, ctx: &QuirkContext) -> bool {
-        self.ams_drying_while_printing_support(ctx).is_supported()
-    }
-
-    /// Drying-while-printing support with its provenance attached.
-    ///
-    /// The same answer as
-    /// [`supports_ams_drying_while_printing`](Self::supports_ams_drying_while_printing).
-    fn ams_drying_while_printing_support(&self, ctx: &QuirkContext) -> Support {
-        dry_while_printing_unless_reported_off(ctx, Support::Assumed(false))
-    }
-
-    /// Returns true if the model mounts its hotends from a swappable tool-changer rack.
-    ///
-    /// Only the H2C. A rack model addresses nozzles by *physical ID* rather than by extruder
-    /// index, and the two namespaces overlap in a way that makes an untranslated value silently
-    /// wrong rather than obviously wrong — see
-    /// [`crate::mqtt::resolve_rack_nozzle_mapping`] for the translation and why it matters.
-    fn uses_nozzle_rack(&self) -> bool {
-        false
+    /// Sourced from the drying guide's "Introduction to Simultaneous Drying and Printing Function"
+    /// list plus each model's release history ("Added support for printing while filament is
+    /// drying" / "Print While Drying"). **Defaults to deny**, unlike idle remote drying. No `fun2`
+    /// bit reports it, but a reported *clear* remote-dry bit refuses it.
+    #[must_use]
+    pub fn ams_drying_while_printing_support(&self, ctx: &QuirkContext) -> Support {
+        self.dry.while_printing(ctx)
     }
 
     /// Returns the maximum safe nozzle/hotend temperature in °C for this model.
-    fn nozzle_temp_max(&self) -> u16;
+    #[must_use]
+    pub fn nozzle_temp_max(&self) -> u16 {
+        self.nozzle_temp_max
+    }
 
     /// Returns the maximum safe heated bed temperature in °C for this model.
     ///
     /// `mains_220v` is `Some(true)`/`Some(false)` when the printer's mains voltage region is
     /// known (from `PrinterTelemetry::is_220v_power()`, derived from `home_flag` bit 3), or
-    /// `None` before any `home_flag` telemetry has been received. Every model except X1C and X1
-    /// ignores this parameter and returns a flat constant — see `X1CQuirks::bed_temp_max` for
-    /// the ceiling that is genuinely voltage-dependent per the official spec sheet
-    /// ("Max Build Plate Temperature: 110°C @220V, 120°C @110V").
-    fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16;
+    /// `None` before any `home_flag` telemetry has been received. Only the X1 and X1C have a
+    /// voltage-dependent ceiling, per the official spec sheet ("Max Build Plate Temperature:
+    /// 110°C @220V, 120°C @110V"); with the region unknown they return the lower one. Every
+    /// other model ignores the parameter.
+    #[must_use]
+    pub fn bed_temp_max(&self, mains_220v: Option<bool>) -> u16 {
+        match self.bed_temp_max {
+            BedMax::Flat(max) => max,
+            BedMax::Voltage { v220, v110 } => match mains_220v {
+                Some(true) => v220,
+                Some(false) => v110,
+                None => v220.min(v110),
+            },
+        }
+    }
 
-    /// Returns this model's active PTC chamber heater ceiling in °C (M141), or `None` if it
-    /// has no active chamber heater [REF-MOTO-GCODE].
+    /// Returns this model's active chamber heater ceiling in °C (M141), or `None` if it has no active chamber heater [REF-MOTO-GCODE].
     ///
-    /// Supported on: X1E, X2D, H2S, H2D, H2D Pro, H2C. Combining "has an active heater" and
-    /// "its max temp" into one `Option`-returning method (rather than two separate methods,
-    /// one of which used to default to `0`) makes the two facts impossible to state
-    /// inconsistently — no trait default means every implementor must supply both together,
-    /// so a future model can't set "has heater" true while silently inheriting a stale/absent
-    /// max temp.
-    fn active_chamber_heater_max_temp_c(&self) -> Option<u16>;
+    /// Supported on: X1E, X2D, H2S, H2D, H2D Pro, H2C. One `Option` rather than a "has heater"
+    /// flag plus a ceiling, so the two facts can't be stated inconsistently.
+    #[must_use]
+    pub fn chamber_heater_temp_max(&self) -> Option<u16> {
+        self.chamber_heater_temp_max
+    }
 }
 
 impl PrinterModel {
-    /// Returns the [`ModelQuirks`] strategy for this model variant.
+    /// Returns the [`ModelQuirks`] for this model variant.
     ///
-    /// This is the single dispatch point — all model-specific behavior goes through
-    /// the trait object returned here, rather than match-blocks scattered across the crate.
-    pub fn quirks(&self) -> &'static dyn ModelQuirks {
-        match self {
-            PrinterModel::A1 => &models::a1::A1Quirks,
-            PrinterModel::A2L => &models::a2::A2LQuirks,
-            PrinterModel::A1Mini => &models::a1::A1MiniQuirks,
-            PrinterModel::P1P => &models::p1::P1PQuirks,
-            PrinterModel::P1S => &models::p1::P1SQuirks,
-            PrinterModel::P2S => &models::p2::P2Quirks,
-            PrinterModel::X1C => &models::x1::X1CQuirks,
-            PrinterModel::X1 => &models::x1::X1Quirks,
-            PrinterModel::X1E => &models::x1::X1EQuirks,
-            PrinterModel::X2D => &models::x2::X2Quirks,
-            PrinterModel::H2S => &models::h2::H2SQuirks,
-            PrinterModel::H2D => &models::h2::H2DQuirks,
-            PrinterModel::H2DPro => &models::h2::H2DProQuirks,
-            PrinterModel::H2C => &models::h2::H2CQuirks,
-            PrinterModel::Unknown => &models::unknown::UnknownQuirks,
-        }
+    /// This is the single dispatch point — all model-specific behavior goes through the row
+    /// returned here, rather than match-blocks scattered across the crate.
+    pub fn quirks(&self) -> &'static ModelQuirks {
+        self.spec_quirks().unwrap_or(&models::unknown::UNKNOWN)
     }
 }
 
@@ -524,7 +677,6 @@ pub(crate) fn warn_if_unknown_model(model: PrinterModel) {
         );
     }
 }
-
 // ============================================================================
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
@@ -676,22 +828,22 @@ mod tests {
 
         // Bit 5 set beats the X1C's and the P1's never rules.
         let reported_yes = QuirkContext::empty().with_fun2(Some("20"));
-        assert!(x1c.supports_ams_remote_drying(&reported_yes));
-        assert!(p1s.supports_ams_remote_drying(&reported_yes));
+        assert!(x1c.ams_remote_drying_support(&reported_yes).is_supported());
+        assert!(p1s.ams_remote_drying_support(&reported_yes).is_supported());
 
         // Bit 5 clear beats a met firmware minimum.
         let reported_no = QuirkContext::empty()
             .with_fun2(Some("00"))
             .with_firmware(Some("99.99.99.99"));
-        assert!(!x1c.supports_ams_remote_drying(&reported_no));
+        assert!(!x1c.ams_remote_drying_support(&reported_no).is_supported());
 
         // A fun2 carrying no hex digits is "didn't say", not a reported zero, so the model
         // rules still decide — which for both of these is never.
         let said_nothing = QuirkContext::empty()
             .with_fun2(Some(""))
             .with_firmware(Some("99.99.99.99"));
-        assert!(!x1c.supports_ams_remote_drying(&said_nothing));
-        assert!(!p1s.supports_ams_remote_drying(&said_nothing));
+        assert!(!x1c.ams_remote_drying_support(&said_nothing).is_supported());
+        assert!(!p1s.ams_remote_drying_support(&said_nothing).is_supported());
     }
 
     /// The model rules, which are what actually run on hardware — `fun2` is BambuStudio-only and
@@ -718,7 +870,10 @@ mod tests {
                 "{model:?}"
             );
             assert!(
-                !model.quirks().supports_ams_remote_drying(&newest),
+                !model
+                    .quirks()
+                    .ams_remote_drying_support(&newest)
+                    .is_supported(),
                 "{model:?} must stay false even on the newest firmware"
             );
         }
@@ -747,7 +902,7 @@ mod tests {
             // An unread version is "nobody asked", not "too old": only a version actually read
             // and judged refuses, so capability never depends on call ordering. Deliberately
             // unlike bambuddy, whose `bool(firmware and ...)` is a Python None-guard on a
-            // background scheduler — see `remote_dry_from_firmware`.
+            // background scheduler — see `DryRule::Firmware`.
             assert_eq!(
                 model.quirks().ams_remote_drying_support(&none),
                 Support::Assumed(true),
@@ -807,12 +962,12 @@ mod tests {
             );
             let at = QuirkContext::empty().with_firmware(Some(min));
             assert!(
-                q.supports_ams_drying_while_printing(&at),
+                q.ams_drying_while_printing_support(&at).is_supported(),
                 "{model:?} at {min}"
             );
             let old = QuirkContext::empty().with_firmware(Some(below));
             assert!(
-                !q.supports_ams_drying_while_printing(&old),
+                !q.ams_drying_while_printing_support(&old).is_supported(),
                 "{model:?} at {below}"
             );
         }
@@ -877,72 +1032,72 @@ mod tests {
     fn test_a1_quirks() {
         let q = PrinterModel::A1.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforces_ftps_tls_1_2());
-        assert!(!q.has_door_sensor());
+        assert!(!q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::None);
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
-        assert!(q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+        assert!(!q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.supports_auxiliary_left2_fan());
-        assert!(!q.supports_auxiliary_left_fan());
+        assert!(!q.has_auxiliary_left2_fan());
+        assert!(!q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 100);
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
     fn test_a2l_quirks() {
         let q = PrinterModel::A2L.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforces_ftps_tls_1_2());
-        assert!(!q.has_door_sensor());
+        assert!(!q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::None);
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
-        assert!(q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+        assert!(!q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
-        assert_eq!(q.z_max(), 325.0);
+        assert_eq!(q.build_volume().z, 325.0);
         assert!(q.relative_z_move_gcode(330.0, 3000).is_empty());
         assert!(!q.relative_z_move_gcode(300.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 80);
-        assert!(!q.supports_auxiliary_left_fan());
+        assert!(!q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
     fn test_a1_mini_quirks() {
         let q = PrinterModel::A1Mini.quirks();
         assert!(q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforces_ftps_tls_1_2());
-        assert!(!q.has_door_sensor());
+        assert!(!q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::None);
         assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
-        assert!(q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+        assert!(!q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
-        assert_eq!(q.z_max(), 180.0);
+        assert_eq!(q.build_volume().z, 180.0);
         assert!(q.relative_z_move_gcode(200.0, 3000).is_empty());
         assert!(!q.relative_z_move_gcode(150.0, 3000).is_empty());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 80);
-        assert!(!q.supports_auxiliary_left_fan());
+        assert!(!q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
@@ -950,24 +1105,24 @@ mod tests {
         for model in [PrinterModel::P1P, PrinterModel::P1S] {
             let q = model.quirks();
             assert!(!q.uses_plaintext_ftps_data_channel());
-            assert!(!q.enforces_ftps_tls_1_2());
-            assert!(!q.has_door_sensor());
+            assert!(!q.requires_ftps_tls_1_2());
+            assert_eq!(q.door_sensor(), DoorSensor::None);
             assert_eq!(q.camera_protocol(), CameraProtocol::BinaryJpeg);
-            assert!(q.ignores_chamber_temperature());
-            assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+            assert!(!q.has_chamber_temperature_sensor());
+            assert_eq!(q.chamber_heater_temp_max(), None);
             assert_eq!(q.physical_nozzle_count(), 1);
             assert!(!q.supports_nozzle_offset_calibration());
             assert!(q.is_bed_on_z());
             assert!(!q.requires_wallclock_rtsp_timestamps());
-            assert!(!q.supports_auxiliary_left2_fan());
-            assert_eq!(q.supports_auxiliary_left_fan(), model == PrinterModel::P1S);
+            assert!(!q.has_auxiliary_left2_fan());
+            assert_eq!(q.has_auxiliary_left_fan(), model == PrinterModel::P1S);
             assert!(!q.has_chamber_exhaust_fan());
-            assert_eq!(q.z_max(), 256.0);
+            assert_eq!(q.build_volume().z, 256.0);
             assert_eq!(q.nozzle_temp_max(), 300);
             assert_eq!(q.bed_temp_max(None), 100);
             assert!(!q.supports_airduct_mode());
             assert!(!q.supports_prompt_sound());
-            assert!(!q.supports_buzzer());
+            assert!(!q.has_buzzer());
         }
     }
 
@@ -975,196 +1130,196 @@ mod tests {
     fn test_p2s_quirks() {
         let q = PrinterModel::P2S.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(q.enforces_ftps_tls_1_2());
-        assert!(q.has_door_sensor());
+        assert!(q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::Stat);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(!q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+        assert!(q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(q.requires_wallclock_rtsp_timestamps());
-        assert!(q.supports_auxiliary_left2_fan());
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left2_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 110);
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
     fn test_x1c_quirks() {
         let q = PrinterModel::X1C.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforces_ftps_tls_1_2());
-        assert!(q.has_door_sensor());
+        assert!(!q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::HomeFlag);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(!q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+        assert!(q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert!(!q.requires_wallclock_rtsp_timestamps());
-        assert!(!q.supports_auxiliary_left2_fan());
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(!q.has_auxiliary_left2_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
-        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(Some(true)), 110);
         assert_eq!(q.bed_temp_max(Some(false)), 120);
         assert_eq!(q.bed_temp_max(None), 110);
         assert!(!q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
     fn test_x1_quirks_match_x1c_except_aux_fan() {
         let x1 = PrinterModel::X1.quirks();
         let x1c = PrinterModel::X1C.quirks();
-        assert!(!x1.supports_auxiliary_left_fan());
+        assert!(!x1.has_auxiliary_left_fan());
         assert_eq!(x1.nozzle_temp_max(), x1c.nozzle_temp_max());
         for mains in [Some(true), Some(false), None] {
             assert_eq!(x1.bed_temp_max(mains), x1c.bed_temp_max(mains));
         }
-        assert_eq!(x1.z_max(), x1c.z_max());
+        assert_eq!(x1.build_volume().z, x1c.build_volume().z);
         assert_eq!(x1.camera_protocol(), x1c.camera_protocol());
-        assert_eq!(x1.active_chamber_heater_max_temp_c(), None);
+        assert_eq!(x1.chamber_heater_temp_max(), None);
         assert_eq!(x1.physical_nozzle_count(), 1);
         assert!(x1.is_bed_on_z());
-        assert!(x1.has_door_sensor());
+        assert_eq!(x1.door_sensor(), DoorSensor::HomeFlag);
     }
 
     #[test]
     fn test_x1e_quirks() {
         let q = PrinterModel::X1E.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforces_ftps_tls_1_2());
-        assert!(q.has_door_sensor());
+        assert!(!q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::HomeFlag);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(!q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(60));
+        assert!(q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), Some(60));
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
-        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 320);
         assert_eq!(q.bed_temp_max(None), 110);
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
         assert!(!q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
     fn test_x2d_quirks() {
         let q = PrinterModel::X2D.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(q.enforces_ftps_tls_1_2());
-        assert!(q.has_door_sensor());
+        assert!(q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::Stat);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(!q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
+        assert!(q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
-        assert!(q.supports_auxiliary_left2_fan());
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left2_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
-        assert_eq!(q.z_max(), 256.0);
+        assert_eq!(q.build_volume().z, 256.0);
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 120);
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(!q.supports_buzzer());
+        assert!(!q.has_buzzer());
     }
 
     #[test]
     fn test_h2s_quirks() {
         let q = PrinterModel::H2S.quirks();
         assert!(!q.uses_plaintext_ftps_data_channel());
-        assert!(!q.enforces_ftps_tls_1_2());
-        assert!(q.has_door_sensor());
+        assert!(!q.requires_ftps_tls_1_2());
+        assert_eq!(q.door_sensor(), DoorSensor::Stat);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(!q.ignores_chamber_temperature());
-        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
+        assert!(q.has_chamber_temperature_sensor());
+        assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 1);
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
-        assert_eq!(q.z_max(), 340.0);
+        assert_eq!(q.build_volume().z, 340.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(q.supports_buzzer());
+        assert!(q.has_buzzer());
     }
 
     #[test]
     fn test_h2d_quirks() {
         let q = PrinterModel::H2D.quirks();
-        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
+        assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert_eq!(q.z_max(), 325.0);
+        assert_eq!(q.build_volume().z, 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(q.supports_buzzer());
+        assert!(q.has_buzzer());
     }
 
     #[test]
     fn test_h2d_pro_quirks() {
         let q = PrinterModel::H2DPro.quirks();
-        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
+        assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 2);
         assert!(q.supports_nozzle_offset_calibration());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert_eq!(q.z_max(), 325.0);
+        assert_eq!(q.build_volume().z, 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(q.supports_buzzer());
+        assert!(q.has_buzzer());
     }
 
     #[test]
     fn test_h2c_quirks() {
         let q = PrinterModel::H2C.quirks();
-        assert_eq!(q.active_chamber_heater_max_temp_c(), Some(65));
+        assert_eq!(q.chamber_heater_temp_max(), Some(65));
         assert_eq!(q.physical_nozzle_count(), 7);
         assert!(q.supports_nozzle_offset_calibration());
         assert!(q.is_bed_on_z());
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert_eq!(q.z_max(), 325.0);
+        assert_eq!(q.build_volume().z, 325.0);
         assert_eq!(q.nozzle_temp_max(), 350);
         assert_eq!(q.bed_temp_max(None), 120);
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(q.has_chamber_exhaust_fan());
         assert!(q.supports_airduct_mode());
         assert!(!q.supports_prompt_sound());
-        assert!(q.supports_buzzer());
+        assert!(q.has_buzzer());
     }
 
     #[test]
     fn test_unknown_fallback_quirks() {
         let q = PrinterModel::Unknown.quirks();
-        assert_eq!(q.active_chamber_heater_max_temp_c(), None);
+        assert_eq!(q.chamber_heater_temp_max(), None);
         assert_eq!(q.physical_nozzle_count(), 1);
         assert_eq!(q.camera_protocol(), CameraProtocol::Rtsps);
-        assert!(q.supports_auxiliary_left_fan());
+        assert!(q.has_auxiliary_left_fan());
         assert!(!q.has_chamber_exhaust_fan());
 
         // The fallback's ceilings must be the floor of the whole family, and must not vary
@@ -1174,9 +1329,9 @@ mod tests {
             assert_eq!(q.bed_temp_max(mains), 80);
         }
         assert_eq!(q.nozzle_temp_max(), 300);
-        assert_eq!(q.z_max(), 180.0);
-        assert_eq!(q.x_max(), 180.0);
-        assert_eq!(q.y_max(), 180.0);
+        assert_eq!(q.build_volume().z, 180.0);
+        assert_eq!(q.build_volume().x, 180.0);
+        assert_eq!(q.build_volume().y, 180.0);
         assert!(q.validate_gcode("G28 Z", None).is_err());
     }
 

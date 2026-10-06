@@ -127,7 +127,7 @@ pub(super) fn merge_update(
 /// mid-screen at the current cursor with stair-stepped line breaks.
 pub(super) fn draw_dashboard(
     state: &serde_json::Map<String, serde_json::Value>,
-    quirks: &dyn ModelQuirks,
+    quirks: &ModelQuirks,
     progress: bambino::client::PrintProgress,
     bed: (u16, u16),
     warning: Option<&str>,
@@ -333,7 +333,7 @@ fn populate_nozzle_temps(
 
 fn render_thermal(
     state: &serde_json::Map<String, serde_json::Value>,
-    quirks: &dyn ModelQuirks,
+    quirks: &ModelQuirks,
     // From `PrinterClient::bed_temperatures()`, which decodes H2D-style `device.bed.info.temp`
     // as well as the flat `bed_temper`/`bed_target_temper` pair.
     (bed_act, bed_tgt): (u16, u16),
@@ -351,7 +351,7 @@ fn render_thermal(
         bed_tgt
     );
 
-    if !quirks.ignores_chamber_temperature() {
+    if quirks.has_chamber_temperature_sensor() {
         let chamber_temper = state
             .get("chamber_temper")
             .and_then(|t| t.as_f64())

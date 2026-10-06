@@ -218,9 +218,9 @@ pub struct PrintJobConfig {
     pub ams: Option<AmsSource>,
     /// Tool-changer rack routing, set via [`PrintJobConfig::with_nozzle_rack`].
     ///
-    /// Only consulted on a model whose quirks report [`uses_nozzle_rack`].
+    /// Only consulted on a model whose quirks report [`has_nozzle_rack`].
     ///
-    /// [`uses_nozzle_rack`]: crate::quirks::ModelQuirks::uses_nozzle_rack
+    /// [`has_nozzle_rack`]: crate::quirks::ModelQuirks::has_nozzle_rack
     pub nozzle_rack: Option<NozzleRack>,
 }
 
@@ -555,7 +555,7 @@ impl ProjectFileRequest {
         let nozzle_mapping = config
             .nozzle_rack
             .as_ref()
-            .filter(|_| quirks.uses_nozzle_rack())
+            .filter(|_| quirks.has_nozzle_rack())
             .and_then(|rack| {
                 resolve_rack_nozzle_mapping(&rack.slot_extruders, rack.rack_nozzle_id)
             });

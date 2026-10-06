@@ -47,7 +47,7 @@ This section was kept separate from the raw command list above so the CI-live tr
 
 1. **No direct platform I/O in library code.** All network I/O goes through abstract traits in `src/io/` (`AsyncIo`, `TlsConnector`, `RawStreamFactory`, `AsyncUdpSocket`, `TimerProvider`). Never use `tokio::` or `std::net::` outside `src/io/`. `TlsConnector` wraps an existing raw stream in TLS; `RawStreamFactory` dials a fresh pre-TLS stream to host:port (used for both MQTT's lazy connect and FTPS's data channel). `TimerProvider::now_millis()` provides monotonic clock for platform-agnostic timeouts.
 
-2. **All model-specific behavior goes through the quirks engine.** Access via `model.quirks()` — never match on `BambuModel` variants for behavioral dispatch. Strategy structs live in `src/quirks/models/`.
+2. **All model-specific behavior goes through the quirks engine.** Access via `model.quirks()` — never match on `BambuModel` variants for behavioral dispatch. Each model is one `const ModelQuirks` row in `src/quirks/models/`, built from `ModelQuirks::new` (safety limits have no defaults) and referenced from its `MODELS` row in `src/models.rs`.
 
 3. **MQTT commands follow the Payload+Request pattern** (`src/mqtt/commands/` — split into `mod.rs` plus per-category files (`ams.rs`, `control.rs`, `gcode.rs`, `hardware.rs`, `print_job.rs`, `status.rs`) — and `src/diagnostics/kprofile.rs`):
    - A `#[derive(Serialize)]` payload struct with typed fields

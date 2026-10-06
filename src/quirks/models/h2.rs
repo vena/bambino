@@ -12,9 +12,11 @@
 //! H2C has 6 Vortek tool-changer hotends + 1 fixed hotend = 7 nozzles.
 //! O1C and O1C2 are hardware revisions with identical quirks.
 
+use crate::ams::AmsPoolComposition;
 use crate::camera::CameraProtocol;
-use crate::quirks::ModelQuirks;
-use crate::types::PrinterTelemetry;
+use crate::quirks::{
+    BedMax, BuildVolume, DoorSensor, DryRule, ModelQuirks, NozzleLayout, SafetyLimits,
+};
 
 /// H2S build volume Z depth (mm) — single-nozzle-only platform, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const H2S_Z_MAX: f32 = 340.0;
@@ -35,23 +37,6 @@ pub const H2_NOZZLE_TEMP_MAX: u16 = 350;
 pub const H2_BED_TEMP_MAX: u16 = 120;
 /// Chamber temperature ceiling (°C) shared across the H2 family, per `MODEL_MATRIX.csv`'s Max Chamber Temperature row.
 pub const H2_CHAMBER_TEMP_MAX: u16 = 65;
-
-/// Quirks for the H2S — single-nozzle CoreXY, tallest Z of the H2 family.
-pub struct H2SQuirks;
-/// Quirks for the H2D — dual-nozzle (IDEX) CoreXY.
-pub struct H2DQuirks;
-/// Quirks for the H2D Pro — same kinematics as H2D.
-pub struct H2DProQuirks;
-/// Quirks for the H2C — Vortek tool-changer platform (6 tool-changer nozzles + 1 fixed nozzle).
-pub struct H2CQuirks;
-
-fn h2_is_door_open(telemetry: &PrinterTelemetry) -> bool {
-    telemetry.is_door_open_from_stat()
-}
-
-fn h2_has_door_sensor_field(telemetry: &PrinterTelemetry) -> bool {
-    telemetry.stat.is_some()
-}
 
 /// Firmware release that introduced remote AMS drying, and drying while printing, on the H2D.
 ///
@@ -84,153 +69,71 @@ pub const H2S_H2C_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.00.00";
 /// than contradicting this, and its `_DRY_WHILE_PRINTING_MIN_FIRMWARE` agrees.
 pub const H2D_PRO_MIN_REMOTE_DRY_FIRMWARE: &str = "01.02.00.00";
 
-macro_rules! impl_h2_shared {
-    ($quirks_type:ty, $nozzle_count:expr, $offset_cal:expr, $z_max:expr, $x_max:expr, $y_max:expr, $uses_rack:expr, $min_dry_firmware:expr) => {
-        impl ModelQuirks for $quirks_type {
-            fn uses_plaintext_ftps_data_channel(&self) -> bool {
-                false
-            }
-
-            fn enforces_ftps_tls_1_2(&self) -> bool {
-                false
-            }
-
-            fn is_door_open(&self, telemetry: &PrinterTelemetry) -> bool {
-                h2_is_door_open(telemetry)
-            }
-
-            fn has_door_sensor_field(&self, telemetry: &PrinterTelemetry) -> bool {
-                h2_has_door_sensor_field(telemetry)
-            }
-
-            fn has_door_sensor(&self) -> bool {
-                true
-            }
-
-            fn camera_protocol(&self) -> CameraProtocol {
-                CameraProtocol::Rtsps
-            }
-
-            fn ignores_chamber_temperature(&self) -> bool {
-                false
-            }
-
-            fn physical_nozzle_count(&self) -> u8 {
-                $nozzle_count
-            }
-
-            /// Passed explicitly rather than derived from `$nozzle_count` so a future H2 variant
-            /// joining this macro has to state whether it racks its hotends, instead of
-            /// inheriting the answer from an unrelated count.
-            fn uses_nozzle_rack(&self) -> bool {
-                $uses_rack
-            }
-
-            fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
-                crate::ams::AmsPoolComposition::Independent {
-                    max_standard: 4,
-                    max_ht: 8,
-                }
-            }
-
-            fn supports_nozzle_offset_calibration(&self) -> bool {
-                $offset_cal
-            }
-
-            fn ams_remote_drying_support(
-                &self,
-                ctx: &crate::quirks::QuirkContext,
-            ) -> crate::quirks::Support {
-                crate::quirks::remote_dry_from_firmware(ctx, $min_dry_firmware)
-            }
-
-            fn ams_drying_while_printing_support(
-                &self,
-                ctx: &crate::quirks::QuirkContext,
-            ) -> crate::quirks::Support {
-                crate::quirks::dry_while_printing_from_firmware(ctx, $min_dry_firmware)
-            }
-
-            fn is_bed_on_z(&self) -> bool {
-                true
-            }
-
-            fn z_max(&self) -> f32 {
-                $z_max
-            }
-
-            fn x_max(&self) -> f32 {
-                $x_max
-            }
-
-            fn y_max(&self) -> f32 {
-                $y_max
-            }
-
-            fn nozzle_temp_max(&self) -> u16 {
-                H2_NOZZLE_TEMP_MAX
-            }
-
-            fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
-                H2_BED_TEMP_MAX
-            }
-
-            fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
-                Some(H2_CHAMBER_TEMP_MAX)
-            }
-
-            fn supports_airduct_mode(&self) -> bool {
-                true
-            }
-
-            fn supports_buzzer(&self) -> bool {
-                true
-            }
-
-            fn has_chamber_exhaust_fan(&self) -> bool {
-                true
-            }
-        }
-    };
+/// The H2 family's shared row: everything but nozzle layout, build volume and drying release.
+const fn h2(
+    volume: BuildVolume,
+    nozzles: NozzleLayout,
+    min_dry_firmware: &'static str,
+) -> ModelQuirks {
+    ModelQuirks {
+        door: DoorSensor::Stat,
+        chamber_temperature_sensor: true,
+        nozzles,
+        airduct_mode: true,
+        buzzer: true,
+        chamber_exhaust_fan: true,
+        ..ModelQuirks::new(
+            SafetyLimits {
+                volume,
+                nozzle_temp_max: H2_NOZZLE_TEMP_MAX,
+                bed_temp_max: BedMax::Flat(H2_BED_TEMP_MAX),
+                chamber_heater_temp_max: Some(H2_CHAMBER_TEMP_MAX),
+                bed_on_z: true,
+            },
+            CameraProtocol::Rtsps,
+            AmsPoolComposition::Independent {
+                max_standard: 4,
+                max_ht: 8,
+            },
+            DryRule::Firmware {
+                min: min_dry_firmware,
+                in_first_release: false,
+            },
+        )
+    }
 }
 
-impl_h2_shared!(
-    H2SQuirks,
-    1,
-    false,
-    H2S_Z_MAX,
-    H2S_X_MAX,
-    H2S_Y_MAX,
-    false,
-    H2S_H2C_MIN_REMOTE_DRY_FIRMWARE
+const H2_DUAL_VOLUME: BuildVolume = BuildVolume {
+    x: H2_DUAL_X_MAX,
+    y: H2_DUAL_Y_MAX,
+    z: H2_DUAL_Z_MAX,
+};
+
+/// H2S: single-nozzle CoreXY, tallest Z of the H2 family.
+pub(crate) const H2S: ModelQuirks = h2(
+    BuildVolume {
+        x: H2S_X_MAX,
+        y: H2S_Y_MAX,
+        z: H2S_Z_MAX,
+    },
+    NozzleLayout::Single,
+    H2S_H2C_MIN_REMOTE_DRY_FIRMWARE,
 );
-impl_h2_shared!(
-    H2DQuirks,
-    2,
-    true,
-    H2_DUAL_Z_MAX,
-    H2_DUAL_X_MAX,
-    H2_DUAL_Y_MAX,
-    false,
-    H2D_MIN_REMOTE_DRY_FIRMWARE
+/// H2D: dual-nozzle (IDEX) CoreXY.
+pub(crate) const H2D: ModelQuirks = h2(
+    H2_DUAL_VOLUME,
+    NozzleLayout::Dual,
+    H2D_MIN_REMOTE_DRY_FIRMWARE,
 );
-impl_h2_shared!(
-    H2DProQuirks,
-    2,
-    true,
-    H2_DUAL_Z_MAX,
-    H2_DUAL_X_MAX,
-    H2_DUAL_Y_MAX,
-    false,
-    H2D_PRO_MIN_REMOTE_DRY_FIRMWARE
+/// H2D Pro: same kinematics as H2D.
+pub(crate) const H2D_PRO: ModelQuirks = h2(
+    H2_DUAL_VOLUME,
+    NozzleLayout::Dual,
+    H2D_PRO_MIN_REMOTE_DRY_FIRMWARE,
 );
-impl_h2_shared!(
-    H2CQuirks,
-    7,
-    true,
-    H2_DUAL_Z_MAX,
-    H2_DUAL_X_MAX,
-    H2_DUAL_Y_MAX,
-    true,
-    H2S_H2C_MIN_REMOTE_DRY_FIRMWARE
+/// H2C: Vortek tool-changer platform (6 rack nozzles + 1 fixed nozzle).
+pub(crate) const H2C: ModelQuirks = h2(
+    H2_DUAL_VOLUME,
+    NozzleLayout::Rack { nozzles: 7 },
+    H2S_H2C_MIN_REMOTE_DRY_FIRMWARE,
 );

@@ -219,7 +219,7 @@ where
     /// Fetches and caches the printer's firmware version, ignoring failure.
     ///
     /// Several capabilities are gated on a minimum firmware release
-    /// ([`ModelQuirks::supports_ams_remote_drying`](crate::quirks::ModelQuirks::supports_ams_remote_drying)
+    /// ([`ModelQuirks::ams_remote_drying_support`](crate::quirks::ModelQuirks::ams_remote_drying_support)
     /// and anything added beside it), and the version is connection-establishment data the same
     /// way the initial pushall is — bambuddy requests it from its own connect handler, next to
     /// `_request_push_all()` (`bambu_mqtt.py:1727-1729`). Doing it here means a connected client
@@ -229,7 +229,8 @@ where
     /// perfectly usable MQTT session, and failing the connect over an optional capability lookup
     /// would turn a missing nicety into an outage. The cached version simply stays `None`, which
     /// quirks read as "not asked" and resolve from their model rules — see
-    /// [`remote_dry_from_firmware`](crate::quirks) for why that is the safe direction.
+    /// [`ModelQuirks::ams_remote_drying_support`](crate::quirks::ModelQuirks::ams_remote_drying_support)
+    /// for why that is the safe direction.
     ///
     /// Only the explicit connect paths call this. A caller relying on lazy connect — where
     /// `ensure_mqtt()` runs inside some other command — never pays this round trip, and gets the

@@ -1427,7 +1427,7 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// with no ABI stability guarantee across ESP-IDF/mbedTLS version bumps. Practical impact:
 /// if a printer's vsFTPd offers/prefers TLS 1.3, `require_tls_1_2_if_enforced`
 /// (`ftps/client.rs`) still fails closed for models where
-/// `model.quirks().enforces_ftps_tls_1_2()` is true — the connection is safely rejected
+/// `model.quirks().requires_ftps_tls_1_2()` is true — the connection is safely rejected
 /// rather than silently downgraded — but there is currently no way to make it succeed on
 /// ESP-IDF for those models.
 ///

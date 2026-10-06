@@ -332,8 +332,9 @@ where
         if let Some(state) = &print.gcode_state {
             self.cache.last_gcode_state = Some(state.clone());
         }
-        if self.identity.model.quirks().has_door_sensor_field(print) {
-            self.cache.last_door_open = Some(self.identity.model.quirks().is_door_open(print));
+        // A frame without the door field leaves the last observed state in place.
+        if let Some(open) = print.door_state(self.quirks().door_sensor()) {
+            self.cache.last_door_open = Some(open);
         }
         if let Some(print_error) = print.print_error {
             self.cache.last_print_error = Some(print_error);
@@ -492,14 +493,11 @@ where
 
     /// Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
-    /// Returns `None` on models without a door sensor (`ModelQuirks::has_door_sensor()`
-    /// returns `false`, e.g. A1/A2), regardless of telemetry observed — distinct from
-    /// `Some(false)`, which means a sensor-equipped model's telemetry confirms the door is
-    /// closed. Also `None` before any telemetry carrying `print` has been observed.
+    /// Returns `None` on models without a door sensor (`ModelQuirks::door_sensor()` is
+    /// `DoorSensor::None`, e.g. A1/A2) — distinct from `Some(false)`, which means a
+    /// sensor-equipped model's telemetry confirms the door is closed. Also `None` before any
+    /// telemetry carrying the model's door field has been observed.
     pub fn is_door_open(&self) -> Option<bool> {
-        if !self.identity.model.quirks().has_door_sensor() {
-            return None;
-        }
         self.cache.last_door_open
     }
 
@@ -647,11 +645,11 @@ where
     /// Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
     /// Returns `None` on models without an active chamber temperature sensor/heater
-    /// (`ModelQuirks::ignores_chamber_temperature()` returns `true`, e.g. A1/A1 Mini/A2L/P1P/
-    /// P1S) — mirrors `is_door_open()`'s sensor-capability gate. `Some((0, 0))` before any
-    /// telemetry carrying `chamber_temper` has been observed on a chamber-equipped model.
+    /// (`ModelQuirks::has_chamber_temperature_sensor()` returns `false`, e.g. A1/A1 Mini/A2L/P1P/
+    /// P1S). `Some((0, 0))` before any telemetry carrying `chamber_temper` has been observed on a
+    /// chamber-equipped model.
     pub fn chamber_temperature(&self) -> Option<(u16, u16)> {
-        if self.identity.model.quirks().ignores_chamber_temperature() {
+        if !self.quirks().has_chamber_temperature_sensor() {
             return None;
         }
         let raw = self.cache.last_chamber_temper.unwrap_or(0.0);

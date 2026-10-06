@@ -11,7 +11,7 @@
 //! Quirks in the second category take a `QuirkContext` rather than composing the report at the
 //! call site. That is deliberate and load-bearing: when the composition lives outside the quirk,
 //! two callers can reach different answers to the same question, which is exactly what happened
-//! between `ModelQuirks::supports_ams_remote_drying` and
+//! between `ModelQuirks::ams_remote_drying_support` and
 //! `PrinterClient::supports_ams_remote_drying` before #240. Requiring the context makes the
 //! stale-answer call impossible to write rather than merely discouraged.
 //!

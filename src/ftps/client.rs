@@ -442,7 +442,7 @@ where
             );
             return Ok(());
         }
-        if model.quirks().enforces_ftps_tls_1_2()
+        if model.quirks().requires_ftps_tls_1_2()
             && tls_connector.negotiated_version(stream) != Some(TlsVersion::Tls12)
         {
             return Err(Error::ProtocolViolation(

@@ -1,14 +1,14 @@
 //! # A1 Series (A1 & A1 Mini Bed-Slingers) Quirks & Coordinates
 //!
-//! Handles the kinematics, safety boundaries, and mechanical constraints of the
-//! A1 bed-slinger family [REF-MOTO-GCODE].
+//! Kinematics, safety boundaries, and mechanical constraints of the A1 bed-slinger family
+//! [REF-MOTO-GCODE].
 //!
 //! - A1: 256×256×256mm build volume
 //! - A1 Mini: 180×180×180mm build volume
 
+use crate::ams::{AmsLiteSlot, AmsPoolComposition};
 use crate::camera::CameraProtocol;
-use crate::quirks::ModelQuirks;
-use crate::types::PrinterTelemetry;
+use crate::quirks::{BedMax, BuildVolume, DryRule, ModelQuirks, SafetyLimits};
 
 /// A1 build volume Z depth (mm), per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const A1_Z_MAX: f32 = 256.0;
@@ -21,133 +21,41 @@ pub const A1_BED_TEMP_MAX: u16 = 100;
 /// A1 Mini bed temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Build Plate Temperature row.
 pub const A1_MINI_BED_TEMP_MAX: u16 = 80;
 
-/// Quirks for the full-size A1 bed-slinger.
-pub struct A1Quirks;
-/// Quirks for the A1 Mini bed-slinger (same family, smaller build volume/bed ceiling).
-pub struct A1MiniQuirks;
-
-macro_rules! impl_a1_shared {
-    ($quirks_type:ty, $z_max:expr, $bed_max:expr) => {
-        impl ModelQuirks for $quirks_type {
-            fn uses_plaintext_ftps_data_channel(&self) -> bool {
-                true
-            }
-
-            fn enforces_ftps_tls_1_2(&self) -> bool {
-                false
-            }
-
-            fn is_door_open(&self, _telemetry: &PrinterTelemetry) -> bool {
-                false
-            }
-
-            fn has_door_sensor(&self) -> bool {
-                false
-            }
-
-            fn camera_protocol(&self) -> CameraProtocol {
-                CameraProtocol::BinaryJpeg
-            }
-
-            fn ignores_chamber_temperature(&self) -> bool {
-                true
-            }
-
-            fn active_chamber_heater_max_temp_c(&self) -> Option<u16> {
-
-
-                None
-
-
-            }
-
-            fn physical_nozzle_count(&self) -> u8 {
-                1
-            }
-
-            fn ams_pool_composition(&self) -> crate::ams::AmsPoolComposition {
-                // A shared pool of 4, or one AMS Lite instead (`MODEL_MATRIX.csv`).
-                crate::ams::AmsPoolComposition::Shared {
-                    max_units: 4,
-                    ams_lite: crate::ams::AmsLiteSlot::Exclusive,
-                }
-            }
-
-            fn supports_nozzle_offset_calibration(&self) -> bool {
-                false
-            }
-
-            /// Never: no known firmware path on the A1 series exposes a remote-dry command.
-            ///
-            /// Bambu Lab's *Filament drying guide for AMS 2 Pro and AMS HT* lists A1/A1 mini as
-            /// "not supported yet", and bambuddy lists both in `_DRYING_UNSUPPORTED_MODELS`
-            /// (`printer_manager.py:223`).
-            ///
-            /// **Not a hardware limit.** The A1 series does take AMS 2 Pro and AMS-HT units —
-            /// see `ams_pool_composition()` a few lines below, which
-            /// returns a shared pool of 4 like the X1C/P1/A2L (with one AMS Lite as the
-            /// alternative), plus
-            /// `reference/05_materials_ams.md` and `MODEL_MATRIX.csv`. The gate is about the
-            /// command channel, not the attachable hardware; this puts A1 in the same bucket as
-            /// P1P/P1S rather than a "never possible" one.
-            ///
-            /// Unconditional rather than `fun2`-first only because the A1 family sends no
-            /// `fun2` at all, so there is no reported bit to defer to.
-            fn ams_remote_drying_support(
-                &self,
-                _ctx: &crate::quirks::QuirkContext,
-            ) -> crate::quirks::Support {
-                crate::quirks::Support::Inferred(false)
-            }
-
-            /// Never supports drying while printing.
-            ///
-            /// The drying guide names A1/A1 mini as "not supported yet" for simultaneous drying
-            /// and printing.
-            fn ams_drying_while_printing_support(
-                &self,
-                ctx: &crate::quirks::QuirkContext,
-            ) -> crate::quirks::Support {
-                crate::quirks::dry_while_printing_unless_reported_off(
-                    ctx,
-                    crate::quirks::Support::Inferred(false),
-                )
-            }
-
-            fn is_bed_on_z(&self) -> bool {
-                false
-            }
-
-            fn z_max(&self) -> f32 {
-                $z_max
-            }
-
-            fn x_max(&self) -> f32 {
-                $z_max
-            }
-
-            fn y_max(&self) -> f32 {
-                $z_max
-            }
-
-            fn nozzle_temp_max(&self) -> u16 {
-                A1_NOZZLE_TEMP_MAX
-            }
-
-            fn bed_temp_max(&self, _mains_220v: Option<bool>) -> u16 {
-                $bed_max
-            }
-
-            fn supports_prompt_sound(&self) -> bool {
-                true
-            }
-
-            fn supports_auxiliary_left_fan(&self) -> bool {
-                false
-            }
-        }
-    };
+/// The A1 family's shared row: plaintext FTPS data channel, binary JPEG camera, prompt speaker,
+/// no aux fan, no door or chamber sensor.
+///
+/// **Drying: never.** No known firmware path on the A1 series exposes a remote-dry command. Bambu
+/// Lab's *Filament drying guide for AMS 2 Pro and AMS HT* lists A1/A1 mini as "not supported yet"
+/// for both remote drying and simultaneous drying and printing, and bambuddy lists both in
+/// `_DRYING_UNSUPPORTED_MODELS` (`printer_manager.py:223`). **Not a hardware limit**: the A1
+/// series takes AMS 2 Pro and AMS-HT units from a shared pool of 4 (`MODEL_MATRIX.csv`,
+/// `reference/05_materials_ams.md`). The A1 family sends no `fun2`, so the reported-bit stage
+/// never engages, but it is honored like every other model's.
+const fn a1(side: f32, bed_max: u16) -> ModelQuirks {
+    ModelQuirks {
+        plaintext_ftps_data_channel: true,
+        prompt_sound: true,
+        auxiliary_left_fan: false,
+        ..ModelQuirks::new(
+            SafetyLimits {
+                volume: BuildVolume::cube(side),
+                nozzle_temp_max: A1_NOZZLE_TEMP_MAX,
+                bed_temp_max: BedMax::Flat(bed_max),
+                chamber_heater_temp_max: None,
+                bed_on_z: false,
+            },
+            CameraProtocol::BinaryJpeg,
+            // A shared pool of 4, or one AMS Lite instead (`MODEL_MATRIX.csv`).
+            AmsPoolComposition::Shared {
+                max_units: 4,
+                ams_lite: AmsLiteSlot::Exclusive,
+            },
+            DryRule::Never,
+        )
+    }
 }
 
-impl_a1_shared!(A1Quirks, A1_Z_MAX, A1_BED_TEMP_MAX);
-impl_a1_shared!(A1MiniQuirks, A1_MINI_Z_MAX, A1_MINI_BED_TEMP_MAX);
+/// Full-size A1 bed-slinger.
+pub(crate) const A1: ModelQuirks = a1(A1_Z_MAX, A1_BED_TEMP_MAX);
+/// A1 Mini bed-slinger (same family, smaller build volume and bed ceiling).
+pub(crate) const A1_MINI: ModelQuirks = a1(A1_MINI_Z_MAX, A1_MINI_BED_TEMP_MAX);
