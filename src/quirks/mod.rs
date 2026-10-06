@@ -24,6 +24,7 @@ use alloc::string::String;
 use crate::camera::CameraProtocol;
 use crate::error::Error;
 use crate::models::PrinterModel;
+use crate::types::control::CalibrationOption;
 
 /// Reads the printer's own remote-dry answer out of a [`QuirkContext`]'s `fun2` string.
 ///
@@ -37,7 +38,7 @@ use crate::models::PrinterModel;
 /// families — not a rarely-taken fallback.
 pub(crate) fn reported_remote_dry(ctx: &QuirkContext) -> Option<bool> {
     ctx.fun2.and_then(|hex| {
-        crate::types::telemetry::fun2_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
+        crate::types::telemetry::hex_bit(hex, crate::types::telemetry::FUN2_REMOTE_DRY_BIT)
     })
 }
 
@@ -206,6 +207,59 @@ impl NozzleLayout {
             Self::Single => 1,
             Self::Dual => 2,
             Self::Rack { nozzles } => nozzles,
+        }
+    }
+}
+
+/// Nozzle ids of a tool changer's six rack slots (H2C) [REF-THER-DECODE].
+pub const RACK_NOZZLE_IDS: core::ops::RangeInclusive<u8> = 16..=21;
+
+/// A motion axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum Axis {
+    /// X.
+    X,
+    /// Y.
+    Y,
+    /// Z.
+    Z,
+}
+
+impl Axis {
+    /// Every axis, in X, Y, Z order.
+    pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
+
+    /// The G-code letter for this axis.
+    #[must_use]
+    pub const fn letter(self) -> char {
+        match self {
+            Axis::X => 'X',
+            Axis::Y => 'Y',
+            Axis::Z => 'Z',
+        }
+    }
+}
+
+impl core::fmt::Display for Axis {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use core::fmt::Write as _;
+        f.write_char(self.letter())
+    }
+}
+
+impl core::str::FromStr for Axis {
+    type Err = Error;
+
+    /// Parses `x`/`y`/`z`, case-insensitively.
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "x" | "X" => Ok(Axis::X),
+            "y" | "Y" => Ok(Axis::Y),
+            "z" | "Z" => Ok(Axis::Z),
+            _ => Err(Error::InvalidArgument(
+                format!("unknown axis '{s}' (expected X, Y, or Z)").into(),
+            )),
         }
     }
 }
@@ -428,22 +482,24 @@ impl ModelQuirks {
         self.heatbed_thermal_calibration
     }
 
-    /// Returns the mask of `calibration` option bits this model actually executes [REF-MQTT-LIFECYCLE].
+    /// Returns the `calibration` routines this model actually executes [REF-MQTT-LIFECYCLE].
     ///
-    /// Bits 1–3 (bed leveling, vibration compensation, motor noise) are supported everywhere
-    /// observed. Bit 4 follows [`Self::supports_nozzle_offset_calibration`] and bit 5 follows
-    /// [`Self::supports_heatbed_thermal_calibration`]. Bits 0 and 6 are internal/undocumented
-    /// and never included.
+    /// Bed leveling, vibration compensation and motor noise (bits 1–3) are supported everywhere
+    /// observed. Nozzle height (bit 4) follows [`Self::supports_nozzle_offset_calibration`] and
+    /// heatbed thermal (bit 5) follows [`Self::supports_heatbed_thermal_calibration`]. Bits 0 and
+    /// 6 are internal/undocumented and never included.
     #[must_use]
-    pub fn supported_calibration_mask(&self) -> u32 {
-        let mut mask = 0b0000_1110;
+    pub fn supported_calibration(&self) -> CalibrationOption {
+        let mut supported = CalibrationOption::BED_LEVELING
+            | CalibrationOption::VIBRATION_COMPENSATION
+            | CalibrationOption::MOTOR_NOISE_CANCELLATION;
         if self.supports_nozzle_offset_calibration() {
-            mask |= 0b0001_0000;
+            supported |= CalibrationOption::NOZZLE_HEIGHT;
         }
         if self.supports_heatbed_thermal_calibration() {
-            mask |= 0b0010_0000;
+            supported |= CalibrationOption::HEATBED_THERMAL;
         }
-        mask
+        supported
     }
 
     /// Returns true if the build plate moves along the Z-axis (CoreXY bed-on-Z platforms) [REF-MOTO-GCODE].
@@ -490,28 +546,37 @@ impl ModelQuirks {
         self.volume
     }
 
-    /// Generates a model-compliant safe relative Z-axis movement G-code command [REF-MOTO-GCODE].
+    /// Whether `id` addresses a nozzle on this model, as `M104 T<id>` and the print-job nozzle mapping use it.
     ///
-    /// Returns an empty string if `distance` exceeds the model's Z travel.
+    /// On a tool changer ([`has_nozzle_rack`](Self::has_nozzle_rack), H2C) that is the fixed
+    /// hotend `0` or a rack slot in [`RACK_NOZZLE_IDS`] — *not* `0..physical_nozzle_count()`,
+    /// even though that count is `7` there. Elsewhere it is `0..physical_nozzle_count()`.
+    ///
+    /// `reference/04_toolhead_thermal_motion.md` §4 confirms `16..=21` for the rack slots'
+    /// telemetry `stat` field only, not that a write to a passively stored tool does anything, so
+    /// this is a permissive address check, not a statement about effect.
     #[must_use]
-    pub fn relative_z_move_gcode(&self, distance: f32, feedrate: u32) -> String {
-        format_z_move_gcode(distance, feedrate, self.volume.z)
+    pub fn is_valid_nozzle_id(&self, id: u8) -> bool {
+        if self.has_nozzle_rack() {
+            id == 0 || RACK_NOZZLE_IDS.contains(&id)
+        } else {
+            id < self.physical_nozzle_count()
+        }
     }
 
-    /// Generates a bounded relative X/Y-axis movement G-code command.
+    /// Generates a bounded relative move on one axis [REF-MOTO-GCODE].
     ///
-    /// The same single-command distance cap `relative_z_move_gcode` applies to Z (see
-    /// `format_z_move_gcode` for why this isn't true position-aware crash prevention). Returns an
-    /// empty string if `distance` is zero, non-finite, exceeds the axis's travel, or `axis` is
-    /// neither `'X'` nor `'Y'`.
+    /// `None` when `distance` is zero, non-finite, or exceeds the axis's travel in
+    /// [`build_volume()`](Self::build_volume). The cap bounds a single command, not the toolhead's
+    /// position — see `format_move_gcode`.
     #[must_use]
-    pub fn relative_xy_move_gcode(&self, axis: char, distance: f32, feedrate: u32) -> String {
+    pub fn relative_move_gcode(&self, axis: Axis, distance: f32, feedrate: u32) -> Option<String> {
         let axis_max = match axis {
-            'X' => self.volume.x,
-            'Y' => self.volume.y,
-            _ => return String::new(),
+            Axis::X => self.volume.x,
+            Axis::Y => self.volume.y,
+            Axis::Z => self.volume.z,
         };
-        format_xy_move_gcode(axis, distance, feedrate, axis_max)
+        format_move_gcode(axis, distance, feedrate, axis_max)
     }
 
     /// Returns true if the model's RTSP camera stream requires wallclock timestamps instead of embedded RTP clock ticks to avoid frame freezing [REF-CAM-RTSPS].
@@ -691,44 +756,36 @@ pub(crate) fn warn_if_unknown_model(model: PrinterModel) {
 // Specialized Telemetry Signal Processing Helpers
 // ============================================================================
 
-/// Generates a relative Z-axis movement G-code block, bounded by a client-side `z_max` distance
-/// cap on the single move (not true position-aware crash prevention — the printer reports no
-/// absolute axis position over MQTT, so neither firmware nor client can clamp from actual
-/// position; this only bounds how far one relative command can travel). The move is wrapped in
+/// Generates a relative move G-code block, bounded by a client-side `axis_max` distance cap on the single move.
+///
+/// Not true position-aware crash prevention: the printer reports no absolute axis position over
+/// MQTT, so neither firmware nor client can clamp from actual position; this only bounds how far
+/// one relative command can travel.
+///
+/// A Z move is wrapped in reference-mode push/pop (`M1002`) to prevent frame shifting, inside
 /// BambuStudio's own jog sequence (`DevAxisCtrl.cpp`): `M211 S` saves the soft-endstop state,
 /// `M211 X1 Y1 Z1` enables it, and `M211 R` restores the saved state afterwards, so the
 /// printer's `M211` setting is left as it was. Per real H2D hardware testing (bambuddy #2579,
 /// confirmed 2026-07-16) firmware does not enforce software travel limits on G-code received
-/// over MQTT regardless of `M211` state — it provides no actual crash protection here.
+/// over MQTT regardless of `M211` state — it provides no actual crash protection here. X/Y moves
+/// get no wrapping; the frame-shifting risk is Z's.
 ///
-/// Returns an empty string if `distance` is zero or exceeds the model's Z bounds.
-pub(crate) fn format_z_move_gcode(distance: f32, feedrate: u32, z_max: f32) -> String {
-    if !distance.is_finite() || distance == 0.0 || distance.abs() > z_max {
-        return String::new();
-    }
-    format!(
-        "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z{:.2} F{}\nG90\nM1002 pop_ref_mode\nM211 R",
-        distance, feedrate
-    )
-}
-
-/// Generates a relative X/Y-axis movement G-code block, bounded by a client-side `axis_max`
-/// distance cap on the single move — same limitation as `format_z_move_gcode`'s
-/// `z_max` cap (not position-aware crash prevention; see its doc comment). No `M211`/reference-
-/// mode wrapping here: that's specific to Z's frame-shifting risk (see `format_z_move_gcode`),
-/// not applicable to X/Y.
-///
-/// Returns an empty string if `distance` is zero, non-finite, or exceeds `axis_max`.
-pub(crate) fn format_xy_move_gcode(
-    axis: char,
+/// `None` if `distance` is zero, non-finite, or exceeds `axis_max`.
+pub(crate) fn format_move_gcode(
+    axis: Axis,
     distance: f32,
     feedrate: u32,
     axis_max: f32,
-) -> String {
+) -> Option<String> {
     if !distance.is_finite() || distance == 0.0 || distance.abs() > axis_max {
-        return String::new();
+        return None;
     }
-    format!("G91\nG0 {axis}{distance:.2} F{feedrate}\nG90")
+    Some(match axis {
+        Axis::Z => format!(
+            "M211 S\nM211 X1 Y1 Z1\nM1002 push_ref_mode\nG91\nG0 Z{distance:.2} F{feedrate}\nG90\nM1002 pop_ref_mode\nM211 R"
+        ),
+        Axis::X | Axis::Y => format!("G91\nG0 {axis}{distance:.2} F{feedrate}\nG90"),
+    })
 }
 
 pub(crate) const FAN_STEP_MAX: u8 = 15;
@@ -1075,8 +1132,8 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
         assert_eq!(q.build_volume().z, 325.0);
-        assert!(q.relative_z_move_gcode(330.0, 3000).is_empty());
-        assert!(!q.relative_z_move_gcode(300.0, 3000).is_empty());
+        assert!(q.relative_move_gcode(Axis::Z, 330.0, 3000).is_none());
+        assert!(q.relative_move_gcode(Axis::Z, 300.0, 3000).is_some());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 80);
         assert!(!q.has_auxiliary_left_fan());
@@ -1099,8 +1156,8 @@ mod tests {
         assert!(!q.supports_nozzle_offset_calibration());
         assert!(!q.is_bed_on_z());
         assert_eq!(q.build_volume().z, 180.0);
-        assert!(q.relative_z_move_gcode(200.0, 3000).is_empty());
-        assert!(!q.relative_z_move_gcode(150.0, 3000).is_empty());
+        assert!(q.relative_move_gcode(Axis::Z, 200.0, 3000).is_none());
+        assert!(q.relative_move_gcode(Axis::Z, 150.0, 3000).is_some());
         assert_eq!(q.nozzle_temp_max(), 300);
         assert_eq!(q.bed_temp_max(None), 80);
         assert!(!q.has_auxiliary_left_fan());
@@ -1349,7 +1406,7 @@ mod tests {
 
     #[test]
     fn test_z_move_gcode_parameterized() {
-        let gcode = format_z_move_gcode(10.0, 3000, 256.0);
+        let gcode = format_move_gcode(Axis::Z, 10.0, 3000, 256.0).unwrap();
         assert!(gcode.contains("Z10.00"));
         assert!(gcode.contains("F3000"));
         assert!(gcode.starts_with("M211 S\nM211 X1 Y1 Z1\n"));
@@ -1359,41 +1416,41 @@ mod tests {
 
     #[test]
     fn test_z_move_gcode_negative_distance() {
-        let gcode = format_z_move_gcode(-5.5, 1500, 256.0);
+        let gcode = format_move_gcode(Axis::Z, -5.5, 1500, 256.0).unwrap();
         assert!(gcode.contains("Z-5.50"));
         assert!(gcode.contains("F1500"));
     }
 
     #[test]
     fn test_z_move_gcode_exceeds_bounds() {
-        assert!(format_z_move_gcode(300.0, 3000, 256.0).is_empty());
-        assert!(format_z_move_gcode(-300.0, 3000, 256.0).is_empty());
+        assert!(format_move_gcode(Axis::Z, 300.0, 3000, 256.0).is_none());
+        assert!(format_move_gcode(Axis::Z, -300.0, 3000, 256.0).is_none());
     }
 
     #[test]
     fn test_z_move_gcode_rejects_non_finite() {
         // Regression: NaN failed both the `== 0.0` and `.abs() > z_max` guards,
         // so a malformed G0 ZNaN command would have reached the printer.
-        assert!(format_z_move_gcode(f32::NAN, 3000, 256.0).is_empty());
-        assert!(format_z_move_gcode(f32::INFINITY, 3000, 256.0).is_empty());
-        assert!(format_z_move_gcode(f32::NEG_INFINITY, 3000, 256.0).is_empty());
+        assert!(format_move_gcode(Axis::Z, f32::NAN, 3000, 256.0).is_none());
+        assert!(format_move_gcode(Axis::Z, f32::INFINITY, 3000, 256.0).is_none());
+        assert!(format_move_gcode(Axis::Z, f32::NEG_INFINITY, 3000, 256.0).is_none());
     }
 
     #[test]
     fn test_z_move_gcode_zero_distance() {
-        assert!(format_z_move_gcode(0.0, 3000, 256.0).is_empty());
+        assert!(format_move_gcode(Axis::Z, 0.0, 3000, 256.0).is_none());
     }
 
     #[test]
     fn test_z_move_gcode_at_boundary() {
-        let gcode = format_z_move_gcode(256.0, 3000, 256.0);
+        let gcode = format_move_gcode(Axis::Z, 256.0, 3000, 256.0).unwrap();
         assert!(gcode.contains("Z256.00"));
     }
 
     #[test]
     fn test_z_move_via_trait() {
         let q = PrinterModel::P1P.quirks();
-        let gcode = q.relative_z_move_gcode(15.0, 2000);
+        let gcode = q.relative_move_gcode(Axis::Z, 15.0, 2000).unwrap();
         assert!(gcode.contains("Z15.00"));
         assert!(gcode.contains("F2000"));
     }
@@ -1402,7 +1459,7 @@ mod tests {
 
     #[test]
     fn test_xy_move_gcode_parameterized() {
-        let gcode = format_xy_move_gcode('X', 10.0, 3000, 256.0);
+        let gcode = format_move_gcode(Axis::X, 10.0, 3000, 256.0).unwrap();
         assert!(gcode.contains("G0 X10.00"));
         assert!(gcode.contains("F3000"));
         assert!(
@@ -1413,28 +1470,19 @@ mod tests {
 
     #[test]
     fn test_xy_move_gcode_exceeds_bounds() {
-        assert!(format_xy_move_gcode('X', 300.0, 3000, 256.0).is_empty());
-        assert!(format_xy_move_gcode('Y', -300.0, 3000, 256.0).is_empty());
+        assert!(format_move_gcode(Axis::X, 300.0, 3000, 256.0).is_none());
+        assert!(format_move_gcode(Axis::Y, -300.0, 3000, 256.0).is_none());
     }
 
     #[test]
     fn test_xy_move_gcode_rejects_non_finite() {
-        assert!(format_xy_move_gcode('X', f32::NAN, 3000, 256.0).is_empty());
-        assert!(format_xy_move_gcode('Y', f32::INFINITY, 3000, 256.0).is_empty());
+        assert!(format_move_gcode(Axis::X, f32::NAN, 3000, 256.0).is_none());
+        assert!(format_move_gcode(Axis::Y, f32::INFINITY, 3000, 256.0).is_none());
     }
 
     #[test]
     fn test_xy_move_gcode_zero_distance() {
-        assert!(format_xy_move_gcode('X', 0.0, 3000, 256.0).is_empty());
-    }
-
-    #[test]
-    fn test_xy_move_via_trait_rejects_non_xy_axis() {
-        // format_xy_move_gcode itself is axis-agnostic (just formats whatever char it's given,
-        // same as format_z_move_gcode is Z-only by construction) — the 'X'/'Y'-only restriction
-        // lives in relative_xy_move_gcode's axis match, so test it there.
-        let q = PrinterModel::P1P.quirks();
-        assert!(q.relative_xy_move_gcode('Z', 10.0, 3000).is_empty());
+        assert!(format_move_gcode(Axis::X, 0.0, 3000, 256.0).is_none());
     }
 
     #[test]
@@ -1442,8 +1490,8 @@ mod tests {
         // A1 Mini's x_max/y_max is 180mm, unlike the 256mm default — confirms the trait method
         // routes through the model's own x_max()/y_max(), not a shared constant.
         let q = PrinterModel::A1Mini.quirks();
-        assert!(q.relative_xy_move_gcode('X', 200.0, 2000).is_empty());
-        let gcode = q.relative_xy_move_gcode('X', 100.0, 2000);
+        assert!(q.relative_move_gcode(Axis::X, 200.0, 2000).is_none());
+        let gcode = q.relative_move_gcode(Axis::X, 100.0, 2000).unwrap();
         assert!(gcode.contains("X100.00"));
     }
 
@@ -1527,8 +1575,8 @@ mod tests {
         // P1S capture: option 62 (bits 1-5) queued stages for bits 1-3 only. Bits 4 and 5
         // produced nothing while the firmware still acked "success" [REF-MQTT-LIFECYCLE].
         let q = PrinterModel::P1S.quirks();
-        assert_eq!(q.supported_calibration_mask(), 0b0000_1110);
-        assert_eq!(62 & q.supported_calibration_mask(), 14);
+        assert_eq!(q.supported_calibration().bits(), 0b0000_1110);
+        assert_eq!(62 & q.supported_calibration().bits(), 14);
     }
 
     #[test]
@@ -1540,7 +1588,7 @@ mod tests {
             PrinterModel::X1C,
             PrinterModel::Unknown,
         ] {
-            let mask = model.quirks().supported_calibration_mask();
+            let mask = model.quirks().supported_calibration().bits();
             assert_eq!(
                 mask & 0b0100_0001,
                 0,
@@ -1555,7 +1603,7 @@ mod tests {
         for model in [PrinterModel::P1S, PrinterModel::A1, PrinterModel::X1C] {
             let q = model.quirks();
             assert_eq!(
-                q.supported_calibration_mask() & 0b0001_0000 != 0,
+                q.supported_calibration().bits() & 0b0001_0000 != 0,
                 q.supports_nozzle_offset_calibration(),
                 "{model:?} bit 4 disagrees with supports_nozzle_offset_calibration()"
             );

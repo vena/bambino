@@ -110,7 +110,7 @@ async fn test_echo_resolves_its_command_with_the_decoded_verdict() {
     }
 
     let led = client
-        .set_led("chamber_light", true)
+        .set_led(bambino::client::LedNode::Chamber, true)
         .await
         .expect("set_led failed");
     match client.poll_telemetry().await.unwrap() {
@@ -183,7 +183,7 @@ async fn test_unanswered_command_times_out_at_its_deadline() {
     let mut client = connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S)
         .await
         .with_timer(clock.clone());
-    client.set_command_timeout(5);
+    client.set_command_timeout(Some(std::time::Duration::from_secs(5)));
 
     let handle = client.pause_print().await.expect("pause_print failed");
     broker_task.await.expect("broker task panicked");
@@ -218,7 +218,7 @@ async fn test_disconnect_resolves_pending_commands_as_connection_lost() {
     let handle = client.resume_print().await.expect("resume_print failed");
     broker_task.await.expect("broker task panicked");
 
-    client.disconnect_mqtt().await.unwrap();
+    client.disconnect_mqtt().await;
     // Delivered before any reconnect is attempted — this from_mqtt() client cannot redial.
     match client.poll_telemetry().await.unwrap() {
         TelemetryEvent::Command(resolution, None) => {
@@ -245,7 +245,7 @@ async fn test_await_ack_after_disconnect_returns_connection_lost_without_rediali
     let handle = client.resume_print().await.expect("resume_print failed");
     broker_task.await.expect("broker task panicked");
 
-    client.disconnect_mqtt().await.unwrap();
+    client.disconnect_mqtt().await;
     assert_eq!(
         client
             .await_ack(&handle)

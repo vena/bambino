@@ -54,95 +54,64 @@ pub(crate) fn encode_remaining_length(mut len: usize) -> Vec<u8> {
     bytes
 }
 
-/// Encodes a standard MQTT CONNECT packet using Clean Session = True, Username, and Password flags.
-pub(crate) fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(16 + client_id.len() + username.len() + password.len());
+/// Bits 1-2 of a PUBLISH fixed header: the QoS level.
+const PUBLISH_QOS_MASK: u8 = 0b0000_0110;
 
-    // String length prefixes below are u16 wire fields; these `as u16` casts
-    // silently truncate/wrap past 65535 bytes instead of erroring. Not reachable today (all
-    // values derive from short serials/fixed strings) — debug_assert as insurance.
-    debug_assert!(
-        client_id.len() <= u16::MAX as usize,
-        "client_id exceeds u16::MAX"
-    );
-    debug_assert!(
-        username.len() <= u16::MAX as usize,
-        "username exceeds u16::MAX"
-    );
-    debug_assert!(
-        password.len() <= u16::MAX as usize,
-        "password exceeds u16::MAX"
-    );
+/// The QoS level a PUBLISH fixed header carries.
+pub(crate) fn qos_of(header: u8) -> u8 {
+    (header & PUBLISH_QOS_MASK) >> 1
+}
 
-    // Protocol Name length prefix and string
-    payload.extend_from_slice(&[0x00, 0x04]);
-    payload.extend_from_slice(b"MQTT");
+/// Appends an MQTT UTF-8 string: a big-endian `u16` length prefix, then the bytes.
+///
+/// The prefix is a `u16` wire field; every value written here derives from short serials or
+/// fixed strings, so the length check is a debug assertion rather than an error path.
+fn put_str(buf: &mut Vec<u8>, s: &str) {
+    debug_assert!(s.len() <= u16::MAX as usize, "MQTT string exceeds u16::MAX");
+    buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
+    buf.extend_from_slice(s.as_bytes());
+}
 
-    // Protocol Level: 4 (v3.1.1)
-    payload.push(0x04);
-
-    // Connect Flags: Clean Session (0x02) | Username (0x80) | Password (0x40) -> 0xC2
-    payload.push(0xC2);
-
-    payload.extend_from_slice(&MQTT_KEEP_ALIVE_SECS.to_be_bytes());
-
-    // Client ID
-    payload.extend_from_slice(&(client_id.len() as u16).to_be_bytes());
-    payload.extend_from_slice(client_id.as_bytes());
-
-    // Username
-    payload.extend_from_slice(&(username.len() as u16).to_be_bytes());
-    payload.extend_from_slice(username.as_bytes());
-
-    // Password
-    payload.extend_from_slice(&(password.len() as u16).to_be_bytes());
-    payload.extend_from_slice(password.as_bytes());
-
-    let mut packet = vec![HEADER_CONNECT];
-    packet.extend_from_slice(&encode_remaining_length(payload.len()));
-    packet.extend(payload);
+/// Prepends `header` and the remaining-length varint to `body`.
+fn frame(header: u8, body: &[u8]) -> Vec<u8> {
+    let mut packet = vec![header];
+    packet.extend_from_slice(&encode_remaining_length(body.len()));
+    packet.extend_from_slice(body);
     packet
 }
 
-/// Encodes an MQTT SUBSCRIBE packet with QoS 1 flags.
-pub(crate) fn encode_subscribe(packet_id: u16, topic: &str, qos: u8) -> Vec<u8> {
+/// Encodes a standard MQTT CONNECT packet using Clean Session = True, Username, and Password flags.
+pub(crate) fn encode_connect(client_id: &str, username: &str, password: &str) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(16 + client_id.len() + username.len() + password.len());
+    put_str(&mut payload, "MQTT");
+    // Protocol Level: 4 (v3.1.1)
+    payload.push(0x04);
+    // Connect Flags: Clean Session (0x02) | Username (0x80) | Password (0x40) -> 0xC2
+    payload.push(0xC2);
+    payload.extend_from_slice(&MQTT_KEEP_ALIVE_SECS.to_be_bytes());
+    put_str(&mut payload, client_id);
+    put_str(&mut payload, username);
+    put_str(&mut payload, password);
+    frame(HEADER_CONNECT, &payload)
+}
+
+/// Encodes an MQTT SUBSCRIBE packet for one topic, requesting QoS 1.
+pub(crate) fn encode_subscribe(packet_id: u16, topic: &str) -> Vec<u8> {
     let mut payload = Vec::with_capacity(5 + topic.len());
-    debug_assert!(topic.len() <= u16::MAX as usize, "topic exceeds u16::MAX");
-
-    // Packet ID
     payload.extend_from_slice(&packet_id.to_be_bytes());
-
-    // Topic string length prefix and bytes
-    payload.extend_from_slice(&(topic.len() as u16).to_be_bytes());
-    payload.extend_from_slice(topic.as_bytes());
-
-    // Requested QoS byte
-    payload.push(qos);
-
-    let mut packet = vec![HEADER_SUBSCRIBE];
-    packet.extend_from_slice(&encode_remaining_length(payload.len()));
-    packet.extend(payload);
-    packet
+    put_str(&mut payload, topic);
+    // Requested QoS
+    payload.push(1);
+    frame(HEADER_SUBSCRIBE, &payload)
 }
 
 /// Encodes an MQTT PUBLISH packet with QoS 1 flags.
 pub(crate) fn encode_publish_qos1(packet_id: u16, topic: &str, payload: &[u8]) -> Vec<u8> {
-    let mut var_header = Vec::with_capacity(4 + topic.len());
-    debug_assert!(topic.len() <= u16::MAX as usize, "topic exceeds u16::MAX");
-
-    // Topic string length prefix and bytes
-    var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());
-    var_header.extend_from_slice(topic.as_bytes());
-
-    // Packet Identifier for QoS 1
-    var_header.extend_from_slice(&packet_id.to_be_bytes());
-
-    let remaining_length = var_header.len() + payload.len();
-    let mut packet = vec![HEADER_PUBLISH_QOS1];
-    packet.extend_from_slice(&encode_remaining_length(remaining_length));
-    packet.extend(var_header);
-    packet.extend_from_slice(payload);
-    packet
+    let mut body = Vec::with_capacity(4 + topic.len() + payload.len());
+    put_str(&mut body, topic);
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    body.extend_from_slice(payload);
+    frame(HEADER_PUBLISH_QOS1, &body)
 }
 
 /// Encodes an MQTT PUBACK confirmation packet.

@@ -2,17 +2,23 @@ use super::*;
 
 #[test]
 fn test_temperature_unpacking_composite() {
-    let (actual, target) = PrinterTelemetry::unpack_temperature(6553700.0);
+    let HeaterTemps { actual, target } = unpack_temperature(6553700.0);
     assert_eq!(actual, 100);
     assert_eq!(target, 100);
 
-    let (actual_idle, target_idle) = PrinterTelemetry::unpack_temperature(35.0);
+    let HeaterTemps {
+        actual: actual_idle,
+        target: target_idle,
+    } = unpack_temperature(35.0);
     assert_eq!(actual_idle, 35);
     assert_eq!(target_idle, 0);
 
-    // Fractional temps from P1S/A1 models — truncated to integer
-    let (actual_frac, target_frac) = PrinterTelemetry::unpack_temperature(27.625);
-    assert_eq!(actual_frac, 27);
+    // Fractional temps from P1S/A1 models — rounded to the nearest degree
+    let HeaterTemps {
+        actual: actual_frac,
+        target: target_frac,
+    } = unpack_temperature(27.625);
+    assert_eq!(actual_frac, 28);
     assert_eq!(target_frac, 0);
 }
 
@@ -435,7 +441,7 @@ fn test_p1s_wire_capture_end_to_end() {
     assert_eq!(print.stg_cur, Some(0));
     assert_eq!(print.print_error, Some(0));
     assert!(print.hms.unwrap().is_empty());
-    assert!(print.sdcard);
+    assert_eq!(print.sdcard, Some(true));
     assert_eq!(print.wifi_signal.as_deref(), Some("-41dBm"));
 
     // Fix A: float temps deserialize correctly
@@ -497,17 +503,17 @@ fn test_temperature_fields_accept_float_and_int() {
 
 #[test]
 fn test_temperature_boundary_500_and_501() {
-    let (actual, target) = PrinterTelemetry::unpack_temperature(500.0);
+    let HeaterTemps { actual, target } = unpack_temperature(500.0);
     assert_eq!(actual, 500);
     assert_eq!(target, 0);
 
     // 501 = 0x000001F5 → actual=501, target=0 (but > threshold so unpacked)
-    let (actual, target) = PrinterTelemetry::unpack_temperature(501.0);
+    let HeaterTemps { actual, target } = unpack_temperature(501.0);
     assert_eq!(actual, 501);
     assert_eq!(target, 0);
 
     // Real composite: target=60, actual=48 → (60 << 16) | 48 = 3932208
-    let (actual, target) = PrinterTelemetry::unpack_temperature(3932208.0);
+    let HeaterTemps { actual, target } = unpack_temperature(3932208.0);
     assert_eq!(actual, 48);
     assert_eq!(target, 60);
 
@@ -515,86 +521,48 @@ fn test_temperature_boundary_500_and_501() {
     // only diverge once bits above u16 range are actually set, so a boundary case at 500/501
     // with a zero upper half can't detect an off-by-one in the threshold comparison itself.
     // (1 << 16) | 501 = 66037 → target=1, actual=501.
-    let (actual, target) = PrinterTelemetry::unpack_temperature(66037.0);
+    let HeaterTemps { actual, target } = unpack_temperature(66037.0);
     assert_eq!(actual, 501);
     assert_eq!(target, 1);
 }
 
 #[test]
 fn test_deserialize_permissive_bool_variants() {
-    // Bool true
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": true } }"#).unwrap();
-    assert!(r.print.unwrap().sdcard);
-
-    // Bool false
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": false } }"#).unwrap();
-    assert!(!r.print.unwrap().sdcard);
-
-    // Int 1
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": 1 } }"#).unwrap();
-    assert!(r.print.unwrap().sdcard);
-
-    // Int 0
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": 0 } }"#).unwrap();
-    assert!(!r.print.unwrap().sdcard);
-
-    // String "HAS_SDCARD_NORMAL"
-    let r: TelemetryReport =
-        serde_json::from_str(r#"{ "print": { "sdcard": "HAS_SDCARD_NORMAL" } }"#).unwrap();
-    assert!(r.print.unwrap().sdcard);
-
-    // String "TRUE"
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": "TRUE" } }"#).unwrap();
-    assert!(r.print.unwrap().sdcard);
-
-    // String "1"
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": "1" } }"#).unwrap();
-    assert!(r.print.unwrap().sdcard);
-
-    // String other → false
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": "nope" } }"#).unwrap();
-    assert!(!r.print.unwrap().sdcard);
-
-    // Missing → default false
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": {} }"#).unwrap();
-    assert!(!r.print.unwrap().sdcard);
-
-    // Null → default false (field varies structurally across firmwares)
-    let r: TelemetryReport = serde_json::from_str(r#"{ "print": { "sdcard": null } }"#).unwrap();
-    assert!(!r.print.unwrap().sdcard);
+    for (wire, expected) in [
+        ("true", Some(true)),
+        ("false", Some(false)),
+        ("1", Some(true)),
+        ("0", Some(false)),
+        (r#""HAS_SDCARD_NORMAL""#, Some(true)),
+        (r#""TRUE""#, Some(true)),
+        (r#""1""#, Some(true)),
+        (r#""nope""#, Some(false)),
+        ("null", None),
+    ] {
+        let json = format!(r#"{{ "print": {{ "sdcard": {wire} }} }}"#);
+        assert_eq!(print(&json).sdcard, expected, "sdcard: {wire}");
+    }
+    // Absent is "not reported", distinct from a reported `false`.
+    assert_eq!(print(r#"{ "print": {} }"#).sdcard, None);
 }
 
 #[test]
-fn test_deserialize_permissive_bool_malformed_shape_is_error() {
-    // A malformed `sdcard` value (an object, not a bool/int/string) must be a hard parse error,
-    // not silently coerced to `false` — that would be indistinguishable from a legitimately
-    // absent/false field.
-    let result: Result<TelemetryReport, _> =
-        serde_json::from_str(r#"{ "print": { "sdcard": {} } }"#);
-    assert!(
-        result.is_err(),
-        "expected malformed sdcard shape to be a deserialization error, got {:?}",
-        result.map(|r| r.print.map(|p| p.sdcard))
-    );
+fn test_malformed_field_shape_degrades_the_field_not_the_frame() {
+    // A value of a shape no field has (an object here) loses that field only; the rest of the
+    // push still parses (see `loose.rs`'s error policy).
+    let print = print(r#"{ "print": { "sdcard": {}, "spd_lvl": {}, "gcode_state": "IDLE" } }"#);
+    assert_eq!(print.sdcard, None);
+    assert_eq!(print.spd_lvl, None);
+    assert_eq!(print.gcode_state.as_deref(), Some("IDLE"));
 }
 
 #[test]
-fn test_parse_hex_string_variants() {
-    assert_eq!(
-        PrinterTelemetry::parse_hex_string("0x00800000"),
-        Some(0x00800000)
-    );
-    assert_eq!(
-        PrinterTelemetry::parse_hex_string("0X00800000"),
-        Some(0x00800000)
-    );
-    assert_eq!(
-        PrinterTelemetry::parse_hex_string("00800000"),
-        Some(0x00800000)
-    );
-    assert_eq!(PrinterTelemetry::parse_hex_string("ff"), Some(0xff));
-    assert_eq!(PrinterTelemetry::parse_hex_string("zzzz"), None);
-    assert_eq!(PrinterTelemetry::parse_hex_string(""), None);
+fn test_numeric_fields_accept_the_quoted_form() {
+    let print =
+        print(r#"{ "print": { "spd_lvl": "2", "remain_time": "15", "print_error": "0" } }"#);
+    assert_eq!(print.spd_lvl, Some(2));
+    assert_eq!(print.remain_time, Some(15));
+    assert_eq!(print.print_error, Some(0));
 }
 
 #[test]
@@ -950,7 +918,7 @@ fn test_h2d_pushall_comprehensive() {
     let bed = device.bed.unwrap();
     assert_eq!(bed.state, Some(2));
     let bed_temp = bed.info.unwrap().temp.unwrap();
-    let (actual, target) = PrinterTelemetry::unpack_temperature(bed_temp as f64);
+    let HeaterTemps { actual, target } = unpack_temperature(bed_temp as f64);
     assert_eq!(actual, 70);
     assert_eq!(target, 70);
 

@@ -38,8 +38,19 @@ pub(crate) const PENDING_COMMAND_LIMIT: usize = MQTT_IN_FLIGHT_LIMIT;
 /// How many already-delivered outcomes [`await_ack()`](super::PrinterClient::await_ack) can still answer from.
 pub(crate) const RESOLVED_OUTCOME_LIMIT: usize = 32;
 
+/// The `command` a printer's own state push carries.
+pub(crate) const PUSH_STATUS_COMMAND: &str = "push_status";
+
 /// `command` values carried by genuine telemetry pushes rather than by a command echo.
-const TELEMETRY_COMMANDS: &[&str] = &["push_status", "pushall"];
+const TELEMETRY_COMMANDS: &[&str] = &[PUSH_STATUS_COMMAND, crate::mqtt::PushAllRequest::COMMAND];
+
+/// Whether `command` marks a telemetry push rather than a command echo.
+///
+/// The one test both `poll_telemetry`'s classifier and [`parse_command_echo`] apply, so the two
+/// cannot disagree about whether a frame is a report or an echo.
+pub(crate) fn is_telemetry_command(command: &str) -> bool {
+    TELEMETRY_COMMANDS.contains(&command)
+}
 
 /// Whether the printer answers a command with an echo of its `sequence_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -211,16 +222,13 @@ pub(crate) fn parse_command_echo(payload: &[u8]) -> Option<CommandEcho> {
         .flatten()
         .find_map(|mut fields| {
             let command = fields.command.take()?;
-            if TELEMETRY_COMMANDS.contains(&command.as_str()) {
+            if is_telemetry_command(&command) {
                 return None;
             }
-            let sequence_id = match &fields.sequence_id {
-                Some(serde_json::Value::String(s)) => s.parse().ok(),
-                Some(serde_json::Value::Number(n)) => {
-                    n.as_u64().and_then(|n| u32::try_from(n).ok())
-                }
-                _ => None,
-            };
+            let sequence_id = fields
+                .sequence_id
+                .as_ref()
+                .and_then(crate::mqtt::client::parse_sequence_id);
             Some(CommandEcho {
                 command,
                 sequence_id,

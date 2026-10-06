@@ -11,7 +11,7 @@ fn test_chamber_temper_composite_packed_via_unpack_temperature() {
         .unwrap()
         .print
         .unwrap();
-    let (actual, target) = PrinterTelemetry::unpack_temperature(print.chamber_temper.unwrap());
+    let HeaterTemps { actual, target } = unpack_temperature(print.chamber_temper.unwrap());
     assert_eq!(actual, 38);
     assert_eq!(target, 45);
 }
@@ -34,7 +34,7 @@ fn test_bed_telemetry_composite_packed() {
     let bed = device.bed.unwrap();
     assert_eq!(bed.state, Some(2));
     let temp = bed.info.unwrap().temp.unwrap();
-    let (actual, target) = PrinterTelemetry::unpack_temperature(temp as f64);
+    let HeaterTemps { actual, target } = unpack_temperature(temp as f64);
     assert_eq!(actual, 70);
     assert_eq!(target, 70);
     assert_eq!(device.bed_temp, Some(4587590));
@@ -49,7 +49,7 @@ fn test_bed_temperatures_new_gen_top_level() {
             }
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (70, 70));
+    assert_eq!(report.bed_temperatures(), temps(70, 70));
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn test_bed_temperatures_ignores_device_bed_temp() {
             }
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (70, 70));
+    assert_eq!(report.bed_temperatures(), temps(70, 70));
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn test_bed_temperatures_new_gen_nested_in_print() {
             }
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    let (actual, target) = report.bed_temperatures();
+    let HeaterTemps { actual, target } = report.bed_temperatures().unwrap();
     // 3932261 = 0x3C0065 → actual = 0x65 = 101, target = 0x3C = 60
     assert_eq!(actual, 101);
     assert_eq!(target, 60);
@@ -93,7 +93,8 @@ fn test_bed_temperatures_old_gen_direct() {
             }
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (55, 60));
+    // Rounded, not truncated (#461): 55.5 reads 56.
+    assert_eq!(report.bed_temperatures(), temps(56, 60));
 }
 
 #[test]
@@ -109,7 +110,7 @@ fn test_bed_temperatures_old_gen_direct_above_composite_threshold() {
             }
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (600, 600));
+    assert_eq!(report.bed_temperatures(), temps(600, 600));
 }
 
 #[test]
@@ -125,19 +126,19 @@ fn test_bed_temperatures_both_present_new_gen_wins() {
             }
         }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (70, 70));
+    assert_eq!(report.bed_temperatures(), temps(70, 70));
 }
 
 #[test]
 fn test_bed_temperatures_neither_present() {
     let json = r#"{ "print": {} }"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (0, 0));
+    assert_eq!(report.bed_temperatures(), None);
 }
 
 #[test]
 fn test_bed_temperatures_empty_report() {
     let json = r#"{}"#;
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
-    assert_eq!(report.bed_temperatures(), (0, 0));
+    assert_eq!(report.bed_temperatures(), None);
 }

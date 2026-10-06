@@ -21,16 +21,17 @@ pub mod print_job;
 pub mod status;
 
 pub use ams::{
-    AmsChangeFilamentRequest, AmsControlRequest, AmsFilamentDryingRequest,
-    AmsFilamentSettingRequest, AmsGetRfidRequest, DryingParams,
+    AmsChangeFilamentRequest, AmsControlOp, AmsControlRequest, AmsFilamentDryingRequest,
+    AmsFilamentSettingRequest, AmsGetRfidRequest, ChangeTemps, DryingParams, FilamentSpec,
 };
 pub use control::{
     CalibrationRequest, CleanPrintErrorRequest, HmsActionRequest, IdleIgnoreRequest,
-    PrintSpeedRequest, SkipObjectsRequest, StandardControlRequest, UiopRequest,
+    IdleIgnoreScope, PrintSpeedRequest, SkipObjectsRequest, StandardCommand,
+    StandardControlRequest, UiopRequest,
 };
 pub use gcode::GCodeRequest;
 pub use hardware::{
-    AirductMode, AirductRequest, BuzzerRequest, LedCtrlRequest, PromptSoundRequest,
+    AirductMode, AirductRequest, BuzzerRequest, FlashTiming, LedCtrlRequest, PromptSoundRequest,
 };
 pub use print_job::{
     AmsMappingTable, AmsSource, CalibrationMode, NozzleRack, PrintJobConfig, ProjectFileRequest,
@@ -40,34 +41,32 @@ pub use status::{GetAccessCodeRequest, GetVersionRequest, PushAllRequest};
 
 pub(crate) const TASK_ID_MAX: u64 = i32::MAX as u64;
 
-/// Wraps a 64-bit transaction or tracking identifier (typically standard UNIX epoch milliseconds) into the strict boundary limits of a 32-bit signed integer (`2147483647`) via modulo, not saturation.
+/// Wraps a 64-bit identifier into `[0, i32::MAX)` by modulo, not saturation.
 ///
-/// **Why this is critical [REF-MQTT-ENV]:**
-/// The printer's onboard G-code parsing routine clamps subtask identifiers to standard 32-bit
-/// signed integer limits. If a connecting client uses an un-clamped millisecond epoch (13-digit integer),
-/// the memory allocation registers on the motion board will overflow. This causes the printer to lock
-/// indefinitely in an `IDLE` state and reject all subsequent print dispatches.
-///
-/// The modulo semantics are deliberate (`client/mod.rs`'s `next_sequence_id()` wants
-/// continuation across the wraparound, not a reset to a fixed ceiling) — `clamp_task_id(TASK_ID_MAX)
-/// == 0`, asserted by `test_clamp_task_id_wraps_near_max` below.
-pub fn clamp_task_id(raw_id: u64) -> u32 {
+/// Firmware parses task and sequence ids as signed 32-bit integers; an unclamped epoch-millisecond
+/// id overflows the motion board's registers, locking the printer in `IDLE` and making it reject
+/// every later print dispatch [REF-MQTT-ENV]. Modulo rather than saturation so a counter keeps
+/// advancing across the wrap. Reachable only through [`ClampedTaskId`]'s `From<u64>`; see
+/// `.claude/rules/task-id-clamping.md`.
+pub(crate) fn clamp_task_id(raw_id: u64) -> u32 {
     (raw_id % TASK_ID_MAX) as u32
 }
 
-/// A task/sequence ID pre-clamped to `TASK_ID_MAX`, obtainable only via its `From<u64>` impl,
-/// which always clamps.
+/// A task or sequence id already reduced into the range firmware accepts (below `i32::MAX`).
 ///
-/// A constructor that called `clamp_task_id()` on every field except one, and 24 constructors
-/// across 7 files each independently remembering to call `clamp_task_id()` (with a regression
-/// test that only ever exercised 2 of them), were both instances of the same
-/// gap: the clamping invariant was enforced by convention, not the type system, so a future
-/// constructor could silently skip it. Every command constructor now takes `impl
-/// Into<ClampedTaskId>` for its `sequence_id` parameter instead of a raw `u64` — since the only
-/// way to produce a `ClampedTaskId` is through the clamping `From<u64>` impl below, skipping
-/// the clamp is no longer possible to write, not just discouraged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Every request constructor takes `impl Into<ClampedTaskId>`; the only way to make one is the
+/// clamping `From<u64>`, so an out-of-range id can't reach the wire. Serializes as a decimal
+/// string, the form the printer expects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClampedTaskId(u32);
+
+impl ClampedTaskId {
+    /// The clamped value.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
 
 impl From<u64> for ClampedTaskId {
     fn from(raw_id: u64) -> Self {
@@ -81,10 +80,41 @@ impl core::fmt::Display for ClampedTaskId {
     }
 }
 
+impl serde::Serialize for ClampedTaskId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
+/// Generates one namespace envelope: the single-field wrapper every command is published in.
+macro_rules! envelope {
+    ($name:ident, $field:ident, $wire:literal) => {
+        #[doc = concat!("The `", $wire, "` namespace envelope a command payload is published in.")]
+        #[derive(Debug, Clone, serde::Serialize)]
+        pub struct $name<P> {
+            #[doc = concat!("The payload, serialized under `", $wire, "`.")]
+            pub $field: P,
+        }
+    };
+}
+
+envelope!(Print, print, "print");
+envelope!(System, system, "system");
+envelope!(Pushing, pushing, "pushing");
+envelope!(Info, info, "info");
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::PrinterModel;
+    use crate::types::control::LedNode;
+
+    const PLA_SPEC: FilamentSpec<'static> = FilamentSpec {
+        preset: "GFA01",
+        material: "PLA",
+        nozzle_temp_min: 190,
+        nozzle_temp_max: 220,
+    };
 
     #[test]
     fn test_command_constructor_clamps_unclamped_sequence_id() {
@@ -97,7 +127,7 @@ mod tests {
         let req = GCodeRequest::new("G28", u64::MAX);
         let json = serde_json::to_string(&req).unwrap();
         assert!(
-            req.print.sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+            i64::from(req.print.sequence_id.get()) <= i32::MAX as i64,
             "sequence_id {} exceeds i32::MAX in {json}",
             req.print.sequence_id
         );
@@ -112,7 +142,7 @@ mod tests {
         );
         let project_req = ProjectFileRequest::from_config(&config, u64::MAX, PrinterModel::P1S);
         assert!(
-            project_req.print.sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+            i64::from(project_req.print.sequence_id.get()) <= i32::MAX as i64,
             "ProjectFileRequest sequence_id {} exceeds i32::MAX",
             project_req.print.sequence_id
         );
@@ -371,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_ams_change_filament_load_json() {
-        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, None, 40005);
+        let req = AmsChangeFilamentRequest::load(0, 1, ChangeTemps::FIRMWARE, None, 40005);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_change_filament"#));
         assert!(json.contains(r#""ams_id":0"#));
@@ -383,7 +413,15 @@ mod tests {
 
     #[test]
     fn test_ams_change_filament_unload_json() {
-        let req = AmsChangeFilamentRequest::new(0, 255, 255, 210, 210, None, 40008);
+        let req = AmsChangeFilamentRequest::unload(
+            0,
+            ChangeTemps {
+                current: 210,
+                target: 210,
+            },
+            None,
+            40008,
+        );
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""slot_id":255"#));
         assert!(json.contains(r#""target":255"#));
@@ -433,25 +471,32 @@ mod tests {
     #[test]
     fn test_hms_action_json_sends_err_in_decimal() {
         // 0x0500C010 = 83935248: BambuStudio sends `std::to_string(m_error_code)`.
-        let req = HmsActionRequest::ignore(0x0500_C010, "4242", 20011);
+        let req = HmsActionRequest::ignore(0x0500_C010, Some("4242"), 20011);
         assert_eq!(
             serde_json::to_string(&req).unwrap(),
             r#"{"print":{"command":"ignore","err":"83935248","param":"reserve","job_id":"4242","sequence_id":"20011"}}"#
         );
-        let resume = serde_json::to_string(&HmsActionRequest::resume(1, "", 1)).unwrap();
+        let resume = serde_json::to_string(&HmsActionRequest::resume(1, None, 1)).unwrap();
         assert!(resume.contains(r#""command":"resume","err":"1","param":"reserve","job_id":"""#));
-        let stop = serde_json::to_string(&HmsActionRequest::stop(1, "", 1)).unwrap();
+        let stop = serde_json::to_string(&HmsActionRequest::stop(1, None, 1)).unwrap();
         assert!(stop.contains(r#""command":"stop""#));
     }
 
     #[test]
     fn test_idle_ignore_json() {
-        let once = serde_json::to_string(&IdleIgnoreRequest::new(0x0500_C010, false, 7)).unwrap();
+        let once = serde_json::to_string(&IdleIgnoreRequest::new(
+            0x0500_C010,
+            IdleIgnoreScope::Once,
+            7,
+        ))
+        .unwrap();
         assert_eq!(
             once,
             r#"{"print":{"command":"idle_ignore","err":"83935248","type":0,"sequence_id":"7"}}"#
         );
-        let always = serde_json::to_string(&IdleIgnoreRequest::new(1, true, 7)).unwrap();
+        let always =
+            serde_json::to_string(&IdleIgnoreRequest::new(1, IdleIgnoreScope::Permanent, 7))
+                .unwrap();
         assert!(always.contains(r#""type":1"#));
     }
 
@@ -643,20 +688,29 @@ mod tests {
 
     #[test]
     fn test_led_ctrl_request_json() {
-        let req_on = LedCtrlRequest::new("chamber_light", true, 10005);
+        let req_on = LedCtrlRequest::new(LedNode::Chamber, true, 10005);
         let json = serde_json::to_string(&req_on).unwrap();
         assert!(json.contains(r#""command":"ledctrl"#));
         assert!(json.contains(r#""led_node":"chamber_light""#));
         assert!(json.contains(r#""led_mode":"on""#));
 
-        let req_off = LedCtrlRequest::new("chamber_light", false, 10006);
+        let req_off = LedCtrlRequest::new(LedNode::Chamber, false, 10006);
         let json_off = serde_json::to_string(&req_off).unwrap();
         assert!(json_off.contains(r#""led_mode":"off""#));
     }
 
     #[test]
     fn test_led_ctrl_request_new_flashing_json() {
-        let req = LedCtrlRequest::new_flashing("chamber_light", 500, 500, 3, 1000, 10005);
+        let req = LedCtrlRequest::new_flashing(
+            LedNode::Chamber,
+            FlashTiming {
+                on_ms: 500,
+                off_ms: 500,
+                loops: 3,
+                interval_ms: 1000,
+            },
+            10005,
+        );
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ledctrl"#));
         assert!(json.contains(r#""led_node":"chamber_light""#));
@@ -693,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_buzzer_request_json() {
-        let req = BuzzerRequest::new(2, 10010);
+        let req = BuzzerRequest::new(crate::types::control::BuzzerMode::Chirp, 10010);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"buzzer_ctrl"#));
         assert!(json.contains(r#""mode":2"#));
@@ -710,7 +764,7 @@ mod tests {
 
     #[test]
     fn test_print_speed_request_json() {
-        let req = PrintSpeedRequest::new("3", 10012);
+        let req = PrintSpeedRequest::new(crate::types::control::PrintSpeed::Sport, 10012);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"print_speed"#));
         assert!(json.contains(r#""param":"3""#));
@@ -718,7 +772,7 @@ mod tests {
 
     #[test]
     fn test_ams_control_request_json() {
-        let req = AmsControlRequest::new("resume", 10013);
+        let req = AmsControlRequest::new(AmsControlOp::Resume, 10013);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_control"#));
         assert!(json.contains(r#""param":"resume""#));
@@ -735,11 +789,10 @@ mod tests {
 
     #[test]
     fn test_ams_filament_setting_request_json() {
-        let req = AmsFilamentSettingRequest::new(0, 1, 10015)
-            .with_preset("GFA01")
-            .with_filament("PLA", Some("Bambu PLA Basic"))
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10015)
+            .with_sub_brands("Bambu PLA Basic")
             .with_color("FF0000FF")
-            .with_temps(190, 220);
+            .unwrap();
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"ams_filament_setting"#));
         assert!(json.contains(r#""tray_info_idx":"GFA01""#));
@@ -752,22 +805,19 @@ mod tests {
 
     #[test]
     fn test_ams_filament_setting_default_sub_brands() {
-        let req = AmsFilamentSettingRequest::new(255, 0, 10016).with_filament("PLA", None);
+        let req = AmsFilamentSettingRequest::new(255, 0, PLA_SPEC, 10016);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_sub_brands":"PLA Basic""#));
     }
 
     #[test]
-    fn test_ams_filament_setting_unset_fields_serialize_empty() {
-        // `new()` carries addressing only; anything not set through a `with_*` goes out empty
-        // rather than omitted, since these are non-optional wire fields.
-        let req = AmsFilamentSettingRequest::new(0, 1, 10026);
+    fn test_ams_filament_setting_unset_optional_fields() {
+        // The description is required; the optional fields go out as an empty color and no
+        // setting_id.
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10026);
         let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains(r#""tray_info_idx":"""#));
-        assert!(json.contains(r#""tray_type":"""#));
+        assert!(json.contains(r#""tray_info_idx":"GFA01""#));
         assert!(json.contains(r#""tray_color":"""#));
-        assert!(json.contains(r#""nozzle_temp_min":0"#));
-        assert!(json.contains(r#""nozzle_temp_max":0"#));
         assert!(!json.contains("setting_id"));
     }
 
@@ -778,11 +828,7 @@ mod tests {
         // tag_tray_id = VIRTUAL_TRAY_DEPUTY_ID for either external address, never 0. bambuddy
         // sends the same trio for a single external slot: ams 255, slot 0, tray 254.
         for ams_id in [254, 255] {
-            let req = AmsFilamentSettingRequest::new(ams_id, 0, 10024)
-                .with_preset("GFA01")
-                .with_filament("PLA", None)
-                .with_color("FF0000FF")
-                .with_temps(190, 220);
+            let req = AmsFilamentSettingRequest::new(ams_id, 0, PLA_SPEC, 10024);
             let json = serde_json::to_string(&req).unwrap();
             assert!(json.contains(&format!(r#""ams_id":{ams_id}"#)));
             assert!(
@@ -800,11 +846,7 @@ mod tests {
     fn test_ams_filament_setting_standard_slot_and_tray_coincide() {
         // On a standard AMS the two fields carry the same value, which is why omitting slot_id
         // went unnoticed — it is only the virtual-tray and AMS-HT cases that diverge.
-        let req = AmsFilamentSettingRequest::new(1, 3, 10025)
-            .with_preset("GFA01")
-            .with_filament("PLA", None)
-            .with_color("FF0000FF")
-            .with_temps(190, 220);
+        let req = AmsFilamentSettingRequest::new(1, 3, PLA_SPEC, 10025);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""ams_id":1"#));
         assert!(json.contains(r#""slot_id":3"#));
@@ -816,16 +858,19 @@ mod tests {
         // The firmware parses a lowercase hex letter in tray_color as 0 and stores the
         // corrupted value while acking success (P1S firmware 01.10.00.00). Normalizing inside
         // `with_color` is the single fix point.
-        let req = AmsFilamentSettingRequest::new(0, 1, 10019).with_color("09ff00ff");
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10019)
+            .with_color("09ff00ff")
+            .unwrap();
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_color":"09FF00FF""#));
     }
 
     #[test]
     fn test_ams_filament_setting_strips_color_hash_and_keeps_case_elsewhere() {
-        let req = AmsFilamentSettingRequest::new(0, 1, 10020)
-            .with_filament("PLA", Some("Bambu PLA Basic"))
-            .with_color("#ff5100ff");
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10020)
+            .with_sub_brands("Bambu PLA Basic")
+            .with_color("#ff5100ff")
+            .unwrap();
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_color":"FF5100FF""#));
         // Case is meaningful in these two and must survive untouched.
@@ -834,16 +879,30 @@ mod tests {
     }
 
     #[test]
-    fn test_ams_filament_setting_empty_color_stays_empty() {
-        let req = AmsFilamentSettingRequest::new(0, 1, 10021).with_color("");
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains(r#""tray_color":"""#));
+    fn test_ams_filament_setting_color_widths() {
+        // A 6-digit color gets an opaque alpha; anything but 6 or 8 hex digits is refused rather
+        // than sent for the printer to misread.
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10021)
+            .with_color("#ff0000")
+            .unwrap();
+        assert!(
+            serde_json::to_string(&req)
+                .unwrap()
+                .contains(r#""tray_color":"FF0000FF""#)
+        );
+        for bad in ["", "FFF", "FF0000F", "GG0000FF", "FF0000FF00"] {
+            let result = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 1).with_color(bad);
+            assert!(
+                matches!(result, Err(crate::error::Error::InvalidArgument(_))),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
     fn test_ams_filament_setting_omits_setting_id_by_default() {
         // setting_id is a separate optional wire field; absent, not null, when unset.
-        let req = AmsFilamentSettingRequest::new(0, 1, 10022).with_preset("GFA01");
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10022);
         let json = serde_json::to_string(&req).unwrap();
         assert!(!json.contains("setting_id"));
     }
@@ -852,8 +911,7 @@ mod tests {
     fn test_ams_filament_setting_with_setting_id() {
         // The long preset id belongs here, not in tray_info_idx — a 19-character id in the
         // short field is what an A1 stored as 8 characters while acking success.
-        let req = AmsFilamentSettingRequest::new(0, 1, 10023)
-            .with_preset("GFA01")
+        let req = AmsFilamentSettingRequest::new(0, 1, PLA_SPEC, 10023)
             .with_setting_id("PF12345678901234567");
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""tray_info_idx":"GFA01""#));
@@ -864,7 +922,7 @@ mod tests {
     fn test_ams_change_filament_omits_extruder_id_when_none() {
         // Without a Filament Track Switch the payload must be byte-identical to the pre-FTS
         // form: the key is absent, not null.
-        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, None, 40009);
+        let req = AmsChangeFilamentRequest::load(0, 1, ChangeTemps::FIRMWARE, None, 40009);
         let json = serde_json::to_string(&req).unwrap();
         assert!(!json.contains("extruder_id"));
     }
@@ -873,7 +931,7 @@ mod tests {
     fn test_ams_change_filament_emits_extruder_id_when_set() {
         // On an FTS machine every AMS reports 0xE and a command naming no extruder is
         // discarded in silence, so the key must reach the wire when the caller supplies it.
-        let req = AmsChangeFilamentRequest::new(0, 1, 1, -1, -1, Some(1), 40010);
+        let req = AmsChangeFilamentRequest::load(0, 1, ChangeTemps::FIRMWARE, Some(1), 40010);
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""extruder_id":1"#));
     }
@@ -888,8 +946,15 @@ mod tests {
 
     #[test]
     fn test_standard_control_request_json() {
-        for cmd in ["pause", "resume", "stop"] {
-            let req = StandardControlRequest::new(cmd, 10018);
+        for (req, cmd) in [
+            (StandardControlRequest::pause(10018), "pause"),
+            (StandardControlRequest::resume(10018), "resume"),
+            (StandardControlRequest::stop(10018), "stop"),
+            (
+                StandardControlRequest::new(StandardCommand::CloseAirFilter, 10018),
+                "close_air_filt",
+            ),
+        ] {
             let json = serde_json::to_string(&req).unwrap();
             assert!(json.contains(&format!(r#""command":"{}""#, cmd)));
         }

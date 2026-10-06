@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use bambino::Error;
-use bambino::client::{FanTarget, PrintStatus};
+use bambino::client::{Axis, FanTarget, LedNode, PrintStatus};
 use serde::Serialize;
 
 use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target, unix_now_secs, write_report};
@@ -13,9 +13,8 @@ use crate::redact::redact_secrets;
 
 const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 3;
 const LONG_CAPTURE_WINDOW_SECS: u64 = 60;
-// Mirrors PrinterClient::wait_for_homing()'s internal timeout override (src/client/motion.rs) —
-// display-only, since that method manages its own deadline rather than taking one.
-const HOMING_WAIT_DISPLAY_SECS: u64 = 90;
+// Display-only: wait_for_homing() applies this deadline itself.
+const HOMING_WAIT_DISPLAY_SECS: u64 = bambino::client::HOMING_WAIT_TIMEOUT.as_secs();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProbeTest {
@@ -74,7 +73,7 @@ impl ProbeTest {
             Self::TempBedZero => "Set bed temperature to 0",
             Self::HomeAxes => "Home all axes (changes printer state)",
             Self::HomeAxesRepeat => {
-                "Home all axes again immediately after home_axes (redundant re-home — printer is already homed going in)"
+                "Home all axes again immediately after home_all (redundant re-home — printer is already homed going in)"
             }
             Self::HomeAxesWait => {
                 "Home all axes, then block on wait_for_homing() until firmware confirms completion"
@@ -83,7 +82,7 @@ impl ProbeTest {
                 "Home all axes again via wait_for_homing() (redundant re-home — validates wait_for_homing() does not false-resolve instantly on an already-homed printer)"
             }
             Self::HomeAxesWithBusyCheck => {
-                "Holistic homing example: refuse if the printer is actively printing/paused (gcode_state), otherwise always try wait_for_homing() first to join any already-in-progress home, falling back to self-triggered home_axes() only on timeout. MANUAL: trigger homing from the printer's touchscreen/slicer during the confirmation pause to exercise the join path; not run by default."
+                "Holistic homing example: refuse if the printer is actively printing/paused (gcode_state), otherwise always try wait_for_homing() first to join any already-in-progress home, falling back to self-triggered home_all() only on timeout. MANUAL: trigger homing from the printer's touchscreen/slicer during the confirmation pause to exercise the join path; not run by default."
             }
         }
     }
@@ -223,10 +222,10 @@ async fn capture_pushall(
 async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error> {
     match test {
         ProbeTest::MoveZUnhomed => {
-            client.move_relative('Z', 1.0, 500).await?;
+            client.move_relative(Axis::Z, 1.0, 500).await?;
         }
         ProbeTest::MoveXUnhomed => {
-            client.move_relative('X', 5.0, 1000).await?;
+            client.move_relative(Axis::X, 5.0, 1000).await?;
         }
         ProbeTest::PauseWhenIdle => {
             client.pause_print().await?;
@@ -241,10 +240,10 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error
             client.clear_print_error().await?;
         }
         ProbeTest::LedOn => {
-            client.set_led("chamber_light", true).await?;
+            client.set_led(LedNode::Chamber, true).await?;
         }
         ProbeTest::LedOff => {
-            client.set_led("chamber_light", false).await?;
+            client.set_led(LedNode::Chamber, false).await?;
         }
         ProbeTest::FanPartZero => {
             client.set_fan_speed(FanTarget::PartCooling, 0).await?;
@@ -259,7 +258,7 @@ async fn send_command(client: &mut Printer, test: ProbeTest) -> Result<(), Error
         | ProbeTest::HomeAxesRepeat
         | ProbeTest::HomeAxesWait
         | ProbeTest::HomeAxesRepeatWait => {
-            client.home_axes(false).await?;
+            client.home_all().await?;
         }
         ProbeTest::HomeAxesWithBusyCheck => {
             unreachable!("dispatched via run_holistic_homing(), not send_command()")
@@ -287,11 +286,11 @@ fn printer_is_busy(client: &Printer) -> bool {
 ///    probe run against a printer already several seconds into a UI-triggered home
 ///    observed `mc_print_sub_stage` back at its rest value despite `home_flag` still
 ///    showing unhomed axes — gating on the pulse missed it and self-triggered a
-///    redundant `home_axes()` on top of the still-active external cycle. Trying
+///    redundant `home_all()` on top of the still-active external cycle. Trying
 ///    `wait_for_homing()` unconditionally has no such timing window: it joins an
 ///    in-progress home no matter how long it's been running before we connected.
 /// 4. If the join times out (nothing ever resolved within ~90s), re-check the safety
-///    gate once more, then self-trigger `home_axes()` and wait.
+///    gate once more, then self-trigger `home_all()` and wait.
 async fn run_holistic_homing(client: &mut Printer) -> Result<String, Error> {
     // Warm up the home_flag/gcode_state cache (a single poll may land on a partial
     // telemetry delta carrying neither). mc_print_sub_stage is recorded opportunistically
@@ -346,7 +345,7 @@ async fn run_holistic_homing(client: &mut Printer) -> Result<String, Error> {
                     client.print_status()
                 ));
             }
-            client.home_axes(false).await?;
+            client.home_all().await?;
             match client.wait_for_homing().await {
                 Ok(()) => Ok("self-triggered home, resolved".to_string()),
                 Err(e) => Ok(format!("self-triggered home, error: {e}")),

@@ -28,7 +28,6 @@ use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use crate::client::dummy::DummyTimer;
 use crate::error::Error;
-use crate::identity::PrinterIdentity;
 use crate::io::{AsyncIo, Raced, SocketError, TimerProvider, race};
 
 mod codec;
@@ -61,7 +60,8 @@ pub(crate) const MQTT_IN_FLIGHT_LIMIT: usize = 200;
 /// genuinely slow ack is never aged out before the zombie check has had its say — this is a
 /// leak backstop, not a retransmission policy (QoS 1 redelivery is the broker's job).
 pub(crate) const MQTT_IN_FLIGHT_TTL_SECS: u32 = 120;
-pub(crate) const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10;
+/// Seconds a published command may go unanswered before [`MqttClient::tick_zombie_check`] reports [`Liveness::WriteZombie`].
+pub const MQTT_ZOMBIE_TIMEOUT_SECS: u32 = 10;
 pub(crate) const MQTT_STALE_CONNECTION_SECS: u32 = 60;
 
 /// How long the connection may go with no client-to-broker traffic before
@@ -111,7 +111,7 @@ pub struct MqttClient<IO: AsyncIo> {
     pending_bytes: usize,
     /// Accumulated elapsed seconds since the last command publish while waiting for a response update.
     write_pending_secs: Option<u32>,
-    /// `(command, sequence_id)` [REF-MQTT-ACK] of the command that armed `write_pending_secs`.
+    /// [`EchoKey`] [REF-MQTT-ACK] of the command that armed `write_pending_secs`.
     ///
     /// poll_wire's PUBLISH arm only clears the zombie timer on a reply echoing both values, not
     /// on any incoming PUBLISH (background telemetry arrives far more often than
@@ -119,7 +119,7 @@ pub struct MqttClient<IO: AsyncIo> {
     /// command name is part of the key because the number alone is not unique on the shared
     /// report topic: the printer's `push_status` counter and other clients' commands mint ids
     /// from overlapping ranges.
-    write_pending_echo: Option<(String, String)>,
+    write_pending_echo: Option<EchoKey>,
     /// Accumulated elapsed seconds since the last received message of any kind.
     /// Used to detect silent connection loss independent of publish activity.
     secs_since_last_message: u32,
@@ -153,24 +153,48 @@ fn advance_packet_id(current: u16) -> u16 {
     if next == 0 { 1 } else { next }
 }
 
-/// Extracts the `(command, sequence_id)` pair echoed one level inside a Bambu MQTT JSON payload's top-level wrapper object.
+/// The `(command, sequence_id)` pair that ties a command to its echo [REF-MQTT-ACK].
 ///
-/// The wrapper is `print`/`system`/`pushing`/`info` — see [REF-MQTT-ACK]. Used to correlate a
-/// command ack with the command that armed the write-zombie timer, rather than treating any
-/// incoming PUBLISH as proof the write channel is alive. Both values are required: background
-/// `push_status` telemetry carries its own independent `sequence_id` counter under the same
-/// shape, so a number match alone can be a different message.
-fn extract_echo_key(payload: &[u8]) -> Option<(String, String)> {
+/// Both halves are required: background `push_status` telemetry carries its own independent
+/// `sequence_id` counter under the same shape, so a number match alone can be a different
+/// message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EchoKey {
+    /// The wire command name.
+    pub command: String,
+    /// The `sequence_id`, decoded from whichever form (decimal string or number) it was sent in.
+    pub sequence_id: u32,
+}
+
+/// Decodes a `sequence_id` sent as a decimal string (what this crate sends) or a JSON number.
+pub(crate) fn parse_sequence_id(value: &serde_json::Value) -> Option<u32> {
+    match value {
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        serde_json::Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+        _ => None,
+    }
+}
+
+/// Reads the [`EchoKey`] from the first top-level wrapper (`print`/`system`/`pushing`/`info`) that carries one.
+///
+/// The one reader for both directions: an outgoing payload when a command is published, and an
+/// incoming echo when deciding whether it answers the command that armed the write-zombie
+/// timer. Accepting both `sequence_id` forms on both sides keeps a numerically-echoed id from
+/// resolving a command handle while leaving its write-zombie armed.
+pub fn echo_key(payload: &[u8]) -> Option<EchoKey> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
     value.as_object()?.values().find_map(|inner| {
-        let command = inner.get("command")?.as_str()?;
-        let sequence_id = inner.get("sequence_id")?.as_str()?;
-        Some((command.to_string(), sequence_id.to_string()))
+        Some(EchoKey {
+            command: inner.get("command")?.as_str()?.to_string(),
+            sequence_id: parse_sequence_id(inner.get("sequence_id")?)?,
+        })
     })
 }
 
-/// Wire command names confirmed to produce an echoed ack [REF-MQTT-ACK] that write-zombie
-/// detection can correlate against by `sequence_id`. Deliberately an allowlist, not "every
+/// Wire command names confirmed to produce an echoed ack [REF-MQTT-ACK] that write-zombie detection can correlate against by `sequence_id`.
+///
+/// Each entry is the payload type's own `COMMAND` constant, the same one its constructor writes,
+/// so a renamed command can't silently fall off this list. Deliberately an allowlist, not "every
 /// command except pushall": most command families here have never been checked against real
 /// hardware, and defaulting an unverified command to "assumed correlatable" is exactly the bug
 /// that shipped and broke bambino-cli's monitor against a real P1S (pushall has no ack at all,
@@ -188,6 +212,8 @@ fn extract_echo_key(payload: &[u8]) -> Option<(String, String)> {
 ///   family and `ams_filament_drying`.
 /// - `get_version`: echoed-response shape confirmed by `src/types/version.rs`'s deserialization
 ///   test fixture.
+/// - `get_access_code`: confirmed on a real P1S by `bambino-cli ack-probe` (issue #140) — a
+///   `system`-wrapped reply echoing the `sequence_id` within 14ms.
 ///
 /// - `skip_objects`/`project_file`/`ams_control`/`ams_get_rfid`/`ams_change_filament`/
 ///   `set_airduct`/`print_option`/`buzzer_ctrl`: confirmed on a real P1S (firmware 2025) by a
@@ -203,8 +229,11 @@ fn extract_echo_key(payload: &[u8]) -> Option<(String, String)> {
 /// on this list therefore says nothing about whether a command does anything on a given model
 /// — it says only that the printer answers, which is all write-zombie detection needs.
 ///
-/// Not on this list: `pushall`, confirmed to produce *no* ack at all (see
-/// `extract_command_and_sequence_id`'s doc comment).
+/// Not on this list: `pushall`, confirmed to produce *no* ack at all — it triggers an unlabeled
+/// state dump instead [REF-MQTT-LIFECYCLE]. Also absent, with no ack evidence recorded for them:
+/// the error-dialog commands `ignore`, `idle_ignore`, `uiop`, `refresh_nozzle`,
+/// `close_air_filt` and `auto_stop_ams_dry` (#383). They degrade to "any PUBLISH clears the
+/// zombie", never to a hang.
 ///
 /// To add a further command, run `bambino-cli ack-probe` against real hardware and cite its
 /// report: it publishes the command with a known `sequence_id` and records whether a response
@@ -212,32 +241,39 @@ fn extract_echo_key(payload: &[u8]) -> Option<(String, String)> {
 /// the background `push_status` stream. Do not add an entry on the strength of a payload's
 /// *shape* alone. The P1S run above does not generalize to other models either — re-run it on
 /// the model in question before assuming a command behaves the same there.
-const ACK_CORRELATED_COMMANDS: &[&str] = &[
-    "pause",
-    "resume",
-    "stop",
-    "gcode_line",
-    "clean_print_error",
-    "calibration",
-    "print_speed",
-    "ledctrl",
-    "ams_filament_setting",
-    "ams_filament_drying",
-    "extrusion_cali_get",
-    "extrusion_cali_set",
-    "extrusion_cali_sel",
-    "extrusion_cali_del",
-    "get_version",
-    "skip_objects",
-    "project_file",
-    "ams_control",
-    "ams_get_rfid",
-    "ams_change_filament",
-    "set_airduct",
-    "print_option",
-    "buzzer_ctrl",
-    "get_access_code",
-];
+const ACK_CORRELATED_COMMANDS: &[&str] = {
+    use crate::diagnostics::kprofile::{
+        ExtrusionCaliGetRequest, ExtrusionCaliSelRequest, ExtrusionCaliSetRequest,
+        StandardCaliDelRequest,
+    };
+    use crate::mqtt::commands::*;
+    &[
+        StandardCommand::Pause.as_wire(),
+        StandardCommand::Resume.as_wire(),
+        StandardCommand::Stop.as_wire(),
+        GCodeRequest::COMMAND,
+        CleanPrintErrorRequest::COMMAND,
+        CalibrationRequest::COMMAND,
+        PrintSpeedRequest::COMMAND,
+        LedCtrlRequest::COMMAND,
+        AmsFilamentSettingRequest::COMMAND,
+        AmsFilamentDryingRequest::COMMAND,
+        ExtrusionCaliGetRequest::COMMAND,
+        ExtrusionCaliSetRequest::COMMAND,
+        ExtrusionCaliSelRequest::COMMAND,
+        StandardCaliDelRequest::COMMAND,
+        GetVersionRequest::COMMAND,
+        SkipObjectsRequest::COMMAND,
+        ProjectFileRequest::COMMAND,
+        AmsControlRequest::COMMAND,
+        AmsGetRfidRequest::COMMAND,
+        AmsChangeFilamentRequest::COMMAND,
+        AirductRequest::COMMAND,
+        PromptSoundRequest::COMMAND,
+        BuzzerRequest::COMMAND,
+        GetAccessCodeRequest::COMMAND,
+    ]
+};
 
 /// Whether `command` is confirmed to echo its `sequence_id` — membership in [`ACK_CORRELATED_COMMANDS`].
 ///
@@ -248,17 +284,39 @@ pub(crate) fn command_echoes(command: &str) -> bool {
     ACK_CORRELATED_COMMANDS.contains(&command)
 }
 
-/// Extracts the `command` name and `sequence_id` from an outgoing command payload's single
-/// top-level wrapper object (`print`/`system`/`pushing`/`info` — the Payload+Request pattern
-/// always nests exactly one). `pushall` (`pushing` wrapper) triggers an unlabeled state-dump
-/// stream rather than an echoed ack [REF-MQTT-LIFECYCLE], so it's excluded from
-/// `ACK_CORRELATED_COMMANDS` above like every other command without confirmed ack evidence.
-pub(crate) fn extract_command_and_sequence_id(payload: &[u8]) -> Option<(String, String)> {
-    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    let inner = value.as_object()?.values().next()?;
-    let command = inner.get("command")?.as_str()?.to_string();
-    let sequence_id = inner.get("sequence_id")?.as_str()?.to_string();
-    Some((command, sequence_id))
+/// The topic the printer publishes its reports and command echoes on.
+pub fn report_topic(serial: &str) -> String {
+    format!("device/{serial}/report")
+}
+
+/// The topic commands are published to.
+pub fn request_topic(serial: &str) -> String {
+    format!("device/{serial}/request")
+}
+
+/// Packet id of the one SUBSCRIBE the handshake sends; publishes start after it.
+const SUBSCRIBE_PACKET_ID: u16 = 1;
+
+/// Which liveness condition [`MqttClient::tick_zombie_check`] found violated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Liveness {
+    /// A published command has gone [`MQTT_ZOMBIE_TIMEOUT_SECS`] with no answer [REF-MQTT-ZOMBIE].
+    ///
+    /// The broker may be discarding writes. Telemetry may still be arriving, so the read side can
+    /// look healthy; it is still the signal to reconnect.
+    WriteZombie,
+    /// Nothing at all has arrived for `MQTT_STALE_CONNECTION_SECS` (60s) [REF-MQTT-CONN]: the link
+    /// is dead. Reconnect.
+    Stale,
+}
+
+impl core::fmt::Display for Liveness {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Liveness::WriteZombie => "command unanswered past the zombie timeout",
+            Liveness::Stale => "no packets received past the stale-connection timeout",
+        })
+    }
 }
 
 /// Writes and flushes a complete packet to `stream`, mapping I/O failures via `crate::io::map_embedded_io_error_kind` — the one mapping the read side uses too — instead of collapsing everything to a fixed `ConnectionAborted`.
@@ -275,8 +333,9 @@ async fn write_frame<IO: AsyncIo>(stream: &mut IO, packet: &[u8]) -> Result<(), 
         .map_err(|e| Error::Network(crate::io::map_embedded_io_error_kind(e.kind())))
 }
 
-/// Same as [`write_frame`], but races the write against `MQTT_WRITE_TIMEOUT_SECS` when `timer`
-/// has a real wall-clock — without this, a stalled peer that stops draining its
+/// Writes a frame like [`write_frame`], racing it against `MQTT_WRITE_TIMEOUT_SECS` when `timer` has a real wall-clock.
+///
+/// Without this, a stalled peer that stops draining its
 /// socket buffer (or a dead connection with no RST yet) blocks `write_all()`/`flush()`
 /// forever, unlike the read path's existing `MQTT_READ_TIMEOUT_SECS` protection. Unlike
 /// `read_chunk`'s single-step racing (needed for resumability across partial reads), a timed-
@@ -296,6 +355,41 @@ async fn write_frame_with_timer<IO: AsyncIo, T: TimerProvider>(
         Raced::Left(result) => result,
         Raced::Right(r) => Err(Error::Network(crate::io::deadline_error(r))),
     }
+}
+
+/// Reads one handshake packet and checks its type and minimum length, returning its body.
+///
+/// Unbounded (`DummyTimer`), like the rest of the handshake — see `MqttClient::connect`.
+async fn read_expect<IO: AsyncIo>(
+    stream: &mut IO,
+    read_state: &mut FrameReadState,
+    packet_type: u8,
+    what: &'static str,
+    min_len: usize,
+) -> Result<Vec<u8>, Error> {
+    let (header, body) = read_exact_packet(
+        stream,
+        read_state,
+        &DummyTimer,
+        MQTT_READ_TIMEOUT_SECS * 1000,
+    )
+    .await?;
+    log::debug!(
+        "Received packet type {} ({} bytes) awaiting {what}",
+        header >> 4,
+        body.len()
+    );
+    if header >> 4 != packet_type {
+        return Err(Error::ProtocolViolation(
+            format!("expected {what} frame, got packet type {}", header >> 4).into(),
+        ));
+    }
+    if body.len() < min_len {
+        return Err(Error::ProtocolViolation(
+            format!("short {what} payload ({} bytes)", body.len()).into(),
+        ));
+    }
+    Ok(body)
 }
 
 impl<IO: AsyncIo> MqttClient<IO> {
@@ -358,9 +452,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
     /// invoking `MqttClient::connect()` directly (bypassing `PrinterClient`) gets no such
     /// bound and must wrap this call in its own timeout (e.g. `tokio::time::timeout`) against
     /// a peer that stalls before CONNACK/SUBACK.
-    pub async fn connect(mut stream: IO, identity: &PrinterIdentity) -> Result<Self, Error> {
-        let serial = identity.serial.as_str();
-        let access_code = identity.access_code.as_str();
+    pub async fn connect(mut stream: IO, serial: &str, access_code: &str) -> Result<Self, Error> {
         let conn_id = CONNECTION_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let client_id = format!("bambino_{}_{}", serial, conn_id);
         let connect_pkt = encode_connect(&client_id, crate::identity::LAN_USERNAME, access_code);
@@ -376,34 +468,20 @@ impl<IO: AsyncIo> MqttClient<IO> {
         // `read_exact_packet` fall back to a plain unbounded read here. Deliberately not wired
         // to `PrinterClient`'s configurable `Timer`: `connect()` runs before a `MqttClient`
         // (and thus a persistent `FrameReadState`) exists, and the connect-phase handshake
-        // (TCP+TLS dial timeout, `PrinterClient::connect_timeout_secs`) is a separate concern
+        // (TCP+TLS dial timeout, `PrinterClient::with_connect_timeout`) is a separate concern
         // from a stall on an already-established connection, mid-`poll_wire()`.
         let mut read_state = FrameReadState::default();
 
         log::debug!("Awaiting broker CONNACK response packet");
 
-        let (header, payload_buf) = read_exact_packet(
+        let payload_buf = read_expect(
             &mut stream,
             &mut read_state,
-            &DummyTimer,
-            MQTT_READ_TIMEOUT_SECS * 1000,
+            PACKET_TYPE_CONNACK,
+            "CONNACK",
+            2,
         )
         .await?;
-
-        let packet_type = header >> 4;
-
-        log::debug!(
-            "Received raw packet header type: {}, remaining size: {} bytes",
-            packet_type,
-            payload_buf.len()
-        );
-
-        if packet_type != PACKET_TYPE_CONNACK {
-            return Err(Error::ProtocolViolation("Expected CONNACK frame".into()));
-        }
-        if payload_buf.len() < 2 {
-            return Err(Error::ProtocolViolation("Short CONNACK payload".into()));
-        }
         let connack_code = payload_buf[1];
 
         log::debug!("Connection accepted response byte: {}", connack_code);
@@ -444,14 +522,14 @@ impl<IO: AsyncIo> MqttClient<IO> {
         }
 
         // Subscribe to report topic
-        let report_topic = format!("device/{}/report", serial);
+        let report_topic = report_topic(serial);
 
         log::debug!(
             "Sending SUBSCRIBE frame targeting topic: '{}' (granted QoS 1)",
             report_topic
         );
 
-        let subscribe_pkt = encode_subscribe(1, &report_topic, 1);
+        let subscribe_pkt = encode_subscribe(SUBSCRIBE_PACKET_ID, &report_topic);
 
         write_frame(&mut stream, &subscribe_pkt).await?;
 
@@ -459,28 +537,19 @@ impl<IO: AsyncIo> MqttClient<IO> {
         // read above, so reusing it here starts a fresh frame read.
         log::debug!("Awaiting broker SUBACK verification packet");
 
-        let (sub_header, payload_buf) = read_exact_packet(
+        let payload_buf = read_expect(
             &mut stream,
             &mut read_state,
-            &DummyTimer,
-            MQTT_READ_TIMEOUT_SECS * 1000,
+            PACKET_TYPE_SUBACK,
+            "SUBACK",
+            3,
         )
         .await?;
-        let sub_type = sub_header >> 4;
-
-        log::debug!("Received raw packet header type: {}", sub_type);
-
-        if sub_type != PACKET_TYPE_SUBACK {
-            return Err(Error::ProtocolViolation("Expected SUBACK frame".into()));
-        }
-        if payload_buf.len() < 3 {
-            return Err(Error::ProtocolViolation("Short SUBACK payload".into()));
-        }
-        // The SUBACK's variable header echoes the SUBSCRIBE packet id, which `encode_subscribe`
-        // always sets to 1. A mismatch means the bytes at [2] are not the return code for the
-        // subscription we sent, so validating the code alone would be meaningless.
+        // The SUBACK's variable header echoes the SUBSCRIBE packet id. A mismatch means the bytes
+        // at [2] are not the return code for the subscription we sent, so validating the code
+        // alone would be meaningless.
         let echoed_packet_id = u16::from_be_bytes([payload_buf[0], payload_buf[1]]);
-        if echoed_packet_id != 1 {
+        if echoed_packet_id != SUBSCRIBE_PACKET_ID {
             return Err(Error::ProtocolViolation(
                 "SUBACK echoed an unexpected packet id".into(),
             ));
@@ -501,11 +570,19 @@ impl<IO: AsyncIo> MqttClient<IO> {
             ));
         }
 
-        Ok(Self {
+        Ok(Self::with_stream(stream, serial))
+    }
+
+    /// Wraps a stream whose handshake has completed; the one place a client's initial state is written.
+    ///
+    /// `connect()` ends here, and so do unit tests that need a client without scripting a
+    /// handshake.
+    fn with_stream(stream: IO, serial: &str) -> Self {
+        Self {
             stream,
-            request_topic: format!("device/{}/request", serial),
+            request_topic: request_topic(serial),
             serial: serial.to_string(),
-            next_packet_id: 2, // 1 is consumed by SUBSCRIBE handshake
+            next_packet_id: SUBSCRIBE_PACKET_ID + 1,
             in_flight: BTreeMap::new(),
             pending_messages: VecDeque::new(),
             pending_bytes: 0,
@@ -516,10 +593,10 @@ impl<IO: AsyncIo> MqttClient<IO> {
             read_state: FrameReadState::default(),
             write_poisoned: false,
             write_in_progress: false,
-        })
+        }
     }
 
-    /// Returns the serial number this client authenticated with (`connect()`'s `serial` argument).
+    /// Returns the serial number this client authenticated with.
     pub fn serial(&self) -> &str {
         &self.serial
     }
@@ -542,6 +619,19 @@ impl<IO: AsyncIo> MqttClient<IO> {
     pub async fn publish_command<T: TimerProvider>(
         &mut self,
         payload: &[u8],
+        timer: &T,
+    ) -> Result<u16, Error> {
+        self.publish_keyed(payload, echo_key(payload), timer).await
+    }
+
+    /// [`publish_command`](Self::publish_command) for a caller that already read `payload`'s [`EchoKey`].
+    ///
+    /// `PrinterClient` reads the key once to build its command handle; passing it here spares the
+    /// second parse of the same bytes.
+    pub(crate) async fn publish_keyed<T: TimerProvider>(
+        &mut self,
+        payload: &[u8],
+        echo: Option<EchoKey>,
         timer: &T,
     ) -> Result<u16, Error> {
         if self.in_flight.len() >= MQTT_IN_FLIGHT_LIMIT {
@@ -597,8 +687,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
             // Only correlate commands with confirmed ack evidence (ACK_CORRELATED_COMMANDS);
             // everything else (including pushall) falls back to clearing on any PUBLISH, same
             // as before this correlation fix existed.
-            self.write_pending_echo = extract_command_and_sequence_id(payload)
-                .filter(|(command, _)| command_echoes(command));
+            self.write_pending_echo = echo.filter(|key| command_echoes(&key.command));
         }
 
         Ok(packet_id)
@@ -713,7 +802,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
 
             match packet_type {
                 PACKET_TYPE_PUBLISH => {
-                    let qos = (header & 0x06) >> 1;
+                    let qos = codec::qos_of(header);
 
                     if payload_buf.len() < 2 {
                         return Err(Error::ProtocolViolation("Short publish payload".into()));
@@ -765,7 +854,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     // has no echoed ack, see `ACK_CORRELATED_COMMANDS`) falls back to clearing on any
                     // PUBLISH, matching pre-correlation behavior for that case only.
                     let should_clear = match &self.write_pending_echo {
-                        Some(expected) => extract_echo_key(&payload).as_ref() == Some(expected),
+                        Some(expected) => echo_key(&payload).as_ref() == Some(expected),
                         None => self.write_pending_secs.is_some(),
                     };
                     if should_clear {
@@ -781,8 +870,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     // rather than a full protocol extension for a case never observed against
                     // real hardware. A broker that did send genuine QoS 2 would see no PUBREC
                     // and may retransmit with DUP set.
-                    if qos == 1 {
-                        let id = packet_id.expect("QoS 1 always has packet_id");
+                    if let (1, Some(id)) = (qos, packet_id) {
                         log::trace!("Sending automatic PUBACK for packet_id: {}", id);
 
                         // Park the message in the pending buffer across the ack write. The frame
@@ -864,26 +952,29 @@ impl<IO: AsyncIo> MqttClient<IO> {
         self.write_frame_guarded(&ping, timer).await
     }
 
-    /// Returns true once a write has failed and left the stream possibly desynced.
+    /// Returns true once either side of the stream is permanently desynced.
     ///
-    /// A poisoned client is permanently unusable: every later `publish_command`, `send_ping`,
-    /// and automatic PUBACK returns `ConnectionAborted` forever, because a failed write may have
-    /// put a partial frame on the wire and, unlike a read, has no resumable progress state.
-    /// Without this accessor a retry loop could not tell that error apart from a transient one
-    /// and would spin against a client that can never recover; the correct response is to drop
-    /// the connection and reconnect (`PrinterClient::disconnect_mqtt()`).
+    /// The write side poisons when a write fails: it may have put a partial frame on the wire and,
+    /// unlike a read, has no resumable progress state, so every later `publish_command`,
+    /// `send_ping` and automatic PUBACK returns `ConnectionAborted`. The read side poisons on a
+    /// malformed length prefix or an oversized frame, after which every read returns
+    /// `InvalidInput`. Either way the client can never recover; the correct response is to drop
+    /// the connection and reconnect (`PrinterClient::disconnect_mqtt()`), not to retry.
     pub fn is_poisoned(&self) -> bool {
-        self.write_poisoned
+        self.write_poisoned || matches!(self.read_state, FrameReadState::Poisoned)
     }
 
-    /// Platform-agnostic timer tick update.
+    /// Advances the liveness clocks by `elapsed_secs` and reports the first violated condition.
     ///
-    /// Evaluates two independent liveness conditions:
-    /// 1. **Write zombie**: A published command has gone unanswered for 10+ seconds
-    ///    [REF-MQTT-ZOMBIE].
-    /// 2. **Connection staleness**: No packets of any kind received for 60+ seconds,
-    ///    indicating a silently dropped connection — independent of (1) [REF-MQTT-CONN].
-    pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Error> {
+    /// Two independent conditions, checked in this order:
+    ///
+    /// 1. [`Liveness::WriteZombie`]: a published command has gone [`MQTT_ZOMBIE_TIMEOUT_SECS`]
+    ///    with no answer [REF-MQTT-ZOMBIE].
+    /// 2. [`Liveness::Stale`]: no packets of any kind for `MQTT_STALE_CONNECTION_SECS` (60s),
+    ///    a silently dropped connection [REF-MQTT-CONN].
+    ///
+    /// Both mean the connection should be dropped and re-established.
+    pub fn tick_zombie_check(&mut self, elapsed_secs: u32) -> Result<(), Liveness> {
         // Age out unacknowledged QoS 1 entries. Without this, a broker that drops PUBACKs leaks
         // `in_flight` entries with no expiry and no drain, and `publish_command` returns
         // saturation forever — see `MQTT_IN_FLIGHT_TTL_SECS`.
@@ -907,7 +998,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                     "Zombie state detected: command issued but zero telemetry updates received for >= {}s",
                     MQTT_ZOMBIE_TIMEOUT_SECS
                 );
-                return Err(Error::Timeout);
+                return Err(Liveness::WriteZombie);
             }
         }
 
@@ -917,7 +1008,7 @@ impl<IO: AsyncIo> MqttClient<IO> {
                 "Connection stale: no packets received for >= {}s",
                 MQTT_STALE_CONNECTION_SECS
             );
-            return Err(Error::Timeout);
+            return Err(Liveness::Stale);
         }
 
         Ok(())
@@ -960,7 +1051,6 @@ mod tests {
     mod async_tests {
         use super::super::*;
         use crate::io::TokioIo;
-        use crate::models::PrinterModel;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         #[tokio::test]
@@ -980,16 +1070,9 @@ mod tests {
                 server_stream.flush().await.unwrap();
             });
 
-            let result = MqttClient::connect(
-                TokioIo::new(client_stream),
-                &PrinterIdentity {
-                    ip: String::new(),
-                    serial: "01P000000000000".into(),
-                    access_code: "12345678".into(),
-                    model: PrinterModel::P1S,
-                },
-            )
-            .await;
+            let result =
+                MqttClient::connect(TokioIo::new(client_stream), "01P000000000000", "12345678")
+                    .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
                 matches!(err, crate::error::Error::AccessDenied),
@@ -1019,16 +1102,9 @@ mod tests {
                 server_stream.flush().await.unwrap();
             });
 
-            let result = MqttClient::connect(
-                TokioIo::new(client_stream),
-                &PrinterIdentity {
-                    ip: String::new(),
-                    serial: "01P000000000000".into(),
-                    access_code: "12345678".into(),
-                    model: PrinterModel::P1S,
-                },
-            )
-            .await;
+            let result =
+                MqttClient::connect(TokioIo::new(client_stream), "01P000000000000", "12345678")
+                    .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
                 matches!(err, crate::error::Error::ProtocolViolation(_)),
@@ -1063,16 +1139,9 @@ mod tests {
                 server_stream.flush().await.unwrap();
             });
 
-            let result = MqttClient::connect(
-                TokioIo::new(client_stream),
-                &PrinterIdentity {
-                    ip: String::new(),
-                    serial: "01P000000000000".into(),
-                    access_code: "12345678".into(),
-                    model: PrinterModel::P1S,
-                },
-            )
-            .await;
+            let result =
+                MqttClient::connect(TokioIo::new(client_stream), "01P000000000000", "12345678")
+                    .await;
             let err = result.err().expect("Expected error, got Ok");
             assert!(
                 matches!(err, crate::error::Error::ProtocolViolation(_)),
@@ -1127,17 +1196,10 @@ mod tests {
                 let _ = server_stream.read(&mut discard).await;
             });
 
-            let mut client = MqttClient::connect(
-                TokioIo::new(client_stream),
-                &PrinterIdentity {
-                    ip: String::new(),
-                    serial: "01P000000000000".into(),
-                    access_code: "12345678".into(),
-                    model: PrinterModel::P1S,
-                },
-            )
-            .await
-            .expect("connect should succeed");
+            let mut client =
+                MqttClient::connect(TokioIo::new(client_stream), "01P000000000000", "12345678")
+                    .await
+                    .expect("connect should succeed");
 
             let timer = crate::io::tokio::TokioTimer::new();
             let first = tokio::time::timeout(
@@ -1204,17 +1266,10 @@ mod tests {
                 tokio::time::sleep(core::time::Duration::from_millis(500)).await;
             });
 
-            let mut client = MqttClient::connect(
-                TokioIo::new(client_stream),
-                &PrinterIdentity {
-                    ip: String::new(),
-                    serial: "01P000000000000".into(),
-                    access_code: "12345678".into(),
-                    model: PrinterModel::P1S,
-                },
-            )
-            .await
-            .expect("connect should succeed");
+            let mut client =
+                MqttClient::connect(TokioIo::new(client_stream), "01P000000000000", "12345678")
+                    .await
+                    .expect("connect should succeed");
 
             // Poison the write channel so the automatic PUBACK write fails.
             client.write_poisoned = true;
@@ -1262,17 +1317,10 @@ mod tests {
                 tokio::time::sleep(core::time::Duration::from_secs(5)).await;
             });
 
-            let mut client = MqttClient::connect(
-                TokioIo::new(client_stream),
-                &PrinterIdentity {
-                    ip: String::new(),
-                    serial: "01P000000000000".into(),
-                    access_code: "12345678".into(),
-                    model: PrinterModel::P1S,
-                },
-            )
-            .await
-            .expect("connect should succeed");
+            let mut client =
+                MqttClient::connect(TokioIo::new(client_stream), "01P000000000000", "12345678")
+                    .await
+                    .expect("connect should succeed");
 
             client
                 .stream
@@ -1324,22 +1372,8 @@ mod tests {
             // `.read()` and leaving a second one-shot `.read()` blocked forever. Just holding
             // `_server_stream` open (never reading it) sidesteps that hazard entirely.
             let (client_stream, _server_stream) = tokio::io::duplex(8192);
-            let mut client = MqttClient {
-                stream: TokioIo::new(client_stream),
-                request_topic: "device/01P000000000000/request".to_string(),
-                serial: "01P000000000000".to_string(),
-                next_packet_id: 2,
-                in_flight: BTreeMap::new(),
-                pending_messages: VecDeque::new(),
-                pending_bytes: 0,
-                write_pending_secs: None,
-                write_pending_echo: None,
-                last_outbound_ms: None,
-                secs_since_last_message: 0,
-                read_state: FrameReadState::default(),
-                write_poisoned: false,
-                write_in_progress: false,
-            };
+            let mut client =
+                MqttClient::with_stream(TokioIo::new(client_stream), "01P000000000000");
 
             client
                 .publish_command(b"{}", &DummyTimer)
@@ -1392,22 +1426,8 @@ mod tests {
                 now_ms: core::cell::Cell::new(1_000),
             };
             let (client_stream, _server_stream) = tokio::io::duplex(8192);
-            let mut client = MqttClient {
-                stream: TokioIo::new(client_stream),
-                request_topic: "device/01P000000000000/request".to_string(),
-                serial: "01P000000000000".to_string(),
-                next_packet_id: 2,
-                in_flight: BTreeMap::new(),
-                pending_messages: VecDeque::new(),
-                pending_bytes: 0,
-                write_pending_secs: None,
-                write_pending_echo: None,
-                last_outbound_ms: None,
-                secs_since_last_message: 0,
-                read_state: FrameReadState::default(),
-                write_poisoned: false,
-                write_in_progress: false,
-            };
+            let mut client =
+                MqttClient::with_stream(TokioIo::new(client_stream), "01P000000000000");
 
             // First call stamps the clock instead of pinging, so the interval is measured from
             // a real outbound event rather than from the epoch.
@@ -1468,24 +1488,11 @@ mod tests {
             // SocketError::TimedOut forever — inviting a caller's retry-on-timeout policy into an
             // infinite loop against a condition that was neither a timeout nor self-clearing.
             let (client_stream, _server_stream) = tokio::io::duplex(64 * 1024);
-            let mut client = MqttClient {
-                stream: TokioIo::new(client_stream),
-                request_topic: "device/01P000000000000/request".to_string(),
-                serial: "01P000000000000".to_string(),
-                next_packet_id: 2,
-                in_flight: (0..MQTT_IN_FLIGHT_LIMIT as u16)
-                    .map(|id| (id + 1, 0))
-                    .collect(),
-                pending_messages: VecDeque::new(),
-                pending_bytes: 0,
-                write_pending_secs: None,
-                write_pending_echo: None,
-                last_outbound_ms: None,
-                secs_since_last_message: 0,
-                read_state: FrameReadState::default(),
-                write_poisoned: false,
-                write_in_progress: false,
-            };
+            let mut client =
+                MqttClient::with_stream(TokioIo::new(client_stream), "01P000000000000");
+            client.in_flight = (0..MQTT_IN_FLIGHT_LIMIT as u16)
+                .map(|id| (id + 1, 0))
+                .collect();
 
             let result = client.publish_command(b"{}", &DummyTimer).await;
             assert!(
@@ -1523,22 +1530,13 @@ mod tests {
             // silently discarding commands) forever. It must only clear on a PUBLISH whose
             // sequence_id matches the outstanding command's.
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-            let mut client = MqttClient {
-                stream: TokioIo::new(client_stream),
-                request_topic: "device/01P000000000000/request".to_string(),
-                serial: "01P000000000000".to_string(),
-                next_packet_id: 2,
-                in_flight: BTreeMap::new(),
-                pending_messages: VecDeque::new(),
-                pending_bytes: 0,
-                write_pending_secs: Some(0),
-                write_pending_echo: Some(("gcode_line".to_string(), "100002".to_string())),
-                last_outbound_ms: None,
-                secs_since_last_message: 0,
-                read_state: FrameReadState::default(),
-                write_poisoned: false,
-                write_in_progress: false,
-            };
+            let mut client =
+                MqttClient::with_stream(TokioIo::new(client_stream), "01P000000000000");
+            client.write_pending_secs = Some(0);
+            client.write_pending_echo = Some(EchoKey {
+                command: "gcode_line".to_string(),
+                sequence_id: 100002,
+            });
 
             // Unrelated telemetry with its own low-value sequence_id must not clear the timer.
             let telemetry = encode_publish_qos1(
@@ -1609,22 +1607,8 @@ mod tests {
             // it (like print/system commands get) left write_pending_secs armed forever and
             // fired a false zombie timeout against real hardware within MQTT_ZOMBIE_TIMEOUT_SECS.
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-            let mut client = MqttClient {
-                stream: TokioIo::new(client_stream),
-                request_topic: "device/01P000000000000/request".to_string(),
-                serial: "01P000000000000".to_string(),
-                next_packet_id: 2,
-                in_flight: BTreeMap::new(),
-                pending_messages: VecDeque::new(),
-                pending_bytes: 0,
-                write_pending_secs: None,
-                write_pending_echo: None,
-                last_outbound_ms: None,
-                secs_since_last_message: 0,
-                read_state: FrameReadState::default(),
-                write_poisoned: false,
-                write_in_progress: false,
-            };
+            let mut client =
+                MqttClient::with_stream(TokioIo::new(client_stream), "01P000000000000");
 
             client
                 .publish_command(

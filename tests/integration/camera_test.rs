@@ -154,8 +154,8 @@ async fn test_ensure_camera_rejects_rtsps_model_without_dialing() {
     let result = printer.read_camera_frame().await;
 
     assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
-        "expected ProtocolViolation for an RTSPS model, got {:?}",
+        matches!(result, Err(Error::ModelMismatch(_))),
+        "expected ModelMismatch for an RTSPS model, got {:?}",
         result.map(|_| ())
     );
     assert!(!printer.is_camera_connected());
@@ -291,10 +291,7 @@ async fn test_attach_and_disconnect_camera() {
             model: PrinterModel::P1S,
         },
     )
-    .with_camera(
-        DummyTlsConnector,
-        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
-    );
+    .with_camera(DummyTlsConnector, MockDataStreamFactory::empty());
     assert!(!client.is_camera_connected());
 
     client.attach_camera(camera_stream).await;
@@ -305,10 +302,7 @@ async fn test_attach_and_disconnect_camera() {
         .expect("attach_camera should leave an immediately-usable connected stream");
     assert_eq!(frame_buf[0..2], [0xFF, 0xD8]);
 
-    client
-        .disconnect_camera()
-        .await
-        .expect("disconnect_camera should succeed");
+    client.disconnect_camera().await;
     assert!(
         !client.is_camera_connected(),
         "disconnect_camera must clear self.camera"
@@ -355,16 +349,10 @@ async fn test_disconnect_camera_closes_the_tls_session() {
             model: PrinterModel::P1S,
         },
     )
-    .with_camera(
-        connector,
-        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
-    );
+    .with_camera(connector, MockDataStreamFactory::empty());
     client.attach_camera(camera_stream).await;
 
-    client
-        .disconnect_camera()
-        .await
-        .expect("disconnect_camera should succeed");
+    client.disconnect_camera().await;
     assert_eq!(
         closes.load(std::sync::atomic::Ordering::SeqCst),
         1,

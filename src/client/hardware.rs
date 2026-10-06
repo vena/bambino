@@ -4,8 +4,13 @@ use alloc::format;
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 
-use super::types::{BuzzerMode, FanTarget};
 use super::{CommandHandle, PrinterClient};
+use crate::mqtt::commands::AirductMode;
+use crate::types::control::{BuzzerMode, FanTarget, LedNode};
+#[cfg(not(feature = "std"))]
+use alloc::string as alloc_string;
+#[cfg(feature = "std")]
+use std::string as alloc_string;
 
 impl<
     MqttRawIO,
@@ -48,14 +53,20 @@ where
 {
     /// Sets the speed of a targeted onboard fan as a percentage (0 to 100) [REF-CLIM-FANS].
     ///
-    /// Translates percentage input to standard PWM ranges (0 to 255) in the G-code envelope.
-    /// For models with unique secondary cooling configurations (like the X2D), directs commands
-    /// to the correct target port ID.
+    /// Translates the percentage to the 0-255 PWM range of `M106`, on the fan's own port
+    /// ([`FanTarget::write_port`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when this model doesn't have the fan.
     pub async fn set_fan_speed(
         &mut self,
-        fan_type: FanTarget,
+        fan: FanTarget,
         speed_percent: u8,
     ) -> Result<CommandHandle, Error> {
+        require(fan.is_supported_by(self.quirks()), || {
+            format!("{fan:?} fan not available on this model")
+        })?;
         if speed_percent > 100 {
             log::warn!(
                 "Fan speed {}% exceeds maximum 100%, clamping",
@@ -64,41 +75,12 @@ where
         }
         let speed_clamped = core::cmp::min(speed_percent, 100);
         let pwm = ((speed_clamped as u32 * 255) / 100) as u16;
-
-        let port_id = match fan_type {
-            FanTarget::PartCooling => super::types::FAN_WRITE_PORT_PART_COOLING,
-            FanTarget::AuxiliaryLeft => {
-                if !self.identity.model.quirks().has_auxiliary_left_fan() {
-                    return Err(Error::ModelMismatch(
-                        "auxiliary left fan not available on this model".into(),
-                    ));
-                }
-                super::types::FAN_WRITE_PORT_AUXILIARY_LEFT
-            }
-            FanTarget::ChamberExhaust => {
-                if !self.identity.model.quirks().has_chamber_exhaust_fan() {
-                    return Err(Error::ModelMismatch(
-                        "chamber exhaust fan not available on this model".into(),
-                    ));
-                }
-                super::types::FAN_WRITE_PORT_CHAMBER_EXHAUST
-            }
-            FanTarget::AuxiliaryLeft2 => {
-                if !self.identity.model.quirks().has_auxiliary_left2_fan() {
-                    return Err(Error::ModelMismatch(
-                        "second auxiliary left fan not available on this model".into(),
-                    ));
-                }
-                super::types::FAN_WRITE_PORT_AUXILIARY_LEFT2
-            }
-        };
-
-        let gcode = format!("M106 P{} S{}", port_id, pwm);
+        let gcode = format!("M106 P{} S{}", fan.write_port(), pwm);
         self.send_gcode_raw(&gcode).await
     }
 
-    /// Configures the active state of a targeted enclosure LED lighting node [REF-MQTT-LIFECYCLE].
-    pub async fn set_led(&mut self, node: &str, turn_on: bool) -> Result<CommandHandle, Error> {
+    /// Turns an LED fixture on or off [REF-MQTT-LIFECYCLE].
+    pub async fn set_led(&mut self, node: LedNode, turn_on: bool) -> Result<CommandHandle, Error> {
         self.dispatch(|seq| crate::mqtt::commands::LedCtrlRequest::new(node, turn_on, seq))
             .await
     }
@@ -106,15 +88,10 @@ where
     /// Configures the active climate airduct damper mode [REF-MQTT-LIFECYCLE].
     ///
     /// Supported on models with controllable airduct dampers (H2 series, P2S, X2D).
-    pub async fn set_airduct_mode(
-        &mut self,
-        mode: crate::mqtt::commands::AirductMode,
-    ) -> Result<CommandHandle, Error> {
-        if !self.identity.model.quirks().supports_airduct_mode() {
-            return Err(Error::ModelMismatch(
-                "airduct damper control not available on this model".into(),
-            ));
-        }
+    pub async fn set_airduct_mode(&mut self, mode: AirductMode) -> Result<CommandHandle, Error> {
+        require(self.quirks().supports_airduct_mode(), || {
+            "airduct damper control not available on this model".into()
+        })?;
         self.dispatch(|seq| crate::mqtt::commands::AirductRequest::new(mode, seq))
             .await
     }
@@ -123,11 +100,9 @@ where
     ///
     /// Supported on models with onboard speakers (A1, A1 Mini, A2L).
     pub async fn set_prompt_sound(&mut self, enable_sound: bool) -> Result<CommandHandle, Error> {
-        if !self.identity.model.quirks().supports_prompt_sound() {
-            return Err(Error::ModelMismatch(
-                "prompt sound not available on this model".into(),
-            ));
-        }
+        require(self.quirks().supports_prompt_sound(), || {
+            "prompt sound not available on this model".into()
+        })?;
         self.dispatch(|seq| crate::mqtt::commands::PromptSoundRequest::new(enable_sound, seq))
             .await
     }
@@ -136,12 +111,22 @@ where
     ///
     /// Supported on models with a physical fire alarm buzzer (H2 series).
     pub async fn set_buzzer_mode(&mut self, mode: BuzzerMode) -> Result<CommandHandle, Error> {
-        if !self.identity.model.quirks().has_buzzer() {
-            return Err(Error::ModelMismatch(
-                "buzzer control not available on this model".into(),
-            ));
-        }
-        self.dispatch(|seq| crate::mqtt::commands::BuzzerRequest::new(mode as i32, seq))
+        require(self.quirks().has_buzzer(), || {
+            "buzzer control not available on this model".into()
+        })?;
+        self.dispatch(|seq| crate::mqtt::commands::BuzzerRequest::new(mode, seq))
             .await
+    }
+}
+
+/// Fails with [`Error::ModelMismatch`] carrying `message()` unless `supported`.
+pub(crate) fn require(
+    supported: bool,
+    message: impl FnOnce() -> alloc_string::String,
+) -> Result<(), Error> {
+    if supported {
+        Ok(())
+    } else {
+        Err(Error::ModelMismatch(message().into()))
     }
 }

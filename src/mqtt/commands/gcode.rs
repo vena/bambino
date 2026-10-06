@@ -1,7 +1,7 @@
 //! G-code dispatch command payload.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use serde::Serialize;
 
@@ -18,21 +18,20 @@ pub struct GCodePayload {
     /// Raw G-code line, newline-terminated by [`GCodeRequest::new`].
     pub param: String,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Sends a raw G-code line to the printer for immediate execution.
-#[derive(Debug, Clone, Serialize)]
-pub struct GCodeRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: GCodePayload,
-}
+pub type GCodeRequest = super::Print<GCodePayload>;
 
 impl GCodeRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "gcode_line";
+
     /// Creates a request envelope wrapping a raw G-code payload.
     ///
-    /// **Execution Note:** The raw G-code string is strictly appended with a newline character (`\n`)
-    /// to ensure the physical controller's stream parser identifies the end-of-command boundary.
+    /// Ensures the line ends with a newline (`\n`), appending one only if missing, so the
+    /// printer's stream parser sees the end-of-command boundary.
     pub fn new(gcode_line: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
         let mut param = String::from(gcode_line);
         if !param.ends_with('\n') {
@@ -40,9 +39,9 @@ impl GCodeRequest {
         }
         Self {
             print: GCodePayload {
-                command: "gcode_line",
+                command: Self::COMMAND,
                 param,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }

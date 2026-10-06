@@ -345,6 +345,13 @@ async fn sleep_fed(d: Duration, wdt: &mut Watchdog) {
     }
 }
 
+/// Runs an infallible teardown step under [`CALL_BOUND`], logging if it overran.
+async fn bounded(label: &str, fut: impl core::future::Future<Output = ()>) {
+    if embassy_time::with_timeout(CALL_BOUND, fut).await.is_err() {
+        log::warn!("    {label}: no result within the call bound");
+    }
+}
+
 /// Runs one bambino call under `CALL_BOUND`, logging how long it took.
 async fn call<T>(
     label: &str,
@@ -705,7 +712,7 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
             break;
         }
     }
-    call("disconnect_mqtt", p.disconnect_mqtt()).await?;
+    bounded("disconnect_mqtt", p.disconnect_mqtt()).await;
     drop(p);
     let mut entries = 0;
     for n in 1..=H_FTPS_CONNECTS {
@@ -722,11 +729,7 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
             .await?
             .len();
         }
-        call(
-            &alloc::format!("disconnect_ftps {n}"),
-            p.disconnect_ftps(),
-        )
-        .await?;
+        bounded(&alloc::format!("disconnect_ftps {n}"), p.disconnect_ftps()).await;
     }
 
     ctx.wdt.feed();
@@ -743,8 +746,8 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
         outcome.camera
     );
     let all_ok = matches!(outcome.mqtt, Some(Ok(()))) && matches!(outcome.ftps, Some(Ok(())));
-    let _ = call("disconnect_ftps", p.disconnect_ftps()).await;
-    let _ = call("disconnect_mqtt", p.disconnect_mqtt()).await;
+    bounded("disconnect_ftps", p.disconnect_ftps()).await;
+    bounded("disconnect_mqtt", p.disconnect_mqtt()).await;
     drop(p);
 
     let mut reconnects: Vec<u64> = Vec::new();
@@ -764,7 +767,7 @@ async fn stage_h(ctx: &mut Ctx) -> Result<String, String> {
             p.poll_telemetry(),
         )
         .await?;
-        let _ = call("disconnect_mqtt", p.disconnect_mqtt()).await;
+        bounded("disconnect_mqtt", p.disconnect_mqtt()).await;
     }
 
     Ok(alloc::format!(

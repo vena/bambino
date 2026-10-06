@@ -17,8 +17,8 @@
 //! three-plus-instances threshold this crate's quirks-engine precedent uses to justify a
 //! shared-strategy refactor.
 
+use bambino::client::{HeaterTemps, NozzleTemps};
 use bambino::client::{PrinterClient, TelemetryEvent};
-use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::models::PrinterModel;
 use bambino::mqtt::MqttClient;
@@ -63,17 +63,9 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         }
     });
 
-    let mqtt_client = MqttClient::connect(
-        TokioIo::new(client_stream),
-        &PrinterIdentity {
-            ip: String::new(),
-            serial: SERIAL.into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-    )
-    .await
-    .expect("MQTT connect handshake failed");
+    let mqtt_client = MqttClient::connect(TokioIo::new(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, PrinterModel::P1S);
 
     let mut reports_parsed = 0usize;
@@ -126,13 +118,14 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
             );
         }
 
-        let (bed_actual, bed_target) = client.bed_temperatures();
-        assert!(
-            bed_actual < PLAUSIBLE_MAX_TEMP_C && bed_target < PLAUSIBLE_MAX_TEMP_C,
-            "bed_temperatures implausible at message {i}: ({bed_actual}, {bed_target})"
-        );
+        if let Some(bed) = client.bed_temperatures() {
+            assert!(
+                bed.actual < PLAUSIBLE_MAX_TEMP_C && bed.target < PLAUSIBLE_MAX_TEMP_C,
+                "bed_temperatures implausible at message {i}: {bed:?}"
+            );
+        }
 
-        for (id, actual, target) in client.nozzle_temperatures() {
+        for NozzleTemps { id, actual, target } in client.nozzle_temperatures() {
             assert!(
                 actual < PLAUSIBLE_MAX_TEMP_C && target < PLAUSIBLE_MAX_TEMP_C,
                 "nozzle_temperatures[{id}] implausible at message {i}: ({actual}, {target})"
@@ -151,11 +144,11 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
         let _ = client.active_hms_alerts();
 
         for pct in [
-            client.part_cooling_fan_speed(),
-            client.auxiliary_left_fan_speed(),
-            client.chamber_exhaust_fan_speed(),
+            client.fan_speed(bambino::client::FanTarget::PartCooling),
+            client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft),
+            client.fan_speed(bambino::client::FanTarget::ChamberExhaust),
             client.heatbreak_fan_speed(),
-            client.auxiliary_left2_fan_speed(),
+            client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
         ]
         .into_iter()
         .flatten()
@@ -230,30 +223,23 @@ async fn test_x1c_chamber_temperature_decode_and_plausibility_check() {
         read_puback(&mut server_stream).await;
     });
 
-    let mqtt_client = MqttClient::connect(
-        TokioIo::new(client_stream),
-        &PrinterIdentity {
-            ip: String::new(),
-            serial: SERIAL.into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::X1C,
-        },
-    )
-    .await
-    .expect("MQTT connect handshake failed");
+    let mqtt_client = MqttClient::connect(TokioIo::new(client_stream), SERIAL, "12345678")
+        .await
+        .expect("MQTT connect handshake failed");
     let mut client = PrinterClient::from_mqtt(mqtt_client, PrinterModel::X1C);
 
-    // Chamber-equipped model: Some((0, 0)) before any chamber_temper is observed.
-    assert_eq!(client.chamber_temperature(), Some((0, 0)));
+    // Chamber-equipped model: None before any chamber_temper is observed.
+    assert_eq!(client.chamber_temperature(), None);
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse the direct-temperature report");
-    let (actual, target) = client
+    let HeaterTemps { actual, target } = client
         .chamber_temperature()
         .expect("X1C must report chamber temperatures");
-    assert_eq!((actual, target), (35, 0));
+    // 35.5 rounds to 36 (#461).
+    assert_eq!((actual, target), (36, 0));
     assert!(
         actual < PLAUSIBLE_MAX_TEMP_C && target < PLAUSIBLE_MAX_TEMP_C,
         "chamber_temperature implausible: ({actual}, {target})"
@@ -263,7 +249,7 @@ async fn test_x1c_chamber_temperature_decode_and_plausibility_check() {
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse the composite-temperature report");
-    let (actual, target) = client
+    let HeaterTemps { actual, target } = client
         .chamber_temperature()
         .expect("X1C must report chamber temperatures");
     assert_eq!((actual, target), (35, 1));

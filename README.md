@@ -83,7 +83,7 @@ let identity = PrinterIdentity::new(ip, serial, access_code);
 let model = identity.model;
 let mut printer = PrinterClient::new(tls, TokioRawStreamFactory, identity)
     .with_timer(TokioTimer::new())
-    .with_connect_timeout(5); // seconds; 0 disables the timeout
+    .with_connect_timeout(Some(Duration::from_secs(5))); // None disables the timeout
 
 // MQTT connects lazily on first use, or eagerly:
 printer.connect_mqtt().await?;
@@ -120,10 +120,10 @@ A `from_mqtt()` client's FTPS and camera slots are placeholders, so attach conne
 ```rust
 printer.request_pushall().await?;              // request full state dump
                                                // warning: calling this too often may slow older models!
-printer.home_axes(false).await?;               // false = bare G28; true = Z-only (rejected on bed-on-Z models)
+printer.home_all().await?;                     // bare G28; home_z_only() is refused on bed-on-Z models
 printer.set_bed_temperature(60).await?;        // clamped to model max
 printer.set_nozzle_temperature(0, 220).await?; // nozzle 0 at 220°C
-printer.set_led("chamber_light", true).await?; // turn on the chamber light
+printer.set_led(LedNode::Chamber, true).await?; // turn on the chamber light
 printer.send_gcode("M106 P1 S255").await?;     // rejected if it homes unsafely or exceeds a heater limit; not clamped
 ```
 
@@ -137,7 +137,7 @@ use bambino::client::TelemetryEvent;
 loop {
     match printer.poll_telemetry().await? {
         TelemetryEvent::Report(report, _raw) => {
-            let (bed_actual, bed_target) = report.bed_temperatures();
+            let bed = report.bed_temperatures(); // Option<HeaterTemps>
             if let Some(print) = &report.print {
                 println!(
                     "{:?} — bed {}°C/{}°C — {:?}%",
@@ -161,7 +161,7 @@ Every command method returns a `CommandHandle` carrying the `sequence_id` the pr
 ```rust
 use bambino::client::CommandOutcome;
 
-let handle = printer.set_led("chamber_light", true).await?;
+let handle = printer.set_led(LedNode::Chamber, true).await?;
 match printer.await_ack(&handle).await? {
     CommandOutcome::Refused(refusal) => eprintln!("refused: {:?}", refusal.reason),
     outcome => println!("{outcome:?}"),

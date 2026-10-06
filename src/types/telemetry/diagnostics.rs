@@ -3,6 +3,8 @@
 #[cfg(not(feature = "std"))]
 use alloc::string::String;
 
+use super::merge::{Mergeable, keep_new, merge_opt};
+use super::temps::{HeaterTemps, unpack_temperature};
 use serde::{Deserialize, Serialize};
 
 /// Chamber Temperature Controller (CTC) telemetry sub-object.
@@ -16,7 +18,7 @@ pub struct CtcTelemetry {
     pub state: Option<u32>,
 }
 
-impl CtcTelemetry {
+impl Mergeable for CtcTelemetry {
     /// Merges a freshly-parsed `CtcTelemetry` into `self` field-by-field.
     ///
     /// Confirmed against BambuStudio's own `DevChamber::ParseChamberV2_0`
@@ -26,23 +28,18 @@ impl CtcTelemetry {
     /// but reads `device.ctc.info` behind its own `.contains()` check, i.e. `info` *can*
     /// arrive absent while `state` is present. `self.info` must not be cleared just
     /// because a push carries `ctc.state` without repeating `ctc.info`.
-    pub(crate) fn merge_from(&mut self, incoming: &CtcTelemetry) {
-        match (&mut self.info, &incoming.info) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.info = Some(new.clone()),
-            _ => {}
-        }
-        if incoming.state.is_some() {
-            self.state = incoming.state;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self { info, state } = incoming;
+        merge_opt(&mut self.info, info);
+        keep_new(&mut self.state, state);
     }
 }
 
 /// Controller information segment detailing current temperature coordinates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CtcInfo {
-    /// Composite-packed integer temperature value [REF-THER-DECODE].
-    /// Use `PrinterTelemetry::unpack_temperature()` on this value cast to `f64`.
+    /// Composite-packed integer temperature value [REF-THER-DECODE]; decode with
+    /// [`temperatures()`](Self::temperatures).
     pub temp: Option<u32>,
 
     /// Explicit CTC target temperature (authoritative on new-gen models).
@@ -51,6 +48,22 @@ pub struct CtcInfo {
 }
 
 impl CtcInfo {
+    /// The chamber controller's temperatures: `temp` unpacked, with `target` overriding the packed target when present.
+    ///
+    /// `target` is the authoritative target on new-gen models (bambuddy reads it separately,
+    /// `bambu_mqtt.py:2652`); BambuStudio derives both halves from the packed `temp`. `None` when
+    /// `temp` is absent.
+    #[must_use]
+    pub fn temperatures(&self) -> Option<HeaterTemps> {
+        let mut temps = unpack_temperature(f64::from(self.temp?));
+        if let Some(target) = self.target {
+            temps.target = u16::try_from(target).unwrap_or(u16::MAX);
+        }
+        Some(temps)
+    }
+}
+
+impl Mergeable for CtcInfo {
     /// Merges a freshly-parsed `CtcInfo` into `self` field-by-field.
     ///
     /// `target` is a real, independently-arriving wire key — `bambuddy`
@@ -60,13 +73,10 @@ impl CtcInfo {
     /// no counter-evidence, but doesn't need to: `self.info` was previously cloned wholesale
     /// whenever `ctc.info` was present at all, which would silently drop a cached `target` on
     /// any push whose `ctc.info` repeats only `temp`.
-    pub(crate) fn merge_from(&mut self, incoming: &CtcInfo) {
-        if incoming.temp.is_some() {
-            self.temp = incoming.temp;
-        }
-        if incoming.target.is_some() {
-            self.target = incoming.target;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self { temp, target } = incoming;
+        keep_new(&mut self.temp, temp);
+        keep_new(&mut self.target, target);
     }
 }
 
@@ -125,35 +135,32 @@ impl IpcamTelemetry {
     pub fn tutk_server_enabled(&self) -> Option<bool> {
         enable_flag(self.tutk_server.as_deref())
     }
+}
 
+impl Mergeable for IpcamTelemetry {
     /// Merges a freshly-parsed `IpcamTelemetry` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
     /// BambuStudio's `parse_json` (`DeviceManager.cpp:3338-3399`) gates every
     /// `ipcam` field behind its own `.contains()` check, same preserve-on-absence pattern
     /// as `CtcTelemetry`/`BedTelemetry`/`ExtToolTelemetry`.
-    pub(crate) fn merge_from(&mut self, incoming: &IpcamTelemetry) {
-        if incoming.ipcam_dev.is_some() {
-            self.ipcam_dev = incoming.ipcam_dev.clone();
-        }
-        if incoming.ipcam_record.is_some() {
-            self.ipcam_record = incoming.ipcam_record.clone();
-        }
-        if incoming.timelapse.is_some() {
-            self.timelapse = incoming.timelapse.clone();
-        }
-        if incoming.mode_bits.is_some() {
-            self.mode_bits = incoming.mode_bits;
-        }
-        if incoming.resolution.is_some() {
-            self.resolution = incoming.resolution.clone();
-        }
-        if incoming.tutk_server.is_some() {
-            self.tutk_server = incoming.tutk_server.clone();
-        }
-        if incoming.rtsp_url.is_some() {
-            self.rtsp_url = incoming.rtsp_url.clone();
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            ipcam_dev,
+            ipcam_record,
+            timelapse,
+            mode_bits,
+            resolution,
+            tutk_server,
+            rtsp_url,
+        } = incoming;
+        keep_new(&mut self.ipcam_dev, ipcam_dev);
+        keep_new(&mut self.ipcam_record, ipcam_record);
+        keep_new(&mut self.timelapse, timelapse);
+        keep_new(&mut self.mode_bits, mode_bits);
+        keep_new(&mut self.resolution, resolution);
+        keep_new(&mut self.tutk_server, tutk_server);
+        keep_new(&mut self.rtsp_url, rtsp_url);
     }
 }
 
@@ -164,10 +171,10 @@ impl IpcamTelemetry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HmsEntry {
     /// Packed attribute word encoding module ID, severity, and subsystem address.
-    #[serde(default, deserialize_with = "deserialize_permissive_hms_u32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_hms_u32")]
     pub attr: u32,
     /// Packed code word encoding fault category and error index.
-    #[serde(default, deserialize_with = "deserialize_permissive_hms_u32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_hms_u32")]
     pub code: u32,
     /// Seconds since boot when the alert was raised (confirmed present on X2 only; unverified on H2/P2).
     #[serde(default)]
@@ -179,34 +186,4 @@ pub struct HmsEntry {
     /// neither guaranteed UTC nor comparable with host time.
     #[serde(default, rename = "ts_unix")]
     pub ts_local: Option<String>,
-}
-
-/// Permissively decodes an `HmsEntry.attr`/`.code` wire value.
-///
-/// BambuStudio's `ParseHMSItems` (`DevHMS.cpp:42-61`) pushes a default-zeroed
-/// item on a malformed entry rather than aborting the whole message; bambuddy
-/// (`bambu_mqtt.py:2756-2761`) additionally tolerates hex-string `attr`/`code` values.
-/// Accepts a plain integer or a `0x`/`0X`-prefixed hex string; any other shape (including a
-/// non-prefixed decimal string) defaults to `0` instead of failing the entire telemetry
-/// message's deserialize.
-fn deserialize_permissive_hms_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RawHmsValue {
-        Int(u32),
-        Str(String),
-    }
-
-    Ok(match RawHmsValue::deserialize(deserializer) {
-        Ok(RawHmsValue::Int(i)) => i,
-        Ok(RawHmsValue::Str(s)) => s
-            .strip_prefix("0x")
-            .or_else(|| s.strip_prefix("0X"))
-            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-            .unwrap_or(0),
-        Err(_) => 0,
-    })
 }

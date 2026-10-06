@@ -25,11 +25,6 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 1_048_576; // 1 MiB
 /// cannot satisfy an allocation calls `handle_alloc_error` and aborts rather than returning a
 /// recoverable error, and `pending.rs` already notes that RAM on these targets is measured in KB.
 ///
-/// Note this is now purely a ceiling on what will be *accepted*. It is no longer the amount a
-/// single PUBLISH can force the client to allocate on firmware-controlled input — the payload
-/// buffer grows with delivery, so reaching this bound requires a peer that actually sends this
-/// many bytes.
-///
 /// Covers ESP-IDF as well as `no_std`/Embassy: `esp-idf` implies `std`, so gating on `std`
 /// alone would have left an ESP32 — one of the two targets this bound exists for — at the host
 /// value. The predicate here is the exact negation of the host one above, so exactly one
@@ -46,12 +41,12 @@ pub(crate) const MQTT_MAX_PAYLOAD_BYTES: usize = 65_536; // 64 KiB
 ///
 /// Bounds a single `poll_wire()` invocation's total wait for *new* bytes to arrive —
 /// independent of, and strictly lower-level than, `PrinterClient::poll_until`'s
-/// `command_timeout_secs`/`POLL_UNTIL_MAX_MESSAGES` valves (`src/client/mod.rs`), which
+/// command timeout / `POLL_UNTIL_MAX_MESSAGES` valves (`src/client/mod.rs`), which
 /// only ever run *after* a full frame has already been received and therefore cannot
 /// catch a stall that happens mid-read [REF-MQTT-STALL]. A connection that stalls with
 /// zero incoming bytes may take up to this long to surface as
 /// `Error::Network(SocketError::TimedOut)`, even if the caller configured a
-/// shorter `command_timeout_secs` — the two timeouts are independent layers, not summed
+/// shorter command timeout — the two timeouts are independent layers, not summed
 /// or coordinated.
 pub(crate) const MQTT_READ_TIMEOUT_SECS: u64 = 30;
 
@@ -119,22 +114,22 @@ pub(crate) enum FrameReadState {
     Poisoned,
 }
 
-/// Reads exactly one byte from `stream`, retrying partial reads via `read_chunk`.
+/// Reads exactly one byte from `stream`.
 ///
 /// Either fully succeeds (one byte consumed and returned) or fails before any byte is
 /// consumed — there's no partial-byte state for a caller to lose across a timeout, unlike
 /// the multi-byte payload read in [`read_exact_packet`], which must stay a manual loop.
+///
+/// One `read_chunk` call suffices: it never returns `Ok(0)` for a non-empty buffer, mapping a
+/// 0-byte read to `SocketError::ConnectionReset` on both its deadline and no-deadline branches
+/// (`.claude/rules/wire-read-deadline.md`). If that ever changes, this needs its loop back.
 async fn read_one_byte<IO: AsyncIo, T: TimerProvider>(
     stream: &mut IO,
     timer: &T,
     deadline_ms: Option<u64>,
 ) -> Result<u8, SocketError> {
     let mut b = [0u8; 1];
-    let mut filled = 0;
-    while filled < b.len() {
-        let n = read_chunk(stream, &mut b[filled..], timer, deadline_ms).await?;
-        filled += n;
-    }
+    read_chunk(stream, &mut b, timer, deadline_ms).await?;
     Ok(b[0])
 }
 

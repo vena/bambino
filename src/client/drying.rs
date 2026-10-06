@@ -25,7 +25,7 @@ use crate::types::drying::DEFAULT_COMMAND_COOLING_TEMP;
 use crate::types::telemetry::AmsUnitModel;
 
 use super::{CommandHandle, PrinterClient};
-use crate::ams::ids::{is_ams_ht_id, is_valid_ams_id, wire_ams_id};
+use crate::ams::ids::{VALID_AMS_IDS_TEXT, is_ams_ht_id, is_valid_ams_id, wire_ams_id};
 
 impl<
     MqttRawIO,
@@ -112,8 +112,9 @@ where
     /// every field zeroed/defaulted, only `mode: 0` (`Off`) is meaningful.
     pub async fn stop_drying(&mut self, ams_id: u8) -> Result<CommandHandle, Error> {
         if !is_valid_ams_id(ams_id) {
-            return Err(Error::ProtocolViolation(
-                "invalid AMS addressing parameters for stop_drying".into(),
+            return Err(Error::InvalidArgument(
+                format!("stop_drying: ams_id {ams_id} is not an AMS unit ({VALID_AMS_IDS_TEXT})")
+                    .into(),
             ));
         }
         let ams_id = i32::from(wire_ams_id(ams_id));
@@ -370,7 +371,7 @@ where
     /// longhand at `Widgets/AMSControl.cpp:348`: the printer must act on the command *and* the
     /// attached box must have a heater.
     ///
-    /// [`Error::ProtocolViolation`] for an `ams_id` outside the documented address space.
+    /// [`Error::InvalidArgument`] for an `ams_id` outside the documented address space.
     ///
     /// [`Error::InvalidArgument`] when the temperature falls outside the unit's
     /// [`dry_temp_range`](AmsUnitModel::dry_temp_range). **Both bounds are rejected, not
@@ -433,8 +434,12 @@ where
             ));
         }
         if !is_valid_ams_id(self.ams_id) {
-            return Err(Error::ProtocolViolation(
-                "invalid AMS addressing parameters for a drying cycle".into(),
+            return Err(Error::InvalidArgument(
+                format!(
+                    "drying cycle: ams_id {} is not an AMS unit ({VALID_AMS_IDS_TEXT})",
+                    self.ams_id
+                )
+                .into(),
             ));
         }
         // An external spool is a holder on a bracket, not a box with a heater — the one place

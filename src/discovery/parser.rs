@@ -10,7 +10,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::borrow::ToOwned;
 #[cfg(not(feature = "std"))]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 
 use core::net::{IpAddr, SocketAddr};
 
@@ -54,6 +54,24 @@ pub struct SsdpDevice {
     pub bind_state: String,
     /// Security link state (e.g. "secure").
     pub security_link: String,
+}
+
+impl SsdpDevice {
+    /// The identity to connect to this printer with, keeping the model discovery resolved.
+    ///
+    /// Unlike `PrinterIdentity::new(dev.ip, dev.serial, ..)`, which re-resolves the model from
+    /// the serial alone, this keeps [`model`](Self::model) — resolved from the serial *and* the
+    /// `DevModel`/NT/ST headers — so a printer with an unrecognized serial prefix doesn't fall
+    /// back to the conservative `Unknown` quirks.
+    #[must_use]
+    pub fn into_identity(self, access_code: impl Into<String>) -> crate::identity::PrinterIdentity {
+        crate::identity::PrinterIdentity {
+            ip: self.ip.to_string(),
+            serial: self.serial,
+            access_code: access_code.into(),
+            model: self.model,
+        }
+    }
 }
 
 /// Domain suffix on Bambu's vendor SSDP headers (`DevName.bambu.com`); some firmware omits it.

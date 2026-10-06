@@ -13,36 +13,48 @@
 //!   via the quirks engine.
 
 pub mod ams;
+pub(crate) mod bits;
 pub mod device;
 pub mod diagnostics;
+mod loose;
+pub(crate) mod merge;
 pub mod report;
 pub mod stage;
+mod temps;
 pub mod xcam;
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 pub use ams::{
     AmsDryFanStatus, AmsDrySetting, AmsDryStatus, AmsDrySubStatus, AmsFilamentStep,
     AmsStatusReport, AmsTray, AmsUnit, AmsUnitModel, DryBlockReason, FilamentSwitchInlet,
     VirtualTray,
 };
+pub use bits::{FUN2_REMOTE_DRY_BIT, hex_bit};
 pub use device::{
     AirductCollection, AirductModeListEntry, AirductPart, BedInfo, BedTelemetry, DeviceTelemetry,
     ExtToolTelemetry, ExtruderCollection, ExtruderInfo, NozzleCollection, NozzleInfo,
 };
 pub use diagnostics::{CtcInfo, CtcTelemetry, HmsEntry, IpcamTelemetry};
+pub(crate) use loose::{
+    deserialize_permissive_hms_u32, deserialize_permissive_opt_bool,
+    deserialize_permissive_opt_flags, deserialize_permissive_opt_int,
+    deserialize_permissive_opt_string, deserialize_permissive_string,
+};
 pub use report::{
     LightReport, NetInfo, PrintPauseList, PrintPausePoint, PrinterTelemetry, SdcardState,
 };
 pub use stage::PrintStage;
+pub use temps::{HeaterTemps, NozzleTemps, unpack_temperature};
+pub(crate) use temps::{decode_bed_temperatures, decode_nozzle_temperatures};
 pub use xcam::{XcamDetector, XcamSensitivity, XcamTelemetry};
 
-pub(crate) const FUN_MQTT_SIGNATURE_REQUIRED: u64 = 0x20000000;
+use crate::types::control::{FanTarget, PrintStatus};
 
 /// Unified top-level telemetry report received from the printer's local MQTT broker.
 ///
@@ -78,33 +90,65 @@ pub struct TelemetryReport {
 }
 
 impl TelemetryReport {
-    /// Returns the bed's (actual, target) temperatures in °C.
+    /// Returns the bed's temperatures, or `None` when this report carries none.
     ///
     /// Handles the different wire formats across printer generations automatically:
     /// new-gen composite-packed `device.bed`, pushall-nested `print.device.bed`, and
-    /// old-gen direct `bed_temper`/`bed_target_temper` fields. Returns (0, 0) if absent.
+    /// old-gen direct `bed_temper`/`bed_target_temper` fields.
     ///
     /// # Example
     ///
     /// ```rust,ignore
-    /// let (actual, target) = report.bed_temperatures();
-    /// println!("Bed: {}°C (target {}°C)", actual, target);
+    /// if let Some(bed) = report.bed_temperatures() {
+    ///     println!("Bed: {}°C (target {}°C)", bed.actual, bed.target);
+    /// }
     /// ```
-    pub fn bed_temperatures(&self) -> (u16, u16) {
-        let (bed_temper, bed_target_temper) = self
-            .print
-            .as_ref()
-            .map(|print| (print.bed_temper, print.bed_target_temper))
-            .unwrap_or((None, None));
-        decode_bed_temperatures(self.device(), bed_temper, bed_target_temper)
+    #[must_use]
+    pub fn bed_temperatures(&self) -> Option<HeaterTemps> {
+        let print = self.print.as_ref();
+        decode_bed_temperatures(
+            self.device(),
+            print.and_then(|p| p.bed_temper),
+            print.and_then(|p| p.bed_target_temper),
+        )
+    }
+
+    /// Returns one entry per nozzle this report carries temperatures for, empty when none.
+    ///
+    /// Prefers per-extruder `device.extruder.info`; falls back to the flat
+    /// `nozzle_temper`/`nozzle_target_temper` fields, including their IDEX routing quirk — see
+    /// `PrinterClient::nozzle_temperatures`.
+    #[must_use]
+    pub fn nozzle_temperatures(&self) -> Vec<NozzleTemps> {
+        let print = self.print.as_ref();
+        decode_nozzle_temperatures(
+            self.device(),
+            print.and_then(|p| p.nozzle_temper),
+            print.and_then(|p| p.nozzle_target_temper),
+        )
+    }
+
+    /// Returns `fan`'s speed as a percentage (0-100), or `None` when this report doesn't carry it.
+    #[must_use]
+    pub fn fan_percent(&self, fan: FanTarget) -> Option<u8> {
+        let print = self.print.as_ref();
+        decode_fan_percent(
+            fan,
+            FanStrings {
+                part_cooling: print.and_then(|p| p.cooling_fan_speed.as_deref()),
+                aux_left: print.and_then(|p| p.big_fan1_speed.as_deref()),
+                chamber_exhaust: print.and_then(|p| p.big_fan2_speed.as_deref()),
+            },
+            self.device(),
+        )
     }
 
     /// Returns the `DeviceTelemetry` sub-object, checking both wire locations it can arrive at.
     ///
-    /// Mirrors `bed_temperatures()`'s first-found-wins fallback: top-level `device` (incremental
-    /// updates) is checked first, falling back to pushall-nested `print.device` (H2/P2/X2
-    /// models). Returns `None` if neither location is present. Use this instead of manually
-    /// checking both locations for nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
+    /// Top-level `device` (incremental updates) is checked first, falling back to
+    /// pushall-nested `print.device` (H2/P2/X2 models). Returns `None` if neither location is
+    /// present. Use this instead of manually checking both locations for
+    /// nozzle/extruder/airduct/ctc/ext_tool sub-telemetry.
     pub fn device(&self) -> Option<&DeviceTelemetry> {
         self.device
             .as_ref()
@@ -122,10 +166,16 @@ impl TelemetryReport {
             .or_else(|| self.print.as_ref().and_then(|print| print.fun.as_deref()))
     }
 
+    /// Whether Developer LAN Mode is on, from [`fun()`](Self::fun) — see [`is_developer_mode`].
+    #[must_use]
+    pub fn is_developer_mode(&self) -> Option<bool> {
+        is_developer_mode(self.fun()?)
+    }
+
     /// Returns the `fun2` capability bitfield, checking both wire locations.
     ///
     /// Same first-found-wins order as [`fun`](Self::fun). Prefer [`fun2_bit`](Self::fun2_bit)
-    /// over parsing this yourself — see that method for why the string can't go through
+    /// over parsing this yourself — see [`hex_bit`] for why the string can't go through
     /// `u64::from_str_radix`.
     #[must_use]
     pub fn fun2(&self) -> Option<&str> {
@@ -148,7 +198,7 @@ impl TelemetryReport {
     /// sliced printer, `21`-`22` AMS preload version, `23` filament manual multi-color.
     #[must_use]
     pub fn fun2_bit(&self, bit: u32) -> Option<bool> {
-        fun2_bit(self.fun2()?, bit)
+        hex_bit(self.fun2()?, bit)
     }
 
     /// Whether the printer reports its own support for remote AMS drying — `fun2` bit 5.
@@ -164,242 +214,52 @@ impl TelemetryReport {
     pub fn supports_remote_dry(&self) -> Option<bool> {
         self.fun2_bit(FUN2_REMOTE_DRY_BIT)
     }
+
+    /// Returns the printer's activity classification from `print.gcode_state`.
+    #[must_use]
+    pub fn print_status(&self) -> Option<PrintStatus> {
+        self.print.as_ref()?.print_status()
+    }
 }
 
-/// `fun2` bit reporting the printer's own remote-dry support (`DeviceManager.cpp:4469`).
-pub const FUN2_REMOTE_DRY_BIT: u32 = 5;
+/// The three 0-15 step fan strings `print` carries (`cooling_fan_speed`, `big_fan1_speed`, `big_fan2_speed`).
+#[derive(Default, Clone, Copy)]
+pub(crate) struct FanStrings<'a> {
+    pub(crate) part_cooling: Option<&'a str>,
+    pub(crate) aux_left: Option<&'a str>,
+    pub(crate) chamber_exhaust: Option<&'a str>,
+}
 
-/// Reads one bit of a `fun2` capability hex string, LSB-first from the right.
+/// Shared fan decode behind [`TelemetryReport::fan_percent`] and `PrinterClient::fan_speed`.
 ///
-/// The counterpart to [`is_developer_mode`] for the second capability field, and the free
-/// function behind [`TelemetryReport::fun2_bit`] — use this when holding a `fun2` string on its
-/// own rather than a whole report.
-///
-/// `fun2` "may have infinite length" per BambuStudio's own comment
-/// (`DeviceManager.cpp:4464`), which is why this walks hex digits from the right instead of
-/// going through `u64::from_str_radix` the way [`is_developer_mode`] does for `fun` — a string
-/// longer than 16 digits would fail that parse outright and report every capability as absent.
-///
-/// Mirrors `DevUtil::get_flag_bits_no_border` (`DevUtil.cpp:27-90`): a `0x` prefix and any
-/// non-hex characters are ignored, and an index past the end of the string reads `false` rather
-/// than failing. Returns `None` only when no hex digits remain after filtering.
-#[must_use]
-pub fn fun2_bit(hex: &str, bit: u32) -> Option<bool> {
-    let digits: &[u8] = hex
-        .trim()
-        .strip_prefix("0x")
-        .unwrap_or(hex.trim())
-        .as_bytes();
-    let nibble_from_right = (bit / 4) as usize;
-    let mut seen = 0usize;
-    let mut any = false;
-    for &byte in digits.iter().rev() {
-        let Some(value) = (byte as char).to_digit(16) else {
-            continue;
-        };
-        any = true;
-        if seen == nibble_from_right {
-            return Some((value >> (bit % 4)) & 1 == 1);
+/// Three fans report a 0-15 step string in `print`; the second left auxiliary fan reports a
+/// direct percentage in `device.airduct.parts` instead.
+pub(crate) fn decode_fan_percent(
+    fan: FanTarget,
+    strings: FanStrings<'_>,
+    device: Option<&DeviceTelemetry>,
+) -> Option<u8> {
+    use crate::quirks::decode_fan_percentage;
+    match fan {
+        FanTarget::PartCooling => decode_fan_percentage(strings.part_cooling),
+        FanTarget::AuxiliaryLeft => decode_fan_percentage(strings.aux_left),
+        FanTarget::ChamberExhaust => decode_fan_percentage(strings.chamber_exhaust),
+        FanTarget::AuxiliaryLeft2 => {
+            let id = fan.airduct_part_id()?;
+            device?.airduct.as_ref()?.part_percent(id)
         }
-        seen += 1;
-    }
-    // Ran off the left end of the string: those bits are zero, not unknown — but a string with
-    // no hex digits at all never told us anything.
-    any.then_some(false)
-}
-
-/// Shared bed-temperature decode logic behind [`TelemetryReport::bed_temperatures()`] and [`crate::client::PrinterClient::bed_temperatures()`] — both need the same cross-model unpack (composite-packed new-gen `device.bed` vs. flat old-gen `bed_temper`/ `bed_target_temper`), one sourced from a fresh report, the other from cached scalars.
-pub(crate) fn decode_bed_temperatures(
-    device: Option<&DeviceTelemetry>,
-    bed_temper: Option<f64>,
-    bed_target_temper: Option<f64>,
-) -> (u16, u16) {
-    if let Some(temps) = device.and_then(unpack_bed_telemetry) {
-        return temps;
-    }
-    let actual = bed_temper.unwrap_or(0.0) as u16;
-    let target = bed_target_temper.unwrap_or(0.0) as u16;
-    (actual, target)
-}
-
-fn unpack_bed_telemetry(device: &DeviceTelemetry) -> Option<(u16, u16)> {
-    let temp = device.bed.as_ref()?.info.as_ref()?.temp?;
-    Some(PrinterTelemetry::unpack_temperature(temp as f64))
-}
-
-/// Shared nozzle-temperature decode logic behind [`crate::client::PrinterClient::nozzle_temperatures()`] — ported from the CLI's `bin/bambino-cli/monitor/dashboard.rs` (`populate_nozzle_temps()`), previously the only place this IDEX routing quirk lived.
-///
-/// Returns one `(id, actual, target)` tuple per nozzle. Prefers `device.extruder.info`
-/// (composite-packed per-nozzle temperatures, decoded via [`ExtruderInfo::temperatures()`]).
-/// Falls back to the flat `nozzle_temper`/`nozzle_target_temper` fields when absent: a single
-/// entry `(0, actual, target)` for a single-nozzle model, or — for a dual-nozzle (IDEX) model
-/// with no live extruder temps yet — the wire's undocumented routing quirk: `nozzle_temper` is
-/// nozzle 1 (left)'s actual reading and `nozzle_target_temper` is nozzle 0 (right)'s target,
-/// each nozzle only getting half of its own reading from the flat fields.
-pub fn decode_nozzle_temperatures(
-    device: Option<&DeviceTelemetry>,
-    nozzle_temper: Option<f64>,
-    nozzle_target_temper: Option<f64>,
-) -> Vec<(u8, u16, u16)> {
-    if let Some(extruder) = device.and_then(|d| d.extruder.as_ref())
-        && let Some(info) = extruder.info.as_deref()
-        && !info.is_empty()
-    {
-        return info
-            .iter()
-            .map(|entry| {
-                let (actual, target) = entry.temperatures();
-                (entry.id, actual, target)
-            })
-            .collect();
-    }
-
-    // Exclude rack-stored spare nozzles before counting — BambuStudio appends them
-    // to the same `nozzle.info` array as installed ones, distinguished only by
-    // `NozzleInfo::is_rack_stored()`. Without this, an H2C (single hotend + spare-nozzle
-    // rack) misclassifies as IDEX.
-    let is_idex = device
-        .and_then(|d| d.nozzle.as_ref())
-        .map(|n| {
-            n.info
-                .iter()
-                .flatten()
-                .filter(|nz| !nz.is_rack_stored())
-                .count()
-                >= 2
-        })
-        .unwrap_or(false);
-
-    let actual = nozzle_temper.unwrap_or(0.0) as u16;
-    let target = nozzle_target_temper.unwrap_or(0.0) as u16;
-
-    if is_idex {
-        vec![(0, 0, target), (1, actual, 0)]
-    } else {
-        vec![(0, actual, target)]
     }
 }
 
 /// Evaluates Developer LAN Mode from the `fun` hex string [REF-MQTT-ENV §3.2.1].
 ///
 /// Returns `Some(true)` when developer mode is enabled (MQTT signature NOT required),
-/// `Some(false)` when disabled, or `None` if the hex string is unparseable.
-/// The `fun` field is a variable-length hex string (up to 64 bits). Bit 29
+/// `Some(false)` when disabled, or `None` if the string carries no hex digits. Bit 29
 /// (`0x20000000`) is the `MQTT_SIGNATURE_REQUIRED` flag — when clear, developer mode is on.
+/// Read with [`hex_bit`], so a `0x` prefix, whitespace or a string longer than 16 digits all work.
+#[must_use]
 pub fn is_developer_mode(fun_hex: &str) -> Option<bool> {
-    let val = u64::from_str_radix(fun_hex, 16).ok()?;
-    Some((val & FUN_MQTT_SIGNATURE_REQUIRED) == 0)
-}
-
-/// Custom deserializer mapping various over-the-wire `sdcard` formats to a unified boolean.
-///
-/// Absorbs standard boolean values, integer indicators (e.g., `1`), and
-/// firmware string constants like `"HAS_SDCARD_NORMAL"`.
-fn deserialize_permissive_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RawSdValue {
-        Null,
-        Bool(bool),
-        Int(i64),
-        String(String),
-    }
-
-    match RawSdValue::deserialize(deserializer) {
-        Ok(RawSdValue::Null) => Ok(false),
-        Ok(RawSdValue::Bool(b)) => Ok(b),
-        Ok(RawSdValue::Int(i)) => Ok(i != 0),
-        Ok(RawSdValue::String(s)) => {
-            let s_upper = s.to_uppercase();
-            Ok(s_upper == "HAS_SDCARD_NORMAL" || s_upper == "TRUE" || s_upper == "1")
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Deserializes an optional integer that firmware may send as either a JSON number or a
-/// decimal string.
-///
-/// Needed where BambuStudio itself branches on the wire type rather than assuming one. A plain
-/// `Option<i32>` is not merely wrong for the string form — it fails the **whole frame**, so one
-/// field arriving as `"2"` instead of `2` costs every other field in that push.
-///
-/// An unparseable string degrades to `None` rather than erroring, on the same reasoning: a
-/// value this crate cannot read is not worth discarding a telemetry frame over.
-fn deserialize_permissive_opt_i32<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RawIntValue {
-        Null,
-        Int(i64),
-        Float(f64),
-        String(String),
-    }
-
-    match RawIntValue::deserialize(deserializer) {
-        Ok(RawIntValue::Null) => Ok(None),
-        Ok(RawIntValue::Int(i)) => Ok(i32::try_from(i).ok()),
-        Ok(RawIntValue::Float(f)) => Ok(Some(f as i32)),
-        Ok(RawIntValue::String(s)) => Ok(s.trim().parse::<i32>().ok()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Deserializes an optional string that firmware may send as either a JSON string or a bare
-/// number.
-///
-/// The mirror image of [`deserialize_permissive_opt_i32`], for the fields where the quoted form
-/// is the one seen in captures but BambuStudio still branches on `is_number()` — `mc_print_stage`
-/// is parsed with both an `is_string()` and an `is_number()` arm in `DeviceManager.cpp:3071-3076`.
-/// Binding it as a plain `Option<String>` would fail the whole frame on the numeric form.
-///
-/// A number is rendered back to its decimal text so callers see one consistent representation.
-///
-/// `pub(crate)` rather than private: `diagnostics::kprofile` binds the same number-or-string wire
-/// forms and must not re-derive a second copy of this rule.
-pub(crate) fn deserialize_permissive_opt_string<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum RawStringValue {
-        Null,
-        Str(String),
-        Int(i64),
-        Float(f64),
-    }
-
-    match RawStringValue::deserialize(deserializer) {
-        Ok(RawStringValue::Null) => Ok(None),
-        Ok(RawStringValue::Str(s)) => Ok(Some(s)),
-        Ok(RawStringValue::Int(i)) => Ok(Some(i.to_string())),
-        Ok(RawStringValue::Float(f)) => Ok(Some(f.to_string())),
-        Err(e) => Err(e),
-    }
-}
-
-/// Required-field counterpart of [`deserialize_permissive_opt_string`], for a string field the
-/// wire always carries but may carry as a bare number.
-///
-/// An explicit `null` is an error here rather than a silent default: unlike the optional form,
-/// these fields have no "not reported" state to degrade to, and inventing an empty string would
-/// hand the caller a value the printer never sent.
-pub(crate) fn deserialize_permissive_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::Error as _;
-    deserialize_permissive_opt_string(deserializer)?
-        .ok_or_else(|| D::Error::custom("expected a string or number, found null"))
+    hex_bit(fun_hex, bits::FUN_MQTT_SIGNATURE_REQUIRED_BIT).map(|required| !required)
 }
 
 #[cfg(test)]

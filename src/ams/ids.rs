@@ -8,6 +8,10 @@
 //! see `.claude/rules/ams-lite-on-a2l-unit-id.md` before adding a predicate here.
 
 pub(crate) const AMS_SLOTS_PER_UNIT: u8 = 4;
+/// `ams_change_filament` slot (and target) meaning "unload / retract whatever is loaded".
+pub(crate) const SLOT_UNLOAD: u8 = 255;
+/// The `ams_id`s a caller may pass to an AMS command, as `InvalidArgument` messages state them.
+pub(crate) const VALID_AMS_IDS_TEXT: &str = "0..=3, 6 or 16 (A2L AMS Lite), 128..=135, 254, 255";
 /// Reverted from `7` back to `3` — the widening to `7` relied on
 /// bambuddy's `ck_ams_id_range` CHECK constraint (0-7), but that range predates bambuddy's
 /// own issue #1274 by a month with no cited evidence of a standard unit above id 3; #1274

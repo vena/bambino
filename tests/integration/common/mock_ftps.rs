@@ -7,9 +7,8 @@
 //! different FTPS protocol paths (happy path, A1 plaintext, STAT fallback,
 //! download, directory ops, upload error recovery).
 
-use std::sync::Arc;
+use super::io::DataContainer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex;
 
 use bambino::io::TokioIo;
 
@@ -91,7 +90,7 @@ async fn run_handshake_with_greeting(
 async fn handle_pasv(
     server_control: &mut tokio::io::DuplexStream,
     buf: &mut [u8],
-    data_container: &Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: &DataContainer,
 ) -> tokio::io::DuplexStream {
     let cmd = read_cmd(server_control, buf).await;
     assert_eq!(cmd, "PASV\r\n");
@@ -115,7 +114,7 @@ async fn handle_pasv(
 /// Primary happy-path mock server: handshake, list, AVBL, SIZE, upload, delete.
 pub async fn run_mock_server(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -189,7 +188,7 @@ pub async fn run_mock_server(
 /// a multi-chunk payload correctly end-to-end.
 pub async fn run_mock_server_upload_multi_chunk(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
     expected_len: usize,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; 1024];
@@ -229,7 +228,7 @@ pub async fn run_mock_server_upload_multi_chunk(
 /// Mock server for A1 plaintext data channel tests: skips PROT P.
 pub async fn run_mock_server_a1_plaintext(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -257,7 +256,7 @@ pub async fn run_mock_server_a1_plaintext(
 /// Mock server for download (RETR) test.
 pub async fn run_mock_server_download(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -286,7 +285,7 @@ pub async fn run_mock_server_download(
 /// Mock server for download (RETR) with a SIZE mismatch (should trigger ProtocolViolation).
 pub async fn run_mock_server_download_size_mismatch(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -317,7 +316,7 @@ pub async fn run_mock_server_download_size_mismatch(
 /// Mock server for directory operations: MKD, RMD, RNFR/RNTO.
 pub async fn run_mock_server_dir_ops(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -360,7 +359,7 @@ pub async fn run_mock_server_dir_ops(
 /// without ever sending `STAT`.
 pub async fn run_mock_server_avbl_unsupported(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -380,7 +379,7 @@ pub async fn run_mock_server_avbl_unsupported(
 /// reply.
 pub async fn run_mock_server_mdtm_success(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -394,7 +393,7 @@ pub async fn run_mock_server_mdtm_success(
 /// Mock server for `modification_time()` when the firmware doesn't implement `MDTM` (`500`).
 pub async fn run_mock_server_mdtm_unsupported(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -412,7 +411,7 @@ pub async fn run_mock_server_mdtm_unsupported(
 /// Mock server for `modification_time()` on an absent file (`550`).
 pub async fn run_mock_server_mdtm_not_found(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -430,7 +429,7 @@ pub async fn run_mock_server_mdtm_not_found(
 /// Mock server for `modification_time()` with a malformed `213` body (not `YYYYMMDDHHMMSS`).
 pub async fn run_mock_server_mdtm_malformed(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -451,7 +450,7 @@ pub async fn run_mock_server_mdtm_malformed(
 /// `allow_unverified_tls_1_2` opt-out, so the test proving it has to be able to fail.
 pub async fn run_mock_server_upload_426_recovery(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
     expected_len: usize,
 ) {
     let mut buf = vec![0u8; 1024];
@@ -499,7 +498,7 @@ pub async fn run_mock_server_upload_426_recovery(
 /// Mock server for upload with 426 + SIZE mismatch (should trigger DiskWriteFailure).
 pub async fn run_mock_server_upload_size_mismatch(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -541,7 +540,7 @@ pub async fn run_mock_server_upload_size_mismatch(
 /// control channel again, that read would hang forever against this mock.
 pub async fn run_mock_server_data_channel_failure(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -566,7 +565,7 @@ pub async fn run_mock_server_data_channel_failure(
 /// write that is meant to pass through doesn't fail on a closed pipe instead.
 pub async fn run_mock_server_upload_data_failure(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -587,7 +586,7 @@ pub async fn run_mock_server_upload_data_failure(
 /// `SocketError::ConnectionReset` immediately (no 30s timeout wait needed for this test).
 pub async fn run_mock_server_dele_connection_drop(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -605,7 +604,7 @@ pub async fn run_mock_server_dele_connection_drop(
 /// `negotiate_passive_port`'s own calls to the poisoning helpers were never covered.
 pub async fn run_mock_server_pasv_connection_drop(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -622,7 +621,7 @@ pub async fn run_mock_server_pasv_connection_drop(
 /// is the thing worth pinning.
 pub async fn run_mock_server_pasv_rejected(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -645,7 +644,7 @@ pub async fn run_mock_server_pasv_rejected(
 /// `RNTO`.
 pub async fn run_mock_server_rnto_connection_drop(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -665,7 +664,7 @@ pub async fn run_mock_server_rnto_connection_drop(
 /// already do — upload/download both have a dedicated 426-recovery test; LIST did not.
 pub async fn run_mock_server_list_426_recovery(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -702,7 +701,7 @@ pub async fn run_mock_server_list_426_recovery(
 /// signal `list_directory` now rejects.
 pub async fn run_mock_server_list_426_truncated(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -740,7 +739,7 @@ pub async fn run_mock_server_list_426_truncated(
 /// exists to catch.
 pub async fn run_mock_server_list_426_empty(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -768,7 +767,7 @@ pub async fn run_mock_server_list_426_empty(
 /// normally (`226`), so only the per-line decoding is under test.
 pub async fn run_mock_server_list_non_utf8_line(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -802,7 +801,7 @@ pub async fn run_mock_server_list_non_utf8_line(
 /// command, before ever sending a `150`/`125` reply.
 pub async fn run_mock_server_list_connection_drop(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -820,7 +819,7 @@ pub async fn run_mock_server_list_connection_drop(
 /// previously RETR treated 426 as an unconditional hard failure.
 pub async fn run_mock_server_download_426_recovery(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -864,7 +863,7 @@ pub async fn run_mock_server_download_426_recovery(
 /// the client's own `control_fill_buf`. Ends with QUIT so the caller can assert a clean session.
 pub async fn run_mock_server_multiline_greeting(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -891,7 +890,7 @@ pub async fn run_mock_server_multiline_greeting(
 /// carried-over leftover bytes.
 pub async fn run_mock_server_download_coalesced_replies(
     mut server_control: tokio::io::DuplexStream,
-    data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 
@@ -928,7 +927,7 @@ pub async fn run_mock_server_download_coalesced_replies(
 /// Mock server for disconnect (QUIT) test.
 pub async fn run_mock_server_disconnect(
     mut server_control: tokio::io::DuplexStream,
-    _data_container: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    _data_container: DataContainer,
 ) {
     let mut buf = vec![0u8; 1024];
 

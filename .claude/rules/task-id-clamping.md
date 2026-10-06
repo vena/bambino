@@ -6,7 +6,7 @@ paths:
   - "src/client/mod.rs"
 ---
 
-All MQTT sequence IDs and task IDs must be clamped to 32-bit signed integer max (`TASK_ID_MAX`). Un-clamped values overflow the motion board's allocation registers, locking the printer in `IDLE` and making it reject every subsequent print dispatch — see the doc comment on `clamp_task_id` in `src/mqtt/commands/mod.rs`.
+All MQTT sequence IDs and task IDs must be clamped to 32-bit signed integer max (`TASK_ID_MAX`). Un-clamped values overflow the motion board's allocation registers, locking the printer in `IDLE` and making it reject every subsequent print dispatch — see the doc comment on `ClampedTaskId` in `src/mqtt/commands/mod.rs`.
 
 **How the invariant is enforced differs by layer, and only one layer is still convention:**
 

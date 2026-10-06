@@ -1,23 +1,22 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 
 use crate::ams::ids::{
-    AMS_LITE_ON_A2L_PHYSICAL_ID, AMS_SLOTS_PER_UNIT, is_ams_ht_id, is_bus_unit_id,
-    is_external_spool_id, is_unit_slot, is_valid_ams_id, normalize_ams_unit_id, wire_ams_id,
+    AMS_SLOTS_PER_UNIT, SLOT_UNLOAD, VALID_AMS_IDS_TEXT, is_bus_unit_id, is_external_spool_id,
+    is_unit_slot, is_valid_ams_id, normalize_ams_unit_id, wire_ams_id,
 };
 use crate::diagnostics::ExtrusionCaliGetResponse;
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::mqtt::commands::ChangeTemps;
 use crate::types::VersionInfo;
 
 use super::{CommandHandle, PrinterClient};
 
 use crate::types::telemetry::AmsUnitModel;
 
-/// `change_filament` slot meaning "unload / retract whatever is loaded".
-const SLOT_UNLOAD: u8 = 255;
 /// `change_filament` slot meaning "load from the single-nozzle external spool".
 const SLOT_EXTERNAL_LOAD: u8 = 254;
 
@@ -73,14 +72,12 @@ where
     ///   `reference/05_materials_ams.md` §5.3 [REF-AMS-MAP]).
     /// * `curr_temp` / `tar_temp`: Nozzle temperatures (`-1` = let firmware decide).
     ///
-    /// The wire's `target` field is derived internally rather than caller-supplied —
-    /// confirmed against BambuStudio's `command_ams_change_filament`
-    /// (`DeviceManager.cpp:1602-1638`) — `target` is `255` on unload, the `ams_id` itself for
-    /// any AMS-HT/external-spool unit or an A2L-attached AMS Lite (wire `ams_id >= 16`), or the flat global tray ID
-    /// (`ams_id*4 + slot_id`) for a standard unit. A caller-supplied `target` that didn't
-    /// match this derivation was a real hardware misconfiguration risk (error `07FF_8012`
-    /// class), not just a doc gap — `target` mirroring `slot_id` only coincidentally held for
-    /// `ams_id: 0`, the sole worked example in the reference doc.
+    /// The wire's `target` field is derived, not caller-supplied — see
+    /// [`AmsChangeFilamentRequest::load`](crate::mqtt::AmsChangeFilamentRequest::load).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for an address no unit answers to.
     ///
     /// `extruder_id` names the hotend to feed — `Some(0)` for right/main, `Some(1)` for
     /// left/deputy. Pass `None` on any printer without a Filament Track Switch, where the
@@ -109,30 +106,33 @@ where
             slot => is_unit_slot(ams_id, slot),
         };
         if !is_valid_ams_id(ams_id) || !slot_valid {
-            return Err(Error::ProtocolViolation(
-                "invalid AMS addressing parameters for change_filament".into(),
+            return Err(Error::InvalidArgument(
+                format!(
+                    "change_filament: ams_id {ams_id} slot_id {slot_id} is not a load or unload \
+                     address (ams_id {VALID_AMS_IDS_TEXT}; slot 0..=3, 0 on AMS-HT, 254 for an \
+                     external spool, 255 to unload)"
+                )
+                .into(),
             ));
         }
 
         let ams_id = wire_ams_id(ams_id);
-        let target = if slot_id == SLOT_UNLOAD {
-            SLOT_UNLOAD
-        } else if ams_id >= AMS_LITE_ON_A2L_PHYSICAL_ID {
-            ams_id
-        } else {
-            ams_id * AMS_SLOTS_PER_UNIT + slot_id
+        let temps = ChangeTemps {
+            current: curr_temp,
+            target: tar_temp,
         };
-
         self.dispatch(|seq| {
-            crate::mqtt::AmsChangeFilamentRequest::new(
-                i32::from(ams_id),
-                i32::from(slot_id),
-                i32::from(target),
-                curr_temp,
-                tar_temp,
-                extruder_id,
-                seq,
-            )
+            if slot_id == SLOT_UNLOAD {
+                crate::mqtt::AmsChangeFilamentRequest::unload(ams_id, temps, extruder_id, seq)
+            } else {
+                crate::mqtt::AmsChangeFilamentRequest::load(
+                    ams_id,
+                    slot_id,
+                    temps,
+                    extruder_id,
+                    seq,
+                )
+            }
         })
         .await
     }
@@ -197,8 +197,12 @@ where
         // published a nonexistent slot while the legacy path's `resolve_global_tray_id` rejected
         // the same input.
         if !is_bus_unit_id(ams_id) || !is_unit_slot(ams_id, slot_id) {
-            return Err(Error::ProtocolViolation(
-                "invalid AMS addressing parameters for scan_rfid".into(),
+            return Err(Error::InvalidArgument(
+                format!(
+                    "scan_rfid: ams_id {ams_id} slot_id {slot_id} is not an AMS slot (ams_id 0..=3, \
+                     6 or 16, 128..=135; slot 0..=3, 0 on AMS-HT)"
+                )
+                .into(),
             ));
         }
         if self
@@ -211,7 +215,7 @@ where
             ));
         }
 
-        if self.cache.last_np_format == Some(false) {
+        if self.core.cache.last_np_format == Some(false) {
             let global_tray =
                 crate::ams::resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id)
                     .ok_or_else(|| {
@@ -246,14 +250,9 @@ where
     ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     ///   `tray_id: 254`.
     ///
-    /// Takes the unit and its **local** slot, and derives the global `tray_id` the wire carries
-    /// with [`resolve_global_tray_id`](crate::ams::resolve_global_tray_id): `ams_id * 4 + slot`
-    /// on a standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1`
-    /// example is unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's
-    /// `GetTrayIndexMap`, `DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT
-    /// (slot 0 only) or an external holder (slot ignored), which gives the cheat-sheet pairs
-    /// above. Taking the global id from the caller used to let `(2, 1)` bind unit 0's tray 1
-    /// while claiming unit 2 (#397).
+    /// Takes the unit and its **local** slot; the global `tray_id` the wire carries is derived by
+    /// [`CaliSelAddress`](crate::diagnostics::kprofile::CaliSelAddress). Taking the global id
+    /// from the caller used to let `(2, 1)` bind unit 0's tray 1 while claiming unit 2 (#397).
     pub async fn select_k_profile(
         &mut self,
         ams_id: u8,
@@ -262,28 +261,10 @@ where
         filament_id: &str,
         nozzle_diameter: &str,
     ) -> Result<CommandHandle, Error> {
-        let tray_id = is_valid_ams_id(ams_id)
-            .then(|| crate::ams::resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id))
-            .flatten()
-            .ok_or_else(|| {
-                Error::ProtocolViolation(
-                    "invalid ams_id/slot_id parameters for select_k_profile".into(),
-                )
-            })?;
-
-        // The unit-local slot BambuStudio and bambuddy send next to the global tray (#315):
-        // the caller's slot on a four-slot unit, `0` on an AMS-HT or external holder.
-        let slot_id = if is_ams_ht_id(ams_id) || is_external_spool_id(ams_id) {
-            0
-        } else {
-            slot_id
-        };
-        let ams_id = i32::from(wire_ams_id(ams_id));
+        let address = crate::diagnostics::kprofile::CaliSelAddress::new(ams_id, slot_id)?;
         self.dispatch(|seq| {
             crate::diagnostics::ExtrusionCaliSelRequest::new(
-                ams_id,
-                i32::from(tray_id),
-                i32::from(slot_id),
+                address,
                 cali_idx,
                 filament_id,
                 nozzle_diameter,
@@ -297,7 +278,7 @@ where
     ///
     /// Sends a `get_version` command and waits for the response, buffering any
     /// telemetry messages that arrive in the interim. Wrap in a platform-specific
-    /// timeout if you need a shorter deadline than `command_timeout_secs`.
+    /// timeout if you need a shorter deadline than the command timeout.
     pub async fn get_version(&mut self) -> Result<VersionInfo, Error> {
         let seq = self.next_sequence_id();
         let req = crate::mqtt::GetVersionRequest::new(seq);
@@ -309,17 +290,18 @@ where
         // #[serde(default)]) silently falls through as a non-match and the caller sees whatever
         // error poll_until eventually surfaces (typically Error::Timeout, or a connection error
         // if the stream drops) with no indication a response ever arrived (issue #52).
-        let mut parse_failed = false;
+        let mut parse_error: Option<String> = None;
         let result = self
-            .poll_until(|msg| {
+            .poll_until_command_timeout(|msg| {
                 let v: serde_json::Value = serde_json::from_slice(&msg.payload).ok()?;
                 let node = v.get("info").unwrap_or(&v);
                 if node.get("command")?.as_str()? == "get_version" {
                     match serde_json::from_value::<VersionInfo>(node.clone()) {
                         Ok(info) if info.sequence_id == expected_seq => Some(info),
                         Ok(_) => None,
-                        Err(_) => {
-                            parse_failed = true;
+                        Err(e) => {
+                            // Keep the first failure: it names the field that didn't parse.
+                            parse_error.get_or_insert_with(|| e.to_string());
                             None
                         }
                     }
@@ -330,13 +312,16 @@ where
             .await;
 
         match result {
-            Err(_) if parse_failed => Err(Error::Serialization),
+            Err(_) if parse_error.is_some() => Err(Error::Serialization(
+                format!("get_version response: {}", parse_error.unwrap_or_default()).into(),
+            )),
             Ok(info) => {
                 // Cache the OTA version for the quirk context — several capabilities are gated
                 // on it, and a caller should not have to re-query per check.
                 if let Some(firmware) = info.firmware_version() {
-                    self.cache.last_firmware = Some(firmware.to_string());
-                    self.cache.last_firmware_generation = Some(self.connection_generation);
+                    self.core.cache.last_firmware = Some(firmware.to_string());
+                    self.core.cache.last_firmware_generation =
+                        Some(self.core.connection_generation);
                 }
                 Ok(info)
             }
@@ -367,7 +352,7 @@ where
         filament_id: Option<&str>,
         nozzle_diameter: Option<&str>,
     ) -> Result<ExtrusionCaliGetResponse, Error> {
-        if !self.k_profile_primed {
+        if !self.core.k_profile_primed {
             let prime_seq = self.next_sequence_id();
             let prime_req = crate::diagnostics::ExtrusionCaliGetRequest::new(
                 filament_id,
@@ -375,7 +360,7 @@ where
                 prime_seq,
             );
             self.publish_request(&prime_req).await?;
-            self.k_profile_primed = true;
+            self.core.k_profile_primed = true;
         }
 
         let seq = self.next_sequence_id();
@@ -384,7 +369,7 @@ where
         self.publish_request(&req).await?;
 
         let expected_seq = seq.to_string();
-        self.poll_until(|msg| {
+        self.poll_until_command_timeout(|msg| {
             let mut resp: ExtrusionCaliGetResponse = match serde_json::from_slice(&msg.payload) {
                 Ok(resp) => resp,
                 Err(e) => {
@@ -422,6 +407,6 @@ where
     /// Set to `true` to skip the firmware priming quirk — useful if you handle priming
     /// yourself or target firmware that does not require it.
     pub fn set_k_profile_primed(&mut self, primed: bool) {
-        self.k_profile_primed = primed;
+        self.core.k_profile_primed = primed;
     }
 }

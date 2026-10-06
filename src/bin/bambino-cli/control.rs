@@ -8,11 +8,10 @@
 //! Incorporates detailed diagnostic telemetry printing if `--verbose` is enabled
 //! to isolate connection, handshake, and packet serialization issues.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bambino::Error;
-use bambino::client::{CalibrationOption, FanTarget, PrintSpeed};
-use bambino::mqtt::AirductMode;
+use bambino::client::{AirductMode, Axis, CalibrationOption, FanTarget, LedNode, PrintSpeed};
 use bambino::types::DryingMaterial;
 use bambino::types::telemetry::AmsUnitModel;
 use clap::{Subcommand, ValueEnum};
@@ -22,31 +21,6 @@ use crate::error::CliError;
 use crate::connection::{Printer, RESPONSE_TIMEOUT_SECS, Target};
 
 #[derive(Clone, ValueEnum, Debug)]
-pub enum FanTargetArg {
-    Part,
-    Aux,
-    Exhaust,
-    Left2,
-}
-
-#[derive(Clone, Copy, ValueEnum, Debug)]
-pub enum AxisArg {
-    X,
-    Y,
-    Z,
-}
-
-impl AxisArg {
-    fn as_char(self) -> char {
-        match self {
-            AxisArg::X => 'X',
-            AxisArg::Y => 'Y',
-            AxisArg::Z => 'Z',
-        }
-    }
-}
-
-#[derive(Clone, ValueEnum, Debug)]
 pub enum TempTargetArg {
     Nozzle,
     Bed,
@@ -54,30 +28,9 @@ pub enum TempTargetArg {
 }
 
 #[derive(Clone, ValueEnum, Debug)]
-pub enum LedNodeArg {
-    Chamber,
-    Work,
-}
-
-#[derive(Clone, ValueEnum, Debug)]
 pub enum LedStateArg {
     On,
     Off,
-}
-
-#[derive(Clone, ValueEnum, Debug)]
-pub enum PrintSpeedArg {
-    Silent,
-    Standard,
-    Sport,
-    Ludicrous,
-}
-
-#[derive(Clone, ValueEnum, Debug)]
-pub enum AirductModeArg {
-    Cooling,
-    Heating,
-    Laser,
 }
 
 #[derive(Clone, ValueEnum, Debug)]
@@ -113,7 +66,7 @@ pub enum ControlAction {
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] move <AXIS> <DISTANCE> [FEEDRATE]"
     )]
     Move {
-        axis: AxisArg,
+        axis: Axis,
         distance: f32,
         feedrate: Option<u32>,
     },
@@ -127,7 +80,7 @@ pub enum ControlAction {
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] fan <TARGET> <SPEED_PERCENT>"
     )]
     Fan {
-        target: FanTargetArg,
+        target: FanTarget,
         speed_percent: u8,
     },
     /// Set hotend or build-plate temperatures
@@ -139,10 +92,7 @@ pub enum ControlAction {
     #[command(
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] led <NODE> <STATE>"
     )]
-    Led {
-        node: LedNodeArg,
-        state: LedStateArg,
-    },
+    Led { node: LedNode, state: LedStateArg },
     /// Suspend print queue execution
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] pause")]
     Pause,
@@ -169,13 +119,13 @@ pub enum ControlAction {
     },
     /// Set print speed profile
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] speed <LEVEL>")]
-    Speed { level: PrintSpeedArg },
+    Speed { level: PrintSpeed },
     /// Clear active print error codes
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] clear-error")]
     ClearError,
     /// Switch airduct damper mode
     #[command(override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] airduct <MODE>")]
-    Airduct { mode: AirductModeArg },
+    Airduct { mode: AirductMode },
     /// Trigger one or more calibration routines
     #[command(
         override_usage = "bambino-cli control <IP> <SERIAL> [ACCESS_CODE] calibrate <ROUTINES>... [--watch [--show-serials]]"
@@ -349,21 +299,13 @@ async fn resolve_dry_unit(client: &mut Printer, ams_id: u8) -> AmsUnitModel {
     // Neither the pushall nor a failed poll is fatal: the fallback below is a sound answer, and
     // the drying gate still refuses anything the hardware would reject.
     let _ = client.request_pushall().await;
-    let deadline = Instant::now() + Duration::from_secs(DRY_UNIT_RESOLVE_TIMEOUT_SECS);
-    loop {
-        if let Some(model) = client.ams_unit_model(ams_id) {
-            return model;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        if !matches!(
-            tokio::time::timeout(remaining, client.poll_telemetry()).await,
-            Ok(Ok(_))
-        ) {
-            break;
-        }
+    let found = client
+        .poll_telemetry_until(Duration::from_secs(DRY_UNIT_RESOLVE_TIMEOUT_SECS), |c| {
+            c.ams_unit_model(ams_id).is_some()
+        })
+        .await;
+    if let (Ok(true), Some(model)) = (found, client.ams_unit_model(ams_id)) {
+        return model;
     }
     eprintln!(
         "warning: AMS {ams_id} never reported its unit type within {DRY_UNIT_RESOLVE_TIMEOUT_SECS}s — \
@@ -469,7 +411,7 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             dispatch(
                 "Dispatching safe homing command macro...",
                 "Homing command published successfully.",
-                client.home_axes(false),
+                client.home_all(),
             )
             .await?;
         }
@@ -481,10 +423,7 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             let feedrate = feedrate.unwrap_or(3000);
             println!("Dispatching motion G-code G0 relative move...");
             // `None` means the library dropped a zero-distance move without publishing.
-            match client
-                .move_relative(axis.as_char(), distance, feedrate)
-                .await?
-            {
+            match client.move_relative(axis, distance, feedrate).await? {
                 Some(_) => println!("Motion command published successfully."),
                 None => println!("Zero-distance move: nothing was sent."),
             }
@@ -502,16 +441,10 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             target,
             speed_percent,
         } => {
-            let fan_target = match target {
-                FanTargetArg::Part => FanTarget::PartCooling,
-                FanTargetArg::Aux => FanTarget::AuxiliaryLeft,
-                FanTargetArg::Exhaust => FanTarget::ChamberExhaust,
-                FanTargetArg::Left2 => FanTarget::AuxiliaryLeft2,
-            };
             dispatch(
                 "Configuring cooling fan PWM scale...",
                 "Fan control command published successfully.",
-                client.set_fan_speed(fan_target, speed_percent),
+                client.set_fan_speed(target, speed_percent),
             )
             .await?;
         }
@@ -542,10 +475,6 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             }
         },
         ControlAction::Led { node, state } => {
-            let led_node = match node {
-                LedNodeArg::Chamber => "chamber_light",
-                LedNodeArg::Work => "work_light",
-            };
             let turn_on = match state {
                 LedStateArg::On => true,
                 LedStateArg::Off => false,
@@ -553,7 +482,7 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             dispatch(
                 "Dispatching ledctrl command register block...",
                 "LED command published successfully.",
-                client.set_led(led_node, turn_on),
+                client.set_led(node, turn_on),
             )
             .await?;
         }
@@ -607,16 +536,10 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             println!("Raw G-code command published successfully.");
         }
         ControlAction::Speed { level } => {
-            let speed = match level {
-                PrintSpeedArg::Silent => PrintSpeed::Silent,
-                PrintSpeedArg::Standard => PrintSpeed::Standard,
-                PrintSpeedArg::Sport => PrintSpeed::Sport,
-                PrintSpeedArg::Ludicrous => PrintSpeed::Ludicrous,
-            };
             dispatch(
                 &format!("Setting print speed to {:?}...", level),
                 "Print speed command published successfully.",
-                client.set_print_speed(speed),
+                client.set_print_speed(level),
             )
             .await?;
         }
@@ -629,15 +552,10 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             .await?;
         }
         ControlAction::Airduct { mode } => {
-            let airduct_mode = match mode {
-                AirductModeArg::Cooling => AirductMode::Cooling,
-                AirductModeArg::Heating => AirductMode::Heating,
-                AirductModeArg::Laser => AirductMode::Laser,
-            };
             dispatch(
                 &format!("Switching airduct damper to {:?} mode...", mode),
                 "Airduct command published successfully.",
-                client.set_airduct_mode(airduct_mode),
+                client.set_airduct_mode(mode),
             )
             .await?;
         }
@@ -646,17 +564,16 @@ pub async fn run(target: &Target, action: ControlAction) -> Result<(), CliError>
             watch,
             show_serials,
         } => {
-            let mut options = CalibrationOption(0);
-            for routine in routines {
-                let flag = match routine {
+            let options: CalibrationOption = routines
+                .into_iter()
+                .map(|routine| match routine {
                     CalibrationArg::BedLeveling => CalibrationOption::BED_LEVELING,
                     CalibrationArg::Vibration => CalibrationOption::VIBRATION_COMPENSATION,
                     CalibrationArg::MotorNoise => CalibrationOption::MOTOR_NOISE_CANCELLATION,
                     CalibrationArg::NozzleHeight => CalibrationOption::NOZZLE_HEIGHT,
                     CalibrationArg::HeatbedThermal => CalibrationOption::HEATBED_THERMAL,
-                };
-                options = options | flag;
-            }
+                })
+                .collect();
             // Under --watch stdout is the NDJSON capture stream, so status chatter goes to
             // stderr — a stray human-readable line would make the captured file invalid NDJSON.
             if watch {

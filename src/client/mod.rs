@@ -30,6 +30,14 @@ mod telemetry;
 mod thermal;
 pub mod types;
 
+pub use crate::mqtt::commands::{AirductMode, IdleIgnoreScope};
+pub use crate::quirks::Axis;
+#[doc(inline)]
+pub use crate::types::control::{
+    BuzzerMode, CalibrationOption, FanTarget, LedNode, LightMode, PrintSpeed, PrintStatus,
+};
+#[doc(inline)]
+pub use crate::types::telemetry::{HeaterTemps, NozzleTemps};
 pub use capabilities::Capabilities;
 pub use command::{
     AckExpectation, CommandHandle, CommandOutcome, CommandRefusal, CommandResolution,
@@ -37,18 +45,22 @@ pub use command::{
 pub use connect::ConnectAllOutcome;
 pub use drying::DryingCycle;
 pub use dummy::{DummyFactory, DummyRawIo, DummyTimer, DummyTls, PreConnected};
+pub use motion::HOMING_WAIT_TIMEOUT;
+pub use thermal::PreheatHandles;
 #[doc(inline)]
-pub use types::{
-    BuzzerMode, CalibrationOption, FanTarget, PrintProgress, PrintSpeed, PrintStatus,
-    TelemetryEvent,
-};
+pub use types::{PrintProgress, TelemetryEvent};
 
 #[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
 use serde::Serialize;
 
 use core::marker::PhantomData;
+use core::time::Duration;
 
 use crate::camera::CameraProtocol;
 use crate::camera::binary::BinaryCameraStream;
@@ -68,8 +80,7 @@ use crate::mqtt::{MqttClient, MqttMessage};
 /// (`DevUtil.h` `STUDIO_START_SEQ_ID`/`STUDIO_END_SEQ_ID`) — it raises an error dialog for any
 /// echo in that range carrying an `err_code`, so an id of ours landing there would pop dialogs
 /// in a user's open BambuStudio.
-pub(crate) const SEQUENCE_ID_FLOOR: u64 = 30_000;
-pub(crate) const INITIAL_SEQUENCE_ID: u64 = SEQUENCE_ID_FLOOR;
+pub const SEQUENCE_ID_FLOOR: u64 = 30_000;
 
 /// Maps an arbitrary seed (a clock reading) into the mintable range `[SEQUENCE_ID_FLOOR, TASK_ID_MAX)`.
 pub(crate) fn sequence_id_from_seed(seed: u64) -> u64 {
@@ -77,11 +88,12 @@ pub(crate) fn sequence_id_from_seed(seed: u64) -> u64 {
     SEQUENCE_ID_FLOOR + seed % (TASK_ID_MAX - SEQUENCE_ID_FLOOR)
 }
 
-pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
+/// Default command timeout; override with [`PrinterClient::with_command_timeout`].
+pub const DEFAULT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Message-count backstop for request-response waits under a timer with no real clock.
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
-/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined dial+connect sequence.
-/// Override via `.with_connect_timeout(secs)`.
-pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
+/// Default bound on each channel's dial+TLS+handshake; override with [`PrinterClient::with_connect_timeout`].
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Clamps `value` to `max`, logging a warning if it was reduced.
 /// Shared by every model-ceiling-clamped heater-setting method in `thermal.rs`
@@ -101,9 +113,114 @@ pub(crate) fn clamp_temp(value: u16, max: u16, label: &str) -> u16 {
     }
 }
 
+/// Serializes an outbound request, keeping serde's message on failure.
+pub(crate) fn serialize<T: Serialize>(request: &T) -> Result<Vec<u8>, Error> {
+    serde_json::to_vec(request).map_err(|e| {
+        Error::Serialization(format!("serialize {}: {e}", core::any::type_name::<T>()).into())
+    })
+}
+
+/// The deadline a telemetry-reading wait runs against.
+///
+/// With a real clock that is `timeout` from the start of the wait. Without one nothing can be
+/// measured, so `POLL_UNTIL_MAX_MESSAGES` messages stand in for it; applying that count under a
+/// real clock too only added a way to time out early on a link pushing faster than
+/// `POLL_UNTIL_MAX_MESSAGES / timeout` messages per second.
+pub(crate) struct WaitBudget {
+    start_ms: u64,
+    timeout_ms: Option<u64>,
+    real_clock: bool,
+    messages: usize,
+}
+
+impl WaitBudget {
+    pub(crate) fn start<T: TimerProvider>(timer: &T, timeout: Option<Duration>) -> Self {
+        Self {
+            start_ms: timer.now_millis(),
+            timeout_ms: timeout.map(duration_millis),
+            real_clock: timer.has_real_clock(),
+            messages: 0,
+        }
+    }
+
+    /// Counts one message read without ending the wait; `Err(Timeout)` once the budget is spent.
+    pub(crate) fn after_message<T: TimerProvider>(&mut self, timer: &T) -> Result<(), Error> {
+        if !self.real_clock {
+            self.messages += 1;
+            if self.messages >= POLL_UNTIL_MAX_MESSAGES {
+                return Err(Error::Timeout);
+            }
+            return Ok(());
+        }
+        let elapsed = timer.now_millis().wrapping_sub(self.start_ms);
+        match self.timeout_ms {
+            Some(limit) if elapsed >= limit => Err(Error::Timeout),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// How often to call [`PrinterClient::keepalive_tick`]: half the 30s keepalive this client
 /// advertises in CONNECT, so a missed tick still leaves margin before the broker's 45s cutoff.
 pub const KEEPALIVE_TICK_SECS: u32 = 15;
+
+/// The part of [`PrinterClient`]'s state that no type parameter touches.
+///
+/// Kept in one struct so a type-changing builder moves it whole instead of copying each field
+/// by hand. That copy was written out in seven places, and a field reset where it should have
+/// been carried over is the bug class behind #7 and #346: the compiler catches a missing field
+/// in a struct literal, not a wrong one.
+pub(crate) struct ClientCore {
+    pub(crate) identity: PrinterIdentity,
+    pub(crate) sequence_counter: u64,
+    /// Commands awaiting an echo and outcomes waiting to be delivered — see `command::CommandTracker`.
+    pub(crate) commands: command::CommandTracker,
+    pub(crate) k_profile_primed: bool,
+    /// Monotonic counter bumped on every MQTT connection boundary (attach, lazy dial,
+    /// disconnect). Telemetry that is only trustworthy on the connection it was observed
+    /// under is stamped with this value — see `TelemetryCache::last_home_flag_generation`.
+    pub(crate) connection_generation: u32,
+    pub(crate) cache: telemetry::TelemetryCache,
+    /// `None` disables the wall-clock command timeout.
+    pub(crate) command_timeout: Option<Duration>,
+    /// `None` disables the connect timeout.
+    pub(crate) connect_timeout: Option<Duration>,
+    pub(crate) mqtt_port: u16,
+    pub(crate) ftps_port: u16,
+    /// Bypasses `FtpsClient`'s TLS-1.2-enforcement rejection for P2S/X2D when set —
+    /// see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. Only meaningful for the `embassy`
+    /// feature; on `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead.
+    /// Default `false`.
+    pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
+    pub(crate) camera_port: u16,
+    pub(crate) camera_max_frame_size: Option<usize>,
+}
+
+impl ClientCore {
+    fn new(identity: PrinterIdentity) -> Self {
+        crate::quirks::warn_if_unknown_model(identity.model);
+        Self {
+            identity,
+            sequence_counter: SEQUENCE_ID_FLOOR,
+            commands: command::CommandTracker::default(),
+            k_profile_primed: false,
+            connection_generation: 0,
+            cache: telemetry::TelemetryCache::default(),
+            command_timeout: Some(DEFAULT_COMMAND_TIMEOUT),
+            connect_timeout: Some(DEFAULT_CONNECT_TIMEOUT),
+            mqtt_port: crate::mqtt::MQTTS_PORT,
+            ftps_port: crate::ftps::FTPS_PORT,
+            ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
+            camera_port: CameraProtocol::BinaryJpeg.default_port(),
+            camera_max_frame_size: None,
+        }
+    }
+}
+
+/// A duration in whole milliseconds, saturating at `u64::MAX`.
+pub(crate) fn duration_millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
 
 /// High-level client for controlling a Bambu Lab printer.
 ///
@@ -148,27 +265,8 @@ pub struct PrinterClient<
     pub(crate) mqtt_tls: MqttTls,
     pub(crate) mqtt_factory: MqttFactory,
     pub(crate) timer: Timer,
-    pub(crate) identity: PrinterIdentity,
-    pub(crate) sequence_counter: u64,
-    /// Commands awaiting an echo and outcomes waiting to be delivered — see `command::CommandTracker`.
-    pub(crate) commands: command::CommandTracker,
-    pub(crate) k_profile_primed: bool,
-    /// Monotonic counter bumped on every MQTT connection boundary (attach, lazy dial,
-    /// disconnect). Telemetry that is only trustworthy on the connection it was observed
-    /// under is stamped with this value — see `TelemetryCache::last_home_flag_generation`.
-    pub(crate) connection_generation: u32,
-    pub(crate) cache: telemetry::TelemetryCache,
-    pub(crate) command_timeout_secs: u64,
-    pub(crate) connect_timeout_secs: u64,
-    pub(crate) mqtt_port: u16,
-    pub(crate) ftps_port: u16,
-    /// Bypasses `FtpsClient`'s TLS-1.2-enforcement rejection for P2S/X2D when set —
-    /// see `src/ftps/CLAUDE.md` and `src/io/CLAUDE.md`. Only meaningful for the `embassy`
-    /// feature; on `tokio`, build the `TlsConnector` with `TlsVersions::Tls12Only` instead.
-    /// Default `false`.
-    pub(crate) ftps_tls_version_check: crate::ftps::TlsVersionCheck,
-    pub(crate) camera_port: u16,
-    pub(crate) camera_max_frame_size: Option<usize>,
+    /// Every field that doesn't depend on a type parameter, moved whole by each type-changing builder.
+    pub(crate) core: ClientCore,
     pub(crate) _mqtt_raw_io: PhantomData<MqttRawIO>,
     pub(crate) _camera_raw_io: PhantomData<CameraRawIO>,
 }
@@ -206,7 +304,6 @@ where
     /// instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
     /// for real timeouts.
     pub fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self {
-        crate::quirks::warn_if_unknown_model(identity.model);
         Self {
             mqtt: None,
             ftps: None,
@@ -216,19 +313,7 @@ where
             mqtt_tls: tls,
             mqtt_factory: factory,
             timer: DummyTimer,
-            identity,
-            sequence_counter: INITIAL_SEQUENCE_ID,
-            commands: command::CommandTracker::default(),
-            k_profile_primed: false,
-            connection_generation: 0,
-            cache: telemetry::TelemetryCache::default(),
-            command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
-            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
-            mqtt_port: crate::mqtt::MQTTS_PORT,
-            ftps_port: crate::ftps::FTPS_PORT,
-            ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
-            camera_port: CameraProtocol::BinaryJpeg.default_port(),
-            camera_max_frame_size: None,
+            core: ClientCore::new(identity),
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         }
@@ -267,38 +352,19 @@ where
     /// [`request_pushall()`](Self::request_pushall) once to refill it. The sequence counter is
     /// reseeded when [`with_timer()`](Self::with_timer) supplies a real clock.
     pub fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self {
-        let serial = String::from(mqtt_client.serial());
-        crate::quirks::warn_if_unknown_model(model);
-        Self {
-            mqtt: Some(mqtt_client),
-            ftps: None,
-            ftps_config: None,
-            camera: None,
-            camera_config: None,
-            mqtt_tls: PreConnected(PhantomData),
-            mqtt_factory: PreConnected(PhantomData),
-            timer: DummyTimer,
-            identity: PrinterIdentity {
-                serial,
-                ip: String::new(),
-                access_code: String::new(),
-                model,
-            },
-            sequence_counter: INITIAL_SEQUENCE_ID,
-            commands: command::CommandTracker::default(),
-            k_profile_primed: false,
-            connection_generation: 0,
-            cache: telemetry::TelemetryCache::default(),
-            command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
-            connect_timeout_secs: DEFAULT_CONNECT_TIMEOUT_SECS,
-            mqtt_port: crate::mqtt::MQTTS_PORT,
-            ftps_port: crate::ftps::FTPS_PORT,
-            ftps_tls_version_check: crate::ftps::TlsVersionCheck::Enforce,
-            camera_port: CameraProtocol::BinaryJpeg.default_port(),
-            camera_max_frame_size: None,
-            _mqtt_raw_io: PhantomData,
-            _camera_raw_io: PhantomData,
-        }
+        let identity = PrinterIdentity {
+            serial: String::from(mqtt_client.serial()),
+            ip: String::new(),
+            access_code: String::new(),
+            model,
+        };
+        let mut client = Self::new(
+            PreConnected(PhantomData),
+            PreConnected(PhantomData),
+            identity,
+        );
+        client.mqtt = Some(mqtt_client);
+        client
     }
 }
 
@@ -347,13 +413,13 @@ where
     /// reaching it wraps back to `SEQUENCE_ID_FLOOR` rather than to 0, so a long session never
     /// drifts into the low range the printer's own `push_status` counter and other clients use.
     pub fn next_sequence_id(&mut self) -> u64 {
-        let next = self.sequence_counter + 1;
-        self.sequence_counter = if next >= crate::mqtt::commands::TASK_ID_MAX {
+        let next = self.core.sequence_counter + 1;
+        self.core.sequence_counter = if next >= crate::mqtt::commands::TASK_ID_MAX {
             SEQUENCE_ID_FLOOR
         } else {
             next
         };
-        self.sequence_counter
+        self.core.sequence_counter
     }
 
     /// Reseeds `sequence_counter` from the clock after a successful MQTT connect.
@@ -372,20 +438,28 @@ where
             .timer
             .unix_millis()
             .unwrap_or_else(|| self.timer.now_millis());
-        self.sequence_counter = sequence_id_from_seed(seed);
+        self.core.sequence_counter = sequence_id_from_seed(seed);
     }
 
-    /// Sets the timeout (in seconds) used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles).
-    ///
-    /// Passing `0` disables the wall-clock timeout entirely — commands then rely solely on
-    /// the 200-message safety valve (`POLL_UNTIL_MAX_MESSAGES`), not immediate timeout.
+    /// Sets the timeout used by command-response methods like [`get_version()`](Self::get_version) and [`get_k_profiles()`](Self::get_k_profiles); `None` disables it.
     ///
     /// The same value is the deadline after which a fire-and-forget command with no echo
     /// resolves as [`CommandOutcome::TimedOut`], measured from its publish. A command keeps the
     /// deadline in force when it was sent; changing this later does not move it. The default is
-    /// 10 seconds, the same window write-zombie detection allows for an echo.
-    pub fn set_command_timeout(&mut self, secs: u64) {
-        self.command_timeout_secs = secs;
+    /// [`DEFAULT_COMMAND_TIMEOUT`] (10 seconds), the same window write-zombie detection allows
+    /// for an echo.
+    ///
+    /// The timeout needs a real clock ([`with_timer()`](Self::with_timer)). Without one, and with
+    /// `None`, a wait is bounded only by the printer answering or the connection failing.
+    pub fn set_command_timeout(&mut self, timeout: Option<Duration>) {
+        self.core.command_timeout = timeout;
+    }
+
+    /// Builder form of [`set_command_timeout()`](Self::set_command_timeout).
+    #[must_use]
+    pub fn with_command_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.core.command_timeout = timeout;
+        self
     }
 
     /// Polls the MQTT stream until `matcher` returns `Some(T)`, buffering non-matching messages for later retrieval via `poll_telemetry()` / `poll_raw()`.
@@ -394,8 +468,10 @@ where
     /// for a match before reading from the wire — a leftover message from a prior
     /// request-response round-trip may already satisfy this call's `matcher`.
     ///
-    /// Returns `Error::Timeout` if the wall-clock timeout (`command_timeout_secs`)
-    /// or message-count safety valve (`POLL_UNTIL_MAX_MESSAGES`) is exceeded. Neither of
+    /// Returns `Error::Timeout` once `timeout` elapses (`None` disables it). Under a timer with
+    /// no real clock the deadline can't be measured, so `POLL_UNTIL_MAX_MESSAGES` buffered
+    /// messages end the wait instead; with a real clock that count is not applied, since a busy
+    /// link would otherwise time out a wait well inside its deadline. Neither of
     /// these protects against a fully-stalled read on the wire itself: both only run
     /// *after* `poll_wire().await` below has already returned, so a connection that
     /// stalls with zero incoming bytes mid-`await` bypasses them entirely — a real
@@ -406,7 +482,11 @@ where
     /// this function's own loop does. See `read_exact_packet`'s doc comment for the
     /// mechanism and the resumability invariant that keeps a timed-out read from
     /// desyncing the stream for the next attempt.
-    pub(crate) async fn poll_until<F, T>(&mut self, mut matcher: F) -> Result<T, Error>
+    pub(crate) async fn poll_until<F, T>(
+        &mut self,
+        timeout: Option<Duration>,
+        mut matcher: F,
+    ) -> Result<T, Error>
     where
         F: FnMut(&MqttMessage) -> Option<T>,
     {
@@ -421,42 +501,45 @@ where
             return Ok(result);
         }
 
-        let start = self.timer.now_millis();
-        // Saturating: a caller-set `command_timeout_secs` above u64::MAX / 1000 would
-        // otherwise overflow in debug builds (panic) and wrap in release builds.
-        let timeout_ms = self.command_timeout_secs.saturating_mul(1000);
-        let mut count: usize = 0;
-
+        let mut wait = WaitBudget::start(&self.timer, timeout);
         loop {
             let msg = self.mqtt.as_mut().unwrap().poll_wire(&self.timer).await?;
             if let Some(result) = matcher(&msg) {
                 return Ok(result);
             }
             self.mqtt.as_mut().unwrap().push_pending(msg);
-            count += 1;
-
-            if count >= POLL_UNTIL_MAX_MESSAGES {
-                return Err(Error::Timeout);
-            }
-            let elapsed = self.timer.now_millis().wrapping_sub(start);
-            if timeout_ms > 0 && elapsed >= timeout_ms {
-                return Err(Error::Timeout);
-            }
+            wait.after_message(&self.timer)?;
         }
+    }
+
+    /// [`poll_until()`](Self::poll_until) bounded by the configured command timeout.
+    pub(crate) async fn poll_until_command_timeout<F, T>(&mut self, matcher: F) -> Result<T, Error>
+    where
+        F: FnMut(&MqttMessage) -> Option<T>,
+    {
+        self.poll_until(self.core.command_timeout, matcher).await
     }
 
     /// Serializes a request struct and publishes it to the printer's MQTT command channel.
     pub(crate) async fn publish_request<T: Serialize>(&mut self, request: &T) -> Result<(), Error> {
         self.ensure_mqtt().await?;
-        let payload = serde_json::to_vec(request).map_err(|_| Error::Serialization)?;
-        self.publish_payload(&payload).await
+        let payload = serialize(request)?;
+        let echo = crate::mqtt::client::echo_key(&payload);
+        self.publish_payload(&payload, echo).await
     }
 
-    async fn publish_payload(&mut self, payload: &[u8]) -> Result<(), Error> {
-        self.mqtt
-            .as_mut()
-            .unwrap()
-            .publish_command(payload, &self.timer)
+    /// Publishes `payload`, whose echo key the caller has already read, on the current session.
+    ///
+    /// Doesn't call `ensure_mqtt()`, so it is safe from inside the connect path.
+    pub(crate) async fn publish_payload(
+        &mut self,
+        payload: &[u8],
+        echo: Option<crate::mqtt::client::EchoKey>,
+    ) -> Result<(), Error> {
+        let Some(mqtt) = self.mqtt.as_mut() else {
+            return Err(Error::Network(crate::io::SocketError::NotConnected));
+        };
+        mqtt.publish_keyed(payload, echo, &self.timer)
             .await
             .map(|_packet_id| ())
     }
@@ -474,41 +557,51 @@ where
         // Connect before minting: `ensure_mqtt()` reseeds `sequence_counter` from the wall
         // clock on a successful lazy connect (see `connect.rs`), and MQTT connects lazily by
         // default — so minting first meant the first command of every session carried the
-        // un-reseeded `INITIAL_SEQUENCE_ID + 1`, which is the exact collision between two
+        // un-reseeded `SEQUENCE_ID_FLOOR + 1`, which is the exact collision between two
         // independent sessions the reseed exists to prevent. Idempotent: `ensure_mqtt()`
         // short-circuits when already connected.
         self.ensure_mqtt().await?;
         let seq = self.next_sequence_id();
         let req = build(seq);
-        let payload = serde_json::to_vec(&req).map_err(|_| Error::Serialization)?;
-        let (command, _) = crate::mqtt::client::extract_command_and_sequence_id(&payload).ok_or(
-            Error::ProtocolViolation("command payload carries no command name".into()),
-        )?;
-        let ack = if crate::mqtt::client::command_echoes(&command) {
+        let payload = serialize(&req)?;
+        // Read once here and handed to the publish, which needs the same key to arm write-zombie
+        // correlation; parsing the payload a second time there cost a heap parse per command.
+        let echo = crate::mqtt::client::echo_key(&payload).ok_or_else(|| {
+            Error::Serialization(
+                format!(
+                    "{} serialized without a command name",
+                    core::any::type_name::<T>()
+                )
+                .into(),
+            )
+        })?;
+        let ack = if crate::mqtt::client::command_echoes(&echo.command) {
             AckExpectation::Echoes
         } else {
             AckExpectation::SettlesOnPublish
         };
-        self.publish_payload(&payload).await?;
+        let command = echo.command.clone();
+        self.publish_payload(&payload, Some(echo)).await?;
         // `next_sequence_id` keeps the counter below `TASK_ID_MAX` (`i32::MAX`), so this is lossless.
         let handle = CommandHandle::new(command, seq as u32, ack);
         let deadline_ms = self.command_deadline_ms();
-        self.commands.track(&handle, deadline_ms);
+        self.core.commands.track(&handle, deadline_ms);
         Ok(handle)
     }
 
     /// Returns the monotonic deadline for a command published now, or `None` when none can be measured.
     ///
     /// `None` without a real clock (`DummyTimer` always reads 0) or with the command timeout
-    /// disabled by [`set_command_timeout(0)`](Self::set_command_timeout).
+    /// disabled by [`set_command_timeout(None)`](Self::set_command_timeout).
     fn command_deadline_ms(&self) -> Option<u64> {
-        if !self.timer.has_real_clock() || self.command_timeout_secs == 0 {
+        if !self.timer.has_real_clock() {
             return None;
         }
+        let timeout = self.core.command_timeout?;
         Some(
             self.timer
                 .now_millis()
-                .saturating_add(self.command_timeout_secs.saturating_mul(1000)),
+                .saturating_add(duration_millis(timeout)),
         )
     }
 
@@ -538,17 +631,17 @@ where
         self.ensure_mqtt().await?;
         let mqtt = self.mqtt.as_mut().unwrap();
         mqtt.send_keepalive_if_due(&self.timer).await?;
-        mqtt.tick_zombie_check(KEEPALIVE_TICK_SECS)
+        Ok(mqtt.tick_zombie_check(KEEPALIVE_TICK_SECS)?)
     }
 
     /// Returns a reference to the printer's unique hardware serial number.
     pub fn serial(&self) -> &str {
-        &self.identity.serial
+        &self.core.identity.serial
     }
 
     /// Returns the resolved printer hardware model.
     pub fn model(&self) -> PrinterModel {
-        self.identity.model
+        self.core.identity.model
     }
 
     /// Returns the model quirks for this printer's resolved model.
@@ -564,7 +657,7 @@ where
     /// [`QuirkContext`](crate::quirks::QuirkContext) and cannot be called from here without one
     /// — use [`capabilities()`](Self::capabilities) for those, which supplies it from the cache.
     pub fn quirks(&self) -> &'static crate::quirks::ModelQuirks {
-        self.identity.model.quirks()
+        self.core.identity.model.quirks()
     }
 
     /// Builds a [`QuirkContext`](crate::quirks::QuirkContext) from this client's cached state.
@@ -580,7 +673,7 @@ where
     #[must_use]
     pub fn quirk_context(&self) -> crate::quirks::QuirkContext<'_> {
         crate::quirks::QuirkContext::empty()
-            .with_fun2(self.cache.last_fun2.as_deref())
+            .with_fun2(self.core.cache.last_fun2.as_deref())
             .with_firmware(self.firmware_this_connection())
     }
 
@@ -590,10 +683,10 @@ where
     /// that boundary may be the pre-update one, which would answer firmware-gated capabilities
     /// wrongly until the next `get_version()` (#352). Mirrors `home_flag_this_connection`.
     pub(crate) fn firmware_this_connection(&self) -> Option<&str> {
-        if self.cache.last_firmware_generation? != self.connection_generation {
+        if self.core.cache.last_firmware_generation? != self.core.connection_generation {
             return None;
         }
-        self.cache.last_firmware.as_deref()
+        self.core.cache.last_firmware.as_deref()
     }
 
     /// Capability answers for this printer, with its cached telemetry already supplied.

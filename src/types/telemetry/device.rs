@@ -5,9 +5,11 @@ use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use super::merge::{Mergeable, keep_new, merge_opt};
 use serde::{Deserialize, Serialize};
 
 use super::diagnostics::CtcTelemetry;
+use super::temps::{HeaterTemps, unpack_temperature};
 
 /// Device hardware state properties containing physical tooling descriptions.
 ///
@@ -45,12 +47,12 @@ pub struct DeviceTelemetry {
     /// A fixture payload carries the identical value in both fields, and both
     /// pybambu (`models.py`, reads only `device.bed.info.temp`) and bambuddy independently
     /// never consult this field either. Parsed for wire-format completeness only —
-    /// `decode_bed_temperatures()` deliberately does not read it.
+    /// The bed-temperature decode deliberately does not read it.
     #[serde(default)]
     pub bed_temp: Option<u32>,
 }
 
-impl DeviceTelemetry {
+impl Mergeable for DeviceTelemetry {
     /// Merges a freshly-parsed `DeviceTelemetry` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
@@ -75,43 +77,25 @@ impl DeviceTelemetry {
     /// Recurses into `bed` too — confirmed via BambuStudio's
     /// `json_diff::restore_objects` generic reconstruction layer (see `BedTelemetry::merge_from`
     /// for the full trace).
-    pub(crate) fn merge_from(&mut self, incoming: &DeviceTelemetry) {
-        match (&mut self.nozzle, &incoming.nozzle) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.nozzle = Some(new.clone()),
-            _ => {}
-        }
-        match (&mut self.extruder, &incoming.extruder) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.extruder = Some(new.clone()),
-            _ => {}
-        }
-        match (&mut self.airduct, &incoming.airduct) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.airduct = Some(new.clone()),
-            _ => {}
-        }
-        match (&mut self.ctc, &incoming.ctc) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.ctc = Some(new.clone()),
-            _ => {}
-        }
-        match (&mut self.bed, &incoming.bed) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.bed = Some(new.clone()),
-            _ => {}
-        }
-        match (&mut self.ext_tool, &incoming.ext_tool) {
-            (Some(cached), Some(new)) => cached.merge_from(new),
-            (None, Some(new)) => self.ext_tool = Some(new.clone()),
-            _ => {}
-        }
-        if incoming.fire_ext.is_some() {
-            self.fire_ext = incoming.fire_ext.clone();
-        }
-        if incoming.bed_temp.is_some() {
-            self.bed_temp = incoming.bed_temp;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            nozzle,
+            extruder,
+            airduct,
+            ctc,
+            bed,
+            ext_tool,
+            fire_ext,
+            bed_temp,
+        } = incoming;
+        merge_opt(&mut self.nozzle, nozzle);
+        merge_opt(&mut self.extruder, extruder);
+        merge_opt(&mut self.airduct, airduct);
+        merge_opt(&mut self.ctc, ctc);
+        merge_opt(&mut self.bed, bed);
+        merge_opt(&mut self.ext_tool, ext_tool);
+        keep_new(&mut self.fire_ext, fire_ext);
+        keep_new(&mut self.bed_temp, bed_temp);
     }
 }
 
@@ -126,7 +110,7 @@ pub struct BedTelemetry {
     pub state: Option<u32>,
 }
 
-impl BedTelemetry {
+impl Mergeable for BedTelemetry {
     /// Merges a freshly-parsed `BedTelemetry` into `self` field-by-field.
     ///
     /// Confirmed against BambuStudio's `json_diff::restore_objects`
@@ -144,13 +128,10 @@ impl BedTelemetry {
     /// even though no field-specific parser (`DevBed.cpp`) ever reads the nested object at
     /// all — the reconstruction layer preserves it regardless of whether anything downstream
     /// consumes it.
-    pub(crate) fn merge_from(&mut self, incoming: &BedTelemetry) {
-        if incoming.info.is_some() {
-            self.info = incoming.info.clone();
-        }
-        if incoming.state.is_some() {
-            self.state = incoming.state;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self { info, state } = incoming;
+        keep_new(&mut self.info, info);
+        keep_new(&mut self.state, state);
     }
 }
 
@@ -160,6 +141,14 @@ pub struct BedInfo {
     /// Composite-packed bed temperature [REF-THER-DECODE].
     #[serde(default)]
     pub temp: Option<u32>,
+}
+
+impl BedInfo {
+    /// The bed's temperatures unpacked from `temp`; `None` when it is absent.
+    #[must_use]
+    pub fn temperatures(&self) -> Option<HeaterTemps> {
+        Some(unpack_temperature(f64::from(self.temp?)))
+    }
 }
 
 /// Laser/cutter external tool telemetry from `device.ext_tool`.
@@ -185,7 +174,7 @@ pub struct ExtToolTelemetry {
     pub mount_3d: Option<i32>,
 }
 
-impl ExtToolTelemetry {
+impl Mergeable for ExtToolTelemetry {
     /// Merges a freshly-parsed `ExtToolTelemetry` into `self` field-by-field.
     ///
     /// Confirmed against BambuStudio's own `DevExtensionToolParser::ParseV2_0`
@@ -196,25 +185,21 @@ impl ExtToolTelemetry {
     /// `th_temp` aren't modeled by BambuStudio at all — extended uniformly here for
     /// consistency with every other `merge_from` in this file, same as `DeviceTelemetry::merge_from` extending
     /// nozzle/extruder/airduct together once the pattern was established for one.
-    pub(crate) fn merge_from(&mut self, incoming: &ExtToolTelemetry) {
-        if incoming.mount.is_some() {
-            self.mount = incoming.mount;
-        }
-        if incoming.tool_type.is_some() {
-            self.tool_type = incoming.tool_type.clone();
-        }
-        if incoming.calib.is_some() {
-            self.calib = incoming.calib;
-        }
-        if incoming.low_prec.is_some() {
-            self.low_prec = incoming.low_prec;
-        }
-        if incoming.th_temp.is_some() {
-            self.th_temp = incoming.th_temp;
-        }
-        if incoming.mount_3d.is_some() {
-            self.mount_3d = incoming.mount_3d;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            mount,
+            tool_type,
+            calib,
+            low_prec,
+            th_temp,
+            mount_3d,
+        } = incoming;
+        keep_new(&mut self.mount, mount);
+        keep_new(&mut self.tool_type, tool_type);
+        keep_new(&mut self.calib, calib);
+        keep_new(&mut self.low_prec, low_prec);
+        keep_new(&mut self.th_temp, th_temp);
+        keep_new(&mut self.mount_3d, mount_3d);
     }
 }
 
@@ -253,7 +238,7 @@ pub struct NozzleCollection {
     pub tar_id: Option<u32>,
 }
 
-impl NozzleCollection {
+impl Mergeable for NozzleCollection {
     /// Merges a freshly-parsed `NozzleCollection` into `self` field-by-field.
     ///
     /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
@@ -263,22 +248,19 @@ impl NozzleCollection {
     /// wholesale replace, not a keyed per-entry merge, matching BambuStudio's own
     /// `DevNozzleSystemParser::ParseV2_0` (`system->ClearNozzles()` + full rebuild whenever
     /// `nozzle.info` is present in the already-reconstructed snapshot).
-    pub(crate) fn merge_from(&mut self, incoming: &NozzleCollection) {
-        if let Some(info) = &incoming.info {
-            self.info = Some(info.clone());
-        }
-        if incoming.exist.is_some() {
-            self.exist = incoming.exist;
-        }
-        if incoming.state.is_some() {
-            self.state = incoming.state;
-        }
-        if incoming.src_id.is_some() {
-            self.src_id = incoming.src_id;
-        }
-        if incoming.tar_id.is_some() {
-            self.tar_id = incoming.tar_id;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            info,
+            exist,
+            state,
+            src_id,
+            tar_id,
+        } = incoming;
+        keep_new(&mut self.info, info);
+        keep_new(&mut self.exist, exist);
+        keep_new(&mut self.state, state);
+        keep_new(&mut self.src_id, src_id);
+        keep_new(&mut self.tar_id, tar_id);
     }
 }
 
@@ -464,7 +446,9 @@ impl ExtruderCollection {
     pub fn extruder_count(&self) -> u8 {
         self.state.map_or(0, |s| (s & 0xF) as u8)
     }
+}
 
+impl Mergeable for ExtruderCollection {
     /// Merges a freshly-parsed `ExtruderCollection` into `self` field-by-field.
     ///
     /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
@@ -473,13 +457,10 @@ impl ExtruderCollection {
     /// now `Option<Vec<_>>` (see its doc comment) so a present-but-empty push actually clears
     /// — wholesale replace, matching BambuStudio's own `ExtderSystemParser::ParseV2_0`
     /// (`system->m_extders.clear()` + full rebuild).
-    pub(crate) fn merge_from(&mut self, incoming: &ExtruderCollection) {
-        if let Some(info) = &incoming.info {
-            self.info = Some(info.clone());
-        }
-        if incoming.state.is_some() {
-            self.state = incoming.state;
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self { info, state } = incoming;
+        keep_new(&mut self.info, info);
+        keep_new(&mut self.state, state);
     }
 }
 
@@ -492,7 +473,7 @@ pub struct ExtruderInfo {
     /// Extruder carriage index (0 = right/main, 1 = left/deputy).
     pub id: u8,
 
-    /// Composite-packed temperature (use `unpack_temperature()` to decode).
+    /// Composite-packed temperature; decode with [`temperatures()`](Self::temperatures).
     pub temp: Option<u32>,
 
     /// Current AMS slot routing (confirmed against BambuStudio's `DevExterSystemParser::ParseV2_0`, `DevExtruderSystem.cpp:369-372`): low 8 bits (0–7) = slot_id, next 8 bits (8–15) = ams_id. Sentinel `0xFFFF` on a single-extruder system means unmapped.
@@ -546,11 +527,10 @@ pub struct ExtruderInfo {
 }
 
 impl ExtruderInfo {
-    /// Unpacks the composite temperature into (actual, target) degrees Celsius.
-    pub fn temperatures(&self) -> (u16, u16) {
-        self.temp
-            .map(|t| super::report::PrinterTelemetry::unpack_temperature(t as f64))
-            .unwrap_or((0, 0))
+    /// Unpacks the composite `temp`; `None` when it is absent.
+    #[must_use]
+    pub fn temperatures(&self) -> Option<HeaterTemps> {
+        Some(unpack_temperature(f64::from(self.temp?)))
     }
 
     /// Decodes an AMS-routing field (`snow`/`spre`/`star`) into `(ams_id, slot_id)`.
@@ -650,6 +630,29 @@ pub struct AirductCollection {
 }
 
 impl AirductCollection {
+    /// The speed of the fan reported as part `id`, as a percentage (0-100).
+    ///
+    /// Two wire shapes, both real, and the fix for each broke the other once (#31, then #184),
+    /// so order matters:
+    ///
+    /// 1. A negative state is a firmware sentinel for "off/unknown" and reads `None`. It must be
+    ///    rejected *before* the mask, since `-1 & 0xFF == 255`, which would clamp to a bogus 100%.
+    /// 2. A non-negative state may be bit-packed, with the percentage in the low byte and flags
+    ///    above it. BambuStudio's `DevFan::ParseV3_0` applies `get_flag_bits(state, 0, 8)`
+    ///    unconditionally to every airduct part, and bambuddy independently does the same
+    ///    `int(part["state"]) & 0xFF`. Without the mask a packed `306` clamps to 100 instead of
+    ///    decoding to its real 50.
+    #[must_use]
+    pub fn part_percent(&self, id: u32) -> Option<u8> {
+        let state = self.parts.as_deref()?.iter().find(|p| p.id == id)?.state?;
+        if state < 0 {
+            return None;
+        }
+        Some((state & 0xFF).clamp(0, 100) as u8)
+    }
+}
+
+impl Mergeable for AirductCollection {
     /// Merges a freshly-parsed `AirductCollection` into `self` field-by-field.
     ///
     /// Confirmed via `pybambu` and `bambuddy` (see `DeviceTelemetry::merge_from`) —
@@ -665,8 +668,13 @@ impl AirductCollection {
     /// as an explicit clear, matching BambuStudio's `json_diff::restore_objects` (which fully
     /// reconstructs `device.airduct` before `DevFan.cpp`'s own parser unconditionally clears
     /// and rebuilds `parts`/`modeList` from that already-correct snapshot) for that one case.
-    pub(crate) fn merge_from(&mut self, incoming: &AirductCollection) {
-        if let Some(parts) = &incoming.parts {
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            parts,
+            mode_cur,
+            mode_list,
+        } = incoming;
+        if let Some(parts) = parts {
             if parts.is_empty() {
                 self.parts = Some(Vec::new());
             } else {
@@ -679,12 +687,8 @@ impl AirductCollection {
                 }
             }
         }
-        if incoming.mode_cur.is_some() {
-            self.mode_cur = incoming.mode_cur;
-        }
-        if let Some(mode_list) = &incoming.mode_list {
-            self.mode_list = Some(mode_list.clone());
-        }
+        keep_new(&mut self.mode_cur, mode_cur);
+        keep_new(&mut self.mode_list, mode_list);
     }
 }
 

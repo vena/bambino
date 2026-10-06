@@ -91,9 +91,9 @@ pub(crate) const RACK_FIXED_EXTRUDER_ID: i32 = 1;
 /// Extruder index of the H2C's swappable rack carriage.
 pub(crate) const RACK_RACK_EXTRUDER_ID: i32 = 0;
 /// Lowest physical nozzle ID the rack reports (rack position 1).
-pub(crate) const RACK_NOZZLE_ID_MIN: i32 = 16;
+pub(crate) const RACK_NOZZLE_ID_MIN: i32 = *crate::quirks::RACK_NOZZLE_IDS.start() as i32;
 /// Highest physical nozzle ID the rack reports (rack position 6).
-pub(crate) const RACK_NOZZLE_ID_MAX: i32 = 21;
+pub(crate) const RACK_NOZZLE_ID_MAX: i32 = *crate::quirks::RACK_NOZZLE_IDS.end() as i32;
 /// Fixed length of the `nozzle_mapping` array on the wire, padded with `-1`.
 pub(crate) const RACK_WIRE_SLOTS: usize = 32;
 
@@ -389,7 +389,7 @@ pub struct ProjectFilePayload {
     /// Wire command name, always `"project_file"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
     /// Target file path of the internal sliced plate payload (e.g. "Metadata/plate_1.gcode").
     pub param: String,
     /// User-friendly label associated with the print queue task.
@@ -458,13 +458,12 @@ pub struct ProjectFilePayload {
 }
 
 /// Submits a `.3mf` print job from the SD card for execution.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectFileRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: ProjectFilePayload,
-}
+pub type ProjectFileRequest = super::Print<ProjectFilePayload>;
 
 impl ProjectFileRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "project_file";
+
     /// Constructs a print job request from a `PrintJobConfig`, model, and sequence ID.
     ///
     /// `nozzle_offset_cali` is gated on the model's `supports_nozzle_offset_calibration()`
@@ -567,8 +566,8 @@ impl ProjectFileRequest {
 
         Self {
             print: ProjectFilePayload {
-                command: "project_file",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
                 param: config.plate_gcode_path.clone(),
                 subtask_name: config.subtask_name.clone(),
                 subtask_id: submission_id.clone(),

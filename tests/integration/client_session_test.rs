@@ -65,7 +65,7 @@ async fn test_home_flag_cache_and_advisory_warnings() {
         connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet — cache must read as unknown, not "unhomed".
-    assert_eq!(client.is_axis_homed('x'), None);
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::X), None);
     assert_eq!(client.is_all_axes_homed(), None);
 
     let event = client
@@ -74,14 +74,13 @@ async fn test_home_flag_cache_and_advisory_warnings() {
         .expect("poll_telemetry should parse home_flag report");
     assert!(event.report().is_some());
 
-    assert_eq!(client.is_axis_homed('x'), Some(true));
-    assert_eq!(client.is_axis_homed('y'), Some(true));
-    assert_eq!(client.is_axis_homed('z'), Some(false));
-    assert_eq!(client.is_axis_homed('e'), None);
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::X), Some(true));
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::Y), Some(true));
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::Z), Some(false));
     assert_eq!(client.is_all_axes_homed(), Some(false));
 
     client
-        .move_relative('z', 5.0, 1000)
+        .move_relative(bambino::client::Axis::Z, 5.0, 1000)
         .await
         .expect("move_relative should proceed despite unhomed Z");
     client
@@ -122,9 +121,9 @@ async fn test_home_flag_bit31_set_deserializes_as_negative_wire_value() {
         .expect("negative home_flag must still parse via deserialize_signed_as_u32");
     assert!(event.report().is_some());
 
-    assert_eq!(client.is_axis_homed('x'), Some(true));
-    assert_eq!(client.is_axis_homed('y'), Some(true));
-    assert_eq!(client.is_axis_homed('z'), Some(false));
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::X), Some(true));
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::Y), Some(true));
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::Z), Some(false));
 
     broker_task.await.expect("Broker task panicked");
 }

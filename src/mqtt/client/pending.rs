@@ -1,15 +1,10 @@
 //! Pending-message buffer management for `MqttClient`.
 
-#[cfg(not(feature = "std"))]
-use alloc::collections::VecDeque;
-#[cfg(feature = "std")]
-use std::collections::VecDeque;
-
 use super::{MqttClient, MqttMessage};
 use crate::io::AsyncIo;
 
-/// Upper bound on the combined topic+payload size of all buffered `pending_messages`, on a
-/// full host.
+/// Upper bound on the combined topic+payload size of all buffered `pending_messages`, on a full host.
+///
 /// Generous for a handful of telemetry updates. Once exceeded, `push_pending()` evicts from the
 /// front (oldest first) until the new message fits, logging a `log::warn!` for each eviction.
 #[cfg(all(feature = "std", not(feature = "esp-idf")))]
@@ -91,27 +86,17 @@ impl<IO: AsyncIo> MqttClient<IO> {
     where
         F: FnMut(&MqttMessage) -> Option<T>,
     {
-        let mut survivors = VecDeque::with_capacity(self.pending_messages.len());
-        let mut result = None;
-
-        while let Some(msg) = self.pending_messages.pop_front() {
-            let matched = if result.is_none() {
-                matcher(&msg)
-            } else {
-                None
-            };
-            match matched {
-                Some(r) => {
-                    self.pending_bytes =
-                        self.pending_bytes.saturating_sub(Self::message_size(&msg));
-                    result = Some(r);
-                }
-                None => survivors.push_back(msg),
-            }
+        // Scanned in place: rebuilding the deque allocated and moved every buffered message on
+        // each call, even when nothing matched. `VecDeque::remove` keeps the rest in order.
+        let (index, result) = self
+            .pending_messages
+            .iter()
+            .enumerate()
+            .find_map(|(i, msg)| matcher(msg).map(|r| (i, r)))?;
+        if let Some(msg) = self.pending_messages.remove(index) {
+            self.pending_bytes = self.pending_bytes.saturating_sub(Self::message_size(&msg));
         }
-
-        self.pending_messages = survivors;
-        result
+        Some(result)
     }
 
     /// Pops the oldest buffered message, keeping `pending_bytes` in sync.
@@ -129,28 +114,11 @@ mod tests {
     // `MQTT_PENDING_BUFFER_MAX_BYTES`.
     mod buffer_tests {
         use super::super::*;
-        use crate::mqtt::client::frame::FrameReadState;
         use crate::test_support::MockIo;
-        use std::collections::BTreeMap;
 
         /// Builds a `MqttClient` without going through `connect()`'s handshake — the stream is never touched by the pending-buffer tests below.
         fn test_client() -> MqttClient<MockIo> {
-            MqttClient {
-                stream: MockIo::empty(),
-                request_topic: "device/test/request".to_string(),
-                serial: "test".to_string(),
-                next_packet_id: 2,
-                in_flight: BTreeMap::new(),
-                pending_messages: VecDeque::new(),
-                pending_bytes: 0,
-                write_pending_secs: None,
-                write_pending_echo: None,
-                last_outbound_ms: None,
-                secs_since_last_message: 0,
-                read_state: FrameReadState::default(),
-                write_poisoned: false,
-                write_in_progress: false,
-            }
+            MqttClient::with_stream(MockIo::empty(), "test")
         }
 
         /// Regression test: a caller that keeps issuing request-response calls whose responses never arrive (firmware bug, wrong echoed sequence_id, or a malicious/compromised device on the LAN) must not be able to grow `pending_messages` without bound — unacceptable on ESP-IDF/Embassy targets where RAM is measured in KB.

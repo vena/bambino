@@ -44,8 +44,9 @@
 //!     loop {
 //!         match printer.poll_telemetry().await? {
 //!             TelemetryEvent::Report(report, _raw) => {
-//!                 let (bed_actual, bed_target) = report.bed_temperatures();
-//!                 println!("Bed: {}°C / {}°C target", bed_actual, bed_target);
+//!                 if let Some(bed) = report.bed_temperatures() {
+//!                     println!("Bed: {}°C / {}°C target", bed.actual, bed.target);
+//!                 }
 //!             }
 //!             // Every command's outcome: accepted, refused, no verdict, timed out, or lost
 //!             TelemetryEvent::Command(resolution, _raw) => {

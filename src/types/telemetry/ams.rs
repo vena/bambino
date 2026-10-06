@@ -5,6 +5,7 @@ use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use super::merge::{Mergeable, keep_new, merge_keyed, merge_opt};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Normalizes `AmsUnit::id` on the way in, so the whole crate addresses one id per unit.
@@ -192,7 +193,9 @@ impl AmsStatusReport {
             .iter()
             .find(|tray| tray.slot() == Some(slot))
     }
+}
 
+impl Mergeable for AmsStatusReport {
     /// Merges a freshly-parsed `AmsStatusReport` into `self` field-by-field, instead of
     /// replacing `self` wholesale.
     ///
@@ -207,8 +210,26 @@ impl AmsStatusReport {
     ///
     /// `ams` itself is a keyed per-unit merge, not a wholesale array replace —
     /// see the loop body below and `AmsUnit::merge_from`.
-    pub(crate) fn merge_from(&mut self, incoming: &AmsStatusReport) {
-        if !incoming.ams.is_empty() {
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            ams,
+            ams_exist_bits,
+            tray_exist_bits,
+            tray_is_bbl_bits,
+            tray_now,
+            tray_pre,
+            tray_tar,
+            version,
+            tray_read_done_bits,
+            tray_reading_bits,
+            insert_flag,
+            power_on_flag,
+            cali_id,
+            cali_stat,
+            calibrate_remain_flag,
+            cfs,
+        } = incoming;
+        if !ams.is_empty() {
             // Keyed per-unit merge, not wholesale replace — confirmed against
             // BambuStudio's own `DevFilaSystem.cpp` (`ParseAmsInfo`), which looks up each
             // unit by `ams_id` in a persistent `amsList` map (`system->amsList.find(ams_id)`)
@@ -216,58 +237,23 @@ impl AmsStatusReport {
             // `print.ams.ams` push stays cached exactly as last observed, and a mentioned
             // unit's own fields merge in via `AmsUnit::merge_from` rather than replacing the
             // whole unit.
-            for incoming_unit in &incoming.ams {
-                match self.ams.iter_mut().find(|u| u.id == incoming_unit.id) {
-                    Some(cached_unit) => cached_unit.merge_from(incoming_unit),
-                    None => self.ams.push(incoming_unit.clone()),
-                }
-            }
+            merge_keyed(&mut self.ams, ams, |u| u.id.clone());
         }
-        if incoming.ams_exist_bits.is_some() {
-            self.ams_exist_bits = incoming.ams_exist_bits.clone();
-        }
-        if incoming.tray_exist_bits.is_some() {
-            self.tray_exist_bits = incoming.tray_exist_bits.clone();
-        }
-        if incoming.tray_is_bbl_bits.is_some() {
-            self.tray_is_bbl_bits = incoming.tray_is_bbl_bits.clone();
-        }
-        if incoming.tray_now.is_some() {
-            self.tray_now = incoming.tray_now.clone();
-        }
-        if incoming.tray_pre.is_some() {
-            self.tray_pre = incoming.tray_pre.clone();
-        }
-        if incoming.tray_tar.is_some() {
-            self.tray_tar = incoming.tray_tar.clone();
-        }
-        if incoming.version.is_some() {
-            self.version = incoming.version;
-        }
-        if incoming.tray_read_done_bits.is_some() {
-            self.tray_read_done_bits = incoming.tray_read_done_bits.clone();
-        }
-        if incoming.tray_reading_bits.is_some() {
-            self.tray_reading_bits = incoming.tray_reading_bits.clone();
-        }
-        if incoming.insert_flag.is_some() {
-            self.insert_flag = incoming.insert_flag;
-        }
-        if incoming.power_on_flag.is_some() {
-            self.power_on_flag = incoming.power_on_flag;
-        }
-        if incoming.cali_id.is_some() {
-            self.cali_id = incoming.cali_id;
-        }
-        if incoming.cali_stat.is_some() {
-            self.cali_stat = incoming.cali_stat;
-        }
-        if incoming.calibrate_remain_flag.is_some() {
-            self.calibrate_remain_flag = incoming.calibrate_remain_flag;
-        }
-        if incoming.cfs.is_some() {
-            self.cfs = incoming.cfs.clone();
-        }
+        keep_new(&mut self.ams_exist_bits, ams_exist_bits);
+        keep_new(&mut self.tray_exist_bits, tray_exist_bits);
+        keep_new(&mut self.tray_is_bbl_bits, tray_is_bbl_bits);
+        keep_new(&mut self.tray_now, tray_now);
+        keep_new(&mut self.tray_pre, tray_pre);
+        keep_new(&mut self.tray_tar, tray_tar);
+        keep_new(&mut self.version, version);
+        keep_new(&mut self.tray_read_done_bits, tray_read_done_bits);
+        keep_new(&mut self.tray_reading_bits, tray_reading_bits);
+        keep_new(&mut self.insert_flag, insert_flag);
+        keep_new(&mut self.power_on_flag, power_on_flag);
+        keep_new(&mut self.cali_id, cali_id);
+        keep_new(&mut self.cali_stat, cali_stat);
+        keep_new(&mut self.calibrate_remain_flag, calibrate_remain_flag);
+        keep_new(&mut self.cfs, cfs);
     }
 }
 
@@ -322,7 +308,7 @@ pub struct AmsUnit {
     pub dry_sf_reason: Option<Vec<i32>>,
 }
 
-impl AmsUnit {
+impl Mergeable for AmsUnit {
     /// Merges a freshly-parsed `AmsUnit` into `self` field-by-field, instead of replacing
     /// `self` wholesale.
     ///
@@ -344,41 +330,31 @@ impl AmsUnit {
     /// prunes any previously-cached `tray_id` not present in `existing_tray_set` after the
     /// loop — but *only* when the `tray` key itself was present in this push (`tray: None`
     /// leaves the cached trays untouched entirely, matching every other field here).
-    pub(crate) fn merge_from(&mut self, incoming: &AmsUnit) {
-        if incoming.temp.is_some() {
-            self.temp = incoming.temp.clone();
-        }
-        if incoming.humidity.is_some() {
-            self.humidity = incoming.humidity.clone();
-        }
-        if incoming.humidity_raw.is_some() {
-            self.humidity_raw = incoming.humidity_raw.clone();
-        }
-        if incoming.dry_time.is_some() {
-            self.dry_time = incoming.dry_time;
-        }
-        if let Some(incoming_dry) = &incoming.dry_setting {
-            match &mut self.dry_setting {
-                Some(cached_dry) => cached_dry.merge_from(incoming_dry),
-                None => self.dry_setting = Some(incoming_dry.clone()),
-            }
-        }
-        if let Some(incoming_trays) = &incoming.tray {
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            // The caller matched this unit by id before merging.
+            id: _,
+            temp,
+            humidity,
+            humidity_raw,
+            dry_time,
+            dry_setting,
+            tray,
+            info,
+            dry_sf_reason,
+        } = incoming;
+        keep_new(&mut self.temp, temp);
+        keep_new(&mut self.humidity, humidity);
+        keep_new(&mut self.humidity_raw, humidity_raw);
+        keep_new(&mut self.dry_time, dry_time);
+        merge_opt(&mut self.dry_setting, dry_setting);
+        if let Some(incoming_trays) = tray {
             let cached_trays = self.tray.get_or_insert_with(Vec::new);
-            for incoming_tray in incoming_trays {
-                match cached_trays.iter_mut().find(|t| t.id == incoming_tray.id) {
-                    Some(cached_tray) => cached_tray.merge_from(incoming_tray),
-                    None => cached_trays.push(incoming_tray.clone()),
-                }
-            }
+            merge_keyed(cached_trays, incoming_trays, |t| t.id.clone());
             cached_trays.retain(|t| incoming_trays.iter().any(|it| it.id == t.id));
         }
-        if incoming.info.is_some() {
-            self.info = incoming.info.clone();
-        }
-        if incoming.dry_sf_reason.is_some() {
-            self.dry_sf_reason = incoming.dry_sf_reason.clone();
-        }
+        keep_new(&mut self.info, info);
+        keep_new(&mut self.dry_sf_reason, dry_sf_reason);
     }
 }
 
@@ -399,20 +375,19 @@ pub struct AmsDrySetting {
     pub dry_filament: Option<String>,
 }
 
-impl AmsDrySetting {
+impl Mergeable for AmsDrySetting {
     /// Merges a freshly-parsed `AmsDrySetting` into `self` field-by-field, mirroring
     /// `AmsTray::merge_from` -- a partial push (e.g. only `dry_temperature` mid-cycle) must not
     /// clobber cached fields the incoming object omits (issue #57).
-    pub(crate) fn merge_from(&mut self, incoming: &AmsDrySetting) {
-        if incoming.dry_temperature.is_some() {
-            self.dry_temperature = incoming.dry_temperature;
-        }
-        if incoming.dry_duration.is_some() {
-            self.dry_duration = incoming.dry_duration;
-        }
-        if incoming.dry_filament.is_some() {
-            self.dry_filament = incoming.dry_filament.clone();
-        }
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            dry_temperature,
+            dry_duration,
+            dry_filament,
+        } = incoming;
+        keep_new(&mut self.dry_temperature, dry_temperature);
+        keep_new(&mut self.dry_duration, dry_duration);
+        keep_new(&mut self.dry_filament, dry_filament);
     }
 }
 
@@ -844,9 +819,7 @@ impl AmsUnit {
     /// Parses the hex-encoded `info` bitmask string into an integer.
     #[must_use]
     pub fn parse_info(&self) -> Option<u64> {
-        self.info
-            .as_ref()
-            .and_then(|s| u64::from_str_radix(s, 16).ok())
+        self.info.as_deref().and_then(super::bits::hex_u64)
     }
 
     /// Extracts `(info >> shift) & mask`, every mask here being at most 4 bits wide.
@@ -1224,7 +1197,7 @@ impl AmsTray {
     }
 }
 
-impl AmsTray {
+impl Mergeable for AmsTray {
     /// Merges a freshly-parsed `AmsTray` into `self` field-by-field, instead of replacing
     /// `self` wholesale.
     ///
@@ -1248,95 +1221,70 @@ impl AmsTray {
     /// counterpart elsewhere in this codebase. `remain_g`/
     /// `filament_setting_id` preserve-on-absence like every other field with a
     /// confirmed 3-arg `ParseVal` counterpart (`DevFilaSystem.cpp:800-801`).
-    pub(crate) fn merge_from(&mut self, incoming: &AmsTray) {
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            id,
+            state,
+            tray_type,
+            tray_color,
+            tray_info_idx,
+            tag_uid,
+            tray_uuid,
+            remain,
+            tray_sub_brands,
+            nozzle_temp_max,
+            nozzle_temp_min,
+            tray_diameter,
+            tray_weight,
+            tray_id_name,
+            tray_temp,
+            tray_time,
+            drying_temp,
+            drying_time,
+            bed_temp,
+            bed_temp_type,
+            xcam_info,
+            k,
+            n,
+            cali_idx,
+            cols,
+            ctype,
+            total_len,
+            remain_g,
+            filament_setting_id,
+        } = incoming;
         // A no-op for an AMS tray, which is matched by id before merging; an external holder's
         // cached copy may have been created from a push that omitted it.
-        if !incoming.id.is_empty() {
-            self.id = incoming.id.clone();
+        if !id.is_empty() {
+            self.id = id.clone();
         }
-        if incoming.state.is_some() {
-            self.state = incoming.state;
-        }
-        if incoming.tray_type.is_some() {
-            self.tray_type = incoming.tray_type.clone();
-        }
-        if incoming.tray_color.is_some() {
-            self.tray_color = incoming.tray_color.clone();
-        }
-        if incoming.tray_info_idx.is_some() {
-            self.tray_info_idx = incoming.tray_info_idx.clone();
-        }
-        if incoming.tag_uid.is_some() {
-            self.tag_uid = incoming.tag_uid.clone();
-        }
-        if incoming.tray_uuid.is_some() {
-            self.tray_uuid = incoming.tray_uuid.clone();
-        }
-        if incoming.remain.is_some() {
-            self.remain = incoming.remain;
-        }
-        if incoming.tray_sub_brands.is_some() {
-            self.tray_sub_brands = incoming.tray_sub_brands.clone();
-        }
-        if incoming.nozzle_temp_max.is_some() {
-            self.nozzle_temp_max = incoming.nozzle_temp_max.clone();
-        }
-        if incoming.nozzle_temp_min.is_some() {
-            self.nozzle_temp_min = incoming.nozzle_temp_min.clone();
-        }
-        if incoming.tray_diameter.is_some() {
-            self.tray_diameter = incoming.tray_diameter.clone();
-        }
-        if incoming.tray_weight.is_some() {
-            self.tray_weight = incoming.tray_weight.clone();
-        }
-        if incoming.tray_id_name.is_some() {
-            self.tray_id_name = incoming.tray_id_name.clone();
-        }
-        if incoming.tray_temp.is_some() {
-            self.tray_temp = incoming.tray_temp.clone();
-        }
-        if incoming.tray_time.is_some() {
-            self.tray_time = incoming.tray_time.clone();
-        }
-        if incoming.drying_temp.is_some() {
-            self.drying_temp = incoming.drying_temp.clone();
-        }
-        if incoming.drying_time.is_some() {
-            self.drying_time = incoming.drying_time.clone();
-        }
-        if incoming.bed_temp.is_some() {
-            self.bed_temp = incoming.bed_temp.clone();
-        }
-        if incoming.bed_temp_type.is_some() {
-            self.bed_temp_type = incoming.bed_temp_type.clone();
-        }
-        if incoming.xcam_info.is_some() {
-            self.xcam_info = incoming.xcam_info.clone();
-        }
-        if incoming.k.is_some() {
-            self.k = incoming.k;
-        }
-        if incoming.n.is_some() {
-            self.n = incoming.n;
-        }
-        if incoming.cali_idx.is_some() {
-            self.cali_idx = incoming.cali_idx;
-        }
-        if incoming.cols.is_some() {
-            self.cols = incoming.cols.clone();
-        }
-        if incoming.ctype.is_some() {
-            self.ctype = incoming.ctype;
-        }
-        if incoming.total_len.is_some() {
-            self.total_len = incoming.total_len;
-        }
-        if incoming.remain_g.is_some() {
-            self.remain_g = incoming.remain_g;
-        }
-        if incoming.filament_setting_id.is_some() {
-            self.filament_setting_id = incoming.filament_setting_id.clone();
-        }
+        keep_new(&mut self.state, state);
+        keep_new(&mut self.tray_type, tray_type);
+        keep_new(&mut self.tray_color, tray_color);
+        keep_new(&mut self.tray_info_idx, tray_info_idx);
+        keep_new(&mut self.tag_uid, tag_uid);
+        keep_new(&mut self.tray_uuid, tray_uuid);
+        keep_new(&mut self.remain, remain);
+        keep_new(&mut self.tray_sub_brands, tray_sub_brands);
+        keep_new(&mut self.nozzle_temp_max, nozzle_temp_max);
+        keep_new(&mut self.nozzle_temp_min, nozzle_temp_min);
+        keep_new(&mut self.tray_diameter, tray_diameter);
+        keep_new(&mut self.tray_weight, tray_weight);
+        keep_new(&mut self.tray_id_name, tray_id_name);
+        keep_new(&mut self.tray_temp, tray_temp);
+        keep_new(&mut self.tray_time, tray_time);
+        keep_new(&mut self.drying_temp, drying_temp);
+        keep_new(&mut self.drying_time, drying_time);
+        keep_new(&mut self.bed_temp, bed_temp);
+        keep_new(&mut self.bed_temp_type, bed_temp_type);
+        keep_new(&mut self.xcam_info, xcam_info);
+        keep_new(&mut self.k, k);
+        keep_new(&mut self.n, n);
+        keep_new(&mut self.cali_idx, cali_idx);
+        keep_new(&mut self.cols, cols);
+        keep_new(&mut self.ctype, ctype);
+        keep_new(&mut self.total_len, total_len);
+        keep_new(&mut self.remain_g, remain_g);
+        keep_new(&mut self.filament_setting_id, filament_setting_id);
     }
 }

@@ -2,15 +2,10 @@
 
 use std::io::{self, Write};
 
-use bambino::ams::clean_stale_tray_data;
-use bambino::diagnostics::{decode_hms_alert, decode_print_error};
-use bambino::quirks::{ModelQuirks, decode_fan_percentage};
-use bambino::types::{AmsTray, DeviceTelemetry, PrinterTelemetry, decode_nozzle_temperatures};
-use serde::Deserialize;
+use bambino::client::{FanTarget, PrintProgress, PrintSpeed, PrintStatus};
+use bambino::types::SdcardState;
 
-/// AMS-HT unit ids. Mirrors the library's `AMS_HT_ID_MIN..=AMS_HT_ID_MAX` (`ams/parser.rs`),
-/// which are crate-private.
-const AMS_HT_IDS: std::ops::RangeInclusive<u8> = 128..=135;
+use crate::connection::Printer;
 
 /// `write!`, ignoring the error — every `render_*` helper below targets an in-memory or
 /// raw-mode terminal writer where a failed write means the terminal session is gone, which
@@ -55,99 +50,39 @@ impl<W: Write> Write for RawWriter<W> {
     }
 }
 
-/// Recursively merges `incoming` into `target`: object keys merge key-by-key, everything else
-/// (arrays, scalars, a type change) is replaced wholesale.
+/// Redraws the dashboard from the client's cached telemetry.
 ///
-/// Bambu MQTT pushes are incremental — a push may update one sub-field of a nested
-/// object (e.g. `print.ams.tray_now`) without resending the rest of that object (e.g.
-/// `print.ams.ams`, the actual AMS unit/tray array). A flat `state.insert(key, value)` per
-/// top-level key treated every nested object as an atomic value, so a partial `ams` push wiped
-/// out the previously-accumulated `ams` array, hiding the whole AMS section on the dashboard
-/// until the next full push resent it.
-fn deep_merge(target: &mut serde_json::Value, incoming: &serde_json::Value) {
-    match (target, incoming) {
-        (serde_json::Value::Object(target_map), serde_json::Value::Object(incoming_map)) => {
-            for (key, value) in incoming_map {
-                deep_merge(
-                    target_map
-                        .entry(key.clone())
-                        .or_insert(serde_json::Value::Null),
-                    value,
-                );
-            }
-        }
-        (target, incoming) => {
-            *target = incoming.clone();
-        }
-    }
-}
-
-/// Merges a partial telemetry update into accumulated state, returning whether it carried
-/// anything the dashboard draws (`print` or `device`); `info`/`system`/`mc_print` pushes don't.
-pub(super) fn merge_update(
-    payload: &[u8],
-    state: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<bool, serde_json::Error> {
-    let v: serde_json::Value = serde_json::from_slice(payload)?;
-
-    let mut had_update = false;
-
-    if let Some(serde_json::Value::Object(print_obj)) = v.get("print") {
-        for (key, value) in print_obj {
-            deep_merge(
-                state.entry(key.clone()).or_insert(serde_json::Value::Null),
-                value,
-            );
-        }
-        had_update = true;
-    }
-
-    // H2/P2/X2 pushalls carry `device` inside `print`; older models send it at the top level
-    // (`types/telemetry/device.rs`). Merge the nested one first so a top-level `device` in the
-    // same payload takes precedence, as `TelemetryReport::device()` does.
-    let nested_device = v.get("print").and_then(|p| p.get("device"));
-    for device_obj in [nested_device, v.get("device")].into_iter().flatten() {
-        deep_merge(
-            state
-                .entry("_device".to_string())
-                .or_insert(serde_json::Value::Null),
-            device_obj,
-        );
-        had_update = true;
-    }
-
-    Ok(had_update)
-}
-
-/// Redraws the dashboard from accumulated state.
+/// Everything shown comes from `PrinterClient`'s typed accessors after `poll_telemetry()` has
+/// folded the latest frame in, so the dashboard shows exactly what a library consumer sees and
+/// inherits every decode fix (#600) instead of re-reading the raw JSON by wire name.
 ///
 /// `warning` is the monitor loop's most recent non-fatal diagnostic, rendered in the footer
 /// through the same [`RawWriter`] as everything else. It cannot go to `log::warn!`: the CLI's
 /// logger writes to the tty this dashboard has put in raw mode, so a record would land
 /// mid-screen at the current cursor with stair-stepped line breaks.
-pub(super) fn draw_dashboard(
-    state: &serde_json::Map<String, serde_json::Value>,
-    quirks: &ModelQuirks,
-    progress: bambino::client::PrintProgress,
-    bed: (u16, u16),
-    warning: Option<&str>,
-) {
+pub(super) fn draw_dashboard(printer: &Printer, warning: Option<&str>) {
     let mut w = RawWriter(io::stdout());
     dwrite!(w, "\x1B[1;1H\x1B[2J");
 
-    render_print_status(state, progress, &mut w);
-    render_nozzles(state, &mut w);
-    render_thermal(state, quirks, bed, &mut w);
-    render_fans_and_system(state, &mut w);
-    render_ams(state, &mut w);
-    render_external_spool(state, &mut w);
+    render_print_status(
+        printer.print_status(),
+        printer.subtask_name(),
+        printer.print_progress(),
+        (printer.print_speed(), printer.print_speed_magnitude()),
+        &mut w,
+    );
+    render_nozzles(printer, &mut w);
+    render_thermal(printer, &mut w);
+    render_fans_and_system(printer, &mut w);
+    render_ams(printer, &mut w);
+    render_external_spool(printer, &mut w);
 
     dwriteln!(
         w,
         "======================================================================="
     );
 
-    render_diagnostics(state, &mut w);
+    render_diagnostics(printer, &mut w);
 
     if let Some(warning) = warning {
         dwriteln!(w, "\n\x1B[33m! {}\x1B[0m", warning);
@@ -157,35 +92,22 @@ pub(super) fn draw_dashboard(
     w.flush().unwrap_or(());
 }
 
+/// `--` for an unobserved value.
+fn or_dash(value: Option<String>) -> String {
+    value.unwrap_or_else(|| "--".to_string())
+}
+
 fn render_print_status(
-    state: &serde_json::Map<String, serde_json::Value>,
-    progress: bambino::client::PrintProgress,
+    status: Option<PrintStatus>,
+    subtask_name: Option<&str>,
+    progress: PrintProgress,
+    (speed, magnitude): (Option<PrintSpeed>, Option<u16>),
     w: &mut impl Write,
 ) {
-    let gcode_state = state
-        .get("gcode_state")
-        .and_then(|s| s.as_str())
-        .unwrap_or("UNKNOWN");
-    let subtask_name = state
-        .get("subtask_name")
-        .and_then(|s| s.as_str())
-        .unwrap_or("None");
-    // Progress comes from the client's cache, not from `state`, because the wire key names
-    // differ from this crate's field names and reading the map by field name silently yields
-    // nothing: the percentage is `mc_percent` (not `progress` — the only `progress` keys on the
-    // wire are `upgrade_state.progress` and `upload.progress`, neither of which is print
-    // completion), and the total is `total_layer_num` (not `total_layers`, which is this
-    // crate's name for it and carries a serde alias that only applies to typed
-    // deserialization). Reading both by the wrong name is what rendered `0.0%  (516/0)` mid-print.
-    //
-    // Deferring to `PrinterClient::print_progress()` rather than correcting the two key names
-    // here also inherits its end-of-print guard: P1S firmware resets `total_layer_num` to 0 in
-    // the final frame, which a plain merge-and-read would show as `(879/0)` at 100%.
     let percent = progress.percent.unwrap_or(0);
     let layer_num = progress.layer_num.unwrap_or(0);
     let total_layers = progress.total_layers.unwrap_or(0);
-    let remaining_sec = progress.remaining_secs.unwrap_or(0) as i64;
-
+    let remaining_sec = i64::from(progress.remaining_secs.unwrap_or(0));
     let remaining_formatted = if remaining_sec > 0 {
         format!("{}m {}s", remaining_sec / 60, remaining_sec % 60)
     } else {
@@ -196,8 +118,18 @@ fn render_print_status(
         w,
         "================== Bambu Lab Printer Live Dashboard ==================="
     );
-    dwriteln!(w, "{:<20} : {}", "Operational State", gcode_state);
-    dwriteln!(w, "{:<20} : {}", "Active Job Name", subtask_name);
+    dwriteln!(
+        w,
+        "{:<20} : {}",
+        "Operational State",
+        or_dash(status.map(|s| format!("{s:?}")))
+    );
+    dwriteln!(
+        w,
+        "{:<20} : {}",
+        "Active Job Name",
+        subtask_name.unwrap_or("None")
+    );
     dwriteln!(
         w,
         "{:<20} : {}%  ({}/{})",
@@ -207,250 +139,174 @@ fn render_print_status(
         total_layers
     );
     dwriteln!(w, "{:<20} : {}", "Time Remaining", remaining_formatted);
-
-    let spd_label = match state.get("spd_lvl").and_then(|v| v.as_u64()) {
-        Some(1) => "Silent",
-        Some(2) => "Standard",
-        Some(3) => "Sport",
-        Some(4) => "Ludicrous",
-        _ => "--",
-    };
-    let spd_mag = state
-        .get("spd_mag")
-        .and_then(|v| v.as_u64())
-        .map(|m| format!("{}%", m))
-        .unwrap_or_else(|| "--".to_string());
-    dwriteln!(w, "{:<20} : {} ({})", "Print Speed", spd_label, spd_mag);
+    dwriteln!(
+        w,
+        "{:<20} : {} ({})",
+        "Print Speed",
+        or_dash(speed.map(|s| format!("{s:?}"))),
+        or_dash(magnitude.map(|m| format!("{m}%")))
+    );
 }
 
-struct NozzleEntry {
-    id: u64,
-    diameter: String,
-    ntype: String,
-    temp: String,
-}
-
-fn render_nozzles(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
-    let mut nozzles: Vec<NozzleEntry> = Vec::new();
-
-    if let Some(device_nozzles) = state
-        .get("_device")
-        .and_then(|d| d.get("nozzle"))
-        .and_then(|n| n.get("info"))
-        .and_then(|i| i.as_array())
-    {
-        for n in device_nozzles {
-            let id = n.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
-            if id >= 16 {
-                continue;
-            }
+fn render_nozzles(printer: &Printer, w: &mut impl Write) {
+    // Installed nozzles from `device.nozzle.info` (rack-stored spares excluded), else one
+    // nozzle 0; temperatures from the library's cross-model decode.
+    let mut rows: Vec<(u8, String)> = printer
+        .device()
+        .and_then(|d| d.nozzle.as_ref())
+        .and_then(|n| n.info.as_deref())
+        .unwrap_or(&[])
+        .iter()
+        .filter(|n| !n.is_rack_stored())
+        .map(|n| {
             let diameter = n
-                .get("diameter")
-                .and_then(|d| d.as_f64())
-                .map(|d| format!("{:.1}mm", d))
-                .unwrap_or_else(|| "--".to_string());
-            let ntype = n
-                .get("type")
-                .or_else(|| n.get("nozzle_type"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("--")
-                .to_string();
-            nozzles.push(NozzleEntry {
-                id,
-                diameter,
-                ntype,
-                temp: String::new(),
-            });
-        }
+                .diameter
+                .map_or_else(|| "--".to_string(), |d| format!("{d:.1}mm"));
+            let ntype = n.nozzle_type.as_deref().unwrap_or("--");
+            (n.id, format!("{diameter} {ntype}"))
+        })
+        .collect();
+    if rows.is_empty() {
+        let (diameter, ntype) = printer.legacy_nozzle();
+        rows.push((
+            0,
+            format!("{}mm {}", diameter.unwrap_or("--"), ntype.unwrap_or("--")),
+        ));
     }
-
-    if nozzles.is_empty() {
-        let diameter = state
-            .get("nozzle_diameter")
-            .and_then(|s| s.as_str())
-            .unwrap_or("--")
-            .to_string();
-        let ntype = state
-            .get("nozzle_type")
-            .and_then(|s| s.as_str())
-            .unwrap_or("--")
-            .to_string();
-        nozzles.push(NozzleEntry {
-            id: 0,
-            diameter: format!("{}mm", diameter),
-            ntype,
-            temp: String::new(),
-        });
-    }
-
-    // Populate temperatures from extruder.info (IDEX) or top-level fields
-    populate_nozzle_temps(state, &mut nozzles);
+    let temps = printer.nozzle_temperatures();
 
     dwriteln!(
         w,
         "\n--- Nozzles -----------------------------------------------------------"
     );
-    for row in nozzles.chunks(2) {
-        let mut cols: Vec<String> = Vec::new();
-        for n in row {
-            if n.temp.is_empty() {
-                cols.push(format!("#{}: {} {}", n.id, n.diameter, n.ntype));
-            } else {
-                cols.push(format!(
-                    "#{}: {} {} ({})",
-                    n.id, n.diameter, n.ntype, n.temp
-                ));
-            }
-        }
-        if cols.len() == 2 {
-            dwriteln!(w, "{:<34} │ {}", cols[0], cols[1]);
-        } else {
-            dwriteln!(w, "{}", cols[0]);
+    let cells: Vec<String> = rows
+        .iter()
+        .map(|(id, label)| match temps.iter().find(|t| t.id == *id) {
+            Some(t) => format!("#{id}: {label} ({}°C / T: {}°C)", t.actual, t.target),
+            None => format!("#{id}: {label}"),
+        })
+        .collect();
+    for pair in cells.chunks(2) {
+        match pair {
+            [a, b] => dwriteln!(w, "{:<34} │ {}", a, b),
+            [a] => dwriteln!(w, "{}", a),
+            _ => {}
         }
     }
 }
 
-fn populate_nozzle_temps(
-    state: &serde_json::Map<String, serde_json::Value>,
-    nozzles: &mut [NozzleEntry],
-) {
-    // Cross-model decode (device.extruder.info, or the flat nozzle_temper/nozzle_target_temper
-    // fields including the undocumented IDEX routing quirk) now lives in the library — see
-    // `bambino::types::decode_nozzle_temperatures`.
-    let device: Option<DeviceTelemetry> = state
-        .get("_device")
-        .and_then(|v| DeviceTelemetry::deserialize(v).ok());
-    let nozzle_act = state.get("nozzle_temper").and_then(|t| t.as_f64());
-    let nozzle_tgt = state.get("nozzle_target_temper").and_then(|t| t.as_f64());
-
-    for (id, actual, target) in decode_nozzle_temperatures(device.as_ref(), nozzle_act, nozzle_tgt)
-    {
-        if let Some(nozzle) = nozzles.iter_mut().find(|n| n.id == id as u64) {
-            nozzle.temp = format!("{}°C / T: {}°C", actual, target);
-        }
-    }
-}
-
-fn render_thermal(
-    state: &serde_json::Map<String, serde_json::Value>,
-    quirks: &ModelQuirks,
-    // From `PrinterClient::bed_temperatures()`, which decodes H2D-style `device.bed.info.temp`
-    // as well as the flat `bed_temper`/`bed_target_temper` pair.
-    (bed_act, bed_tgt): (u16, u16),
-    w: &mut impl Write,
-) {
+fn render_thermal(printer: &Printer, w: &mut impl Write) {
     dwriteln!(
         w,
         "\n--- Thermal -----------------------------------------------------------"
     );
+    let heater = |t: Option<bambino::client::HeaterTemps>| match t {
+        Some(t) => format!("{:>3}°C / {:>3}°C", t.actual, t.target),
+        None => "--".to_string(),
+    };
     dwriteln!(
         w,
-        "{:<20} : {:>3}°C / {:>3}°C",
+        "{:<20} : {}",
         "Heated Bed",
-        bed_act,
-        bed_tgt
+        heater(printer.bed_temperatures())
     );
-
-    if quirks.has_chamber_temperature_sensor() {
-        let chamber_temper = state
-            .get("chamber_temper")
-            .and_then(|t| t.as_f64())
-            .unwrap_or(0.0);
-        let (chamber_act, chamber_tgt) = PrinterTelemetry::unpack_temperature(chamber_temper);
+    if printer.quirks().has_chamber_temperature_sensor() {
         dwriteln!(
             w,
-            "{:<20} : {:>3}°C / {:>3}°C",
+            "{:<20} : {}",
             "Chamber",
-            chamber_act,
-            chamber_tgt
+            heater(printer.chamber_temperature())
         );
     }
 }
 
-fn render_fans_and_system(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
-    let fan_values = [
-        ("Part Cooling", get_fan_pct(state, "cooling_fan_speed")),
-        ("Aux Fan", get_fan_pct(state, "big_fan1_speed")),
-        ("Chamber Fan", get_fan_pct(state, "big_fan2_speed")),
-        ("Heatbreak Fan", get_fan_pct(state, "heatbreak_fan_speed")),
+fn render_fans_and_system(printer: &Printer, w: &mut impl Write) {
+    let pct = |v: Option<u8>| or_dash(v.map(|p| format!("{p}%")));
+    let quirks = printer.quirks();
+    let mut fans: Vec<(&str, String)> = vec![
+        (
+            "Part Cooling",
+            pct(printer.fan_speed(FanTarget::PartCooling)),
+        ),
+        ("Aux Fan", pct(printer.fan_speed(FanTarget::AuxiliaryLeft))),
+        (
+            "Chamber Fan",
+            pct(printer.fan_speed(FanTarget::ChamberExhaust)),
+        ),
+        ("Heatbreak Fan", pct(printer.heatbreak_fan_speed())),
     ];
+    if FanTarget::AuxiliaryLeft2.is_supported_by(quirks) {
+        fans.push((
+            "Aux Fan 2",
+            pct(printer.fan_speed(FanTarget::AuxiliaryLeft2)),
+        ));
+    }
 
-    let wifi = state
-        .get("wifi_signal")
-        .and_then(|s| s.as_str())
-        .unwrap_or("--");
-    let sdcard = match state.get("sdcard") {
-        Some(serde_json::Value::Bool(true)) => "Inserted",
-        Some(serde_json::Value::String(s)) if s.to_uppercase() == "HAS_SDCARD_NORMAL" => "Inserted",
-        Some(serde_json::Value::Number(n)) if n.as_i64().unwrap_or(0) != 0 => "Inserted",
-        Some(serde_json::Value::Bool(false)) | Some(serde_json::Value::Number(_)) => "Not Detected",
-        // An unrecognized string shape (e.g. an abnormal-state constant this dashboard doesn't
-        // know about yet) must not be masked as "--" the same as a genuinely-absent field —
-        // show it raw instead of silently discarding a real, if unrecognized, signal.
-        Some(serde_json::Value::String(s)) => s.as_str(),
-        _ => "--",
+    let sdcard = match printer.sdcard_status() {
+        Some(SdcardState::Normal) => "Inserted",
+        Some(SdcardState::NoSdcard) => "Not Detected",
+        Some(SdcardState::Abnormal) => "Abnormal",
+        Some(SdcardState::ReadOnly) => "Read-only",
+        None => "--",
     };
-    let ipcam = state.get("ipcam");
-    let recording = ipcam
-        .and_then(|i| i.get("ipcam_record"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("--");
-    let timelapse = ipcam
-        .and_then(|i| i.get("timelapse"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("--");
-
-    let sys_values = [
-        ("WiFi", wifi),
-        ("SD Card", sdcard),
-        ("Recording", recording),
-        ("Timelapse", timelapse),
+    let toggle = |v: Option<bool>| match v {
+        Some(true) => "enable",
+        Some(false) => "disable",
+        None => "--",
+    };
+    let ipcam = printer.ipcam();
+    let system: [(&str, String); 4] = [
+        ("WiFi", printer.wifi_signal().unwrap_or("--").to_string()),
+        ("SD Card", sdcard.to_string()),
+        (
+            "Recording",
+            toggle(ipcam.and_then(|i| i.recording())).to_string(),
+        ),
+        (
+            "Timelapse",
+            toggle(ipcam.and_then(|i| i.timelapse_enabled())).to_string(),
+        ),
     ];
 
     dwriteln!(
         w,
         "\n--- Fans & System -----------------------------------------------------"
     );
-    for i in 0..4 {
+    for i in 0..fans.len().max(system.len()) {
+        let (fan_label, fan_value) = fans.get(i).map_or(("", ""), |(l, v)| (*l, v.as_str()));
+        let (sys_label, sys_value) = system.get(i).map_or(("", ""), |(l, v)| (*l, v.as_str()));
         dwriteln!(
             w,
             "{:<14} : {:<6} {:>3} {:<14} : {}",
-            fan_values[i].0,
-            fan_values[i].1,
+            fan_label,
+            fan_value,
             "│",
-            sys_values[i].0,
-            sys_values[i].1
+            sys_label,
+            sys_value
         );
     }
 }
 
-fn render_ams(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
-    let Some(ams_array) = state
-        .get("ams")
-        .and_then(|a| a.get("ams"))
-        .and_then(|a| a.as_array())
-    else {
+fn render_ams(printer: &Printer, w: &mut impl Write) {
+    // `sanitized_ams()` applies the library's stale-tray rules, including AMS-HT's.
+    let Some(ams) = printer.sanitized_ams() else {
         return;
     };
-
-    for unit in ams_array {
-        let unit_id = json_as_str_or_num(unit.get("id"));
-        let temp = unit.get("temp").and_then(|t| t.as_str()).unwrap_or("--");
-        let humidity = json_as_parsed_u64(unit.get("humidity_raw"))
-            .map(|h| format!("{}%", h))
-            .unwrap_or_else(|| {
-                unit.get("humidity")
-                    .and_then(|h| h.as_str())
-                    .map(|s| format!("idx:{}", s))
-                    .unwrap_or_else(|| "--".to_string())
-            });
-
-        let dry_suffix = match json_as_parsed_u64(unit.get("dry_time")) {
+    for unit in &ams.ams {
+        let temp = unit.temp.as_deref().unwrap_or("--");
+        let humidity = unit
+            .humidity_raw
+            .as_deref()
+            .and_then(|h| h.trim().parse::<u64>().ok())
+            .map(|h| format!("{h}%"))
+            .or_else(|| unit.humidity.clone())
+            .unwrap_or_else(|| "--".to_string());
+        let dry_suffix = match unit.dry_time {
             Some(mins) if mins > 0 => {
                 let dry_temp = unit
-                    .get("dry_setting")
-                    .and_then(|ds| ds.get("dry_temperature"))
-                    .and_then(|t| t.as_i64())
+                    .dry_setting
+                    .as_ref()
+                    .and_then(|ds| ds.dry_temperature)
                     .filter(|t| *t > 0);
                 match dry_temp {
                     Some(t) => format!(" Drying: {}:{:02}@{}°C", mins / 60, mins % 60, t),
@@ -462,68 +318,41 @@ fn render_ams(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl W
 
         let header = format!(
             "\n--- AMS #{} ({}°C, RH:{}){}",
-            unit_id, temp, humidity, dry_suffix
+            unit.id, temp, humidity, dry_suffix
         );
         let pad = 71usize.saturating_sub(header.chars().count() - 1);
         dwriteln!(w, "{} {}", header, "-".repeat(pad));
 
-        if let Some(trays) = unit.get("tray").and_then(|t| t.as_array()) {
-            let mut table =
-                crate::table::Table::new(vec!["Slot", "Status", "Material", "Remaining"]);
-
-            // The unit id is a string on the wire; an unparsable one is treated as standard.
-            let ams_id: u8 = unit_id.parse().unwrap_or(0);
-            let is_ht = AMS_HT_IDS.contains(&ams_id);
-
-            for tray in trays {
-                let tray_id = json_as_str_or_num(tray.get("id"));
-
-                // Same absence rules the library's `sanitized_ams()` applies: a tray with no
-                // `state` key but real filament metadata is present, and AMS-HT states 9/10 are
-                // not emptiness signals. A tray this can't parse renders as "Unknown".
-                let Ok(mut parsed) = AmsTray::deserialize(tray) else {
-                    table.add_row(vec![&tray_id, "Unknown", "", ""]);
-                    continue;
-                };
-                clean_stale_tray_data(&mut parsed, ams_id);
-
-                let material = parsed.tray_type.as_deref().unwrap_or("");
-                let status = match parsed.state {
-                    Some(11) => "Loaded",
-                    Some(10) if !is_ht => "Present",
-                    _ if !material.is_empty() => "Present",
-                    Some(0 | 9 | 10) | None => "Empty",
-                    _ => "Unknown",
-                };
-
-                let remain = parsed
-                    .remain
-                    .filter(|r| *r >= 0)
-                    .map(|r| format!("{}%", r))
-                    .unwrap_or_default();
-
-                table.add_row(vec![&tray_id, status, material, &remain]);
-            }
-
-            table.write_to(w);
+        let Some(trays) = unit.tray.as_deref() else {
+            continue;
+        };
+        let ams_id = unit.ams_id();
+        let mut table = crate::table::Table::new(vec!["Slot", "Status", "Material", "Remaining"]);
+        for tray in trays {
+            let material = tray.material().unwrap_or("");
+            let status = match tray.state {
+                Some(11) => "Loaded",
+                _ if ams_id.is_some_and(|id| tray.is_loaded(id)) => "Present",
+                _ => "Empty",
+            };
+            let remain = tray
+                .remain_percent()
+                .map(|r| format!("{r}%"))
+                .unwrap_or_default();
+            table.add_row(vec![&tray.id, status, material, &remain]);
         }
+        table.write_to(w);
     }
 }
 
-fn render_external_spool(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
-    let Some(vt) = state.get("vt_tray") else {
+fn render_external_spool(printer: &Printer, w: &mut impl Write) {
+    let Some(vt) = printer.vt_tray() else {
         return;
     };
-    let tray_type = vt.get("tray_type").and_then(|t| t.as_str()).unwrap_or("");
-    if tray_type.is_empty() {
+    let Some(material) = vt.material() else {
         return;
-    }
-    let tray_color = vt.get("tray_color").and_then(|c| c.as_str()).unwrap_or("");
-    let nozzle_temp = vt
-        .get("nozzle_temp_max")
-        .and_then(|t| t.as_str())
-        .unwrap_or("--");
-    let color_swatch = format_color_swatch(tray_color);
+    };
+    let color_swatch = format_color_swatch(vt.tray_color.as_deref().unwrap_or(""));
     dwriteln!(
         w,
         "\n--- External Spool ----------------------------------------------------"
@@ -532,73 +361,35 @@ fn render_external_spool(state: &serde_json::Map<String, serde_json::Value>, w: 
         w,
         "{:<20} : {} {} (max {}°C)",
         "Material",
-        tray_type,
+        material,
         color_swatch,
-        nozzle_temp
+        vt.nozzle_temp_max.as_deref().unwrap_or("--")
     );
 }
 
-fn render_diagnostics(state: &serde_json::Map<String, serde_json::Value>, w: &mut impl Write) {
-    if let Some(err_val) = state.get("print_error").and_then(|e| e.as_u64())
-        && let Some(decoded_err) = decode_print_error(err_val as u32)
-        && decoded_err.is_genuine_fault
+fn render_diagnostics(printer: &Printer, w: &mut impl Write) {
+    if let Some(fault) = printer.active_fault()
+        && fault.is_genuine_fault
     {
         dwriteln!(
             w,
             "\x1B[1;31m[ACTIVE ERROR] Code: {}\x1B[0m",
-            decoded_err.short_code
+            fault.short_code
         );
     }
 
-    if let Some(hms_array) = state.get("hms").and_then(|h| h.as_array()) {
-        let mut active_hms = Vec::new();
-        for alert in hms_array {
-            if let (Some(attr), Some(code)) = (
-                alert.get("attr").and_then(|a| a.as_u64()),
-                alert.get("code").and_then(|c| c.as_u64()),
-            ) {
-                let decoded = decode_hms_alert(attr as u32, code as u32);
-                if decoded.is_genuine_fault {
-                    active_hms.push(decoded);
-                }
-            }
+    let alerts = printer.active_hms_alerts();
+    if !alerts.is_empty() {
+        dwriteln!(w, "Active Hardware Alerts:");
+        for decoded in &alerts {
+            dwriteln!(
+                w,
+                "  \x1B[1;33m[{}] Severity: {:?} (Module: {})\x1B[0m",
+                decoded.short_code,
+                decoded.severity,
+                decoded.module_id
+            );
         }
-
-        if !active_hms.is_empty() {
-            dwriteln!(w, "Active Hardware Alerts:");
-            for decoded in &active_hms {
-                dwriteln!(
-                    w,
-                    "  \x1B[1;33m[{}] Severity: {:?} (Module: {})\x1B[0m",
-                    decoded.short_code,
-                    decoded.severity,
-                    decoded.module_id
-                );
-            }
-        }
-    }
-}
-
-fn get_fan_pct(state: &serde_json::Map<String, serde_json::Value>, key: &str) -> String {
-    let raw = state.get(key).and_then(|v| v.as_str());
-    decode_fan_percentage(raw)
-        .map(|pct| format!("{}%", pct))
-        .unwrap_or_else(|| "--".to_string())
-}
-
-fn json_as_str_or_num(val: Option<&serde_json::Value>) -> String {
-    match val {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(serde_json::Value::Number(n)) => n.to_string(),
-        _ => "?".to_string(),
-    }
-}
-
-fn json_as_parsed_u64(val: Option<&serde_json::Value>) -> Option<u64> {
-    match val {
-        Some(serde_json::Value::Number(n)) => n.as_u64(),
-        Some(serde_json::Value::String(s)) => s.parse().ok(),
-        _ => None,
     }
 }
 
@@ -621,40 +412,6 @@ fn format_color_swatch(hex_color: &str) -> String {
     format!("\x1B[48;2;{};{};{}m  \x1B[0m", r, g, b)
 }
 
-#[cfg(test)]
-mod deep_merge_tests {
-    use super::deep_merge;
-
-    #[test]
-    fn test_deep_merge_preserves_sibling_object_keys() {
-        // A partial `ams` push (only `tray_now` changed) must not wipe the
-        // previously-accumulated `ams` array sitting alongside it in the same object.
-        let mut target = serde_json::json!({
-            "ams": { "ams": [{"id": "0"}], "tray_now": "0" }
-        });
-        let incoming = serde_json::json!({ "ams": { "tray_now": "1" } });
-        deep_merge(&mut target, &incoming);
-        assert_eq!(target["ams"]["ams"], serde_json::json!([{"id": "0"}]));
-        assert_eq!(target["ams"]["tray_now"], "1");
-    }
-
-    #[test]
-    fn test_deep_merge_replaces_arrays_wholesale() {
-        // A resent array is authoritative — element-wise merging would be wrong here.
-        let mut target = serde_json::json!({ "hms": [1, 2, 3] });
-        let incoming = serde_json::json!({ "hms": [4] });
-        deep_merge(&mut target, &incoming);
-        assert_eq!(target["hms"], serde_json::json!([4]));
-    }
-
-    #[test]
-    fn test_deep_merge_adds_new_keys() {
-        let mut target = serde_json::json!({ "a": 1 });
-        let incoming = serde_json::json!({ "b": 2 });
-        deep_merge(&mut target, &incoming);
-        assert_eq!(target, serde_json::json!({ "a": 1, "b": 2 }));
-    }
-}
 #[cfg(test)]
 mod format_color_swatch_tests {
     use super::format_color_swatch;
@@ -685,85 +442,32 @@ mod format_color_swatch_tests {
 #[cfg(test)]
 mod print_status_tests {
     use super::render_print_status;
+    use bambino::client::{PrintProgress, PrintSpeed, PrintStatus};
+
+    fn render(progress: PrintProgress) -> String {
+        let mut out: Vec<u8> = Vec::new();
+        render_print_status(
+            Some(PrintStatus::Running),
+            Some("JEFF+DOG"),
+            progress,
+            (Some(PrintSpeed::Standard), Some(100)),
+            &mut out,
+        );
+        String::from_utf8(out).expect("utf8")
+    }
 
     #[test]
-    fn test_print_progress_reads_client_cache_not_raw_wire_names() {
-        // Regression: this line rendered "0.0%  (516/0)" mid-print on a P1S. The percentage
-        // was read as `progress` and the total as `total_layers`, but the wire sends
-        // `mc_percent` and `total_layer_num` — and the only `progress` keys that exist on the
-        // wire are `upgrade_state.progress` and `upload.progress`, so the lookup found either
-        // nothing or an unrelated firmware-upgrade field. `layer_num` was right by accident,
-        // being the one name that matches the wire.
-        //
-        // The state map below is deliberately the *raw* shape, including a decoy
-        // `upload.progress` and no `progress`/`total_layers` keys at all, so a regression to
-        // map lookups fails here rather than silently reading zeros.
-        let state: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({
-                "gcode_state": "RUNNING",
-                "subtask_name": "JEFF+DOG",
-                "layer_num": 516,
-                "total_layer_num": 879,
-                "mc_percent": 68,
-                "mc_remaining_time": 99,
-                "upload": { "progress": 0 },
-                "upgrade_state": { "progress": "" },
-            }))
-            .expect("state fixture");
-
-        let progress = bambino::client::PrintProgress {
+    fn test_print_progress_renders_the_client_cache() {
+        let rendered = render(PrintProgress {
             percent: Some(68),
             // 99 wire minutes -> seconds, as `update_progress_cache` converts it.
             remaining_secs: Some(5940),
             layer_num: Some(516),
             total_layers: Some(879),
-        };
-
-        let mut out: Vec<u8> = Vec::new();
-        render_print_status(&state, progress, &mut out);
-        let rendered = String::from_utf8(out).expect("utf8");
-
-        assert!(
-            rendered.contains("68%  (516/879)"),
-            "expected percent and total from the client cache, got: {rendered}"
-        );
-        assert!(!rendered.contains("(516/0)"), "total_layers regressed to 0");
-        assert!(!rendered.contains("0%  ("), "percent regressed to 0");
-        assert!(
-            rendered.contains("99m 0s"),
-            "expected the 99-minute wire value rendered as 99m, got: {rendered}"
-        );
-    }
-
-    #[test]
-    fn test_print_progress_end_of_print_total_reset_does_not_show_zero() {
-        // P1S firmware resets total_layer_num to 0 in the end-of-print frame. The client's
-        // cache guards this (only positive values overwrite the last known total), so the
-        // dashboard must show the retained total rather than the 0 sitting in the merged map.
-        let state: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_value(serde_json::json!({
-                "gcode_state": "FINISH",
-                "subtask_name": "JEFF+DOG",
-                "layer_num": 879,
-                "total_layer_num": 0,
-                "mc_percent": 100,
-            }))
-            .expect("state fixture");
-
-        let progress = bambino::client::PrintProgress {
-            percent: Some(100),
-            remaining_secs: Some(0),
-            layer_num: Some(879),
-            total_layers: Some(879),
-        };
-
-        let mut out: Vec<u8> = Vec::new();
-        render_print_status(&state, progress, &mut out);
-        let rendered = String::from_utf8(out).expect("utf8");
-
-        assert!(
-            rendered.contains("100%  (879/879)"),
-            "end-of-print total must survive the firmware's 0, got: {rendered}"
-        );
+        });
+        assert!(rendered.contains("68%  (516/879)"), "{rendered}");
+        assert!(rendered.contains("99m 0s"), "{rendered}");
+        assert!(rendered.contains("Running"), "{rendered}");
+        assert!(rendered.contains("Standard (100%)"), "{rendered}");
     }
 }

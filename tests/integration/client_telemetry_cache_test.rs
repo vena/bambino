@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use bambino::client::HeaterTemps;
 use bambino::client::{PrintProgress, PrintSpeed, PrintStatus, PrinterClient, TelemetryEvent};
 use bambino::diagnostics::DecodedPrintError;
 use bambino::identity::PrinterIdentity;
@@ -261,6 +262,7 @@ async fn test_active_fault_cache_from_telemetry() {
     assert_eq!(
         client.active_fault(),
         Some(DecodedPrintError {
+            code: 0x0500_400C,
             short_code: "0500_400C".to_string(),
             module_id: 0x05,
             is_genuine_fault: true,
@@ -423,19 +425,31 @@ async fn test_bed_temperatures_cache_from_telemetry() {
     let mut client =
         connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
-    assert_eq!(client.bed_temperatures(), (0, 0));
+    assert_eq!(client.bed_temperatures(), None);
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse first bed temperature report");
-    assert_eq!(client.bed_temperatures(), (60, 65));
+    assert_eq!(
+        client.bed_temperatures(),
+        Some(HeaterTemps {
+            actual: 60,
+            target: 65
+        })
+    );
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse second bed temperature report");
-    assert_eq!(client.bed_temperatures(), (61, 65));
+    assert_eq!(
+        client.bed_temperatures(),
+        Some(HeaterTemps {
+            actual: 61,
+            target: 65
+        })
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -637,13 +651,27 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
     let mut client =
         connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
-    assert_eq!(client.nozzle_temperatures(), vec![(0, 0, 0)]);
+    assert_eq!(
+        client
+            .nozzle_temperatures()
+            .iter()
+            .map(|t| (t.id, t.actual, t.target))
+            .collect::<Vec<_>>(),
+        vec![]
+    );
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse nozzle temperature report");
-    assert_eq!(client.nozzle_temperatures(), vec![(0, 200, 210)]);
+    assert_eq!(
+        client
+            .nozzle_temperatures()
+            .iter()
+            .map(|t| (t.id, t.actual, t.target))
+            .collect::<Vec<_>>(),
+        vec![(0, 200, 210)]
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -764,7 +792,14 @@ async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse IDEX nozzle report");
-    assert_eq!(client.nozzle_temperatures(), vec![(0, 0, 220), (1, 100, 0)]);
+    assert_eq!(
+        client
+            .nozzle_temperatures()
+            .iter()
+            .map(|t| (t.id, t.actual, t.target))
+            .collect::<Vec<_>>(),
+        vec![(0, 0, 220), (1, 100, 0)]
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -814,12 +849,18 @@ async fn test_chamber_temperature_cache() {
     let mut heated_client =
         connect_test_client(TokioIo::new(client_stream2), SERIAL, PrinterModel::H2D).await;
 
-    assert_eq!(heated_client.chamber_temperature(), Some((0, 0)));
+    assert_eq!(heated_client.chamber_temperature(), None);
     heated_client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse chamber temperature report");
-    assert_eq!(heated_client.chamber_temperature(), Some((50, 60)));
+    assert_eq!(
+        heated_client.chamber_temperature(),
+        Some(HeaterTemps {
+            actual: 50,
+            target: 60
+        })
+    );
 
     broker_task.await.expect("Broker task panicked");
     broker_task2.await.expect("Broker task panicked");
@@ -942,19 +983,37 @@ async fn test_fan_speed_cache_from_telemetry() {
     let mut client =
         connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::H2D).await;
 
-    assert_eq!(client.part_cooling_fan_speed(), None);
-    assert_eq!(client.auxiliary_left2_fan_speed(), None);
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::PartCooling),
+        None
+    );
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        None
+    );
 
     client
         .poll_telemetry()
         .await
         .expect("poll_telemetry should parse fan speed report");
 
-    assert_eq!(client.part_cooling_fan_speed(), Some(100));
-    assert_eq!(client.auxiliary_left_fan_speed(), Some(53));
-    assert_eq!(client.chamber_exhaust_fan_speed(), Some(0));
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::PartCooling),
+        Some(100)
+    );
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft),
+        Some(53)
+    );
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::ChamberExhaust),
+        Some(0)
+    );
     assert_eq!(client.heatbreak_fan_speed(), Some(100));
-    assert_eq!(client.auxiliary_left2_fan_speed(), Some(75));
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        Some(75)
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -989,11 +1048,23 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
         .await
         .expect("poll_telemetry should parse fan speed report");
 
-    assert_eq!(client.part_cooling_fan_speed(), Some(100));
-    assert_eq!(client.auxiliary_left_fan_speed(), Some(53));
-    assert_eq!(client.chamber_exhaust_fan_speed(), Some(0));
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::PartCooling),
+        Some(100)
+    );
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft),
+        Some(53)
+    );
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::ChamberExhaust),
+        Some(0)
+    );
     assert_eq!(client.heatbreak_fan_speed(), Some(100));
-    assert_eq!(client.auxiliary_left2_fan_speed(), Some(75));
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        Some(75)
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1026,7 +1097,10 @@ async fn test_auxiliary_left2_fan_negative_state_is_none() {
         .await
         .expect("poll_telemetry should parse fan speed report");
 
-    assert_eq!(client.auxiliary_left2_fan_speed(), None);
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        None
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1063,7 +1137,10 @@ async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
         .await
         .expect("poll_telemetry should parse fan speed report");
 
-    assert_eq!(client.auxiliary_left2_fan_speed(), Some(50));
+    assert_eq!(
+        client.fan_speed(bambino::client::FanTarget::AuxiliaryLeft2),
+        Some(50)
+    );
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1241,14 +1318,11 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
         .await
         .expect("poll_telemetry should parse the home_flag report");
     assert_eq!(client.is_all_axes_homed(), Some(true));
-    assert_eq!(client.is_axis_homed('x'), Some(true));
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::X), Some(true));
     assert_eq!(client.is_220v_power(), Some(true));
     first_broker.await.expect("first broker task panicked");
 
-    client
-        .disconnect_mqtt()
-        .await
-        .expect("disconnect_mqtt is infallible");
+    client.disconnect_mqtt().await;
 
     // The disconnect's cause may be the very event that lost homing, and firmware re-sends
     // only *changed* fields — so a flag from the previous connection is not evidence about
@@ -1258,7 +1332,7 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
         None,
         "a home_flag observed on a previous connection must not read as a confident Some"
     );
-    assert_eq!(client.is_axis_homed('x'), None);
+    assert_eq!(client.is_axis_homed(bambino::client::Axis::X), None);
 
     // ...but the mains region is a fixed property of the physical printer, so it deliberately
     // does NOT share the homing accessors' fate. A "just clear the whole cache" refactor would
@@ -1285,8 +1359,7 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
         read_puback(&mut server_stream_2).await;
     });
 
-    let reconnected =
-        connect_test_mqtt(TokioIo::new(client_stream_2), SERIAL, PrinterModel::P1S).await;
+    let reconnected = connect_test_mqtt(TokioIo::new(client_stream_2), SERIAL).await;
     client.attach_mqtt(reconnected).await;
     assert_eq!(
         client.is_all_axes_homed(),
@@ -1342,7 +1415,7 @@ async fn test_lazy_connect_publishes_pushall_before_the_callers_own_command() {
     // Lazy connect: `home_axes` dials through `ensure_mqtt()`, which is where the pushall
     // belongs — the reconnect path in the bug report goes through it, not through an explicit
     // `connect_mqtt()`.
-    client.home_axes(false).await.expect("G28 homing failed");
+    client.home_all().await.expect("G28 homing failed");
 
     broker_task.await.expect("Broker task panicked");
 }

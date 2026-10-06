@@ -43,14 +43,11 @@ async fn test_homing_safety_interlocks() {
     assert_eq!(client_x1c.model(), PrinterModel::X1C);
 
     // Bed-on-Z Safety Guard Verification: home_z_only_danger must return ModelMismatch
-    let err_res = client_x1c.home_axes(true).await;
+    let err_res = client_x1c.home_z_only().await;
     assert!(matches!(err_res, Err(Error::ModelMismatch(_))));
 
     // Standard homing should succeed with bare G28
-    client_x1c
-        .home_axes(false)
-        .await
-        .expect("G28 homing failed");
+    client_x1c.home_all().await.expect("G28 homing failed");
 
     // Bed-Slinger initialization
     let (client_stream_a1, mut server_stream_a1) = tokio::io::duplex(8192);
@@ -71,7 +68,7 @@ async fn test_homing_safety_interlocks() {
 
     // Bed-Slingers do not share upward bed collision hazards; G28 Z homing is permitted
     client_a1
-        .home_axes(true)
+        .home_z_only()
         .await
         .expect("A1 Z-only homing failed");
 
@@ -110,11 +107,11 @@ async fn test_kinematic_and_extrusion_moves() {
     .await;
 
     client
-        .move_relative('z', 10.0, 3000)
+        .move_relative(bambino::client::Axis::Z, 10.0, 3000)
         .await
         .expect("Z move failed");
     client
-        .move_relative('x', -15.5, 6000)
+        .move_relative(bambino::client::Axis::X, -15.5, 6000)
         .await
         .expect("X move failed");
     client.extrude(10.0, 900).await.expect("Extrusion failed");
@@ -149,7 +146,7 @@ async fn test_move_relative_zero_distance_is_noop() {
     // not the misleading "exceeds model travel limits" error `relative_z_move_gcode` would
     // otherwise collapse it into (it returns the same empty string for zero and out-of-range).
     let z_result = client
-        .move_relative('z', 0.0, 3000)
+        .move_relative(bambino::client::Axis::Z, 0.0, 3000)
         .await
         .expect("zero-distance Z move should succeed as a no-op");
     assert_eq!(
@@ -159,7 +156,7 @@ async fn test_move_relative_zero_distance_is_noop() {
 
     // Zero-distance X move: same no-op contract, off the Z-only travel-limit code path.
     let x_zero_result = client
-        .move_relative('x', 0.0, 1000)
+        .move_relative(bambino::client::Axis::X, 0.0, 1000)
         .await
         .expect("zero-distance X move should succeed as a no-op");
     assert_eq!(
@@ -170,7 +167,7 @@ async fn test_move_relative_zero_distance_is_noop() {
     // Non-zero move on the same client still publishes normally, and its handle names exactly
     // what reached the wire (issue #283).
     let handle = client
-        .move_relative('x', 5.0, 1000)
+        .move_relative(bambino::client::Axis::X, 5.0, 1000)
         .await
         .expect("non-zero X move failed")
         .expect("a published move must return a handle");
@@ -202,7 +199,9 @@ async fn test_move_relative_z_still_rejects_out_of_range_distance() {
 
     // P1S z_max is 256.0mm — a non-zero distance exceeding that must still surface the
     // travel-limit error, confirming the zero-distance short-circuit didn't swallow this case.
-    let result = client.move_relative('z', 300.0, 3000).await;
+    let result = client
+        .move_relative(bambino::client::Axis::Z, 300.0, 3000)
+        .await;
     assert!(matches!(result, Err(Error::ModelMismatch(_))));
 
     drop(client);
@@ -227,33 +226,10 @@ async fn test_move_relative_x_rejects_out_of_range_distance() {
     )
     .await;
 
-    let result = client.move_relative('x', 300.0, 3000).await;
+    let result = client
+        .move_relative(bambino::client::Axis::X, 300.0, 3000)
+        .await;
     assert!(matches!(result, Err(Error::ModelMismatch(_))));
-
-    drop(client);
-    broker_task.await.expect("Broker task panicked");
-}
-
-#[tokio::test]
-async fn test_move_relative_rejects_invalid_axis() {
-    let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-
-    let broker_task = tokio::spawn(async move {
-        handle_mqtt_handshake(&mut server_stream).await;
-    });
-
-    let mut client = connect_test_client(
-        TokioIo::new(client_stream),
-        "01P000000000000",
-        PrinterModel::P1S,
-    )
-    .await;
-
-    // A non-X/Y/Z axis must be rejected as an invalid argument before any command is
-    // sent — not reported as a travel-limit error (the pre-validation behavior) and not
-    // dispatched to the wire.
-    let result = client.move_relative('q', 10.0, 3000).await;
-    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     drop(client);
     broker_task.await.expect("Broker task panicked");
@@ -724,14 +700,17 @@ async fn test_error_dialog_commands_reach_the_wire() {
         .expect("poll_telemetry failed");
 
     client
-        .ignore_error_and_resume(0x0500_C010)
+        .ignore_error_and_resume(0x0500_C010_u32)
         .await
         .expect("ignore");
     client
-        .dismiss_error(0x0500_C010, true)
+        .dismiss_error(0x0500_C010_u32, bambino::client::IdleIgnoreScope::Permanent)
         .await
         .expect("idle_ignore");
-    client.close_error_dialog(0x0500_C010).await.expect("uiop");
+    client
+        .close_error_dialog(0x0500_C010_u32)
+        .await
+        .expect("uiop");
     client.refresh_nozzle().await.expect("refresh_nozzle");
 
     broker_task.await.expect("Broker task panicked");

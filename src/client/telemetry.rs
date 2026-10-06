@@ -12,20 +12,24 @@ use crate::diagnostics::{
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::MqttMessage;
-use crate::quirks::decode_fan_percentage;
-use crate::types::telemetry::report::POWER_220V_BITMASK;
-use crate::types::telemetry::{decode_bed_temperatures, decode_nozzle_temperatures};
+use crate::types::control::FanTarget;
+use crate::types::telemetry::merge::{keep_new, merge_keyed, merge_opt};
+use crate::types::telemetry::{
+    FanStrings, HeaterTemps, NozzleTemps, bits, decode_bed_temperatures, decode_fan_percent,
+    decode_nozzle_temperatures, unpack_temperature,
+};
 use crate::types::{
-    AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, TelemetryReport,
-    VirtualTray, XcamTelemetry,
+    AmsStatusReport, DeviceTelemetry, HmsEntry, IpcamTelemetry, PrinterTelemetry, SdcardState,
+    TelemetryReport, VirtualTray, XcamTelemetry,
 };
 
 use super::PrinterClient;
 use super::command::{
-    AckExpectation, CommandHandle, CommandOutcome, CommandResolution, decode_verdict,
-    parse_command_echo,
+    AckExpectation, CommandHandle, CommandOutcome, CommandResolution, PUSH_STATUS_COMMAND,
+    decode_verdict, is_telemetry_command, parse_command_echo,
 };
-use super::types::{PrintProgress, PrintSpeed, PrintStatus, TelemetryEvent};
+use super::types::{PrintProgress, TelemetryEvent};
+use crate::types::control::{PrintSpeed, PrintStatus};
 
 /// Cached "last-observed" telemetry values, updated by `PrinterClient::poll_telemetry()`.
 /// Each field independently keeps its most recently observed value — a telemetry message
@@ -47,6 +51,10 @@ pub(crate) struct TelemetryCache {
     // Echoed back by the error-dialog commands (`ignore`, error-aware `resume`/`stop`), as
     // BambuStudio's `command_hms_*` do; `job_id` is sparse in telemetry, so it is cached.
     pub(crate) last_job_id: Option<String>,
+    pub(crate) last_subtask_name: Option<String>,
+    pub(crate) last_nozzle_diameter: Option<String>,
+    pub(crate) last_nozzle_type: Option<String>,
+    pub(crate) last_sdcard: Option<SdcardState>,
     pub(crate) last_progress: PrintProgress,
     pub(crate) last_bed_temper: Option<f64>,
     pub(crate) last_bed_target_temper: Option<f64>,
@@ -225,27 +233,27 @@ where
         }
         // No `ensure_mqtt()` before these: a known outcome (e.g. `ConnectionLost` after
         // `disconnect_mqtt()`) needs no connection, and `poll_until` connects on its own (#351).
-        if let Some(outcome) = self.commands.take_known(handle) {
+        if let Some(outcome) = self.core.commands.take_known(handle) {
             return Ok(outcome);
         }
-        if !self.commands.is_pending(handle) {
+        if !self.core.commands.is_pending(handle) {
             return Err(Error::InvalidArgument(
                 "no outcome held for this command handle".into(),
             ));
         }
         let result = self
-            .poll_until(|msg| {
+            .poll_until_command_timeout(|msg| {
                 let echo = parse_command_echo(&msg.payload)?;
                 handle.is_answered_by(&echo).then(|| decode_verdict(&echo))
             })
             .await;
         match result {
             Ok(outcome) => {
-                self.commands.forget(handle);
+                self.core.commands.forget(handle);
                 Ok(outcome)
             }
             Err(Error::Timeout) => {
-                self.commands.forget(handle);
+                self.core.commands.forget(handle);
                 Ok(CommandOutcome::TimedOut)
             }
             Err(e) => Err(e),
@@ -255,8 +263,8 @@ where
     /// Pops a command outcome that needs no message, recording it as delivered.
     fn next_unanswered_outcome(&mut self) -> Option<TelemetryEvent> {
         let now_ms = self.timer.has_real_clock().then(|| self.timer.now_millis());
-        let resolution = self.commands.next_unanswered(now_ms)?;
-        self.commands.remember(&resolution);
+        let resolution = self.core.commands.next_unanswered(now_ms)?;
+        self.core.commands.remember(&resolution);
         Some(TelemetryEvent::Command(resolution, None))
     }
 
@@ -270,16 +278,16 @@ where
                 .print
                 .as_ref()
                 .and_then(|print| print.command.as_deref())
-                .is_some_and(|command| matches!(command, "push_status" | "pushall"))
+                .is_some_and(is_telemetry_command)
         });
         if !is_push && let Some(echo) = parse_command_echo(&msg.payload) {
-            return match self.commands.take_answered(&echo) {
+            return match self.core.commands.take_answered(&echo) {
                 Some(handle) => {
                     let resolution = CommandResolution {
                         handle,
                         outcome: decode_verdict(&echo),
                     };
-                    self.commands.remember(&resolution);
+                    self.core.commands.remember(&resolution);
                     TelemetryEvent::Command(resolution, Some(msg))
                 }
                 None => TelemetryEvent::Unknown(msg),
@@ -299,17 +307,12 @@ where
     /// the previously-cached value in place (staleness is intentional; see the `last_*` field docs on
     /// the struct).
     fn update_telemetry_cache(&mut self, report: &TelemetryReport) {
-        if let Some(device) = report.device() {
-            // Merge field-by-field rather than replacing wholesale — see
-            // `DeviceTelemetry::merge_from`.
-            match &mut self.cache.last_device {
-                Some(cached) => cached.merge_from(device),
-                None => self.cache.last_device = Some(device.clone()),
-            }
-        }
+        // Merge field-by-field rather than replacing wholesale — see `DeviceTelemetry`'s
+        // `Mergeable` impl.
+        merge_opt(&mut self.core.cache.last_device, &report.device().cloned());
         // Read before the `print` early-return: both accessors check the top level too.
         if let Some(fun2) = report.fun2() {
-            self.cache.last_fun2 = Some(fun2.to_string());
+            self.core.cache.last_fun2 = Some(fun2.to_string());
         }
         let Some(print) = report.print.as_ref() else {
             return;
@@ -326,169 +329,152 @@ where
 
     fn update_state_cache(&mut self, print: &PrinterTelemetry) {
         if let Some(flag) = print.home_flag {
-            self.cache.last_home_flag = Some(flag);
-            self.cache.last_home_flag_generation = Some(self.connection_generation);
+            self.core.cache.last_home_flag = Some(flag);
+            self.core.cache.last_home_flag_generation = Some(self.core.connection_generation);
         }
-        if let Some(state) = &print.gcode_state {
-            self.cache.last_gcode_state = Some(state.clone());
-        }
+        keep_new(&mut self.core.cache.last_gcode_state, &print.gcode_state);
         // A frame without the door field leaves the last observed state in place.
         if let Some(open) = print.door_state(self.quirks().door_sensor()) {
-            self.cache.last_door_open = Some(open);
+            self.core.cache.last_door_open = Some(open);
         }
-        if let Some(print_error) = print.print_error {
-            self.cache.last_print_error = Some(print_error);
-        }
-        if let Some(job_id) = &print.job_id {
-            self.cache.last_job_id = Some(job_id.clone());
-        }
-        if let Some(hms) = &print.hms {
-            self.cache.last_hms = Some(hms.clone());
-        }
+        keep_new(&mut self.core.cache.last_print_error, &print.print_error);
+        keep_new(&mut self.core.cache.last_job_id, &print.job_id);
+        keep_new(&mut self.core.cache.last_subtask_name, &print.subtask_name);
+        keep_new(
+            &mut self.core.cache.last_nozzle_diameter,
+            &print.nozzle_diameter,
+        );
+        keep_new(&mut self.core.cache.last_nozzle_type, &print.nozzle_type);
+        keep_new(&mut self.core.cache.last_sdcard, &print.sdcard_status());
+        keep_new(&mut self.core.cache.last_hms, &print.hms);
         if print.reports_np_format() {
-            self.cache.last_np_format = Some(true);
-        } else if self.cache.last_np_format.is_none()
-            && print.command.as_deref() == Some("push_status")
+            self.core.cache.last_np_format = Some(true);
+        } else if self.core.cache.last_np_format.is_none()
+            && print.command.as_deref() == Some(PUSH_STATUS_COMMAND)
         {
-            self.cache.last_np_format = Some(false);
+            self.core.cache.last_np_format = Some(false);
         }
     }
 
     fn update_progress_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(percent) = print.mc_percent {
-            self.cache.last_progress.percent = Some(percent);
-        }
+        keep_new(
+            &mut self.core.cache.last_progress.percent,
+            &print.mc_percent,
+        );
         // `mc_remaining_time` is in minutes on the wire, not seconds — both BambuStudio
         // (`DeviceManager.cpp:3081-3086`) and bambuddy (`notification_service.py:1163-1169`)
         // multiply by 60 to reach a seconds value. Convert here so `remaining_secs` is honest
         // about its own name; storing the raw value understated every ETA by 60x.
         if let Some(remaining) = print.mc_remaining_time {
-            self.cache.last_progress.remaining_secs = Some(remaining.saturating_mul(60));
+            self.core.cache.last_progress.remaining_secs = Some(remaining.saturating_mul(60));
         }
-        if let Some(layer_num) = print.layer_num {
-            self.cache.last_progress.layer_num = Some(layer_num);
-        }
+        keep_new(
+            &mut self.core.cache.last_progress.layer_num,
+            &print.layer_num,
+        );
         // Some firmware (confirmed on P1S) resets total_layer_num to 0 in the end-of-print
         // frame — only positive values are real, so 0 must not clobber the last known total.
         if let Some(total_layers) = print.total_layers
             && total_layers > 0
         {
-            self.cache.last_progress.total_layers = Some(total_layers);
+            self.core.cache.last_progress.total_layers = Some(total_layers);
         }
     }
 
     fn update_temperature_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(bed_temper) = print.bed_temper {
-            self.cache.last_bed_temper = Some(bed_temper);
-        }
-        if let Some(bed_target_temper) = print.bed_target_temper {
-            self.cache.last_bed_target_temper = Some(bed_target_temper);
-        }
-        if let Some(nozzle_temper) = print.nozzle_temper {
-            self.cache.last_nozzle_temper = Some(nozzle_temper);
-        }
-        if let Some(nozzle_target_temper) = print.nozzle_target_temper {
-            self.cache.last_nozzle_target_temper = Some(nozzle_target_temper);
-        }
-        if let Some(chamber_temper) = print.chamber_temper {
-            self.cache.last_chamber_temper = Some(chamber_temper);
-        }
+        let cache = &mut self.core.cache;
+        keep_new(&mut cache.last_bed_temper, &print.bed_temper);
+        keep_new(&mut cache.last_bed_target_temper, &print.bed_target_temper);
+        keep_new(&mut cache.last_nozzle_temper, &print.nozzle_temper);
+        keep_new(
+            &mut cache.last_nozzle_target_temper,
+            &print.nozzle_target_temper,
+        );
+        keep_new(&mut cache.last_chamber_temper, &print.chamber_temper);
     }
 
     fn update_ams_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(ams) = &print.ams {
-            // Merge field-by-field rather than replacing wholesale — a partial
-            // `print.ams` push (confirmed via wire capture) can carry only a few fields with
-            // the unit/tray array omitted entirely; see `AmsStatusReport::merge_from`.
-            match &mut self.cache.last_ams {
-                Some(cached) => cached.merge_from(ams),
-                None => self.cache.last_ams = Some(ams.clone()),
-            }
-        }
-        if let Some(vt_tray) = &print.vt_tray {
-            // Merge field-by-field rather than replacing wholesale — VirtualTray shares
-            // AmsTray's wire schema, and a partial id-only push must not wipe cached
-            // tray_type/tray_color/etc.; see `VirtualTray::merge_from`.
-            match &mut self.cache.last_vt_tray {
-                Some(cached) => cached.merge_from(vt_tray),
-                None => self.cache.last_vt_tray = Some(vt_tray.clone()),
-            }
-        }
-        if let Some(incoming_vir_slot) = &print.vir_slot {
-            // Merge per-element by id rather than replacing the array wholesale — a partial
-            // array carrying only one IDEX extruder's entry must not drop the other cached
-            // entry; see `VirtualTray::merge_from`.
-            let cached_slots = self.cache.last_vir_slot.get_or_insert_with(Vec::new);
-            for incoming_slot in incoming_vir_slot {
-                match cached_slots.iter_mut().find(|s| s.id == incoming_slot.id) {
-                    Some(cached_slot) => cached_slot.merge_from(incoming_slot),
-                    None => cached_slots.push(incoming_slot.clone()),
-                }
-            }
+        let cache = &mut self.core.cache;
+        // Merged field-by-field rather than replaced wholesale: a partial `print.ams` push
+        // (confirmed via wire capture) can carry only a few fields with the unit/tray array
+        // omitted entirely, and a partial id-only `vt_tray` push must not wipe cached
+        // tray_type/tray_color/etc.
+        merge_opt(&mut cache.last_ams, &print.ams);
+        merge_opt(&mut cache.last_vt_tray, &print.vt_tray);
+        // Per element by id, so a partial array carrying only one IDEX extruder's entry doesn't
+        // drop the other cached entry.
+        if let Some(incoming) = &print.vir_slot {
+            let cached = cache.last_vir_slot.get_or_insert_with(Vec::new);
+            merge_keyed(cached, incoming, |slot| slot.id.clone());
         }
     }
 
     fn update_fan_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(v) = &print.cooling_fan_speed {
-            self.cache.last_cooling_fan_speed = Some(v.clone());
-        }
-        if let Some(v) = &print.big_fan1_speed {
-            self.cache.last_big_fan1_speed = Some(v.clone());
-        }
-        if let Some(v) = &print.big_fan2_speed {
-            self.cache.last_big_fan2_speed = Some(v.clone());
-        }
-        if let Some(v) = &print.heatbreak_fan_speed {
-            self.cache.last_heatbreak_fan_speed = Some(v.clone());
-        }
+        let cache = &mut self.core.cache;
+        keep_new(&mut cache.last_cooling_fan_speed, &print.cooling_fan_speed);
+        keep_new(&mut cache.last_big_fan1_speed, &print.big_fan1_speed);
+        keep_new(&mut cache.last_big_fan2_speed, &print.big_fan2_speed);
+        keep_new(
+            &mut cache.last_heatbreak_fan_speed,
+            &print.heatbreak_fan_speed,
+        );
     }
 
     fn update_speed_and_signal_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(spd_lvl) = print.spd_lvl {
-            self.cache.last_spd_lvl = Some(spd_lvl);
-        }
-        if let Some(spd_mag) = print.spd_mag {
-            self.cache.last_spd_mag = Some(spd_mag);
-        }
-        if let Some(wifi_signal) = &print.wifi_signal {
-            self.cache.last_wifi_signal = Some(wifi_signal.clone());
-        }
-        if let Some(net) = &print.net
-            && let Some(conf) = net.conf
-        {
-            self.cache.last_net_conf = Some(conf);
-        }
+        let cache = &mut self.core.cache;
+        keep_new(&mut cache.last_spd_lvl, &print.spd_lvl);
+        keep_new(&mut cache.last_spd_mag, &print.spd_mag);
+        keep_new(&mut cache.last_wifi_signal, &print.wifi_signal);
+        keep_new(
+            &mut cache.last_net_conf,
+            &print.net.as_ref().and_then(|net| net.conf),
+        );
     }
 
     fn update_ipcam_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(ipcam) = &print.ipcam {
-            // Merge field-by-field rather than replacing wholesale — see
-            // `IpcamTelemetry::merge_from`.
-            match &mut self.cache.last_ipcam {
-                Some(cached) => cached.merge_from(ipcam),
-                None => self.cache.last_ipcam = Some(ipcam.clone()),
-            }
-        }
+        merge_opt(&mut self.core.cache.last_ipcam, &print.ipcam);
     }
 
     fn update_xcam_cache(&mut self, print: &PrinterTelemetry) {
-        if let Some(xcam) = &print.xcam {
-            // Merge field-by-field rather than replacing wholesale — see
-            // `XcamTelemetry::merge_from`.
-            match &mut self.cache.last_xcam {
-                Some(cached) => cached.merge_from(xcam),
-                None => self.cache.last_xcam = Some(xcam.clone()),
-            }
-        }
+        merge_opt(&mut self.core.cache.last_xcam, &print.xcam);
     }
 
     /// Returns the printer's high-level activity classification as of the last-observed `gcode_state` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// `None` means no telemetry carrying `gcode_state` has been observed yet.
     pub fn print_status(&self) -> Option<PrintStatus> {
-        self.cache
+        self.core
+            .cache
             .last_gcode_state
             .as_deref()
             .map(PrintStatus::from_gcode_state)
+    }
+
+    /// Returns the active job's name (`subtask_name`) as of the last-observed telemetry; `None` before any carried it.
+    pub fn subtask_name(&self) -> Option<&str> {
+        self.core.cache.last_subtask_name.as_deref()
+    }
+
+    /// Returns the legacy single-nozzle `(nozzle_diameter, nozzle_type)` strings as of the last-observed telemetry.
+    ///
+    /// Pre-IDEX models report the fitted nozzle this way; newer ones report per-nozzle entries
+    /// under [`device()`](Self::device) instead.
+    pub fn legacy_nozzle(&self) -> (Option<&str>, Option<&str>) {
+        (
+            self.core.cache.last_nozzle_diameter.as_deref(),
+            self.core.cache.last_nozzle_type.as_deref(),
+        )
+    }
+
+    /// Returns the SD-card state as of the last-observed telemetry that carried one — see [`PrinterTelemetry::sdcard_status`].
+    pub fn sdcard_status(&self) -> Option<SdcardState> {
+        self.core.cache.last_sdcard
+    }
+
+    /// Returns the merged `device` telemetry (nozzles, extruders, airduct, chamber controller) as of the last-observed telemetry.
+    ///
+    /// `None` before any telemetry carried a `device` object, from either wire location.
+    pub fn device(&self) -> Option<&DeviceTelemetry> {
+        self.core.cache.last_device.as_ref()
     }
 
     /// Returns whether the door was open as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
@@ -498,7 +484,7 @@ where
     /// sensor-equipped model's telemetry confirms the door is closed. Also `None` before any
     /// telemetry carrying the model's door field has been observed.
     pub fn is_door_open(&self) -> Option<bool> {
-        self.cache.last_door_open
+        self.core.cache.last_door_open
     }
 
     /// Returns the printer's mains region as of the last-observed `home_flag` telemetry.
@@ -508,9 +494,7 @@ where
     /// [`PrinterClient::quirks()`](super::PrinterClient::quirks)) to read a printer's bed
     /// ceiling before issuing a command; `set_bed_temperature` uses this same accessor.
     pub fn is_220v_power(&self) -> Option<bool> {
-        self.cache
-            .last_home_flag
-            .map(|flag| flag & POWER_220V_BITMASK != 0)
+        self.core.cache.last_home_flag.map(bits::is_220v)
     }
 
     /// Returns the decoded active print-error fault as of the last-observed `print_error` telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
@@ -519,27 +503,26 @@ where
     /// register reads 0 (no fault)" — both warrant the same caller action, so they are not
     /// distinguished here.
     pub fn active_fault(&self) -> Option<DecodedPrintError> {
-        decode_print_error(self.cache.last_print_error?)
+        decode_print_error(self.core.cache.last_print_error?)
     }
 
     /// Returns the print progress snapshot as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// Each field independently tracks its own "last observed" value — see [`PrintProgress`]'s doc
     /// comment.
     pub fn print_progress(&self) -> PrintProgress {
-        self.cache.last_progress
+        self.core.cache.last_progress
     }
 
-    /// Returns the bed's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-    /// Returns `(0, 0)` before any telemetry carrying bed temperature has been observed.
+    /// Returns the bed's temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)); `None` before any telemetry carrying them.
     ///
     /// Shares its cross-model decode logic with
     /// [`TelemetryReport::bed_temperatures()`](crate::types::TelemetryReport::bed_temperatures) —
     /// use that method instead if you already have a fresh `TelemetryReport` in hand.
-    pub fn bed_temperatures(&self) -> (u16, u16) {
+    pub fn bed_temperatures(&self) -> Option<HeaterTemps> {
         decode_bed_temperatures(
-            self.cache.last_device.as_ref(),
-            self.cache.last_bed_temper,
-            self.cache.last_bed_target_temper,
+            self.core.cache.last_device.as_ref(),
+            self.core.cache.last_bed_temper,
+            self.core.cache.last_bed_target_temper,
         )
     }
 
@@ -567,7 +550,7 @@ where
     ///   [`hms()`](Self::hms)/[`active_hms_alerts()`](Self::active_hms_alerts)'s raw-cache +
     ///   opt-in-decoded accessor split.
     pub fn ams(&self) -> Option<&AmsStatusReport> {
-        self.cache.last_ams.as_ref()
+        self.core.cache.last_ams.as_ref()
     }
 
     /// Returns the global tray ID of the spool currently feeding the active extruder, as of
@@ -580,7 +563,7 @@ where
     /// on single-nozzle models, which may not populate this sub-object at all) or the active
     /// extruder's `snow` is the unmapped sentinel.
     pub fn printing_tray_global_id(&self) -> Option<u8> {
-        let extruder = self.cache.last_device.as_ref()?.extruder.as_ref()?;
+        let extruder = self.core.cache.last_device.as_ref()?.extruder.as_ref()?;
         let active_idx = extruder.active_extruder_index();
         let info = extruder
             .info
@@ -600,7 +583,7 @@ where
     /// keeps returning the raw values; see its doc comment for why the raw cache is never
     /// proactively scrubbed.
     pub fn sanitized_ams(&self) -> Option<AmsStatusReport> {
-        let mut sanitized = self.cache.last_ams.clone()?;
+        let mut sanitized = self.core.cache.last_ams.clone()?;
         for unit in &mut sanitized.ams {
             // A non-numeric id can't be placed on the bus, so there is no rule to clean it by;
             // treating it as unit 0 used to apply standard-AMS rules to whatever it was.
@@ -620,52 +603,52 @@ where
     /// `None` means no telemetry carrying `print.vt_tray` has been observed yet — including on IDEX
     /// models, which send [`vir_slot()`](Self::vir_slot) instead.
     pub fn vt_tray(&self) -> Option<&VirtualTray> {
-        self.cache.last_vt_tray.as_ref()
+        self.core.cache.last_vt_tray.as_ref()
     }
 
     /// Returns the cached IDEX external spool holder array as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// `None` means no telemetry carrying `print.vir_slot` has been observed yet — including on
     /// single-nozzle models, which send [`vt_tray()`](Self::vt_tray) instead.
     pub fn vir_slot(&self) -> Option<&[VirtualTray]> {
-        self.cache.last_vir_slot.as_deref()
+        self.core.cache.last_vir_slot.as_deref()
     }
 
-    /// Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)) as `(id, actual, target)` tuples in °C.
+    /// Returns the nozzle temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)), one entry per nozzle; empty before any telemetry carrying them.
+    ///
     /// Single-nozzle models return one entry (`id` 0); IDEX models return one entry per physical
-    /// nozzle. See [`decode_nozzle_temperatures`] for the cross-model decode (including the
-    /// undocumented IDEX flat-field routing quirk).
-    pub fn nozzle_temperatures(&self) -> Vec<(u8, u16, u16)> {
+    /// nozzle. Same decode as
+    /// [`TelemetryReport::nozzle_temperatures()`](crate::types::TelemetryReport::nozzle_temperatures),
+    /// including the undocumented IDEX flat-field routing quirk.
+    pub fn nozzle_temperatures(&self) -> Vec<NozzleTemps> {
         decode_nozzle_temperatures(
-            self.cache.last_device.as_ref(),
-            self.cache.last_nozzle_temper,
-            self.cache.last_nozzle_target_temper,
+            self.core.cache.last_device.as_ref(),
+            self.core.cache.last_nozzle_temper,
+            self.core.cache.last_nozzle_target_temper,
         )
     }
 
-    /// Returns the chamber's (actual, target) temperatures in °C, decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
+    /// Returns the chamber's temperatures as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     ///
-    /// Returns `None` on models without an active chamber temperature sensor/heater
-    /// (`ModelQuirks::has_chamber_temperature_sensor()` returns `false`, e.g. A1/A1 Mini/A2L/P1P/
-    /// P1S). `Some((0, 0))` before any telemetry carrying `chamber_temper` has been observed on a
-    /// chamber-equipped model.
-    pub fn chamber_temperature(&self) -> Option<(u16, u16)> {
+    /// `None` on models without a chamber temperature sensor
+    /// (`ModelQuirks::has_chamber_temperature_sensor()` is `false`, e.g. A1/A1 Mini/A2L/P1P/
+    /// P1S), and before any telemetry carrying `chamber_temper` has been observed.
+    pub fn chamber_temperature(&self) -> Option<HeaterTemps> {
         if !self.quirks().has_chamber_temperature_sensor() {
             return None;
         }
-        let raw = self.cache.last_chamber_temper.unwrap_or(0.0);
-        Some(PrinterTelemetry::unpack_temperature(raw))
+        self.core.cache.last_chamber_temper.map(unpack_temperature)
     }
 
     /// Returns the cached active hardware-alert (HMS) entries as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// `None` means no telemetry carrying `print.hms` has been observed yet.
     pub fn hms(&self) -> Option<&[HmsEntry]> {
-        self.cache.last_hms.as_deref()
+        self.core.cache.last_hms.as_deref()
     }
 
     /// Returns the cached camera/recording state as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// `None` means no telemetry carrying `print.ipcam` has been observed yet.
     pub fn ipcam(&self) -> Option<&IpcamTelemetry> {
-        self.cache.last_ipcam.as_ref()
+        self.core.cache.last_ipcam.as_ref()
     }
 
     /// Returns the cached AI-detection and print-option settings as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
@@ -675,14 +658,15 @@ where
     /// is not evidence the model lacks these settings. Use
     /// [`XcamTelemetry::supports_ai_monitoring`] for that question instead.
     pub fn xcam(&self) -> Option<&XcamTelemetry> {
-        self.cache.last_xcam.as_ref()
+        self.core.cache.last_xcam.as_ref()
     }
 
     /// Returns every cached HMS entry decoded and filtered to genuine faults (mirrors `active_fault()`'s raw-cache-decode-on-access shape).
     /// Empty when nothing is cached or nothing currently decodes as a genuine fault — there's no caller
     /// action that would differ between those two cases.
     pub fn active_hms_alerts(&self) -> Vec<DecodedHmsAlert> {
-        self.cache
+        self.core
+            .cache
             .last_hms
             .as_deref()
             .unwrap_or(&[])
@@ -692,87 +676,53 @@ where
             .collect()
     }
 
-    /// Returns the part-cooling fan speed (Port 1) as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
-    pub fn part_cooling_fan_speed(&self) -> Option<u8> {
-        self.decode_fan_speed(self.cache.last_cooling_fan_speed.as_deref())
-    }
-
-    /// Returns the primary left-side auxiliary fan speed (Port 2) as a percentage (0-100).
-    pub fn auxiliary_left_fan_speed(&self) -> Option<u8> {
-        self.decode_fan_speed(self.cache.last_big_fan1_speed.as_deref())
-    }
-
-    /// Returns the chamber exhaust/filtration fan speed (Port 3) as a percentage (0-100).
-    pub fn chamber_exhaust_fan_speed(&self) -> Option<u8> {
-        self.decode_fan_speed(self.cache.last_big_fan2_speed.as_deref())
+    /// Returns `fan`'s speed as a percentage (0-100), decoded from the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)); `None` before any telemetry carrying it.
+    ///
+    /// [`FanTarget::AuxiliaryLeft2`] (X2D/P2S, port 10) reports at a different wire location
+    /// than the other three — `device.airduct.parts[id=160].state`, already a percentage
+    /// [REF-CLIM-FANS] — which this handles.
+    pub fn fan_speed(&self, fan: FanTarget) -> Option<u8> {
+        let cache = &self.core.cache;
+        let strings = FanStrings {
+            part_cooling: cache.last_cooling_fan_speed.as_deref(),
+            aux_left: cache.last_big_fan1_speed.as_deref(),
+            chamber_exhaust: cache.last_big_fan2_speed.as_deref(),
+        };
+        decode_fan_percent(fan, strings, cache.last_device.as_ref())
     }
 
     /// Returns the toolhead heatbreak fan speed as a percentage (0-100).
+    ///
     /// Not independently controllable (no corresponding `FanTarget` variant/M106 port) — read-only
     /// telemetry.
     pub fn heatbreak_fan_speed(&self) -> Option<u8> {
-        self.decode_fan_speed(self.cache.last_heatbreak_fan_speed.as_deref())
-    }
-
-    /// Returns the X2D/P2S second left-side auxiliary fan speed (Port 10, `FanTarget::AuxiliaryLeft2`) as a percentage (0-100).
-    /// Reported at a different wire location than the other four fans —
-    /// `device.airduct.parts[id=160].state` — already a direct percentage, no 0-15 step conversion
-    /// [REF-CLIM-FANS].
-    pub fn auxiliary_left2_fan_speed(&self) -> Option<u8> {
-        let state = self
-            .cache
-            .last_device
-            .as_ref()?
-            .airduct
-            .as_ref()?
-            .parts
-            .as_deref()
-            .unwrap_or(&[])
-            .iter()
-            .find(|part| part.id == super::types::FAN_READ_PORT_AUXILIARY_LEFT2)?
-            .state?;
-        // Two distinct wire shapes, both real, and the fix for each broke the other once
-        // (issues #31 then #184) before they were combined here — order matters:
-        //
-        // 1. A negative state is a firmware sentinel for "off/unknown". It must be rejected
-        //    *before* the mask, since `-1 & 0xFF == 255`, which would clamp to a bogus 100%.
-        // 2. A non-negative state may be bit-packed, with the percentage in the low byte and
-        //    flags above it. BambuStudio's `DevFan::ParseV3_0` applies `get_flag_bits(state,
-        //    0, 8)` unconditionally to every airduct part, and bambuddy independently does the
-        //    same `int(part["state"]) & 0xFF`. Without the mask a packed `306` clamps to 100
-        //    instead of decoding to its real 50.
-        //
-        // None on the sentinel matches decode_fan_percentage's None on an unparseable value.
-        if state < 0 {
-            return None;
-        }
-        Some((state & 0xFF).clamp(0, 100) as u8)
-    }
-
-    fn decode_fan_speed(&self, raw: Option<&str>) -> Option<u8> {
-        decode_fan_percentage(raw)
+        crate::quirks::decode_fan_percentage(self.core.cache.last_heatbreak_fan_speed.as_deref())
     }
 
     /// Returns the printer's current print-speed level as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     /// `None` before any telemetry carrying `spd_lvl` has been observed, or if the observed value is
     /// out of the known 1-4 range.
     pub fn print_speed(&self) -> Option<PrintSpeed> {
-        PrintSpeed::from_level(self.cache.last_spd_lvl?)
+        PrintSpeed::from_level(self.core.cache.last_spd_lvl?)
     }
 
     /// Returns the printer's current print-speed magnitude (percentage of nominal feedrate) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     pub fn print_speed_magnitude(&self) -> Option<u16> {
-        self.cache.last_spd_mag
+        self.core.cache.last_spd_mag
     }
 
     /// Returns the raw wireless signal strength string (e.g. `"-52dBm"`) as of the last-observed telemetry (via [`poll_telemetry()`](Self::poll_telemetry)).
     pub fn wifi_signal(&self) -> Option<&str> {
-        self.cache.last_wifi_signal.as_deref()
+        self.core.cache.last_wifi_signal.as_deref()
     }
 
     /// Returns whether the printer is on wired Ethernet, per the cached `wifi_signal` sentinel (mirrors `PrinterTelemetry::is_ethernet_active_via_wifi_signal()` but works between polls off the cached value, the same way [`is_all_axes_homed()`](Self::is_all_axes_homed) works off cached `home_flag`).
     pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
-        self.cache.last_wifi_signal.as_deref() == Some("-90dBm")
+        self.core
+            .cache
+            .last_wifi_signal
+            .as_deref()
+            .is_some_and(bits::is_wired_wifi_signal)
     }
 
     /// Returns whether the printer is on wired Ethernet, per the cached `print.net.conf` bit 0
@@ -781,7 +731,47 @@ where
     /// value. `false` before any telemetry carrying `print.net.conf` has been observed; prefer
     /// `is_ethernet_active_via_wifi_signal()` as a fallback for firmware that doesn't send it.
     pub fn is_ethernet_active(&self) -> bool {
-        self.cache.last_net_conf.is_some_and(|conf| conf & 0x1 != 0)
+        self.core.cache.last_net_conf.is_some_and(bits::is_wired)
+    }
+
+    /// Polls telemetry until `done` holds for this client's cache, or `timeout` passes; returns whether `done` was reached.
+    ///
+    /// `done` is checked before each poll, so an already-satisfied condition returns at once
+    /// without touching the wire. Events read along the way update the cache as
+    /// [`poll_telemetry()`](Self::poll_telemetry) always does, and are otherwise dropped — use
+    /// `poll_telemetry()` directly to see them.
+    ///
+    /// `timeout` is measured on this client's timer and checked between messages, so on a link
+    /// that goes silent the wait can overrun it by up to one read deadline (30s). Without a real
+    /// clock ([`with_timer()`](Self::with_timer)) the elapsed time can't be measured and the
+    /// wait ends after the same 200-message backstop `get_version()` uses.
+    pub async fn poll_telemetry_until(
+        &mut self,
+        timeout: core::time::Duration,
+        mut done: impl FnMut(&Self) -> bool,
+    ) -> Result<bool, Error> {
+        let mut wait = super::WaitBudget::start(&self.timer, Some(timeout));
+        loop {
+            if done(self) {
+                return Ok(true);
+            }
+            self.poll_telemetry().await?;
+            if let Err(Error::Timeout) = wait.after_message(&self.timer) {
+                return Ok(done(self));
+            }
+        }
+    }
+
+    /// Requests a full state dump and waits until the cache holds a `gcode_state`, or `timeout` passes; returns whether it does.
+    ///
+    /// A `pushall` reply carries `gcode_state`, so this waits for the reply on a cold cache; on a
+    /// cache that already holds one it returns at once without waiting for the new dump. For
+    /// a field that only some frames carry (an AMS unit's type, say), follow this with
+    /// [`poll_telemetry_until()`](Self::poll_telemetry_until) on that field.
+    pub async fn refresh_state(&mut self, timeout: core::time::Duration) -> Result<bool, Error> {
+        self.request_pushall().await?;
+        self.poll_telemetry_until(timeout, |client| client.print_status().is_some())
+            .await
     }
 
     /// Pulls the next raw MQTT message without deserialization.

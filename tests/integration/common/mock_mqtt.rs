@@ -48,6 +48,42 @@ fn encode_remaining_length(mut len: usize) -> Vec<u8> {
     bytes
 }
 
+/// Bits 1-2 of a PUBLISH fixed header: the QoS level (mirrors the client codec's mask).
+const PUBLISH_QOS_MASK: u8 = 0b0000_0110;
+
+/// Builds a QoS 1 PUBLISH frame — the one encoder both [`send_publish_payload`] and the broker use.
+pub fn build_publish(topic: &str, packet_id: u16, payload: &[u8]) -> Vec<u8> {
+    let mut body = Vec::with_capacity(4 + topic.len() + payload.len());
+    body.extend_from_slice(&(topic.len() as u16).to_be_bytes());
+    body.extend_from_slice(topic.as_bytes());
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    body.extend_from_slice(payload);
+    let mut packet = vec![HEADER_PUBLISH_QOS1];
+    packet.extend_from_slice(&encode_remaining_length(body.len()));
+    packet.extend(body);
+    packet
+}
+
+/// Splits a PUBLISH body (after the fixed header) into topic, packet id (QoS 1+) and payload.
+pub fn parse_publish(header: u8, body: &[u8]) -> (&str, Option<u16>, &[u8]) {
+    let topic_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let topic = std::str::from_utf8(&body[2..2 + topic_len]).expect("UTF-8 topic");
+    let mut rest = &body[2 + topic_len..];
+    let packet_id = if (header & PUBLISH_QOS_MASK) >> 1 >= 1 {
+        let id = u16::from_be_bytes([rest[0], rest[1]]);
+        rest = &rest[2..];
+        Some(id)
+    } else {
+        None
+    };
+    (topic, packet_id, rest)
+}
+
+/// The topic a printer reports on.
+pub fn report_topic(serial: &str) -> String {
+    bambino::mqtt::report_topic(serial)
+}
+
 /// Reads a single, complete MQTT frame from an asynchronous stream.
 ///
 /// **Not cancellation-safe**: internally awaits across several sequential reads
@@ -149,11 +185,48 @@ pub async fn read_publish_payload(stream: &mut DuplexStream) -> serde_json::Valu
             HEADER_PUBLISH_QOS1, header
         );
 
-        let topic_len = u16::from_be_bytes([packet[0], packet[1]]) as usize;
-        let payload_start = 2 + topic_len + 2; // +2 topic len prefix, +2 packet ID
+        let (_, _, payload) = parse_publish(header, &packet);
+        return serde_json::from_slice(payload).expect("Failed to parse PUBLISH JSON payload");
+    }
+}
 
-        return serde_json::from_slice(&packet[payload_start..])
-            .expect("Failed to parse PUBLISH JSON payload");
+/// Reads the client's next PUBLISH, asserts it is a `gcode_line` command, and returns its `param`.
+pub async fn read_gcode_param(stream: &mut DuplexStream) -> String {
+    let json = read_publish_payload(stream).await;
+    assert_eq!(
+        json["print"]["command"], "gcode_line",
+        "expected a gcode_line command, got {json}"
+    );
+    json["print"]["param"]
+        .as_str()
+        .unwrap_or_else(|| panic!("gcode_line without a string param: {json}"))
+        .to_string()
+}
+
+/// Publishes server-side reports on one serial's report topic, numbering packet ids and consuming each PUBACK.
+///
+/// Reading the PUBACK here keeps the stream in sync: a forgotten `read_puback` after a raw
+/// [`send_publish_payload`] desyncs the next [`read_publish_payload`] far from the cause.
+pub struct ReportPublisher {
+    topic: String,
+    next_packet_id: u16,
+}
+
+impl ReportPublisher {
+    /// A publisher on `serial`'s report topic.
+    pub fn new(serial: &str) -> Self {
+        Self {
+            topic: report_topic(serial),
+            next_packet_id: 5000,
+        }
+    }
+
+    /// Publishes `payload` and reads the client's PUBACK for it.
+    pub async fn publish(&mut self, stream: &mut DuplexStream, payload: &[u8]) {
+        let id = self.next_packet_id;
+        self.next_packet_id = self.next_packet_id.wrapping_add(1);
+        send_publish_payload(stream, &self.topic, id, payload).await;
+        read_puback(stream).await;
     }
 }
 
@@ -175,17 +248,7 @@ pub async fn send_publish_payload(
     packet_id: u16,
     payload: &[u8],
 ) {
-    let mut var_header = Vec::new();
-    var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());
-    var_header.extend_from_slice(topic.as_bytes());
-    var_header.extend_from_slice(&packet_id.to_be_bytes());
-
-    let remaining_length = var_header.len() + payload.len();
-    let mut packet = vec![HEADER_PUBLISH_QOS1];
-    packet.extend_from_slice(&encode_remaining_length(remaining_length));
-    packet.extend(var_header);
-    packet.extend_from_slice(payload);
-
+    let packet = build_publish(topic, packet_id, payload);
     stream
         .write_all(&packet)
         .await
@@ -231,7 +294,7 @@ pub async fn run_mock_mqtt_broker(
 
     // Enter Multiplexing Event Loop
     let mut server_packet_id: u16 = 1000;
-    let topic = format!("device/{}/report", serial);
+    let topic = report_topic(&serial);
     let mut ack_sender = Some(ack_tx);
 
     loop {
@@ -248,12 +311,8 @@ pub async fn run_mock_mqtt_broker(
                         let packet_type = header >> 4;
                         match packet_type {
                             PACKET_TYPE_PUBLISH => {
-                                let qos = (header & 0x06) >> 1;
-                                if qos == 1 {
-                                    let topic_len = u16::from_be_bytes([payload[0], payload[1]]) as usize;
-                                    let id_msb = payload[2 + topic_len];
-                                    let id_lsb = payload[3 + topic_len];
-
+                                if let (_, Some(id), _) = parse_publish(header, &payload) {
+                                    let [id_msb, id_lsb] = id.to_be_bytes();
                                     write_half
                                         .write_all(&[HEADER_PUBACK, 0x02, id_msb, id_lsb])
                                         .await
@@ -270,6 +329,7 @@ pub async fn run_mock_mqtt_broker(
                                     .write_all(&[HEADER_PINGRESP, 0x00])
                                     .await
                                     .expect("Failed to write PINGRESP");
+                                write_half.flush().await.expect("Failed to flush PINGRESP");
                             }
                             PACKET_TYPE_DISCONNECT => {
                                 break;
@@ -286,19 +346,8 @@ pub async fn run_mock_mqtt_broker(
 
             // B: Listen for test-suite payload injections
             Some(injection_payload) = inject_rx.recv() => {
-                let mut var_header = Vec::new();
-
-                var_header.extend_from_slice(&(topic.len() as u16).to_be_bytes());
-                var_header.extend_from_slice(topic.as_bytes());
-
-                var_header.extend_from_slice(&server_packet_id.to_be_bytes());
+                let packet = build_publish(&topic, server_packet_id, &injection_payload);
                 server_packet_id = server_packet_id.wrapping_add(1);
-
-                let remaining_length = var_header.len() + injection_payload.len();
-                let mut packet = vec![HEADER_PUBLISH_QOS1];
-                packet.extend_from_slice(&encode_remaining_length(remaining_length));
-                packet.extend(var_header);
-                packet.extend_from_slice(&injection_payload);
 
                 write_half.write_all(&packet).await.expect("Failed to write injected PUBLISH");
                 write_half.flush().await.expect("Failed to flush injected PUBLISH");

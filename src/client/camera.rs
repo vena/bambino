@@ -59,7 +59,7 @@ where
     /// later disconnect only if a connector is configured (`.with_camera()` or
     /// `.with_attached_camera()`); without one it is dropped without `close_notify`.
     pub async fn attach_camera(&mut self, camera: BinaryCameraStream<CameraTls::Stream>) {
-        let _ = self.disconnect_camera().await;
+        self.disconnect_camera().await;
         self.camera = Some(camera);
     }
 
@@ -67,7 +67,7 @@ where
     ///
     /// Requires prior camera configuration via [`.with_camera()`](Self::with_camera),
     /// [`.attach_camera()`](Self::attach_camera) or
-    /// [`.with_attached_camera()`](Self::with_attached_camera). Returns `Error::ProtocolViolation`
+    /// [`.with_attached_camera()`](Self::with_attached_camera). Returns `Error::ModelMismatch`
     /// immediately for RTSPS models — see `ensure_camera()`'s doc
     /// comment.
     pub async fn camera(&mut self) -> Result<&mut BinaryCameraStream<CameraTls::Stream>, Error> {
@@ -108,7 +108,7 @@ where
     /// Idempotent, and reconnectable like [`disconnect_ftps()`](Self::disconnect_ftps):
     /// `ensure_camera()` never consumes `camera_config` (nothing is moved out of it), so the
     /// next camera call redials.
-    pub async fn disconnect_camera(&mut self) -> Result<(), Error> {
+    pub async fn disconnect_camera(&mut self) {
         if let Some((tls, _)) = self.camera_config.as_ref()
             && let Some(mut camera) = self.camera.take()
             && let Err(e) = tls.close(camera.stream_mut()).await
@@ -116,6 +116,5 @@ where
             log::debug!("camera TLS close failed: {e:?}");
         }
         self.camera = None;
-        Ok(())
     }
 }

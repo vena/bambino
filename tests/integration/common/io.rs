@@ -14,6 +14,19 @@ use tokio::sync::Mutex;
 
 use bambino::io::{AsyncIo, RawStreamFactory, SocketError, TlsConnector, TlsVersion, TokioIo};
 
+/// The slot a [`MockDataStreamFactory`] dials from: one preloaded duplex stream, or none.
+pub type DataContainer = Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>;
+
+/// True on the first call for `flag`, false on every later one — the "first connect is the
+/// FTPS control channel, the rest are data channels" rule the data-channel connectors share.
+///
+/// `TlsConnector::connect` takes no port (the raw stream is already connected), so "which
+/// channel" is exactly "was this the first `connect()` on this instance", matching how
+/// `FtpsClient` sequences connects: control once, then one data connect per transfer.
+fn first_connect(flag: &std::sync::atomic::AtomicBool) -> bool {
+    !flag.swap(true, std::sync::atomic::Ordering::SeqCst)
+}
+
 /// A pass-through TLS connector for testing.
 ///
 /// Immediately returns the raw stream unchanged without attempting any cryptographic
@@ -94,12 +107,7 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for PerCallVersionReportingTlsConnector
 /// data-channel TLS handshake failure after the server has already sent its `150`/`125`
 /// "opening data connection" reply, to verify the control channel doesn't get left desynced.
 ///
-/// Tracks connection order via an `AtomicBool` rather than the target port — `TlsConnector`'s
-/// `connect()` takes no `port` parameter (the raw stream is already connected to its target
-/// port by the time `connect()` is called, so no implementer needs it) — control-vs-data-channel
-/// is instead exactly "was this the first `connect()` call on this instance," matching how
-/// `FtpsClient` actually sequences connects (control channel once in `connect()`, then one
-/// data-channel connect per transfer).
+/// Tells the channels apart with [`first_connect`].
 pub struct FailingDataTlsConnector {
     control_channel_connected: std::sync::atomic::AtomicBool,
 }
@@ -116,13 +124,10 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for FailingDataTlsConnector {
     type Stream = RawIO;
 
     async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
-        let was_already_connected = self
-            .control_channel_connected
-            .swap(true, std::sync::atomic::Ordering::SeqCst);
-        if was_already_connected {
-            Err(SocketError::ConnectionAborted)
-        } else {
+        if first_connect(&self.control_channel_connected) {
             Ok(raw_stream)
+        } else {
+            Err(SocketError::ConnectionAborted)
         }
     }
 }
@@ -198,9 +203,7 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for FaultyDataTlsConnector {
     type Stream = FaultyStream<RawIO>;
 
     async fn connect(&self, _host: &str, raw_stream: RawIO) -> Result<Self::Stream, SocketError> {
-        let is_data_channel = self
-            .control_channel_connected
-            .swap(true, std::sync::atomic::Ordering::SeqCst);
+        let is_data_channel = !first_connect(&self.control_channel_connected);
         Ok(FaultyStream {
             inner: raw_stream,
             write_error: self.write_error.filter(|_| is_data_channel),
@@ -288,7 +291,7 @@ impl<RawIO: AsyncIo> TlsConnector<RawIO> for CloseCountingTlsConnector {
 /// loopback stream and yields it when the FTPS client attempts to dial the passive port.
 pub struct MockDataStreamFactory {
     /// Container holding the pre-allocated duplex stream representing the passive channel.
-    pub active_stream: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    pub active_stream: DataContainer,
     /// Every `(host, port)` pair `dial()` was asked for, in call order.
     ///
     /// `dial()` yields the same preloaded stream regardless of its arguments, so without this
@@ -301,11 +304,22 @@ pub struct MockDataStreamFactory {
 
 impl MockDataStreamFactory {
     /// Builds a factory over `active_stream` with an empty dial log.
-    pub fn new(active_stream: Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>) -> Self {
+    pub fn new(active_stream: DataContainer) -> Self {
         Self {
             active_stream,
             dialed: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// A factory with nothing to dial: every `dial()` is refused.
+    pub fn empty() -> Self {
+        Self::new(Arc::new(Mutex::new(None)))
+    }
+
+    /// A factory preloaded with `stream`, plus a handle to its slot for refilling it later.
+    pub fn with_stream(stream: tokio::io::DuplexStream) -> (Self, DataContainer) {
+        let container: DataContainer = Arc::new(Mutex::new(Some(TokioIo::new(stream))));
+        (Self::new(container.clone()), container)
     }
 }
 

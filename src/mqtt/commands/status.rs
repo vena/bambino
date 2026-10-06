@@ -1,8 +1,5 @@
 //! Status query commands (pushall, get_version, get_access_code).
 
-#[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-
 use serde::Serialize;
 
 use super::ClampedTaskId;
@@ -13,23 +10,22 @@ pub struct PushAllPayload {
     /// Wire command name, always `"pushall"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Requests a full state dump from the printer (all telemetry fields at once).
-#[derive(Debug, Clone, Serialize)]
-pub struct PushAllRequest {
-    /// The `pushing` namespace envelope required by the wire protocol.
-    pub pushing: PushAllPayload,
-}
+pub type PushAllRequest = super::Pushing<PushAllPayload>;
 
 impl PushAllRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "pushall";
+
     /// Builds a `pushall` request.
     pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             pushing: PushAllPayload {
-                command: "pushall",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -41,23 +37,22 @@ pub struct GetVersionPayload {
     /// Wire command name, always `"get_version"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Queries the printer for its hardware and firmware version info.
-#[derive(Debug, Clone, Serialize)]
-pub struct GetVersionRequest {
-    /// The `info` namespace envelope required by the wire protocol.
-    pub info: GetVersionPayload,
-}
+pub type GetVersionRequest = super::Info<GetVersionPayload>;
 
 impl GetVersionRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "get_version";
+
     /// Builds a `get_version` request.
     pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             info: GetVersionPayload {
-                command: "get_version",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -69,7 +64,7 @@ pub struct GetAccessCodePayload {
     /// Wire command name, always `"get_access_code"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Queries the printer for its own current LAN access code.
@@ -83,19 +78,18 @@ pub struct GetAccessCodePayload {
 /// (issue #140); see `reference/03_mqtt_telemetry.md` for the observed shape.
 ///
 /// Treat the returned code as a credential: it must never be logged or written to disk.
-#[derive(Debug, Clone, Serialize)]
-pub struct GetAccessCodeRequest {
-    /// The `system` namespace envelope required by the wire protocol.
-    pub system: GetAccessCodePayload,
-}
+pub type GetAccessCodeRequest = super::System<GetAccessCodePayload>;
 
 impl GetAccessCodeRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "get_access_code";
+
     /// Builds a `get_access_code` request.
     pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             system: GetAccessCodePayload {
-                command: "get_access_code",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
             },
         }
     }

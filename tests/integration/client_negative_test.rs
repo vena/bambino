@@ -494,11 +494,11 @@ async fn test_set_led_wire_payload() {
     .await;
 
     client
-        .set_led("chamber_light", true)
+        .set_led(bambino::client::LedNode::Chamber, true)
         .await
         .expect("set_led on failed");
     client
-        .set_led("chamber_light", false)
+        .set_led(bambino::client::LedNode::Chamber, false)
         .await
         .expect("set_led off failed");
 
@@ -757,7 +757,7 @@ async fn test_change_filament_rejects_invalid_ams_id() {
     .await;
 
     let result = client.change_filament(99, 1, -1, -1, None).await;
-    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -782,7 +782,7 @@ async fn test_change_filament_rejects_external_spool_sentinel_on_an_ams_ht_bus_i
 
     let result = client.change_filament(130, 254, -1, -1, None).await;
     assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
+        matches!(result, Err(Error::InvalidArgument(_))),
         "slot_id 254 against an AMS-HT bus id must be rejected, got {result:?}"
     );
 
@@ -1479,7 +1479,7 @@ async fn test_start_drying_rejects_invalid_ams_id() {
         .filament("PA-CF")
         .send()
         .await;
-    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1500,7 +1500,7 @@ async fn test_stop_drying_rejects_invalid_ams_id() {
 
     // 16 is an A2L-attached AMS Lite's physical id and valid; 17 addresses nothing.
     let result = client.stop_drying(17).await;
-    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1686,7 +1686,7 @@ async fn test_scan_rfid_rejects_invalid_ams_id() {
     .await;
 
     let result = client.scan_rfid(255, 2).await;
-    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1737,7 +1737,7 @@ async fn test_select_k_profile_rejects_invalid_combo() {
     .await;
 
     let result = client.select_k_profile(200, 200, 4, "GFA01", "0.4").await;
-    assert!(matches!(result, Err(Error::ProtocolViolation(_))));
+    assert!(matches!(result, Err(Error::InvalidArgument(_))));
 
     broker_task.await.expect("Broker task panicked");
 }
@@ -1773,7 +1773,7 @@ async fn test_select_k_profile_derives_tray_from_unit_and_slot() {
             .select_k_profile(ams_id, slot_id, 4, "GFA01", "0.4")
             .await;
         assert!(
-            matches!(result, Err(Error::ProtocolViolation(_))),
+            matches!(result, Err(Error::InvalidArgument(_))),
             "({ams_id}, {slot_id}) must be rejected"
         );
     }

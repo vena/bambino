@@ -5,16 +5,15 @@ use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
 use crate::mqtt::GCodeRequest;
 
-use super::{CommandHandle, POLL_UNTIL_MAX_MESSAGES, PrinterClient};
+use crate::quirks::Axis;
+use crate::types::telemetry::bits;
 
-// home_flag bits 0-2 [REF-HOMEFLAG]
-const HOME_FLAG_X_BIT: u32 = 0x01;
-const HOME_FLAG_Y_BIT: u32 = 0x02;
-const HOME_FLAG_Z_BIT: u32 = 0x04;
-const HOME_FLAG_XYZ_BITS: u32 = HOME_FLAG_X_BIT | HOME_FLAG_Y_BIT | HOME_FLAG_Z_BIT;
+use super::{CommandHandle, PrinterClient, WaitBudget};
 
-// Homing took up to ~46s across wire-confirmed P1S runs [REF-HOMEFLAG]; 90s leaves margin.
-const HOMING_WAIT_TIMEOUT_SECS: u64 = 90;
+/// How long [`PrinterClient::wait_for_homing`] waits for a homing cycle to complete.
+///
+/// Homing took up to ~46s across wire-confirmed P1S runs [REF-HOMEFLAG]; 90s leaves margin.
+pub const HOMING_WAIT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(90);
 
 impl<
     MqttRawIO,
@@ -64,27 +63,22 @@ where
     /// reconnect and the stale value would otherwise persist indefinitely rather than
     /// self-correcting on the next report.
     fn home_flag_this_connection(&self) -> Option<u32> {
-        if self.cache.last_home_flag_generation? != self.connection_generation {
+        if self.core.cache.last_home_flag_generation? != self.core.connection_generation {
             return None;
         }
-        self.cache.last_home_flag
+        self.core.cache.last_home_flag
     }
 
-    /// Returns whether `axis` (`'X'`/`'Y'`/`'Z'`, case-insensitive) was homed as of the last-observed `home_flag` telemetry.
+    /// Returns whether `axis` was homed as of the last-observed `home_flag` telemetry.
     ///
     /// `None` means no telemetry carrying `home_flag` has been observed **on the current MQTT
     /// connection** (via [`poll_telemetry()`](Self::poll_telemetry)) — not "unhomed". A
     /// disconnect/reconnect resets this to `None` until the printer reports again; the two
     /// cases are deliberately not distinguished, since a caller must handle `None` either way.
     /// Advisory only: the firmware does not reject motion on unhomed axes [REF-MOTO-HOME].
-    pub fn is_axis_homed(&self, axis: char) -> Option<bool> {
-        let bit = match axis.to_ascii_uppercase() {
-            'X' => HOME_FLAG_X_BIT,
-            'Y' => HOME_FLAG_Y_BIT,
-            'Z' => HOME_FLAG_Z_BIT,
-            _ => return None,
-        };
-        self.home_flag_this_connection().map(|flag| flag & bit != 0)
+    pub fn is_axis_homed(&self, axis: Axis) -> Option<bool> {
+        self.home_flag_this_connection()
+            .map(|flag| bits::is_axis_homed(flag, axis))
     }
 
     /// Returns whether X, Y, and Z were all homed as of the last-observed `home_flag` telemetry.
@@ -93,7 +87,7 @@ where
     /// connection — see [`is_axis_homed()`](Self::is_axis_homed).
     pub fn is_all_axes_homed(&self) -> Option<bool> {
         self.home_flag_this_connection()
-            .map(|flag| flag & HOME_FLAG_XYZ_BITS == HOME_FLAG_XYZ_BITS)
+            .map(bits::is_all_axes_homed)
     }
 
     /// Sends a G-code command with model-aware safety validation.
@@ -120,10 +114,7 @@ where
     /// ```
     pub async fn send_gcode(&mut self, gcode_line: &str) -> Result<CommandHandle, Error> {
         let mains_220v = self.is_220v_power();
-        self.identity
-            .model
-            .quirks()
-            .validate_gcode(gcode_line, mains_220v)?;
+        self.quirks().validate_gcode(gcode_line, mains_220v)?;
         self.send_gcode_raw(gcode_line).await
     }
 
@@ -135,103 +126,74 @@ where
             .await
     }
 
-    /// Dispatches safe homing operations to prevent hardware collisions.
+    /// Homes every axis with a bare `G28`, the firmware's own safe parking sequence [REF-MOTO-GCODE].
     ///
-    /// **Z-Axis Homing Crash Hazards [REF-MOTO-GCODE]:**
-    /// * **Bed-on-Z models** (X1, X2D, P1, H2, P2S series) must strictly be homed using a bare `G28`
-    ///   to execute the safe firmware-defined toolhead parking sequence. Specifying axis constraints
-    ///   (such as `G28 Z`) bypasses this and risks driving the bed directly into a misplaced toolhead.
-    /// * **Bed-Slingers** (A1, A1 Mini, A2L) can handle targeted homing macros safely, but a bare `G28` is
-    ///   highly recommended for standard configurations.
-    pub async fn home_axes(&mut self, home_z_only_danger: bool) -> Result<CommandHandle, Error> {
-        let is_bed_on_z = self.identity.model.quirks().is_bed_on_z();
+    /// The right call on every model. On bed-slingers (A1, A1 Mini, A2L) a targeted
+    /// [`home_z_only()`](Self::home_z_only) is also available.
+    pub async fn home_all(&mut self) -> Result<CommandHandle, Error> {
+        self.send_gcode_raw("G28").await
+    }
 
-        let gcode = if is_bed_on_z {
-            if home_z_only_danger {
-                return Err(Error::ModelMismatch(
-                    "Z-only homing unsafe on bed-on-Z model".into(),
-                ));
-            }
-            "G28"
-        } else if home_z_only_danger {
-            "G28 Z"
-        } else {
-            "G28"
-        };
-
-        self.send_gcode_raw(gcode).await
+    /// Homes only Z (`G28 Z`) — refused on bed-on-Z models [REF-MOTO-GCODE].
+    ///
+    /// **Bed-on-Z models** (X1, X2D, P1, H2, P2S series) must be homed with a bare `G28`
+    /// ([`home_all()`](Self::home_all)), which runs the firmware's toolhead parking sequence.
+    /// `G28 Z` skips it and risks driving the bed into a misplaced toolhead, so those models get
+    /// [`Error::ModelMismatch`] and nothing is sent. Bed-slingers (A1, A1 Mini, A2L) accept it.
+    pub async fn home_z_only(&mut self) -> Result<CommandHandle, Error> {
+        if self.quirks().is_bed_on_z() {
+            return Err(Error::ModelMismatch(
+                "Z-only homing unsafe on bed-on-Z model".into(),
+            ));
+        }
+        self.send_gcode_raw("G28 Z").await
     }
 
     /// Dispatches a manual relative axis movement block.
     ///
     /// **Relative Axis Movement Safety [REF-MOTO-GCODE]:**
-    /// For relative movements on the Z-axis, this method wraps the move in a client-side
-    /// `z_max` distance cap (bounding how far a single command can travel — not true
-    /// position-aware crash prevention, since the printer reports no absolute axis position
-    /// over MQTT) and safe reference-mode push/pop blocks (`M1002 push_ref_mode` /
-    /// `M1002 pop_ref_mode`) to prevent frame shifting, inside BambuStudio's `M211 S` /
-    /// `M211 X1 Y1 Z1` … `M211 R` save-enable-restore of the soft-endstop state. Per real H2D
-    /// hardware testing (bambuddy #2579, confirmed 2026-07-16) firmware does not enforce
-    /// software travel limits on G-code received over MQTT regardless of `M211` state — it is
-    /// not a source of crash protection here. X/Y moves get the same kind of client-side
-    /// `x_max()`/`y_max()` distance cap — same limitation, not position-aware.
+    /// Each move is capped client-side at the axis's travel in the model's
+    /// [`build_volume()`](crate::quirks::ModelQuirks::build_volume) — a bound on one command's
+    /// distance, not position-aware crash prevention, since the printer reports no absolute axis
+    /// position over MQTT. A Z move is additionally wrapped in reference-mode push/pop
+    /// (`M1002 push_ref_mode` / `M1002 pop_ref_mode`) to prevent frame shifting, inside
+    /// BambuStudio's `M211 S` / `M211 X1 Y1 Z1` … `M211 R` save-enable-restore of the
+    /// soft-endstop state. Per real H2D hardware testing (bambuddy #2579, confirmed 2026-07-16)
+    /// firmware does not enforce software travel limits on G-code received over MQTT regardless
+    /// of `M211` state — it is not a source of crash protection here.
     ///
     /// A `distance` of exactly `0.0` is a no-op: no G-code is sent to the printer, and this
-    /// returns `Ok(None)`. This avoids surfacing the Z-axis travel-limit error for a request
-    /// that isn't actually out of range.
+    /// returns `Ok(None)`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ModelMismatch`] when `distance` is non-finite or exceeds the axis's travel.
     pub async fn move_relative(
         &mut self,
-        axis: char,
+        axis: Axis,
         distance: f32,
         feedrate: u32,
     ) -> Result<Option<CommandHandle>, Error> {
-        let axis_upper = axis.to_ascii_uppercase();
-        if !matches!(axis_upper, 'X' | 'Y' | 'Z') {
-            // Reject invalid axes up front — otherwise `relative_xy_move_gcode` collapses
-            // them to an empty string and the call reports a travel-limit error that has
-            // nothing to do with the actual distance.
-            return Err(Error::InvalidArgument(
-                format!("unknown axis '{axis}' (expected X, Y, or Z)").into(),
-            ));
-        }
-        if self.is_axis_homed(axis_upper) == Some(false) {
+        if self.is_axis_homed(axis) == Some(false) {
             log::warn!(
                 "{} axis is not homed (last-known state) — move_relative proceeding anyway",
-                axis_upper
+                axis
             );
         }
         if distance == 0.0 {
-            // Zero-distance move is a legitimate no-op (e.g. a UI slider at rest), not a
-            // travel-limit violation — short-circuit before `relative_z_move_gcode` collapses
-            // it to the same empty-string signal it uses for an out-of-range distance. Nothing
-            // is published, so there is no command to hand back.
+            // A zero-distance move is a legitimate no-op (e.g. a UI slider at rest), not a
+            // travel-limit violation. Nothing is published, so there is no command to hand back.
             return Ok(None);
         }
-        if axis_upper == 'Z' {
-            let gcode = self
-                .identity
-                .model
-                .quirks()
-                .relative_z_move_gcode(distance, feedrate);
-            if gcode.is_empty() {
-                return Err(Error::ModelMismatch(
-                    "Z-axis move exceeds model travel limits".into(),
-                ));
-            }
-            self.send_gcode_raw(&gcode).await.map(Some)
-        } else {
-            let gcode = self
-                .identity
-                .model
-                .quirks()
-                .relative_xy_move_gcode(axis_upper, distance, feedrate);
-            if gcode.is_empty() {
-                return Err(Error::ModelMismatch(
-                    format!("{axis_upper}-axis move exceeds model travel limits").into(),
-                ));
-            }
-            self.send_gcode_raw(&gcode).await.map(Some)
-        }
+        let gcode = self
+            .quirks()
+            .relative_move_gcode(axis, distance, feedrate)
+            .ok_or_else(|| {
+                Error::ModelMismatch(
+                    format!("{axis}-axis move of {distance} exceeds model travel limits").into(),
+                )
+            })?;
+        self.send_gcode_raw(&gcode).await.map(Some)
     }
 
     /// Dispatches a manual relative extrusion command sequence [REF-GCODE-EXTRUDE].
@@ -248,7 +210,7 @@ where
 
     /// Blocks until a `G28` homing cycle observed via telemetry has completed.
     ///
-    /// Standalone — does not require this client to have issued [`home_axes()`](Self::home_axes).
+    /// Standalone — does not require this client to have issued [`home_all()`](Self::home_all).
     /// Resolves correctly whether homing was triggered by this client, the touchscreen, slicer
     /// software, or another `PrinterClient` instance, since it only relies on `home_flag`
     /// telemetry observed via [`poll_telemetry()`](Self::poll_telemetry).
@@ -258,9 +220,9 @@ where
     /// resolve instantly, and a call where nothing ever homes times out rather than
     /// returning early.
     ///
-    /// Like `poll_until` (`src/client/mod.rs`), `wait_for_homing_inner`'s own
-    /// wall-clock timeout (`HOMING_WAIT_TIMEOUT_SECS`) and message-count valve
-    /// (`POLL_UNTIL_MAX_MESSAGES`) only run *after* each `poll_telemetry().await` below
+    /// Times out after [`HOMING_WAIT_TIMEOUT`], independent of the command timeout. Like
+    /// `poll_until` (`src/client/mod.rs`), that deadline (or, without a real clock, the
+    /// message-count valve) is only checked *after* each `poll_telemetry().await` below
     /// has already returned — neither protects against that single call stalling
     /// forever on a connection that stops delivering bytes mid-homing (printer powered
     /// off, network drop). That protection is a distinct, lower layer: the underlying
@@ -268,19 +230,10 @@ where
     /// step against `self.timer` internally, bounding a single call regardless of what
     /// this loop does above it.
     pub async fn wait_for_homing(&mut self) -> Result<(), Error> {
-        let original_timeout = self.command_timeout_secs;
-        self.command_timeout_secs = HOMING_WAIT_TIMEOUT_SECS;
-
-        let result = self.wait_for_homing_inner().await;
-
-        self.command_timeout_secs = original_timeout;
-        result
-    }
-
-    async fn wait_for_homing_inner(&mut self) -> Result<(), Error> {
-        let start = self.timer.now_millis();
-        let timeout_ms = self.command_timeout_secs.saturating_mul(1000);
-        let mut count: usize = 0;
+        // The timeout is a local, not a temporary write to the command timeout: a caller that
+        // drops this future mid-wait (`select!`, `tokio::time::timeout`) would otherwise leave
+        // every later command running against the homing deadline.
+        let mut wait = WaitBudget::start(&self.timer, Some(HOMING_WAIT_TIMEOUT));
         let mut saw_not_all_homed = false;
 
         loop {
@@ -295,14 +248,7 @@ where
                 }
             }
 
-            count += 1;
-            if count >= POLL_UNTIL_MAX_MESSAGES {
-                return Err(Error::Timeout);
-            }
-            let elapsed = self.timer.now_millis().wrapping_sub(start);
-            if timeout_ms > 0 && elapsed >= timeout_ms {
-                return Err(Error::Timeout);
-            }
+            wait.after_message(&self.timer)?;
         }
     }
 }

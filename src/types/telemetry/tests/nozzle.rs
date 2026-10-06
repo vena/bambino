@@ -101,7 +101,10 @@ fn test_extruder_info_h2d_mock() {
     // id 0 (right/main): temp 16056565 = 0x00F500F5 → composite packed
     let right = &info[0];
     assert_eq!(right.id, 0);
-    let (right_actual, right_target) = right.temperatures();
+    let HeaterTemps {
+        actual: right_actual,
+        target: right_target,
+    } = right.temperatures().unwrap();
     assert_eq!(right_actual, 245);
     assert_eq!(right_target, 245);
     assert_eq!(right.filam_bak, vec![48]);
@@ -110,7 +113,10 @@ fn test_extruder_info_h2d_mock() {
     // id 1 (left/deputy): temp 47 → direct (≤ 500)
     let left = &info[1];
     assert_eq!(left.id, 1);
-    let (left_actual, left_target) = left.temperatures();
+    let HeaterTemps {
+        actual: left_actual,
+        target: left_target,
+    } = left.temperatures().unwrap();
     assert_eq!(left_actual, 47);
     assert_eq!(left_target, 0);
 }
@@ -157,7 +163,10 @@ fn test_extruder_info_x2d_mock() {
 
     // id 0: temp 50 (direct, ≤ 500)
     let right = &info[0];
-    let (right_actual, right_target) = right.temperatures();
+    let HeaterTemps {
+        actual: right_actual,
+        target: right_target,
+    } = right.temperatures().unwrap();
     assert_eq!(right_actual, 50);
     assert_eq!(right_target, 0);
     assert_eq!(right.z_bias, Some(0.0));
@@ -165,7 +174,10 @@ fn test_extruder_info_x2d_mock() {
     // id 1: temp 16384250 (composite packed, > 500)
     // 16384250 = 0xFA00FA → target = 250, actual = 250
     let left = &info[1];
-    let (left_actual, left_target) = left.temperatures();
+    let HeaterTemps {
+        actual: left_actual,
+        target: left_target,
+    } = left.temperatures().unwrap();
     assert_eq!(left_target, 250);
     assert_eq!(left_actual, 250);
 
@@ -272,7 +284,7 @@ fn test_decode_nozzle_temperatures_composite_extruder_path() {
     let report: TelemetryReport = serde_json::from_str(json).unwrap();
     let temps = decode_nozzle_temperatures(report.device(), None, None);
     // 3211296 = (49 << 16) | 32 -> actual=32, target=49
-    assert_eq!(temps, vec![(0, 70, 70), (1, 32, 49)]);
+    assert_eq!(nozzle_tuples(&temps), vec![(0, 70, 70), (1, 32, 49)]);
 }
 
 #[test]
@@ -294,7 +306,7 @@ fn test_decode_nozzle_temperatures_single_nozzle_flat_fallback() {
         report.print.as_ref().unwrap().nozzle_temper,
         report.print.as_ref().unwrap().nozzle_target_temper,
     );
-    assert_eq!(temps, vec![(0, 210, 220)]);
+    assert_eq!(nozzle_tuples(&temps), vec![(0, 210, 220)]);
 }
 
 #[test]
@@ -318,7 +330,7 @@ fn test_decode_nozzle_temperatures_flat_fallback_above_composite_threshold() {
         report.print.as_ref().unwrap().nozzle_temper,
         report.print.as_ref().unwrap().nozzle_target_temper,
     );
-    assert_eq!(temps, vec![(0, 600, 600)]);
+    assert_eq!(nozzle_tuples(&temps), vec![(0, 600, 600)]);
 }
 
 #[test]
@@ -342,7 +354,7 @@ fn test_decode_nozzle_temperatures_idex_swapped_fallback() {
         report.print.as_ref().unwrap().nozzle_temper,
         report.print.as_ref().unwrap().nozzle_target_temper,
     );
-    assert_eq!(temps, vec![(0, 0, 220), (1, 210, 0)]);
+    assert_eq!(nozzle_tuples(&temps), vec![(0, 0, 220), (1, 210, 0)]);
 }
 
 #[test]
@@ -366,7 +378,7 @@ fn test_decode_nozzle_temperatures_h2c_rack_nozzle_not_misclassified_as_idex() {
         report.print.as_ref().unwrap().nozzle_target_temper,
     );
     assert_eq!(
-        temps,
+        nozzle_tuples(&temps),
         vec![(0, 210, 220)],
         "must resolve as single-nozzle, not IDEX"
     );

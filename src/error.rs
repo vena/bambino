@@ -30,10 +30,24 @@ pub enum Error {
     TlsHandshakeFailed,
 
     /// Emitted when a printer violates expected protocol states or emits illegal data lines.
+    ///
+    /// The printer's fault, not the caller's: a misconfigured client is [`Error::NotConfigured`],
+    /// a bad argument [`Error::InvalidArgument`], a missing capability [`Error::ModelMismatch`].
     ProtocolViolation(Cow<'static, str>),
 
-    /// Serializer and Deserializer mismatches during telemetry JSON parsing.
-    Serialization,
+    /// A payload failed to serialize (outbound) or deserialize (inbound), with serde's message.
+    Serialization(Cow<'static, str>),
+
+    /// The client was not configured for the channel a call needs (no `.with_ftps()`, no camera,
+    /// no address on a `from_mqtt()` client).
+    ///
+    /// A code change fixes this, not a retry or a reconnect.
+    NotConfigured(Cow<'static, str>),
+
+    /// The MQTT connection failed a liveness check — see [`Liveness`](crate::mqtt::Liveness).
+    ///
+    /// Both conditions mean the connection is unusable; reconnect rather than retry.
+    Liveness(crate::mqtt::Liveness),
 
     /// Emitted when the broker refuses the connection with MQTT CONNACK code 4 or 5.
     ///
@@ -104,6 +118,12 @@ impl From<crate::io::SocketError> for Error {
     }
 }
 
+impl From<crate::mqtt::Liveness> for Error {
+    fn from(l: crate::mqtt::Liveness) -> Self {
+        Error::Liveness(l)
+    }
+}
+
 impl From<crate::io::TimerError> for Error {
     fn from(e: crate::io::TimerError) -> Self {
         Error::TimerFailure(e)
@@ -117,9 +137,9 @@ impl core::fmt::Display for Error {
             Error::TimerFailure(e) => write!(f, "Timer scheduling failure: {e}"),
             Error::TlsHandshakeFailed => f.write_str("TLS secure channel handshake failed"),
             Error::ProtocolViolation(s) => write!(f, "Protocol violation: {s}"),
-            Error::Serialization => {
-                f.write_str("JSON payload serialization or deserialization failure")
-            }
+            Error::Serialization(s) => write!(f, "JSON serialization failure: {s}"),
+            Error::NotConfigured(s) => write!(f, "Not configured: {s}"),
+            Error::Liveness(l) => write!(f, "MQTT connection not live: {l}"),
             Error::AccessDenied => {
                 f.write_str("Authentication credentials rejected (access denied)")
             }

@@ -1,10 +1,16 @@
+#[cfg(not(feature = "std"))]
+use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 use core::future::Future;
 use core::marker::PhantomData;
+use core::time::Duration;
 
 use crate::camera::CameraProtocol;
 use crate::camera::binary::BinaryCameraStream;
 use crate::error::Error;
 use crate::ftps::FtpsClient;
+use crate::identity::PrinterIdentity;
 use crate::io::{
     AsyncIo, Raced, RawStreamFactory, SocketError, TimerProvider, TlsConnector, join3, race,
 };
@@ -12,23 +18,17 @@ use crate::mqtt::MqttClient;
 
 use super::PrinterClient;
 
-/// Races `fut` against a `connect_timeout_secs`-second deadline on `timer`, used by `ensure_mqtt()`/`ensure_ftps()` to bound their two-step dial+connect sequences.
+/// Races `fut` against `connect_timeout` on `timer`; `None` (or a timer with no real clock) runs it unbounded.
+///
 /// Reuses the `race()` combinator `src/mqtt/client/{mod,frame}.rs`'s
 /// `poll_wire`/`read_exact_packet` per-read deadline is built on, including its `has_real_clock()`
 /// guard: under `DummyTimer` (`has_real_clock() == false`), `sleep()` completes instantly
 /// regardless of duration, so racing against it unconditionally would make every connect attempt
 /// look timed out instead of providing real protection — see `TimerProvider::has_real_clock`'s doc
 /// comment.
-///
-/// `connect_timeout_secs == 0` also skips the race, matching `set_command_timeout`'s "0 disables
-/// the timeout" convention — without this, `timer.sleep(Duration::from_secs(0))` resolves
-/// effectively instantly and wins the race against the dial+TLS+handshake future on nearly every
-/// attempt, since that future essentially never completes synchronously on its first poll. That
-/// would make `0` mean "always fail immediately" instead of "disabled," the opposite of the
-/// sibling `command_timeout_secs` field's documented behavior.
 async fn race_against_connect_timeout<TP, F, T, E>(
     timer: &TP,
-    connect_timeout_secs: u64,
+    connect_timeout: Option<Duration>,
     fut: F,
 ) -> Result<T, E>
 where
@@ -36,14 +36,100 @@ where
     F: Future<Output = Result<T, E>>,
     E: From<SocketError>,
 {
-    if !timer.has_real_clock() || connect_timeout_secs == 0 {
+    let Some(timeout) = connect_timeout.filter(|_| timer.has_real_clock()) else {
         return fut.await;
-    }
-    let sleep_fut = timer.sleep(core::time::Duration::from_secs(connect_timeout_secs));
-    match race(fut, sleep_fut).await {
+    };
+    match race(fut, timer.sleep(timeout)).await {
         Raced::Left(result) => result,
         Raced::Right(r) => Err(E::from(crate::io::deadline_error(r))),
     }
+}
+
+/// Fails with [`Error::NotConfigured`] when `identity` has no address to dial — a `from_mqtt()` client.
+///
+/// Such a client was given a connected MQTT session and never an ip or access code; a channel it
+/// has to dial itself can only be attached (`with_attached_ftps()`/`with_attached_camera()`).
+fn require_dialable(identity: &PrinterIdentity, channel: &'static str) -> Result<(), Error> {
+    if identity.ip.is_empty() || identity.access_code.is_empty() {
+        return Err(Error::NotConfigured(
+            format!(
+                "{channel} needs the printer's ip and access code, which a from_mqtt() client \
+                 doesn't have; use .with_attached_{channel}() instead"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Dials, wraps in TLS and completes the MQTT handshake — the one MQTT connect sequence.
+async fn dial_mqtt<RawIO, Tls, Factory>(
+    factory: &Factory,
+    tls: &Tls,
+    identity: &PrinterIdentity,
+    port: u16,
+) -> Result<MqttClient<Tls::Stream>, Error>
+where
+    RawIO: AsyncIo,
+    Tls: TlsConnector<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
+{
+    let raw = factory.dial(&identity.ip, port).await?;
+    let stream = tls.connect(&identity.serial, raw).await?;
+    MqttClient::connect(stream, &identity.serial, &identity.access_code).await
+}
+
+/// Dials, wraps in TLS and authenticates the binary camera stream — the one camera connect sequence.
+///
+/// The RTSPS check stays with the callers: `ensure_camera()` refuses an RTSPS model while
+/// `connect_all()` reports it as not attempted (`.claude/rules/camera-trio.md`).
+async fn dial_camera<RawIO, Tls, Factory>(
+    factory: &Factory,
+    tls: &Tls,
+    identity: &PrinterIdentity,
+    port: u16,
+    max_frame_size: Option<usize>,
+) -> Result<BinaryCameraStream<Tls::Stream>, Error>
+where
+    RawIO: AsyncIo,
+    Tls: TlsConnector<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
+{
+    let raw = factory.dial(&identity.ip, port).await?;
+    let stream = tls.connect(&identity.serial, raw).await?;
+    let mut cam = BinaryCameraStream::new(stream);
+    if let Some(max) = max_frame_size {
+        cam = cam.with_max_frame_size(max);
+    }
+    cam.authenticate(&identity.access_code).await?;
+    Ok(cam)
+}
+
+/// Dials and logs in the FTPS control channel over borrowed config — the one FTPS connect sequence.
+///
+/// Borrowed so a failed attempt leaves the config in place for a retry; [`install_ftps`] takes it
+/// only once this has succeeded.
+async fn dial_ftps<RawIO, Tls, Factory, FtpsTimer>(
+    (tls, factory, timer): &(Tls, Factory, FtpsTimer),
+    identity: &PrinterIdentity,
+    port: u16,
+    tls_version_check: crate::ftps::TlsVersionCheck,
+) -> Result<(Tls::Stream, Vec<u8>), Error>
+where
+    RawIO: AsyncIo,
+    Tls: TlsConnector<RawIO>,
+    Factory: RawStreamFactory<RawIO>,
+    FtpsTimer: TimerProvider,
+{
+    let raw = factory.dial(&identity.ip, port).await?;
+    FtpsClient::<RawIO, Tls, Factory, FtpsTimer>::connect_control_stream(
+        raw,
+        tls,
+        identity,
+        timer,
+        tls_version_check,
+    )
+    .await
 }
 
 /// Per-channel outcome of [`PrinterClient::connect_all`], one field per connection channel.
@@ -71,6 +157,48 @@ pub struct ConnectAllOutcome {
     pub ftps: Option<Result<(), Error>>,
     /// Camera channel result — see the struct docs for what each state means.
     pub camera: Option<Result<(), Error>>,
+}
+
+/// One of [`PrinterClient`]'s connection channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Channel {
+    /// The MQTT command/telemetry session.
+    Mqtt,
+    /// The FTPS storage session.
+    Ftps,
+    /// The binary-JPEG camera stream.
+    Camera,
+}
+
+impl ConnectAllOutcome {
+    /// Every channel that was attempted and failed, with its error.
+    ///
+    /// A view over the per-channel fields for the "did everything I configured connect?"
+    /// question; channels not attempted (`None`) aren't failures and don't appear.
+    pub fn errors(&self) -> impl Iterator<Item = (Channel, &Error)> {
+        [
+            (Channel::Mqtt, &self.mqtt),
+            (Channel::Ftps, &self.ftps),
+            (Channel::Camera, &self.camera),
+        ]
+        .into_iter()
+        .filter_map(|(channel, result)| match result {
+            Some(Err(e)) => Some((channel, e)),
+            _ => None,
+        })
+    }
+
+    /// `Ok(())` if no attempted channel failed, else the first failure in MQTT, FTPS, camera order.
+    ///
+    /// For callers that treat a partial connect as a failed one. The per-channel fields stay
+    /// available for those that don't.
+    pub fn into_result(self) -> Result<(), Error> {
+        [self.mqtt, self.ftps, self.camera]
+            .into_iter()
+            .flatten()
+            .find_map(Result::err)
+            .map_or(Ok(()), Err)
+    }
 }
 
 impl<
@@ -114,24 +242,23 @@ where
 {
     /// Establishes the MQTT connection if not already connected.
     ///
-    /// Short-circuits when `self.mqtt` is already `Some`. Otherwise, dials a raw stream via
-    /// `self.mqtt_factory.dial()`, wraps it in TLS via `self.mqtt_tls.connect()`, then calls
-    /// `MqttClient::connect()` — the whole dial+TLS+handshake sequence is raced against
-    /// `self.connect_timeout_secs`.
+    /// Short-circuits when `self.mqtt` is already `Some`. Otherwise runs `dial_mqtt` (dial, TLS,
+    /// handshake) raced against the connect timeout.
     pub(super) async fn ensure_mqtt(&mut self) -> Result<(), Error> {
         if self.mqtt.is_some() {
             return Ok(());
         }
-        let mqtt_client =
-            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-                let raw = self
-                    .mqtt_factory
-                    .dial(&self.identity.ip, self.mqtt_port)
-                    .await?;
-                let stream = self.mqtt_tls.connect(&self.identity.serial, raw).await?;
-                MqttClient::connect(stream, &self.identity).await
-            })
-            .await?;
+        let mqtt_client = race_against_connect_timeout(
+            &self.timer,
+            self.core.connect_timeout,
+            dial_mqtt(
+                &self.mqtt_factory,
+                &self.mqtt_tls,
+                &self.core.identity,
+                self.core.mqtt_port,
+            ),
+        )
+        .await?;
         self.install_mqtt(mqtt_client).await;
         Ok(())
     }
@@ -155,15 +282,15 @@ where
     ///
     /// Bumping one counter is deliberately preferred over resetting fields one by one: the
     /// previous shape — `disconnect_mqtt()` clearing whatever its author remembered to clear —
-    /// is exactly how `self.cache` came to survive a reconnect while `k_profile_primed` did not.
+    /// is exactly how `self.core.cache` came to survive a reconnect while `k_profile_primed` did not.
     /// A new connection-scoped cache field opts in by stamping `connection_generation` when it
     /// is written, and cannot be silently forgotten here.
     pub(crate) fn begin_connection(&mut self) {
         // Echoes addressed to the old session can no longer arrive; see
         // `CommandOutcome::ConnectionLost`.
-        self.commands.connection_ended();
-        self.k_profile_primed = false;
-        self.connection_generation = self.connection_generation.wrapping_add(1);
+        self.core.commands.connection_ended();
+        self.core.k_profile_primed = false;
+        self.core.connection_generation = self.core.connection_generation.wrapping_add(1);
     }
 
     /// Publishes a `pushall` immediately after a connection is established, refilling the
@@ -178,10 +305,9 @@ where
     /// (`services/bambu_mqtt.py:1711-1731`). None of them gates it on cache age, and none
     /// branches on model — don't route this through the quirks engine.
     ///
-    /// Publishes directly rather than through
-    /// [`request_pushall()`](PrinterClient::request_pushall) because that path re-enters
-    /// `ensure_mqtt()`, which would make this an async recursion. `self.mqtt` is already
-    /// `Some` by the time this runs, so the re-entry would be a no-op anyway.
+    /// Publishes through `publish_payload` rather than
+    /// [`request_pushall()`](PrinterClient::request_pushall), because the latter re-enters
+    /// `ensure_mqtt()`, which would make this an async recursion.
     ///
     /// **Deliberately non-fatal**, for the same reason as
     /// [`prime_firmware_version()`](Self::prime_firmware_version): a printer that never
@@ -190,17 +316,15 @@ where
     async fn publish_connect_pushall(&mut self) {
         let seq = self.next_sequence_id();
         let request = crate::mqtt::PushAllRequest::new(seq);
-        let payload = match serde_json::to_vec(&request) {
+        let payload = match super::serialize(&request) {
             Ok(payload) => payload,
-            Err(_) => {
-                log::debug!("serializing the connect-time pushall failed; cache stays cold");
+            Err(e) => {
+                log::debug!("connect-time pushall not sent ({e}); cache stays cold");
                 return;
             }
         };
-        let Some(mqtt) = self.mqtt.as_mut() else {
-            return;
-        };
-        if let Err(e) = mqtt.publish_command(&payload, &self.timer).await {
+        let echo = crate::mqtt::client::echo_key(&payload);
+        if let Err(e) = self.publish_payload(&payload, echo).await {
             log::debug!(
                 "connect-time pushall failed ({e:?}); connection-scoped telemetry stays None until the printer reports"
             );
@@ -294,10 +418,9 @@ where
     /// `MqttClient` for a [`from_mqtt()`](PrinterClient::from_mqtt)-built client — its
     /// `PreConnected` factory's `dial()` always errors, so `ensure_mqtt()`'s lazy-dial fallback
     /// only recovers a `new()`-built client, never one built via `from_mqtt()`.
-    pub async fn disconnect_mqtt(&mut self) -> Result<(), Error> {
+    pub async fn disconnect_mqtt(&mut self) {
         self.close_mqtt_session().await;
         self.begin_connection();
-        Ok(())
     }
 
     /// Sets a [`TimerProvider`] for wall-clock command-response timeouts.
@@ -332,19 +455,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer,
-            identity: self.identity,
-            sequence_counter: self.sequence_counter,
-            commands: self.commands,
-            k_profile_primed: self.k_profile_primed,
-            connection_generation: self.connection_generation,
-            cache: self.cache,
-            command_timeout_secs: self.command_timeout_secs,
-            connect_timeout_secs: self.connect_timeout_secs,
-            mqtt_port: self.mqtt_port,
-            ftps_port: self.ftps_port,
-            ftps_tls_version_check: self.ftps_tls_version_check,
-            camera_port: self.camera_port,
-            camera_max_frame_size: self.camera_max_frame_size,
+            core: self.core,
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         };
@@ -359,20 +470,22 @@ where
     /// Overrides the default MQTT port (8883).
     #[must_use]
     pub fn with_mqtt_port(mut self, port: u16) -> Self {
-        self.mqtt_port = port;
+        self.core.mqtt_port = port;
         self
     }
 
-    /// Overrides the default connect-timeout deadline (10s) that bounds `ensure_mqtt()`/`ensure_ftps()`'s combined dial+TLS-connect sequence.
-    /// Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
-    /// convention. Non-consuming — chain onto any construction path.
+    /// Sets the bound on each channel's dial+TLS+handshake; `None` disables it.
+    ///
+    /// The default is [`DEFAULT_CONNECT_TIMEOUT`](super::DEFAULT_CONNECT_TIMEOUT) (10s). Needs a
+    /// real clock ([`with_timer()`](Self::with_timer)) to fire. Keeps the type parameters;
+    /// chain onto any construction path.
     ///
     /// This is the only connect budget on every backend. `EspIdfTlsConnector` has its own
     /// handshake deadline for direct use, but it is disabled unless set, so it doesn't cap this
     /// one; leave it unset under `PrinterClient`.
     #[must_use]
-    pub fn with_connect_timeout(mut self, secs: u64) -> Self {
-        self.connect_timeout_secs = secs;
+    pub fn with_connect_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.core.connect_timeout = timeout;
         self
     }
 
@@ -389,6 +502,10 @@ where
     /// Call [`disconnect_ftps()`](Self::disconnect_ftps) first on a client with a
     /// connected FTPS session: this builder is synchronous and cannot close it, so the session is
     /// dropped without `close_notify` (see `.claude/rules/tls-session-teardown.md`).
+    ///
+    /// On a [`from_mqtt()`](PrinterClient::from_mqtt) client, which has no ip or access code to
+    /// dial with, the first FTPS call returns [`Error::NotConfigured`]; use
+    /// [`with_attached_ftps()`](Self::with_attached_ftps) there.
     #[must_use]
     pub fn with_ftps<NewFtpsRawIO, NewFtpsTls, NewFtpsFactory, NewFtpsTimer>(
         self,
@@ -414,15 +531,6 @@ where
         NewFtpsFactory: RawStreamFactory<NewFtpsRawIO>,
         NewFtpsTimer: TimerProvider,
     {
-        // `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host
-        // config was ever supplied), which would otherwise fail opaquely at actual FTPS
-        // connect time — panic here instead, at the builder call site, with a clear message
-        // pointing at the real cause.
-        assert!(
-            !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
-            "with_ftps() requires a real ip/access_code — this PrinterClient was built via \
-             from_mqtt(), which leaves both empty; use .with_attached_ftps() instead"
-        );
         PrinterClient {
             mqtt: self.mqtt,
             ftps: None,
@@ -432,19 +540,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
-            identity: self.identity,
-            sequence_counter: self.sequence_counter,
-            commands: self.commands,
-            k_profile_primed: self.k_profile_primed,
-            connection_generation: self.connection_generation,
-            cache: self.cache,
-            command_timeout_secs: self.command_timeout_secs,
-            connect_timeout_secs: self.connect_timeout_secs,
-            mqtt_port: self.mqtt_port,
-            ftps_port: self.ftps_port,
-            ftps_tls_version_check: self.ftps_tls_version_check,
-            camera_port: self.camera_port,
-            camera_max_frame_size: self.camera_max_frame_size,
+            core: self.core,
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         }
@@ -453,7 +549,7 @@ where
     /// Overrides the default FTPS port (990).
     #[must_use]
     pub fn with_ftps_port(mut self, port: u16) -> Self {
-        self.ftps_port = port;
+        self.core.ftps_port = port;
         self
     }
 
@@ -469,10 +565,10 @@ where
     /// embassy — so against a printer that insisted on TLS 1.3 they fail closed, and this
     /// bypass is the only way through. It skips the version check only; certificate
     /// verification is configured on the `TlsConnector` and is unaffected.
-    /// Non-consuming — chain onto any construction path.
+    /// Keeps the type parameters; chain onto any construction path.
     #[must_use]
     pub fn with_ftps_allow_unverified_tls_1_2(mut self, allow: bool) -> Self {
-        self.ftps_tls_version_check = if allow {
+        self.core.ftps_tls_version_check = if allow {
             crate::ftps::TlsVersionCheck::Bypass
         } else {
             crate::ftps::TlsVersionCheck::Enforce
@@ -482,54 +578,56 @@ where
 
     /// Establishes the FTPS connection if not already connected.
     ///
-    /// Short-circuits when `self.ftps` is already `Some`. Otherwise, borrows the TLS
-    /// connector and data factory from `ftps_config`, dials a raw connection, and runs
-    /// `FtpsClient::connect_control_stream()` — the whole dial+connect sequence is
-    /// raced against `self.connect_timeout_secs`. `ftps_config` is only consumed
-    /// (`.take()`n) once that attempt has actually succeeded — a failed attempt,
-    /// including a `connect_timeout_secs` timeout on a slow LAN, leaves it intact so the
-    /// next call retries instead of permanently reporting "not configured". A poisoned session
-    /// is disconnected first (its parts return to `ftps_config`) and redialed.
+    /// Short-circuits when `self.ftps` is already `Some`. Otherwise runs `dial_ftps` over the
+    /// borrowed `ftps_config`, raced against the connect timeout. `ftps_config` is only consumed
+    /// once that attempt has actually succeeded — a failed attempt, including a connect timeout
+    /// on a slow LAN, leaves it intact so the next call retries instead of permanently reporting
+    /// "not configured". A poisoned session is disconnected first (its parts return to
+    /// `ftps_config`) and redialed.
     pub(super) async fn ensure_ftps(&mut self) -> Result<(), Error> {
         match &self.ftps {
-            Some(client) if client.is_poisoned() => self.disconnect_ftps().await?,
+            Some(client) if client.is_poisoned() => self.disconnect_ftps().await,
             Some(_) => return Ok(()),
             None => {}
         }
-        let (tls, factory, timer) = self.ftps_config.as_ref().ok_or_else(|| {
-            Error::ProtocolViolation(
-                "FTPS not configured — call .with_ftps(), .attach_ftps() or .with_attached_ftps()"
-                    .into(),
+        let config = self.ftps_config.as_ref().ok_or_else(|| {
+            Error::NotConfigured(
+                "FTPS — call .with_ftps(), .attach_ftps() or .with_attached_ftps()".into(),
             )
         })?;
-        let identity = &self.identity;
-        let ftps_port = self.ftps_port;
-        let tls_version_check = self.ftps_tls_version_check;
-        let (control_stream, fill_buf) =
-            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-                let raw_stream = factory.dial(&identity.ip, ftps_port).await?;
-                FtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
-                    raw_stream,
-                    tls,
-                    identity,
-                    timer,
-                    tls_version_check,
-                )
-                .await
-            })
-            .await?;
-        // Safe to consume now — the handshake above already succeeded.
-        let (tls, factory, timer) = self.ftps_config.take().unwrap();
+        require_dialable(&self.core.identity, "ftps")?;
+        let (control_stream, fill_buf) = race_against_connect_timeout(
+            &self.timer,
+            self.core.connect_timeout,
+            dial_ftps(
+                config,
+                &self.core.identity,
+                self.core.ftps_port,
+                self.core.ftps_tls_version_check,
+            ),
+        )
+        .await?;
+        self.install_ftps(control_stream, fill_buf);
+        Ok(())
+    }
+
+    /// Builds the [`FtpsClient`] from a control stream `dial_ftps` returned, consuming `ftps_config`.
+    ///
+    /// Only called after a successful dial, so `ftps_config` is still present.
+    fn install_ftps(&mut self, control_stream: FtpsTls::Stream, fill_buf: Vec<u8>) {
+        let (tls, factory, timer) = self
+            .ftps_config
+            .take()
+            .expect("dial_ftps borrowed ftps_config, so it is still configured");
         self.ftps = Some(FtpsClient::from_control_stream(
             control_stream,
             tls,
             factory,
-            &self.identity,
+            &self.core.identity,
             timer,
-            tls_version_check,
+            self.core.ftps_tls_version_check,
             fill_buf,
         ));
-        Ok(())
     }
 
     /// Eagerly establishes the FTPS connection.
@@ -548,15 +646,14 @@ where
 
     /// Establishes the camera connection if not already connected.
     ///
-    /// Returns `Error::ProtocolViolation` immediately for RTSPS models — those use
-    /// `camera::rtsps::build_rtsps_url()` instead and have no `PrinterClient`-managed
-    /// connection state. Otherwise dials a raw stream via the camera factory, wraps it in
-    /// TLS, constructs a `BinaryCameraStream`, and authenticates — the whole sequence is
-    /// raced against `self.connect_timeout_secs`, mirroring `ensure_ftps()`.
+    /// Returns [`Error::ModelMismatch`] immediately, without dialing, for RTSPS models — those
+    /// use `camera::rtsps::build_rtsps_url()` instead and have no `PrinterClient`-managed
+    /// connection state. Otherwise runs `dial_camera` raced against the connect timeout,
+    /// mirroring `ensure_ftps()`.
     pub(super) async fn ensure_camera(&mut self) -> Result<(), Error> {
-        if self.identity.model.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
-            return Err(Error::ProtocolViolation(
-                "This model uses RTSPS for its camera feed — use camera::rtsps::build_rtsps_url() instead"
+        if self.quirks().camera_protocol() != CameraProtocol::BinaryJpeg {
+            return Err(Error::ModelMismatch(
+                "this model streams its camera over RTSPS — use camera::rtsps::build_rtsps_url()"
                     .into(),
             ));
         }
@@ -564,27 +661,23 @@ where
             return Ok(());
         }
         let (tls, factory) = self.camera_config.as_ref().ok_or_else(|| {
-            Error::ProtocolViolation(
-                "Camera not configured — call .with_camera(), .attach_camera() or .with_attached_camera()".into(),
+            Error::NotConfigured(
+                "camera — call .with_camera(), .attach_camera() or .with_attached_camera()".into(),
             )
         })?;
-        let identity = &self.identity;
-        let ip = &identity.ip;
-        let serial = &identity.serial;
-        let camera_port = self.camera_port;
-        let max_frame_size = self.camera_max_frame_size;
-        let camera_stream =
-            race_against_connect_timeout(&self.timer, self.connect_timeout_secs, async {
-                let raw = factory.dial(ip, camera_port).await?;
-                let stream = tls.connect(serial, raw).await?;
-                let mut cam = BinaryCameraStream::new(stream);
-                if let Some(max) = max_frame_size {
-                    cam = cam.with_max_frame_size(max);
-                }
-                cam.authenticate(&identity.access_code).await?;
-                Ok::<_, Error>(cam)
-            })
-            .await?;
+        require_dialable(&self.core.identity, "camera")?;
+        let camera_stream = race_against_connect_timeout(
+            &self.timer,
+            self.core.connect_timeout,
+            dial_camera(
+                factory,
+                tls,
+                &self.core.identity,
+                self.core.camera_port,
+                self.core.camera_max_frame_size,
+            ),
+        )
+        .await?;
         // `camera_config` is deliberately *not* cleared here. Unlike `ftps_config`, whose
         // connector is moved into the `FtpsClient`, nothing is consumed by a camera connect —
         // the borrow above is `as_ref()` only. Keeping it is what lets `disconnect_camera()`
@@ -626,7 +719,7 @@ where
     /// - **Camera** — attempted only if `.with_camera()` supplied a config *and* the model's
     ///   [`CameraProtocol`] is `BinaryJpeg`. Note the deliberate difference from
     ///   [`connect_camera()`](Self::connect_camera), which returns
-    ///   [`Error::ProtocolViolation`] on an RTSPS model: here an RTSPS camera is a channel
+    ///   [`Error::ModelMismatch`] on an RTSPS model: here an RTSPS camera is a channel
     ///   that does not apply to this printer, not a failure, so reporting it as an error
     ///   would hand every P2S/X2D consumer a guaranteed `Err` on an otherwise clean connect.
     ///   Those models use `camera::rtsps::build_rtsps_url()` and have no client-managed
@@ -634,7 +727,7 @@ where
     ///
     /// # Timeouts
     ///
-    /// `connect_timeout_secs` is applied **per channel**, matching the individual
+    /// The connect timeout is applied **per channel**, matching the individual
     /// `ensure_*` methods, so a slow or unreachable camera can never cause an otherwise
     /// healthy MQTT dial to be reported as timed out. Because the channels run concurrently
     /// the worst-case wall clock for the whole call is still one timeout, not three. A
@@ -669,25 +762,18 @@ where
     /// the waits is the available lever.
     pub async fn connect_all(&mut self) -> ConnectAllOutcome {
         let timer = &self.timer;
-        let secs = self.connect_timeout_secs;
-        let identity = &self.identity;
+        let timeout = self.core.connect_timeout;
+        let identity = &self.core.identity;
 
         let mqtt_wanted = self.mqtt.is_none();
-        let mqtt_factory = &self.mqtt_factory;
-        let mqtt_tls = &self.mqtt_tls;
-        let mqtt_port = self.mqtt_port;
+        let (mqtt_factory, mqtt_tls) = (&self.mqtt_factory, &self.mqtt_tls);
+        let mqtt_port = self.core.mqtt_port;
         let mqtt_fut = async move {
             if !mqtt_wanted {
                 return None;
             }
-            Some(
-                race_against_connect_timeout(timer, secs, async {
-                    let raw = mqtt_factory.dial(&identity.ip, mqtt_port).await?;
-                    let stream = mqtt_tls.connect(&identity.serial, raw).await?;
-                    MqttClient::connect(stream, identity).await
-                })
-                .await,
-            )
+            let dial = dial_mqtt(mqtt_factory, mqtt_tls, identity, mqtt_port);
+            Some(race_against_connect_timeout(timer, timeout, dial).await)
         };
 
         // `as_ref()` only — `ftps_config` is consumed after the join, and only on success,
@@ -697,22 +783,16 @@ where
         } else {
             None
         };
-        let ftps_port = self.ftps_port;
-        let tls_version_check = self.ftps_tls_version_check;
+        let ftps_port = self.core.ftps_port;
+        let tls_version_check = self.core.ftps_tls_version_check;
         let ftps_fut = async move {
-            let (tls, factory, ftps_timer) = ftps_slot?;
+            let config = ftps_slot?;
             Some(
-                race_against_connect_timeout(timer, secs, async {
-                    let raw_stream = factory.dial(&identity.ip, ftps_port).await?;
-                    FtpsClient::<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>::connect_control_stream(
-                        raw_stream,
-                        tls,
-                        identity,
-                        ftps_timer,
-                        tls_version_check,
-                    )
-                    .await
-                })
+                async {
+                    require_dialable(identity, "ftps")?;
+                    let dial = dial_ftps(config, identity, ftps_port, tls_version_check);
+                    race_against_connect_timeout(timer, timeout, dial).await
+                }
                 .await,
             )
         };
@@ -724,21 +804,16 @@ where
         } else {
             None
         };
-        let camera_port = self.camera_port;
-        let max_frame_size = self.camera_max_frame_size;
+        let camera_port = self.core.camera_port;
+        let max_frame_size = self.core.camera_max_frame_size;
         let camera_fut = async move {
             let (tls, factory) = camera_slot?;
             Some(
-                race_against_connect_timeout(timer, secs, async {
-                    let raw = factory.dial(&identity.ip, camera_port).await?;
-                    let stream = tls.connect(&identity.serial, raw).await?;
-                    let mut cam = BinaryCameraStream::new(stream);
-                    if let Some(max) = max_frame_size {
-                        cam = cam.with_max_frame_size(max);
-                    }
-                    cam.authenticate(&identity.access_code).await?;
-                    Ok::<_, Error>(cam)
-                })
+                async {
+                    require_dialable(identity, "camera")?;
+                    let dial = dial_camera(factory, tls, identity, camera_port, max_frame_size);
+                    race_against_connect_timeout(timer, timeout, dial).await
+                }
                 .await,
             )
         };
@@ -761,18 +836,7 @@ where
             None => None,
             Some(Err(e)) => Some(Err(e)),
             Some(Ok((control_stream, fill_buf))) => {
-                // Safe to consume now — the handshake above already succeeded, and
-                // `ftps_res` is only `Some` when `ftps_slot` was.
-                let (tls, factory, ftps_timer) = self.ftps_config.take().unwrap();
-                self.ftps = Some(FtpsClient::from_control_stream(
-                    control_stream,
-                    tls,
-                    factory,
-                    &self.identity,
-                    ftps_timer,
-                    tls_version_check,
-                    fill_buf,
-                ));
+                self.install_ftps(control_stream, fill_buf);
                 Some(Ok(()))
             }
         };
@@ -802,7 +866,9 @@ where
     /// parameters. Independent of MQTT's and FTPS's connectors, mirroring `.with_ftps()`.
     ///
     /// Call [`disconnect_camera()`](Self::disconnect_camera) first on a client with a connected
-    /// camera session, for the same reason as `.with_ftps()`.
+    /// camera session, for the same reason as `.with_ftps()`. On a
+    /// [`from_mqtt()`](PrinterClient::from_mqtt) client the first camera call returns
+    /// [`Error::NotConfigured`]; use [`with_attached_camera()`](Self::with_attached_camera) there.
     #[must_use]
     pub fn with_camera<NewCameraRawIO, NewCameraTls, NewCameraFactory>(
         self,
@@ -826,13 +892,6 @@ where
         NewCameraTls: TlsConnector<NewCameraRawIO>,
         NewCameraFactory: RawStreamFactory<NewCameraRawIO>,
     {
-        // Same guard as with_ftps() — from_mqtt()-constructed clients have empty
-        // ip/access_code, which would otherwise fail opaquely at actual camera connect time.
-        assert!(
-            !self.identity.ip.is_empty() && !self.identity.access_code.is_empty(),
-            "with_camera() requires a real ip/access_code — this PrinterClient was built via \
-             from_mqtt(), which leaves both empty; use .with_attached_camera() instead"
-        );
         PrinterClient {
             mqtt: self.mqtt,
             ftps: self.ftps,
@@ -842,19 +901,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
-            identity: self.identity,
-            sequence_counter: self.sequence_counter,
-            commands: self.commands,
-            k_profile_primed: self.k_profile_primed,
-            connection_generation: self.connection_generation,
-            cache: self.cache,
-            command_timeout_secs: self.command_timeout_secs,
-            connect_timeout_secs: self.connect_timeout_secs,
-            mqtt_port: self.mqtt_port,
-            ftps_port: self.ftps_port,
-            ftps_tls_version_check: self.ftps_tls_version_check,
-            camera_port: self.camera_port,
-            camera_max_frame_size: self.camera_max_frame_size,
+            core: self.core,
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         }
@@ -907,19 +954,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
-            identity: self.identity,
-            sequence_counter: self.sequence_counter,
-            commands: self.commands,
-            k_profile_primed: self.k_profile_primed,
-            connection_generation: self.connection_generation,
-            cache: self.cache,
-            command_timeout_secs: self.command_timeout_secs,
-            connect_timeout_secs: self.connect_timeout_secs,
-            mqtt_port: self.mqtt_port,
-            ftps_port: self.ftps_port,
-            ftps_tls_version_check: self.ftps_tls_version_check,
-            camera_port: self.camera_port,
-            camera_max_frame_size: self.camera_max_frame_size,
+            core: self.core,
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         }
@@ -968,19 +1003,7 @@ where
             mqtt_tls: self.mqtt_tls,
             mqtt_factory: self.mqtt_factory,
             timer: self.timer,
-            identity: self.identity,
-            sequence_counter: self.sequence_counter,
-            commands: self.commands,
-            k_profile_primed: self.k_profile_primed,
-            connection_generation: self.connection_generation,
-            cache: self.cache,
-            command_timeout_secs: self.command_timeout_secs,
-            connect_timeout_secs: self.connect_timeout_secs,
-            mqtt_port: self.mqtt_port,
-            ftps_port: self.ftps_port,
-            ftps_tls_version_check: self.ftps_tls_version_check,
-            camera_port: self.camera_port,
-            camera_max_frame_size: self.camera_max_frame_size,
+            core: self.core,
             _mqtt_raw_io: PhantomData,
             _camera_raw_io: PhantomData,
         }
@@ -989,14 +1012,14 @@ where
     /// Overrides the default camera port (6000, binary-JPEG only).
     #[must_use]
     pub fn with_camera_port(mut self, port: u16) -> Self {
-        self.camera_port = port;
+        self.core.camera_port = port;
         self
     }
 
     /// Overrides the default maximum accepted camera frame size (see `BinaryCameraStream::with_max_frame_size`).
     #[must_use]
     pub fn with_camera_max_frame_size(mut self, bytes: usize) -> Self {
-        self.camera_max_frame_size = Some(bytes);
+        self.core.camera_max_frame_size = Some(bytes);
         self
     }
 }

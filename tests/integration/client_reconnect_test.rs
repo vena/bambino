@@ -232,7 +232,7 @@ async fn test_disconnect_mqtt_closes_the_tls_session() {
     let (connector, closes) = CloseCountingTlsConnector::new();
     let mut client = PrinterClient::new(
         connector,
-        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
+        MockDataStreamFactory::empty(),
         PrinterIdentity {
             ip: "127.0.0.1".into(),
             serial: SERIAL.into(),
@@ -241,16 +241,11 @@ async fn test_disconnect_mqtt_closes_the_tls_session() {
         },
     );
     client
-        .attach_mqtt(
-            connect_test_mqtt(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await,
-        )
+        .attach_mqtt(connect_test_mqtt(TokioIo::new(client_stream), SERIAL).await)
         .await;
     broker_task.await.expect("mock broker task panicked");
 
-    client
-        .disconnect_mqtt()
-        .await
-        .expect("disconnect_mqtt should succeed");
+    client.disconnect_mqtt().await;
     assert_eq!(
         closes.load(std::sync::atomic::Ordering::SeqCst),
         1,
@@ -275,10 +270,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     assert!(client.is_mqtt_connected());
     broker_task_a.await.expect("First broker task panicked");
 
-    client
-        .disconnect_mqtt()
-        .await
-        .expect("disconnect_mqtt should succeed");
+    client.disconnect_mqtt().await;
     assert!(
         !client.is_mqtt_connected(),
         "disconnect_mqtt must clear self.mqtt"
@@ -300,17 +292,9 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
         .await;
         read_puback(&mut server_stream_b).await;
     });
-    let mqtt_client_b = MqttClient::connect(
-        TokioIo::new(client_stream_b),
-        &PrinterIdentity {
-            ip: String::new(),
-            serial: SERIAL.into(),
-            access_code: "12345678".into(),
-            model: PrinterModel::P1S,
-        },
-    )
-    .await
-    .expect("second MQTT connect handshake failed");
+    let mqtt_client_b = MqttClient::connect(TokioIo::new(client_stream_b), SERIAL, "12345678")
+        .await
+        .expect("second MQTT connect handshake failed");
     client.attach_mqtt(mqtt_client_b).await;
     assert!(
         client.is_mqtt_connected(),
@@ -424,10 +408,7 @@ async fn test_disconnect_ftps_clears_ftps_for_clean_reconnect() {
         .expect("ftps() should redial over the poisoned session");
     assert!(client.is_ftps_connected());
 
-    client
-        .disconnect_ftps()
-        .await
-        .expect("disconnect_ftps should succeed");
+    client.disconnect_ftps().await;
     assert!(!client.is_ftps_connected());
     fresh_handle.await.expect("Fresh mock server panicked");
 }
@@ -459,15 +440,12 @@ async fn test_attach_ftps_installs_a_connected_session() {
 
     let mut client = PrinterClient::new(DummyTls, DummyFactory, identity).with_ftps(
         DummyTlsConnector,
-        MockDataStreamFactory::new(Arc::new(Mutex::new(None))),
+        MockDataStreamFactory::empty(),
         DummyTimer,
     );
     client.attach_ftps(fresh_ftps).await;
     assert!(client.is_ftps_connected());
-    client
-        .disconnect_ftps()
-        .await
-        .expect("disconnect_ftps on the attached session should succeed");
+    client.disconnect_ftps().await;
     fresh_handle.await.expect("Fresh mock server panicked");
 }
 
@@ -492,8 +470,8 @@ async fn test_camera_trio_unconfigured_error() {
 
     let result = client.read_camera_frame().await;
     assert!(
-        matches!(result, Err(Error::ProtocolViolation(_))),
-        "expected ProtocolViolation (\"Camera not configured\") on an unconfigured client, got {:?}",
+        matches!(result, Err(Error::NotConfigured(_))),
+        "expected NotConfigured on an unconfigured client, got {:?}",
         result.map(|_| ())
     );
     assert!(!client.is_camera_connected());
@@ -522,7 +500,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
         },
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
-    .with_connect_timeout(1);
+    .with_connect_timeout(Some(std::time::Duration::from_secs(1)));
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), client.connect_mqtt())
         .await
@@ -562,7 +540,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
         },
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
-    .with_connect_timeout(0);
+    .with_connect_timeout(None);
 
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), client.connect_mqtt())
         .await
@@ -597,7 +575,7 @@ async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
         },
     )
     .with_timer(bambino::io::tokio::TokioTimer::new())
-    .with_connect_timeout(1);
+    .with_connect_timeout(Some(std::time::Duration::from_secs(1)));
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), client.connect_mqtt()).await;
 
@@ -608,22 +586,25 @@ async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     );
 }
 
-/// `from_mqtt()`-constructed clients have empty `ip`/`access_code` (no host config
-/// was ever supplied) — calling `.with_ftps()` on one used to silently succeed and only fail
-/// opaquely at actual FTPS connect time. Must now panic immediately at the builder call site.
 #[tokio::test]
-#[should_panic(expected = "with_ftps() requires a real ip/access_code")]
-async fn test_with_ftps_panics_on_from_mqtt_client() {
+async fn test_with_ftps_on_from_mqtt_client_reports_not_configured() {
+    // A from_mqtt() client has no ip or access code to dial FTPS with. with_ftps() used to
+    // panic at the builder; the first FTPS call now returns NotConfigured instead (#449).
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
     });
     let client = connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
-    let _ = client.with_ftps(
-        bambino::client::dummy::DummyTls,
-        bambino::client::dummy::DummyFactory,
+    let mut client = client.with_ftps(
+        crate::common::io::DummyTlsConnector,
+        MockDataStreamFactory::empty(),
         bambino::client::dummy::DummyTimer,
+    );
+    let result = client.connect_ftps().await;
+    assert!(
+        matches!(result, Err(Error::NotConfigured(_))),
+        "expected NotConfigured, got {result:?}"
     );
 
     broker_task.await.expect("mock broker task panicked");

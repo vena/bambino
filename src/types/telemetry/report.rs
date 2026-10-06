@@ -12,6 +12,8 @@ use super::device::DeviceTelemetry;
 use super::diagnostics::{HmsEntry, IpcamTelemetry};
 use super::stage::PrintStage;
 use super::xcam::XcamTelemetry;
+use super::{HeaterTemps, bits, unpack_temperature};
+use crate::types::control::{LedNode, LightMode, PrintStatus};
 
 /// Chamber/work/heatbed light state entry from the `lights_report` array.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +25,18 @@ pub struct LightReport {
 }
 
 impl LightReport {
+    /// The fixture this entry reports, or `None` for an absent or unrecognized node.
+    #[must_use]
+    pub fn led_node(&self) -> Option<LedNode> {
+        self.node.as_deref()?.parse().ok()
+    }
+
+    /// The fixture's mode, or `None` for an absent or unrecognized mode.
+    #[must_use]
+    pub fn light_mode(&self) -> Option<LightMode> {
+        self.mode.as_deref()?.parse().ok()
+    }
+
     /// Whether the light is lit: `true` for `"on"` and `"flashing"`, `false` for `"off"`,
     /// `None` when the mode is absent or unrecognized.
     #[must_use]
@@ -102,16 +116,19 @@ impl PrintPauseList {
 /// | Instead of the raw field | Use |
 /// | :--- | :--- |
 /// | `stg_cur`, `stg` | [`current_stage`](Self::current_stage) (gated on `gcode_state` [REF-MQTT-IDLEBUG]), [`stage_queue`](Self::stage_queue) |
-/// | `home_flag` bits 8–9, `sdcard` | [`sdcard_state`](Self::sdcard_state) |
+/// | `aux` bits 12–13, `home_flag` bits 8–9, `sdcard` | [`sdcard_status`](Self::sdcard_status) |
+/// | `gcode_state` | [`print_status`](Self::print_status) |
 /// | `home_flag` bit 23, `stat` | [`is_door_open_from_home_flag`](Self::is_door_open_from_home_flag), [`is_door_open_from_stat`](Self::is_door_open_from_stat) |
 /// | `home_flag` bit 3 | [`is_220v_power`](Self::is_220v_power) |
 /// | `net.conf`, `wifi_signal` | [`is_ethernet_active`](Self::is_ethernet_active), with [`is_ethernet_active_via_wifi_signal`](Self::is_ethernet_active_via_wifi_signal) as the fallback |
 /// | `gcode_start_time` | [`gcode_start_time_secs`](Self::gcode_start_time_secs) |
-/// | `chamber_temper` (packed) | [`unpack_temperature`](Self::unpack_temperature) |
+/// | `chamber_temper` (packed) | [`chamber_temperatures`](Self::chamber_temperatures) |
 /// | `bed_temper` / `device.bed` | [`TelemetryReport::bed_temperatures`](super::TelemetryReport::bed_temperatures) |
+/// | `nozzle_temper` / `device.extruder` | [`TelemetryReport::nozzle_temperatures`](super::TelemetryReport::nozzle_temperatures) |
+/// | `*_fan_speed` | [`TelemetryReport::fan_percent`](super::TelemetryReport::fan_percent) |
 /// | `device`, `fun`, `fun2` | [`TelemetryReport::device`](super::TelemetryReport::device), [`fun`](super::TelemetryReport::fun), [`fun2_bit`](super::TelemetryReport::fun2_bit) (both wire locations) |
 /// | `ipcam.*` toggles | [`IpcamTelemetry::recording`](super::IpcamTelemetry::recording), [`timelapse_enabled`](super::IpcamTelemetry::timelapse_enabled) |
-/// | `lights_report[].mode` | [`LightReport::is_on`] |
+/// | `lights_report[]` | [`LightReport::is_on`], [`LightReport::led_node`], [`LightReport::light_mode`] |
 /// | `xcam.cfg`, `xcam.halt_print_sensitivity` | the `XcamTelemetry` detector accessors, [`halt_print_sensitivity_level`](super::XcamTelemetry::halt_print_sensitivity_level) |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterTelemetry {
@@ -141,7 +158,7 @@ pub struct PrinterTelemetry {
     /// about whether these arrive as ints or as numeric strings". BambuStudio reads it as a
     /// bare `get<int>()` and does not corroborate the string form, so the permissive binding is
     /// defensive rather than confirmed — it costs nothing and cannot fail a frame.
-    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub layer_num: Option<i32>,
 
     /// Total layers within the sliced print pipeline.
@@ -151,7 +168,7 @@ pub struct PrinterTelemetry {
     #[serde(
         alias = "total_layer_num",
         default,
-        deserialize_with = "super::deserialize_permissive_opt_i32"
+        deserialize_with = "super::deserialize_permissive_opt_int"
     )]
     pub total_layers: Option<i32>,
 
@@ -163,23 +180,26 @@ pub struct PrinterTelemetry {
     /// seconds"). Callers wanting seconds must multiply.
     ///
     /// Permissive: BambuStudio branches on `is_string()` here, so the quoted form is real.
-    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub mc_remaining_time: Option<i32>,
 
     /// Active speed profile level (1=Silent, 2=Standard, 3=Sport, 4=Ludicrous).
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub spd_lvl: Option<u8>,
 
     /// Speed magnitude as a percentage of the nominal feedrate.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub spd_mag: Option<u16>,
 
     /// Motion controller progress percentage (0–100).
     ///
     /// Permissive: BambuStudio branches on `is_string()` (`DeviceManager.cpp:3060-3065`) and
     /// bambuddy coerces via `float()`/`_probe_number`, so the quoted form is confirmed.
-    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub mc_percent: Option<i32>,
 
     /// Print sub-stage identifier tracking granular execution phases within the active print stage.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub mc_print_sub_stage: Option<i32>,
 
     /// Motion controller print stage.
@@ -194,8 +214,8 @@ pub struct PrinterTelemetry {
     ///
     /// Transmitted as a signed 32-bit int on the wire [REF-HOMEFLAG]; bit 31 set produces a
     /// negative JSON number that a bare `u32` target rejects, failing the whole telemetry
-    /// message's deserialize. Masked into `u32` via `deserialize_signed_as_u32`.
-    #[serde(default, deserialize_with = "deserialize_signed_as_u32")]
+    /// message's deserialize. Masked into `u32` via `deserialize_permissive_opt_flags`.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_flags")]
     pub home_flag: Option<u32>,
 
     /// State field used in newer enclosed printer lines to track sensors (e.g., door status hex strings).
@@ -209,20 +229,24 @@ pub struct PrinterTelemetry {
     /// Emitted in incremental pushes, so it is usable for real-time stage tracking subject to
     /// the [REF-MQTT-IDLEBUG] `gcode_state` gate — A1/P1 firmware reports `0` ("printing") while
     /// genuinely idle, so the value means nothing unless `gcode_state` is `RUNNING` or `PAUSE`.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub stg_cur: Option<i32>,
 
     /// Active error code register, packed as a 32-bit integer [REF-DIAG-HMS].
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub print_error: Option<u32>,
 
     /// Active hardware fault and diagnostic alert entries [REF-DIAG-HMS].
     #[serde(default)]
     pub hms: Option<Vec<HmsEntry>>,
 
-    /// Permissive indicator tracking physical MicroSD card insertion.
+    /// Top-level MicroSD presence flag, sent as a bool, an integer or a string such as `"HAS_SDCARD_NORMAL"`.
     ///
-    /// Evaluated via custom deserializer to absorb structural variations between firmwares.
-    #[serde(deserialize_with = "super::deserialize_permissive_bool", default)]
-    pub sdcard: bool,
+    /// `None` when this frame doesn't carry it — distinct from `Some(false)`, "no card". It
+    /// cannot report a degraded card; prefer [`sdcard_status`](Self::sdcard_status), which reads
+    /// the richer bit fields first.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_bool")]
+    pub sdcard: Option<bool>,
 
     /// Raw wireless network reception scale returned as a formatted string (e.g. "-52dBm").
     pub wifi_signal: Option<String>,
@@ -246,7 +270,7 @@ pub struct PrinterTelemetry {
     /// Hotend target temperature register.
     ///
     /// Wire sends both integers and floats depending on model. Never composite-packed —
-    /// unlike `chamber_temper`, no `unpack_temperature()` call is needed here.
+    /// unlike `chamber_temper`, no unpacking is needed here.
     pub nozzle_target_temper: Option<f64>,
 
     /// Hotend actual temperature register.
@@ -282,7 +306,7 @@ pub struct PrinterTelemetry {
     pub p_list: Option<PrintPauseList>,
 
     /// Combined AMS state bitmask (lower 8 bits = sub status, bits 8–15 = main status).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub ams_status: Option<i32>,
 
     /// Slicer-mapped material assignment channels configured during print dispatch [REF-AMS-MAP].
@@ -341,7 +365,7 @@ pub struct PrinterTelemetry {
     /// [`ExtruderInfo`](super::device::ExtruderInfo) instead, which model the V2
     /// per-extruder `info` bit field BambuStudio actually uses for the deputy extruder
     /// (`DevExtruderSystem.cpp`, `ExterSystemParser::ParseV2_0`).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub hw_switch_state: Option<i32>,
 
     /// Skipped object IDs during selective printing.
@@ -357,15 +381,15 @@ pub struct PrinterTelemetry {
     pub nozzle_diameter: Option<String>,
 
     /// Fan gear composite bitmask.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub fan_gear: Option<u32>,
 
     /// G-code action state (H2/X2 models).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub print_gcode_action: Option<i32>,
 
     /// Real action state (H2/X2 models).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub print_real_action: Option<i32>,
 
     /// Cloud task identifier.
@@ -377,7 +401,11 @@ pub struct PrinterTelemetry {
     pub job_id: Option<String>,
 
     /// Alternative remaining time field (minutes).
-    #[serde(default)]
+    ///
+    /// Prefer [`mc_remaining_time`](Self::mc_remaining_time): it is the field BambuStudio reads
+    /// for the ETA (`DeviceManager.cpp:3081-3086`) and the one `PrinterClient::print_progress`
+    /// tracks. This one is kept for completeness; nothing in either upstream client prefers it.
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub remain_time: Option<i32>,
 
     /// Hex config bitmask string of user-facing printer settings [REF-MQTT-TELEMETRY].
@@ -406,7 +434,7 @@ pub struct PrinterTelemetry {
     /// Bit 9 is BambuStudio's `is_enable_ams_np`, the AMS-side "np" flag
     /// (`DeviceManager.cpp:3111`), read alongside the `cfg`/`fun`/`aux`/`stat` probe — see
     /// [`Self::reports_np_format`]. Masked into `u32` like [`home_flag`](Self::home_flag).
-    #[serde(default, deserialize_with = "deserialize_signed_as_u32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_flags")]
     pub flag3: Option<u32>,
 
     /// Stage queue for the run in progress — the stages still to execute, emptied to `[]` at
@@ -437,7 +465,7 @@ pub struct PrinterTelemetry {
     pub gcode_start_time: Option<String>,
 
     /// Calibration version identifier.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub cali_version: Option<i32>,
 
     /// Error string field.
@@ -471,7 +499,7 @@ pub struct PrinterTelemetry {
     /// `is_number()` / `is_string()` for exactly this field (`DeviceManager.cpp:2617-2626`), so
     /// the permissive deserializer is load-bearing rather than defensive: a bare `Option<i32>`
     /// would fail the entire telemetry frame on the string form.
-    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_i32")]
+    #[serde(default, deserialize_with = "super::deserialize_permissive_opt_int")]
     pub plate_idx: Option<i32>,
 
     /// Cloud profile ID.
@@ -495,33 +523,13 @@ pub struct NetInfo {
     pub conf: Option<u32>,
 }
 
-/// Masks a signed wire value (`home_flag` can carry bit 31 set, read by firmware as negative)
-/// into its `u32` bit pattern instead of rejecting it. Mirrors [REF-HOMEFLAG]'s documented
-/// `flag & 0xFFFFFFFF` handling.
-fn deserialize_signed_as_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let raw: Option<i64> = Option::deserialize(deserializer)?;
-    Ok(raw.map(|v| v as u32))
-}
-
-pub(crate) const TEMP_COMPOSITE_THRESHOLD: u32 = 500;
-pub(crate) const DOOR_SENSOR_BITMASK: u32 = 0x00800000;
-pub(crate) const NET_CONF_WIRED_BITMASK: u32 = 0x1;
-pub(crate) const POWER_220V_BITMASK: u32 = 0x0000_0008;
-pub(crate) const SDCARD_STATE_SHIFT: u32 = 8;
-pub(crate) const SDCARD_STATE_MASK: u32 = 0x3;
-/// `flag3` bit 9, BambuStudio's `is_enable_ams_np`.
-pub(crate) const FLAG3_AMS_NEW_PROTOCOL_BITMASK: u32 = 1 << 9;
-
-/// SD-card presence/health state, decoded from `home_flag` bits 8–9.
+/// SD-card presence/health state, decoded from a two-bit field (`aux` bits 12–13 or `home_flag` bits 8–9).
 ///
-/// Confirmed against BambuStudio's `MachineObject::parse_json` (`DeviceManager.cpp:1092`:
-/// `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and corroborated by pybambu's
-/// `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard` boolean field can never
-/// report a degraded state — only this bitmask distinguishes "no card," "normal," "abnormal,"
-/// and "read-only."
+/// Confirmed against BambuStudio's `MachineObject::parse_home_flag`
+/// (`DeviceManager.cpp:1075`: `m_storage->set_sdcard_state(get_flag_bits(flag, 8, 2))`) and
+/// corroborated by pybambu's `const.py:265-266`/`models.py:3408-3412` (same bits). The `sdcard`
+/// boolean field can never report a degraded state — only the bit fields distinguish "no card,"
+/// "normal," "abnormal," and "read-only."
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SdcardState {
     /// No SD card physically present.
@@ -535,7 +543,7 @@ pub enum SdcardState {
 }
 
 impl SdcardState {
-    fn from_bits(bits: u32) -> Self {
+    pub(crate) fn from_bits(bits: u32) -> Self {
         match bits {
             0 => Self::NoSdcard,
             1 => Self::Normal,
@@ -572,7 +580,7 @@ impl PrinterTelemetry {
         probe
             || self
                 .flag3
-                .is_some_and(|f| f & FLAG3_AMS_NEW_PROTOCOL_BITMASK != 0)
+                .is_some_and(|f| f & bits::FLAG3_AMS_NEW_PROTOCOL != 0)
     }
 
     /// Returns the stage currently executing, decoded, or `None` when it cannot be trusted.
@@ -586,11 +594,21 @@ impl PrinterTelemetry {
     /// A `Some(PrintStage::Idle)` during a run is not a bug and not completion: after the last
     /// queued stage finishes, `stg_cur` reads idle for the tail of the run.
     pub fn current_stage(&self) -> Option<PrintStage> {
-        let state = self.gcode_state.as_deref()?;
-        if !matches!(state, "RUNNING" | "PAUSE") {
+        if !matches!(
+            self.print_status()?,
+            PrintStatus::Running | PrintStatus::Paused
+        ) {
             return None;
         }
         self.current_stage_ungated()
+    }
+
+    /// Classifies `gcode_state`; `None` when this frame doesn't carry it.
+    #[must_use]
+    pub fn print_status(&self) -> Option<PrintStatus> {
+        self.gcode_state
+            .as_deref()
+            .map(PrintStatus::from_gcode_state)
     }
 
     /// Decodes `stg_cur` with no [REF-MQTT-IDLEBUG] gate applied.
@@ -615,20 +633,14 @@ impl PrinterTelemetry {
             .collect()
     }
 
-    /// Resolves the actual and target values from a composite packed temperature [REF-THER-DECODE].
+    /// The chamber's temperatures, unpacked from `chamber_temper`; `None` when this frame doesn't carry it.
     ///
-    /// Accepts `f64` because the wire sends both integers and floats depending on model.
-    /// Values ≤ 500 are direct temperatures (target assumed 0°C). Values > 500 are
-    /// composite-packed: upper 16 bits = target, lower 16 bits = actual.
-    pub fn unpack_temperature(raw_val: f64) -> (u16, u16) {
-        let int_val = raw_val as u32;
-        if int_val <= TEMP_COMPOSITE_THRESHOLD {
-            (int_val as u16, 0)
-        } else {
-            let target = (int_val >> 16) & 0xFFFF;
-            let actual = int_val & 0xFFFF;
-            (actual as u16, target as u16)
-        }
+    /// Values above 500 are composite-packed `(target << 16) | actual` on models with an active
+    /// chamber heater; at or below 500 the value is the reading itself with target `0`, which is
+    /// what every model without a heater sends, so the unpack is correct on both.
+    #[must_use]
+    pub fn chamber_temperatures(&self) -> Option<HeaterTemps> {
+        self.chamber_temper.map(unpack_temperature)
     }
 
     /// Evaluates whether the physical printer is connected via wired Ethernet [REF-NET-PORTS].
@@ -645,7 +657,7 @@ impl PrinterTelemetry {
         self.net
             .as_ref()
             .and_then(|net| net.conf)
-            .map(|conf| (conf & NET_CONF_WIRED_BITMASK) != 0)
+            .map(bits::is_wired)
             .unwrap_or(false)
     }
 
@@ -655,7 +667,9 @@ impl PrinterTelemetry {
     /// `wifi_signal` of `"-90dBm"`. Prefer `is_ethernet_active()` — this heuristic is kept
     /// only as a fallback for firmware that doesn't send `net.conf`.
     pub fn is_ethernet_active_via_wifi_signal(&self) -> bool {
-        self.wifi_signal.as_deref() == Some("-90dBm")
+        self.wifi_signal
+            .as_deref()
+            .is_some_and(bits::is_wired_wifi_signal)
     }
 
     /// Evaluates whether the printer's mains power supply is wired for the 220V region, based on bit 3 (`0x00000008`) of the `home_flag` register.
@@ -664,17 +678,46 @@ impl PrinterTelemetry {
     /// temperature ceiling is genuinely voltage-dependent (110°C @220V, 120°C @110V per the
     /// official spec sheet.
     pub fn is_220v_power(&self) -> bool {
-        self.home_flag
-            .map(|flag| (flag & POWER_220V_BITMASK) != 0)
-            .unwrap_or(false)
+        self.home_flag.map(bits::is_220v).unwrap_or(false)
     }
 
-    /// Evaluates the SD-card presence/health state from `home_flag` bits 8–9. See
-    /// [`SdcardState`]'s doc comment for verification sources. Returns `None` before any
-    /// telemetry carrying `home_flag` has been observed — distinct from `Some(NoSdcard)`.
+    /// Evaluates the SD-card presence/health state from `home_flag` bits 8–9 alone. See
+    /// [`SdcardState`]'s doc comment for verification sources, and prefer
+    /// [`sdcard_status`](Self::sdcard_status), which also reads `aux` and the `sdcard` flag.
+    /// Returns `None` when this frame doesn't carry `home_flag` — distinct from `Some(NoSdcard)`.
     pub fn sdcard_state(&self) -> Option<SdcardState> {
         self.home_flag
-            .map(|flag| SdcardState::from_bits((flag >> SDCARD_STATE_SHIFT) & SDCARD_STATE_MASK))
+            .map(|flag| SdcardState::from_bits(bits::sdcard_state_bits(flag)))
+    }
+
+    /// The SD-card state from whichever signal this frame carries, in BambuStudio's precedence.
+    ///
+    /// BambuStudio reads all three and lets the later one win (`DeviceManager.cpp`): the
+    /// top-level `sdcard` flag (`DevStorage::ParseV1_0`), then `home_flag` bits 8–9
+    /// (`parse_home_flag`, `:1075`), then — on "np" firmware — `aux` bits 12–13 (`:4514`). This
+    /// returns the first present of `aux`, `home_flag`, `sdcard`, which is the same answer.
+    ///
+    /// bambuddy reads only `sdcard`, saying heartbeat pushes clear `home_flag` bits 8–9 with a
+    /// card inserted (`bambu_mqtt.py:4915-4927`). BambuStudio, the authoritative source, reads the
+    /// bits on every frame that carries `home_flag`, so they are followed here; see
+    /// `reference/03_mqtt_telemetry.md` for the disagreement.
+    #[must_use]
+    pub fn sdcard_status(&self) -> Option<SdcardState> {
+        if let Some(aux) = self.aux.as_deref()
+            && let (Some(lo), Some(hi)) = (bits::hex_bit(aux, 12), bits::hex_bit(aux, 13))
+        {
+            return Some(SdcardState::from_bits(u32::from(lo) | (u32::from(hi) << 1)));
+        }
+        if let Some(state) = self.sdcard_state() {
+            return Some(state);
+        }
+        self.sdcard.map(|present| {
+            if present {
+                SdcardState::Normal
+            } else {
+                SdcardState::NoSdcard
+            }
+        })
     }
 
     /// Reads door sensor state from bit 23 of the `home_flag` register [REF-NET-DOOR].
@@ -682,7 +725,7 @@ impl PrinterTelemetry {
     /// Used by X1 series models where the door sensor is wired to the home_flag bitmask.
     pub fn is_door_open_from_home_flag(&self) -> bool {
         self.home_flag
-            .map(|flag| (flag & DOOR_SENSOR_BITMASK) != 0)
+            .map(|flag| bits::is_door_open(u64::from(flag)))
             .unwrap_or(false)
     }
 
@@ -692,9 +735,8 @@ impl PrinterTelemetry {
     pub fn is_door_open_from_stat(&self) -> bool {
         self.stat
             .as_ref()
-            .and_then(|s| Self::parse_hex_string(s))
-            .map(|val| (val & u64::from(DOOR_SENSOR_BITMASK)) != 0)
-            .unwrap_or(false)
+            .and_then(|s| bits::hex_u64(s))
+            .is_some_and(bits::is_door_open)
     }
 
     /// Reads the door state from wherever `sensor` says this model reports it [REF-NET-DOOR].
@@ -703,29 +745,16 @@ impl PrinterTelemetry {
     /// doesn't carry a readable field — never a guess of "closed". Get `sensor` from
     /// [`ModelQuirks::door_sensor`](crate::quirks::ModelQuirks::door_sensor).
     pub fn door_state(&self, sensor: crate::quirks::DoorSensor) -> Option<bool> {
-        let bit = u64::from(DOOR_SENSOR_BITMASK);
         match sensor {
             crate::quirks::DoorSensor::None => None,
-            crate::quirks::DoorSensor::HomeFlag => {
-                self.home_flag.map(|flag| u64::from(flag) & bit != 0)
-            }
+            crate::quirks::DoorSensor::HomeFlag => self
+                .home_flag
+                .map(|flag| bits::is_door_open(u64::from(flag))),
             crate::quirks::DoorSensor::Stat => self
                 .stat
                 .as_deref()
-                .and_then(Self::parse_hex_string)
-                .map(|val| val & bit != 0),
+                .and_then(bits::hex_u64)
+                .map(bits::is_door_open),
         }
-    }
-
-    /// Helper converting raw hexadecimal state strings cleanly into standard numeric values.
-    ///
-    /// `u64`, not `u32`: new-generation `stat` values run 9-13 hex digits (X2D
-    /// `"1001000208070"`), which overflow a `u32` and would read as `None`.
-    pub(crate) fn parse_hex_string(hex_str: &str) -> Option<u64> {
-        let clean = hex_str
-            .strip_prefix("0x")
-            .or_else(|| hex_str.strip_prefix("0X"))
-            .unwrap_or(hex_str);
-        u64::from_str_radix(clean, 16).ok()
     }
 }

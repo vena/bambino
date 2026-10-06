@@ -31,10 +31,11 @@ use bambino::Error;
 use bambino::client::BuzzerMode;
 use bambino::io::tokio::TokioTimer;
 use bambino::models::PrinterModel;
+use bambino::mqtt::commands::{AmsControlOp, ChangeTemps};
 use bambino::mqtt::{
     AirductMode, AirductRequest, AmsChangeFilamentRequest, AmsControlRequest, AmsGetRfidRequest,
     BuzzerRequest, GetAccessCodeRequest, PrintJobConfig, ProjectFileRequest, PromptSoundRequest,
-    SkipObjectsRequest,
+    SkipObjectsRequest, echo_key,
 };
 use serde::Serialize;
 
@@ -108,15 +109,15 @@ impl AckTest {
     /// summary line can be pasted straight into `ACK_CORRELATED_COMMANDS`.
     fn wire_command(&self) -> &'static str {
         match self {
-            Self::AmsControl => "ams_control",
-            Self::AmsGetRfid => "ams_get_rfid",
-            Self::AmsChangeFilament => "ams_change_filament",
-            Self::SkipObjects => "skip_objects",
-            Self::ProjectFile => "project_file",
-            Self::SetAirduct => "set_airduct",
-            Self::PrintOption => "print_option",
-            Self::BuzzerCtrl => "buzzer_ctrl",
-            Self::GetAccessCode => "get_access_code",
+            Self::AmsControl => AmsControlRequest::COMMAND,
+            Self::AmsGetRfid => AmsGetRfidRequest::COMMAND,
+            Self::AmsChangeFilament => AmsChangeFilamentRequest::COMMAND,
+            Self::SkipObjects => SkipObjectsRequest::COMMAND,
+            Self::ProjectFile => ProjectFileRequest::COMMAND,
+            Self::SetAirduct => AirductRequest::COMMAND,
+            Self::PrintOption => PromptSoundRequest::COMMAND,
+            Self::BuzzerCtrl => BuzzerRequest::COMMAND,
+            Self::GetAccessCode => GetAccessCodeRequest::COMMAND,
         }
     }
 
@@ -193,10 +194,15 @@ impl AckTest {
     /// rejection is just as good an ack as a success [REF-MQTT-ACK].
     fn build_payload(&self, model: PrinterModel, seq: u64) -> Result<serde_json::Value, CliError> {
         let value = match self {
-            Self::AmsControl => serde_json::to_value(AmsControlRequest::new("resume", seq)),
+            Self::AmsControl => {
+                serde_json::to_value(AmsControlRequest::new(AmsControlOp::Resume, seq))
+            }
             Self::AmsGetRfid => serde_json::to_value(AmsGetRfidRequest::new(0, 0, seq)),
-            Self::AmsChangeFilament => serde_json::to_value(AmsChangeFilamentRequest::new(
-                0, 255, 255, -1, -1, None, seq,
+            Self::AmsChangeFilament => serde_json::to_value(AmsChangeFilamentRequest::unload(
+                0,
+                ChangeTemps::FIRMWARE,
+                None,
+                seq,
             )),
             Self::SkipObjects => serde_json::to_value(SkipObjectsRequest::new(vec![1], seq)),
             Self::ProjectFile => {
@@ -213,9 +219,7 @@ impl AckTest {
                 serde_json::to_value(AirductRequest::new(AirductMode::Cooling, seq))
             }
             Self::PrintOption => serde_json::to_value(PromptSoundRequest::new(true, seq)),
-            Self::BuzzerCtrl => {
-                serde_json::to_value(BuzzerRequest::new(BuzzerMode::Silent as i32, seq))
-            }
+            Self::BuzzerCtrl => serde_json::to_value(BuzzerRequest::new(BuzzerMode::Silent, seq)),
             Self::GetAccessCode => serde_json::to_value(GetAccessCodeRequest::new(seq)),
         };
 
@@ -296,9 +300,10 @@ struct AckReport {
     tests: Vec<AckEntry>,
 }
 
-/// Returns the payload's single top-level wrapper object (`print`/`system`/`pushing`/`info`) —
-/// mirrors `extract_echo_key`'s traversal in `src/mqtt/client/mod.rs`, which is the code
-/// whose behavior this harness exists to justify.
+/// Returns the payload's top-level wrapper object (`print`/`system`/`pushing`/`info`), for the report's `ack_wrapper`/`result`/`reason` fields.
+///
+/// Correlation itself goes through the library's `echo_key`, the code whose behavior this
+/// harness exists to justify, rather than a copy of its traversal.
 fn wrapper_object(
     payload: &serde_json::Value,
 ) -> Option<(&str, &serde_json::Map<String, serde_json::Value>)> {
@@ -340,7 +345,7 @@ struct Capture {
 /// Keeps listening for the full window even after a match so `uncorrelated_commands` reflects
 /// the whole window — the report reader needs to see that background telemetry was flowing
 /// alongside the ack, which is what distinguishes a real correlated ack from a lucky read.
-async fn capture_ack(client: &mut Printer, expected_seq: &str, window: Duration) -> Capture {
+async fn capture_ack(client: &mut Printer, expected_seq: u32, window: Duration) -> Capture {
     let start = Instant::now();
     let deadline = start + window;
     let mut ack = None;
@@ -370,7 +375,7 @@ async fn capture_ack(client: &mut Printer, expected_seq: &str, window: Duration)
         };
         let command = inner_str(inner, "command").map(str::to_string);
 
-        if inner_str(inner, "sequence_id") == Some(expected_seq) {
+        if echo_key(&message.payload).is_some_and(|key| key.sequence_id == expected_seq) {
             if ack.is_none() {
                 ack = Some(AckObservation {
                     message: ObservedMessage {
@@ -414,21 +419,20 @@ async fn run_one(
     let payload_value = test.build_payload(model, seq)?;
     // The clamped sequence_id the constructor actually wrote, not the raw counter — these
     // differ once the counter wraps TASK_ID_MAX, and it is the wire value we must match.
-    let sequence_id = wrapper_object(&payload_value)
-        .and_then(|(_, inner)| inner_str(inner, "sequence_id"))
-        .ok_or_else(|| {
-            CliError::Other(format!(
-                "{} payload has no sequence_id to correlate against",
-                test.wire_command()
-            ))
-        })?
-        .to_string();
     let payload_bytes = serde_json::to_vec(&payload_value).map_err(|e| {
         CliError::Other(format!(
             "failed to encode {} payload: {e}",
             test.wire_command()
         ))
     })?;
+    let sequence_id = echo_key(&payload_bytes)
+        .ok_or_else(|| {
+            CliError::Other(format!(
+                "{} payload has no sequence_id to correlate against",
+                test.wire_command()
+            ))
+        })?
+        .sequence_id;
 
     eprint!(
         "[{}/{}] {} (seq {}, {}s window)... ",
@@ -451,7 +455,7 @@ async fn run_one(
     let mut entry = AckEntry {
         wire_command: test.wire_command().to_string(),
         description: test.description().to_string(),
-        sequence_id: sequence_id.clone(),
+        sequence_id: sequence_id.to_string(),
         // Redacted like every other JSON value reaching the report, even though no current
         // `build_payload` arm emits a credential. The module invites new `AckTest` variants
         // ("add a variant for any future command before putting it on the allowlist"), and
@@ -477,7 +481,7 @@ async fn run_one(
         return Ok(entry);
     }
 
-    let capture = capture_ack(client, &sequence_id, window).await;
+    let capture = capture_ack(client, sequence_id, window).await;
     entry.uncorrelated_message_count = capture.uncorrelated_count;
     entry.uncorrelated_commands = capture.uncorrelated_commands;
     entry.capture_error = capture.error;

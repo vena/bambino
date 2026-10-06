@@ -10,32 +10,76 @@ use alloc::vec::Vec;
 use serde::Serialize;
 
 use super::ClampedTaskId;
+use crate::types::control::PrintSpeed;
 
-/// General control payload used for pause, resume, stop, and clean actions.
+/// A print-lifecycle command that carries nothing but its name and `sequence_id` [REF-MQTT-LIFECYCLE].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StandardCommand {
+    /// Pause the running job (`pause`).
+    Pause,
+    /// Resume a paused job (`resume`).
+    Resume,
+    /// Stop the job (`stop`).
+    Stop,
+    /// Re-read the nozzle information (`refresh_nozzle`).
+    RefreshNozzle,
+    /// Turn off air purification (`close_air_filt`).
+    CloseAirFilter,
+    /// The error dialog's "stop drying" (`auto_stop_ams_dry`).
+    AutoStopAmsDry,
+}
+
+impl StandardCommand {
+    /// The wire command name.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            StandardCommand::Pause => "pause",
+            StandardCommand::Resume => "resume",
+            StandardCommand::Stop => "stop",
+            StandardCommand::RefreshNozzle => "refresh_nozzle",
+            StandardCommand::CloseAirFilter => "close_air_filt",
+            StandardCommand::AutoStopAmsDry => "auto_stop_ams_dry",
+        }
+    }
+}
+
+/// General control payload used for pause, resume, stop and the other name-only commands.
 #[derive(Debug, Clone, Serialize)]
 pub struct StandardControlPayload {
-    /// Wire command name ("pause", "resume", "stop", etc.), a dynamic string rather than `&'static str`.
-    pub command: String,
+    /// Wire command name — see [`StandardCommand`].
+    pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
-/// Sends a print lifecycle command (pause, resume, stop) to the printer.
-#[derive(Debug, Clone, Serialize)]
-pub struct StandardControlRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: StandardControlPayload,
-}
+/// Sends a name-only print lifecycle command (pause, resume, stop, ...) to the printer.
+pub type StandardControlRequest = super::Print<StandardControlPayload>;
 
 impl StandardControlRequest {
-    /// Builds a control request for the given lifecycle command string ("pause", "resume", "stop").
-    pub fn new(command: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    /// Builds a request for `command`.
+    pub fn new(command: StandardCommand, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: StandardControlPayload {
-                command: String::from(command),
-                sequence_id: sequence_id.into().to_string(),
+                command: command.as_wire(),
+                sequence_id: sequence_id.into(),
             },
         }
+    }
+
+    /// Builds a `pause` request.
+    pub fn pause(sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self::new(StandardCommand::Pause, sequence_id)
+    }
+
+    /// Builds a `resume` request.
+    pub fn resume(sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self::new(StandardCommand::Resume, sequence_id)
+    }
+
+    /// Builds a `stop` request.
+    pub fn stop(sequence_id: impl Into<ClampedTaskId>) -> Self {
+        Self::new(StandardCommand::Stop, sequence_id)
     }
 }
 
@@ -47,24 +91,23 @@ pub struct SkipObjectsPayload {
     /// List of object indices (as sliced) to skip rendering.
     pub obj_list: Vec<u32>,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Tells the printer to skip specific objects in a multi-object print.
-#[derive(Debug, Clone, Serialize)]
-pub struct SkipObjectsRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: SkipObjectsPayload,
-}
+pub type SkipObjectsRequest = super::Print<SkipObjectsPayload>;
 
 impl SkipObjectsRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "skip_objects";
+
     /// Builds a `skip_objects` request from a list of object indices to skip.
     pub fn new(object_indices: Vec<u32>, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: SkipObjectsPayload {
-                command: "skip_objects",
+                command: Self::COMMAND,
                 obj_list: object_indices,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -76,23 +119,22 @@ pub struct CleanPrintErrorPayload {
     /// Wire command name, always `"clean_print_error"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Clears the printer's current error state so it can resume operation.
-#[derive(Debug, Clone, Serialize)]
-pub struct CleanPrintErrorRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: CleanPrintErrorPayload,
-}
+pub type CleanPrintErrorRequest = super::Print<CleanPrintErrorPayload>;
 
 impl CleanPrintErrorRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "clean_print_error";
+
     /// Builds a `clean_print_error` request.
     pub fn new(sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: CleanPrintErrorPayload {
-                command: "clean_print_error",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -115,21 +157,17 @@ pub struct HmsActionPayload {
     /// The current job's `job_id`, or empty when unknown (bambuddy sends `""` then).
     pub job_id: String,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Answers a paused print's error dialog: ignore the fault and resume, or resume/stop naming it.
-#[derive(Debug, Clone, Serialize)]
-pub struct HmsActionRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: HmsActionPayload,
-}
+pub type HmsActionRequest = super::Print<HmsActionPayload>;
 
 impl HmsActionRequest {
     fn build(
         command: &'static str,
         error_code: u32,
-        job_id: &str,
+        job_id: Option<&str>,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
@@ -137,8 +175,8 @@ impl HmsActionRequest {
                 command,
                 err: error_code.to_string(),
                 param: "reserve",
-                job_id: String::from(job_id),
-                sequence_id: sequence_id.into().to_string(),
+                job_id: String::from(job_id.unwrap_or_default()),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -147,17 +185,31 @@ impl HmsActionRequest {
     ///
     /// Unlike a plain `resume` ("fixed it, re-check"), this stops a fault such as a wrong build
     /// plate from being re-detected and re-pausing the print a second later (bambuddy #1869).
-    pub fn ignore(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    ///
+    /// `job_id` is the running job's id, or `None` when no telemetry has carried one yet.
+    pub fn ignore(
+        error_code: u32,
+        job_id: Option<&str>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
         Self::build("ignore", error_code, job_id, sequence_id)
     }
 
     /// Builds an error-aware `resume` request, the form BambuStudio's error dialog sends.
-    pub fn resume(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    pub fn resume(
+        error_code: u32,
+        job_id: Option<&str>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
         Self::build("resume", error_code, job_id, sequence_id)
     }
 
     /// Builds an error-aware `stop` request, the form BambuStudio's error dialog sends.
-    pub fn stop(error_code: u32, job_id: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    pub fn stop(
+        error_code: u32,
+        job_id: Option<&str>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
         Self::build("stop", error_code, job_id, sequence_id)
     }
 }
@@ -173,25 +225,40 @@ pub struct IdleIgnorePayload {
     #[serde(rename = "type")]
     pub ignore_type: u8,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Dismisses a non-pausing warning, once or permanently (BambuStudio `command_hms_idle_ignore`).
-#[derive(Debug, Clone, Serialize)]
-pub struct IdleIgnoreRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: IdleIgnorePayload,
+pub type IdleIgnoreRequest = super::Print<IdleIgnorePayload>;
+
+/// How long an `idle_ignore` dismissal lasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IdleIgnoreScope {
+    /// Dismiss this occurrence only (`type: 0`).
+    Once,
+    /// Never show this warning again (`type: 1`).
+    Permanent,
 }
 
 impl IdleIgnoreRequest {
-    /// Builds an `idle_ignore` request; `persistent` selects `type: 1` (never show again).
-    pub fn new(error_code: u32, persistent: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "idle_ignore";
+
+    /// Builds an `idle_ignore` request dismissing `error_code` for `scope`.
+    pub fn new(
+        error_code: u32,
+        scope: IdleIgnoreScope,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
         Self {
             print: IdleIgnorePayload {
-                command: "idle_ignore",
+                command: Self::COMMAND,
                 err: error_code.to_string(),
-                ignore_type: u8::from(persistent),
-                sequence_id: sequence_id.into().to_string(),
+                ignore_type: match scope {
+                    IdleIgnoreScope::Once => 0,
+                    IdleIgnoreScope::Permanent => 1,
+                },
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -203,7 +270,7 @@ pub struct UiopPayload {
     /// Wire command name, always `"uiop"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
     /// UI element family, always `"print_error"`.
     pub name: &'static str,
     /// Always `"close"`.
@@ -221,19 +288,18 @@ pub struct UiopPayload {
 ///
 /// Separate from [`CleanPrintErrorRequest`], which clears the error latch: BambuStudio sends
 /// this once whenever its own copy of the dialog closes.
-#[derive(Debug, Clone, Serialize)]
-pub struct UiopRequest {
-    /// The `system` namespace envelope required by the wire protocol.
-    pub system: UiopPayload,
-}
+pub type UiopRequest = super::System<UiopPayload>;
 
 impl UiopRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "uiop";
+
     /// Builds a `uiop` request closing the dialog for `error_code`.
     pub fn close_print_error(error_code: u32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             system: UiopPayload {
-                command: "uiop",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
                 name: "print_error",
                 action: "close",
                 source: 1,
@@ -252,24 +318,23 @@ pub struct CalibrationPayload {
     /// Calculated 32-bit active target parameter option bitmask [REF-MQTT-LIFECYCLE].
     pub option: u32,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Kicks off a calibration routine (vibration compensation, bed leveling, etc.).
-#[derive(Debug, Clone, Serialize)]
-pub struct CalibrationRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: CalibrationPayload,
-}
+pub type CalibrationRequest = super::Print<CalibrationPayload>;
 
 impl CalibrationRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "calibration";
+
     /// Builds a `calibration` request from a capability option bitmask.
     pub fn new(option_bitmask: u32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: CalibrationPayload {
-                command: "calibration",
+                command: Self::COMMAND,
                 option: option_bitmask,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -287,24 +352,23 @@ pub struct PrintSpeedPayload {
     /// * `"4"`: Ludicrous Mode (166% limits).
     pub param: String,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Changes the active print speed profile (silent, standard, sport, ludicrous).
-#[derive(Debug, Clone, Serialize)]
-pub struct PrintSpeedRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: PrintSpeedPayload,
-}
+pub type PrintSpeedRequest = super::Print<PrintSpeedPayload>;
 
 impl PrintSpeedRequest {
-    /// Builds a `print_speed` request from a stringified speed index.
-    pub fn new(speed_index_str: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_speed";
+
+    /// Builds a `print_speed` request for `speed`.
+    pub fn new(speed: PrintSpeed, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: PrintSpeedPayload {
-                command: "print_speed",
-                param: String::from(speed_index_str),
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                param: speed.level().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }

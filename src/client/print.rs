@@ -3,18 +3,12 @@ use alloc::format;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-#[cfg(feature = "std")]
-use std::borrow::Cow;
-
-#[cfg(not(feature = "std"))]
-use alloc::borrow::Cow;
-
+use super::{CommandHandle, PrinterClient};
 use crate::error::Error;
 use crate::io::{AsyncIo, RawStreamFactory, TimerProvider, TlsConnector};
+use crate::mqtt::commands::{IdleIgnoreScope, StandardCommand};
 use crate::mqtt::{PrintJobConfig, StandardControlRequest};
-
-use super::types::{CalibrationOption, PrintSpeed, PrintStatus};
-use super::{CommandHandle, PrinterClient};
+use crate::types::control::{CalibrationOption, PrintSpeed, PrintStatus};
 
 impl<
     MqttRawIO,
@@ -63,16 +57,14 @@ where
     /// purpose to document what the firmware does. See `stop_print` for the staleness argument
     /// that applies to any cache-backed gate on this path.
     pub async fn pause_print(&mut self) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| StandardControlRequest::new("pause", seq))
-            .await
+        self.dispatch(StandardControlRequest::pause).await
     }
 
     /// Resumes a paused print job [REF-MQTT-LIFECYCLE].
     ///
     /// Not state-gated, on the same terms as [`pause_print`](Self::pause_print).
     pub async fn resume_print(&mut self) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| StandardControlRequest::new("resume", seq))
-            .await
+        self.dispatch(StandardControlRequest::resume).await
     }
 
     /// Aborts/cancels the currently running print job queue [REF-MQTT-LIFECYCLE].
@@ -84,8 +76,7 @@ where
     /// printer running while reporting the stop as rejected — the wrong direction to fail for
     /// the abort path. Stop is idempotent, so a no-op stop costs nothing on the other side.
     pub async fn stop_print(&mut self) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| StandardControlRequest::new("stop", seq))
-            .await
+        self.dispatch(StandardControlRequest::stop).await
     }
 
     /// Clears active error codes from the printer's diagnostic fault register [REF-MQTT-LIFECYCLE].
@@ -99,15 +90,20 @@ where
     /// Sends `ignore`, which skips the firmware's next re-check of that one fault. A plain
     /// [`resume_print`](Self::resume_print) means "fixed it, re-check", so a fault such as a wrong
     /// build plate is re-detected and pauses the print again a second later (bambuddy #1869).
-    /// `error_code` is the raw `print_error` register value; the cached `job_id` is echoed back,
-    /// or an empty string before any telemetry carried one. [REF-MQTT-LIFECYCLE]
+    /// `error_code` is the `print_error` register value: pass the
+    /// [`DecodedPrintError`](crate::diagnostics::DecodedPrintError) from
+    /// [`active_fault()`](Self::active_fault), or its raw `code`. The cached `job_id` is echoed
+    /// back, or an empty string before any telemetry carried one. [REF-MQTT-LIFECYCLE]
     pub async fn ignore_error_and_resume(
         &mut self,
-        error_code: u32,
+        error_code: impl Into<u32>,
     ) -> Result<CommandHandle, Error> {
-        let job_id = self.cache.last_job_id.clone().unwrap_or_default();
-        self.dispatch(|seq| crate::mqtt::HmsActionRequest::ignore(error_code, &job_id, seq))
-            .await
+        let error_code = error_code.into();
+        let job_id = self.core.cache.last_job_id.clone();
+        self.dispatch(|seq| {
+            crate::mqtt::HmsActionRequest::ignore(error_code, job_id.as_deref(), seq)
+        })
+        .await
     }
 
     /// Resumes naming the fault being answered — BambuStudio's error-dialog form of `resume`.
@@ -118,11 +114,14 @@ where
     /// [`ignore_error_and_resume`](Self::ignore_error_and_resume). [REF-MQTT-LIFECYCLE]
     pub async fn resume_print_after_error(
         &mut self,
-        error_code: u32,
+        error_code: impl Into<u32>,
     ) -> Result<CommandHandle, Error> {
-        let job_id = self.cache.last_job_id.clone().unwrap_or_default();
-        self.dispatch(|seq| crate::mqtt::HmsActionRequest::resume(error_code, &job_id, seq))
-            .await
+        let error_code = error_code.into();
+        let job_id = self.core.cache.last_job_id.clone();
+        self.dispatch(|seq| {
+            crate::mqtt::HmsActionRequest::resume(error_code, job_id.as_deref(), seq)
+        })
+        .await
     }
 
     /// Stops naming the fault being answered — BambuStudio's error-dialog form of `stop`.
@@ -131,23 +130,25 @@ where
     /// [`resume_print_after_error`](Self::resume_print_after_error). [REF-MQTT-LIFECYCLE]
     pub async fn stop_print_after_error(
         &mut self,
-        error_code: u32,
+        error_code: impl Into<u32>,
     ) -> Result<CommandHandle, Error> {
-        let job_id = self.cache.last_job_id.clone().unwrap_or_default();
-        self.dispatch(|seq| crate::mqtt::HmsActionRequest::stop(error_code, &job_id, seq))
+        let error_code = error_code.into();
+        let job_id = self.core.cache.last_job_id.clone();
+        self.dispatch(|seq| crate::mqtt::HmsActionRequest::stop(error_code, job_id.as_deref(), seq))
             .await
     }
 
     /// Dismisses a non-pausing warning without resuming anything (`idle_ignore`).
     ///
-    /// `persistent` suppresses the same warning permanently (`type: 1`) instead of just this
-    /// occurrence. [REF-MQTT-LIFECYCLE]
+    /// `scope` dismisses this occurrence or suppresses the warning permanently.
+    /// [REF-MQTT-LIFECYCLE]
     pub async fn dismiss_error(
         &mut self,
-        error_code: u32,
-        persistent: bool,
+        error_code: impl Into<u32>,
+        scope: IdleIgnoreScope,
     ) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| crate::mqtt::IdleIgnoreRequest::new(error_code, persistent, seq))
+        let error_code = error_code.into();
+        self.dispatch(|seq| crate::mqtt::IdleIgnoreRequest::new(error_code, scope, seq))
             .await
     }
 
@@ -156,20 +157,24 @@ where
     /// Separate from [`clear_print_error`](Self::clear_print_error), which clears the error
     /// latch but leaves the on-screen dialog; BambuStudio sends this once whenever its own copy
     /// of the dialog closes. [REF-MQTT-LIFECYCLE]
-    pub async fn close_error_dialog(&mut self, error_code: u32) -> Result<CommandHandle, Error> {
+    pub async fn close_error_dialog(
+        &mut self,
+        error_code: impl Into<u32>,
+    ) -> Result<CommandHandle, Error> {
+        let error_code = error_code.into();
         self.dispatch(|seq| crate::mqtt::UiopRequest::close_print_error(error_code, seq))
             .await
     }
 
     /// Asks the printer to re-read its nozzle information (`refresh_nozzle`) [REF-MQTT-LIFECYCLE].
     pub async fn refresh_nozzle(&mut self) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| StandardControlRequest::new("refresh_nozzle", seq))
+        self.dispatch(|seq| StandardControlRequest::new(StandardCommand::RefreshNozzle, seq))
             .await
     }
 
     /// Turns off air purification (`close_air_filt`), the error dialog's "disable purification" [REF-MQTT-LIFECYCLE].
     pub async fn disable_air_purification(&mut self) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| StandardControlRequest::new("close_air_filt", seq))
+        self.dispatch(|seq| StandardControlRequest::new(StandardCommand::CloseAirFilter, seq))
             .await
     }
 
@@ -179,19 +184,13 @@ where
     /// `ams_filament_drying` for one unit. Whether the two are equivalent is not known, so this
     /// is offered alongside it rather than in place of it.
     pub async fn auto_stop_ams_drying(&mut self) -> Result<CommandHandle, Error> {
-        self.dispatch(|seq| StandardControlRequest::new("auto_stop_ams_dry", seq))
+        self.dispatch(|seq| StandardControlRequest::new(StandardCommand::AutoStopAmsDry, seq))
             .await
     }
 
     /// Dynamically scales maximum velocity and acceleration limits during an active print [REF-MQTT-LIFECYCLE].
     pub async fn set_print_speed(&mut self, level: PrintSpeed) -> Result<CommandHandle, Error> {
-        let speed_str = match level {
-            PrintSpeed::Silent => "1",
-            PrintSpeed::Standard => "2",
-            PrintSpeed::Sport => "3",
-            PrintSpeed::Ludicrous => "4",
-        };
-        self.dispatch(|seq| crate::mqtt::commands::PrintSpeedRequest::new(speed_str, seq))
+        self.dispatch(|seq| crate::mqtt::commands::PrintSpeedRequest::new(level, seq))
             .await
     }
 
@@ -216,24 +215,24 @@ where
     /// it would break skip-objects outright. bambuddy parses it and likewise does not gate on it.
     pub async fn skip_objects(&mut self, object_ids: Vec<u32>) -> Result<CommandHandle, Error> {
         if object_ids.is_empty() {
-            return Err(Error::InvalidArgument(Cow::Borrowed(
-                "skip_objects requires at least one object id",
-            )));
+            return Err(Error::InvalidArgument(
+                "skip_objects requires at least one object id".into(),
+            ));
         }
-        match self.print_status() {
-            // `None`/`Unknown` pass through for the reasons in `reject_unless_job_active`.
-            Some(PrintStatus::Running)
-            | Some(PrintStatus::Paused)
-            | Some(PrintStatus::Unknown)
-            | None => {}
-            Some(status) => {
-                return Err(Error::InvalidState(
-                    format!(
-                        "skip_objects requires a running or paused print (observed state: {status:?})"
-                    )
-                    .into(),
-                ));
-            }
+        // `None`/`Unknown` pass: an unobserved or unrecognized state can't confirm the job is
+        // gone, and refusing on it would fail a legitimate skip on a client that hasn't polled.
+        if let Some(status) = self.print_status()
+            && !matches!(
+                status,
+                PrintStatus::Running | PrintStatus::Paused | PrintStatus::Unknown
+            )
+        {
+            return Err(Error::InvalidState(
+                format!(
+                    "skip_objects requires a running or paused print (observed state: {status:?})"
+                )
+                .into(),
+            ));
         }
         self.dispatch(|seq| crate::mqtt::SkipObjectsRequest::new(object_ids, seq))
             .await
@@ -272,8 +271,8 @@ where
     /// The firmware accepts every option bit, acknowledges the command `"result": "success"`,
     /// and silently queues nothing for a routine the hardware doesn't run — so the wire never
     /// reports the skip. This method masks the request against
-    /// [`supported_calibration_mask()`](crate::quirks::ModelQuirks::supported_calibration_mask)
-    /// instead of trusting that ack: unsupported bits are dropped with a `log::warn!` and the
+    /// [`supported_calibration()`](crate::quirks::ModelQuirks::supported_calibration)
+    /// instead of trusting that ack: unsupported routines are dropped with a `log::warn!` and the
     /// remaining routines still run.
     ///
     /// **Vibration compensation (bit 2) is kept on every model.** Both upstreams send the bit
@@ -300,24 +299,24 @@ where
         // model actually runs and refuse only when nothing at all would execute — a partial
         // request still does useful work, so failing it outright would break a caller that ORs in
         // every flag defensively.
-        let supported = self.identity.model.quirks().supported_calibration_mask();
-        let effective = options.0 & supported;
+        let supported = self.quirks().supported_calibration();
+        let effective = options.intersection(supported);
 
-        if effective == 0 {
-            return Err(Error::ModelMismatch(Cow::Borrowed(
-                "no requested calibration routine is supported on this model",
-            )));
+        if effective.is_empty() {
+            return Err(Error::ModelMismatch(
+                "no requested calibration routine is supported on this model".into(),
+            ));
         }
-        if effective != options.0 {
+        if effective != options {
             log::warn!(
                 "dropping calibration option bits unsupported on this model: {:#08b} (requested {:#08b}, running {:#08b})",
-                options.0 & !supported,
-                options.0,
-                effective
+                options.difference(supported).bits(),
+                options.bits(),
+                effective.bits()
             );
         }
 
-        self.dispatch(|seq| crate::mqtt::CalibrationRequest::new(effective, seq))
+        self.dispatch(|seq| crate::mqtt::CalibrationRequest::new(effective.bits(), seq))
             .await
     }
 
@@ -327,7 +326,7 @@ where
     /// config left it `None`, and forces it off on a single-nozzle model even if the caller set
     /// it explicitly.
     pub async fn start_print(&mut self, config: &PrintJobConfig) -> Result<CommandHandle, Error> {
-        let model = self.identity.model;
+        let model = self.core.identity.model;
         self.dispatch(|seq| crate::mqtt::ProjectFileRequest::from_config(config, seq, model))
             .await
     }

@@ -15,6 +15,9 @@ pub(crate) mod protocol;
 pub const FTPS_PORT: u16 = 990;
 
 pub use client::{FtpsClient, TlsVersionCheck};
+
+/// Largest file `FtpsClient` uploads or downloads, in bytes (512 MiB).
+pub const MAX_TRANSFER_BYTES: usize = protocol::FTPS_MAX_TRANSFER_BYTES;
 pub use parser::{
     CurrentDateTime, FtpFile, FtpTimestamp, parse_mdtm_timestamp, parse_unix_listing,
 };

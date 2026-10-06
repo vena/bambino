@@ -51,21 +51,21 @@ fn test_fun2_deserialization_and_location_fallback() {
 #[test]
 fn test_fun2_bit_reads_lsb_first_from_the_right() {
     // 0x20 = 0b0010_0000 -> bit 5 set, neighbours clear.
-    assert_eq!(fun2_bit("20", 5), Some(true));
-    assert_eq!(fun2_bit("20", 4), Some(false));
-    assert_eq!(fun2_bit("20", 6), Some(false));
-    assert_eq!(fun2_bit("00", 5), Some(false));
+    assert_eq!(hex_bit("20", 5), Some(true));
+    assert_eq!(hex_bit("20", 4), Some(false));
+    assert_eq!(hex_bit("20", 6), Some(false));
+    assert_eq!(hex_bit("00", 5), Some(false));
 
     // A bit index past the end of the string reads false, not None — BambuStudio's
     // get_flag_bits_no_border returns 0 there rather than failing.
-    assert_eq!(fun2_bit("20", 99), Some(false));
+    assert_eq!(hex_bit("20", 99), Some(false));
 
     // A 0x prefix and stray non-hex characters are ignored, as upstream filters them.
-    assert_eq!(fun2_bit("0x20", 5), Some(true));
+    assert_eq!(hex_bit("0x20", 5), Some(true));
 
     // No hex digits at all is the one None case: the printer told us nothing.
-    assert_eq!(fun2_bit("", 5), None);
-    assert_eq!(fun2_bit("zz", 5), None);
+    assert_eq!(hex_bit("", 5), None);
+    assert_eq!(hex_bit("zz", 5), None);
 }
 
 #[test]
@@ -77,11 +77,11 @@ fn test_fun2_bit_handles_strings_longer_than_u64() {
     assert!(u64::from_str_radix(long_hex, 16).is_err());
 
     // Low nibble is 4 = 0b0100, so bit 2 is set and bit 0 is clear.
-    assert_eq!(fun2_bit(long_hex, 2), Some(true));
-    assert_eq!(fun2_bit(long_hex, 0), Some(false));
+    assert_eq!(hex_bit(long_hex, 2), Some(true));
+    assert_eq!(hex_bit(long_hex, 0), Some(false));
 
     // Bit 76 lands in the leading "1", well past 64 bits.
-    assert_eq!(fun2_bit(long_hex, 76), Some(true));
+    assert_eq!(hex_bit(long_hex, 76), Some(true));
 }
 
 #[test]

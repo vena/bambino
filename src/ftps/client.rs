@@ -763,7 +763,20 @@ where
     ///    transient `426` reply — this guards against silent SD card write truncation on every
     ///    model, not only the P2S/X2D TLS 1.3 close race [REF-FTPS-CONN]. A size mismatch is
     ///    [`Error::DiskWriteFailure`]; a final reply other than `226`/`426` is [`Error::FtpReply`].
+    ///
+    /// A payload larger than [`MAX_TRANSFER_BYTES`](crate::ftps::MAX_TRANSFER_BYTES) is refused
+    /// with [`Error::InvalidArgument`] before anything is sent: `download_file` would refuse to
+    /// read it back.
     pub async fn upload_file(&mut self, remote_path: &str, data: &[u8]) -> Result<(), Error> {
+        if data.len() > FTPS_MAX_TRANSFER_BYTES {
+            return Err(Error::InvalidArgument(
+                format!(
+                    "upload of {} bytes exceeds the {FTPS_MAX_TRANSFER_BYTES}-byte transfer limit",
+                    data.len()
+                )
+                .into(),
+            ));
+        }
         let mut data_channel = self.open_transfer("STOR", remote_path).await?;
 
         // One `write_all` per chunk, each with its own fresh write deadline.

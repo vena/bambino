@@ -12,7 +12,7 @@ fn test_ctc_info_deserialization_composite() {
     let report: TelemetryReport = serde_json::from_str(json_data).unwrap();
     let ctc = report.device.unwrap().ctc.unwrap();
     let temp = ctc.info.unwrap().temp.unwrap();
-    let (actual, target) = PrinterTelemetry::unpack_temperature(temp as f64);
+    let HeaterTemps { actual, target } = unpack_temperature(temp as f64);
     assert_eq!(actual, 48);
     assert_eq!(target, 60);
 }
@@ -36,7 +36,7 @@ fn test_ctc_info_deserialization_direct() {
         .unwrap()
         .temp
         .unwrap();
-    let (actual, target) = PrinterTelemetry::unpack_temperature(temp as f64);
+    let HeaterTemps { actual, target } = unpack_temperature(temp as f64);
     assert_eq!(actual, 35);
     assert_eq!(target, 0);
 }

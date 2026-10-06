@@ -170,8 +170,6 @@ pub async fn run(target: &Target) -> Result<(), CliError> {
     );
 
     let mut printer = target.printer()?;
-    let quirks = printer.model().quirks();
-
     printer.request_pushall().await?;
 
     let mut keepalive = keepalive_interval().await;
@@ -193,8 +191,6 @@ pub async fn run(target: &Target) -> Result<(), CliError> {
         }
     });
 
-    let mut state = serde_json::Map::new();
-
     // Most recent non-fatal diagnostic, shown in the dashboard footer. These used to be
     // `log::warn!` calls, which reach stderr on the same raw-mode tty the dashboard is
     // drawing to and corrupt it; the CLI's logger is silenced for this subcommand
@@ -203,14 +199,8 @@ pub async fn run(target: &Target) -> Result<(), CliError> {
     // the dashboard otherwise redraws only on telemetry, so a stall warning would surface only
     // after the stall ended, and a push that draws nothing would clear it unseen.
     let mut warning: Option<String> = None;
-    let redraw = |printer: &Printer, state: &serde_json::Map<_, _>, warning: Option<&str>| {
-        dashboard::draw_dashboard(
-            state,
-            quirks,
-            printer.print_progress(),
-            printer.bed_temperatures(),
-            warning,
-        );
+    let redraw = |printer: &Printer, warning: Option<&str>| {
+        dashboard::draw_dashboard(printer, warning);
     };
 
     // NOTE: racing `poll_telemetry()` against `ping_timer.tick()` here means a silently
@@ -224,23 +214,11 @@ pub async fn run(target: &Target) -> Result<(), CliError> {
             telemetry_res = printer.poll_telemetry() => {
                 match telemetry_res {
                     Ok(event) => {
-                        // An outcome no message produced (a timeout, a disconnect) has nothing
-                        // to render; this monitor sends no commands after its pushall anyway.
-                        let Some(raw) = event.raw() else { continue };
-                        // Progress and bed temperature are read from the client cache inside
-                        // `redraw`, after `poll_telemetry()` has folded this frame in, so the
-                        // dashboard shows what a library consumer would see.
-                        match dashboard::merge_update(&raw.payload, &mut state) {
-                            Ok(true) => {
-                                redraw(&printer, &state, warning.as_deref());
-                                warning = None;
-                            }
-                            Ok(false) => {}
-                            Err(e) => {
-                                warning =
-                                    Some(format!("Failed to parse telemetry update: {:?}", e));
-                                redraw(&printer, &state, warning.as_deref());
-                            }
+                        // Only a telemetry report changes what is drawn; the dashboard reads the
+                        // client cache, which `poll_telemetry()` has already updated.
+                        if event.report().is_some() {
+                            redraw(&printer, warning.as_deref());
+                            warning = None;
                         }
                     }
                     // A `TimedOut` from `poll_wire`'s per-read deadline means the wire went
@@ -255,7 +233,7 @@ pub async fn run(target: &Target) -> Result<(), CliError> {
                             "Connection stalled (no telemetry within the read deadline) — retrying"
                                 .to_string(),
                         );
-                        redraw(&printer, &state, warning.as_deref());
+                        redraw(&printer, warning.as_deref());
                     }
                     Err(e) => break Err(e),
                 }

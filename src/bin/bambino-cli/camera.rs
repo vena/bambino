@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 
+use bambino::Error;
 use bambino::camera::CameraProtocol;
 use bambino::io::TlsVersions;
 use bambino::io::tokio::TokioRawStreamFactory;
@@ -17,47 +18,40 @@ use crate::error::CliError;
 pub enum CameraAction {
     /// Capture a single JPEG frame (A1/P1 binary protocol only)
     #[command(override_usage = "bambino-cli camera <IP> <SERIAL> [ACCESS_CODE] snapshot [OUTPUT]")]
-    Snapshot { output: Option<String> },
+    Snapshot {
+        #[arg(default_value = "snapshot.jpg")]
+        output: String,
+    },
 }
 
 /// Dispatches a typed camera action.
 pub async fn run(target: &Target, action: CameraAction) -> Result<(), CliError> {
     match action {
-        CameraAction::Snapshot { output } => {
-            let output_path = output.as_deref().unwrap_or("snapshot.jpg");
-            run_snapshot(target, output_path).await
-        }
+        CameraAction::Snapshot { output } => run_snapshot(target, &output).await,
     }
 }
 
 async fn run_snapshot(target: &Target, output_path: &str) -> Result<(), CliError> {
-    let printer = target.printer()?;
-
-    let protocol = printer.model().quirks().camera_protocol();
-    if protocol != CameraProtocol::BinaryJpeg {
-        eprintln!(
-            "Warning: {} uses RTSPS (port {}), not the binary JPEG protocol.",
-            target.serial,
-            protocol.default_port()
-        );
-        eprintln!("The snapshot command only supports binary camera streaming (A1/P1 series).");
-        return Err(CliError::InvalidArgs(
-            "Model does not support binary JPEG camera protocol".into(),
-        ));
-    }
-
     let tls_connector = build_cli_tls_connector(TlsVersions::Default)?;
-
-    let mut printer = printer.with_camera(tls_connector, TokioRawStreamFactory);
+    let mut printer = target
+        .printer()?
+        .with_camera(tls_connector, TokioRawStreamFactory);
 
     println!(
         "Connecting to {} port {} ...",
         target.ip,
-        protocol.default_port()
+        CameraProtocol::BinaryJpeg.default_port()
     );
-
     println!("Capturing frame ...");
-    let frame = printer.read_camera_frame().await?;
+    // The library refuses an RTSPS model before dialing; that refusal is the only check.
+    let frame = printer.read_camera_frame().await.map_err(|e| match e {
+        Error::ModelMismatch(_) => CliError::InvalidArgs(format!(
+            "{} streams its camera over RTSPS; snapshot supports only the binary JPEG \
+             protocol (A1/P1 series)",
+            target.serial
+        )),
+        other => other.into(),
+    })?;
 
     let path = Path::new(output_path);
     fs::write(path, &frame)?;

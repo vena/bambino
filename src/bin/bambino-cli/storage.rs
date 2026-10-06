@@ -18,8 +18,9 @@ use crate::connection::Target;
 use crate::error::CliError;
 use crate::trust::build_cli_tls_connector;
 
-/// Bytes per gibibyte — shared by the upload size ceiling and `format_size`'s unit conversion, which previously each hardcoded this same literal independently.
-const BYTES_PER_GIB: u64 = 1_073_741_824;
+const BYTES_PER_KIB: u64 = 1024;
+const BYTES_PER_MIB: u64 = 1024 * BYTES_PER_KIB;
+const BYTES_PER_GIB: u64 = 1024 * BYTES_PER_MIB;
 
 #[derive(Subcommand, Debug)]
 pub enum FilesAction {
@@ -134,12 +135,14 @@ pub async fn run(
                 let local = Path::new(&local_path);
                 let metadata = fs::metadata(local)?;
 
-                const MAX_UPLOAD_BYTES: u64 = BYTES_PER_GIB;
-                if metadata.len() > MAX_UPLOAD_BYTES {
+                // The library's own transfer cap, checked before reading the file in: anything
+                // larger couldn't be downloaded again.
+                let max = bambino::ftps::MAX_TRANSFER_BYTES as u64;
+                if metadata.len() > max {
                     return Err(CliError::InvalidArgs(format!(
-                        "File too large for upload: {} bytes (max {} MB)",
-                        metadata.len(),
-                        MAX_UPLOAD_BYTES / (1024 * 1024)
+                        "File too large for upload: {} (max {})",
+                        format_size(metadata.len()),
+                        format_size(max)
                     )));
                 }
 
@@ -188,13 +191,9 @@ pub async fn run(
             FilesAction::Space => {
                 println!("Querying hardware storage space evaluations...");
                 let space_bytes = client.get_available_space().await?;
-                let space_mb = space_bytes as f64 / (1024.0 * 1024.0);
-                let space_gb = space_mb / 1024.0;
-
                 println!("\nStorage Capacity Status:");
                 println!("  - Free Space (Bytes) : {}", space_bytes);
-                println!("  - Free Space (MB)    : {:.2} MB", space_mb);
-                println!("  - Free Space (GB)    : {:.2} GB\n", space_gb);
+                println!("  - Free Space         : {}\n", format_size(space_bytes));
             }
         }
         Ok(())
@@ -438,10 +437,10 @@ fn print_file_listing_table(remote_path: &str, files: &[bambino::ftps::FtpFile])
 fn format_size(bytes: u64) -> String {
     if bytes >= BYTES_PER_GIB {
         format!("{:.1} GB", bytes as f64 / BYTES_PER_GIB as f64)
-    } else if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else if bytes >= 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes >= BYTES_PER_MIB {
+        format!("{:.1} MB", bytes as f64 / BYTES_PER_MIB as f64)
+    } else if bytes >= BYTES_PER_KIB {
+        format!("{:.1} KB", bytes as f64 / BYTES_PER_KIB as f64)
     } else {
         format!("{} B", bytes)
     }

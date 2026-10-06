@@ -57,7 +57,7 @@ where
         &mut self,
         ftps_client: FtpsClient<FtpsRawIO, FtpsTls, FtpsFactory, FtpsTimer>,
     ) {
-        let _ = self.disconnect_ftps().await;
+        self.disconnect_ftps().await;
         self.ftps = Some(ftps_client);
     }
 
@@ -82,13 +82,11 @@ where
     /// into this client's FTPS configuration, so the next [`ftps()`](Self::ftps) or
     /// [`connect_ftps()`](Self::connect_ftps) dials a fresh session, as the camera channel does.
     ///
-    /// Idempotent — a no-op if no FTPS session is active. Always returns `Ok(())`; kept
-    /// fallible for API symmetry with [`connect_ftps()`](Self::connect_ftps) and to leave room
-    /// for a fallible teardown step in the future without a breaking signature change.
-    pub async fn disconnect_ftps(&mut self) -> Result<(), Error> {
+    /// Idempotent — a no-op if no FTPS session is active. Infallible: a close failure on the way
+    /// out is logged and swallowed, since the connection is going away either way.
+    pub async fn disconnect_ftps(&mut self) {
         if let Some(client) = self.ftps.take() {
             self.ftps_config = Some(client.disconnect().await);
         }
-        Ok(())
     }
 }

@@ -22,8 +22,25 @@ use alloc::format;
 use alloc::string::String;
 
 pub(crate) const HMS_FAULT_THRESHOLD: u32 = 0x4000;
-pub(crate) const HMS_CANCEL_ECHO_A: &str = "0300_400C";
-pub(crate) const HMS_CANCEL_ECHO_B: &str = "0500_400E";
+/// `(high word, low word)` of the two user-cancellation echoes, `0300_400C` and `0500_400E`.
+const HMS_CANCEL_ECHOES: [(u32, u32); 2] = [(0x0300, 0x400C), (0x0500, 0x400E)];
+
+/// The `MMMM_CCCC` short code for a high and low word.
+fn short_code(hi: u32, lo: u32) -> String {
+    format!("{hi:04X}_{lo:04X}")
+}
+
+/// Whether `hi`/`lo` name a user-cancellation echo rather than a fault.
+///
+/// Raised as a confirmation when a user aborts a print; must not be flagged as an error.
+fn is_cancel_echo(hi: u32, lo: u32) -> bool {
+    HMS_CANCEL_ECHOES.contains(&(hi, lo))
+}
+
+/// The source module id, in the top byte of `attr` or of the `print_error` register.
+fn module_id(word: u32) -> u8 {
+    (word >> 24) as u8
+}
 
 /// Numerical classification of the severity level of an HMS diagnostic alert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -78,23 +95,10 @@ pub struct DecodedHmsAlert {
 /// tracking variables, extract severity ratings, isolate module indexes, and filter
 /// transient state updates.
 pub fn decode_hms_alert(attr: u32, code: u32) -> DecodedHmsAlert {
-    let attr_high = (attr >> 16) & 0xFFFF;
+    let attr_high = attr >> 16;
     let attr_low = attr & 0xFFFF;
-    let code_high = (code >> 16) & 0xFFFF;
+    let code_high = code >> 16;
     let code_low = code & 0xFFFF;
-
-    // Build the 16-character underscore-delimited format used on support channels
-    let wiki_key = format!(
-        "{:04X}_{:04X}_{:04X}_{:04X}",
-        attr_high, attr_low, code_high, code_low
-    );
-
-    // Build local 8-character LCD format: High word of attr combined with low word of code
-    let short_code = format!("{:04X}_{:04X}", attr_high, code_low);
-
-    // Module ID resides on the fourth byte of the attr parameter: (attr >> 24) & 0xFF
-    let module_id = ((attr >> 24) & 0xFF) as u8;
-    let severity = HmsSeverity::from_code(code);
 
     // Compare the full 32-bit code (not just its low 16 bits) against the fault
     // threshold — confirmed against BambuStudio's bundled `resources/hms/hms_en_093.json`
@@ -102,24 +106,23 @@ pub fn decode_hms_alert(attr: u32, code: u32) -> DecodedHmsAlert {
     // check misclassifies nearly every real fault as a non-fault status step).
     let is_status_step = code < HMS_FAULT_THRESHOLD;
 
-    // Cancellation echoes (e.g., 0300_400C) are raised as system confirmations when
-    // a user aborts a print. These must not be flagged as actual errors.
-    let is_cancel_echo = short_code == HMS_CANCEL_ECHO_A || short_code == HMS_CANCEL_ECHO_B;
-
-    let is_genuine_fault = !is_status_step && !is_cancel_echo;
-
     DecodedHmsAlert {
-        wiki_key,
-        short_code,
-        severity,
-        module_id,
-        is_genuine_fault,
+        // 16-character underscore-delimited format used on support channels.
+        wiki_key: format!("{attr_high:04X}_{attr_low:04X}_{code_high:04X}_{code_low:04X}"),
+        // Local LCD format: high word of attr with low word of code.
+        short_code: short_code(attr_high, code_low),
+        severity: HmsSeverity::from_code(code),
+        module_id: module_id(attr),
+        is_genuine_fault: !is_status_step && !is_cancel_echo(attr_high, code_low),
     }
 }
 
 /// Fully decoded representation of the primary system `print_error` register.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DecodedPrintError {
+    /// The raw `print_error` register value this was decoded from — what the error-dialog
+    /// commands (`PrinterClient::ignore_error_and_resume` and friends) take.
+    pub code: u32,
     /// The local 8-character short-code format displayed on the physical LCD panel (`MMMM_CCCC`).
     pub short_code: String,
     /// Unpacked system module code where the primary print execution halted.
@@ -138,28 +141,29 @@ pub fn decode_print_error(print_error: u32) -> Option<DecodedPrintError> {
         return None;
     }
 
-    let short_code = format!(
-        "{:04X}_{:04X}",
-        (print_error >> 16) & 0xFFFF,
-        print_error & 0xFFFF
-    );
-
-    // Unpack mathematically to prevent overflow hazards during string parsing [REF-DIAG-HMS]
-    let module_id = ((print_error >> 24) & 0xFF) as u8;
-    let code_low = (print_error & 0xFFFF) as u16;
-
-    let is_status_step = (code_low as u32) < HMS_FAULT_THRESHOLD;
-
-    // Filter out standard cancellation status echoes
-    let is_cancel_echo = short_code == HMS_CANCEL_ECHO_A || short_code == HMS_CANCEL_ECHO_B;
-
-    let is_genuine_fault = !is_status_step && !is_cancel_echo;
+    let hi = print_error >> 16;
+    let lo = print_error & 0xFFFF;
+    // Only the low word gates the register, unlike `hms[]` entries — see the module docs.
+    let is_status_step = lo < HMS_FAULT_THRESHOLD;
 
     Some(DecodedPrintError {
-        short_code,
-        module_id,
-        is_genuine_fault,
+        code: print_error,
+        short_code: short_code(hi, lo),
+        module_id: module_id(print_error),
+        is_genuine_fault: !is_status_step && !is_cancel_echo(hi, lo),
     })
+}
+
+impl From<&DecodedPrintError> for u32 {
+    fn from(error: &DecodedPrintError) -> u32 {
+        error.code
+    }
+}
+
+impl From<DecodedPrintError> for u32 {
+    fn from(error: DecodedPrintError) -> u32 {
+        error.code
+    }
 }
 
 #[cfg(test)]

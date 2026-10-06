@@ -23,9 +23,9 @@ use bambino::io::TlsVersion;
 const REF_NOW: CurrentDateTime = CurrentDateTime::new(2026, 6, 17, 15, 0);
 
 use crate::common::io::{
-    CloseCountingTlsConnector, DummyTlsConnector, FailingDataTlsConnector, FaultyDataTlsConnector,
-    HostCapturingTlsConnector, MockDataStreamFactory, PerCallVersionReportingTlsConnector,
-    VersionReportingTlsConnector,
+    CloseCountingTlsConnector, DataContainer, DummyTlsConnector, FailingDataTlsConnector,
+    FaultyDataTlsConnector, HostCapturingTlsConnector, MockDataStreamFactory,
+    PerCallVersionReportingTlsConnector, VersionReportingTlsConnector,
 };
 use crate::common::mock_ftps;
 
@@ -33,7 +33,7 @@ use crate::common::mock_ftps;
 type SetupResult = (
     tokio::io::DuplexStream,
     tokio::io::DuplexStream,
-    Arc<Mutex<Option<TokioIo<tokio::io::DuplexStream>>>>,
+    DataContainer,
     MockDataStreamFactory,
 );
 

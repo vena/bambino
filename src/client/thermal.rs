@@ -52,7 +52,7 @@ where
     /// voltage-dependent — 110°C on a 220V-region unit, 120°C on a 110V-region unit, per the
     /// official spec sheet. This is
     /// derived from the most recently observed `home_flag` telemetry
-    /// (`self.cache.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
+    /// (`self.core.cache.last_home_flag`, bit 3 — see [`PrinterTelemetry::is_220v_power`](crate::types::PrinterTelemetry::is_220v_power));
     /// before any `home_flag` has been received (fresh connection, no `pushall` yet) the mains
     /// region is unknown and the X1C/X1 conservatively clamp to 110°C.
     ///
@@ -63,7 +63,7 @@ where
     /// ```
     pub async fn set_bed_temperature(&mut self, target_temp: u16) -> Result<CommandHandle, Error> {
         let mains_220v = self.is_220v_power();
-        let max = self.identity.model.quirks().bed_temp_max(mains_220v);
+        let max = self.quirks().bed_temp_max(mains_220v);
         let target_temp = super::clamp_temp(target_temp, max, "Bed");
         let gcode = format!("M140 S{}", target_temp);
         self.send_gcode_raw(&gcode).await
@@ -72,14 +72,9 @@ where
     /// Sets the target temperature of a specific hotend/nozzle [REF-MOTO-GCODE].
     ///
     /// * `nozzle_id`: The carriage ID (usually `0` for primary/single, or `1` for secondary on
-    ///   IDEX). **Tool-changer exception (H2C):** per `reference/04_toolhead_thermal_motion.md`
-    ///   §4's "Nozzle & Carriage Kinematics", H2C addresses its dedicated fixed hotend as `0`
-    ///   (same `M104 T0` convention as every other model) but its 6 passive tool-changer rack
-    ///   slots as `16..=21` — NOT a simple `0..physical_nozzle_count()` linear index, despite
-    ///   `physical_nozzle_count()` returning `7` for this model. The reference doc only
-    ///   confirms `16..=21` for the rack slots' telemetry-side `stat` field, not that
-    ///   `M104 T16`-style writes are actually meaningful for a passively-stored (unmounted)
-    ///   tool — validation below is deliberately permissive on H2C for exactly that reason.
+    ///   IDEX). On a tool changer (H2C) the fixed hotend is `0` and the rack slots are
+    ///   [`RACK_NOZZLE_IDS`](crate::quirks::RACK_NOZZLE_IDS) — see
+    ///   [`ModelQuirks::is_valid_nozzle_id`](crate::quirks::ModelQuirks::is_valid_nozzle_id).
     ///
     /// Values exceeding the model's maximum nozzle temperature are clamped automatically.
     pub async fn set_nozzle_temperature(
@@ -87,26 +82,17 @@ where
         nozzle_id: u8,
         target_temp: u16,
     ) -> Result<CommandHandle, Error> {
-        // Rack-slot addressing is a quirks *predicate*, not something to infer from the
-        // nozzle count — `has_nozzle_rack()` is passed explicitly by the H2 macro precisely
-        // so a future variant has to state whether it racks its hotends (see
-        // `quirks/models/h2.rs`), and `mqtt/commands/print_job.rs` already dispatches on it.
-        let quirks = self.identity.model.quirks();
-        if quirks.has_nozzle_rack() {
-            // Tool changer: fixed hotend (0) or a rack slot (16..=21) — see doc comment.
-            if nozzle_id != 0 && !(16..=21).contains(&nozzle_id) {
-                return Err(Error::ModelMismatch(
-                    "nozzle_id must be the fixed hotend (0) or a rack slot (16..=21) on this model"
-                        .into(),
-                ));
-            }
-        } else if nozzle_id >= quirks.physical_nozzle_count() {
+        let quirks = self.quirks();
+        if !quirks.is_valid_nozzle_id(nozzle_id) {
             return Err(Error::ModelMismatch(
-                "nozzle_id exceeds this model's physical nozzle count".into(),
+                format!(
+                    "nozzle_id {nozzle_id} is not a nozzle on this model (see ModelQuirks::is_valid_nozzle_id)"
+                )
+                .into(),
             ));
         }
 
-        let max = self.identity.model.quirks().nozzle_temp_max();
+        let max = quirks.nozzle_temp_max();
         let target_temp = super::clamp_temp(target_temp, max, "Nozzle");
         let gcode = format!("M104 T{} S{}", nozzle_id, target_temp);
         self.send_gcode_raw(&gcode).await
@@ -130,7 +116,7 @@ where
         &mut self,
         target_temp: u16,
     ) -> Result<CommandHandle, Error> {
-        let Some(max) = self.identity.model.quirks().chamber_heater_temp_max() else {
+        let Some(max) = self.quirks().chamber_heater_temp_max() else {
             return Err(Error::ModelMismatch(
                 "active chamber heater not available on this model".into(),
             ));
@@ -159,34 +145,44 @@ where
     /// `target_temp` still returns the same `ModelMismatch` the primitive would, and the flap is
     /// left alone — the caller wanted heat this model cannot make.
     ///
-    /// Returns the handle of the `M141` when one is sent, or of the `set_airduct` command when
-    /// `target_temp` is `0` on a flap-only model. When both are sent, only the `M141`'s handle is
-    /// returned.
+    /// Returns the handle of each command sent, so a caller can await the flap's outcome as well
+    /// as the heater's — the flap is the command this method exists for.
     ///
     /// [`AirductMode::Heating`]: crate::mqtt::commands::AirductMode::Heating
     /// [`AirductMode::Cooling`]: crate::mqtt::commands::AirductMode::Cooling
     /// [`ModelQuirks::supports_airduct_mode`]: crate::quirks::ModelQuirks::supports_airduct_mode
-    pub async fn preheat_chamber(&mut self, target_temp: u16) -> Result<CommandHandle, Error> {
+    pub async fn preheat_chamber(&mut self, target_temp: u16) -> Result<PreheatHandles, Error> {
         use crate::mqtt::commands::AirductMode;
 
-        let quirks = self.identity.model.quirks();
+        let quirks = self.quirks();
         let has_flap = quirks.supports_airduct_mode();
         let has_heater = quirks.chamber_heater_temp_max().is_some();
 
         // A model with a flap but no heater can still be asked to stop venting-for-cooling.
         // A model with neither is nothing but the primitive.
+        let mut handles = PreheatHandles::default();
         if has_flap && (has_heater || target_temp == 0) {
             let mode = if target_temp > 0 {
                 AirductMode::Heating
             } else {
                 AirductMode::Cooling
             };
-            let seq = self.set_airduct_mode(mode).await?;
+            handles.airduct = Some(self.set_airduct_mode(mode).await?);
             if !has_heater {
-                return Ok(seq);
+                return Ok(handles);
             }
         }
 
-        self.set_chamber_temperature(target_temp).await
+        handles.chamber = Some(self.set_chamber_temperature(target_temp).await?);
+        Ok(handles)
     }
+}
+
+/// The commands [`preheat_chamber()`](PrinterClient::preheat_chamber) sent; `None` for one it didn't send.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreheatHandles {
+    /// The `set_airduct` command moving the flap.
+    pub airduct: Option<CommandHandle>,
+    /// The `M141` setting the chamber target.
+    pub chamber: Option<CommandHandle>,
 }

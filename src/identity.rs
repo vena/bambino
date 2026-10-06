@@ -71,8 +71,10 @@ pub struct PrinterIdentity {
 impl PrinterIdentity {
     /// Builds an identity, deriving `model` from `serial` via [`resolve_model`].
     ///
-    /// For callers who need a specific `model` regardless of what the serial
-    /// prefix implies, construct the struct literal directly instead.
+    /// To use a specific model regardless of what the serial prefix implies, chain
+    /// [`with_model`](Self::with_model); for a discovered printer, use
+    /// [`SsdpDevice::into_identity`](crate::discovery::SsdpDevice::into_identity), which keeps the
+    /// model discovery resolved from its headers.
     pub fn new(
         ip: impl Into<String>,
         serial: impl Into<String>,
@@ -86,6 +88,13 @@ impl PrinterIdentity {
             access_code: access_code.into(),
             model,
         }
+    }
+
+    /// Replaces the model `new()` derived from the serial.
+    #[must_use]
+    pub fn with_model(mut self, model: PrinterModel) -> Self {
+        self.model = model;
+        self
     }
 
     /// Like [`PrinterIdentity::new`], but rejects a malformed serial or access code up front.

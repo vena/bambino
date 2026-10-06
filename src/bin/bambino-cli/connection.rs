@@ -155,7 +155,7 @@ pub fn create_printer(ip: &str, serial: &str, access_code: &str) -> Result<Print
         PrinterIdentity::new(ip, serial, access_code),
     )
     .with_timer(TokioTimer::new())
-    .with_connect_timeout(CONNECT_TIMEOUT_SECS))
+    .with_connect_timeout(Some(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))))
 }
 
 pub(crate) fn validate_params(ip: &str, serial: &str, access_code: &str) -> Result<(), CliError> {

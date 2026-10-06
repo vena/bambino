@@ -11,7 +11,9 @@
 //!   also carry `setting_id`) and dual-nozzle IDEX platforms, both sent flat in `print`.
 
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::format;
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
@@ -31,22 +33,29 @@ use crate::types::telemetry::{deserialize_permissive_opt_string, deserialize_per
 /// or table corruption on the physical mainboard.
 #[must_use]
 pub fn is_setting_id_valid(setting_id: &str) -> bool {
-    if !setting_id.starts_with("PF") {
-        return false;
-    }
-    let digits = &setting_id[2..];
-    digits.len() == 17 && digits.chars().all(|c| c.is_ascii_digit())
+    setting_id
+        .strip_prefix(SETTING_ID_PREFIX)
+        .is_some_and(|d| d.len() == SETTING_ID_DIGITS && d.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Returns `Ok(())` if `setting_id` passes [`is_setting_id_valid`], otherwise the shared
-/// `ProtocolViolation` both `ExtrusionCaliSetRequest::new` and `StandardCaliDelRequest::new`
-/// construct on rejection.
+/// Prefix every stored K-profile `setting_id` starts with.
+const SETTING_ID_PREFIX: &str = "PF";
+/// Decimal digits that follow [`SETTING_ID_PREFIX`].
+const SETTING_ID_DIGITS: usize = 17;
+
+/// `Ok(())` if `setting_id` passes [`is_setting_id_valid`], else an [`Error::InvalidArgument`] naming it.
+///
+/// Shared by `ExtrusionCaliSetRequest::new` and `StandardCaliDelRequest::new`.
 fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
     if is_setting_id_valid(setting_id) {
         Ok(())
     } else {
-        Err(Error::ProtocolViolation(
-            "Setting ID violates the strict 19-character numeric calibration boundary rule".into(),
+        Err(Error::InvalidArgument(
+            format!(
+                "setting_id {setting_id:?} must be {SETTING_ID_PREFIX:?} followed by \
+                 {SETTING_ID_DIGITS} decimal digits"
+            )
+            .into(),
         ))
     }
 }
@@ -55,14 +64,6 @@ fn ensure_valid_setting_id(setting_id: &str) -> Result<(), Error> {
 // 1. Database Representation Structs
 // ============================================================================
 
-fn default_cali_idx() -> i32 {
-    -1
-}
-
-fn default_k_value() -> String {
-    String::from("0")
-}
-
 /// Structured representation of a Linear Advance calibration profile entry on the printer.
 ///
 /// Every field is optional on the read side, defaulting as BambuStudio's
@@ -70,13 +71,12 @@ fn default_k_value() -> String {
 /// the whole `extrusion_cali_get` reply, which `get_k_profiles` would then wait out as a timeout
 /// (#314).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct KProfileEntry {
     /// Database index corresponding to the stored slot (-1 indicates a fresh write, and is the
     /// default when the key is absent).
-    #[serde(default = "default_cali_idx")]
     pub cali_idx: i32,
     /// Preset identifier associated with the base filament category (e.g. `"GFA01"`).
-    #[serde(default)]
     pub filament_id: String,
     /// Physical orifice size matching the calibrated tool (e.g. `"0.4"`).
     ///
@@ -93,7 +93,6 @@ pub struct KProfileEntry {
     /// than the quoted form the captures show, and a strict `Option<String>` fails the whole
     /// response on that shape rather than just this field.
     #[serde(
-        default,
         deserialize_with = "deserialize_permissive_opt_string",
         skip_serializing_if = "Option::is_none"
     )]
@@ -117,13 +116,10 @@ pub struct KProfileEntry {
     ///
     /// See `reference/07_diagnostics_hms.md` §7.2 for the full slot-resolution rule, including
     /// why `cali_idx` alone does not identify a profile.
-    #[serde(default)]
     pub nozzle_id: String,
     /// Carriage layout indicator (0 = Right/Primary extruder, 1 = Left/Deputy extruder).
-    #[serde(default)]
     pub extruder_id: u8,
     /// Custom user-defined name assigned to label the profile slot.
-    #[serde(default)]
     pub name: String,
     /// Calibrated Linear Advance constant serialized as a float string.
     ///
@@ -131,30 +127,45 @@ pub struct KProfileEntry {
     /// firmware may send the numeric form (`0.02`) on the read side. A number is rendered back
     /// to its decimal text, so callers see one representation either way. `"0"` when absent,
     /// matching BambuStudio's `0.0` default.
-    #[serde(
-        default = "default_k_value",
-        deserialize_with = "deserialize_permissive_string"
-    )]
+    #[serde(deserialize_with = "deserialize_permissive_string")]
     pub k_value: String,
     /// Extrusion coefficient parameters.
     #[serde(
-        default,
         deserialize_with = "deserialize_permissive_opt_string",
         skip_serializing_if = "Option::is_none"
     )]
     pub n_coef: Option<String>,
     /// Secure 19-character unique setting identifier.
-    #[serde(default)]
     pub setting_id: String,
     /// Links K-profile to AMS unit (default 0).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ams_id: Option<i32>,
     /// Links K-profile to AMS tray slot (default -1). At least X1C firmware spuriously
     /// reports `result: "fail"` for `extrusion_cali` writes using `tray_id: -1` even though
     /// the write still applies — don't treat that ack `result` as authoritative for a
     /// `tray_id: -1` write without cross-checking the profile actually landed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tray_id: Option<i32>,
+}
+
+impl Default for KProfileEntry {
+    /// The defaults BambuStudio's `from_json(PACalibResult)` applies (`DevCalib.cpp:56-72`):
+    /// `cali_idx` `-1` (a fresh write), `k_value` `"0"`, everything else empty.
+    fn default() -> Self {
+        Self {
+            cali_idx: -1,
+            filament_id: String::new(),
+            nozzle_diameter: None,
+            nozzle_id: String::new(),
+            extruder_id: 0,
+            name: String::new(),
+            k_value: String::from("0"),
+            n_coef: None,
+            setting_id: String::new(),
+            ams_id: None,
+            tray_id: None,
+        }
+    }
 }
 
 // ============================================================================
@@ -167,7 +178,7 @@ pub struct ExtrusionCaliGetPayload {
     /// Wire command name, always `"extrusion_cali_get"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
     /// Filament preset to scope the query to (e.g. `"GFA01"`), or `None` for the whole table.
     ///
     /// Upstream sends an empty string here when it wants every filament; both shapes are
@@ -220,13 +231,12 @@ pub struct ExtrusionCaliGetPayload {
 /// real query will receive a response. `PrinterClient::get_k_profiles()` handles this
 /// automatically — use `set_k_profile_primed(true)` to opt out if you manage priming
 /// yourself.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExtrusionCaliGetRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: ExtrusionCaliGetPayload,
-}
+pub type ExtrusionCaliGetRequest = crate::mqtt::commands::Print<ExtrusionCaliGetPayload>;
 
 impl ExtrusionCaliGetRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "extrusion_cali_get";
+
     /// Builds an `extrusion_cali_get` request.
     ///
     /// `filament_id` and `nozzle_diameter` scope the query; both are omitted from the wire when
@@ -242,8 +252,8 @@ impl ExtrusionCaliGetRequest {
     ) -> Self {
         Self {
             print: ExtrusionCaliGetPayload {
-                command: "extrusion_cali_get",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
                 filament_id: filament_id.map(String::from),
                 nozzle_diameter: nozzle_diameter.map(String::from),
                 extruder_id: None,
@@ -321,17 +331,16 @@ pub struct ExtrusionCaliSetPayload {
     /// Calibration profile entries to write. Multiple entries support IDEX multi-nozzle writes.
     pub filaments: Vec<KProfileEntry>,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// JSON request wrapper to create or overwrite calibration profile allocations.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExtrusionCaliSetRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: ExtrusionCaliSetPayload,
-}
+pub type ExtrusionCaliSetRequest = crate::mqtt::commands::Print<ExtrusionCaliSetPayload>;
 
 impl ExtrusionCaliSetRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "extrusion_cali_set";
+
     /// Builds a secure write-transaction payload targeting physical EEPROM slots.
     ///
     /// Verifies that all target profiles carry valid setting identifiers to protect local
@@ -346,9 +355,9 @@ impl ExtrusionCaliSetRequest {
 
         Ok(Self {
             print: ExtrusionCaliSetPayload {
-                command: "extrusion_cali_set",
+                command: Self::COMMAND,
                 filaments: profiles,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         })
     }
@@ -378,20 +387,19 @@ pub struct ExtrusionCaliSelPayload {
     /// Nozzle diameter this K-profile applies to (`KProfileEntry::nozzle_diameter`).
     pub nozzle_diameter: String,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// JSON request wrapper to bind a stored K-profile calibration entry to an AMS material slot [REF-AMS-MAP].
 ///
 /// The `setting_id` field is intentionally omitted from this payload to prevent
 /// database mislinking on the motion board.
-#[derive(Debug, Clone, Serialize)]
-pub struct ExtrusionCaliSelRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: ExtrusionCaliSelPayload,
-}
+pub type ExtrusionCaliSelRequest = crate::mqtt::commands::Print<ExtrusionCaliSelPayload>;
 
 impl ExtrusionCaliSelRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "extrusion_cali_sel";
+
     /// Creates a request payload to bind a stored K-profile calibration entry to an AMS
     /// material slot.
     ///
@@ -409,11 +417,10 @@ impl ExtrusionCaliSelRequest {
     ///   Dual-Nozzle IDEX: both Ext-L (`ams_id: 254`) and Ext-R (`ams_id: 255`) require
     ///   `tray_id: 254`, never `0` (BUG-117 / BambuStudio `DeviceManager.cpp:1667-1693`).
     ///
-    /// Wire form as given: `slot_id` is the unit-local slot, see [`ExtrusionCaliSelPayload::slot_id`].
+    /// The address is a [`CaliSelAddress`], which derives the wire `ams_id`, global `tray_id` and
+    /// local `slot_id` from a unit and slot, so the three can't disagree (#397).
     pub fn new(
-        ams_id: i32,
-        tray_id: i32,
-        slot_id: i32,
+        address: CaliSelAddress,
         cali_idx: i32,
         filament_id: &str,
         nozzle_diameter: &str,
@@ -421,16 +428,69 @@ impl ExtrusionCaliSelRequest {
     ) -> Self {
         Self {
             print: ExtrusionCaliSelPayload {
-                command: "extrusion_cali_sel",
-                ams_id,
-                tray_id,
-                slot_id,
+                command: Self::COMMAND,
+                ams_id: i32::from(address.ams_id),
+                tray_id: i32::from(address.tray_id),
+                slot_id: i32::from(address.slot_id),
                 cali_idx,
                 filament_id: String::from(filament_id),
                 nozzle_diameter: String::from(nozzle_diameter),
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
+    }
+}
+
+/// The three address fields of an `extrusion_cali_sel`, derived from a unit and its local slot.
+///
+/// The wire `tray_id` is the global tray from
+/// [`resolve_global_tray_id`](crate::ams::resolve_global_tray_id): `ams_id * 4 + slot` on a
+/// standard unit (`reference/05_materials_ams.md` §5.3's `"ams_id": 0, "tray_id": 1` example is
+/// unit 0 slot 1), `24 + slot` on an A2L-attached AMS Lite (BambuStudio's `GetTrayIndexMap`,
+/// `DevFilaSystem.cpp:367-373`), the `ams_id` itself on an AMS-HT (slot 0 only) or an external
+/// holder (slot ignored) — which gives the cheat-sheet pairs on [`ExtrusionCaliSelRequest::new`].
+/// `slot_id` is the unit-local slot BambuStudio and bambuddy send beside it (#315): the caller's
+/// slot on a four-slot unit, `0` on an AMS-HT or external holder. `ams_id` is the wire form (an
+/// A2L's AMS Lite is `16`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CaliSelAddress {
+    ams_id: u8,
+    tray_id: u8,
+    slot_id: u8,
+}
+
+impl CaliSelAddress {
+    /// Derives the address of slot `slot_id` on the unit at `ams_id` (telemetry or wire form).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when no tray answers to that unit and slot.
+    pub fn new(ams_id: u8, slot_id: u8) -> Result<Self, Error> {
+        use crate::ams::ids::{
+            VALID_AMS_IDS_TEXT, is_ams_ht_id, is_external_spool_id, is_valid_ams_id,
+            normalize_ams_unit_id, wire_ams_id,
+        };
+        let tray_id = is_valid_ams_id(ams_id)
+            .then(|| crate::ams::resolve_global_tray_id(normalize_ams_unit_id(ams_id), slot_id))
+            .flatten()
+            .ok_or_else(|| {
+                Error::InvalidArgument(
+                    format!(
+                        "ams_id {ams_id} slot_id {slot_id} is not a tray (ams_id {VALID_AMS_IDS_TEXT})"
+                    )
+                    .into(),
+                )
+            })?;
+        let local_slot = if is_ams_ht_id(ams_id) || is_external_spool_id(ams_id) {
+            0
+        } else {
+            slot_id
+        };
+        Ok(Self {
+            ams_id: wire_ams_id(ams_id),
+            tray_id,
+            slot_id: local_slot,
+        })
     }
 }
 
@@ -486,17 +546,16 @@ pub struct StandardCaliDelPayload {
     #[serde(flatten)]
     pub target: StandardCaliDelEntry,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// JSON request wrapper targeting single-nozzle profile deletions (Schema A) [REF-DIAG-KPROF].
-#[derive(Debug, Clone, Serialize)]
-pub struct StandardCaliDelRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: StandardCaliDelPayload,
-}
+pub type StandardCaliDelRequest = crate::mqtt::commands::Print<StandardCaliDelPayload>;
 
 impl StandardCaliDelRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "extrusion_cali_del";
+
     /// Builds a single-nozzle deletion transaction keyed on the setting identifier.
     pub fn new(
         target: StandardCaliDelEntry,
@@ -506,9 +565,9 @@ impl StandardCaliDelRequest {
 
         Ok(Self {
             print: StandardCaliDelPayload {
-                command: "extrusion_cali_del",
+                command: Self::COMMAND,
                 target,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         })
     }
@@ -523,24 +582,23 @@ pub struct IdexCaliDelPayload {
     #[serde(flatten)]
     pub target: IdexCaliDelEntry,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// JSON request wrapper targeting dual-nozzle IDEX profile deletions (Schema B) [REF-DIAG-KPROF].
-#[derive(Debug, Clone, Serialize)]
-pub struct IdexCaliDelRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: IdexCaliDelPayload,
-}
+pub type IdexCaliDelRequest = crate::mqtt::commands::Print<IdexCaliDelPayload>;
 
 impl IdexCaliDelRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "extrusion_cali_del";
+
     /// Builds a dual-nozzle carriage deletion transaction keyed on physical coordinates.
     pub fn new(target: IdexCaliDelEntry, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: IdexCaliDelPayload {
-                command: "extrusion_cali_del",
+                command: Self::COMMAND,
                 target,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -578,17 +636,13 @@ mod tests {
     #[test]
     fn test_extrusion_cali_set_invalid_id() {
         let bad_profile = KProfileEntry {
-            cali_idx: -1,
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
             name: "Faulty ID".into(),
             k_value: "0.022".into(),
-            n_coef: None,
             setting_id: "PF_BAD_ALPHANUM_KEY".into(),
-            ams_id: None,
-            tray_id: None,
+            ..Default::default()
         };
 
         let result = ExtrusionCaliSetRequest::new(vec![bad_profile], 50002);
@@ -598,17 +652,13 @@ mod tests {
     #[test]
     fn test_extrusion_cali_set_valid_id() {
         let good_profile = KProfileEntry {
-            cali_idx: -1,
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
             name: "Good ID".into(),
             k_value: "0.022".into(),
-            n_coef: None,
             setting_id: "PF12345678901234567".into(),
-            ams_id: None,
-            tray_id: None,
+            ..Default::default()
         };
 
         let req = ExtrusionCaliSetRequest::new(vec![good_profile], 50002).unwrap();
@@ -619,7 +669,13 @@ mod tests {
 
     #[test]
     fn test_extrusion_cali_sel_json() {
-        let req = ExtrusionCaliSelRequest::new(0, 1, 1, 4, "GFA01", "0.4", 40003);
+        let req = ExtrusionCaliSelRequest::new(
+            CaliSelAddress::new(0, 1).unwrap(),
+            4,
+            "GFA01",
+            "0.4",
+            40003,
+        );
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains(r#""command":"extrusion_cali_sel"#));
         assert!(json.contains(r#""ams_id":0"#));
@@ -720,17 +776,12 @@ mod tests {
         // (e.g. to edit k_value) used to emit "nozzle_diameter":null — a shape the read side
         // never produces and reference/07_diagnostics_hms.md §7.2 never shows.
         let profile = KProfileEntry {
-            cali_idx: -1,
             filament_id: "GFA01".into(),
-            nozzle_diameter: None,
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
             name: "Round-tripped".into(),
             k_value: "0.022".into(),
-            n_coef: None,
             setting_id: "PF12345678901234567".into(),
-            ams_id: None,
-            tray_id: None,
+            ..Default::default()
         };
 
         let req = ExtrusionCaliSetRequest::new(vec![profile], 50002).unwrap();
@@ -744,17 +795,13 @@ mod tests {
     #[test]
     fn test_n_coef_none_omitted_from_json() {
         let profile = KProfileEntry {
-            cali_idx: -1,
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
             name: "Test".into(),
             k_value: "0.022".into(),
-            n_coef: None,
             setting_id: "PF12345678901234567".into(),
-            ams_id: None,
-            tray_id: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&profile).unwrap();
         assert!(
@@ -766,17 +813,14 @@ mod tests {
     #[test]
     fn test_n_coef_some_included_in_json() {
         let profile = KProfileEntry {
-            cali_idx: -1,
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
             name: "Test".into(),
             k_value: "0.022".into(),
             n_coef: Some("0.000000".into()),
             setting_id: "PF12345678901234567".into(),
-            ams_id: None,
-            tray_id: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&profile).unwrap();
         assert!(json.contains(r#""n_coef":"0.000000""#));
@@ -889,9 +933,9 @@ mod tests {
         // These five constructors must serialize sequence_id through clamp_task_id() —
         // see .claude/rules/task-id-clamping.md.
         let raw = u64::MAX;
-        let assert_clamped = |sequence_id: &str, label: &str| {
+        let assert_clamped = |sequence_id: &ClampedTaskId, label: &str| {
             assert!(
-                sequence_id.parse::<i64>().unwrap() <= i32::MAX as i64,
+                i64::from(sequence_id.get()) <= i32::MAX as i64,
                 "{label} sequence_id {sequence_id} exceeds i32::MAX"
             );
         };
@@ -904,17 +948,13 @@ mod tests {
         );
 
         let profile = KProfileEntry {
-            cali_idx: -1,
             filament_id: "GFA01".into(),
             nozzle_diameter: Some("0.4".into()),
             nozzle_id: "HS00-0.4".into(),
-            extruder_id: 0,
             name: "Test".into(),
             k_value: "0.022".into(),
-            n_coef: None,
             setting_id: "PF12345678901234567".into(),
-            ams_id: None,
-            tray_id: None,
+            ..Default::default()
         };
         assert_clamped(
             &ExtrusionCaliSetRequest::new(vec![profile], raw)
@@ -925,9 +965,15 @@ mod tests {
         );
 
         assert_clamped(
-            &ExtrusionCaliSelRequest::new(0, 1, 1, 4, "GFA01", "0.4", raw)
-                .print
-                .sequence_id,
+            &ExtrusionCaliSelRequest::new(
+                CaliSelAddress::new(0, 1).unwrap(),
+                4,
+                "GFA01",
+                "0.4",
+                raw,
+            )
+            .print
+            .sequence_id,
             "ExtrusionCaliSelRequest",
         );
 

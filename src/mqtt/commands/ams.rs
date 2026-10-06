@@ -3,24 +3,56 @@
 #[cfg(not(feature = "std"))]
 use alloc::format;
 #[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use serde::Serialize;
 
 use super::ClampedTaskId;
+use crate::error::Error;
 
-/// Normalizes a filament colour to the form the firmware actually stores.
+/// Normalizes a filament colour to the `RRGGBBAA` form the firmware stores, or rejects it.
 ///
-/// Strips a leading `#` and uppercases the hex digits. The printer parses lowercase hex
-/// letters in `tray_color` as `0` — measured on a P1S running firmware `01.10.00.00`, where
-/// `09ff00ff` came back as `09000000` while `090000FF` survived intact — and the corruption is
-/// silent, because the `ams_filament_setting` ack echoes what was sent and reports success.
-/// An empty string stays empty. Mirrors bambuddy's single normalization point
-/// (`bambu_mqtt.py:139`), which applies the same strip-and-uppercase.
-fn normalize_tray_color(color_hex: &str) -> String {
+/// Strips a leading `#`, appends an opaque `FF` alpha to a 6-digit `RRGGBB`, and uppercases the
+/// hex digits. The printer parses lowercase hex letters in `tray_color` as `0` — measured on a
+/// P1S running firmware `01.10.00.00`, where `09ff00ff` came back as `09000000` while
+/// `090000FF` survived intact — and the corruption is silent, because the
+/// `ams_filament_setting` ack echoes what was sent and reports success. Mirrors bambuddy's
+/// single normalization point (`bambu_mqtt.py:139`), which applies the same strip-and-uppercase.
+///
+/// `reference/05_materials_ams.md` defines the field as 8 hex digits; anything else is an
+/// [`Error::InvalidArgument`] rather than a value the printer would misread.
+fn normalize_tray_color(color_hex: &str) -> Result<String, Error> {
     let trimmed = color_hex.trim();
-    let trimmed = trimmed.strip_prefix('#').unwrap_or(trimmed);
-    trimmed.to_uppercase()
+    let digits = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::InvalidArgument(
+            format!("tray color {color_hex:?} is not hex").into(),
+        ));
+    }
+    match digits.len() {
+        8 => Ok(digits.to_ascii_uppercase()),
+        6 => Ok(format!("{}FF", digits.to_ascii_uppercase())),
+        _ => Err(Error::InvalidArgument(
+            format!("tray color {color_hex:?} must be RRGGBB or RRGGBBAA").into(),
+        )),
+    }
+}
+
+/// The description an `ams_filament_setting` can't do without.
+///
+/// Required by [`AmsFilamentSettingRequest::new`]: sending the command without them writes an
+/// empty material with a 0–0 °C nozzle window to the tray, and the printer acks it as success.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FilamentSpec<'a> {
+    /// **Short-format** filament preset code, e.g. `"GFA01"` — see
+    /// [`AmsFilamentSettingPayload::tray_info_idx`].
+    pub preset: &'a str,
+    /// Material type, e.g. `"PLA"`.
+    pub material: &'a str,
+    /// Minimum safe nozzle temperature, °C.
+    pub nozzle_temp_min: u32,
+    /// Maximum safe nozzle temperature, °C.
+    pub nozzle_temp_max: u32,
 }
 
 /// Overwrites physical attributes or custom slicer presets assigned to a specific tray.
@@ -29,7 +61,7 @@ pub struct AmsFilamentSettingPayload {
     /// Wire command name, always `"ams_filament_setting"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
     /// Target AMS unit or external-spool address — see the addressing cheat-sheet on [`AmsFilamentSettingRequest::new`].
     pub ams_id: i32,
     /// Slot position within the unit, as supplied by the caller.
@@ -87,13 +119,12 @@ pub struct AmsFilamentSettingPayload {
 }
 
 /// Sets filament properties (type, color, temperature range) on an AMS tray or external spool.
-#[derive(Debug, Clone, Serialize)]
-pub struct AmsFilamentSettingRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: AmsFilamentSettingPayload,
-}
+pub type AmsFilamentSettingRequest = super::Print<AmsFilamentSettingPayload>;
 
 impl AmsFilamentSettingRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "ams_filament_setting";
+
     /// Creates a request payload to update slot parameters.
     ///
     /// **Polymorphic Tray Rule [REF-MQTT-LIFECYCLE]:**
@@ -133,23 +164,23 @@ impl AmsFilamentSettingRequest {
     ///   carriage (Ext-L) EEPROM, leaving the primary right carriage completely
     ///   uncalibrated.
     ///
-    /// Only the addressing is positional. Everything the command *describes* — the filament,
-    /// its color, its temperature window, its preset ids — is set through the `with_*` methods
-    /// below, following the convention [`PrintJobConfig`](super::PrintJobConfig) already
-    /// establishes in this crate.
+    /// The filament's essential description is the named [`FilamentSpec`]; the genuinely
+    /// optional fields (color, sub-brand, long setting id) are `with_*` methods. Named fields
+    /// rather than positional arguments because the temperature bounds were adjacent `u32`s,
+    /// transposable without a compile error on a command whose failures are already silent.
     ///
-    /// This replaced a 9-argument constructor. `nozzle_temp_min`/`nozzle_temp_max` were adjacent
-    /// `u32`s and `ams_id`/`slot_id` adjacent `i32`s, so transposing either pair compiled
-    /// cleanly and produced a silently wrong command — on a command whose failures are already
-    /// silent, since the printer acks a corrupted value as `"success"`.
-    ///
-    /// Fields left unset serialize as empty strings / zero temperatures; `setting_id` is omitted
-    /// from the wire entirely.
-    pub fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    /// Unset optional fields: an empty color, a `"{material} Basic"` sub-brand, and no
+    /// `setting_id` on the wire.
+    pub fn new(
+        ams_id: i32,
+        slot_id: i32,
+        filament: FilamentSpec<'_>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
         Self {
             print: AmsFilamentSettingPayload {
-                command: "ams_filament_setting",
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
                 ams_id,
                 slot_id,
                 // `254` for either external-spool address, the slot otherwise — BambuStudio's
@@ -161,67 +192,39 @@ impl AmsFilamentSettingRequest {
                 } else {
                     slot_id
                 },
-                tray_info_idx: String::new(),
-                tray_type: String::new(),
-                tray_sub_brands: String::new(),
+                tray_info_idx: String::from(filament.preset),
+                tray_type: String::from(filament.material),
+                tray_sub_brands: format!("{} Basic", filament.material),
                 tray_color: String::new(),
-                nozzle_temp_min: 0,
-                nozzle_temp_max: 0,
+                nozzle_temp_min: filament.nozzle_temp_min,
+                nozzle_temp_max: filament.nozzle_temp_max,
                 setting_id: None,
             },
         }
     }
 
-    /// Sets the material type and its sub-brand label.
-    ///
-    /// `sub_brands` defaults to `"{material_type} Basic"` when `None`. Case is meaningful in
-    /// both and is left alone — unlike [`with_color`](Self::with_color).
+    /// Overrides the sub-brand label (default `"{material} Basic"`). Case is meaningful and is left alone.
     #[must_use]
-    pub fn with_filament(mut self, material_type: &str, sub_brands: Option<&str>) -> Self {
-        self.print.tray_sub_brands = match sub_brands {
-            Some(s) => String::from(s),
-            None => format!("{} Basic", material_type),
-        };
-        self.print.tray_type = String::from(material_type);
+    pub fn with_sub_brands(mut self, sub_brands: &str) -> Self {
+        self.print.tray_sub_brands = String::from(sub_brands);
         self
     }
 
-    /// Sets the tray color, **normalized to uppercase** with a leading `#` stripped.
+    /// Sets the tray color from `RRGGBB` or `RRGGBBAA` hex, optionally `#`-prefixed.
     ///
-    /// The printer parses lowercase hex letters in `tray_color` as `0` and the corruption is
-    /// silent: the `ams_filament_setting` ack echoes the value that was sent and reports
-    /// `result: "success"`, and only the next AMS push status reveals it (measured on a P1S
-    /// running firmware `01.10.00.00` — `09ff00ff` stored as `09000000`, `090000FF` intact).
+    /// Normalized to the 8-digit uppercase form the firmware stores: a 6-digit color gets an
+    /// opaque `FF` alpha, and lowercase digits are uppercased. The printer parses lowercase hex
+    /// letters in `tray_color` as `0` and the corruption is silent: the `ams_filament_setting`
+    /// ack echoes the value that was sent and reports `result: "success"`, and only the next
+    /// AMS push status reveals it (measured on a P1S running firmware `01.10.00.00` —
+    /// `09ff00ff` stored as `09000000`, `090000FF` intact).
     ///
-    /// The normalization lives here, at the one place the color is set, rather than in each
-    /// caller — a caller that forgets is exactly how the original bug arrived.
-    #[must_use]
-    pub fn with_color(mut self, color_hex: &str) -> Self {
-        self.print.tray_color = normalize_tray_color(color_hex);
-        self
-    }
-
-    /// Sets the safe nozzle temperature window, in °C.
+    /// # Errors
     ///
-    /// Taking both bounds in one call is the point: as two adjacent positional `u32`s they were
-    /// transposable without a compile error.
-    #[must_use]
-    pub fn with_temps(mut self, min: u32, max: u32) -> Self {
-        self.print.nozzle_temp_min = min;
-        self.print.nozzle_temp_max = max;
-        self
-    }
-
-    /// Sets the **short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"`.
-    ///
-    /// A long `"PF"`-prefixed cloud id does not belong here — pass that to
-    /// [`with_setting_id`](Self::with_setting_id). See
-    /// [`AmsFilamentSettingPayload::tray_info_idx`] for what the printer does when the two are
-    /// conflated.
-    #[must_use]
-    pub fn with_preset(mut self, preset_code: &str) -> Self {
-        self.print.tray_info_idx = String::from(preset_code);
-        self
+    /// [`Error::InvalidArgument`] for anything that isn't 6 or 8 hex digits.
+    pub fn with_color(mut self, color_hex: &str) -> Result<Self, Error> {
+        self.print.tray_color = normalize_tray_color(color_hex)?;
+        Ok(self)
     }
 
     /// Attaches the full preset identifier, which is a separate wire field from
@@ -238,32 +241,54 @@ impl AmsFilamentSettingRequest {
     }
 }
 
+/// An `ams_control` operation on the AMS feed mechanism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AmsControlOp {
+    /// Resume feeding (`resume`).
+    Resume,
+    /// Pause feeding (`pause`).
+    Pause,
+    /// Reset the feed state (`reset`).
+    Reset,
+}
+
+impl AmsControlOp {
+    /// The wire `param` value.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            AmsControlOp::Resume => "resume",
+            AmsControlOp::Pause => "pause",
+            AmsControlOp::Reset => "reset",
+        }
+    }
+}
+
 /// Commands standard AMS controllers to resume, pause, or reset physical material feeds.
 #[derive(Debug, Clone, Serialize)]
 pub struct AmsControlPayload {
     /// Wire command name, always `"ams_control"`.
     pub command: &'static str,
-    /// Target physical operation (e.g., "resume", "pause").
-    pub param: String,
+    /// Target operation — see [`AmsControlOp`].
+    pub param: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Sends a resume, pause, or reset command to the AMS feed mechanism.
-#[derive(Debug, Clone, Serialize)]
-pub struct AmsControlRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: AmsControlPayload,
-}
+pub type AmsControlRequest = super::Print<AmsControlPayload>;
 
 impl AmsControlRequest {
-    /// Builds an `ams_control` request for the given operation ("resume", "pause", etc.).
-    pub fn new(operation: &str, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "ams_control";
+
+    /// Builds an `ams_control` request for `operation`.
+    pub fn new(operation: AmsControlOp, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AmsControlPayload {
-                command: "ams_control",
-                param: String::from(operation),
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                param: operation.as_wire(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -279,25 +304,24 @@ pub struct AmsGetRfidPayload {
     /// Target slot index within the AMS unit.
     pub slot_id: i32,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Requests an RFID tag scan on a specific AMS slot.
-#[derive(Debug, Clone, Serialize)]
-pub struct AmsGetRfidRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: AmsGetRfidPayload,
-}
+pub type AmsGetRfidRequest = super::Print<AmsGetRfidPayload>;
 
 impl AmsGetRfidRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "ams_get_rfid";
+
     /// Builds an `ams_get_rfid` request.
     pub fn new(ams_id: i32, slot_id: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AmsGetRfidPayload {
-                command: "ams_get_rfid",
+                command: Self::COMMAND,
                 ams_id,
                 slot_id,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -312,19 +336,15 @@ pub struct AmsChangeFilamentPayload {
     pub ams_id: i32,
     /// Target slot index within the AMS unit.
     pub slot_id: i32,
-    /// Load/unload destination slot (confirmed against BambuStudio's
-    /// `command_ams_change_filament`, `DeviceManager.cpp:1602-1638`): `255` on unload, the
-    /// `ams_id` itself for AMS-HT/external-spool units (`ams_id >= 16`), or the flat global
-    /// tray ID (`ams_id*4 + slot_id`) for a standard unit. Only coincidentally mirrors
-    /// `slot_id` when `ams_id == 0` — see `PrinterClient::change_filament()`, which derives
-    /// this field so callers can't misconfigure it.
+    /// Load/unload destination slot, derived by [`AmsChangeFilamentRequest::load`]/`unload` —
+    /// see there.
     pub target: i32,
     /// Current nozzle temperature (-1 = let firmware decide).
     pub curr_temp: i32,
     /// Target nozzle temperature (-1 = let firmware decide).
     pub tar_temp: i32,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
     /// Which hotend to feed — `0` = right/main, `1` = left/deputy. Omitted from the wire when
     /// `None`, matching BambuStudio, whose `DeviceManager::command_ams_change_filament` takes
     /// it as an optional field and leaves it out unless a Filament Track Switch is fitted.
@@ -341,40 +361,92 @@ pub struct AmsChangeFilamentPayload {
 }
 
 /// Loads or unloads filament from an AMS slot or external spool to the toolhead.
-#[derive(Debug, Clone, Serialize)]
-pub struct AmsChangeFilamentRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: AmsChangeFilamentPayload,
-}
+pub type AmsChangeFilamentRequest = super::Print<AmsChangeFilamentPayload>;
 
 impl AmsChangeFilamentRequest {
-    /// Builds an `ams_change_filament` request to load or unload filament.
+    /// Wire command name.
+    pub const COMMAND: &'static str = "ams_change_filament";
+
+    /// Builds a request loading slot `slot_id` of the unit at wire address `ams_id`.
     ///
-    /// Pass `extruder_id: None` on any printer without a Filament Track Switch — the wire
-    /// payload is then byte-identical to the pre-FTS form. See
+    /// `target` is derived, never caller-supplied, per BambuStudio's
+    /// `command_ams_change_filament` (`DeviceManager.cpp:1602-1638`): the `ams_id` itself for
+    /// any unit at wire address 16 or above (an A2L's AMS Lite, AMS-HT, an external spool), or
+    /// the flat global tray (`ams_id * 4 + slot_id`) for a standard unit. A caller-supplied
+    /// `target` that didn't match was a real hardware misconfiguration risk (`07FF_8012` class);
+    /// it mirrored `slot_id` only coincidentally, for `ams_id: 0`.
+    ///
+    /// `ams_id` is the *wire* address — an A2L's AMS Lite is `16` here, not the `6` telemetry
+    /// reports. `PrinterClient::change_filament` validates the address and converts it.
+    ///
+    /// Pass `extruder_id: None` on any printer without a Filament Track Switch — see
     /// [`AmsChangeFilamentPayload::extruder_id`] for why an FTS machine requires it.
-    pub fn new(
-        ams_id: i32,
-        slot_id: i32,
-        target: i32,
-        curr_temp: i32,
-        tar_temp: i32,
+    pub fn load(
+        ams_id: u8,
+        slot_id: u8,
+        temps: ChangeTemps,
+        extruder_id: Option<u8>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
+        let target = if ams_id >= crate::ams::ids::AMS_LITE_ON_A2L_PHYSICAL_ID {
+            ams_id
+        } else {
+            ams_id * crate::ams::ids::AMS_SLOTS_PER_UNIT + slot_id
+        };
+        Self::build(ams_id, slot_id, target, temps, extruder_id, sequence_id)
+    }
+
+    /// Builds a request unloading (retracting) the filament fed from the unit at wire address `ams_id`.
+    ///
+    /// `slot_id` and `target` are both the `255` unload sentinel, as in BambuStudio.
+    pub fn unload(
+        ams_id: u8,
+        temps: ChangeTemps,
+        extruder_id: Option<u8>,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
+        let unload = crate::ams::ids::SLOT_UNLOAD;
+        Self::build(ams_id, unload, unload, temps, extruder_id, sequence_id)
+    }
+
+    fn build(
+        ams_id: u8,
+        slot_id: u8,
+        target: u8,
+        temps: ChangeTemps,
         extruder_id: Option<u8>,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
             print: AmsChangeFilamentPayload {
-                command: "ams_change_filament",
-                ams_id,
-                slot_id,
-                target,
-                curr_temp,
-                tar_temp,
-                sequence_id: sequence_id.into().to_string(),
+                command: Self::COMMAND,
+                ams_id: i32::from(ams_id),
+                slot_id: i32::from(slot_id),
+                target: i32::from(target),
+                curr_temp: temps.current,
+                tar_temp: temps.target,
+                sequence_id: sequence_id.into(),
                 extruder_id,
             },
         }
     }
+}
+
+/// The nozzle temperatures an `ams_change_filament` carries, °C; `-1` lets the firmware decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChangeTemps {
+    /// Current nozzle temperature (`curr_temp`).
+    pub current: i32,
+    /// Target nozzle temperature (`tar_temp`).
+    pub target: i32,
+}
+
+impl ChangeTemps {
+    /// Both temperatures left to the firmware (`-1`).
+    pub const FIRMWARE: Self = Self {
+        current: -1,
+        target: -1,
+    };
 }
 
 /// Initiates or terminates dry-chamber heating cycles on AMS 2 Pro and AMS-HT units [REF-AMS-DRYER].
@@ -409,15 +481,11 @@ pub struct AmsFilamentDryingPayload {
     /// Whether to override the AMS unit's power-conflict interlock.
     pub close_power_conflict: bool,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Starts or stops a filament drying cycle on an AMS unit with a built-in heater.
-#[derive(Debug, Clone, Serialize)]
-pub struct AmsFilamentDryingRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: AmsFilamentDryingPayload,
-}
+pub type AmsFilamentDryingRequest = super::Print<AmsFilamentDryingPayload>;
 
 /// `ams_filament_drying` mode that starts a cycle (`DevAms::DryCtrlMode::OnTime`).
 const DRYING_MODE_START: i32 = 1;
@@ -448,6 +516,9 @@ pub struct DryingParams {
 }
 
 impl AmsFilamentDryingRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "ams_filament_drying";
+
     /// Builds a request starting a drying cycle on the unit at `ams_id`.
     pub fn start(ams_id: i32, params: DryingParams, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self::build(ams_id, DRYING_MODE_START, params, sequence_id)
@@ -474,7 +545,7 @@ impl AmsFilamentDryingRequest {
     ) -> Self {
         Self {
             print: AmsFilamentDryingPayload {
-                command: "ams_filament_drying",
+                command: Self::COMMAND,
                 ams_id,
                 mode,
                 filament: params.filament,
@@ -484,7 +555,7 @@ impl AmsFilamentDryingRequest {
                 rotate_tray: params.rotate_tray,
                 cooling_temp: params.cooling_temp,
                 close_power_conflict: params.close_power_conflict,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }

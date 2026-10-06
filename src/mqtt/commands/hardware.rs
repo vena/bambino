@@ -1,11 +1,9 @@
 //! Hardware control commands (LEDs, fans, airduct mode, buzzer, prompt sound).
 
-#[cfg(not(feature = "std"))]
-use alloc::string::{String, ToString};
-
 use serde::Serialize;
 
 use super::ClampedTaskId;
+use crate::types::control::{BuzzerMode, LedNode, LightMode};
 
 /// Chamber illumination and toolhead LED control configurations.
 #[derive(Debug, Clone, Serialize)]
@@ -13,11 +11,11 @@ pub struct LedCtrlPayload {
     /// Wire command name, always `"ledctrl"`.
     pub command: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
-    /// Targets specific physical fixtures (e.g. "chamber_light", "chamber_light2").
-    pub led_node: String,
-    /// Mode state transitions (e.g., "on", "off", "flashing").
-    pub led_mode: String,
+    pub sequence_id: ClampedTaskId,
+    /// The fixture addressed — see [`LedNode`].
+    pub led_node: &'static str,
+    /// The mode set — see [`LightMode`].
+    pub led_mode: &'static str,
     /// On-time per flash cycle (ms); only meaningful in flashing mode.
     pub led_on_time: u32,
     /// Off-time per flash cycle (ms); only meaningful in flashing mode.
@@ -29,48 +27,60 @@ pub struct LedCtrlPayload {
 }
 
 /// Turns chamber or toolhead LEDs on or off.
-#[derive(Debug, Clone, Serialize)]
-pub struct LedCtrlRequest {
-    /// The `system` namespace envelope required by the wire protocol.
-    pub system: LedCtrlPayload,
+pub type LedCtrlRequest = super::System<LedCtrlPayload>;
+
+/// Flash cycle timing for [`LedCtrlRequest::new_flashing`]; every field is in milliseconds except `loops`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct FlashTiming {
+    /// Time lit per cycle, in ms.
+    pub on_ms: u32,
+    /// Time dark per cycle, in ms.
+    pub off_ms: u32,
+    /// Number of cycles.
+    pub loops: u32,
+    /// Pause between cycles, in ms.
+    pub interval_ms: u32,
 }
 
 impl LedCtrlRequest {
-    /// Builds a simple on/off `ledctrl` request for the given fixture.
-    pub fn new(led_node: &str, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
-        Self {
-            system: LedCtrlPayload {
-                command: "ledctrl",
-                sequence_id: sequence_id.into().to_string(),
-                led_node: String::from(led_node),
-                led_mode: String::from(if turn_on { "on" } else { "off" }),
-                led_on_time: 0,
-                led_off_time: 0,
-                loop_times: 0,
-                interval_time: 0,
-            },
-        }
+    /// Wire command name.
+    pub const COMMAND: &'static str = "ledctrl";
+
+    /// Builds a simple on/off `ledctrl` request for `node`.
+    pub fn new(node: LedNode, turn_on: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
+        let mode = if turn_on {
+            LightMode::On
+        } else {
+            LightMode::Off
+        };
+        Self::build(node, mode, FlashTiming::default(), sequence_id)
     }
 
-    /// Builds a flashing-mode LED command with explicit on/off/loop/interval timing (`led_mode: "flashing"`), per [REF-MQTT-LIFECYCLE].
+    /// Builds a flashing-mode request (`led_mode: "flashing"`) with explicit timing [REF-MQTT-LIFECYCLE].
     pub fn new_flashing(
-        led_node: &str,
-        on_time: u32,
-        off_time: u32,
-        loop_times: u32,
-        interval_time: u32,
+        node: LedNode,
+        timing: FlashTiming,
+        sequence_id: impl Into<ClampedTaskId>,
+    ) -> Self {
+        Self::build(node, LightMode::Flashing, timing, sequence_id)
+    }
+
+    fn build(
+        node: LedNode,
+        mode: LightMode,
+        timing: FlashTiming,
         sequence_id: impl Into<ClampedTaskId>,
     ) -> Self {
         Self {
             system: LedCtrlPayload {
-                command: "ledctrl",
-                sequence_id: sequence_id.into().to_string(),
-                led_node: String::from(led_node),
-                led_mode: String::from("flashing"),
-                led_on_time: on_time,
-                led_off_time: off_time,
-                loop_times,
-                interval_time,
+                command: Self::COMMAND,
+                sequence_id: sequence_id.into(),
+                led_node: node.as_wire(),
+                led_mode: mode.as_wire(),
+                led_on_time: timing.on_ms,
+                led_off_time: timing.off_ms,
+                loop_times: timing.loops,
+                interval_time: timing.interval_ms,
             },
         }
     }
@@ -82,6 +92,7 @@ impl LedCtrlRequest {
 /// `Heating` (1): closes exhaust flaps, seals enclosure for heat retention.
 /// `Laser` (2): configuration for laser engraving module operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 pub enum AirductMode {
     /// Closes internal recirculation dampers, routes hot air out through exhaust.
     Cooling = 0,
@@ -102,25 +113,24 @@ pub struct AirductPayload {
     /// Damper submode; always `-1` (unused) — [`AirductRequest::new`] never sets it otherwise.
     pub submode: i32,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Switches the enclosure airduct damper between cooling, heating, and laser modes.
-#[derive(Debug, Clone, Serialize)]
-pub struct AirductRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: AirductPayload,
-}
+pub type AirductRequest = super::Print<AirductPayload>;
 
 impl AirductRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "set_airduct";
+
     /// Builds a `set_airduct` request for the given damper mode.
     pub fn new(mode: AirductMode, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: AirductPayload {
-                command: "set_airduct",
+                command: Self::COMMAND,
                 mode_id: mode as i32,
                 submode: -1,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -134,24 +144,23 @@ pub struct PromptSoundPayload {
     /// Whether notification sounds are enabled.
     pub sound_enable: bool,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Enables or disables the printer's notification sounds.
-#[derive(Debug, Clone, Serialize)]
-pub struct PromptSoundRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: PromptSoundPayload,
-}
+pub type PromptSoundRequest = super::Print<PromptSoundPayload>;
 
 impl PromptSoundRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "print_option";
+
     /// Builds a `print_option` request enabling or disabling notification sounds.
     pub fn new(enable: bool, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: PromptSoundPayload {
-                command: "print_option",
+                command: Self::COMMAND,
                 sound_enable: enable,
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }
@@ -167,25 +176,24 @@ pub struct BuzzerPayload {
     /// Reason string shown alongside the alarm; always empty in practice, per [`BuzzerRequest::new`].
     pub reason: &'static str,
     /// Request sequence ID, serialized as a string on the wire.
-    pub sequence_id: String,
+    pub sequence_id: ClampedTaskId,
 }
 
 /// Controls the printer's buzzer alarm mode (silent, alarm, or chirp).
-#[derive(Debug, Clone, Serialize)]
-pub struct BuzzerRequest {
-    /// The `print` namespace envelope required by the wire protocol.
-    pub print: BuzzerPayload,
-}
+pub type BuzzerRequest = super::Print<BuzzerPayload>;
 
 impl BuzzerRequest {
+    /// Wire command name.
+    pub const COMMAND: &'static str = "buzzer_ctrl";
+
     /// Builds a `buzzer_ctrl` request for the given alarm mode.
-    pub fn new(mode_code: i32, sequence_id: impl Into<ClampedTaskId>) -> Self {
+    pub fn new(mode: BuzzerMode, sequence_id: impl Into<ClampedTaskId>) -> Self {
         Self {
             print: BuzzerPayload {
-                command: "buzzer_ctrl",
-                mode: mode_code,
+                command: Self::COMMAND,
+                mode: mode.code(),
                 reason: "",
-                sequence_id: sequence_id.into().to_string(),
+                sequence_id: sequence_id.into(),
             },
         }
     }

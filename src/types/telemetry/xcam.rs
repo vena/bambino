@@ -16,35 +16,10 @@ use alloc::string::String;
 #[cfg(feature = "std")]
 use std::collections::BTreeMap;
 
+use super::merge::{Mergeable, keep_new};
 use serde::{Deserialize, Serialize};
 
-/// Bit positions within `xcam.cfg`, per BambuStudio `DeviceCore/DevPrintOptions.cpp:41-85`.
-///
-/// The four AI failure detectors sit on a stride-3 layout: an enable bit, then a two-bit
-/// sensitivity field immediately *above* it. bambuddy places the sensitivity pair *below* the
-/// enable bit instead (`bambu_mqtt.py:2636`, `decode_detector(5)`) — a pure phase difference.
-/// BambuStudio is followed here; see this module's `CLAUDE.md` note before "fixing" it back.
-pub(crate) mod cfg_bits {
-    /// Spaghetti-detection enable bit; sensitivity in bits 8-9.
-    pub(crate) const SPAGHETTI: u32 = 7;
-    /// Purge-chute-pileup enable bit; sensitivity in bits 11-12.
-    pub(crate) const PURGE_CHUTE_PILEUP: u32 = 10;
-    /// Nozzle-clumping enable bit; sensitivity in bits 14-15.
-    pub(crate) const NOZZLE_CLUMPING: u32 = 13;
-    /// Air-printing enable bit; sensitivity in bits 17-18.
-    pub(crate) const AIR_PRINTING: u32 = 16;
-    /// Buildplate-alignment detection enable bit (no sensitivity field).
-    pub(crate) const BUILDPLATE_ALIGN: u32 = 20;
-    /// Foreign-object-detection check enable bit (no sensitivity field).
-    pub(crate) const FOD_CHECK: u32 = 21;
-    /// Displacement-detection enable bit (no sensitivity field).
-    pub(crate) const DISPLACEMENT: u32 = 22;
-
-    /// Offset from a detector's enable bit to the low bit of its sensitivity field.
-    pub(crate) const SENSITIVITY_OFFSET: u32 = 1;
-    /// Width of a detector's sensitivity field, in bits.
-    pub(crate) const SENSITIVITY_WIDTH: u32 = 2;
-}
+use super::bits::xcam_cfg as cfg_bits;
 
 /// Sensitivity level attached to an AI failure detector.
 ///
@@ -238,39 +213,39 @@ impl XcamTelemetry {
     fn cfg_bit(&self, bit: u32) -> Option<bool> {
         self.cfg.map(|cfg| (cfg >> bit) & 1 != 0)
     }
+}
 
+impl Mergeable for XcamTelemetry {
     /// Merges a freshly-parsed `XcamTelemetry` into `self` field-by-field.
     ///
     /// Mirrors `IpcamTelemetry::merge_from` and exists for the same reason:
     /// a frame that carries only part of the object must not blank the rest of a cached copy.
     /// Present fields overwrite; absent ones leave the cached value alone. `extra` merges per key
     /// rather than being replaced, so an unmodeled key seen once survives later partial frames.
-    pub fn merge_from(&mut self, incoming: &XcamTelemetry) {
-        if incoming.cfg.is_some() {
-            self.cfg = incoming.cfg;
-        }
-        if incoming.printing_monitor.is_some() {
-            self.printing_monitor = incoming.printing_monitor;
-        }
-        if incoming.spaghetti_detector.is_some() {
-            self.spaghetti_detector = incoming.spaghetti_detector;
-        }
-        if incoming.print_halt.is_some() {
-            self.print_halt = incoming.print_halt;
-        }
-        if incoming.halt_print_sensitivity.is_some() {
-            self.halt_print_sensitivity = incoming.halt_print_sensitivity.clone();
-        }
-        if incoming.first_layer_inspector.is_some() {
-            self.first_layer_inspector = incoming.first_layer_inspector;
-        }
-        if incoming.buildplate_marker_detector.is_some() {
-            self.buildplate_marker_detector = incoming.buildplate_marker_detector;
-        }
-        if incoming.allow_skip_parts.is_some() {
-            self.allow_skip_parts = incoming.allow_skip_parts;
-        }
-        for (key, value) in &incoming.extra {
+    fn merge_from(&mut self, incoming: &Self) {
+        let Self {
+            cfg,
+            printing_monitor,
+            spaghetti_detector,
+            print_halt,
+            halt_print_sensitivity,
+            first_layer_inspector,
+            buildplate_marker_detector,
+            allow_skip_parts,
+            extra,
+        } = incoming;
+        keep_new(&mut self.cfg, cfg);
+        keep_new(&mut self.printing_monitor, printing_monitor);
+        keep_new(&mut self.spaghetti_detector, spaghetti_detector);
+        keep_new(&mut self.print_halt, print_halt);
+        keep_new(&mut self.halt_print_sensitivity, halt_print_sensitivity);
+        keep_new(&mut self.first_layer_inspector, first_layer_inspector);
+        keep_new(
+            &mut self.buildplate_marker_detector,
+            buildplate_marker_detector,
+        );
+        keep_new(&mut self.allow_skip_parts, allow_skip_parts);
+        for (key, value) in extra {
             self.extra.insert(key.clone(), value.clone());
         }
     }

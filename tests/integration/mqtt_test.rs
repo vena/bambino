@@ -8,12 +8,9 @@
 
 use tokio::sync::{mpsc, oneshot};
 
-use bambino::error::Error;
-use bambino::identity::PrinterIdentity;
 use bambino::io::TokioIo;
 use bambino::io::tokio::TokioTimer;
-use bambino::models::PrinterModel;
-use bambino::mqtt::MqttClient;
+use bambino::mqtt::{Liveness, MQTT_ZOMBIE_TIMEOUT_SECS, MqttClient};
 
 use crate::common::mock_mqtt::run_mock_mqtt_broker;
 
@@ -31,20 +28,12 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         ack_tx,
     ));
 
-    let mut client = MqttClient::connect(
-        TokioIo::new(client_stream),
-        &PrinterIdentity {
-            ip: String::new(),
-            serial: serial.to_string(),
-            access_code: "12345678".to_string(),
-            model: PrinterModel::P1S,
-        },
-    )
-    .await
-    .expect("Failed to execute MQTT login and subscription handshake");
+    let mut client = MqttClient::connect(TokioIo::new(client_stream), serial, "12345678")
+        .await
+        .expect("Failed to execute MQTT login and subscription handshake");
     let timer = TokioTimer::new();
 
-    let _packet_id = client
+    client
         .publish_command(
             b"{\"pushing\":{\"command\":\"pushall\",\"sequence_id\":\"1\"}}",
             &timer,
@@ -109,17 +98,19 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
         .await
         .expect("Zombie test command publish failed");
 
-    // Tick forward 5 seconds. Timeout boundary is 10 seconds, so this should pass.
+    // Tick to just under the zombie timeout, then past it.
+    let under = MQTT_ZOMBIE_TIMEOUT_SECS / 2;
     assert!(
-        client.tick_zombie_check(5).is_ok(),
+        client.tick_zombie_check(under).is_ok(),
         "Client falsely triggered zombie timeout under 10 seconds"
     );
 
-    // Tick forward another 6 seconds (Total = 11s). This must trigger a timeout error.
-    let timeout_err = client.tick_zombie_check(6).unwrap_err();
+    let timeout_err = client
+        .tick_zombie_check(MQTT_ZOMBIE_TIMEOUT_SECS - under + 1)
+        .unwrap_err();
     assert!(
-        matches!(timeout_err, Error::Timeout),
-        "Expected Error::Timeout, got {:?}",
+        matches!(timeout_err, Liveness::WriteZombie),
+        "Expected Liveness::WriteZombie, got {:?}",
         timeout_err
     );
 

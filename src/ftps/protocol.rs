@@ -60,7 +60,11 @@ pub(crate) const FTP_CMD_PROT_PRIVATE: &str = "PROT P";
 /// Login step: binary transfers — RFC 959's ASCII default corrupts binary payloads.
 pub(crate) const FTP_CMD_TYPE_BINARY: &str = "TYPE I";
 
-/// Maximum bytes accepted from a single FTPS data-channel transfer (`list_directory`'s listing payload, `download_file`'s file payload) before `read_to_eof` aborts with `ProtocolViolation` rather than growing `out` without bound.
+/// Maximum bytes of a single FTPS transfer, in either direction; re-exported as [`crate::ftps::MAX_TRANSFER_BYTES`].
+///
+/// A download (`list_directory`'s listing, `download_file`'s payload) past it aborts with
+/// `ProtocolViolation` rather than growing `out` without bound, and `upload_file` refuses a
+/// payload past it, so nothing this crate uploads is too large for it to download again.
 /// Mirrors `CAMERA_FRAME_MAX_SIZE`'s rationale (`src/camera/binary.rs`) — unbounded allocation on a
 /// no_std/Embassy target hits the uncatchable `alloc_error_handler` abort, not a recoverable
 /// `Result`. Chosen generously for legitimate large downloads (multi-hundred-MB timelapse videos)

@@ -104,7 +104,7 @@ async fn test_get_version_huge_command_timeout_saturates_without_panic() {
 
     // `secs * 1000` overflowed (debug: panic, release: wrap) before the multiplication
     // became saturating; a saturated timeout behaves as "effectively disabled".
-    client.set_command_timeout(u64::MAX);
+    client.set_command_timeout(Some(std::time::Duration::MAX));
     let info = client
         .get_version()
         .await
@@ -231,7 +231,7 @@ async fn test_get_version_surfaces_serialization_error_on_malformed_matching_res
 
     let result = client.get_version().await;
     assert!(
-        matches!(result, Err(Error::Serialization)),
+        matches!(result, Err(Error::Serialization(_))),
         "a matching-command response that fails to parse must surface Error::Serialization, \
          not Error::Timeout — got {:?}",
         result
