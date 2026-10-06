@@ -206,6 +206,7 @@ where
     /// instead of wall-clock timeouts. Chain [`.with_timer()`](Self::with_timer)
     /// for real timeouts.
     pub fn new(tls: MqttTls, factory: MqttFactory, identity: PrinterIdentity) -> Self {
+        crate::quirks::warn_if_unknown_model(identity.model);
         Self {
             mqtt: None,
             ftps: None,
@@ -267,6 +268,7 @@ where
     /// reseeded when [`with_timer()`](Self::with_timer) supplies a real clock.
     pub fn from_mqtt(mqtt_client: MqttClient<IO>, model: PrinterModel) -> Self {
         let serial = String::from(mqtt_client.serial());
+        crate::quirks::warn_if_unknown_model(model);
         Self {
             mqtt: Some(mqtt_client),
             ftps: None,
@@ -585,7 +587,6 @@ where
     #[must_use]
     pub fn quirk_context(&self) -> crate::quirks::QuirkContext<'_> {
         crate::quirks::QuirkContext::empty()
-            .with_fun(self.cache.last_fun.as_deref())
             .with_fun2(self.cache.last_fun2.as_deref())
             .with_firmware(self.firmware_this_connection())
     }

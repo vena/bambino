@@ -8,7 +8,7 @@ use crate::camera::CameraProtocol;
 use crate::quirks::ModelQuirks;
 use crate::types::PrinterTelemetry;
 
-/// Build volume Z depth (mm) shared by X1C and X1E, per `MODEL_MATRIX.csv`'s Build Volume row.
+/// Build volume Z depth (mm) shared by X1, X1C and X1E, per `MODEL_MATRIX.csv`'s Build Volume row.
 pub const X1_Z_MAX: f32 = 256.0;
 
 /// X1C nozzle temperature ceiling (°C), per `MODEL_MATRIX.csv`'s Max Hot End Temperature row.

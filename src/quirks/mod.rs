@@ -241,25 +241,12 @@ pub trait ModelQuirks {
     /// Returns true if the build plate moves along the Z-axis (CoreXY bed-on-Z platforms) [REF-MOTO-GCODE].
     fn is_bed_on_z(&self) -> bool;
 
-    /// Evaluates if a given G-code command carries unsafe axis-constrained homing directions [REF-MOTO-GCODE].
-    ///
-    /// Default: bed-on-Z models reject G28 with axis constraints (Z, X, or Y) to prevent
-    /// nozzle-to-plate collisions. Bed-slingers allow all homing variants.
-    ///
-    /// Scans every statement of `gcode` independently, splitting on `\n` and a bare `\r` —
-    /// multi-statement payloads are a documented, supported wire shape (see `GCodeRequest`).
-    /// Comments and a leading `M117` message are skipped; `G28X`, `G 28 Z` and `G028 Z` are all
-    /// recognized as `G28`, since the firmware's parser is undocumented and the scan resolves
-    /// every ambiguity toward rejecting.
-    fn is_unsafe_homing_command(&self, gcode: &str) -> bool {
-        self.is_bed_on_z() && gcode::validate(gcode, true, None).is_err()
-    }
-
     /// Checks raw G-code against this model's limits: what `PrinterClient::send_gcode` enforces.
     ///
     /// Rejects, with [`Error::ModelMismatch`]:
     ///
-    /// - axis-constrained `G28` on a bed-on-Z model (see [`Self::is_unsafe_homing_command`]);
+    /// - axis-constrained `G28` (Z, X or Y) on a bed-on-Z model, which risks a nozzle-to-plate
+    ///   collision; bed-slingers allow every homing variant [REF-MOTO-GCODE];
     /// - an `M104`/`M109` `S`/`R`/`B` above [`Self::nozzle_temp_max`];
     /// - an `M140`/`M190` `S`/`R` above [`Self::bed_temp_max`] for `mains_220v`;
     /// - any `M141`/`M191` on a model without an active chamber heater, and an `S`/`R` above
@@ -267,9 +254,16 @@ pub trait ModelQuirks {
     ///
     /// A temperature argument that isn't a plain decimal (`S3e2`, `S0x1F`) is rejected with
     /// [`Error::InvalidArgument`] rather than interpreted. Unlike the typed setters, nothing is
-    /// clamped: the G-code is either sent as written or refused. Relative moves are **not**
-    /// bounded — the printer reports no absolute position, so there is nothing to bound them
-    /// against; `move_relative` caps a single move's distance instead.
+    /// clamped: the G-code is either sent as written or refused.
+    ///
+    /// Every statement is checked independently, splitting on `\n` and a bare `\r` —
+    /// multi-statement payloads are a documented, supported wire shape (see `GCodeRequest`).
+    /// Comments and a leading `M117` message are skipped; `G28X`, `G 28 Z` and `G028 Z` are all
+    /// recognized as `G28`, since the firmware's parser is undocumented and the scan resolves
+    /// every ambiguity toward rejecting.
+    ///
+    /// Relative moves are **not** bounded — the printer reports no absolute position, so there is
+    /// nothing to bound them against; `move_relative` caps a single move's distance instead.
     fn validate_gcode(&self, gcode: &str, mains_220v: Option<bool>) -> Result<(), Error> {
         let temps = gcode::TempLimits {
             nozzle_max: self.nozzle_temp_max(),
@@ -512,15 +506,22 @@ impl PrinterModel {
             PrinterModel::H2D => &models::h2::H2DQuirks,
             PrinterModel::H2DPro => &models::h2::H2DProQuirks,
             PrinterModel::H2C => &models::h2::H2CQuirks,
-            PrinterModel::Unknown => {
-                log::warn!(
-                    "Unrecognized printer model — falling back to conservative quirks; travel \
-                     and temperature limits (180mm axes, 80C bed, 300C nozzle) are the floor of \
-                     the supported family and will be below this machine's real ceilings"
-                );
-                &models::unknown::UnknownQuirks
-            }
+            PrinterModel::Unknown => &models::unknown::UnknownQuirks,
         }
+    }
+}
+
+/// Logs a warning if `model` is [`PrinterModel::Unknown`], whose quirks are a conservative fallback.
+///
+/// Called where a client is constructed, not from [`PrinterModel::quirks`], which runs several
+/// times per telemetry frame and would repeat the warning at that rate.
+pub(crate) fn warn_if_unknown_model(model: PrinterModel) {
+    if model == PrinterModel::Unknown {
+        log::warn!(
+            "Unrecognized printer model — falling back to conservative quirks; travel \
+             and temperature limits (180mm axes, 80C bed, 300C nozzle) are the floor of \
+             the supported family and will be below this machine's real ceilings"
+        );
     }
 }
 
@@ -570,6 +571,12 @@ pub(crate) fn format_xy_move_gcode(
 
 pub(crate) const FAN_STEP_MAX: u8 = 15;
 pub(crate) const FAN_ROUNDING_OFFSET: u32 = 7;
+/// Largest percentage change one fan step can produce (`ceil(100 / FAN_STEP_MAX)`); a bigger
+/// jump bypasses [`FanSpeedDebouncer`].
+pub(crate) const DEBOUNCE_BYPASS_DIFF_PCT: i16 =
+    (100 + FAN_STEP_MAX as i16 - 1) / FAN_STEP_MAX as i16;
+/// Consecutive frames a one-step change must persist before [`FanSpeedDebouncer`] commits it.
+pub(crate) const DEBOUNCE_CONFIRM_FRAMES: u8 = 3;
 
 /// Converts a discrete fan speed step (0 to 15) to an integer percentage (0 to 100) [REF-CLIM-FANS].
 ///
@@ -627,14 +634,14 @@ impl FanSpeedDebouncer {
     pub fn debounce(&mut self, incoming_percentage: u8) -> u8 {
         let diff = (incoming_percentage as i16 - self.last_stable_percentage as i16).abs();
 
-        if diff <= 7 {
+        if diff <= DEBOUNCE_BYPASS_DIFF_PCT {
             // Evaluates whether the change is a transient step bounce or a permanent shift.
             if incoming_percentage == self.last_stable_percentage {
                 self.consecutive_counts = 0;
                 self.target_value = incoming_percentage;
             } else if incoming_percentage == self.target_value {
                 self.consecutive_counts += 1;
-                if self.consecutive_counts >= 3 {
+                if self.consecutive_counts >= DEBOUNCE_CONFIRM_FRAMES {
                     self.last_stable_percentage = incoming_percentage;
                     self.consecutive_counts = 0;
                 }
@@ -1170,7 +1177,7 @@ mod tests {
         assert_eq!(q.z_max(), 180.0);
         assert_eq!(q.x_max(), 180.0);
         assert_eq!(q.y_max(), 180.0);
-        assert!(q.is_unsafe_homing_command("G28 Z"));
+        assert!(q.validate_gcode("G28 Z", None).is_err());
     }
 
     // Z-move gcode parameterization tests
@@ -1280,24 +1287,24 @@ mod tests {
     #[test]
     fn test_unsafe_homing_bed_on_z() {
         let q = PrinterModel::P1P.quirks();
-        assert!(q.is_unsafe_homing_command("G28 Z"));
-        assert!(q.is_unsafe_homing_command("g28 x"));
-        assert!(q.is_unsafe_homing_command("G28 X Y Z"));
-        assert!(!q.is_unsafe_homing_command("G28"));
-        assert!(!q.is_unsafe_homing_command("G1 Z10"));
-        assert!(!q.is_unsafe_homing_command("G280 Z"));
-        assert!(!q.is_unsafe_homing_command(""));
-        assert!(!q.is_unsafe_homing_command("G28"));
-        assert!(q.is_unsafe_homing_command("G28 z"));
+        assert!(q.validate_gcode("G28 Z", None).is_err());
+        assert!(q.validate_gcode("g28 x", None).is_err());
+        assert!(q.validate_gcode("G28 X Y Z", None).is_err());
+        assert!(q.validate_gcode("G28", None).is_ok());
+        assert!(q.validate_gcode("G1 Z10", None).is_ok());
+        assert!(q.validate_gcode("G280 Z", None).is_ok());
+        assert!(q.validate_gcode("", None).is_ok());
+        assert!(q.validate_gcode("G28", None).is_ok());
+        assert!(q.validate_gcode("G28 z", None).is_err());
     }
 
     #[test]
     fn test_unsafe_homing_hidden_on_later_line() {
-        // Regression: is_unsafe_homing_command used to inspect only the first
+        // Regression: the homing check used to inspect only the first
         // whitespace-split token of the whole string, so an unsafe G28 buried on a
         // later line of a multi-statement payload passed through unchecked.
         let q = PrinterModel::P1P.quirks();
-        assert!(q.is_unsafe_homing_command("M104 S200\nG28 Z"));
+        assert!(q.validate_gcode("M104 S200\nG28 Z", None).is_err());
     }
 
     #[test]
@@ -1305,7 +1312,7 @@ mod tests {
         // Regression: "G28X" (no whitespace between the command and the axis
         // letter) used to fail the exact "G28" token match and pass through unchecked.
         let q = PrinterModel::P1P.quirks();
-        assert!(q.is_unsafe_homing_command("G28X"));
+        assert!(q.validate_gcode("G28X", None).is_err());
     }
 
     #[test]
@@ -1313,10 +1320,16 @@ mod tests {
         // Regression (issue #55): a bare (all-axis) G28 with a trailing comment mentioning
         // X/Y/Z must not be mistaken for an explicit axis-constrained G28.
         let q = PrinterModel::P1P.quirks();
-        assert!(!q.is_unsafe_homing_command("G28 ; home XYZ before print"));
-        assert!(!q.is_unsafe_homing_command("G28 (home XYZ before print)"));
+        assert!(
+            q.validate_gcode("G28 ; home XYZ before print", None)
+                .is_ok()
+        );
+        assert!(
+            q.validate_gcode("G28 (home XYZ before print)", None)
+                .is_ok()
+        );
         // A genuine axis-constrained G28 before the comment must still be flagged.
-        assert!(q.is_unsafe_homing_command("G28 Z ; home Z only"));
+        assert!(q.validate_gcode("G28 Z ; home Z only", None).is_err());
     }
 
     #[test]
@@ -1326,22 +1339,22 @@ mod tests {
         // or an M117 display message. The executable G-code on each of these lines is safe (or
         // absent), so none may be rejected.
         let q = PrinterModel::P1P.quirks();
-        assert!(!q.is_unsafe_homing_command("; G28 Z"));
-        assert!(!q.is_unsafe_homing_command("(G28 Z)"));
-        assert!(!q.is_unsafe_homing_command("M400 ; then G28 Z manually"));
-        assert!(!q.is_unsafe_homing_command("M117 G28 Z"));
-        assert!(!q.is_unsafe_homing_command("  m117 now homing G28 Z"));
+        assert!(q.validate_gcode("; G28 Z", None).is_ok());
+        assert!(q.validate_gcode("(G28 Z)", None).is_ok());
+        assert!(q.validate_gcode("M400 ; then G28 Z manually", None).is_ok());
+        assert!(q.validate_gcode("M117 G28 Z", None).is_ok());
+        assert!(q.validate_gcode("  m117 now homing G28 Z", None).is_ok());
         // M1170 is a different command, not M117 with a trailing digit — do not swallow it.
-        assert!(q.is_unsafe_homing_command("M1170 G28 Z"));
+        assert!(q.validate_gcode("M1170 G28 Z", None).is_err());
         // Only the commented line is inert; a real G28 Z on another line still counts.
-        assert!(q.is_unsafe_homing_command("; G28 Z\nG28 Z"));
+        assert!(q.validate_gcode("; G28 Z\nG28 Z", None).is_err());
     }
 
     #[test]
     fn test_a1_homing_always_safe() {
         let q = PrinterModel::A1.quirks();
-        assert!(!q.is_unsafe_homing_command("G28 Z"));
-        assert!(!q.is_unsafe_homing_command("G28"));
+        assert!(q.validate_gcode("G28 Z", None).is_ok());
+        assert!(q.validate_gcode("G28", None).is_ok());
     }
 
     #[test]

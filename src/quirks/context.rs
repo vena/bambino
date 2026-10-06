@@ -16,7 +16,7 @@
 //! stale-answer call impossible to write rather than merely discouraged.
 //!
 //! Every field is `Option` because every one of them can be genuinely absent, and absent is not
-//! the same as `false`. The P1 and A1 families send no `fun`/`fun2` at all
+//! the same as `false`. The P1 and A1 families send no `fun2` at all
 //! (`reference/03_mqtt_telemetry.md`), and firmware version needs a `get_version` round trip
 //! that a caller may never have made. A quirk reading `None` should fall back to its model
 //! default, not treat it as a denial.
@@ -24,8 +24,8 @@
 //! Build one from a client with [`PrinterClient::quirk_context`](crate::client::PrinterClient::quirk_context),
 //! or reach for [`PrinterClient::capabilities`](crate::client::PrinterClient::capabilities), which
 //! supplies it for you.
-
-use crate::types::PrinterTelemetry;
+//!
+//! A field is added when a quirk reads it, not ahead of need.
 
 /// Wire-derived inputs a quirk may consult, all optional.
 ///
@@ -33,12 +33,6 @@ use crate::types::PrinterTelemetry;
 /// site.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QuirkContext<'a> {
-    /// The `fun` capability bitfield, if the printer reported one.
-    ///
-    /// Absent on the P1 and A1 families entirely. Bit 29 is Developer LAN Mode; BambuStudio
-    /// reads a dozen more (`DeviceManager.cpp:4433-4455`) that this crate does not yet.
-    pub fun: Option<&'a str>,
-
     /// The `fun2` capability bitfield, if the printer reported one.
     ///
     /// Absent on the P1 and A1 families entirely, so a quirk that prefers a `fun2` bit is inert
@@ -53,13 +47,6 @@ pub struct QuirkContext<'a> {
     /// the model — remote AMS drying is version-gated on H2D, H2D Pro, H2S, H2C, P2S and X2D for
     /// exactly this reason.
     pub firmware: Option<&'a str>,
-
-    /// The most recent `print` telemetry object, for quirks that read a live state field.
-    ///
-    /// Distinct from the capability fields above: this is machine *state*
-    /// ([`is_door_open`](super::ModelQuirks::is_door_open) reads a door bit that flips as
-    /// someone opens the door), not a capability claim.
-    pub telemetry: Option<&'a PrinterTelemetry>,
 }
 
 impl<'a> QuirkContext<'a> {
@@ -70,13 +57,6 @@ impl<'a> QuirkContext<'a> {
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
-    }
-
-    /// Sets the `fun` capability bitfield.
-    #[must_use]
-    pub fn with_fun(mut self, fun: Option<&'a str>) -> Self {
-        self.fun = fun;
-        self
     }
 
     /// Sets the `fun2` capability bitfield.
@@ -90,13 +70,6 @@ impl<'a> QuirkContext<'a> {
     #[must_use]
     pub fn with_firmware(mut self, firmware: Option<&'a str>) -> Self {
         self.firmware = firmware;
-        self
-    }
-
-    /// Sets the live `print` telemetry object.
-    #[must_use]
-    pub fn with_telemetry(mut self, telemetry: Option<&'a PrinterTelemetry>) -> Self {
-        self.telemetry = telemetry;
         self
     }
 }
@@ -116,20 +89,17 @@ impl<'a> QuirkContext<'a> {
 pub fn firmware_at_least(have: &str, want: &str) -> bool {
     let mut have_parts = have.trim().split('.');
     let mut want_parts = want.trim().split('.');
+    // `None` for an unparseable component; a missing or empty one reads as 0.
+    fn component(part: Option<&str>) -> Option<u32> {
+        match part {
+            None | Some("") => Some(0),
+            Some(part) => part.trim().parse().ok(),
+        }
+    }
     for _ in 0..4 {
-        let h = match have_parts.next() {
-            None | Some("") => 0,
-            Some(part) => match part.trim().parse::<u32>() {
-                Ok(value) => value,
-                Err(_) => return false,
-            },
-        };
-        let w = match want_parts.next() {
-            None | Some("") => 0,
-            Some(part) => match part.trim().parse::<u32>() {
-                Ok(value) => value,
-                Err(_) => return false,
-            },
+        let (Some(h), Some(w)) = (component(have_parts.next()), component(want_parts.next()))
+        else {
+            return false;
         };
         if h != w {
             return h > w;
@@ -177,11 +147,8 @@ mod tests {
             .with_firmware(Some("01.09.00.00"));
         assert_eq!(ctx.fun2, Some("20"));
         assert_eq!(ctx.firmware, Some("01.09.00.00"));
-        assert_eq!(ctx.fun, None);
-        assert!(ctx.telemetry.is_none());
 
         let empty = QuirkContext::empty();
-        assert_eq!(empty.fun, None);
         assert_eq!(empty.fun2, None);
         assert_eq!(empty.firmware, None);
     }
