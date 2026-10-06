@@ -78,7 +78,7 @@ pub struct AmsFilamentSettingPayload {
     pub tray_id: i32,
     /// **Short-format** filament preset code, e.g. `"GFA01"` or `"GFL05"` [REF-AMS-SP_CFG].
     ///
-    /// Set via [`AmsFilamentSettingRequest::with_preset`].
+    /// Set from [`FilamentSpec::preset`].
     ///
     /// This is *not* where a long `"PF"`-prefixed preset id belongs — that goes in
     /// [`setting_id`](Self::setting_id), which is a separate wire field. Putting a 19-character
@@ -231,7 +231,7 @@ impl AmsFilamentSettingRequest {
     /// `tray_info_idx` and is omitted entirely when not set.
     ///
     /// Pass the long form here — `"GFSL05_07"`, or a `"PF"`-prefixed id — and keep the short
-    /// code in [`with_preset`](Self::with_preset). See
+    /// code in [`FilamentSpec::preset`]. See
     /// [`AmsFilamentSettingPayload::tray_info_idx`] for what the printer does when a long id is
     /// put in the short field instead.
     #[must_use]

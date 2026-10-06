@@ -82,7 +82,7 @@ pub struct XcamDetector {
 ///
 /// Every field is `Option` because which keys arrive depends on both firmware generation and
 /// model, and because `xcam` appears to be pushall-only — an incremental `msg: 1` frame carries
-/// none of it. Use [`merge_from`](Self::merge_from) rather than replacing a cached copy wholesale.
+/// none of it. Use `merge_from` rather than replacing a cached copy wholesale.
 ///
 /// Unmodeled keys survive in [`extra`](Self::extra): this wire object is still largely uncharted
 /// and model-dependent, so round-tripping a report must not silently drop what it carries.
