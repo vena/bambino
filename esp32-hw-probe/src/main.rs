@@ -98,7 +98,7 @@ fn teardown(phase: Phase) {
         match phase {
             Phase::DropRaw => drop(raw),
             Phase::Close => {
-                let connector = EspIdfTlsConnector::new().with_connect_timeout(HANDSHAKE_BOUND);
+                let connector = EspIdfTlsConnector::unverified().with_connect_timeout(HANDSHAKE_BOUND);
                 match connector.connect(PRINTER_SERIAL, raw).await {
                     Ok(mut stream) => {
                         if let Err(e) = connector.close(&mut stream).await {
@@ -109,7 +109,7 @@ fn teardown(phase: Phase) {
                 }
             }
             Phase::MidDrop => {
-                let connector = EspIdfTlsConnector::new();
+                let connector = EspIdfTlsConnector::unverified();
                 let started = Instant::now();
                 match embassy_futures::select::select(
                     connector.connect(PRINTER_SERIAL, raw),

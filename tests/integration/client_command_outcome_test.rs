@@ -92,7 +92,8 @@ async fn test_echo_resolves_its_command_with_the_decoded_verdict() {
         .await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let gcode = client.send_gcode("G28").await.expect("send_gcode failed");
     assert!(matches!(
@@ -154,7 +155,8 @@ async fn test_foreign_echo_under_any_wrapper_is_unknown() {
         .await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     for _ in 0..2 {
         let event = client.poll_telemetry().await.unwrap();
@@ -178,7 +180,7 @@ async fn test_unanswered_command_times_out_at_its_deadline() {
     });
 
     let clock = ManualClock::default();
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S)
+    let mut client = connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S)
         .await
         .with_timer(clock.clone());
     client.set_command_timeout(5);
@@ -211,7 +213,8 @@ async fn test_disconnect_resolves_pending_commands_as_connection_lost() {
         read_command(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let handle = client.resume_print().await.expect("resume_print failed");
     broker_task.await.expect("broker task panicked");
 
@@ -237,7 +240,8 @@ async fn test_await_ack_after_disconnect_returns_connection_lost_without_rediali
         read_command(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let handle = client.resume_print().await.expect("resume_print failed");
     broker_task.await.expect("broker task panicked");
 
@@ -278,7 +282,8 @@ async fn test_await_ack_returns_the_outcome_once_and_keeps_other_traffic() {
         .await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let handle = client
         .change_filament(0, 1, 220, 220, None)
         .await
@@ -324,7 +329,8 @@ async fn test_pushall_settles_on_publish() {
         read_command(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let handle = client
         .request_pushall()
         .await

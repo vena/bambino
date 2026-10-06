@@ -4,7 +4,6 @@
 //! and Timer interfaces for bare-metal targets utilizing the Embassy network
 //! stack and `mbedtls-rs`.
 
-#[cfg(feature = "embassy")]
 use crate::io::{
     AsyncIo, AsyncUdpSocket, RawStreamFactory, SocketError, TimerError, TimerProvider,
     TlsConnector, TlsVersion, map_mbedtls_verify_flags, mbedtls_error_kind,
@@ -14,10 +13,8 @@ use crate::io::{
 use alloc::{boxed::Box, vec::Vec};
 
 /// Timer implementation designed for the hardware microsecond clock in Embassy.
-#[cfg(feature = "embassy")]
 pub struct EmbassyTimer;
 
-#[cfg(feature = "embassy")]
 impl TimerProvider for EmbassyTimer {
     async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
         // Saturate, not truncate — as_micros() is u128 and `as u64` wraps. Unreachable in
@@ -41,12 +38,10 @@ impl TimerProvider for EmbassyTimer {
 /// since embassy-net's `UdpSocket::new()` requires pre-allocated buffer slices and its
 /// `bind()` takes a typed `IpListenEndpoint`, not a `SocketAddr`. Construct one with
 /// [`EmbassyUdpSocket::new()`] from an already-bound `embassy_net::udp::UdpSocket`.
-#[cfg(feature = "embassy")]
 pub struct EmbassyUdpSocket<'a> {
     inner: ::embassy_net::udp::UdpSocket<'a>,
 }
 
-#[cfg(feature = "embassy")]
 impl<'a> EmbassyUdpSocket<'a> {
     /// Creates a wrapper using a pre-initialized Embassy UDP socket.
     pub fn new(inner: ::embassy_net::udp::UdpSocket<'a>) -> Self {
@@ -54,7 +49,6 @@ impl<'a> EmbassyUdpSocket<'a> {
     }
 }
 
-#[cfg(feature = "embassy")]
 impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
     async fn send_to(
         &self,
@@ -120,7 +114,7 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
 /// (e.g. behind a `static_cell::StaticCell`, like [`EmbassySocketBuffers`] below — see the
 /// README's Embassy setup example) and passes a
 /// [`TlsReference`](::mbedtls_rs::TlsReference) — a cheap `Copy` handle, not the `Tls` itself —
-/// into each `EmbassyTlsConnector::new()` call. This lets MQTT's connector and FTPS's
+/// into each `EmbassyTlsConnector::unverified()`/`verified()` call. This lets MQTT's connector and FTPS's
 /// control/data connectors all share the one instance concurrently.
 ///
 /// **No caller-supplied buffers.** `mbedtls-rs`
@@ -142,21 +136,24 @@ impl<'a> AsyncUdpSocket for EmbassyUdpSocket<'a> {
 /// own to bound — the hang risk lives inside `mbedtls-rs`'s handshake await. Callers that need
 /// a bounded connect must race `EmbassyTlsConnector::connect` against
 /// `embassy_time::with_timeout` themselves.
-#[cfg(feature = "embassy")]
+///
+/// `Clone` is cheap (`mbedtls-rs` reference-counts a parsed `Certificate`), so one connector can
+/// serve every `PrinterClient` channel.
+#[derive(Clone)]
 pub struct EmbassyTlsConnector<'a> {
     tls: ::mbedtls_rs::TlsReference<'a>,
     ca_chain: Option<::mbedtls_rs::Certificate<'a>>,
     creds: Option<::mbedtls_rs::Credentials<'a>>,
 }
 
-#[cfg(feature = "embassy")]
 impl<'a> EmbassyTlsConnector<'a> {
-    /// Creates a new connector against the single active [`Tls`](::mbedtls_rs::Tls) instance
-    /// (via its [`TlsReference`](::mbedtls_rs::TlsReference)), defaulting to no certificate
-    /// verification — matching this crate's existing unsafe-by-default convention on other
-    /// platforms (`build_unsafe_client_config`), since Bambu printer certs chain to a private
-    /// BBL CA that no OS trust store carries.
-    pub fn new(tls: ::mbedtls_rs::TlsReference<'a>) -> Self {
+    /// A connector against the single active [`Tls`](::mbedtls_rs::Tls) instance that never checks the printer's certificate.
+    ///
+    /// The name matches `TokioTlsConnector::unverified` and `EspIdfTlsConnector::unverified`, so
+    /// skipping verification is always spelled out. Bambu printer certs chain to a private BBL CA
+    /// that no OS trust store carries, which is why this exists; prefer [`Self::verified`] when
+    /// you hold that CA.
+    pub fn unverified(tls: ::mbedtls_rs::TlsReference<'a>) -> Self {
         Self {
             tls,
             ca_chain: None,
@@ -164,12 +161,16 @@ impl<'a> EmbassyTlsConnector<'a> {
         }
     }
 
-    /// Enables server certificate verification against the given CA chain. Without this,
-    /// the connector never checks the printer's certificate.
-    #[must_use]
-    pub fn with_ca_chain(mut self, ca_chain: ::mbedtls_rs::Certificate<'a>) -> Self {
-        self.ca_chain = Some(ca_chain);
-        self
+    /// A connector that verifies the printer's certificate against `ca_chain`.
+    pub fn verified(
+        tls: ::mbedtls_rs::TlsReference<'a>,
+        ca_chain: ::mbedtls_rs::Certificate<'a>,
+    ) -> Self {
+        Self {
+            tls,
+            ca_chain: Some(ca_chain),
+            creds: None,
+        }
     }
 
     /// Supplies client credentials for mutual TLS (mTLS).
@@ -193,10 +194,8 @@ impl<'a> EmbassyTlsConnector<'a> {
 ///
 /// [`session`](Self::session) and [`session_mut`](Self::session_mut) reach the `Session` for
 /// anything else it offers.
-#[cfg(feature = "embassy")]
 pub struct EmbassyTlsStream<'a, T: AsyncIo>(::mbedtls_rs::Session<'a, T>);
 
-#[cfg(feature = "embassy")]
 impl<'a, T: AsyncIo> EmbassyTlsStream<'a, T> {
     /// Returns the underlying `mbedtls-rs` session.
     pub fn session(&self) -> &::mbedtls_rs::Session<'a, T> {
@@ -212,7 +211,6 @@ impl<'a, T: AsyncIo> EmbassyTlsStream<'a, T> {
 }
 
 /// Classifies an `mbedtls-rs` session failure: an underlying stream error keeps its kind, and an mbedTLS code goes through [`mbedtls_error_kind`].
-#[cfg(feature = "embassy")]
 fn session_error_kind(err: &::mbedtls_rs::SessionError) -> embedded_io_async::ErrorKind {
     match err {
         ::mbedtls_rs::SessionError::Io(kind) => *kind,
@@ -227,30 +225,27 @@ fn session_error_kind(err: &::mbedtls_rs::SessionError) -> embedded_io_async::Er
 
 /// Maps a failed session setup, handshake, or close to a `SocketError`.
 ///
-/// `ResourceExhausted` for an allocation failure (GitHub issue #385); everything else stays the
-/// `ConnectionAborted` these steps have always reported.
-#[cfg(feature = "embassy")]
-fn session_setup_error(err: &::mbedtls_rs::SessionError) -> SocketError {
-    if session_error_kind(err) == embedded_io_async::ErrorKind::OutOfMemory {
-        SocketError::ResourceExhausted
-    } else {
-        SocketError::ConnectionAborted
+/// A classified failure keeps its class, so a peer reset during the handshake is
+/// `ConnectionReset` here as on ESP-IDF, and an allocation failure is `ResourceExhausted` (GitHub
+/// issue #385). Only an unclassified one (`ErrorKind::Other`) stays the `ConnectionAborted` these
+/// steps always reported, rather than becoming a non-network `Other` a retry loop would give up on.
+fn session_error(err: &::mbedtls_rs::SessionError) -> SocketError {
+    match session_error_kind(err) {
+        embedded_io_async::ErrorKind::Other => SocketError::ConnectionAborted,
+        kind => crate::io::map_embedded_io_error_kind(kind),
     }
 }
 
-#[cfg(feature = "embassy")]
 impl<T: AsyncIo> embedded_io_async::ErrorType for EmbassyTlsStream<'_, T> {
     type Error = embedded_io_async::ErrorKind;
 }
 
-#[cfg(feature = "embassy")]
 impl<T: AsyncIo> embedded_io_async::Read for EmbassyTlsStream<'_, T> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         self.0.read(buf).await.map_err(|e| session_error_kind(&e))
     }
 }
 
-#[cfg(feature = "embassy")]
 impl<T: AsyncIo> embedded_io_async::Write for EmbassyTlsStream<'_, T> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         self.0.write(buf).await.map_err(|e| session_error_kind(&e))
@@ -261,7 +256,6 @@ impl<T: AsyncIo> embedded_io_async::Write for EmbassyTlsStream<'_, T> {
     }
 }
 
-#[cfg(feature = "embassy")]
 impl<'a, RawStream> TlsConnector<RawStream> for EmbassyTlsConnector<'a>
 where
     RawStream: AsyncIo,
@@ -290,7 +284,7 @@ where
         )
         .map_err(|e| {
             log::debug!("mbedtls-rs Session::new failed: {e:?}");
-            session_setup_error(&e)
+            session_error(&e)
         })?;
 
         // `ClientSessionConfig.server_name` can't hold `host` directly: its lifetime is
@@ -302,7 +296,7 @@ where
         let host_cstring = alloc::ffi::CString::new(host).map_err(|_| SocketError::InvalidInput)?;
         session.set_server_name(&host_cstring).map_err(|e| {
             log::debug!("mbedtls-rs set_server_name failed: {e:?}");
-            session_setup_error(&e)
+            session_error(&e)
         })?;
 
         // `tls_verification_details()` is the one post-handshake inspector `mbedtls-rs` does
@@ -314,7 +308,7 @@ where
         if let Err(e) = session.connect().await {
             log::debug!("mbedtls-rs Session::connect failed: {e:?}");
             return Err(map_mbedtls_verify_flags(session.tls_verification_details())
-                .map_or_else(|| session_setup_error(&e), SocketError::CertificateInvalid));
+                .map_or_else(|| session_error(&e), SocketError::CertificateInvalid));
         }
 
         Ok(EmbassyTlsStream(session))
@@ -333,7 +327,7 @@ where
     async fn close(&self, stream: &mut Self::Stream) -> Result<(), SocketError> {
         stream.0.close().await.map_err(|e| {
             log::debug!("mbedtls-rs Session::close failed: {e:?}");
-            session_setup_error(&e)
+            session_error(&e)
         })
     }
 
@@ -363,14 +357,9 @@ where
     }
 }
 
-/// How often a dial rechecks a connection of the pool that is still closing.
-#[cfg(feature = "embassy")]
-const DIAL_SETTLE_POLL_MS: u64 = 10;
-/// How often the pool task rechecks while some connection is closing.
-#[cfg(feature = "embassy")]
-const TASK_SETTLE_POLL_MS: u64 = 10;
+/// How often the pool task, and a dial waiting for a socket, recheck a connection that is still closing.
+const SETTLE_POLL_MS: u64 = 10;
 /// Bound on waiting for a forced RST to leave the stack.
-#[cfg(feature = "embassy")]
 const RST_FLUSH_BOUND_MS: u64 = 1_000;
 
 /// Buffer storage for an [`EmbassySocketPool`] of `N` sockets.
@@ -378,7 +367,6 @@ const RST_FLUSH_BOUND_MS: u64 = 1_000;
 /// Each socket gets a `TX_SZ`-byte send buffer and an `RX_SZ`-byte receive buffer. Plain byte
 /// arrays, so it can be built in a `const` context and held in a `static_cell::StaticCell`;
 /// [`EmbassySocketPool::new`] borrows it for the rest of the program.
-#[cfg(feature = "embassy")]
 pub struct EmbassySocketBuffers<
     const N: usize,
     const TX_SZ: usize = 2048,
@@ -387,7 +375,6 @@ pub struct EmbassySocketBuffers<
     bufs: [([u8; TX_SZ], [u8; RX_SZ]); N],
 }
 
-#[cfg(feature = "embassy")]
 impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> EmbassySocketBuffers<N, TX_SZ, RX_SZ> {
     /// Creates zeroed buffers.
     pub const fn new() -> Self {
@@ -397,7 +384,6 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> EmbassySocketBuffer
     }
 }
 
-#[cfg(feature = "embassy")]
 impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> Default
     for EmbassySocketBuffers<N, TX_SZ, RX_SZ>
 {
@@ -457,7 +443,6 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> Default
 ///
 /// Like embassy-net's `Stack`, the pool is neither `Send` nor `Sync`: use it from the executor
 /// that runs the network stack.
-#[cfg(feature = "embassy")]
 pub struct EmbassySocketPool {
     slots: core::cell::RefCell<Vec<Slot>>,
     /// Signalled whenever a stream is dropped, so an idle pool task wakes to settle it.
@@ -465,14 +450,12 @@ pub struct EmbassySocketPool {
 }
 
 /// One pool socket and what it is being used for.
-#[cfg(feature = "embassy")]
 struct Slot {
     /// `None` while leased, or while a settle pass has it out to drain or reset it.
     socket: Option<::embassy_net::tcp::TcpSocket<'static>>,
     usage: SlotUsage,
 }
 
-#[cfg(feature = "embassy")]
 #[derive(Clone, Copy)]
 enum SlotUsage {
     Idle,
@@ -483,7 +466,6 @@ enum SlotUsage {
     },
 }
 
-#[cfg(feature = "embassy")]
 impl Slot {
     fn view(&self) -> SlotView {
         match (self.usage, self.socket.is_some()) {
@@ -494,7 +476,6 @@ impl Slot {
     }
 }
 
-#[cfg(feature = "embassy")]
 impl EmbassySocketPool {
     /// Creates one socket per buffer pair in `bufs`, registered on `stack` for good.
     ///
@@ -524,7 +505,7 @@ impl EmbassySocketPool {
     pub async fn run(&self) -> ! {
         loop {
             if self.settle_pass().await {
-                ::embassy_time::Timer::after_millis(TASK_SETTLE_POLL_MS).await;
+                ::embassy_time::Timer::after_millis(SETTLE_POLL_MS).await;
             } else {
                 self.dropped.wait().await;
             }
@@ -636,7 +617,7 @@ impl EmbassySocketPool {
                     Choice::Wait => {}
                 }
             }
-            ::embassy_time::Timer::after_millis(DIAL_SETTLE_POLL_MS).await;
+            ::embassy_time::Timer::after_millis(SETTLE_POLL_MS).await;
         }
     }
 
@@ -657,7 +638,6 @@ impl EmbassySocketPool {
 ///
 /// Dropping it ends the connection with a FIN and returns the socket to the pool, which keeps it
 /// registered until the printer has closed its side too (see [`EmbassySocketPool`]).
-#[cfg(feature = "embassy")]
 pub struct EmbassyTcpStream {
     pool: &'static EmbassySocketPool,
     slot: usize,
@@ -665,7 +645,6 @@ pub struct EmbassyTcpStream {
     socket: Option<::embassy_net::tcp::TcpSocket<'static>>,
 }
 
-#[cfg(feature = "embassy")]
 impl EmbassyTcpStream {
     fn socket(
         &mut self,
@@ -677,7 +656,6 @@ impl EmbassyTcpStream {
     }
 }
 
-#[cfg(feature = "embassy")]
 impl Drop for EmbassyTcpStream {
     fn drop(&mut self) {
         if let Some(socket) = self.socket.take() {
@@ -686,19 +664,16 @@ impl Drop for EmbassyTcpStream {
     }
 }
 
-#[cfg(feature = "embassy")]
 impl embedded_io_async::ErrorType for EmbassyTcpStream {
     type Error = ::embassy_net::tcp::Error;
 }
 
-#[cfg(feature = "embassy")]
 impl embedded_io_async::Read for EmbassyTcpStream {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         self.socket()?.read(buf).await
     }
 }
 
-#[cfg(feature = "embassy")]
 impl embedded_io_async::Write for EmbassyTcpStream {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         self.socket()?.write(buf).await
@@ -713,13 +688,15 @@ impl embedded_io_async::Write for EmbassyTcpStream {
 ///
 /// `Copy`, so one pool can back the factories for every channel. See [`EmbassySocketPool`] for
 /// setup, sizing, and how a dropped connection is ended.
-#[cfg(feature = "embassy")]
+///
+/// **IPv4 literals only.** `dial` rejects a hostname or an IPv6 address with
+/// [`SocketError::InvalidInput`]: this crate doesn't enable embassy-net's IPv6 stack or a DNS
+/// resolver, and Bambu printers are addressed by IPv4 in practice.
 #[derive(Clone, Copy)]
 pub struct EmbassyRawStreamFactory {
     pool: &'static EmbassySocketPool,
 }
 
-#[cfg(feature = "embassy")]
 impl EmbassyRawStreamFactory {
     /// Creates a factory that dials on `pool`'s sockets.
     pub fn new(pool: &'static EmbassySocketPool) -> Self {
@@ -727,7 +704,6 @@ impl EmbassyRawStreamFactory {
     }
 }
 
-#[cfg(feature = "embassy")]
 impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory {
     async fn dial(&self, host: &str, port: u16) -> Result<EmbassyTcpStream, SocketError> {
         use ::embassy_net::tcp::ConnectError;
@@ -779,11 +755,9 @@ impl RawStreamFactory<EmbassyTcpStream> for EmbassyRawStreamFactory {
 /// an RST has nothing left to destroy. Not enforced with `TcpSocket::set_timeout`: on smoltcp
 /// 0.13.1, `close()` doesn't restart the timeout clock, so an idle connection would get an RST
 /// in place of its FIN.
-#[cfg(feature = "embassy")]
 pub(crate) const DRAIN_BOUND_MS: u64 = 10_000;
 
 /// What the socket pool does next with a socket whose connection is closing.
-#[cfg(feature = "embassy")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettleAction {
     /// The printer has closed its side too, so the socket can be dialed again.
@@ -802,7 +776,6 @@ pub(crate) enum SettleAction {
 /// everything we sent. `TimeWait` is local only; the printer has already closed, so `connect()`
 /// may reuse the socket (smoltcp rejects only `is_open()`, which is false there). A socket that
 /// settles exactly at the bound is `Idle`, not reset.
-#[cfg(feature = "embassy")]
 pub(crate) fn settle(state: ::embassy_net::tcp::State, since_ms: u64, now_ms: u64) -> SettleAction {
     use ::embassy_net::tcp::State;
     if matches!(state, State::Closed | State::TimeWait) {
@@ -815,7 +788,6 @@ pub(crate) fn settle(state: ::embassy_net::tcp::State, since_ms: u64, now_ms: u6
 }
 
 /// What the socket pool knows about one slot when `dial` picks a socket.
-#[cfg(feature = "embassy")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlotView {
     /// Held by a live stream.
@@ -827,7 +799,6 @@ pub(crate) enum SlotView {
 }
 
 /// The slot `dial` takes, if any.
-#[cfg(feature = "embassy")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
     /// Dial on this slot's socket.
@@ -844,7 +815,6 @@ pub(crate) enum Choice {
 /// holds an old connection of ours alongside a new one. [`settle`] resets a closing socket at
 /// [`DRAIN_BOUND_MS`], so the wait ends. Only when every slot is held by a live stream does
 /// the dial fail at once: freeing one is the consumer's call, not the pool's.
-#[cfg(feature = "embassy")]
 pub(crate) fn choose_slot(slots: &[SlotView]) -> Choice {
     if slots.contains(&SlotView::Closing) {
         Choice::Wait

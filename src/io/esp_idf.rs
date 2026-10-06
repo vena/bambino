@@ -3,22 +3,19 @@
 //! Bridges native ESP-IDF services and standard BSD socket structures to
 //! our transport-agnostic client traits under Espressif's Rust standard library.
 
-#[cfg(feature = "esp-idf")]
 use crate::io::{
     AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
-    TimerError, TimerProvider, TlsConnector, TlsVersion, account_for_trust_store, esp_tls_read_cap,
-    esp_tls_read_count, map_mbedtls_verify_flags, mbedtls_code_from_esp_tls_record,
-    mbedtls_error_kind,
+    StdIoError, TimerError, TimerProvider, TlsConnector, TlsVersion, account_for_trust_store,
+    esp_tls_read_cap, esp_tls_read_count, map_mbedtls_verify_flags,
+    mbedtls_code_from_esp_tls_record, mbedtls_error_kind,
 };
 
-#[cfg(feature = "esp-idf")]
 use core::net::SocketAddr;
 
 /// Async timer utilizing the ESP-IDF high-resolution timer service.
 ///
 /// Wraps `EspAsyncTimer` to provide non-blocking async sleep that integrates
 /// with the FreeRTOS scheduler instead of blocking the task thread.
-#[cfg(feature = "esp-idf")]
 pub struct EspIdfTimer {
     /// `Option` so `sleep` can *move* the timer out for the duration of the await rather than
     /// hold a `RefCell` borrow across it (`clippy::await_holding_refcell_ref`). A borrow held
@@ -30,7 +27,6 @@ pub struct EspIdfTimer {
     timer: core::cell::RefCell<Option<::esp_idf_svc::timer::EspAsyncTimer>>,
 }
 
-#[cfg(feature = "esp-idf")]
 impl EspIdfTimer {
     /// Constructs a new timer backed by a dedicated ESP-IDF high-resolution timer service.
     ///
@@ -52,7 +48,6 @@ impl EspIdfTimer {
     }
 }
 
-#[cfg(feature = "esp-idf")]
 impl TimerProvider for EspIdfTimer {
     async fn sleep(&self, duration: core::time::Duration) -> Result<(), TimerError> {
         // Take the cached timer out (borrow ends on this line, before the await) or allocate a
@@ -66,7 +61,7 @@ impl TimerProvider for EspIdfTimer {
                 if e.code() == ::esp_idf_svc::sys::ESP_ERR_NO_MEM {
                     TimerError::ResourceExhausted
                 } else {
-                    TimerError::Other("ESP-IDF hardware timer allocation failed")
+                    TimerError::Other(format!("esp_timer allocation failed: {e}").into())
                 }
             })?,
         };
@@ -83,7 +78,7 @@ impl TimerProvider for EspIdfTimer {
         }
         drop(slot);
 
-        result.map_err(|_| TimerError::Other("ESP-IDF hardware timer scheduling failed"))
+        result.map_err(|e| TimerError::Other(format!("esp_timer scheduling failed: {e}").into()))
     }
 
     fn now_millis(&self) -> u64 {
@@ -96,10 +91,7 @@ impl TimerProvider for EspIdfTimer {
     /// Unsynchronised it is only boot-relative, but it still serves the seed this method
     /// exists for; an SNTP-synced device gets a real per-boot distinction.
     fn unix_millis(&self) -> Option<u64> {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_millis() as u64)
+        crate::io::std_unix_millis()
     }
 }
 
@@ -111,7 +103,6 @@ impl TimerProvider for EspIdfTimer {
 /// cannot distinguish "compute is negligible" from "compute was rounded away" (GitHub issue
 /// #160). Nothing else should need this — use `TimerProvider::now_millis` for timeouts and
 /// pacing.
-#[cfg(feature = "esp-idf")]
 fn now_micros() -> u64 {
     unsafe { ::esp_idf_svc::sys::esp_timer_get_time() as u64 }
 }
@@ -125,20 +116,17 @@ fn now_micros() -> u64 {
 /// idle-task watchdog trips on affected configs. SSDP discovery is not latency-sensitive,
 /// so 10-20ms of added per-empty-read latency is a good trade; mirrors `TLS_POLL_INTERVAL`'s
 /// pacing pattern.
-#[cfg(feature = "esp-idf")]
 const UDP_RECV_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(15);
 
 /// UDP Socket implementation designed for ESP-IDF's BSD Socket integration.
-#[cfg(feature = "esp-idf")]
 pub struct EspIdfUdpSocket {
     inner: std::net::UdpSocket,
     timer: EspIdfTimer,
 }
 
-#[cfg(feature = "esp-idf")]
 impl BindableUdpSocket for EspIdfUdpSocket {
     async fn bind(addr: SocketAddr) -> Result<Self, SocketError> {
-        let inner = std::net::UdpSocket::bind(addr).map_err(to_esp_socket_error)?;
+        let inner = std::net::UdpSocket::bind(addr).map_err(SocketError::from)?;
 
         crate::io::configure_std_udp_socket(&inner)?;
 
@@ -153,7 +141,6 @@ impl BindableUdpSocket for EspIdfUdpSocket {
     }
 }
 
-#[cfg(feature = "esp-idf")]
 impl AsyncUdpSocket for EspIdfUdpSocket {
     /// Non-blocking send that reports transient lwIP buffer exhaustion as `TimedOut` rather than a terminal fault.
     ///
@@ -161,7 +148,7 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
     /// have no pbuf to hand this datagram. That surfaces as `ERR_MEM`/`ERR_BUF`, which lwIP's
     /// `err_to_errno` table maps to `ENOMEM`/`ENOBUFS` (`lwip/src/api/err.c`) — *not* to
     /// `EWOULDBLOCK`, which that table reserves for `ERR_TIMEOUT`/`ERR_WOULDBLOCK`. Both land in
-    /// `map_std_io_error`'s `_` arm as `SocketError::Other`, and `DiscoveryEngine::broadcast_search`
+    /// `map_std_io_error` as `SocketError::ResourceExhausted` and `SocketError::Other`, and `DiscoveryEngine::broadcast_search`
     /// errors out when its multicast and broadcast sends both fail — which a single pbuf shortage
     /// makes likely, since they go back to back. Discovery then aborted on a condition that would
     /// have cleared on its own milliseconds later.
@@ -182,15 +169,18 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
                 }
                 Err(SocketError::TimedOut)
             }
-            Err(e) => Err(to_esp_socket_error(e)),
+            Err(e) => Err(SocketError::from(e)),
         }
     }
 
     /// Non-blocking read paced with a short sleep on the WouldBlock path so this never busy-spins a caller polling in a tight loop — see `UDP_RECV_POLL_INTERVAL`'s doc comment.
-    /// `TokioUdpSocket::recv_from` achieves the same pacing via a 100ms timeout wrapping a
-    /// genuinely-blocking OS call; this platform has no async socket-readiness primitive for an
-    /// arbitrary fd (see `TLS_POLL_INTERVAL`'s doc comment for why), so pacing is applied explicitly
-    /// here instead.
+    ///
+    /// Not the same mechanism as `TokioUdpSocket::recv_from`, and the numbers differ on purpose:
+    /// tokio *waits* up to `UDP_RECV_TIMEOUT_MS` (100 ms) for a datagram and returns as soon as one
+    /// arrives, while this returns `TimedOut` after one empty read plus a 15 ms sleep. This platform
+    /// has no async socket-readiness primitive for an arbitrary fd (see `TLS_POLL_INTERVAL`'s doc
+    /// comment), so it cannot wait the way tokio does. Discovery depends on neither value: it
+    /// treats `TimedOut` as "nothing yet" and keeps polling until its own window closes.
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr), SocketError> {
         match self.inner.recv_from(buf) {
             Ok((len, addr)) => Ok((len, addr)),
@@ -200,7 +190,7 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
                 }
                 Err(SocketError::TimedOut)
             }
-            Err(e) => Err(to_esp_socket_error(e)),
+            Err(e) => Err(SocketError::from(e)),
         }
     }
 }
@@ -211,7 +201,6 @@ impl AsyncUdpSocket for EspIdfUdpSocket {
 /// decodes to `Uncategorized`). `ENOMEM` does decode, to `OutOfMemory`, but is matched the same
 /// way so both lwIP buffer shortages stay together. See `send_to`'s doc comment for where these
 /// errnos come from.
-#[cfg(feature = "esp-idf")]
 fn is_transient_send_shortage(err: &std::io::Error) -> bool {
     if err.kind() == std::io::ErrorKind::WouldBlock {
         return true;
@@ -223,18 +212,11 @@ fn is_transient_send_shortage(err: &std::io::Error) -> bool {
     )
 }
 
-/// Helper mapping standard Rust IO errors to our ESP-IDF socket errors.
-#[cfg(feature = "esp-idf")]
-fn to_esp_socket_error(err: std::io::Error) -> SocketError {
-    crate::io::map_std_io_error(err, "ESP-IDF platform BSD network error")
-}
-
 /// Maps an `EspError` from an ESP-IDF allocation call to `ResourceExhausted` when it is `ESP_ERR_NO_MEM`, else to `Other(context)`.
 ///
 /// Used for `EspIdfTimer::new` (`esp_timer_create` returns `ESP_ERR_NO_MEM`) and `EspTls::adopt`
 /// (esp-idf-svc 0.53.0 turns `esp_tls_init` returning `NULL` into `ESP_ERR_NO_MEM`). GitHub
 /// issue #385.
-#[cfg(feature = "esp-idf")]
 fn esp_setup_error(err: &::esp_idf_svc::sys::EspError, context: &'static str) -> SocketError {
     log::debug!("{context}: {err}");
     if err.code() == ::esp_idf_svc::sys::ESP_ERR_NO_MEM {
@@ -250,7 +232,6 @@ fn esp_setup_error(err: &::esp_idf_svc::sys::EspError, context: &'static str) ->
 /// non-blocking connection — is checked separately because std's decoder does not recognize it as
 /// `WouldBlock` (confirmed against `socket2`'s own `Socket::connect_timeout()`, which checks both
 /// independently for the same reason).
-#[cfg(feature = "esp-idf")]
 fn is_connect_in_progress(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::WouldBlock
         || err.raw_os_error() == Some(::esp_idf_svc::sys::EINPROGRESS as i32)
@@ -275,7 +256,6 @@ fn is_connect_in_progress(err: &std::io::Error) -> bool {
 /// outer timeout that depends on it) still works. Returns the raw `revents` — 0 while the
 /// connect is still pending — leaving the caller to separate a completed connection from a
 /// failed one, which `POLLOUT` alone cannot express.
-#[cfg(feature = "esp-idf")]
 fn poll_connect_revents(fd: core::ffi::c_int) -> Result<i16, SocketError> {
     let mut poll_fd = ::esp_idf_svc::sys::pollfd {
         fd,
@@ -317,7 +297,6 @@ fn poll_connect_revents(fd: core::ffi::c_int) -> Result<i16, SocketError> {
 }
 
 /// `revents` bits that mean the connect failed rather than completed.
-#[cfg(feature = "esp-idf")]
 const POLL_CONNECT_FAILED: i16 = (::esp_idf_svc::sys::POLLERR
     | ::esp_idf_svc::sys::POLLHUP
     | ::esp_idf_svc::sys::POLLNVAL) as i16;
@@ -339,7 +318,6 @@ const POLL_CONNECT_FAILED: i16 = (::esp_idf_svc::sys::POLLERR
 /// Sleeps `TLS_POLL_INTERVAL` between attempts so the caller's outer `race_against_connect_timeout`
 /// can preempt this loop; does not bound itself (see `EspIdfTcpStream::connect`'s doc comment for
 /// why).
-#[cfg(feature = "esp-idf")]
 async fn poll_connect_until_complete(
     socket: &::socket2::Socket,
     timer: &EspIdfTimer,
@@ -349,8 +327,8 @@ async fn poll_connect_until_complete(
     let fd = socket.as_raw_fd();
 
     loop {
-        if let Some(err) = socket.take_error().map_err(to_esp_socket_error)? {
-            return Err(to_esp_socket_error(err));
+        if let Some(err) = socket.take_error().map_err(SocketError::from)? {
+            return Err(SocketError::from(err));
         }
 
         let revents = poll_connect_revents(fd)?;
@@ -358,8 +336,8 @@ async fn poll_connect_until_complete(
         if revents != 0 {
             // Readiness only says lwIP reached a verdict; SO_ERROR says which one. A refused or
             // unreachable connect reports POLLERR here, not a `poll()` failure.
-            if let Some(err) = socket.take_error().map_err(to_esp_socket_error)? {
-                return Err(to_esp_socket_error(err));
+            if let Some(err) = socket.take_error().map_err(SocketError::from)? {
+                return Err(SocketError::from(err));
             }
             // An error bit with no SO_ERROR to explain it still means the socket is unusable.
             // Returning Ok here would hand back a dead socket and fail on the first write
@@ -395,41 +373,30 @@ async fn poll_connect_until_complete(
 /// internally for up to the default 4s per call, which made this interval dead time between spins
 /// rather than pacing (GitHub issue #67). (`Config::non_block` is deliberately *off* on the
 /// adopted-socket path — see the comment in `connect` and GitHub issue #61.)
-#[cfg(feature = "esp-idf")]
 const TLS_POLL_INTERVAL: core::time::Duration = core::time::Duration::from_millis(20);
 
 /// How far a single `esp_tls_conn_new_sync` call may carry the handshake before returning, in
 /// milliseconds -- the bound that makes [`TLS_POLL_INTERVAL`] and `connect_timeout` mean anything.
 ///
-/// `1`, not `0`, because ESP-IDF changed what `0` means inside the 5.5 series; the full version
-/// table and the measurements behind it are in `EspIdfTlsConnector::connect`, at the assignment
-/// this is read for (GitHub issue #294).
-///
-/// A named constant rather than a literal at each assignment because `connect` has **two**
-/// `esp_tls_cfg`s to pin it on -- `esp_idf_svc`'s `Config` for the anchored path and the raw one
-/// [`build_unverified_tls_cfg`] builds for the anchor-less path -- and they took different values
-/// for as long as both existed. The anchor-less path started from `esp_tls_cfg::default()` and so
-/// silently kept `timeout_ms = 0` while the anchored path was being fixed for issue #67, which is
-/// why hardware runs of `EspIdfTlsConnector::new()` still reported `1 steps, 0us polling` after
-/// that fix landed. Pin both from here; do not reintroduce a literal.
+/// `1`, not `0`, because ESP-IDF changed what `0` means inside the 5.5 series; the version table
+/// and measurements are on `pin_handshake_step!`, the one place both cfg builders set it (GitHub
+/// issue #294).
 ///
 /// `u32` to match `esp_idf_svc::tls::Config::timeout_ms`, the narrower of the two field types;
-/// the raw `esp_tls_cfg::timeout_ms` is a `c_int` and is cast at its assignment, exactly as
-/// `Config::try_into_raw` casts its own.
-#[cfg(feature = "esp-idf")]
+/// the raw `esp_tls_cfg::timeout_ms` is a `c_int` and is cast in `pin_handshake_step!`.
 const TLS_HANDSHAKE_STEP_BUDGET_MS: u32 = 1;
 
-/// Default upper bound on the handshake loop in `EspIdfTlsConnector::connect`, used when the caller doesn't supply one via `.with_connect_timeout(d)`.
-/// Chosen generously — printers on a healthy LAN handshake in well under a second, but a 10s budget
-/// avoids false timeouts on congested Wi-Fi.
-#[cfg(feature = "esp-idf")]
-const DEFAULT_CONNECT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
+/// The connector's own handshake deadline until `.with_connect_timeout(d)` sets one: disabled.
+///
+/// `PrinterClient` already bounds the whole dial + handshake with `with_connect_timeout`, and a
+/// non-zero inner default silently capped that outer budget (GitHub issue #537). A direct
+/// consumer driving the connector without `PrinterClient` opts in instead.
+const DEFAULT_CONNECT_TIMEOUT: core::time::Duration = core::time::Duration::ZERO;
 
 /// True if `err` indicates the non-blocking TLS operation would have blocked and should be retried, rather than a real failure.
 /// `EWOULDBLOCK` is included alongside the two `esp_tls`-specific codes because
 /// `EspTls::connect`/`read`/`write` can surface it directly in non-blocking mode — documented
 /// upstream as "a peculiarity/bug of the esp-tls C module".
-#[cfg(feature = "esp-idf")]
 fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
     let code = err.code();
     code == ::esp_idf_svc::sys::EWOULDBLOCK as i32
@@ -451,7 +418,6 @@ fn is_would_block(err: &::esp_idf_svc::sys::EspError) -> bool {
 /// step would otherwise read as "retryable" on a later genuine failure that recorded no ESP-type
 /// error of its own. It also reads the mbedTLS type, which carries the actual cause of a failed
 /// step (`MBEDTLS_ERR_NET_CONN_RESET` and friends) — see [`map_esp_tls_connect_error`].
-#[cfg(feature = "esp-idf")]
 fn take_esp_tls_error<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
     err_type: ::esp_idf_svc::sys::esp_tls_error_type_t,
@@ -490,7 +456,6 @@ fn take_esp_tls_error<S: ::esp_idf_svc::tls::Socket>(
 /// [`mbedtls_code_from_esp_tls_record`]), and is printed that way in the `Other` message.
 /// `ESP_ERR_NO_MEM` in the ESP-type record (e.g. `set_client_config` failing to copy the
 /// hostname) is an allocation failure with no mbedTLS code, so it is checked separately.
-#[cfg(feature = "esp-idf")]
 fn map_esp_tls_connect_error(
     err: &::esp_idf_svc::sys::EspError,
     esp_err: Option<i32>,
@@ -513,7 +478,7 @@ fn map_esp_tls_connect_error(
     )
 }
 
-/// Cert bundle used by `EspIdfTlsConnector`'s `ca_pem`/`client_cert`/`client_key` fields and `new()`/`with_certs()` constructors.
+/// Cert bundle used by `EspIdfTlsConnector`'s `ca_pem`/`client_cert`/`client_key` fields and `unverified()`/`with_certs()` constructors.
 /// Factored out so a future cert-related option (e.g. ALPN config) only needs to be added in
 /// one place.
 ///
@@ -521,7 +486,6 @@ fn map_esp_tls_connect_error(
 /// (see `crate::io::der_certs_to_pem_bundle`) rather than raw DER, because DER can only ever
 /// express *one* anchor to mbedTLS. The conversion happens once at construction, not per
 /// connect, so `build_config` stays a cheap borrow.
-#[cfg(feature = "esp-idf")]
 struct EspIdfTlsCerts {
     ca_pem: Option<Vec<u8>>,
     /// How many DER anchors the caller supplied, i.e. how many `ca_pem` should load. The
@@ -531,7 +495,6 @@ struct EspIdfTlsCerts {
     client_key: Option<Vec<u8>>,
 }
 
-#[cfg(feature = "esp-idf")]
 impl EspIdfTlsCerts {
     fn new() -> Self {
         Self {
@@ -542,10 +505,11 @@ impl EspIdfTlsCerts {
         }
     }
 
+    /// Fails on an empty `ca_certs` or one where no anchor parses: either would leave nothing to verify against.
     fn with_certs(
         ca_certs: impl IntoIterator<Item = Vec<u8>>,
         client_auth: Option<(Vec<u8>, Vec<u8>)>,
-    ) -> Self {
+    ) -> Result<Self, crate::Error> {
         let (client_cert, client_key) = match client_auth {
             Some((cert, key)) => (Some(cert), Some(key)),
             None => (None, None),
@@ -555,21 +519,26 @@ impl EspIdfTlsCerts {
         // failed" instead of just "3 failed".
         let ca_certs: Vec<Vec<u8>> = ca_certs.into_iter().collect();
         let anchor_count = ca_certs.len();
-        // `None` for an empty iterator, which `build_tls_config` treats exactly like
-        // `new()` — an anchor-less connector, not a connector with an empty anchor set
-        // that mbedTLS would reject at handshake time with nothing pointing at the cause.
-        let ca_pem = crate::io::der_certs_to_pem_bundle(ca_certs);
-
-        if let Some(pem) = ca_pem.as_deref() {
-            report_anchor_bundle_parse(pem, anchor_count);
+        // `None` only for an empty iterator.
+        let Some(ca_pem) = crate::io::der_certs_to_pem_bundle(ca_certs) else {
+            return Err(crate::Error::InvalidArgument(
+                "with_certs got no trust anchors; use EspIdfTlsConnector::unverified() to skip \
+                 verification"
+                    .into(),
+            ));
+        };
+        if !report_anchor_bundle_parse(&ca_pem, anchor_count) {
+            return Err(crate::Error::InvalidArgument(
+                "none of the trust anchors given to with_certs parsed (they must be DER)".into(),
+            ));
         }
 
-        Self {
-            ca_pem,
+        Ok(Self {
+            ca_pem: Some(ca_pem),
             anchor_count,
             client_cert,
             client_key,
-        }
+        })
     }
 
     fn build_config(&self) -> ::esp_idf_svc::tls::Config<'_> {
@@ -601,13 +570,14 @@ impl EspIdfTlsCerts {
 /// decode cannot allocate, so a handshake under memory pressure can hold fewer anchors than this
 /// parse reported (observed on an ESP32-P4: partial here, aborted at handshake). This report
 /// therefore covers the anchors themselves, not every handshake; a handshake that ran short is
-/// caught afterwards by [`count_handshake_anchors`] (GitHub issue #384). Reported, not returned
-/// as an error: mbedTLS's own policy is that a partial store is still usable, and failing the
-/// connector here would reject a configuration ESP-IDF accepts.
+/// caught afterwards by [`count_handshake_anchors`] (GitHub issue #384).
+///
+/// Returns false only when no anchor parsed, which `with_certs` turns into an error. A partial
+/// store is reported but accepted: mbedTLS's own policy is that it is still usable, and failing
+/// the connector here would reject a configuration ESP-IDF accepts.
 ///
 /// `expected` is the number of DER certificates that went into the bundle.
-#[cfg(feature = "esp-idf")]
-fn report_anchor_bundle_parse(ca_pem: &[u8], expected: usize) {
+fn report_anchor_bundle_parse(ca_pem: &[u8], expected: usize) -> bool {
     // SAFETY: `chain` is zeroed and then initialized by `mbedtls_x509_crt_init` before any
     // other call touches it, `ca_pem` is a live NUL-terminated buffer for the whole call, and
     // `mbedtls_x509_crt_free` runs on every path before the storage is dropped.
@@ -633,17 +603,16 @@ fn report_anchor_bundle_parse(ca_pem: &[u8], expected: usize) {
         // convention when printed (matching `set_ca_cert`'s own `-0x%04X`).
         err => log::error!(
             "TLS trust store: none of {expected} anchor(s) parsed (mbedtls_x509_crt_parse \
-             -0x{:04X}); every handshake will fail verification",
+             -0x{:04X})",
             -err
         ),
     }
+    ret >= 0
 }
 
-#[cfg(feature = "esp-idf")]
 use crate::io::RedactedHost;
 
 /// `esp-tls`'s log tag, as a NUL-terminated C string for `esp_log_level_set`/`_get`.
-#[cfg(feature = "esp-idf")]
 const ESP_TLS_LOG_TAG: &[u8] = b"esp-tls\0";
 
 /// Nesting depth of live [`EspTlsLogQuiet`] guards and the `esp-tls` tag's log level as it was
@@ -651,7 +620,6 @@ const ESP_TLS_LOG_TAG: &[u8] = b"esp-tls\0";
 /// outermost guard, then read/write the saved level" is one atomic transaction — two separate
 /// atomics for depth and saved level let an outer guard's drop interleave with an inner guard's
 /// enter and clobber the saved level (see the enter/exit race this replaced).
-#[cfg(feature = "esp-idf")]
 static ESP_TLS_LOG_QUIET: std::sync::Mutex<(usize, u32)> = std::sync::Mutex::new((0, 0));
 
 /// Lowers the `esp-tls` tag to `ESP_LOG_ERROR` for the length of a handshake, restoring it on drop.
@@ -683,10 +651,8 @@ static ESP_TLS_LOG_QUIET: std::sync::Mutex<(usize, u32)> = std::sync::Mutex::new
 /// No-op where `CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` is disabled — `esp_log_level_set` does
 /// nothing there and the old noise comes back, which is a degraded log, not a broken
 /// handshake.
-#[cfg(feature = "esp-idf")]
 struct EspTlsLogQuiet;
 
-#[cfg(feature = "esp-idf")]
 impl EspTlsLogQuiet {
     fn enter() -> Self {
         // Lock scope covers the "am I outermost, then read/write saved level" decision as one
@@ -710,7 +676,6 @@ impl EspTlsLogQuiet {
     }
 }
 
-#[cfg(feature = "esp-idf")]
 impl Drop for EspTlsLogQuiet {
     fn drop(&mut self) {
         let mut state = ESP_TLS_LOG_QUIET.lock().unwrap_or_else(|e| e.into_inner());
@@ -725,18 +690,80 @@ impl Drop for EspTlsLogQuiet {
     }
 }
 
-/// Builds an `esp_idf_svc::tls::Config` from cert bytes.
+/// Sets the two handshake fields every `esp_tls_cfg` `EspIdfTlsConnector::connect` uses must carry, on either config type.
+///
+/// A macro because the anchored path's `esp_idf_svc::tls::Config` and the anchor-less path's raw
+/// `esp_tls_cfg` are different types with the same two field names (and `timeout_ms` of different
+/// integer types). Both cfg builders call it, so the two paths cannot drift again: the
+/// anchor-less path starts from `esp_tls_cfg::default()`, kept a zeroed `timeout_ms` while the
+/// anchored path was fixed for #67, and still reported `1 steps, 0us polling` on hardware.
+///
+/// **`non_block = false`** (GitHub issue #61). ESP-IDF's `esp_tls_low_level_conn` populates
+/// `tls->rset`/`tls->wset` only in its `ESP_TLS_INIT` branch, but `EspTls::adopt` enters at
+/// `ESP_TLS_CONNECTING`, so with `non_block = true` the `FD_SET` never ran and `select()` waits
+/// out the full `timeout_ms` on zeroed fd sets, returns 0, and the handshake is never started —
+/// every retry burns another timeout and `connect` can only end in `TimedOut`. `esp-idf-svc`'s
+/// own `EspAsyncTls::negotiate` clears the flag for the same reason. The fd itself stays
+/// `O_NONBLOCK` (see `EspIdfTcpStream`), so mbedTLS still returns `WANT_READ`/`WANT_WRITE` and
+/// the poll loop works. `scripts/check-esp-idf.sh` cannot catch this class of bug — it compiles
+/// clean either way; reproducing it needs a flashed board and a printer.
+///
+/// **`timeout_ms = TLS_HANDSHAKE_STEP_BUDGET_MS`** (GitHub issues #67, #294). With `non_block =
+/// false` the call lands in `esp_tls_conn_new_sync`, a `while (1)` around
+/// `esp_tls_low_level_conn` bounded only by `cfg->timeout_ms` — and `esp-idf-svc`'s `Config::new`
+/// defaults that to 4000ms. The fd is `O_NONBLOCK`, so mbedTLS returns `WANT_READ` immediately and
+/// that loop simply spins, unyielding, for up to 4s per call. Without a bound the poll loop is
+/// not pacing anything: `TLS_POLL_INTERVAL` and the `connect_timeout` deadline are only evaluated
+/// between spins, so a 10s budget has ~4s granularity and overshoots to ~12.06s (measured: five
+/// boot-adjacent timeouts within 10ms of each other, 3 x ~4.02s). A successful handshake
+/// finishes inside the first spin, so the loop never ran at all on the happy path.
+///
+/// `1`, not `0`, because ESP-IDF changed what `0` means mid-patch-series. The relevant
+/// `conn_new_sync` gates its expiry check on `ret == 0 && cfg->timeout_ms <op> 0`, where `<op>`
+/// and the value returned on expiry differ across the provisioned checkouts:
+///
+/// ```text
+/// v5.5.3 / v5.5.4 / v6.0.1   `>= 0`, and the expiry returns `0`
+/// v5.5.5                     `> 0`,  and the expiry returns `-1`
+/// ```
+///
+/// So `timeout_ms = 0` bounded the call on 5.5.3/5.5.4/6.0.1 (`elapsed >= 0` is true on the first
+/// pass → one step per call) but disabled the bound entirely on v5.5.5, where the test is never
+/// reached and a single `negotiate()` runs the whole handshake inside `while (1)`. Measured on
+/// ESP32-P4 against a P1S: 113 of 113 v5.5.5 handshakes reported `1 steps` with `0us polling`,
+/// worst case 33.8s of uninterruptible block, tripping the Task Watchdog ~30 times per unattended
+/// run. `1` satisfies both comparisons, so the bound holds on every version.
+///
+/// The cost is that a step is "as much handshake as fits in ~1ms" instead of exactly one — a
+/// ~1ms busy-wait per call, against a 20ms sleep between calls. v5.5.5's `-1` on expiry is *not*
+/// distinguishable from a real failure by return value (`esp-idf-svc` maps both to `ESP_FAIL`) —
+/// see `take_esp_tls_error` and the handshake loop for how the retryable case is recovered.
+///
+/// The two pins only make sense together: the `ESP_TLS_CONNECTING` branch feeds `timeout_ms` to
+/// `select()` when `non_block` is true, so a 1ms `timeout_ms` alone would be a 1ms readiness
+/// poll instead of a handshake step.
+///
+/// Side effect: `conn_new_sync`'s expiry path logs `W esp-tls: Failed to open new connection in
+/// specified timeout` on every step that does not complete the handshake, on every version.
+/// `EspTlsLogQuiet` around the handshake loop handles that noise (GitHub issue #156).
+macro_rules! pin_handshake_step {
+    ($cfg:expr, $budget_ms:expr) => {{
+        $cfg.non_block = false;
+        $cfg.timeout_ms = $budget_ms as _;
+    }};
+}
+
+/// Builds an `esp_idf_svc::tls::Config` from cert bytes, with the handshake pins set (`pin_handshake_step!`).
 ///
 /// `ca_pem` is a NUL-terminated PEM bundle (`der_certs_to_pem_bundle`); the client cert/key
 /// stay DER, since each is a single item and DER is this crate's public convention.
-#[cfg(feature = "esp-idf")]
 fn build_tls_config<'a>(
     ca_pem: &'a Option<Vec<u8>>,
     client_cert: &'a Option<Vec<u8>>,
     client_key: &'a Option<Vec<u8>>,
 ) -> ::esp_idf_svc::tls::Config<'a> {
     let mut cfg = ::esp_idf_svc::tls::Config::new();
-    cfg.non_block = true;
+    pin_handshake_step!(cfg, TLS_HANDSHAKE_STEP_BUDGET_MS);
 
     // Turn off ESP-IDF's bundled public root CAs (GitHub issue #62). `esp-idf-svc`'s
     // `Config::new` defaults this to `true` wherever `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is
@@ -770,8 +797,7 @@ fn build_tls_config<'a>(
 }
 
 /// `crt_bundle_attach` hook that disables mbedTLS server-certificate verification outright,
-/// used by `build_unverified_tls_cfg` for `EspIdfTlsConnector::new()`/`with_certs` with an
-/// empty anchor set.
+/// used by `build_unverified_tls_cfg` for `EspIdfTlsConnector::unverified()`.
 ///
 /// `esp_idf_svc::tls::Config` (0.53.0) has no field for ESP-IDF's own `skip_server_cert_verify`
 /// flag, and that flag only exists in the generated `esp_tls_cfg` at all when the consuming
@@ -814,12 +840,12 @@ unsafe extern "C" fn accept_any_certificate(
 ///
 /// Client cert/key field names mirror `esp_idf_svc::tls::Config::try_into_raw`'s mapping onto
 /// the same bindgen anonymous unions, so the two cfg-building paths stay easy to compare.
-#[cfg(feature = "esp-idf")]
 fn build_unverified_tls_cfg(
     client_cert: &Option<Vec<u8>>,
     client_key: &Option<Vec<u8>>,
 ) -> ::esp_idf_svc::sys::esp_tls_cfg {
     let mut rcfg = ::esp_idf_svc::sys::esp_tls_cfg::default();
+    pin_handshake_step!(rcfg, TLS_HANDSHAKE_STEP_BUDGET_MS);
 
     #[cfg(esp_idf_mbedtls_certificate_bundle)]
     {
@@ -844,7 +870,6 @@ fn build_unverified_tls_cfg(
 /// `internal_connect` is private, so it can't be called directly, and `context_handle()` is the
 /// one seam `esp_idf_svc` exposes to reach the same `*mut esp_tls` it uses internally. Keep this
 /// in sync with `internal_connect` if `esp-idf-svc` is ever upgraded.
-#[cfg(feature = "esp-idf")]
 fn negotiate_unverified_step<S: ::esp_idf_svc::tls::Socket>(
     tls: &mut ::esp_idf_svc::tls::EspTls<S>,
     host: &str,
@@ -893,7 +918,6 @@ fn negotiate_unverified_step<S: ::esp_idf_svc::tls::Socket>(
 ///
 /// Generic over the adopted socket type `S`: `EspIdfTlsConnector` (wrap-an-existing-stream,
 /// below) produces `EspIdfTlsStream<EspIdfTcpStream>`.
-#[cfg(feature = "esp-idf")]
 pub struct EspIdfTlsStream<S>
 where
     S: ::esp_idf_svc::tls::Socket,
@@ -904,12 +928,10 @@ where
     read_cap: usize,
 }
 
-#[cfg(feature = "esp-idf")]
 impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::ErrorType for EspIdfTlsStream<S> {
     type Error = embedded_io_async::ErrorKind;
 }
 
-#[cfg(feature = "esp-idf")]
 impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspIdfTlsStream<S> {
     // Capped, and the count checked, because `esp_tls` can return an error code as a byte count:
     // see `ESP_TLS_READ_CAP`. A short read is normal, so the cap needs nothing from callers.
@@ -922,7 +944,6 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Read for EspIdfTlsStream<
     }
 }
 
-#[cfg(feature = "esp-idf")]
 impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspIdfTlsStream<S> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         let tls = &mut self.tls;
@@ -946,7 +967,6 @@ impl<S: ::esp_idf_svc::tls::Socket> embedded_io_async::Write for EspIdfTlsStream
 /// reaches here, which is why the old `ECONNRESET`/`ETIMEDOUT` arms were dead and a peer reset read as
 /// "non-network I/O error" (#303, a regression of #46). Unrecognized codes fall back to
 /// `Other`, with the real code preserved at `log::debug!`.
-#[cfg(feature = "esp-idf")]
 fn esp_tls_io_error_kind(err: &::esp_idf_svc::sys::EspError) -> embedded_io_async::ErrorKind {
     mbedtls_error_kind(err.code()).unwrap_or_else(|| {
         log::debug!("ESP-IDF TLS I/O failed: {err}");
@@ -954,48 +974,73 @@ fn esp_tls_io_error_kind(err: &::esp_idf_svc::sys::EspError) -> embedded_io_asyn
     })
 }
 
-/// Shared `WouldBlock` retry loop for `EspIdfTlsStream::read`/`write` — both wrap a single `EspTls` call (`op`) in a loop that sleeps `TLS_POLL_INTERVAL` and retries on `is_would_block`, differing only in which `EspTls` method is invoked and the log message text.
-/// Takes `timer`/`op` separately rather than `&mut self` so the caller can borrow `self.tls` (via
-/// the closure) and `self.timer` (via this argument) as disjoint fields — see call sites in
-/// `EspIdfTlsStream::read`/`write` above.
-#[cfg(feature = "esp-idf")]
-async fn retry_on_would_block<F>(
+/// Why [`poll_until_ready`] stopped without a result.
+enum PollError<E> {
+    /// `op` failed with something other than would-block.
+    Op(E),
+    /// The pacing sleep between attempts failed.
+    Timer(TimerError),
+}
+
+/// Calls `op` until it stops reporting would-block, sleeping `TLS_POLL_INTERVAL` between attempts.
+///
+/// Shared by `EspIdfTlsStream` (`EspTls` calls) and `EspIdfTcpStream` (`std::io` calls). Takes
+/// `timer`/`op` separately rather than `&mut self` so a caller can borrow the stream (via the
+/// closure) and the timer as disjoint fields.
+async fn poll_until_ready<T, E>(
     timer: &EspIdfTimer,
-    op_name: &str,
-    mut op: F,
-) -> Result<usize, embedded_io_async::ErrorKind>
-where
-    F: FnMut() -> Result<usize, ::esp_idf_svc::sys::EspError>,
-{
+    mut op: impl FnMut() -> Result<T, E>,
+    would_block: impl Fn(&E) -> bool,
+) -> Result<T, PollError<E>> {
     loop {
         match op() {
-            Ok(n) => return Ok(n),
-            Err(e) if is_would_block(&e) => {
-                timer.sleep(TLS_POLL_INTERVAL).await.map_err(|e| match e {
-                    TimerError::ResourceExhausted => embedded_io_async::ErrorKind::OutOfMemory,
-                    TimerError::Other(_) => embedded_io_async::ErrorKind::Other,
-                })?;
+            Ok(value) => return Ok(value),
+            Err(e) if would_block(&e) => {
+                timer
+                    .sleep(TLS_POLL_INTERVAL)
+                    .await
+                    .map_err(PollError::Timer)?;
             }
-            Err(e) => {
-                log::debug!("ESP-IDF TLS {op_name} failed: {e}");
-                return Err(esp_tls_io_error_kind(&e));
-            }
+            Err(e) => return Err(PollError::Op(e)),
         }
     }
 }
 
+/// Runs one `EspTls` read or write through [`poll_until_ready`], classifying its failure.
+async fn retry_on_would_block(
+    timer: &EspIdfTimer,
+    op_name: &str,
+    op: impl FnMut() -> Result<usize, ::esp_idf_svc::sys::EspError>,
+) -> Result<usize, embedded_io_async::ErrorKind> {
+    poll_until_ready(timer, op, is_would_block)
+        .await
+        .map_err(|e| match e {
+            PollError::Op(e) => {
+                log::debug!("ESP-IDF TLS {op_name} failed: {e}");
+                esp_tls_io_error_kind(&e)
+            }
+            PollError::Timer(e) => e.into(),
+        })
+}
+
+/// Returns the raw mbedTLS context behind `tls`, or `None` when esp-tls has none (not yet set up, or torn down).
+fn ssl_context<S: ::esp_idf_svc::tls::Socket>(
+    tls: &::esp_idf_svc::tls::EspTls<S>,
+) -> Option<*mut ::esp_idf_svc::sys::mbedtls_ssl_context> {
+    // SAFETY: `context_handle()` is the live `esp_tls` handle owned by `tls`, which outlives this
+    // call, and `esp_tls_get_ssl_context` only reads it. The returned context is owned by that
+    // same handle, so it stays valid for as long as the caller holds `&tls`.
+    let ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
+        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
+    (!ctx.is_null()).then_some(ctx)
+}
+
 /// Shared mbedTLS version query.
 /// Generic over the adopted `Socket` impl so it isn't tied to one connector shape.
-#[cfg(feature = "esp-idf")]
 fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
 ) -> Option<TlsVersion> {
-    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
-        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
-
-    if ssl_ctx.is_null() {
-        return None;
-    }
+    let ssl_ctx = ssl_context(tls)?;
 
     let version_ptr = unsafe { ::esp_idf_svc::sys::mbedtls_ssl_get_version(ssl_ctx) };
     if version_ptr.is_null() {
@@ -1017,7 +1062,6 @@ fn query_negotiated_tls_version<S: ::esp_idf_svc::tls::Socket>(
 /// `query_peer_chain_der` against looping forever on a corrupt list. A real printer chain is a
 /// leaf plus at most a couple of CAs; anything past this is a bug in mbedTLS or in memory, not a
 /// chain worth reporting.
-#[cfg(feature = "esp-idf")]
 const MAX_PEER_CHAIN_CERTS: usize = 8;
 
 /// Shared mbedTLS peer-certificate-chain query, returning DER, leaf first.
@@ -1035,16 +1079,10 @@ const MAX_PEER_CHAIN_CERTS: usize = 8;
 /// re-parse elsewhere in that file is the session export/resumption path, which this is not.
 /// The chain is owned by the live SSL context and freed on drop or renegotiation, so every
 /// certificate is copied out here rather than borrowed.
-#[cfg(feature = "esp-idf")]
 fn query_peer_chain_der<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
 ) -> Option<Vec<Vec<u8>>> {
-    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
-        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
-
-    if ssl_ctx.is_null() {
-        return None;
-    }
+    let ssl_ctx = ssl_context(tls)?;
 
     let mut cert = unsafe { ::esp_idf_svc::sys::mbedtls_ssl_get_peer_cert(ssl_ctx) };
     if cert.is_null() {
@@ -1093,16 +1131,10 @@ fn query_peer_chain_der<S: ::esp_idf_svc::tls::Socket>(
 /// was both untrusted *and* wrongly named reported `UntrustedAnchor`, confirming that mbedTLS
 /// really does set both flags and that `map_mbedtls_verify_flags`' precedence — not just its
 /// unit tests — decides the answer.
-#[cfg(feature = "esp-idf")]
 fn query_verify_failure<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
 ) -> Option<CertificateFailure> {
-    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
-        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
-
-    if ssl_ctx.is_null() {
-        return None;
-    }
+    let ssl_ctx = ssl_context(tls)?;
 
     let flags = unsafe { ::esp_idf_svc::sys::mbedtls_ssl_get_verify_result(ssl_ctx) };
 
@@ -1126,15 +1158,12 @@ fn query_verify_failure<S: ::esp_idf_svc::tls::Socket>(
 /// ESP-IDF/mbedTLS bump. A missing context or config counts as zero anchors: in a path where
 /// `query_verify_failure` has already read a verdict off this same context that cannot happen,
 /// and if it did, reporting a short store is the answer that does not over-claim.
-#[cfg(feature = "esp-idf")]
 fn count_handshake_anchors<S: ::esp_idf_svc::tls::Socket>(
     tls: &::esp_idf_svc::tls::EspTls<S>,
 ) -> usize {
-    let ssl_ctx = unsafe { ::esp_idf_svc::sys::esp_tls_get_ssl_context(tls.context_handle()) }
-        .cast::<::esp_idf_svc::sys::mbedtls_ssl_context>();
-    if ssl_ctx.is_null() {
+    let Some(ssl_ctx) = ssl_context(tls) else {
         return 0;
-    }
+    };
 
     // SAFETY: `ssl_ctx` is the live context owned by `tls`, which outlives this call; `conf` and
     // each chain node are owned by that context's `esp_tls_t` and are only read here.
@@ -1156,32 +1185,6 @@ fn count_handshake_anchors<S: ::esp_idf_svc::tls::Socket>(
     loaded
 }
 
-/// Wrapper around `std::io::Error` implementing `embedded_io_async::Error`, mirroring `TokioIoError` (`io/tokio.rs`) — needed because `embedded-io-async` has no blanket impl for `std::io::Error` itself, only for types that opt in explicitly.
-#[cfg(feature = "esp-idf")]
-#[derive(Debug)]
-pub struct EspIdfIoError(std::io::Error);
-
-#[cfg(feature = "esp-idf")]
-impl core::fmt::Display for EspIdfIoError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ESP-IDF TCP IO error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "esp-idf")]
-impl std::error::Error for EspIdfIoError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-#[cfg(feature = "esp-idf")]
-impl embedded_io_async::Error for EspIdfIoError {
-    fn kind(&self) -> embedded_io_async::ErrorKind {
-        crate::io::map_io_error_kind(self.0.kind())
-    }
-}
-
 /// Raw (unencrypted) TCP stream, used both as the seed for `EspIdfTlsConnector::connect`'s `EspTls::adopt()` call and directly as `RawIO` for models whose `model.quirks().uses_plaintext_ftps_data_channel()` is true (the FTPS data channel is then never TLS-wrapped, so its `embedded_io_async::Read`/`Write` impls below are exercised for real, not just to satisfy the `AsyncIo` trait bound).
 ///
 /// The underlying socket stays non-blocking for the stream's entire lifetime (not
@@ -1196,13 +1199,11 @@ impl embedded_io_async::Error for EspIdfIoError {
 /// `.take()` the stream and hand its fd to `IntoRawFd::into_raw_fd()` — `esp_tls_conn_destroy`
 /// closes an adopted fd itself once `release()` returns, so the Rust-side `TcpStream` must
 /// give up ownership of the fd first or the fd would be double-closed.
-#[cfg(feature = "esp-idf")]
 pub struct EspIdfTcpStream {
     stream: Option<std::net::TcpStream>,
     timer: EspIdfTimer,
 }
 
-#[cfg(feature = "esp-idf")]
 impl EspIdfTcpStream {
     /// Dials a raw TCP connection to `host:port`.
     ///
@@ -1232,12 +1233,16 @@ impl EspIdfTcpStream {
     /// (`tokio::net::TcpStream::connect`) — a hostname resolving to multiple addresses
     /// (mDNS `.local`, A + AAAA) whose first entry is unreachable falls through to the next
     /// instead of failing the dial.
+    ///
+    /// **A hostname blocks the calling task while it resolves.** `to_socket_addrs` calls lwIP's
+    /// synchronous `getaddrinfo`, which has no `.await` point, so the executor task — and every
+    /// future on it, including the outer connect-timeout race — stalls until DNS answers or gives
+    /// up. How long that can take on hardware hasn't been measured. An IP literal is only parsed
+    /// and never blocks; resolve a hostname yourself beforehand if the task must stay responsive.
     pub async fn connect(host: &str, port: u16) -> Result<Self, SocketError> {
         use std::net::ToSocketAddrs;
 
-        let addrs = (host, port)
-            .to_socket_addrs()
-            .map_err(to_esp_socket_error)?;
+        let addrs = (host, port).to_socket_addrs().map_err(SocketError::from)?;
 
         let timer = EspIdfTimer::new().map_err(|e| {
             esp_setup_error(&e, "failed to create ESP-IDF async timer for TCP connect")
@@ -1252,13 +1257,13 @@ impl EspIdfTcpStream {
             ) {
                 Ok(socket) => socket,
                 Err(e) => {
-                    last_err = Some(to_esp_socket_error(e));
+                    last_err = Some(SocketError::from(e));
                     continue;
                 }
             };
 
             if let Err(e) = socket.set_nonblocking(true) {
-                last_err = Some(to_esp_socket_error(e));
+                last_err = Some(SocketError::from(e));
                 continue;
             }
 
@@ -1278,14 +1283,14 @@ impl EspIdfTcpStream {
             // `TcpStream` calls the same option `set_nodelay`, so the two backends read slightly
             // differently on purpose.
             if let Err(e) = socket.set_tcp_nodelay(true) {
-                log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {e}");
+                crate::io::warn_nodelay_failed(&e);
             }
 
             match socket.connect(&addr.into()) {
                 Ok(()) => {}
                 Err(e) if is_connect_in_progress(&e) => {}
                 Err(e) => {
-                    last_err = Some(to_esp_socket_error(e));
+                    last_err = Some(SocketError::from(e));
                     continue;
                 }
             }
@@ -1305,92 +1310,75 @@ impl EspIdfTcpStream {
     }
 
     fn inner(&self) -> &std::net::TcpStream {
-        self.stream
-            .as_ref()
-            .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS")
+        live(self.stream.as_ref())
     }
 
     fn inner_mut(&mut self) -> &mut std::net::TcpStream {
-        self.stream
-            .as_mut()
-            .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS")
+        live(self.stream.as_mut())
     }
 }
 
-#[cfg(feature = "esp-idf")]
-impl embedded_io_async::ErrorType for EspIdfTcpStream {
-    type Error = EspIdfIoError;
+/// The socket inside an `EspIdfTcpStream`, which is gone once `EspIdfTlsConnector` adopted it.
+fn live<S>(stream: Option<S>) -> S {
+    stream.expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS")
 }
 
-/// Shared `WouldBlock` retry loop for `EspIdfTcpStream::read`/`write`, mirroring
-/// `retry_on_would_block` above but for plain `std::io` calls instead of `EspTls` ones.
-/// Without this, the raw plaintext stream had no preempt point at all — a stuck
-/// peer blocked the FreeRTOS task indefinitely with no `.await` yield point for an outer
-/// timeout to preempt.
-#[cfg(feature = "esp-idf")]
-async fn retry_on_would_block_io<F>(
+impl embedded_io_async::ErrorType for EspIdfTcpStream {
+    type Error = StdIoError;
+}
+
+/// Runs one plain-socket read or write through [`poll_until_ready`].
+///
+/// Without the polling loop the raw plaintext stream had no preempt point at all — a stuck peer
+/// blocked the FreeRTOS task indefinitely with no `.await` yield point for an outer timeout to
+/// preempt.
+async fn retry_on_would_block_io(
     timer: &EspIdfTimer,
     op_name: &str,
-    mut op: F,
-) -> Result<usize, EspIdfIoError>
-where
-    F: FnMut() -> std::io::Result<usize>,
-{
-    loop {
-        match op() {
-            Ok(n) => return Ok(n),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                timer.sleep(TLS_POLL_INTERVAL).await.map_err(|e| {
-                    EspIdfIoError(match e {
-                        TimerError::ResourceExhausted => {
-                            std::io::Error::from(std::io::ErrorKind::OutOfMemory)
-                        }
-                        TimerError::Other(_) => {
-                            std::io::Error::other("ESP-IDF timer failed while polling TCP I/O")
-                        }
-                    })
-                })?;
-            }
-            Err(e) => {
-                log::debug!("ESP-IDF TCP {op_name} failed: {e}");
-                return Err(EspIdfIoError(e));
-            }
+    op: impl FnMut() -> std::io::Result<usize>,
+) -> Result<usize, StdIoError> {
+    poll_until_ready(timer, op, |e: &std::io::Error| {
+        e.kind() == std::io::ErrorKind::WouldBlock
+    })
+    .await
+    .map_err(|e| match e {
+        PollError::Op(e) => {
+            log::debug!("ESP-IDF TCP {op_name} failed: {e}");
+            e.into()
         }
-    }
+        PollError::Timer(e) => {
+            let kind = match e {
+                TimerError::ResourceExhausted => std::io::ErrorKind::OutOfMemory,
+                TimerError::Other(_) => std::io::ErrorKind::Other,
+            };
+            std::io::Error::new(kind, e).into()
+        }
+    })
 }
 
-#[cfg(feature = "esp-idf")]
 impl embedded_io_async::Read for EspIdfTcpStream {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         use std::io::Read;
-        let timer = &self.timer;
-        let stream = self
-            .stream
-            .as_mut()
-            .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS");
+        let Self { stream, timer, .. } = self;
+        let stream = live(stream.as_mut());
         retry_on_would_block_io(timer, "read", || stream.read(buf)).await
     }
 }
 
-#[cfg(feature = "esp-idf")]
 impl embedded_io_async::Write for EspIdfTcpStream {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         use std::io::Write as _;
-        let timer = &self.timer;
-        let stream = self
-            .stream
-            .as_mut()
-            .expect("EspIdfTcpStream used after socket ownership was released to ESP-TLS");
+        let Self { stream, timer, .. } = self;
+        let stream = live(stream.as_mut());
         retry_on_would_block_io(timer, "write", || stream.write(buf)).await
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         use std::io::Write as _;
-        self.inner_mut().flush().map_err(EspIdfIoError)
+        self.inner_mut().flush().map_err(StdIoError::from)
     }
 }
 
-#[cfg(feature = "esp-idf")]
 impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
     fn handle(&self) -> i32 {
         use std::os::fd::AsRawFd;
@@ -1439,13 +1427,15 @@ impl ::esp_idf_svc::tls::Socket for EspIdfTcpStream {
 /// `require_tls_1_2_if_enforced` (`ftps/client.rs`) passes on both whenever the printer
 /// negotiates 1.2 of its own accord, and `with_ftps_allow_unverified_tls_1_2(true)` is needed
 /// only against a peer that insists on 1.3.
-#[cfg(feature = "esp-idf")]
+///
+/// `Clone` shares one copy of the certificates, so `PrinterClient`'s MQTT, FTPS and camera
+/// channels can take clones of one connector instead of each holding its own PEM bundle.
+#[derive(Clone)]
 pub struct EspIdfTlsConnector {
-    certs: EspIdfTlsCerts,
+    certs: std::sync::Arc<EspIdfTlsCerts>,
     connect_timeout: core::time::Duration,
 }
 
-#[cfg(feature = "esp-idf")]
 impl EspIdfTlsConnector {
     /// Creates a connector that skips server certificate verification.
     ///
@@ -1469,12 +1459,11 @@ impl EspIdfTlsConnector {
     ///
     /// Prefer [`Self::with_certs`] wherever the caller can supply the
     /// printer's CA — it needs no sdkconfig change and actually verifies the peer.
-    /// The handshake (this connector wraps an already-connected raw stream, so there's no TCP dial to
-    /// bound — only the handshake itself) defaults to `DEFAULT_CONNECT_TIMEOUT`; override via
-    /// `.with_connect_timeout(d)`.
-    pub fn new() -> Self {
+    /// The handshake has no deadline of its own unless `.with_connect_timeout(d)` sets one;
+    /// `PrinterClient::with_connect_timeout` bounds it from outside.
+    pub fn unverified() -> Self {
         Self {
-            certs: EspIdfTlsCerts::new(),
+            certs: std::sync::Arc::new(EspIdfTlsCerts::new()),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         }
     }
@@ -1497,26 +1486,30 @@ impl EspIdfTlsConnector {
     /// `crate::io::der_certs_to_pem_bundle`. Passing PEM bytes in is still wrong and will
     /// fail the handshake, now with the extra confusion of being base64'd a second time.
     ///
-    /// An empty `ca_certs` yields an anchor-less connector, behaving exactly like
-    /// [`Self::new`] -- verification is disabled outright via a `crt_bundle_attach` hook rather
-    /// than failing later inside the handshake; see that constructor's doc comment (GitHub
-    /// issue #168).
+    /// **Fails with [`Error::InvalidArgument`](crate::Error::InvalidArgument)** on an empty
+    /// `ca_certs` or one where no anchor parses, rather than quietly falling back to an
+    /// unverified connector: an anchor load that came back empty (missing file, wrong partition)
+    /// must not turn verification off. Use [`Self::unverified`] to skip verification on purpose.
+    /// A store where only some anchors parse is accepted and logged at error level.
     ///
     /// `ca_certs`: DER-encoded CA certificate bytes, one `Vec` per certificate.
     /// `client_auth`: Optional (cert, key), both DER-encoded, for mutual TLS.
-    #[must_use]
     pub fn with_certs(
         ca_certs: impl IntoIterator<Item = Vec<u8>>,
         client_auth: Option<(Vec<u8>, Vec<u8>)>,
-    ) -> Self {
-        Self {
-            certs: EspIdfTlsCerts::with_certs(ca_certs, client_auth),
+    ) -> Result<Self, crate::Error> {
+        Ok(Self {
+            certs: std::sync::Arc::new(EspIdfTlsCerts::with_certs(ca_certs, client_auth)?),
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
-        }
+        })
     }
 
-    /// Overrides the default handshake deadline, which bounds how long the poll loop keeps
-    /// retrying rather than how long any single attempt may take.
+    /// Sets a handshake deadline for direct use of this connector; disabled by default.
+    ///
+    /// Under `PrinterClient`, leave it unset: `PrinterClient::with_connect_timeout` already bounds
+    /// the dial and handshake together, and a shorter inner deadline would silently cap it. The
+    /// deadline bounds how long the poll loop keeps retrying rather than how long any single
+    /// attempt may take.
     /// The deadline is checked *between* iterations, so it cannot preempt a stall *inside*
     /// one: the `EspTls::negotiate` FFI call is not interruptible from this task once entered.
     /// `connect` pins `Config::timeout_ms = 1` so each call advances the handshake for at most
@@ -1531,7 +1524,7 @@ impl EspIdfTlsConnector {
     /// deadline entirely, matching `set_command_timeout`'s "0 disables" convention
     /// and `client::connect::with_connect_timeout`'s precedent — otherwise the very
     /// first would-block poll would immediately exceed a zero-length budget.
-    /// Non-consuming — chain onto `new()`/`with_certs()`.
+    /// Chain onto `unverified()`/`with_certs()`.
     #[must_use]
     pub fn with_connect_timeout(mut self, connect_timeout: core::time::Duration) -> Self {
         self.connect_timeout = connect_timeout;
@@ -1539,14 +1532,6 @@ impl EspIdfTlsConnector {
     }
 }
 
-#[cfg(feature = "esp-idf")]
-impl Default for EspIdfTlsConnector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(feature = "esp-idf")]
 impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     type Stream = EspIdfTlsStream<EspIdfTcpStream>;
 
@@ -1558,7 +1543,7 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
     ) -> Result<Self::Stream, SocketError> {
         // Fail before touching the socket at all when this connector has no trust anchor and
         // this build can't reach the one path that lets it skip verification either: see
-        // `Self::new`'s doc comment for the `crt_bundle_attach` mechanism `connect` uses below,
+        // `Self::unverified`'s doc comment for the `crt_bundle_attach` mechanism `connect` uses below,
         // and why `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE` is what makes that mechanism exist at all
         // (GitHub issue #168). `cfg!` (not `#[cfg]`) here: this is a runtime decision over a
         // compile-time constant, not a choice between two code paths that reference different
@@ -1574,101 +1559,20 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             ));
         }
 
-        // The adopted fd must be non-blocking: it is what makes mbedTLS's read/write calls
-        // inside `negotiate()` (and inside `EspIdfTlsStream`'s later read/write) return
-        // `WANT_READ`/`WANT_WRITE` instead of blocking the FreeRTOS task, which is what the
-        // poll loops retry on. `Config::non_block` plays no part in that on this path — see
-        // the override below. Plaintext callers of `EspIdfTcpStream` never reach this
-        // function, so flipping the fd here doesn't affect them.
-        raw_stream
-            .inner()
-            .set_nonblocking(true)
-            .map_err(to_esp_socket_error)?;
+        // The adopted fd is already non-blocking: `EspIdfTcpStream::connect`, its only
+        // constructor, sets it and it stays so for the stream's lifetime. That is what makes
+        // mbedTLS's read/write calls inside `negotiate()` (and inside `EspIdfTlsStream`'s later
+        // read/write) return `WANT_READ`/`WANT_WRITE` instead of blocking the FreeRTOS task.
 
-        let mut cfg = self.certs.build_config();
-        // Only used when this connector has no trust anchor -- see `build_unverified_tls_cfg`
-        // and `Self::new`'s doc comment for why this bypasses `cfg`/`Config` entirely rather
-        // than being expressible as another field on it.
-        let unverified_cfg = self.certs.ca_pem.is_none().then(|| {
-            let mut rcfg =
-                build_unverified_tls_cfg(&self.certs.client_cert, &self.certs.client_key);
-            // The same two pins `cfg` gets below, for the same reasons -- see the comments
-            // there. They have to be repeated because this path does not go through
-            // `esp_idf_svc::tls::Config` at all: `build_unverified_tls_cfg` starts from
-            // `esp_tls_cfg::default()`, so every field `connect` does not set here is a zero,
-            // and a zeroed `timeout_ms` is exactly the value GitHub issues #67 and #294 are
-            // about. That drift was not theoretical -- it is why `EspIdfTlsConnector::new()`
-            // still reported `1 steps, 0us polling` on hardware after #67 was fixed, the
-            // anchor-less path having quietly never been covered.
-            rcfg.non_block = false;
-            rcfg.timeout_ms = TLS_HANDSHAKE_STEP_BUDGET_MS as ::core::ffi::c_int;
-            rcfg
-        });
-
-        // Force `non_block` off for the adopted-socket path (GitHub issue #61). ESP-IDF's
-        // `esp_tls_low_level_conn` populates `tls->rset`/`tls->wset` only in its
-        // `ESP_TLS_INIT` branch, but `EspTls::adopt` enters at `ESP_TLS_CONNECTING`, so with
-        // `non_block = true` the `FD_SET` never ran and `select()` waits out the full
-        // `Config::timeout_ms` on zeroed fd sets, returns 0, and the handshake is never
-        // started — every retry burns another timeout and `connect` can only end in
-        // `TimedOut`. `esp-idf-svc`'s own `EspAsyncTls::negotiate` clears the flag for the
-        // same reason. The fd itself stays `O_NONBLOCK` (set above), so mbedTLS still
-        // returns `WANT_READ`/`WANT_WRITE` and the poll loop below works as intended.
-        // `Config::non_block = true` remains correct for the plain `EspTls::connect` path,
-        // so this override is local to `connect` rather than a change to
-        // `build_tls_config`. `scripts/check-esp-idf.sh` cannot catch this class of bug —
-        // it compiles clean either way; reproducing it needs a flashed board and a printer.
-        cfg.non_block = false;
-
-        // Bound how far each `negotiate()` call carries the handshake (GitHub issues #67, #294).
-        // With `non_block = false` the call lands in `esp_tls_conn_new_sync`, which is a
-        // `while (1)` around `esp_tls_low_level_conn` bounded only by `cfg->timeout_ms` — and
-        // `esp-idf-svc`'s `Config::new` defaults that to 4000ms. The fd is `O_NONBLOCK`, so
-        // mbedTLS returns `WANT_READ` immediately and that loop simply spins, unyielding, for
-        // up to 4s per call.
-        //
-        // Without a bound the poll loop below is not pacing anything: `TLS_POLL_INTERVAL` and
-        // the `connect_timeout` deadline are only evaluated between spins, so a 10s budget has
-        // ~4s granularity and overshoots to ~12.06s (measured: five boot-adjacent timeouts
-        // within 10ms of each other, 3 x ~4.02s). A successful handshake finishes inside the
-        // first spin, so the loop never ran at all on the happy path.
-        //
-        // `1`, not `0`, because ESP-IDF changed what `0` means mid-patch-series. The relevant
-        // `conn_new_sync` gates its expiry check on `ret == 0 && cfg->timeout_ms <op> 0`, where
-        // `<op>` and the value returned on expiry differ across the provisioned checkouts:
-        //
-        //   v5.5.3 / v5.5.4 / v6.0.1   `>= 0`, and the expiry returns `0`
-        //   v5.5.5                     `> 0`,  and the expiry returns `-1`
-        //
-        // So `timeout_ms = 0` bounded the call on 5.5.3/5.5.4/6.0.1 (`elapsed >= 0` is true on
-        // the first pass → one step per call) but disabled the bound entirely on v5.5.5, where
-        // the test is never reached and a single `negotiate()` runs the whole handshake inside
-        // `while (1)`. Measured on ESP32-P4 against a P1S: 113 of 113 v5.5.5 handshakes reported
-        // `1 steps` with `0us polling`, worst case 33.8s of uninterruptible block, tripping the
-        // Task Watchdog ~30 times per unattended run. `1` satisfies both comparisons, so the
-        // bound holds on every version rather than on whichever operator shipped.
-        //
-        // The cost is that a step is now "as much handshake as fits in ~1ms" instead of exactly
-        // one — a ~1ms busy-wait per call, against a 20ms sleep between calls. That is the
-        // trade #67's comment previously declined, and it is worth taking now that the
-        // alternative is an unbounded block rather than a slightly noisier log.
-        //
-        // v5.5.5's `-1` on expiry is *not* distinguishable from a real failure by return value
-        // (`esp-idf-svc` maps both to `ESP_FAIL`) — see `take_esp_tls_error` and the loop below
-        // for how the retryable case is recovered from the error handle.
-        //
-        // Set here rather than in `build_tls_config` because this is only safe while
-        // `non_block` is false: the `ESP_TLS_CONNECTING` branch feeds `cfg->timeout_ms` to
-        // `select()`, so a `non_block = true` caller would get a 1ms readiness poll instead of
-        // a handshake step. That branch is unreachable from here, but a shared default would
-        // reach it.
-        //
-        // Side effect: `conn_new_sync`'s expiry path logs
-        // `W esp-tls: Failed to open new connection in specified timeout` on every step that
-        // does not complete the handshake, on every version, so a normal ~1.3s connect emits a
-        // stream of `W` lines on a handshake that is going perfectly. That noise is handled
-        // where it belongs, by `EspTlsLogQuiet` around the loop below (GitHub issue #156).
-        cfg.timeout_ms = TLS_HANDSHAKE_STEP_BUDGET_MS;
+        // Both configs carry the handshake pins (`pin_handshake_step!`). The raw one is only
+        // used when this connector has no trust anchor -- see `build_unverified_tls_cfg` and
+        // `Self::unverified`'s doc comment for why it bypasses `Config` entirely.
+        let cfg = self.certs.build_config();
+        let unverified_cfg = self
+            .certs
+            .ca_pem
+            .is_none()
+            .then(|| build_unverified_tls_cfg(&self.certs.client_cert, &self.certs.client_key));
 
         let timer = EspIdfTimer::new()
             .map_err(|e| esp_setup_error(&e, "failed to create ESP-IDF async timer for TLS"))?;
@@ -1714,7 +1618,7 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
             // handshake still in progress" (`conn_new_sync` returns 0, which surfaces as
             // `EWOULDBLOCK`). On v5.5.5 the same condition returns -1 and surfaces as the same
             // opaque `ESP_FAIL` a real failure does, so the error handle is consulted instead --
-            // see `take_esp_tls_error` and the `cfg.timeout_ms` comment above. Drained
+            // see `take_esp_tls_error` and `pin_handshake_step!`. Drained
             // unconditionally on every error, including the already-retryable ones, so the
             // record can never outlive the step that produced it.
             // The mbedTLS record is drained alongside it for the same reason, and kept: it is
@@ -1829,10 +1733,8 @@ impl TlsConnector<EspIdfTcpStream> for EspIdfTlsConnector {
 /// Raw (pre-TLS) connection factory for ESP-IDF, using raw `std::net::TcpStream` — the ESP-IDF counterpart to `TokioRawStreamFactory` (`io/tokio.rs`), used for both MQTT's lazy connect and FTPS's passive data channel.
 /// Whether the returned stream ends up TLS-wrapped (via `EspIdfTlsConnector`) or used directly
 /// (plaintext FTPS data-channel models) is decided by the caller, not this factory.
-#[cfg(feature = "esp-idf")]
 pub struct EspIdfRawStreamFactory;
 
-#[cfg(feature = "esp-idf")]
 impl RawStreamFactory<EspIdfTcpStream> for EspIdfRawStreamFactory {
     async fn dial(&self, host: &str, port: u16) -> Result<EspIdfTcpStream, SocketError> {
         EspIdfTcpStream::connect(host, port).await

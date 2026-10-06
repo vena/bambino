@@ -291,7 +291,7 @@ mod tests {
             data.extend_from_slice(&encode_remaining_length(oversized_len));
 
             let cursor = std::io::Cursor::new(data);
-            let mut stream = TokioIo(cursor);
+            let mut stream = TokioIo::new(cursor);
             let mut state = FrameReadState::default();
             let result = read_exact_packet(
                 &mut stream,
@@ -314,7 +314,7 @@ mod tests {
             let mut good = vec![0x30u8];
             good.extend_from_slice(&encode_remaining_length(2));
             good.extend_from_slice(b"hi");
-            let mut stream = TokioIo(std::io::Cursor::new(good));
+            let mut stream = TokioIo::new(std::io::Cursor::new(good));
             let result = read_exact_packet(
                 &mut stream,
                 &mut state,
@@ -334,7 +334,7 @@ mod tests {
             // 5 continuation bytes → multiplier exceeds 128^3, protocol violation
             let data = vec![0x30, 0x80, 0x80, 0x80, 0x80, 0x01];
             let cursor = std::io::Cursor::new(data);
-            let mut stream = TokioIo(cursor);
+            let mut stream = TokioIo::new(cursor);
             let mut state = FrameReadState::default();
             let result = read_exact_packet(
                 &mut stream,
@@ -363,7 +363,7 @@ mod tests {
             // Server side is kept alive (bound to `_server_stream`) but never writes —
             // dropping it would deliver `Ok(0)`/EOF instead of a genuine stall.
 
-            let mut stream = TokioIo(client_stream);
+            let mut stream = TokioIo::new(client_stream);
             let mut state = FrameReadState::default();
             let timer = crate::io::tokio::TokioTimer::new();
             let budget_ms = 50;
@@ -404,7 +404,7 @@ mod tests {
             // bytes, and assert the allocation tracks what arrived rather than what was claimed.
             let declared = MQTT_MAX_PAYLOAD_BYTES - 1;
             let (client_stream, mut server_stream) = tokio::io::duplex(64);
-            let mut stream = TokioIo(client_stream);
+            let mut stream = TokioIo::new(client_stream);
             let mut state = FrameReadState::default();
             let timer = crate::io::tokio::TokioTimer::new();
 
@@ -461,7 +461,7 @@ mod tests {
             frame.extend_from_slice(&payload);
 
             let (client_stream, mut server_stream) = tokio::io::duplex(128);
-            let mut stream = TokioIo(client_stream);
+            let mut stream = TokioIo::new(client_stream);
             let mut state = FrameReadState::default();
             let timer = crate::io::tokio::TokioTimer::new();
 
@@ -494,7 +494,7 @@ mod tests {
             use tokio::io::AsyncWriteExt;
 
             let (client_stream, mut server_stream) = tokio::io::duplex(64);
-            let mut stream = TokioIo(client_stream);
+            let mut stream = TokioIo::new(client_stream);
             let mut state = FrameReadState::default();
             let timer = crate::io::tokio::TokioTimer::new();
 
@@ -588,7 +588,7 @@ mod tests {
             // `embassy` sizes its per-task arena from this number at compile time, so a
             // regression back to a `PAYLOAD_GROWTH_CHUNK`-sized scratch buffer would silently
             // inflate every task that awaits an MQTT frame read.
-            let mut stream = TokioIo(std::io::Cursor::new(Vec::<u8>::new()));
+            let mut stream = TokioIo::new(std::io::Cursor::new(Vec::<u8>::new()));
             let mut state = FrameReadState::default();
             let timer = DummyTimer;
             let future = read_exact_packet(&mut stream, &mut state, &timer, 0);

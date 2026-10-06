@@ -55,7 +55,7 @@ impl tokio::io::AsyncWrite for StalledStream {
 #[tokio::test]
 async fn test_read_response_keeps_partial_line_across_a_timeout() {
     let (client_half, mut server_half) = tokio::io::duplex(4096);
-    let mut stream = TokioIo(client_half);
+    let mut stream = TokioIo::new(client_half);
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
     let timer = crate::io::tokio::TokioTimer::new();
@@ -106,7 +106,7 @@ async fn test_read_response_keeps_partial_line_across_a_timeout() {
 /// the whole suite.
 #[tokio::test]
 async fn test_read_to_eof_stalled_connection_times_out() {
-    let mut stream = TokioIo(StalledStream::default());
+    let mut stream = TokioIo::new(StalledStream::default());
     let mut out = Vec::new();
     let timer = crate::io::tokio::TokioTimer::new();
     let budget_ms = 50;
@@ -139,7 +139,7 @@ async fn test_read_to_eof_stalled_connection_times_out() {
 /// Regression test mirroring the above, at the control-channel `read_response` level: a control channel that stalls with zero incoming bytes (e.g. after a `150`/`125` reply, before the eventual `226`) must not hang `read_response` forever.
 #[tokio::test]
 async fn test_read_response_stalled_connection_times_out() {
-    let mut stream = TokioIo(StalledStream::default());
+    let mut stream = TokioIo::new(StalledStream::default());
     let mut line_buf = Vec::new();
     let mut fill_buf = Vec::new();
     let timer = crate::io::tokio::TokioTimer::new();
@@ -184,7 +184,7 @@ async fn test_read_response_stalled_connection_times_out() {
 #[tokio::test]
 async fn test_write_command_stalled_connection_times_out() {
     let (client_half, _server_half) = tokio::io::duplex(1);
-    let mut stream = TokioIo(client_half);
+    let mut stream = TokioIo::new(client_half);
     let timer = crate::io::tokio::TokioTimer::new();
     let budget_ms = 50;
     let deadline_ms = Some(timer.now_millis().saturating_add(budget_ms));

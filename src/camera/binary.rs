@@ -447,7 +447,7 @@ mod tests {
         async fn test_read_frame_oversized() {
             let data = make_frame_header((CAMERA_FRAME_MAX_SIZE + 1) as u32);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BinaryCameraStream::new(TokioIo(cursor));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(cursor));
             let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::Network(_))));
             // Cursor has no more bytes after the header, so draining the (never-sent) declared
@@ -467,7 +467,7 @@ mod tests {
             let mut data = make_frame_header(1024);
             data.extend(vec![0u8; 1024]);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
+            let mut camera = BinaryCameraStream::new(TokioIo::new(cursor)).with_max_frame_size(64);
             let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
@@ -487,7 +487,7 @@ mod tests {
             data.extend(&valid_frame);
 
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BinaryCameraStream::new(TokioIo(cursor)).with_max_frame_size(64);
+            let mut camera = BinaryCameraStream::new(TokioIo::new(cursor)).with_max_frame_size(64);
 
             let oversized_result = camera.read_next_frame().await;
             assert!(matches!(oversized_result, Err(Error::ProtocolViolation(_))));
@@ -504,7 +504,7 @@ mod tests {
         async fn test_read_frame_zero_size() {
             let data = make_frame_header(0);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BinaryCameraStream::new(TokioIo(cursor));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(cursor));
             let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
@@ -514,7 +514,7 @@ mod tests {
             // `FF D8 D9` starts with SOI and ends with EOI only by sharing a byte.
             let mut data = make_frame_header(3);
             data.extend_from_slice(&[0xFF, 0xD8, 0xD9]);
-            let mut camera = BinaryCameraStream::new(TokioIo(std::io::Cursor::new(data)));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(std::io::Cursor::new(data)));
             let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
@@ -524,7 +524,7 @@ mod tests {
             let mut data = make_frame_header(4);
             data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
             let cursor = std::io::Cursor::new(data);
-            let mut camera = BinaryCameraStream::new(TokioIo(cursor));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(cursor));
             let result = camera.read_next_frame().await;
             assert!(matches!(result, Err(Error::ProtocolViolation(_))));
         }
@@ -538,7 +538,7 @@ mod tests {
             // Server side is kept alive (bound to `_server_stream`) but never writes —
             // dropping it would deliver `Ok(0)`/EOF instead of a genuine stall.
 
-            let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
             let budget_ms = 50;
 
@@ -578,7 +578,7 @@ mod tests {
         async fn test_authenticate_with_timer_stalled_connection_times_out() {
             let (client_stream, _server_stream) = tokio::io::duplex(64);
 
-            let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
             let budget_ms = 50;
 
@@ -617,7 +617,7 @@ mod tests {
         #[tokio::test]
         async fn test_read_next_frame_with_timer_resumes_after_timeout_without_losing_bytes() {
             let (client_stream, mut server_stream) = tokio::io::duplex(64);
-            let mut camera = BinaryCameraStream::new(TokioIo(client_stream));
+            let mut camera = BinaryCameraStream::new(TokioIo::new(client_stream));
             let timer = crate::io::tokio::TokioTimer::new();
 
             // Header declares a 4-byte payload; server sends header + first 2 payload bytes,

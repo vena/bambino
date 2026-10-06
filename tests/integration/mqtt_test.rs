@@ -32,7 +32,7 @@ async fn test_mqtt_client_lifecycle_and_telemetry() {
     ));
 
     let mut client = MqttClient::connect(
-        TokioIo(client_stream),
+        TokioIo::new(client_stream),
         &PrinterIdentity {
             ip: String::new(),
             serial: serial.to_string(),

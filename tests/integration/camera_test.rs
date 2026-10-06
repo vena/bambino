@@ -36,7 +36,7 @@ async fn test_binary_camera_handshake_and_streaming() {
 
     // We wrap the raw duplex stream in `TokioIo` to satisfy `AsyncIo` trait bounds.
     let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo(client_stream));
+        BinaryCameraStream::new(TokioIo::new(client_stream));
 
     // This transmits the 80-byte block. The mock server will panic and fail the test
     // if the magic identifiers or access code do not match expectations.
@@ -101,7 +101,7 @@ async fn test_printer_client_camera_end_to_end() {
     let access_code = "12345678";
     let (client_stream, server_stream) = tokio::io::duplex(8192);
 
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container.clone());
 
     let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
@@ -212,7 +212,7 @@ async fn test_binary_camera_rejected_handshake_surfaces_on_first_read() {
     ));
 
     let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo(client_stream));
+        BinaryCameraStream::new(TokioIo::new(client_stream));
 
     camera_client
         .authenticate(access_code)
@@ -248,7 +248,7 @@ async fn test_binary_camera_mid_frame_disconnect_returns_error_not_panic() {
     ));
 
     let mut camera_client: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo(client_stream));
+        BinaryCameraStream::new(TokioIo::new(client_stream));
 
     camera_client
         .authenticate(access_code)
@@ -275,7 +275,7 @@ async fn test_attach_and_disconnect_camera() {
     let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
 
     let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo(client_stream));
+        BinaryCameraStream::new(TokioIo::new(client_stream));
     camera_stream
         .authenticate(access_code)
         .await
@@ -338,7 +338,7 @@ async fn test_disconnect_camera_closes_the_tls_session() {
     let server_handle = tokio::spawn(run_mock_camera_server(server_stream, access_code, 1));
 
     let mut camera_stream: BinaryCameraStream<TokioIo<DuplexStream>> =
-        BinaryCameraStream::new(TokioIo(client_stream));
+        BinaryCameraStream::new(TokioIo::new(client_stream));
     camera_stream
         .authenticate(access_code)
         .await

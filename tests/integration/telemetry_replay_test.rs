@@ -64,7 +64,7 @@ async fn test_p1s_print_sequence_full_replay_accessors_stay_sane() {
     });
 
     let mqtt_client = MqttClient::connect(
-        TokioIo(client_stream),
+        TokioIo::new(client_stream),
         &PrinterIdentity {
             ip: String::new(),
             serial: SERIAL.into(),
@@ -231,7 +231,7 @@ async fn test_x1c_chamber_temperature_decode_and_plausibility_check() {
     });
 
     let mqtt_client = MqttClient::connect(
-        TokioIo(client_stream),
+        TokioIo::new(client_stream),
         &PrinterIdentity {
             ip: String::new(),
             serial: SERIAL.into(),

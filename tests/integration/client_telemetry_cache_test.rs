@@ -45,7 +45,8 @@ async fn test_print_status_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet — cache must read as unknown-state, not a stale guess.
     assert_eq!(client.print_status(), None);
@@ -87,7 +88,8 @@ async fn test_door_open_none_on_sensorless_model() {
     });
 
     // P1S has no door sensor.
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.is_door_open(), None);
 
@@ -132,8 +134,12 @@ async fn test_door_open_cache_from_telemetry_on_sensor_equipped_model() {
     });
 
     // X1C has a door sensor, read from home_flag bit 23.
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "00M000000000000",
+        PrinterModel::X1C,
+    )
+    .await;
 
     // No telemetry observed yet — cache must read as unknown, not "closed".
     assert_eq!(client.is_door_open(), None);
@@ -187,8 +193,12 @@ async fn test_door_open_cache_survives_message_omitting_home_flag() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1C).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "00M000000000000",
+        PrinterModel::X1C,
+    )
+    .await;
 
     client
         .poll_telemetry()
@@ -238,7 +248,8 @@ async fn test_active_fault_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet.
     assert_eq!(client.active_fault(), None);
@@ -294,7 +305,8 @@ async fn test_print_progress_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.print_progress(), PrintProgress::default());
 
@@ -360,7 +372,8 @@ async fn test_print_progress_total_layers_zero_does_not_clobber_cache() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .poll_telemetry()
@@ -407,7 +420,8 @@ async fn test_bed_temperatures_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.bed_temperatures(), (0, 0));
 
@@ -448,7 +462,8 @@ async fn test_ams_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.ams().is_none());
 
@@ -491,7 +506,8 @@ async fn test_vt_tray_and_vir_slot_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.vt_tray().is_none());
     assert!(client.vir_slot().is_none());
@@ -548,7 +564,8 @@ async fn test_vt_tray_and_vir_slot_partial_push_preserves_cached_fields() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .poll_telemetry()
@@ -617,7 +634,8 @@ async fn test_nozzle_temperatures_cache_single_nozzle_model() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.nozzle_temperatures(), vec![(0, 0, 0)]);
 
@@ -655,7 +673,8 @@ async fn test_printing_tray_global_id_prefers_snow_field() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.printing_tray_global_id(), None);
 
@@ -697,7 +716,8 @@ async fn test_printing_tray_global_id_normalizes_the_ams_lite_on_a2l_unit_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::A2L).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::A2L).await;
 
     client
         .poll_telemetry()
@@ -737,7 +757,8 @@ async fn test_nozzle_temperatures_cache_idex_flat_field_routing_quirk() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::H2D).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::H2D).await;
 
     client
         .poll_telemetry()
@@ -769,7 +790,7 @@ async fn test_chamber_temperature_cache() {
 
     // P1S has no chamber heater/sensor — always None regardless of telemetry.
     let mut sensorless_client =
-        connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     assert_eq!(sensorless_client.chamber_temperature(), None);
     sensorless_client
         .poll_telemetry()
@@ -791,7 +812,7 @@ async fn test_chamber_temperature_cache() {
         read_puback(&mut server_stream2).await;
     });
     let mut heated_client =
-        connect_test_client(TokioIo(client_stream2), SERIAL, PrinterModel::H2D).await;
+        connect_test_client(TokioIo::new(client_stream2), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(heated_client.chamber_temperature(), Some((0, 0)));
     heated_client
@@ -824,7 +845,8 @@ async fn test_hms_cache_and_active_alerts() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.hms().is_none());
     assert!(client.active_hms_alerts().is_empty());
@@ -863,7 +885,8 @@ async fn test_sanitized_ams_clears_stale_fields_without_mutating_raw_cache() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert!(client.ams().is_none());
     assert!(client.sanitized_ams().is_none());
@@ -916,7 +939,8 @@ async fn test_fan_speed_cache_from_telemetry() {
 
     // The four flat fan keys are step-encoded (0-15) on every model, including P2S/X2D — see
     // test_fan_speed_cache_from_telemetry_x2d_step_encoded below.
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::H2D).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::H2D).await;
 
     assert_eq!(client.part_cooling_fan_speed(), None);
     assert_eq!(client.auxiliary_left2_fan_speed(), None);
@@ -957,7 +981,8 @@ async fn test_fan_speed_cache_from_telemetry_x2d_step_encoded() {
     // already-percentage (ModelQuirks::reports_auxiliary_fan_percentage), reading ~6.7x too low.
     // They must step-decode identically to every other model — only the id-160 airduct part
     // (auxiliary_left2_fan_speed) is a true wire percentage.
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X2D).await;
 
     client
         .poll_telemetry()
@@ -993,7 +1018,8 @@ async fn test_auxiliary_left2_fan_negative_state_is_none() {
 
     // A negative `state` is a firmware sentinel for "off/unknown"; it must report
     // None, not be masked into 100% by `& 0xFF`.
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X2D).await;
 
     client
         .poll_telemetry()
@@ -1029,7 +1055,8 @@ async fn test_auxiliary_left2_fan_packed_state_decodes_low_byte() {
     // Without it a packed value clamps to 100 instead of decoding to its real percentage.
     // The negative-sentinel guard above and this mask are both required and must stay in
     // that order — fixing either alone reintroduced the other's bug once already.
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X2D).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X2D).await;
 
     client
         .poll_telemetry()
@@ -1059,7 +1086,8 @@ async fn test_print_speed_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.print_speed(), None);
     assert_eq!(client.print_speed_magnitude(), None);
@@ -1101,7 +1129,8 @@ async fn test_wifi_signal_cache_from_telemetry() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     assert_eq!(client.wifi_signal(), None);
     assert!(!client.is_ethernet_active_via_wifi_signal());
@@ -1155,7 +1184,8 @@ async fn test_command_echo_is_unknown_and_leaves_the_cache_untouched() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let first = client.poll_telemetry().await.expect("first poll failed");
     assert!(matches!(first, TelemetryEvent::Report(..)));
@@ -1204,7 +1234,8 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
@@ -1254,7 +1285,8 @@ async fn test_home_flag_goes_cold_across_reconnect_but_mains_region_persists() {
         read_puback(&mut server_stream_2).await;
     });
 
-    let reconnected = connect_test_mqtt(TokioIo(client_stream_2), SERIAL, PrinterModel::P1S).await;
+    let reconnected =
+        connect_test_mqtt(TokioIo::new(client_stream_2), SERIAL, PrinterModel::P1S).await;
     client.attach_mqtt(reconnected).await;
     assert_eq!(
         client.is_all_axes_homed(),
@@ -1294,7 +1326,8 @@ async fn test_lazy_connect_publishes_pushall_before_the_callers_own_command() {
         assert_eq!(caller_frame["print"]["command"], "gcode_line");
     });
 
-    let factory = MockDataStreamFactory::new(Arc::new(Mutex::new(Some(TokioIo(client_stream)))));
+    let factory =
+        MockDataStreamFactory::new(Arc::new(Mutex::new(Some(TokioIo::new(client_stream)))));
     let mut client = PrinterClient::new(
         DummyTlsConnector,
         factory,

@@ -367,13 +367,9 @@ where
     /// Passing `0` disables the timeout entirely, matching `set_command_timeout`'s "0 disables"
     /// convention. Non-consuming — chain onto any construction path.
     ///
-    /// On ESP-IDF, this budget is structurally independent from `EspIdfTlsConnector`'s own
-    /// internal handshake timeout (default 10s) — the connector is an opaque generic by the
-    /// time it reaches `PrinterClient::new()`, so this outer setting can't see or influence it.
-    /// Set `EspIdfTlsConnector::with_connect_timeout` directly and keep the two in sync,
-    /// including the `0` case (both treat `0` as "disabled", but neither number implies the
-    /// other). Not an issue on `tokio`/`embassy`, where the handshake is bounded solely by
-    /// this outer race.
+    /// This is the only connect budget on every backend. `EspIdfTlsConnector` has its own
+    /// handshake deadline for direct use, but it is disabled unless set, so it doesn't cap this
+    /// one; leave it unset under `PrinterClient`.
     #[must_use]
     pub fn with_connect_timeout(mut self, secs: u64) -> Self {
         self.connect_timeout_secs = secs;

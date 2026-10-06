@@ -99,7 +99,7 @@ async fn handle_pasv(
     let (client_data, server_data) = tokio::io::duplex(4096);
     {
         let mut guard = data_container.lock().await;
-        *guard = Some(TokioIo(client_data));
+        *guard = Some(TokioIo::new(client_data));
     }
 
     // Port = 192 * 256 + 168 = 49320

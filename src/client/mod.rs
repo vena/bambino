@@ -79,7 +79,7 @@ pub(crate) fn sequence_id_from_seed(seed: u64) -> u64 {
 
 pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 10;
 pub(crate) const POLL_UNTIL_MAX_MESSAGES: usize = 200;
-/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined dial+connect sequence — matches ESP-IDF's pre-existing `DEFAULT_CONNECT_TIMEOUT` (`src/io/esp_idf.rs`).
+/// Default upper bound on `ensure_mqtt()`/`ensure_ftps()`/`ensure_camera()`'s combined dial+connect sequence.
 /// Override via `.with_connect_timeout(secs)`.
 pub(crate) const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 

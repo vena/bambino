@@ -535,7 +535,7 @@ Every teardown path (`disconnect_mqtt`, `disconnect_storage`, `disconnect_camera
 
 **Embassy note:** `discover_devices()` is not available on Embassy. The convenience function needs to bind its own UDP sockets, which Embassy can't do (sockets must be pre-allocated from the network stack). Use `DiscoveryEngine::new()` with a pre-bound `EmbassyUdpSocket` for manual discovery, or provide a pre-configured printer IP.
 
-**Embassy TLS:** `EmbassyTlsConnector` wraps `mbedtls-rs` (real TLS 1.2+1.3, hardware-accelerated crypto on ESP32 targets). MbedTLS only permits one active library instance program-wide, so construct a single `mbedtls_rs::Tls` once at startup and hand out cheap `Copy` `TlsReference`s to as many connectors as you need (e.g. one for MQTT, one for FTPS's control channel, one for FTPS's data channel):
+**Embassy TLS:** `EmbassyTlsConnector` wraps `mbedtls-rs` (real TLS 1.2+1.3, hardware-accelerated crypto on ESP32 targets). MbedTLS only permits one active library instance program-wide, so construct a single `mbedtls_rs::Tls` once at startup and build connectors from its cheap `Copy` `TlsReference`. A connector is `Clone`, so one can serve MQTT, FTPS and the camera:
 
 ```rust
 use bambino::io::embassy::EmbassyTlsConnector;
@@ -549,11 +549,11 @@ static TLS: StaticCell<Tls<'static>> = StaticCell::new();
 let tls: &'static mut Tls<'static> =
     TLS.init(Tls::new(rng).expect("only one Tls instance may exist program-wide"));
 
-let mqtt_tls = EmbassyTlsConnector::new(tls.reference());
-let ftps_tls = EmbassyTlsConnector::new(tls.reference());
+let mqtt_tls = EmbassyTlsConnector::unverified(tls.reference());
+let ftps_tls = mqtt_tls.clone();
 ```
 
-There's no buffer-consumption limit. `connect()` can be called repeatedly on the same connector (`mbedtls-rs` allocates its own 16 KiB in/out record buffers per session). Certificate verification defaults to off, matching this crate's unsafe-by-default convention elsewhere; call `.with_ca_chain(cert)` to enable it, or `.with_client_credentials(creds)` for mTLS. `connect()` returns an `EmbassyTlsStream`, not a bare `mbedtls_rs::Session`, so a failed read or write reports its real cause (e.g. running out of memory) instead of `mbedtls-rs`'s catch-all `Other`; `session()`/`session_mut()` reach the `Session` underneath.
+There's no buffer-consumption limit. `connect()` can be called repeatedly on the same connector (`mbedtls-rs` allocates its own 16 KiB in/out record buffers per session). `EmbassyTlsConnector::unverified(..)` skips certificate verification; `EmbassyTlsConnector::verified(tls.reference(), cert)` checks the printer against `cert`, and `.with_client_credentials(creds)` adds mTLS. `connect()` returns an `EmbassyTlsStream`, not a bare `mbedtls_rs::Session`, so a failed read or write reports its real cause (e.g. running out of memory) instead of `mbedtls-rs`'s catch-all `Other`; `session()`/`session_mut()` reach the `Session` underneath.
 
 **`negotiated_version` reports the real version**, via `mbedtls-rs` 0.3's `Session::tls_version()`. `FtpsClient`'s TLS-1.2 enforcement check for P2S/X2D therefore passes under Embassy whenever the printer negotiates 1.2 of its own accord, which is what those two models appear to do. `None` from this method means the handshake hasn't completed (or the session was closed), never "this backend can't tell". The connector sets only a minimum version, so it cannot force 1.2 on a peer that insists on 1.3 — in that case the check fails closed, and `PrinterClient::with_ftps_allow_unverified_tls_1_2(true)` is the way through; see the "TLS configuration" section above.
 
@@ -586,9 +586,9 @@ let mut printer = PrinterClient::new(mqtt_tls, factory, identity)
 - **Count the sockets in `StackResources`.** The pool's `N` sockets stay registered for good, on top of whatever else the stack needs (DHCP, DNS, UDP discovery).
 - `dial`'s host must be a literal IPv4 address. Bambu printers are always addressed that way, so this isn't a limitation in practice.
 
-**ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK`, so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI. `PrinterClient::with_connect_timeout()` and `EspIdfTlsConnector::with_connect_timeout()` are two independent budgets on this platform. The connector is opaque by the time it reaches `PrinterClient::new()`, so setting one doesn't affect the other. Set both explicitly and keep them in sync (including `0`, which disables the timeout on either).
+**ESP-IDF TLS timeouts:** `EspIdfTlsConnector` runs the handshake and all reads/writes in non-blocking mode, polling every 20ms on `WANT_READ`/`WANT_WRITE`/`EWOULDBLOCK`, so a `TimerProvider`-based timeout (e.g. `poll_until`) can actually preempt a stuck handshake or read/write instead of blocking forever on FFI. Under `PrinterClient`, `PrinterClient::with_connect_timeout()` is the only budget you need: it bounds the dial and handshake together. `EspIdfTlsConnector` has its own `with_connect_timeout()` for driving the connector directly, and it is disabled unless you set it, so it never caps the client's budget.
 
-**Expect `esp-tls` warnings during a normal ESP-IDF handshake.** `EspIdfTlsConnector::connect` pins `Config::timeout_ms = 0` so each `negotiate()` performs exactly one handshake step and then yields. That is what makes the 20ms poll interval and the connect deadline meaningful, since otherwise esp-tls busy-spins internally for up to 4s per call. The cost is that esp-tls logs `W esp-tls: Failed to open new connection in specified timeout` on every step that doesn't complete the handshake, roughly 55 lines for a typical 1.3s connect. They are expected and harmless: a real failure surfaces as `SocketError::TimedOut` from `connect`, not as these warnings. Raise the `esp-tls` tag's log level if they are noisy.
+**`esp-tls` handshake warnings are suppressed.** `EspIdfTlsConnector::connect` pins `Config::timeout_ms = 1` so each `negotiate()` advances the handshake by at most ~1 ms and then yields. That is what makes the 20ms poll interval and the connect deadline meaningful, since otherwise esp-tls busy-spins internally for up to 4s per call (`1`, not `0`: ESP-IDF changed what `0` means within the 5.5 series). esp-tls logs `W esp-tls: Failed to open new connection in specified timeout` on every step that doesn't complete the handshake, so the connector lowers the `esp-tls` tag to `ESP_LOG_ERROR` for the length of each handshake and restores it afterwards; real esp-tls errors still get through. The warnings reappear only where `CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` is disabled, and are harmless there: a real failure surfaces as an error from `connect`.
 
 **Faster ESP32 handshakes: pick a curve the chip can accelerate.** Add this to your `sdkconfig.defaults`:
 
@@ -620,9 +620,10 @@ std::thread::Builder::new()
 use bambino::io::esp_idf::{EspIdfTlsConnector, EspIdfRawStreamFactory, EspIdfTimer};
 
 // Prefer with_certs; see "ESP-IDF certificate verification" below for why
-// EspIdfTlsConnector::new() should be reserved for TOFU/pinning flows.
+// EspIdfTlsConnector::unverified() should be reserved for TOFU/pinning flows.
 // Takes every anchor you want to trust, not just one (DER, one Vec per cert).
-let ftps_tls = EspIdfTlsConnector::with_certs(ca_certs, None);
+// Fails if `ca_certs` is empty or none of them parse, instead of turning verification off.
+let ftps_tls = EspIdfTlsConnector::with_certs(ca_certs, None)?;
 let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTimer::new()?);
 ```
 
@@ -632,7 +633,7 @@ let mut printer = printer.with_ftps(ftps_tls, EspIdfRawStreamFactory, EspIdfTime
 
 It accepts an iterator of DER certificates rather than a single one, matching the tokio backend, because Bambu is mid-PKI-rollover: a P1S chains to the legacy `BBL CA` root, while newer models chain through a `BBL Device CA <model>-V2` intermediate to `BBL CA2 RSA`/`BBL CA2 ECC`, so covering the model range means trusting several roots at once. The certs are re-encoded internally into a single NUL-terminated PEM bundle, the only form mbedTLS parses as more than one certificate; concatenated DER would silently load just the first.
 
-`EspIdfTlsConnector::new()` skips verification by installing a `crt_bundle_attach` hook that turns off certificate checking directly, rather than using ESP-IDF's `skip_server_cert_verify` flag (which `esp_idf_svc::tls::Config` can't reach, and which needs `CONFIG_ESP_TLS_INSECURE` set anyway). This needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`, which is on by ESP-IDF's default — so no sdkconfig change is needed for the common case. Confirmed on a real ESP32-C6 against a live P1S: the handshake completes and `peer_chain_der` returns the printer's certificate chain, which is what this constructor is for (TOFU/pinning). If that Kconfig option is off, `connect()` fails immediately with a clear error instead of ESP-IDF's opaque `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
+`EspIdfTlsConnector::unverified()` skips verification by installing a `crt_bundle_attach` hook that turns off certificate checking directly, rather than using ESP-IDF's `skip_server_cert_verify` flag (which `esp_idf_svc::tls::Config` can't reach, and which needs `CONFIG_ESP_TLS_INSECURE` set anyway). This needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE`, which is on by ESP-IDF's default — so no sdkconfig change is needed for the common case. Confirmed on a real ESP32-C6 against a live P1S: the handshake completes and `peer_chain_der` returns the printer's certificate chain, which is what this constructor is for (TOFU/pinning). If that Kconfig option is off, `connect()` fails immediately with a clear error instead of ESP-IDF's opaque `ESP_ERR_MBEDTLS_SSL_SETUP_FAILED`.
 
 ## bambino-cli
 

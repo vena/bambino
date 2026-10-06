@@ -165,7 +165,7 @@ fn negotiated_against(
     version: &'static rustls::SupportedProtocolVersion,
 ) -> Option<TlsVersion> {
     let port = spawn_tls_server(version);
-    let connector = EmbassyTlsConnector::new(tls);
+    let connector = EmbassyTlsConnector::unverified(tls);
 
     let raw = BlockingStream(TcpStream::connect(("127.0.0.1", port)).expect("connect"));
     let stream =

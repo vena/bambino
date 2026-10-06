@@ -36,7 +36,8 @@ async fn test_connect_all_reports_rtsps_camera_as_not_attempted() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P2S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P2S).await;
     let outcome = client.connect_all().await;
 
     assert!(
@@ -63,7 +64,7 @@ async fn test_connect_all_connects_mqtt_and_skips_unconfigured_channels() {
     // skipped silently and only MQTT is dialled — and it must actually end up installed,
     // not merely reported as Ok.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
 
     let broker_task = tokio::spawn(async move {
@@ -122,7 +123,7 @@ async fn test_ensure_mqtt_reseed_skipped_without_real_clock() {
     // exactly the bug this guard prevents. Verify the first command after a lazy
     // ensure_mqtt() connect still carries the untouched default sequence ID (30001).
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
 
     let broker_task = tokio::spawn(async move {
@@ -167,7 +168,7 @@ async fn test_first_lazy_command_carries_a_reseeded_sequence_id_with_a_real_cloc
     // MQTT connects lazily by default and "construct, then immediately send" is the common
     // shape. With a real TimerProvider the first command must already be reseeded.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
 
     let broker_task = tokio::spawn(async move {
@@ -240,7 +241,9 @@ async fn test_disconnect_mqtt_closes_the_tls_session() {
         },
     );
     client
-        .attach_mqtt(connect_test_mqtt(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await)
+        .attach_mqtt(
+            connect_test_mqtt(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await,
+        )
         .await;
     broker_task.await.expect("mock broker task panicked");
 
@@ -267,7 +270,8 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
     let broker_task_a = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream_a).await;
     });
-    let mut client = connect_test_client(TokioIo(client_stream_a), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream_a), SERIAL, PrinterModel::P1S).await;
     assert!(client.is_mqtt_connected());
     broker_task_a.await.expect("First broker task panicked");
 
@@ -297,7 +301,7 @@ async fn test_disconnect_and_attach_mqtt_recovers_dead_session() {
         read_puback(&mut server_stream_b).await;
     });
     let mqtt_client_b = MqttClient::connect(
-        TokioIo(client_stream_b),
+        TokioIo::new(client_stream_b),
         &PrinterIdentity {
             ip: String::new(),
             serial: SERIAL.into(),
@@ -375,7 +379,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
 
     // `ensure_ftps()` fetches its raw control stream via the factory, so the mock data
     // stream is preloaded with the client side of the duplex pair up front.
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_control))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_control))));
     let factory = MockDataStreamFactory::new(data_container.clone());
 
     // Acks the handshake, reads DELE, then drops the control stream without replying.
@@ -450,7 +454,7 @@ async fn test_disconnect_storage_clears_ftps_for_clean_reconnect() {
     ));
 
     let fresh_ftps = FtpsClient::connect(
-        TokioIo(fresh_control),
+        TokioIo::new(fresh_control),
         DummyTlsConnector,
         MockDataStreamFactory::new(fresh_container),
         PrinterIdentity {
@@ -512,7 +516,7 @@ async fn test_ensure_mqtt_bounds_post_dial_handshake_by_connect_timeout() {
     // idle forever, so any read from the client side blocks indefinitely unless the
     // handshake itself is inside the timeout race.
     let (client_stream, _server_stream) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
 
     let mut client = PrinterClient::new(
@@ -548,7 +552,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
     // unlike the sibling `command_timeout_secs` field's documented "0 disables" convention.
     // With a real (non-stalled) peer completing the handshake, connect_mqtt() must now succeed.
     let (client_stream, mut server_stream) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
 
     let broker_task = tokio::spawn(async move {
@@ -586,7 +590,7 @@ async fn test_with_connect_timeout_zero_disables_timeout() {
 #[tokio::test]
 async fn test_ensure_mqtt_connects_tls_with_serial_not_ip() {
     let (client_stream, _server_stream) = tokio::io::duplex(8192);
-    let data_container = Arc::new(Mutex::new(Some(TokioIo(client_stream))));
+    let data_container = Arc::new(Mutex::new(Some(TokioIo::new(client_stream))));
     let factory = MockDataStreamFactory::new(data_container);
 
     let (connector, captured_host) = HostCapturingTlsConnector::new();
@@ -622,7 +626,7 @@ async fn test_with_ftps_panics_on_from_mqtt_client() {
     let broker_task = tokio::spawn(async move {
         handle_mqtt_handshake(&mut server_stream).await;
     });
-    let client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let client = connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let _ = client.with_ftps(
         bambino::client::dummy::DummyTls,

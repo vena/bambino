@@ -981,7 +981,7 @@ mod tests {
             });
 
             let result = MqttClient::connect(
-                TokioIo(client_stream),
+                TokioIo::new(client_stream),
                 &PrinterIdentity {
                     ip: String::new(),
                     serial: "01P000000000000".into(),
@@ -1020,7 +1020,7 @@ mod tests {
             });
 
             let result = MqttClient::connect(
-                TokioIo(client_stream),
+                TokioIo::new(client_stream),
                 &PrinterIdentity {
                     ip: String::new(),
                     serial: "01P000000000000".into(),
@@ -1064,7 +1064,7 @@ mod tests {
             });
 
             let result = MqttClient::connect(
-                TokioIo(client_stream),
+                TokioIo::new(client_stream),
                 &PrinterIdentity {
                     ip: String::new(),
                     serial: "01P000000000000".into(),
@@ -1128,7 +1128,7 @@ mod tests {
             });
 
             let mut client = MqttClient::connect(
-                TokioIo(client_stream),
+                TokioIo::new(client_stream),
                 &PrinterIdentity {
                     ip: String::new(),
                     serial: "01P000000000000".into(),
@@ -1205,7 +1205,7 @@ mod tests {
             });
 
             let mut client = MqttClient::connect(
-                TokioIo(client_stream),
+                TokioIo::new(client_stream),
                 &PrinterIdentity {
                     ip: String::new(),
                     serial: "01P000000000000".into(),
@@ -1263,7 +1263,7 @@ mod tests {
             });
 
             let mut client = MqttClient::connect(
-                TokioIo(client_stream),
+                TokioIo::new(client_stream),
                 &PrinterIdentity {
                     ip: String::new(),
                     serial: "01P000000000000".into(),
@@ -1276,7 +1276,7 @@ mod tests {
 
             client
                 .stream
-                .0
+                .get_mut()
                 .write_all(&[0u8; CAPACITY])
                 .await
                 .expect("fill the client->server buffer");
@@ -1325,7 +1325,7 @@ mod tests {
             // `_server_stream` open (never reading it) sidesteps that hazard entirely.
             let (client_stream, _server_stream) = tokio::io::duplex(8192);
             let mut client = MqttClient {
-                stream: TokioIo(client_stream),
+                stream: TokioIo::new(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
@@ -1393,7 +1393,7 @@ mod tests {
             };
             let (client_stream, _server_stream) = tokio::io::duplex(8192);
             let mut client = MqttClient {
-                stream: TokioIo(client_stream),
+                stream: TokioIo::new(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
@@ -1469,7 +1469,7 @@ mod tests {
             // infinite loop against a condition that was neither a timeout nor self-clearing.
             let (client_stream, _server_stream) = tokio::io::duplex(64 * 1024);
             let mut client = MqttClient {
-                stream: TokioIo(client_stream),
+                stream: TokioIo::new(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
@@ -1524,7 +1524,7 @@ mod tests {
             // sequence_id matches the outstanding command's.
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
             let mut client = MqttClient {
-                stream: TokioIo(client_stream),
+                stream: TokioIo::new(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,
@@ -1610,7 +1610,7 @@ mod tests {
             // fired a false zombie timeout against real hardware within MQTT_ZOMBIE_TIMEOUT_SECS.
             let (client_stream, mut server_stream) = tokio::io::duplex(8192);
             let mut client = MqttClient {
-                stream: TokioIo(client_stream),
+                stream: TokioIo::new(client_stream),
                 request_topic: "device/01P000000000000/request".to_string(),
                 serial: "01P000000000000".to_string(),
                 next_packet_id: 2,

@@ -54,7 +54,7 @@ async fn connect_client(
     DummyTimer,
 > {
     FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         DummyTlsConnector,
         factory,
         PrinterIdentity {
@@ -84,7 +84,7 @@ async fn test_ftps_control_channel_connects_with_serial_not_ip() {
 
     let (connector, captured_host) = HostCapturingTlsConnector::new();
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         connector,
         factory,
         PrinterIdentity {
@@ -501,7 +501,7 @@ async fn test_ftps_data_channel_failure_poisons_client() {
     ));
 
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         FailingDataTlsConnector::new(),
         factory,
         PrinterIdentity {
@@ -826,7 +826,7 @@ async fn test_ftps_upload_data_failure_keeps_its_error_kind() {
         ));
 
         let mut client = FtpsClient::connect(
-            TokioIo(client_control),
+            TokioIo::new(client_control),
             FaultyDataTlsConnector::new(write_error, flush_error),
             factory,
             PrinterIdentity {
@@ -1045,7 +1045,7 @@ async fn test_ftps_closes_tls_sessions_on_teardown() {
 
     let (connector, closes) = CloseCountingTlsConnector::new();
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         connector,
         factory,
         PrinterIdentity {
@@ -1094,7 +1094,7 @@ async fn test_ftps_tls13_rejected_for_p2s() {
     let (client_control, _server_control, _data_container, factory) = setup();
 
     let result = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterIdentity {
@@ -1120,7 +1120,7 @@ async fn test_ftps_tls13_rejected_for_x2d() {
     let (client_control, _server_control, _data_container, factory) = setup();
 
     let result = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterIdentity {
@@ -1151,7 +1151,7 @@ async fn test_ftps_tls12_accepted_for_p2s() {
     ));
 
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls12)),
         factory,
         PrinterIdentity {
@@ -1186,7 +1186,7 @@ async fn test_ftps_data_channel_tls12_recheck_rejects_tls13_for_p2s() {
     ));
 
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         PerCallVersionReportingTlsConnector::new(Some(TlsVersion::Tls12), Some(TlsVersion::Tls13)),
         factory,
         PrinterIdentity {
@@ -1242,7 +1242,7 @@ async fn test_ftps_tls13_accepted_for_p1s() {
     ));
 
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterIdentity {
@@ -1266,7 +1266,7 @@ async fn test_ftps_version_none_rejected_for_p2s() {
     let (client_control, _server_control, _data_container, factory) = setup();
 
     let result = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(None),
         factory,
         PrinterIdentity {
@@ -1307,7 +1307,7 @@ async fn test_ftps_tls13_bypassed_for_p2s_when_allow_unverified() {
     ));
 
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(Some(TlsVersion::Tls13)),
         factory,
         PrinterIdentity {
@@ -1338,7 +1338,7 @@ async fn test_ftps_version_none_bypassed_for_p2s_when_allow_unverified() {
     ));
 
     let mut client = FtpsClient::connect(
-        TokioIo(client_control),
+        TokioIo::new(client_control),
         VersionReportingTlsConnector(None),
         factory,
         PrinterIdentity {

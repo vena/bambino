@@ -52,7 +52,8 @@ async fn test_get_version_round_trip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client.get_version().await.expect("get_version failed");
 
@@ -98,7 +99,8 @@ async fn test_get_version_huge_command_timeout_saturates_without_panic() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // `secs * 1000` overflowed (debug: panic, release: wrap) before the multiplication
     // became saturating; a saturated timeout behaves as "effectively disabled".
@@ -147,7 +149,8 @@ async fn test_get_version_ignores_mismatched_sequence_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client
         .get_version()
@@ -185,7 +188,8 @@ async fn test_get_version_times_out_when_only_decoy_sequence_id_seen() {
         }
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let result = client.get_version().await;
     assert!(
@@ -222,7 +226,8 @@ async fn test_get_version_surfaces_serialization_error_on_malformed_matching_res
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let result = client.get_version().await;
     assert!(
@@ -267,7 +272,8 @@ async fn test_poll_until_buffers_unmatched_messages() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let info = client
         .get_version()

@@ -25,8 +25,12 @@ async fn test_send_gcode_rejects_unsafe_homing() {
         assert_eq!(json["print"]["param"], "G28\n");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     // Unsafe partial homing on bed-on-Z must be rejected by send_gcode
     let err = client.send_gcode("G28 Z").await;
@@ -56,7 +60,7 @@ async fn test_send_gcode_rejects_over_limit_heater_targets() {
     });
 
     let mut client = connect_test_client(
-        TokioIo(client_stream),
+        TokioIo::new(client_stream),
         "01P000000000000",
         PrinterModel::A1Mini,
     )
@@ -96,8 +100,12 @@ async fn test_send_gcode_raw_bypasses_safety() {
         assert_eq!(json["print"]["param"], "G28 Z\n");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     // send_gcode_raw should bypass safety checks
     client
@@ -128,8 +136,12 @@ async fn test_temperature_clamping() {
         assert_eq!(json_chamber["print"]["param"], "M141 S60\n");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "00M000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .set_bed_temperature(500)
@@ -179,8 +191,12 @@ async fn test_temperature_clamping_lower_bound() {
         );
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "00M000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "00M000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .set_bed_temperature(0)

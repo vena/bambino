@@ -12,13 +12,24 @@
 //! - [`TimerProvider`] — Async sleep and monotonic clock for platform-agnostic timeouts.
 //!
 //! Platform implementations live in the `tokio`, `esp_idf`, and `embassy` submodules
-//! (each gated behind its respective feature flag).
-//! The `TokioIo` adapter (only present when the `tokio` feature is enabled) bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
+//! (each gated behind its respective feature flag):
+//!
+//! | Trait | `tokio` | `esp-idf` | `embassy` |
+//! |---|---|---|---|
+//! | [`AsyncIo`] (raw stream) | `TokioIo<TcpStream>` | `EspIdfTcpStream` | `EmbassyTcpStream` |
+//! | [`AsyncIo`] (TLS stream) | `TokioIo<TlsStream<TcpStream>>` | `EspIdfTlsStream` | `EmbassyTlsStream` |
+//! | [`TlsConnector`] | `TokioTlsConnector` | `EspIdfTlsConnector` | `EmbassyTlsConnector` |
+//! | [`RawStreamFactory`] | `TokioRawStreamFactory` | `EspIdfRawStreamFactory` | `EmbassyRawStreamFactory` (over an `EmbassySocketPool`) |
+//! | [`AsyncUdpSocket`] | `TokioUdpSocket` | `EspIdfUdpSocket` | `EmbassyUdpSocket` |
+//! | [`BindableUdpSocket`] | `TokioUdpSocket` | `EspIdfUdpSocket` | n/a (see [`BindableUdpSocket`]) |
+//! | [`TimerProvider`] | `TokioTimer` | `EspIdfTimer` | `EmbassyTimer` |
+//!
+//! `TokioIo` bridges Tokio's `AsyncRead`/`AsyncWrite` to `embedded-io-async`.
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
 #[cfg(feature = "tokio")]
-pub use tokio::{TokioIo, TokioIoError};
+pub use tokio::TokioIo;
 
 #[cfg(feature = "esp-idf")]
 pub mod esp_idf;
@@ -443,34 +454,96 @@ pub(crate) fn account_for_trust_store(
     failure
 }
 
-/// Maps standard library IO error kinds to the runtime-agnostic `SocketError` enum.
+/// Maps a `std::io::Error` to a `SocketError` through the same two tables every backend shares.
 ///
-/// Shared by every platform backend that surfaces `std::io::Error` (tokio, ESP-IDF).
-/// `other_msg` fills `SocketError::Other` for kinds with no direct mapping — pass a
-/// platform-specific message so the catch-all error stays attributable.
+/// [`map_io_error_kind`] then [`map_embedded_io_error_kind`], so a std backend and a no_std one
+/// classify the same kind identically; there is no third table to keep in step (#298, #523).
 // Gated on the backends that call these helpers, not bare `std`: `embassy,std` without either
 // (`make test-embassy-host`) is a real build, and there they would be dead code.
 #[cfg(any(feature = "tokio", feature = "esp-idf"))]
-pub(crate) fn map_std_io_error(err: std::io::Error, other_msg: &'static str) -> SocketError {
-    match err.kind() {
-        std::io::ErrorKind::ConnectionRefused => SocketError::ConnectionRefused,
-        std::io::ErrorKind::ConnectionAborted => SocketError::ConnectionAborted,
-        std::io::ErrorKind::ConnectionReset => SocketError::ConnectionReset,
-        std::io::ErrorKind::NotConnected => SocketError::NotConnected,
-        std::io::ErrorKind::TimedOut => SocketError::TimedOut,
-        std::io::ErrorKind::AddrInUse => SocketError::AddressInUse,
-        std::io::ErrorKind::AddrNotAvailable => SocketError::AddressNotAvailable,
-        std::io::ErrorKind::InvalidInput => SocketError::InvalidInput,
-        // std's name for `ENOMEM` (its unix `decode_error_kind`, which ESP-IDF targets use too).
-        std::io::ErrorKind::OutOfMemory => SocketError::ResourceExhausted,
-        // Peer closed its end (e.g. tokio-rustls's "tls handshake eof") — connection-shaped,
-        // as in `map_io_error_kind` (#298).
-        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof => {
-            SocketError::ConnectionReset
-        }
-        _ => {
-            log::debug!("{other_msg}: {err}");
-            SocketError::Other(Cow::Borrowed(other_msg))
+pub(crate) fn map_std_io_error(err: std::io::Error) -> SocketError {
+    log::debug!("I/O error: {err}");
+    map_embedded_io_error_kind(map_io_error_kind(err.kind()))
+}
+
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+impl From<std::io::Error> for SocketError {
+    fn from(err: std::io::Error) -> Self {
+        map_std_io_error(err)
+    }
+}
+
+/// Milliseconds since the Unix epoch from `std::time::SystemTime`, for the std backends' `TimerProvider::unix_millis`.
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+pub(crate) fn std_unix_millis() -> Option<u64> {
+    let since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    u64::try_from(since_epoch.as_millis()).ok()
+}
+
+/// Logs that disabling Nagle on a fresh TCP socket failed; every backend's dial calls this so the message and level stay identical.
+///
+/// Non-fatal: the socket still works, only with higher latency (see `src/io/CLAUDE.md`, #160).
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+pub(crate) fn warn_nodelay_failed(err: &std::io::Error) {
+    log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {err}");
+}
+
+/// A `std::io::Error` as an `embedded_io_async::Error`, for the std backends' streams (`TokioIo`, `EspIdfTcpStream`).
+///
+/// `embedded-io-async` has no impl for `std::io::Error` itself, only for types that opt in.
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+#[derive(Debug)]
+pub struct StdIoError(std::io::Error);
+
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+impl StdIoError {
+    /// Returns the wrapped error.
+    pub fn into_inner(self) -> std::io::Error {
+        self.0
+    }
+
+    /// Borrows the wrapped error.
+    pub fn get_ref(&self) -> &std::io::Error {
+        &self.0
+    }
+}
+
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+impl From<std::io::Error> for StdIoError {
+    fn from(err: std::io::Error) -> Self {
+        Self(err)
+    }
+}
+
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+impl core::fmt::Display for StdIoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+impl core::error::Error for StdIoError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+#[cfg(any(feature = "tokio", feature = "esp-idf"))]
+impl embedded_io_async::Error for StdIoError {
+    fn kind(&self) -> embedded_io_async::ErrorKind {
+        map_io_error_kind(self.0.kind())
+    }
+}
+
+/// The error kind a failed `TimerProvider::sleep` surfaces as inside an I/O operation: `OutOfMemory` for an out-of-memory timer, else `Other`.
+impl From<TimerError> for embedded_io_async::ErrorKind {
+    fn from(err: TimerError) -> Self {
+        match err {
+            TimerError::ResourceExhausted => Self::OutOfMemory,
+            TimerError::Other(_) => Self::Other,
         }
     }
 }
@@ -491,14 +564,11 @@ pub(crate) fn configure_std_udp_socket(socket: &std::net::UdpSocket) -> Result<(
     if let Err(e) = socket.join_multicast_v4(&multiaddr, &interface) {
         log::debug!("configure_std_udp_socket: join_multicast_v4 failed: {e}");
     }
-    socket
-        .set_nonblocking(true)
-        .map_err(|e| map_std_io_error(e, "failed to set UDP socket non-blocking"))
+    socket.set_nonblocking(true).map_err(SocketError::from)
 }
 
 /// Maps a `std::io::ErrorKind` to the closest `embedded_io_async::ErrorKind`.
-/// Shared by every std-based platform's `embedded_io_async::Error::kind()` impl (`TokioIoError`,
-/// `EspIdfIoError`) — both previously duplicated this exact match.
+/// Used by [`StdIoError`]'s `embedded_io_async::Error::kind()` and by [`map_std_io_error`].
 #[cfg(any(feature = "tokio", feature = "esp-idf"))]
 pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::ErrorKind {
     match kind {
@@ -531,16 +601,74 @@ pub(crate) fn map_io_error_kind(kind: std::io::ErrorKind) -> embedded_io_async::
 /// Mirrors the subset of [`SocketError`] a timer can fail with. Tokio and Embassy sleeps are
 /// infallible, so only ESP-IDF's `EspAsyncTimer` (which can fail on FreeRTOS timer/task
 /// resource exhaustion) ever constructs this.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimerError {
     /// The device ran out of memory allocating the timer.
     ///
     /// Every consumer reports it as [`SocketError::ResourceExhausted`] (or its `OutOfMemory`
     /// error-kind form), never as `Other` or `TimedOut` (GitHub issue #390).
     ResourceExhausted,
-    /// Catch-all for platform-specific timer scheduling failures.
-    Other(&'static str),
+    /// Catch-all for platform-specific timer scheduling failures, carrying the platform's error code where it has one.
+    Other(Cow<'static, str>),
 }
+
+impl core::fmt::Display for TimerError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ResourceExhausted => f.write_str("out of memory allocating a timer"),
+            Self::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl core::error::Error for TimerError {}
+
+impl core::fmt::Display for SocketError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ConnectionRefused => f.write_str("connection refused"),
+            Self::ConnectionAborted => f.write_str("connection aborted"),
+            Self::ConnectionReset => f.write_str("connection reset by peer"),
+            Self::NotConnected => f.write_str("not connected"),
+            Self::TimedOut => f.write_str("timed out"),
+            Self::AddressInUse => f.write_str("address in use"),
+            Self::AddressNotAvailable => f.write_str("address not available"),
+            Self::InvalidInput => f.write_str("invalid input"),
+            Self::CertificateInvalid(reason) => write!(f, "certificate rejected: {reason}"),
+            Self::ResourceExhausted => f.write_str("out of memory or local resources"),
+            Self::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl core::error::Error for SocketError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::CertificateInvalid(reason) => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for CertificateFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::UntrustedAnchor => "chain reaches no trusted anchor",
+            Self::NameMismatch => "certificate name does not match the host",
+            Self::Expired => "certificate expired",
+            Self::NotYetValid => "certificate not yet valid (check the device clock)",
+            Self::Revoked => "certificate revoked",
+            Self::UnsupportedAlgorithm => "unsupported signature algorithm or key",
+            Self::InvalidPurpose => "certificate not valid for TLS server authentication",
+            Self::Missing => "peer presented no certificate",
+            Self::Malformed => "certificate could not be parsed",
+            Self::IncompleteTrustStore => "no anchor matched, but some anchors failed to load",
+            Self::Unspecified => "certificate rejected for an unspecified reason",
+        })
+    }
+}
+
+impl core::error::Error for CertificateFailure {}
 
 /// TLS protocol version negotiated during a handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -701,6 +829,9 @@ pub trait TlsConnector<RawStream: AsyncIo> {
 #[allow(async_fn_in_trait)]
 pub trait RawStreamFactory<RawIO: AsyncIo> {
     /// Connects a raw, un-encrypted socket to the designated host and port.
+    ///
+    /// A backend may accept only some address forms and reject the rest with
+    /// [`SocketError::InvalidInput`]: embassy takes IPv4 literals only.
     async fn dial(&self, host: &str, port: u16) -> Result<RawIO, SocketError>;
 }
 
@@ -1006,10 +1137,10 @@ pub(crate) fn deadline_error(timer_result: Result<(), TimerError>) -> SocketErro
 ///
 /// Never `TimedOut`: see [`deadline_error`] (#81, #318, #390).
 pub(crate) fn timer_failure_error(err: TimerError, context: &'static str) -> SocketError {
-    log::warn!("{context}: {err:?}");
+    log::warn!("{context}: {err}");
     match err {
         TimerError::ResourceExhausted => SocketError::ResourceExhausted,
-        TimerError::Other(_) => SocketError::Other(Cow::Borrowed(context)),
+        TimerError::Other(msg) => SocketError::Other(format!("{context}: {msg}").into()),
     }
 }
 
@@ -1285,14 +1416,7 @@ mod std_io_error_tests {
     #[test]
     fn enomem_is_resource_exhausted() {
         let err = std::io::Error::from(std::io::ErrorKind::OutOfMemory);
-        assert_eq!(
-            map_std_io_error(err, "unused"),
-            SocketError::ResourceExhausted
-        );
-        assert_eq!(
-            map_embedded_io_error_kind(map_io_error_kind(std::io::ErrorKind::OutOfMemory)),
-            SocketError::ResourceExhausted
-        );
+        assert_eq!(map_std_io_error(err), SocketError::ResourceExhausted);
     }
 }
 
@@ -1310,8 +1434,8 @@ mod deadline_error_tests {
             SocketError::ResourceExhausted
         );
         assert_eq!(
-            deadline_error(Err(TimerError::Other("scheduling failed"))),
-            SocketError::Other(Cow::Borrowed("deadline timer failed"))
+            deadline_error(Err(TimerError::Other("scheduling failed".into()))),
+            SocketError::Other("deadline timer failed: scheduling failed".into())
         );
     }
 }
@@ -1686,7 +1810,7 @@ mod error_kind_mapping_tests {
                 "{kind:?}"
             );
             assert_eq!(
-                super::map_std_io_error(std::io::Error::from(kind), "test"),
+                super::map_std_io_error(std::io::Error::from(kind)),
                 SocketError::ConnectionReset,
                 "{kind:?}"
             );

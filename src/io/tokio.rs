@@ -6,7 +6,7 @@
 
 use crate::io::{
     AsyncUdpSocket, BindableUdpSocket, CertificateFailure, RawStreamFactory, SocketError,
-    TimerError, TimerProvider, TlsConnector, TlsVersion, TlsVersions,
+    StdIoError, TimerError, TimerProvider, TlsConnector, TlsVersion, TlsVersions,
 };
 use core::net::SocketAddr;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName};
@@ -49,10 +49,7 @@ impl TimerProvider for TokioTimer {
     }
 
     fn unix_millis(&self) -> Option<u64> {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|d| d.as_millis() as u64)
+        crate::io::std_unix_millis()
     }
 }
 
@@ -102,12 +99,6 @@ impl AsyncUdpSocket for TokioUdpSocket {
             Ok(Err(e)) => Err(e.into()),
             Err(_) => Err(SocketError::TimedOut),
         }
-    }
-}
-
-impl From<std::io::Error> for SocketError {
-    fn from(err: std::io::Error) -> Self {
-        crate::io::map_std_io_error(err, "Native OS platform IO error occurred")
     }
 }
 
@@ -240,6 +231,10 @@ pub fn build_verified_client_config(
 }
 
 /// TLS Secure connector wrapping Tokio-Rustls.
+///
+/// `Clone` shares the underlying `ClientConfig`, so one connector can serve every
+/// `PrinterClient` channel that needs the same settings.
+#[derive(Clone)]
 pub struct TokioTlsConnector {
     connector: tokio_rustls::TlsConnector,
 }
@@ -285,7 +280,7 @@ impl TlsConnector<TokioIo<::tokio::net::TcpStream>> for TokioTlsConnector {
 
         let tls_stream = self
             .connector
-            .connect(server_name, raw_stream.0)
+            .connect(server_name, raw_stream.into_inner())
             .await
             .map_err(map_tls_handshake_error)?;
 
@@ -339,12 +334,12 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
             .map_err(SocketError::from)?;
 
         // Nagle off, for the same reason and with the same non-fatal handling as
-        // `EspIdfTcpStream::connect` — see that function for the full rationale (GitHub issue
-        // #160). Kept in step across both backends deliberately: a latency characteristic that
+        // `EspIdfTcpStream::connect` and embassy's dial — see `EspIdfTcpStream::connect` for the
+        // full rationale (GitHub issue #160). Kept in step across backends deliberately: a latency characteristic that
         // holds on the printer but not on the host, or the reverse, makes every cross-platform
         // timing comparison misleading, which is exactly what #160 spent its measurements on.
         if let Err(e) = stream.set_nodelay(true) {
-            log::warn!("could not disable Nagle on the TCP socket, latency may suffer: {e}");
+            crate::io::warn_nodelay_failed(&e);
         }
 
         Ok(TokioIo(stream))
@@ -352,51 +347,45 @@ impl RawStreamFactory<TokioIo<::tokio::net::TcpStream>> for TokioRawStreamFactor
 }
 
 /// Adapter wrapping any Tokio `AsyncRead` and `AsyncWrite` implementation to satisfy `embedded-io-async` bounds.
-pub struct TokioIo<T>(pub T);
+pub struct TokioIo<T>(T);
 
-/// Wrapper around `std::io::Error` implementing the `embedded-io-async::Error` trait.
-#[derive(Debug)]
-pub struct TokioIoError(pub std::io::Error);
+impl<T> TokioIo<T> {
+    /// Wraps a Tokio stream.
+    pub fn new(inner: T) -> Self {
+        Self(inner)
+    }
 
-// In embedded-io version 0.7+, the `embedded_io::Error` trait has a supertrait bound on `core::error::Error`.
-// Therefore, we must implement both `core::fmt::Display` and `std::error::Error` for `TokioIoError`.
+    /// Returns the wrapped stream.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
 
-impl core::fmt::Display for TokioIoError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Tokio IO Error: {}", self.0)
+    /// Borrows the wrapped stream.
+    pub fn get_ref(&self) -> &T {
+        &self.0
+    }
+
+    /// Mutably borrows the wrapped stream.
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.0
     }
 }
 
-impl std::error::Error for TokioIoError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl embedded_io_async::Error for TokioIoError {
-    fn kind(&self) -> embedded_io_async::ErrorKind {
-        crate::io::map_io_error_kind(self.0.kind())
-    }
-}
-
-/// Implement ErrorType for TokioIo as specified by the embedded-io-async 0.7 spec.
-///
-/// This separates error declaration from read/write trait implementations.
 impl<T> embedded_io_async::ErrorType for TokioIo<T> {
-    type Error = TokioIoError;
+    type Error = StdIoError;
 }
 
 impl<T: ::tokio::io::AsyncRead + Unpin> embedded_io_async::Read for TokioIo<T> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         use ::tokio::io::AsyncReadExt;
-        self.0.read(buf).await.map_err(TokioIoError)
+        self.0.read(buf).await.map_err(StdIoError::from)
     }
 }
 
 impl<T: ::tokio::io::AsyncWrite + Unpin> embedded_io_async::Write for TokioIo<T> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         use ::tokio::io::AsyncWriteExt;
-        let n = self.0.write(buf).await.map_err(TokioIoError)?;
+        let n = self.0.write(buf).await.map_err(StdIoError::from)?;
         // `embedded_io_async::Write::write_all` *panics* on `Ok(0)`
         // (`embedded-io-async-0.7.0/src/lib.rs:143`), and the trait forbids impls from
         // returning it for a non-empty buffer. `TokioIo<T>` is generic over any
@@ -404,7 +393,7 @@ impl<T: ::tokio::io::AsyncWrite + Unpin> embedded_io_async::Write for TokioIo<T>
         // behalf — and `write_all` sits on live network paths (MQTT, FTPS, camera). Convert
         // it into the error the caller can actually handle instead of panicking the library.
         if n == 0 && !buf.is_empty() {
-            return Err(TokioIoError(std::io::Error::new(
+            return Err(StdIoError::from(std::io::Error::new(
                 std::io::ErrorKind::WriteZero,
                 "underlying AsyncWrite returned Ok(0) for a non-empty buffer",
             )));
@@ -414,7 +403,7 @@ impl<T: ::tokio::io::AsyncWrite + Unpin> embedded_io_async::Write for TokioIo<T>
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         use ::tokio::io::AsyncWriteExt;
-        self.0.flush().await.map_err(TokioIoError)
+        self.0.flush().await.map_err(StdIoError::from)
     }
 }
 

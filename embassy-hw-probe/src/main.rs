@@ -273,7 +273,7 @@ struct Ctx {
 
 impl Ctx {
     fn connector(&self) -> Tls {
-        EmbassyTlsConnector::new(self.tls.reference())
+        EmbassyTlsConnector::unverified(self.tls.reference())
     }
 }
 
@@ -1091,7 +1091,7 @@ async fn second_camera_client(ctx: &mut Ctx) -> Result<u64, String> {
         Ok(Err(e)) => return Err(alloc::format!("dial failed {e:?}")),
         Ok(Ok(())) => {}
     }
-    let connector = EmbassyTlsConnector::new(ctx.tls.reference());
+    let connector = EmbassyTlsConnector::unverified(ctx.tls.reference());
     let started = Instant::now();
     let result = async {
         let mut tls = match embassy_time::with_timeout(

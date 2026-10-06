@@ -24,7 +24,8 @@ async fn test_request_pushall() {
         assert!(json["pushing"]["sequence_id"].is_string());
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .request_pushall()
@@ -60,7 +61,8 @@ async fn test_home_flag_cache_and_advisory_warnings() {
         assert_eq!(json_e["print"]["param"], "M83\nG0 E5.00 F500\n");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // No telemetry observed yet — cache must read as unknown, not "unhomed".
     assert_eq!(client.is_axis_homed('x'), None);
@@ -111,7 +113,8 @@ async fn test_home_flag_bit31_set_deserializes_as_negative_wire_value() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let event = client
         .poll_telemetry()
@@ -167,7 +170,8 @@ async fn test_wait_for_homing_resolves_after_dip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .wait_for_homing()
@@ -206,7 +210,8 @@ async fn test_wait_for_homing_resolves_when_already_in_progress() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     client
         .wait_for_homing()
@@ -239,7 +244,8 @@ async fn test_wait_for_homing_times_out_without_dip() {
         }
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     let result = client.wait_for_homing().await;
     assert!(

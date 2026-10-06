@@ -19,7 +19,7 @@ exclude = ["esp32-hw-probe/", "embassy-hw-probe/"]
 default = ["std", "tokio"]
 
 # Standard library support flag
-std = ["dep:thiserror", "serde/std", "serde_json/std"]
+std = ["serde/std", "serde_json/std"]
 
 # Tokio-specific dependencies and platform bridges
 tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "dep:x509-parser", "std"]
@@ -27,7 +27,7 @@ tokio = ["dep:tokio", "dep:tokio-rustls", "dep:rustls-pki-types", "dep:x509-pars
 # bambino-cli only: terminal manipulation and a concrete log sink. Not implied by
 # `tokio` so library consumers depending on `bambino` with default features don't
 # pull in a terminal UI crate and a log sink they never asked for.
-cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "dep:unicode-width", "tokio"]
+cli = ["dep:env_logger", "dep:crossterm", "dep:clap", "dep:time", "dep:unicode-width", "dep:thiserror", "tokio"]
 
 # ESP-IDF specific features for embedded platforms running FreeRTOS with std library support
 # `dep:embuild` is a build-dependency: `build.rs` needs it to re-emit the `esp_idf_*`

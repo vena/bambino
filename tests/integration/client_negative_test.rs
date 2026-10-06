@@ -27,7 +27,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
         handle_mqtt_handshake(&mut server_stream_p1s).await;
     });
     let mut client_p1s = connect_test_client(
-        TokioIo(client_stream_p1s),
+        TokioIo::new(client_stream_p1s),
         "01P000000000000",
         PrinterModel::P1S,
     )
@@ -46,7 +46,7 @@ async fn test_set_nozzle_temperature_validates_nozzle_id() {
         assert_eq!(json["print"]["param"], "M104 T1 S220\n");
     });
     let mut client_h2d = connect_test_client(
-        TokioIo(client_stream_h2d),
+        TokioIo::new(client_stream_h2d),
         "01P000000000000",
         PrinterModel::H2D,
     )
@@ -72,8 +72,12 @@ async fn test_in_flight_saturation() {
         {}
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     // Fill the in-flight queue to capacity (200 commands)
     for i in 0..200 {
@@ -104,8 +108,12 @@ async fn test_connection_drop_during_operation() {
         drop(server_stream);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     broker_task.await.expect("Broker task panicked");
 
@@ -160,8 +168,12 @@ async fn test_start_print_wire_payload() {
         assert_eq!(json["print"]["task_id"], subtask_id);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -192,8 +204,12 @@ async fn test_start_print_idex_nozzle_offset_default() {
         assert_eq!(json["print"]["use_ams"], true);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "20P000000000000", PrinterModel::X2D).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "20P000000000000",
+        PrinterModel::X2D,
+    )
+    .await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -226,8 +242,12 @@ async fn test_start_print_single_nozzle_overrides_nozzle_offset_off() {
         assert_eq!(json["print"]["nozzle_offset_cali"], 0);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let config = PrintJobConfig::new(
         "job.3mf",
@@ -272,8 +292,12 @@ async fn test_set_print_speed_all_levels() {
         }
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     for level in [
         PrintSpeed::Silent,
@@ -302,8 +326,12 @@ async fn test_skip_objects_wire_payload() {
         assert_eq!(json["print"]["obj_list"], serde_json::json!([0, 3, 7]));
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .skip_objects(vec![0, 3, 7])
@@ -326,8 +354,12 @@ async fn test_start_calibration_combined_flags() {
         assert_eq!(json["print"]["option"], 6);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .start_calibration(
@@ -357,8 +389,12 @@ async fn test_start_calibration_rejects_a_fully_unsupported_request_without_publ
         );
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     // The P1S mask is 0b0000_1110; neither NOZZLE_HEIGHT (16) nor HEATBED_THERMAL (32) is in it.
     let result = client
@@ -393,8 +429,12 @@ async fn test_start_calibration_publishes_only_the_supported_bits() {
         assert_eq!(json["print"]["option"], 2);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .start_calibration(CalibrationOption::BED_LEVELING | CalibrationOption::NOZZLE_HEIGHT)
@@ -415,8 +455,12 @@ async fn test_clear_print_error_wire_payload() {
         assert_eq!(json["print"]["command"], "clean_print_error");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .clear_print_error()
@@ -442,8 +486,12 @@ async fn test_set_led_wire_payload() {
         assert_eq!(json_off["system"]["led_mode"], "off");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .set_led("chamber_light", true)
@@ -482,8 +530,12 @@ async fn test_preheat_chamber_sets_heating_flap_then_target_on_a_flap_and_heater
         assert_eq!(heat["print"]["param"], "M141 S50\n");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "09400000000000", PrinterModel::H2D).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "09400000000000",
+        PrinterModel::H2D,
+    )
+    .await;
 
     client
         .preheat_chamber(50)
@@ -511,8 +563,12 @@ async fn test_preheat_chamber_resets_the_flap_to_cooling_on_a_zero_target() {
         assert_eq!(heat["print"]["param"], "M141 S0\n");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "09400000000000", PrinterModel::H2D).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "09400000000000",
+        PrinterModel::H2D,
+    )
+    .await;
 
     client
         .preheat_chamber(0)
@@ -542,8 +598,12 @@ async fn test_preheat_chamber_on_a_flap_only_model_stops_after_the_flap() {
         );
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "N7000000000000", PrinterModel::P2S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "N7000000000000",
+        PrinterModel::P2S,
+    )
+    .await;
 
     client
         .preheat_chamber(0)
@@ -569,8 +629,12 @@ async fn test_preheat_chamber_on_a_flap_only_model_rejects_heat_without_touching
         assert_eq!(json["print"]["command"], "clean_print_error");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "N7000000000000", PrinterModel::P2S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "N7000000000000",
+        PrinterModel::P2S,
+    )
+    .await;
 
     let result = client.preheat_chamber(50).await;
     assert!(
@@ -602,8 +666,12 @@ async fn test_change_filament_load_wire_payload() {
         assert_eq!(json["print"]["tar_temp"], -1);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .change_filament(0, 1, -1, -1, None)
@@ -629,8 +697,12 @@ async fn test_change_filament_derives_target_for_nonzero_ams_unit() {
         assert_eq!(json["print"]["target"], 6); // 1*4 + 2, not 2
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .change_filament(1, 2, -1, -1, None)
@@ -655,8 +727,12 @@ async fn test_change_filament_derives_target_for_external_spool() {
         assert_eq!(json["print"]["target"], 255);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .change_filament(255, 254, -1, -1, None)
@@ -673,8 +749,12 @@ async fn test_change_filament_rejects_invalid_ams_id() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let result = client.change_filament(99, 1, -1, -1, None).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -693,8 +773,12 @@ async fn test_change_filament_rejects_external_spool_sentinel_on_an_ams_ht_bus_i
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let result = client.change_filament(130, 254, -1, -1, None).await;
     assert!(
@@ -720,8 +804,12 @@ async fn test_change_filament_routes_extruder_id_onto_the_wire() {
         assert_eq!(json["print"]["extruder_id"], 1);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .change_filament(0, 1, -1, -1, Some(1))
@@ -751,8 +839,12 @@ async fn test_drying_lifecycle_wire_payload() {
         assert_eq!(json_stop["print"]["mode"], 0);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .dry(128)
@@ -779,8 +871,12 @@ async fn test_start_drying_rejects_temperature_outside_ams_unit_range() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     // No AMS snapshot has been polled, so the unit-model gate passes through and the range
     // falls back to the `ams_id`-derived one: 45-85 for an AMS-HT address, 45-65 otherwise.
@@ -852,7 +948,8 @@ async fn test_reported_fun2_overrides_the_model_rule() {
         assert_eq!(json["print"]["command"], "ams_filament_drying");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     // Before any telemetry, the P1S screen-only rule stands.
     assert!(!client.supports_ams_remote_drying());
 
@@ -897,7 +994,8 @@ async fn test_reported_fun2_can_refuse_where_the_quirk_allows() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     assert!(client.supports_ams_remote_drying());
 
     client
@@ -953,8 +1051,12 @@ async fn test_dry_builder_defaults_reach_the_wire() {
         assert_eq!(json["print"]["close_power_conflict"], false);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .dry(128)
@@ -983,8 +1085,12 @@ async fn test_dry_builder_material_fills_four_fields() {
         assert_eq!(json["print"]["filament"], "PETG");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .dry(128)
@@ -1007,8 +1113,12 @@ async fn test_dry_builder_printing_column() {
         assert_eq!(json["print"]["temp"], 55);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .dry(128)
@@ -1036,8 +1146,12 @@ async fn test_dry_builder_explicit_values_beat_material_in_any_order() {
         assert_eq!(json["print"]["filament"], "PETG");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     client
         .dry(128)
@@ -1061,8 +1175,12 @@ async fn test_dry_builder_refuses_unset_temp_or_duration() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     let err = client
         .dry(128)
@@ -1103,8 +1221,12 @@ async fn test_dry_builder_inherits_the_gates() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let err = client
         .dry(0)
@@ -1139,7 +1261,8 @@ async fn test_start_drying_refuses_heaterless_unit_once_observed() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1187,7 +1310,8 @@ async fn test_start_drying_allows_observed_ams_2_pro() {
         assert_eq!(json["print"]["temp"], 55);
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1230,7 +1354,8 @@ async fn test_start_drying_range_follows_observed_unit_not_address() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1E).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1E).await;
     client
         .poll_telemetry()
         .await
@@ -1262,8 +1387,12 @@ async fn test_start_drying_rejects_external_spool() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     // 254/255 pass `is_valid_ams_id` (they are real addresses for change_filament), but an
     // external spool is a bracket with no heater, so drying can never act on one. Unlike the
@@ -1296,8 +1425,12 @@ async fn test_start_drying_rejected_on_p1_screen_only_firmware() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     // P1S firmware acks ams_filament_drying with `result: success` and then silently
     // discards it — no heater/fan activation, dry_status stays 0 — confirmed against real
@@ -1328,8 +1461,12 @@ async fn test_start_drying_rejects_invalid_ams_id() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     let result = client
         .dry(200)
@@ -1354,8 +1491,12 @@ async fn test_stop_drying_rejects_invalid_ams_id() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::X1E).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::X1E,
+    )
+    .await;
 
     // 16 is an A2L-attached AMS Lite's physical id and valid; 17 addresses nothing.
     let result = client.stop_drying(17).await;
@@ -1377,8 +1518,12 @@ async fn test_scan_rfid_wire_payload() {
         assert_eq!(json["print"]["slot_id"], 2);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client.scan_rfid(0, 2).await.expect("scan_rfid failed");
 
@@ -1415,8 +1560,12 @@ async fn test_ams_commands_address_ams_lite_on_a2l() {
         assert_eq!(json["print"]["tray_id"], 25);
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::A2L).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::A2L,
+    )
+    .await;
 
     client
         .change_filament(6, 1, -1, -1, None)
@@ -1480,7 +1629,7 @@ async fn test_scan_rfid_selects_command_by_np_format() {
         });
 
         let mut client =
-            connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+            connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1C).await;
         client
             .poll_telemetry()
             .await
@@ -1510,7 +1659,8 @@ async fn test_scan_rfid_refuses_with_filament_loaded() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::X1C).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::X1C).await;
     client
         .poll_telemetry()
         .await
@@ -1528,8 +1678,12 @@ async fn test_scan_rfid_rejects_invalid_ams_id() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let result = client.scan_rfid(255, 2).await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -1553,8 +1707,12 @@ async fn test_select_k_profile_wire_payload() {
         assert_eq!(json["print"]["nozzle_diameter"], "0.4");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client
         .select_k_profile(0, 1, 4, "GFA01", "0.4")
@@ -1571,8 +1729,12 @@ async fn test_select_k_profile_rejects_invalid_combo() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     let result = client.select_k_profile(200, 200, 4, "GFA01", "0.4").await;
     assert!(matches!(result, Err(Error::ProtocolViolation(_))));
@@ -1599,8 +1761,12 @@ async fn test_select_k_profile_derives_tray_from_unit_and_slot() {
         }
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     for (ams_id, slot_id) in [(0, 4), (0, 15), (128, 1)] {
         let result = client
@@ -1680,7 +1846,8 @@ async fn test_get_k_profiles_auto_priming() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
 
     // First call triggers auto-prime (2 publishes)
     let resp = client
@@ -1730,7 +1897,8 @@ async fn test_get_k_profiles_threads_filament_id_onto_the_wire() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     let resp = client
         .get_k_profiles(Some("GFA01"), Some("0.4"))
         .await
@@ -1763,7 +1931,8 @@ async fn test_get_k_profiles_manual_prime_skip() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -1811,7 +1980,8 @@ async fn test_get_k_profiles_ignores_mismatched_sequence_id() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client.set_k_profile_primed(true);
 
     let resp = client
@@ -1848,8 +2018,12 @@ async fn test_sequence_id_fits_in_i32() {
         assert!(seq <= i32::MAX as u64, "Sequence ID must fit in i32");
     });
 
-    let mut client =
-        connect_test_client(TokioIo(client_stream), "01P000000000000", PrinterModel::P1S).await;
+    let mut client = connect_test_client(
+        TokioIo::new(client_stream),
+        "01P000000000000",
+        PrinterModel::P1S,
+    )
+    .await;
 
     client.send_gcode("G28").await.expect("send_gcode failed");
 
@@ -1879,7 +2053,8 @@ async fn test_skip_objects_refuses_when_idle() {
         read_puback(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
@@ -1916,7 +2091,8 @@ async fn test_skip_objects_allowed_when_paused() {
         assert_eq!(json["print"]["command"], "skip_objects");
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
@@ -1940,7 +2116,8 @@ async fn test_skip_objects_rejects_empty_object_ids() {
         handle_mqtt_handshake(&mut server_stream).await;
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     assert!(matches!(
         client.skip_objects(vec![]).await,
         Err(Error::InvalidArgument(_))
@@ -1978,7 +2155,8 @@ async fn test_lifecycle_commands_are_not_state_gated() {
         }
     });
 
-    let mut client = connect_test_client(TokioIo(client_stream), SERIAL, PrinterModel::P1S).await;
+    let mut client =
+        connect_test_client(TokioIo::new(client_stream), SERIAL, PrinterModel::P1S).await;
     client
         .poll_telemetry()
         .await
